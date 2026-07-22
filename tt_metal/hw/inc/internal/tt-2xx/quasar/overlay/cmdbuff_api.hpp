@@ -65,13 +65,19 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
 #define DEFINE_CMD_BUFS(buf_name, cmdbuf)                                                                              \
                                                                                                                        \
     /**                                                                                                                \
+     * @def reset_cmdbuf_0                                                                                             \
+     * @def reset_cmdbuf_1                                                                                             \
      *                                                                                                                 \
      * @brief Reset command-buffer state.                                                                              \
      * @warning Resetting is unsafe while this command buffer has outstanding work.                                    \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void reset_##buf_name() { CMDBUF_RESET(cmdbuf); }                            \
                                                                                                                        \
     /**                                                                                                                \
+     * @def setup_as_copy_cmdbuf_0                                                                                     \
+     * @def setup_as_copy_cmdbuf_1                                                                                     \
      *                                                                                                                 \
      * @brief Configures command buffer for copy operations with customizable settings                                 \
      *                                                                                                                 \
@@ -82,6 +88,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param wrapping_en Enables address wrapping functionality; default is true                                      \
      * @param posted Enables posted transactions for better performance; default is true                               \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void setup_as_copy_##buf_name(                                               \
         bool wr,                                                                                                       \
@@ -106,6 +113,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def setup_as_scatter_list_cmdbuf_0                                                                             \
+     * @def setup_as_scatter_list_cmdbuf_1                                                                             \
      *                                                                                                                 \
      * @brief Configures the specified command buffer as a scatter list with customizable settings.                    \
      *                                                                                                                 \
@@ -124,6 +133,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @note To be used with set_scatter_list_x(_)                                                                     \
      * @note Same thing can be achieved with setup_x() function                                                        \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void setup_as_scatter_list_##buf_name(                                       \
         bool wr,                                                                                                       \
@@ -156,12 +166,16 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def setup_as_atomic_cmdbuf_0                                                                                   \
+     * @def setup_as_atomic_cmdbuf_1                                                                                   \
      *                                                                                                                 \
      * @brief Function for configuring command buffer for atomic transactions                                          \
      *                                                                                                                 \
      * @param wr Indicates if the operation is a write (true) or read (false).                                         \
      *                                                                                                                 \
      * @note Overwrites existing command buffer settings                                                               \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void setup_as_atomic_##buf_name(bool wr) {                                   \
         (void)wr;                                                                                                      \
@@ -176,11 +190,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def idma_setup_as_copy_cmdbuf_0                                                                                \
+     * @def idma_setup_as_copy_cmdbuf_1                                                                                \
      *                                                                                                                 \
      * @brief Function for configuring command buffer for iDMA copy operations                                         \
      *                                                                                                                 \
      * @param wrapping_en Enables address wrapping; default is true                                                    \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void idma_setup_as_copy_##buf_name(bool wrapping_en = true) {                \
         TT_ROCC_CMD_BUF_MISC_reg_u misc;                                                                               \
@@ -194,6 +211,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def idma_setup_as_scatter_list_cmdbuf_0                                                                        \
+     * @def idma_setup_as_scatter_list_cmdbuf_1                                                                        \
      *                                                                                                                 \
      * @brief Function for configuring command buffer for iDMA scatter list operations                                 \
      *                                                                                                                 \
@@ -202,6 +221,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param scatter_list_contains_xy Specifies if the scatter list includes XY coordinates                           \
      * @param wrapping_en Enables address wrapping; default is true                                                    \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void idma_setup_as_scatter_list_##buf_name(                                  \
         bool apply_scatter_to_dest,                                                                                    \
@@ -223,6 +243,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def set_axi_opt_1_cmdbuf_0                                                                                     \
+     * @def set_axi_opt_1_cmdbuf_1                                                                                     \
      *                                                                                                                 \
      * @brief Programs the AXI_OPT_1 cmdbuf register. All fields not exposed as parameters                             \
      *        are written at their TT_ROCC_CMD_BUF_AXI_OPT_1_REG_DEFAULT values.                                       \
@@ -230,6 +252,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param src_protocol AXI source protocol selector                                                                \
      * @param decouple_aw  Decouple AXI AW from W channel                                                              \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void set_axi_opt_1_##buf_name(                                               \
         std::uint8_t src_protocol, std::uint8_t decouple_aw) {                                                         \
@@ -242,6 +265,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def setup_ongoing_cmdbuf_0                                                                                     \
+     * @def setup_ongoing_cmdbuf_1                                                                                     \
      *                                                                                                                 \
      * @brief Function for configuring incrementing logic for command buffer                                           \
      * Addresses, vcs and transaction ids can be configure to be self incrementing after each transactions             \
@@ -254,6 +279,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param req_vc_inc_on_entire_trans Request VC increment on entire transaction                                    \
      * @param resp_vc_inc_on_entire_trans Response VC increment on entire transaction                                  \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void setup_ongoing_##buf_name(                                               \
         bool src_addr_inc_en,                                                                                          \
@@ -278,12 +304,15 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def setup_vcs_cmdbuf_0                                                                                         \
+     * @def setup_vcs_cmdbuf_1                                                                                         \
      *                                                                                                                 \
      * @brief Function for configuring virtual channels based on global values defined in this file                    \
      *                                                                                                                 \
      * @param wr If enabled, will use write VCs                                                                        \
      * @param mcast If enabled, will use multicast VCs                                                                 \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void setup_vcs_##buf_name(bool wr, bool mcast = false) {                     \
         if (wr) {                                                                                                      \
@@ -302,6 +331,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def setup_wrapping_vcs_cmdbuf_0                                                                                \
+     * @def setup_wrapping_vcs_cmdbuf_1                                                                                \
      *                                                                                                                 \
      * @brief Function for configuring wrapping feature of request and response virtual channels                       \
      *                                                                                                                 \
@@ -313,6 +344,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param resp_end_vc End virtual channel for responses                                                            \
      * @param resp_vc_offset Offset while wrapping for responses                                                       \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void setup_wrapping_vcs_##buf_name(                                          \
         bool wr,                                                                                                       \
@@ -335,6 +367,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def setup_trids_cmdbuf_0                                                                                       \
+     * @def setup_trids_cmdbuf_1                                                                                       \
      *                                                                                                                 \
      * @brief Function for configuring transaction ID based on macros defined in this file                             \
      * If wrapping feature for transaction ID is enabled, specified ID is used as offset                               \
@@ -342,6 +376,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param trid_offset Transaction ID, if wrapping is enabled this serves as transaction ID offset                  \
      * @param wrapping Enables wrapping feature for transaction IDs                                                    \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void setup_trids_##buf_name(                                                 \
         std::uint32_t trid_offset = CMDBUF_DEF_TRID, bool wrapping = false) {                                          \
@@ -391,12 +426,15 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def swap_trid_cmdbuf_0                                                                                         \
+     * @def swap_trid_cmdbuf_1                                                                                         \
      *                                                                                                                 \
      * @brief Swaps current transaction ID with new one and returns previous value                                     \
      *                                                                                                                 \
      * @param new_trid New transaction ID to set                                                                       \
      * @return Previous transaction ID value                                                                           \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) std::uint32_t swap_trid_##buf_name(std::uint32_t new_trid) {                 \
         std::uint32_t prev_trid = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET);        \
@@ -418,12 +456,15 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def setup_packet_tags_cmdbuf_0                                                                                 \
+     * @def setup_packet_tags_cmdbuf_1                                                                                 \
      *                                                                                                                 \
      * @brief Function for configuring snoop and flush bit of transaction                                              \
      *                                                                                                                 \
      * @param snoop_bit Enables destination NIU for cache snoop mechanisms                                             \
      * @param flush_bit Enables destination NIU to commit all parts of the flit before committing the next packet      \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void setup_packet_tags_##buf_name(bool snoop_bit, bool flush_bit) {          \
         TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u misc;                                                                        \
@@ -436,17 +477,22 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def get_src_cmdbuf_0                                                                                           \
+     * @def get_src_cmdbuf_1                                                                                           \
      *                                                                                                                 \
      * @brief Returns source address for transactions                                                                  \
      *                                                                                                                 \
      * @return Source address with noc coordinates embedded                                                            \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t get_src_##buf_name() {                                         \
         return CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET);                        \
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def set_src_cmdbuf_0                                                                                           \
+     * @def set_src_cmdbuf_1                                                                                           \
      *                                                                                                                 \
      * @brief Sets up source configuration                                                                             \
      *                                                                                                                 \
@@ -455,6 +501,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param base Base address, if wrapping is enabled                                                                \
      * @param size Size of transfer in bytes                                                                           \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void set_src_##buf_name(                                                     \
         std::uint64_t addr, std::uint64_t coordinate, std::uint64_t base, std::uint64_t size) {                        \
@@ -464,6 +511,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET, coordinate);                  \
     }                                                                                                                  \
     /**                                                                                                                \
+     * @def set_src_cmdbuf_0                                                                                           \
+     * @def set_src_cmdbuf_1                                                                                           \
      *                                                                                                                 \
      * @brief Sets up source configuration with base address                                                           \
      *                                                                                                                 \
@@ -471,6 +520,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param coordinate Coordinate generated using NOC_XY_COORD macro                                                 \
      * @param base Base address for wrapping                                                                           \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void set_src_##buf_name(                                                     \
         std::uint64_t addr, std::uint64_t coordinate, std::uint64_t base) {                                            \
@@ -479,40 +529,51 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET, coordinate);                  \
     }                                                                                                                  \
     /**                                                                                                                \
+     * @def set_src_cmdbuf_0                                                                                           \
+     * @def set_src_cmdbuf_1                                                                                           \
      *                                                                                                                 \
      * @brief Sets up source configuration with address and coordinate                                                 \
      *                                                                                                                 \
      * @param addr Source address without coordinates                                                                  \
      * @param coordinate Coordinate generated using NOC_XY_COORD macro                                                 \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void set_src_##buf_name(std::uint64_t addr, std::uint64_t coordinate) {      \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET, addr);                         \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET, coordinate);                  \
     }                                                                                                                  \
     /**                                                                                                                \
+     * @def set_src_cmdbuf_0                                                                                           \
+     * @def set_src_cmdbuf_1                                                                                           \
      *                                                                                                                 \
      * @brief Sets up source address only                                                                              \
      *                                                                                                                 \
      * @param addr Source address                                                                                      \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void set_src_##buf_name(std::uint64_t addr) {                                \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET, addr);                         \
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def get_dest_cmdbuf_0                                                                                          \
+     * @def get_dest_cmdbuf_1                                                                                          \
      *                                                                                                                 \
      * @brief Returns destination address for transactions                                                             \
      *                                                                                                                 \
      * @return Destination address with noc coordinates embedded                                                       \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t get_dest_##buf_name() {                                        \
         return CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET);                       \
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def set_dest_cmdbuf_0                                                                                          \
+     * @def set_dest_cmdbuf_1                                                                                          \
      *                                                                                                                 \
      * @brief Sets up destination configuration                                                                        \
      *                                                                                                                 \
@@ -521,6 +582,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param base Base address, if wrapping is enabled                                                                \
      * @param size Size of transfer in bytes                                                                           \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void set_dest_##buf_name(                                                    \
         std::uint64_t addr, std::uint64_t coordinates, std::uint64_t base, std::uint64_t size) {                       \
@@ -530,6 +592,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET, coordinates);                \
     }                                                                                                                  \
     /**                                                                                                                \
+     * @def set_dest_cmdbuf_0                                                                                          \
+     * @def set_dest_cmdbuf_1                                                                                          \
      *                                                                                                                 \
      * @brief Sets up destination configuration with base address                                                      \
      *                                                                                                                 \
@@ -537,6 +601,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param coordinates Coordinate generated using NOC_XY_COORD macro                                                \
      * @param base Base address for wrapping                                                                           \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void set_dest_##buf_name(                                                    \
         std::uint64_t addr, std::uint64_t coordinates, std::uint64_t base) {                                           \
@@ -545,29 +610,37 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET, coordinates);                \
     }                                                                                                                  \
     /**                                                                                                                \
+     * @def set_dest_cmdbuf_0                                                                                          \
+     * @def set_dest_cmdbuf_1                                                                                          \
      *                                                                                                                 \
      * @brief Sets up destination configuration with address and coordinate                                            \
      *                                                                                                                 \
      * @param addr Destination address without coordinates                                                             \
      * @param coordinates Coordinate generated using NOC_XY_COORD macro                                                \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void set_dest_##buf_name(std::uint64_t addr, std::uint64_t coordinates) {    \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET, addr);                        \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET, coordinates);                \
     }                                                                                                                  \
     /**                                                                                                                \
+     * @def set_dest_cmdbuf_0                                                                                          \
+     * @def set_dest_cmdbuf_1                                                                                          \
      *                                                                                                                 \
      * @brief Sets up destination address only                                                                         \
      *                                                                                                                 \
      * @param addr Destination address                                                                                 \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void set_dest_##buf_name(std::uint64_t addr) {                               \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET, addr);                        \
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def set_scatter_list_cmdbuf_0                                                                                  \
+     * @def set_scatter_list_cmdbuf_1                                                                                  \
      *                                                                                                                 \
      * @brief Configure scatter list parameters                                                                        \
      *                                                                                                                 \
@@ -576,6 +649,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param index Index value                                                                                        \
      * @param times Number of times                                                                                    \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void set_scatter_list_##buf_name(                                            \
         std::uint64_t addr, std::uint64_t base, std::uint64_t index, std::uint64_t times) {                            \
@@ -584,79 +658,145 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_INDEX_REG_OFFSET, index);                   \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_TIMES_REG_OFFSET, times);                   \
     }                                                                                                                  \
-    /** @brief Set the scatter-list wrapping base address. */                                                          \
+    /**                                                                                                                \
+     * @def set_scatter_list_base_cmdbuf_0                                                                             \
+     * @def set_scatter_list_base_cmdbuf_1                                                                             \
+     *                                                                                                                 \
+     * @brief Set the scatter-list wrapping base address.                                                              \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void set_scatter_list_base_##buf_name(std::uint64_t base) {                  \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_BASE_ADDR_REG_OFFSET, base);                \
     }                                                                                                                  \
-    /** @brief Set the current scatter-list entry index. */                                                            \
+    /**                                                                                                                \
+     * @def set_scatter_list_index_cmdbuf_0                                                                            \
+     * @def set_scatter_list_index_cmdbuf_1                                                                            \
+     *                                                                                                                 \
+     * @brief Set the current scatter-list entry index.                                                                \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void set_scatter_list_index_##buf_name(std::uint64_t index) {                \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_INDEX_REG_OFFSET, index);                   \
     }                                                                                                                  \
-    /** @brief Set the number of scatter-list iterations. */                                                           \
+    /**                                                                                                                \
+     * @def set_scatter_list_times_cmdbuf_0                                                                            \
+     * @def set_scatter_list_times_cmdbuf_1                                                                            \
+     *                                                                                                                 \
+     * @brief Set the number of scatter-list iterations.                                                               \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void set_scatter_list_times_##buf_name(std::uint64_t times) {                \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_TIMES_REG_OFFSET, times);                   \
     }                                                                                                                  \
-    /** @brief Return the configured scatter-list address. */                                                          \
+    /**                                                                                                                \
+     * @def get_scatter_list_addr_cmdbuf_0                                                                             \
+     * @def get_scatter_list_addr_cmdbuf_1                                                                             \
+     *                                                                                                                 \
+     * @brief Return the configured scatter-list address.                                                              \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t get_scatter_list_addr_##buf_name() {                           \
         return CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_LIST_ADDR_REG_OFFSET);               \
     }                                                                                                                  \
-    /** @brief Return the configured scatter-list wrapping base address. */                                            \
+    /**                                                                                                                \
+     * @def get_scatter_list_base_cmdbuf_0                                                                             \
+     * @def get_scatter_list_base_cmdbuf_1                                                                             \
+     *                                                                                                                 \
+     * @brief Return the configured scatter-list wrapping base address.                                                \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t get_scatter_list_base_##buf_name() {                           \
         return CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_BASE_ADDR_REG_OFFSET);               \
     }                                                                                                                  \
-    /** @brief Return the current scatter-list entry index. */                                                         \
+    /**                                                                                                                \
+     * @def get_scatter_list_index_cmdbuf_0                                                                            \
+     * @def get_scatter_list_index_cmdbuf_1                                                                            \
+     *                                                                                                                 \
+     * @brief Return the current scatter-list entry index.                                                             \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t get_scatter_list_index_##buf_name() {                          \
         return CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_INDEX_REG_OFFSET);                   \
     }                                                                                                                  \
-    /** @brief Return the configured scatter-list iteration count. */                                                  \
+    /**                                                                                                                \
+     * @def get_scatter_list_times_cmdbuf_0                                                                            \
+     * @def get_scatter_list_times_cmdbuf_1                                                                            \
+     *                                                                                                                 \
+     * @brief Return the configured scatter-list iteration count.                                                      \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t get_scatter_list_times_##buf_name() {                          \
         return CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_TIMES_REG_OFFSET);                   \
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def set_len_cmdbuf_0                                                                                           \
+     * @def set_len_cmdbuf_1                                                                                           \
      *                                                                                                                 \
      * @brief Configures size of transfer in bytes                                                                     \
      *                                                                                                                 \
      * @param size_bytes Size in bytes                                                                                 \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void set_len_##buf_name(std::uint64_t size_bytes) {                          \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET, size_bytes);                  \
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def issue_cmdbuf_0                                                                                             \
+     * @def issue_cmdbuf_1                                                                                             \
      *                                                                                                                 \
      * @brief Issue the transaction currently configured in the command buffer.                                        \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void issue_##buf_name() { CMDBUF_ISSUE_TRANS(cmdbuf); }                      \
                                                                                                                        \
     /**                                                                                                                \
+     * @def issue_read_cmdbuf_0                                                                                        \
+     * @def issue_read_cmdbuf_1                                                                                        \
      *                                                                                                                 \
      * @brief Issues read transaction                                                                                  \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void issue_read_##buf_name() { issue_##buf_name(); }                         \
                                                                                                                        \
     /**                                                                                                                \
+     * @def issue_write_cmdbuf_0                                                                                       \
+     * @def issue_write_cmdbuf_1                                                                                       \
      *                                                                                                                 \
      * @brief Issues write transaction                                                                                 \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void issue_write_##buf_name() { issue_##buf_name(); }                        \
                                                                                                                        \
     /**                                                                                                                \
+     * @def issue_write_inline_cmdbuf_0                                                                                \
+     * @def issue_write_inline_cmdbuf_1                                                                                \
      *                                                                                                                 \
      * @brief Issue an inline NoC write using the configured address and length.                                       \
      *                                                                                                                 \
      * @param data Inline data to be written                                                                           \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void issue_write_inline_##buf_name(std::uint64_t data) {                     \
         CMDBUF_ISSUE_INLINE_TRANS(cmdbuf, data);                                                                       \
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def issue_write_inline_len_cmdbuf_0                                                                            \
+     * @def issue_write_inline_len_cmdbuf_1                                                                            \
      *                                                                                                                 \
      * @brief Issue an inline NoC write with address, length, and packet tags encoded in the instruction.              \
      *                                                                                                                 \
@@ -668,6 +808,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param snoop Flag for enabling snoop bit                                                                        \
      * @param flush Flag for enabling flush bit                                                                        \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void issue_write_inline_len_##buf_name(                                      \
         std::uint64_t data,                                                                                            \
@@ -682,7 +823,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_ISSUE_INLINE_ADDR_TRANS(cmdbuf, data, rs2);                                                             \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Enable generic command-buffer interrupt @p id, which must be in [0, 2]. */                              \
+    /**                                                                                                                \
+     * @def interrupt_enable_cmdbuf_0                                                                                  \
+     * @def interrupt_enable_cmdbuf_1                                                                                  \
+     *                                                                                                                 \
+     * @brief Enable generic command-buffer interrupt @p id, which must be in [0, 2].                                  \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void interrupt_enable_##buf_name(int id) {                                   \
         TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
         val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
@@ -690,7 +838,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Disable generic command-buffer interrupt @p id, which must be in [0, 2]. */                             \
+    /**                                                                                                                \
+     * @def interrupt_disable_cmdbuf_0                                                                                 \
+     * @def interrupt_disable_cmdbuf_1                                                                                 \
+     *                                                                                                                 \
+     * @brief Disable generic command-buffer interrupt @p id, which must be in [0, 2].                                 \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void interrupt_disable_##buf_name(int id) {                                  \
         TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
         val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
@@ -698,20 +853,41 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the complete generic pending-interrupt register. */                                              \
+    /**                                                                                                                \
+     * @def interrupts_pending_cmdbuf_0                                                                                \
+     * @def interrupts_pending_cmdbuf_1                                                                                \
+     *                                                                                                                 \
+     * @brief Return the complete generic pending-interrupt register.                                                  \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t interrupts_pending_##buf_name() {                              \
         TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
         val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                           \
         return val.val;                                                                                                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Clear generic command-buffer interrupt @p id, which must be in [0, 2]. */                               \
+    /**                                                                                                                \
+     * @def interrupt_clear_cmdbuf_0                                                                                   \
+     * @def interrupt_clear_cmdbuf_1                                                                                   \
+     *                                                                                                                 \
+     * @brief Clear generic command-buffer interrupt @p id, which must be in [0, 2].                                   \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void interrupt_clear_##buf_name(int id) {                                    \
         TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
         val.val = ~(1ULL << id);                                                                                       \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, val.val);                            \
     }                                                                                                                  \
-    /** @brief Enable the count-zero interrupt for @p trid. */                                                         \
+    /**                                                                                                                \
+     * @def per_trid_count_zero_interrupt_enable_cmdbuf_0                                                              \
+     * @def per_trid_count_zero_interrupt_enable_cmdbuf_1                                                              \
+     *                                                                                                                 \
+     * @brief Enable the count-zero interrupt for @p trid.                                                             \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_count_zero_interrupt_enable_##buf_name(int trid) {             \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
@@ -719,7 +895,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Disable the count-zero interrupt for @p trid. */                                                        \
+    /**                                                                                                                \
+     * @def per_trid_count_zero_interrupt_disable_cmdbuf_0                                                             \
+     * @def per_trid_count_zero_interrupt_disable_cmdbuf_1                                                             \
+     *                                                                                                                 \
+     * @brief Disable the count-zero interrupt for @p trid.                                                            \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_count_zero_interrupt_disable_##buf_name(int trid) {            \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
@@ -727,7 +910,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the complete count-zero interrupt-enable field. */                                               \
+    /**                                                                                                                \
+     * @def per_trid_count_zero_get_interrupt_enable_cmdbuf_0                                                          \
+     * @def per_trid_count_zero_get_interrupt_enable_cmdbuf_1                                                          \
+     *                                                                                                                 \
+     * @brief Return the complete count-zero interrupt-enable field.                                                   \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint32_t per_trid_count_zero_get_interrupt_enable_##buf_name() {        \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
@@ -743,14 +933,28 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, reg_val);                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the complete count-zero pending-interrupt field. */                                              \
+    /**                                                                                                                \
+     * @def per_trid_count_zero_interrupts_pending_cmdbuf_0                                                            \
+     * @def per_trid_count_zero_interrupts_pending_cmdbuf_1                                                            \
+     *                                                                                                                 \
+     * @brief Return the complete count-zero pending-interrupt field.                                                  \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t per_trid_count_zero_interrupts_pending_##buf_name() {          \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);                   \
         return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the complete count-zero pending-interrupt field. */                                              \
+    /**                                                                                                                \
+     * @def per_trid_count_zero_get_interrupt_pending_cmdbuf_0                                                         \
+     * @def per_trid_count_zero_get_interrupt_pending_cmdbuf_1                                                         \
+     *                                                                                                                 \
+     * @brief Return the complete count-zero pending-interrupt field.                                                  \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint32_t per_trid_count_zero_get_interrupt_pending_##buf_name() {       \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);                   \
@@ -766,14 +970,28 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET, reg_val);                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Clear the count-zero pending interrupt for @p trid. */                                                  \
+    /**                                                                                                                \
+     * @def per_trid_count_zero_interrupt_clear_cmdbuf_0                                                               \
+     * @def per_trid_count_zero_interrupt_clear_cmdbuf_1                                                               \
+     *                                                                                                                 \
+     * @brief Clear the count-zero pending interrupt for @p trid.                                                      \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_count_zero_interrupt_clear_##buf_name(int trid) {              \
         std::uint64_t val;                                                                                             \
         val = ~(1ULL << trid);                                                                                         \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Enable the NoC-write count-zero interrupt for @p trid. */                                               \
+    /**                                                                                                                \
+     * @def per_trid_wr_count_zero_interrupt_enable_cmdbuf_0                                                           \
+     * @def per_trid_wr_count_zero_interrupt_enable_cmdbuf_1                                                           \
+     *                                                                                                                 \
+     * @brief Enable the NoC-write count-zero interrupt for @p trid.                                                   \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_wr_count_zero_interrupt_enable_##buf_name(int trid) {          \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
@@ -781,7 +999,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Disable the NoC-write count-zero interrupt for @p trid. */                                              \
+    /**                                                                                                                \
+     * @def per_trid_wr_count_zero_interrupt_disable_cmdbuf_0                                                          \
+     * @def per_trid_wr_count_zero_interrupt_disable_cmdbuf_1                                                          \
+     *                                                                                                                 \
+     * @brief Disable the NoC-write count-zero interrupt for @p trid.                                                  \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_wr_count_zero_interrupt_disable_##buf_name(int trid) {         \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
@@ -789,14 +1014,28 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the complete NoC-write count-zero interrupt-enable field. */                                     \
+    /**                                                                                                                \
+     * @def per_trid_wr_count_zero_get_interrupt_enable_cmdbuf_0                                                       \
+     * @def per_trid_wr_count_zero_get_interrupt_enable_cmdbuf_1                                                       \
+     *                                                                                                                 \
+     * @brief Return the complete NoC-write count-zero interrupt-enable field.                                         \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint32_t per_trid_wr_count_zero_get_interrupt_enable_##buf_name() {     \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
         return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Replace the NoC-write count-zero interrupt-enable field with @p val. */                                 \
+    /**                                                                                                                \
+     * @def per_trid_wr_count_zero_set_interrupt_enable_cmdbuf_0                                                       \
+     * @def per_trid_wr_count_zero_set_interrupt_enable_cmdbuf_1                                                       \
+     *                                                                                                                 \
+     * @brief Replace the NoC-write count-zero interrupt-enable field with @p val.                                     \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_wr_count_zero_set_interrupt_enable_##buf_name(                 \
         std::uint32_t val) {                                                                                           \
         std::uint64_t reg_val;                                                                                         \
@@ -805,21 +1044,42 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, reg_val);                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the complete NoC-write count-zero pending-interrupt field. */                                    \
+    /**                                                                                                                \
+     * @def per_trid_wr_count_zero_interrupts_pending_cmdbuf_0                                                         \
+     * @def per_trid_wr_count_zero_interrupts_pending_cmdbuf_1                                                         \
+     *                                                                                                                 \
+     * @brief Return the complete NoC-write count-zero pending-interrupt field.                                        \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t per_trid_wr_count_zero_interrupts_pending_##buf_name() {       \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);                   \
         return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the complete NoC-write count-zero pending-interrupt field. */                                    \
+    /**                                                                                                                \
+     * @def per_trid_wr_count_zero_get_interrupt_pending_cmdbuf_0                                                      \
+     * @def per_trid_wr_count_zero_get_interrupt_pending_cmdbuf_1                                                      \
+     *                                                                                                                 \
+     * @brief Return the complete NoC-write count-zero pending-interrupt field.                                        \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint32_t per_trid_wr_count_zero_get_interrupt_pending_##buf_name() {    \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);                   \
         return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Replace the NoC-write count-zero pending-interrupt field with @p val. */                                \
+    /**                                                                                                                \
+     * @def per_trid_wr_count_zero_set_interrupt_pending_cmdbuf_0                                                      \
+     * @def per_trid_wr_count_zero_set_interrupt_pending_cmdbuf_1                                                      \
+     *                                                                                                                 \
+     * @brief Replace the NoC-write count-zero pending-interrupt field with @p val.                                    \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_wr_count_zero_set_interrupt_pending_##buf_name(                \
         std::uint32_t val) {                                                                                           \
         std::uint64_t reg_val;                                                                                         \
@@ -828,14 +1088,28 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET, reg_val);                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Clear the NoC-write count-zero pending interrupt for @p trid. */                                        \
+    /**                                                                                                                \
+     * @def per_trid_wr_count_zero_interrupt_clear_cmdbuf_0                                                            \
+     * @def per_trid_wr_count_zero_interrupt_clear_cmdbuf_1                                                            \
+     *                                                                                                                 \
+     * @brief Clear the NoC-write count-zero pending interrupt for @p trid.                                            \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_wr_count_zero_interrupt_clear_##buf_name(int trid) {           \
         std::uint64_t val;                                                                                             \
         val = ~(1ULL << (trid + 32));                                                                                  \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Enable the iDMA count-zero interrupt for @p trid. */                                                    \
+    /**                                                                                                                \
+     * @def per_trid_idma_count_zero_interrupt_enable_cmdbuf_0                                                         \
+     * @def per_trid_idma_count_zero_interrupt_enable_cmdbuf_1                                                         \
+     *                                                                                                                 \
+     * @brief Enable the iDMA count-zero interrupt for @p trid.                                                        \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_idma_count_zero_interrupt_enable_##buf_name(int trid) {        \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
@@ -843,7 +1117,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Disable the iDMA count-zero interrupt for @p trid. */                                                   \
+    /**                                                                                                                \
+     * @def per_trid_idma_count_zero_interrupt_disable_cmdbuf_0                                                        \
+     * @def per_trid_idma_count_zero_interrupt_disable_cmdbuf_1                                                        \
+     *                                                                                                                 \
+     * @brief Disable the iDMA count-zero interrupt for @p trid.                                                       \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_idma_count_zero_interrupt_disable_##buf_name(int trid) {       \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
@@ -851,14 +1132,28 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the complete iDMA count-zero interrupt-enable field. */                                          \
+    /**                                                                                                                \
+     * @def per_trid_idma_count_zero_get_interrupt_enable_cmdbuf_0                                                     \
+     * @def per_trid_idma_count_zero_get_interrupt_enable_cmdbuf_1                                                     \
+     *                                                                                                                 \
+     * @brief Return the complete iDMA count-zero interrupt-enable field.                                              \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint32_t per_trid_idma_count_zero_get_interrupt_enable_##buf_name() {   \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
         return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Replace the iDMA count-zero interrupt-enable field with @p val. */                                      \
+    /**                                                                                                                \
+     * @def per_trid_idma_count_zero_set_interrupt_enable_cmdbuf_0                                                     \
+     * @def per_trid_idma_count_zero_set_interrupt_enable_cmdbuf_1                                                     \
+     *                                                                                                                 \
+     * @brief Replace the iDMA count-zero interrupt-enable field with @p val.                                          \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_idma_count_zero_set_interrupt_enable_##buf_name(               \
         std::uint32_t val) {                                                                                           \
         std::uint64_t reg_val;                                                                                         \
@@ -867,21 +1162,42 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the complete iDMA count-zero pending-interrupt field. */                                         \
+    /**                                                                                                                \
+     * @def per_trid_idma_count_zero_interrupts_pending_cmdbuf_0                                                       \
+     * @def per_trid_idma_count_zero_interrupts_pending_cmdbuf_1                                                       \
+     *                                                                                                                 \
+     * @brief Return the complete iDMA count-zero pending-interrupt field.                                             \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t per_trid_idma_count_zero_interrupts_pending_##buf_name() {     \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);                   \
         return val & 0xFFFFFFFFULL;                                                                                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the complete iDMA count-zero pending-interrupt field. */                                         \
+    /**                                                                                                                \
+     * @def per_trid_idma_count_zero_get_interrupt_pending_cmdbuf_0                                                    \
+     * @def per_trid_idma_count_zero_get_interrupt_pending_cmdbuf_1                                                    \
+     *                                                                                                                 \
+     * @brief Return the complete iDMA count-zero pending-interrupt field.                                             \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint32_t per_trid_idma_count_zero_get_interrupt_pending_##buf_name() {  \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);                   \
         return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Replace the iDMA count-zero pending-interrupt field with @p val. */                                     \
+    /**                                                                                                                \
+     * @def per_trid_idma_count_zero_set_interrupt_pending_cmdbuf_0                                                    \
+     * @def per_trid_idma_count_zero_set_interrupt_pending_cmdbuf_1                                                    \
+     *                                                                                                                 \
+     * @brief Replace the iDMA count-zero pending-interrupt field with @p val.                                         \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_idma_count_zero_set_interrupt_pending_##buf_name(              \
         std::uint32_t val) {                                                                                           \
         std::uint64_t reg_val;                                                                                         \
@@ -890,14 +1206,28 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET, reg_val);                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Clear the iDMA count-zero pending interrupt for @p trid. */                                             \
+    /**                                                                                                                \
+     * @def per_trid_idma_count_zero_interrupt_clear_cmdbuf_0                                                          \
+     * @def per_trid_idma_count_zero_interrupt_clear_cmdbuf_1                                                          \
+     *                                                                                                                 \
+     * @brief Clear the iDMA count-zero pending interrupt for @p trid.                                                 \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_idma_count_zero_interrupt_clear_##buf_name(int trid) {         \
         std::uint64_t val;                                                                                             \
         val = ~(1ULL << trid);                                                                                         \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Enable the NoC-read tiles-to-process interrupt for @p trid. */                                          \
+    /**                                                                                                                \
+     * @def per_trid_tiles_to_process_interrupt_enable_cmdbuf_0                                                        \
+     * @def per_trid_tiles_to_process_interrupt_enable_cmdbuf_1                                                        \
+     *                                                                                                                 \
+     * @brief Enable the NoC-read tiles-to-process interrupt for @p trid.                                              \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_tiles_to_process_interrupt_enable_##buf_name(int trid) {       \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
@@ -905,7 +1235,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Disable the NoC-read tiles-to-process interrupt for @p trid. */                                         \
+    /**                                                                                                                \
+     * @def per_trid_tiles_to_process_interrupt_disable_cmdbuf_0                                                       \
+     * @def per_trid_tiles_to_process_interrupt_disable_cmdbuf_1                                                       \
+     *                                                                                                                 \
+     * @brief Disable the NoC-read tiles-to-process interrupt for @p trid.                                             \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_tiles_to_process_interrupt_disable_##buf_name(int trid) {      \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
@@ -913,14 +1250,28 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the NoC-read tiles-to-process interrupt-enable field. */                                         \
+    /**                                                                                                                \
+     * @def per_trid_tiles_to_process_get_interrupt_enable_cmdbuf_0                                                    \
+     * @def per_trid_tiles_to_process_get_interrupt_enable_cmdbuf_1                                                    \
+     *                                                                                                                 \
+     * @brief Return the NoC-read tiles-to-process interrupt-enable field.                                             \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint32_t per_trid_tiles_to_process_get_interrupt_enable_##buf_name() {  \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
         return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Replace the NoC-read tiles-to-process interrupt-enable field with @p val. */                            \
+    /**                                                                                                                \
+     * @def per_trid_tiles_to_process_set_interrupt_enable_cmdbuf_0                                                    \
+     * @def per_trid_tiles_to_process_set_interrupt_enable_cmdbuf_1                                                    \
+     *                                                                                                                 \
+     * @brief Replace the NoC-read tiles-to-process interrupt-enable field with @p val.                                \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_tiles_to_process_set_interrupt_enable_##buf_name(              \
         std::uint32_t val) {                                                                                           \
         std::uint64_t reg_val;                                                                                         \
@@ -929,21 +1280,42 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the NoC-read tiles-to-process pending-interrupt field. */                                        \
+    /**                                                                                                                \
+     * @def per_trid_tiles_to_process_interrupts_pending_cmdbuf_0                                                      \
+     * @def per_trid_tiles_to_process_interrupts_pending_cmdbuf_1                                                      \
+     *                                                                                                                 \
+     * @brief Return the NoC-read tiles-to-process pending-interrupt field.                                            \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t per_trid_tiles_to_process_interrupts_pending_##buf_name() {    \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);                   \
         return (val >> 32) & 0xFFFFFFFFULL;                                                                            \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the NoC-read tiles-to-process pending-interrupt field. */                                        \
+    /**                                                                                                                \
+     * @def per_trid_tiles_to_process_get_interrupt_pending_cmdbuf_0                                                   \
+     * @def per_trid_tiles_to_process_get_interrupt_pending_cmdbuf_1                                                   \
+     *                                                                                                                 \
+     * @brief Return the NoC-read tiles-to-process pending-interrupt field.                                            \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint32_t per_trid_tiles_to_process_get_interrupt_pending_##buf_name() { \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);                   \
         return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Replace the NoC-read tiles-to-process pending-interrupt field with @p val. */                           \
+    /**                                                                                                                \
+     * @def per_trid_tiles_to_process_set_interrupt_pending_cmdbuf_0                                                   \
+     * @def per_trid_tiles_to_process_set_interrupt_pending_cmdbuf_1                                                   \
+     *                                                                                                                 \
+     * @brief Replace the NoC-read tiles-to-process pending-interrupt field with @p val.                               \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_tiles_to_process_set_interrupt_pending_##buf_name(             \
         std::uint32_t val) {                                                                                           \
         std::uint64_t reg_val;                                                                                         \
@@ -952,14 +1324,28 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET, reg_val);                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Clear the NoC-read tiles-to-process pending interrupt for @p trid. */                                   \
+    /**                                                                                                                \
+     * @def per_trid_tiles_to_process_interrupt_clear_cmdbuf_0                                                         \
+     * @def per_trid_tiles_to_process_interrupt_clear_cmdbuf_1                                                         \
+     *                                                                                                                 \
+     * @brief Clear the NoC-read tiles-to-process pending interrupt for @p trid.                                       \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_tiles_to_process_interrupt_clear_##buf_name(int trid) {        \
         std::uint64_t val;                                                                                             \
         val = ~(1ULL << (trid + 32));                                                                                  \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Enable the NoC-write tiles-to-process interrupt for @p trid. */                                         \
+    /**                                                                                                                \
+     * @def per_trid_wr_tiles_to_process_interrupt_enable_cmdbuf_0                                                     \
+     * @def per_trid_wr_tiles_to_process_interrupt_enable_cmdbuf_1                                                     \
+     *                                                                                                                 \
+     * @brief Enable the NoC-write tiles-to-process interrupt for @p trid.                                             \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_interrupt_enable_##buf_name(int trid) {    \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
@@ -967,7 +1353,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Disable the NoC-write tiles-to-process interrupt for @p trid. */                                        \
+    /**                                                                                                                \
+     * @def per_trid_wr_tiles_to_process_interrupt_disable_cmdbuf_0                                                    \
+     * @def per_trid_wr_tiles_to_process_interrupt_disable_cmdbuf_1                                                    \
+     *                                                                                                                 \
+     * @brief Disable the NoC-write tiles-to-process interrupt for @p trid.                                            \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_interrupt_disable_##buf_name(int trid) {   \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
@@ -983,7 +1376,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Replace the NoC-write tiles-to-process interrupt-enable field with @p val. */                           \
+    /**                                                                                                                \
+     * @def per_trid_wr_tiles_to_process_set_interrupt_enable_cmdbuf_0                                                 \
+     * @def per_trid_wr_tiles_to_process_set_interrupt_enable_cmdbuf_1                                                 \
+     *                                                                                                                 \
+     * @brief Replace the NoC-write tiles-to-process interrupt-enable field with @p val.                               \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_set_interrupt_enable_##buf_name(           \
         std::uint32_t val) {                                                                                           \
         std::uint64_t reg_val;                                                                                         \
@@ -992,7 +1392,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the NoC-write tiles-to-process pending-interrupt field. */                                       \
+    /**                                                                                                                \
+     * @def per_trid_wr_tiles_to_process_interrupts_pending_cmdbuf_0                                                   \
+     * @def per_trid_wr_tiles_to_process_interrupts_pending_cmdbuf_1                                                   \
+     *                                                                                                                 \
+     * @brief Return the NoC-write tiles-to-process pending-interrupt field.                                           \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t per_trid_wr_tiles_to_process_interrupts_pending_##buf_name() { \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);                   \
@@ -1007,7 +1414,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Replace the NoC-write tiles-to-process pending-interrupt field with @p val. */                          \
+    /**                                                                                                                \
+     * @def per_trid_wr_tiles_to_process_set_interrupt_pending_cmdbuf_0                                                \
+     * @def per_trid_wr_tiles_to_process_set_interrupt_pending_cmdbuf_1                                                \
+     *                                                                                                                 \
+     * @brief Replace the NoC-write tiles-to-process pending-interrupt field with @p val.                              \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_set_interrupt_pending_##buf_name(          \
         std::uint32_t val) {                                                                                           \
         std::uint64_t reg_val;                                                                                         \
@@ -1016,14 +1430,28 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET, reg_val);                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Clear the NoC-write tiles-to-process pending interrupt for @p trid. */                                  \
+    /**                                                                                                                \
+     * @def per_trid_wr_tiles_to_process_interrupt_clear_cmdbuf_0                                                      \
+     * @def per_trid_wr_tiles_to_process_interrupt_clear_cmdbuf_1                                                      \
+     *                                                                                                                 \
+     * @brief Clear the NoC-write tiles-to-process pending interrupt for @p trid.                                      \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_interrupt_clear_##buf_name(int trid) {     \
         std::uint64_t val;                                                                                             \
         val = ~(1ULL << trid);                                                                                         \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Enable the iDMA tiles-to-process interrupt for @p trid. */                                              \
+    /**                                                                                                                \
+     * @def per_trid_idma_tiles_to_process_interrupt_enable_cmdbuf_0                                                   \
+     * @def per_trid_idma_tiles_to_process_interrupt_enable_cmdbuf_1                                                   \
+     *                                                                                                                 \
+     * @brief Enable the iDMA tiles-to-process interrupt for @p trid.                                                  \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_interrupt_enable_##buf_name(int trid) {  \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
@@ -1031,7 +1459,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Disable the iDMA tiles-to-process interrupt for @p trid. */                                             \
+    /**                                                                                                                \
+     * @def per_trid_idma_tiles_to_process_interrupt_disable_cmdbuf_0                                                  \
+     * @def per_trid_idma_tiles_to_process_interrupt_disable_cmdbuf_1                                                  \
+     *                                                                                                                 \
+     * @brief Disable the iDMA tiles-to-process interrupt for @p trid.                                                 \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_interrupt_disable_##buf_name(int trid) { \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
@@ -1047,7 +1482,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Replace the iDMA tiles-to-process interrupt-enable field with @p val. */                                \
+    /**                                                                                                                \
+     * @def per_trid_idma_tiles_to_process_set_interrupt_enable_cmdbuf_0                                               \
+     * @def per_trid_idma_tiles_to_process_set_interrupt_enable_cmdbuf_1                                               \
+     *                                                                                                                 \
+     * @brief Replace the iDMA tiles-to-process interrupt-enable field with @p val.                                    \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_set_interrupt_enable_##buf_name(         \
         std::uint32_t val) {                                                                                           \
         std::uint64_t reg_val;                                                                                         \
@@ -1072,7 +1514,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Replace the iDMA tiles-to-process pending-interrupt field with @p val. */                               \
+    /**                                                                                                                \
+     * @def per_trid_idma_tiles_to_process_set_interrupt_pending_cmdbuf_0                                              \
+     * @def per_trid_idma_tiles_to_process_set_interrupt_pending_cmdbuf_1                                              \
+     *                                                                                                                 \
+     * @brief Replace the iDMA tiles-to-process pending-interrupt field with @p val.                                   \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_set_interrupt_pending_##buf_name(        \
         std::uint32_t val) {                                                                                           \
         std::uint64_t reg_val;                                                                                         \
@@ -1081,14 +1530,28 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET, reg_val);                \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Clear the iDMA tiles-to-process pending interrupt for @p trid. */                                       \
+    /**                                                                                                                \
+     * @def per_trid_idma_tiles_to_process_interrupt_clear_cmdbuf_0                                                    \
+     * @def per_trid_idma_tiles_to_process_interrupt_clear_cmdbuf_1                                                    \
+     *                                                                                                                 \
+     * @brief Clear the iDMA tiles-to-process pending interrupt for @p trid.                                           \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_interrupt_clear_##buf_name(int trid) {   \
         std::uint64_t val;                                                                                             \
         val = ~(1ULL << (trid + 32));                                                                                  \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET, val);                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Enable the NoC VC-has-space interrupt for @p vc, which must be in [0, 11]. */                           \
+    /**                                                                                                                \
+     * @def per_vc_has_space_interrupt_enable_cmdbuf_0                                                                 \
+     * @def per_vc_has_space_interrupt_enable_cmdbuf_1                                                                 \
+     *                                                                                                                 \
+     * @brief Enable the NoC VC-has-space interrupt for @p vc, which must be in [0, 11].                               \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_vc_has_space_interrupt_enable_##buf_name(int vc) {                  \
         TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
         val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
@@ -1096,7 +1559,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Disable the NoC VC-has-space interrupt for @p vc, which must be in [0, 11]. */                          \
+    /**                                                                                                                \
+     * @def per_vc_has_space_interrupt_disable_cmdbuf_0                                                                \
+     * @def per_vc_has_space_interrupt_disable_cmdbuf_1                                                                \
+     *                                                                                                                 \
+     * @brief Disable the NoC VC-has-space interrupt for @p vc, which must be in [0, 11].                              \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_vc_has_space_interrupt_disable_##buf_name(int vc) {                 \
         TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
         val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
@@ -1104,14 +1574,28 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the NoC VC-has-space interrupt-enable field. */                                                  \
+    /**                                                                                                                \
+     * @def per_vc_has_space_get_interrupt_enable_cmdbuf_0                                                             \
+     * @def per_vc_has_space_get_interrupt_enable_cmdbuf_1                                                             \
+     *                                                                                                                 \
+     * @brief Return the NoC VC-has-space interrupt-enable field.                                                      \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint16_t per_vc_has_space_get_interrupt_enable_##buf_name() {           \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                               \
         return (val & TT_ROCC_CMD_BUF_IE_PER_VC_HAS_SPACE_IE_MASK) >> TT_ROCC_CMD_BUF_IE_PER_VC_HAS_SPACE_IE_SHIFT;    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Replace the NoC VC-has-space interrupt-enable field with @p val. */                                     \
+    /**                                                                                                                \
+     * @def per_vc_has_space_set_interrupt_enable_cmdbuf_0                                                             \
+     * @def per_vc_has_space_set_interrupt_enable_cmdbuf_1                                                             \
+     *                                                                                                                 \
+     * @brief Replace the NoC VC-has-space interrupt-enable field with @p val.                                         \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_vc_has_space_set_interrupt_enable_##buf_name(std::uint16_t val) {   \
         std::uint64_t reg_val;                                                                                         \
         reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
@@ -1121,7 +1605,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, reg_val);                            \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the NoC VC-has-space pending-interrupt field. */                                                 \
+    /**                                                                                                                \
+     * @def per_vc_has_space_interrupts_pending_cmdbuf_0                                                               \
+     * @def per_vc_has_space_interrupts_pending_cmdbuf_1                                                               \
+     *                                                                                                                 \
+     * @brief Return the NoC VC-has-space pending-interrupt field.                                                     \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t per_vc_has_space_interrupts_pending_##buf_name() {             \
         TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
         val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                           \
@@ -1129,14 +1620,28 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
                TT_ROCC_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_SHIFT;                                                           \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the NoC VC-has-space pending-interrupt field. */                                                 \
+    /**                                                                                                                \
+     * @def per_vc_has_space_get_interrupt_pending_cmdbuf_0                                                            \
+     * @def per_vc_has_space_get_interrupt_pending_cmdbuf_1                                                            \
+     *                                                                                                                 \
+     * @brief Return the NoC VC-has-space pending-interrupt field.                                                     \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint16_t per_vc_has_space_get_interrupt_pending_##buf_name() {          \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                               \
         return (val & TT_ROCC_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_MASK) >> TT_ROCC_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_SHIFT;    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Replace the NoC VC-has-space pending-interrupt field with @p val. */                                    \
+    /**                                                                                                                \
+     * @def per_vc_has_space_set_interrupt_pending_cmdbuf_0                                                            \
+     * @def per_vc_has_space_set_interrupt_pending_cmdbuf_1                                                            \
+     *                                                                                                                 \
+     * @brief Replace the NoC VC-has-space pending-interrupt field with @p val.                                        \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_vc_has_space_set_interrupt_pending_##buf_name(std::uint16_t val) {  \
         std::uint64_t reg_val;                                                                                         \
         reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                           \
@@ -1146,14 +1651,28 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, reg_val);                            \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Clear the NoC VC-has-space interrupt for @p vc, which must be in [0, 11]. */                            \
+    /**                                                                                                                \
+     * @def per_vc_has_space_interrupt_clear_cmdbuf_0                                                                  \
+     * @def per_vc_has_space_interrupt_clear_cmdbuf_1                                                                  \
+     *                                                                                                                 \
+     * @brief Clear the NoC VC-has-space interrupt for @p vc, which must be in [0, 11].                                \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_vc_has_space_interrupt_clear_##buf_name(int vc) {                   \
         TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
         val.val = ~(1ULL << (vc + 32));                                                                                \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, val.val);                            \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Enable the iDMA VC-has-space interrupt for @p vc, which must be in [0, 11]. */                          \
+    /**                                                                                                                \
+     * @def per_idma_vc_has_space_interrupt_enable_cmdbuf_0                                                            \
+     * @def per_idma_vc_has_space_interrupt_enable_cmdbuf_1                                                            \
+     *                                                                                                                 \
+     * @brief Enable the iDMA VC-has-space interrupt for @p vc, which must be in [0, 11].                              \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_idma_vc_has_space_interrupt_enable_##buf_name(int vc) {             \
         TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
         val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
@@ -1161,7 +1680,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Disable the iDMA VC-has-space interrupt for @p vc, which must be in [0, 11]. */                         \
+    /**                                                                                                                \
+     * @def per_idma_vc_has_space_interrupt_disable_cmdbuf_0                                                           \
+     * @def per_idma_vc_has_space_interrupt_disable_cmdbuf_1                                                           \
+     *                                                                                                                 \
+     * @brief Disable the iDMA VC-has-space interrupt for @p vc, which must be in [0, 11].                             \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_idma_vc_has_space_interrupt_disable_##buf_name(int vc) {            \
         TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
         val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
@@ -1169,7 +1695,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the iDMA VC-has-space interrupt-enable field. */                                                 \
+    /**                                                                                                                \
+     * @def per_idma_vc_has_space_get_interrupt_enable_cmdbuf_0                                                        \
+     * @def per_idma_vc_has_space_get_interrupt_enable_cmdbuf_1                                                        \
+     *                                                                                                                 \
+     * @brief Return the iDMA VC-has-space interrupt-enable field.                                                     \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint16_t per_idma_vc_has_space_get_interrupt_enable_##buf_name() {      \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                               \
@@ -1188,7 +1721,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, reg_val);                            \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the iDMA VC-has-space pending-interrupt field. */                                                \
+    /**                                                                                                                \
+     * @def per_idma_vc_has_space_interrupts_pending_cmdbuf_0                                                          \
+     * @def per_idma_vc_has_space_interrupts_pending_cmdbuf_1                                                          \
+     *                                                                                                                 \
+     * @brief Return the iDMA VC-has-space pending-interrupt field.                                                    \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t per_idma_vc_has_space_interrupts_pending_##buf_name() {        \
         TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
         val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                           \
@@ -1196,7 +1736,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
                TT_ROCC_CMD_BUF_IP_PER_IDMA_VC_HAS_SPACE_IP_SHIFT;                                                      \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return the iDMA VC-has-space pending-interrupt field. */                                                \
+    /**                                                                                                                \
+     * @def per_idma_vc_has_space_get_interrupt_pending_cmdbuf_0                                                       \
+     * @def per_idma_vc_has_space_get_interrupt_pending_cmdbuf_1                                                       \
+     *                                                                                                                 \
+     * @brief Return the iDMA VC-has-space pending-interrupt field.                                                    \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint16_t per_idma_vc_has_space_get_interrupt_pending_##buf_name() {     \
         std::uint64_t val;                                                                                             \
         val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                               \
@@ -1204,7 +1751,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
                TT_ROCC_CMD_BUF_IP_PER_IDMA_VC_HAS_SPACE_IP_SHIFT;                                                      \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Replace the iDMA VC-has-space pending-interrupt field with @p val. */                                   \
+    /**                                                                                                                \
+     * @def per_idma_vc_has_space_set_interrupt_pending_cmdbuf_0                                                       \
+     * @def per_idma_vc_has_space_set_interrupt_pending_cmdbuf_1                                                       \
+     *                                                                                                                 \
+     * @brief Replace the iDMA VC-has-space pending-interrupt field with @p val.                                       \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_idma_vc_has_space_set_interrupt_pending_##buf_name(                 \
         std::uint16_t val) {                                                                                           \
         std::uint64_t reg_val;                                                                                         \
@@ -1215,7 +1769,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, reg_val);                            \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Clear the iDMA VC-has-space interrupt for @p vc, which must be in [0, 11]. */                           \
+    /**                                                                                                                \
+     * @def per_idma_vc_has_space_interrupt_clear_cmdbuf_0                                                             \
+     * @def per_idma_vc_has_space_interrupt_clear_cmdbuf_1                                                             \
+     *                                                                                                                 \
+     * @brief Clear the iDMA VC-has-space interrupt for @p vc, which must be in [0, 11].                               \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void per_idma_vc_has_space_interrupt_clear_##buf_name(int vc) {              \
         TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
         val.val = ~(1ULL << (vc + 48));                                                                                \
@@ -1223,6 +1784,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def noc_fast_read_cmdbuf_0                                                                                     \
+     * @def noc_fast_read_cmdbuf_1                                                                                     \
      *                                                                                                                 \
      * @brief Standalone noc read function which uses custom ASM instruction, bypassing all configurations             \
      * Does not need any other configuring                                                                             \
@@ -1235,6 +1798,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param snoop Flag for enabling snoop bit                                                                        \
      * @param flush Flag for enabling flush bit                                                                        \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void noc_fast_read_##buf_name(                                               \
         std::uint64_t src_addr,                                                                                        \
@@ -1250,6 +1814,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def noc_read_cmdbuf_0                                                                                          \
+     * @def noc_read_cmdbuf_1                                                                                          \
      *                                                                                                                 \
      * @brief Reset, configure, and issue one NoC read.                                                                \
      * @warning Resetting is unsafe while this command buffer has outstanding work.                                    \
@@ -1263,6 +1829,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param snoop_bit Flag for enabling snoop bit                                                                    \
      * @param flush_bit Flag for enabling flush bit                                                                    \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void noc_read_##buf_name(                                                    \
         std::uint64_t src_coordinate,                                                                                  \
@@ -1288,8 +1855,12 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def noc_write_prep_cmdbuf_0                                                                                    \
+     * @def noc_write_prep_cmdbuf_1                                                                                    \
      * @brief Reset and configure a NoC write without issuing it.                                                      \
      * @note Resetting is unsafe while this command buffer has outstanding work.                                       \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void noc_write_prep_##buf_name(                                              \
         std::uint64_t src_coordinate,                                                                                  \
@@ -1316,8 +1887,12 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def noc_read_prep_cmdbuf_0                                                                                     \
+     * @def noc_read_prep_cmdbuf_1                                                                                     \
      * @brief Reset and configure a NoC read without issuing it.                                                       \
      * @note Resetting is unsafe while this command buffer has outstanding work.                                       \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void noc_read_prep_##buf_name(                                               \
         std::uint64_t src_coordinate,                                                                                  \
@@ -1342,6 +1917,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def noc_fast_write_cmdbuf_0                                                                                    \
+     * @def noc_fast_write_cmdbuf_1                                                                                    \
      *                                                                                                                 \
      * @brief Standalone noc write function which uses custom ASM instruction, bypassing all configurations            \
      * Does not need any other configuring (reset cmd buffer before use)                                               \
@@ -1354,6 +1931,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param snoop Flag for enabling snoop bit                                                                        \
      * @param flush Flag for enabling flush bit                                                                        \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void noc_fast_write_##buf_name(                                              \
         std::uint32_t src_addr,                                                                                        \
@@ -1369,6 +1947,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def noc_write_cmdbuf_0                                                                                         \
+     * @def noc_write_cmdbuf_1                                                                                         \
      *                                                                                                                 \
      * @brief Reset, configure, and issue one NoC write.                                                               \
      * @warning Resetting is unsafe while this command buffer has outstanding work.                                    \
@@ -1385,6 +1965,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param posted Flag if transfer should be posted or not                                                          \
      * @param mcast_exclude Multicast exclusion settings                                                               \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void noc_write_##buf_name(                                                   \
         std::uint64_t src_coordinate,                                                                                  \
@@ -1413,6 +1994,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def idma_copy_cmdbuf_0                                                                                         \
+     * @def idma_copy_cmdbuf_1                                                                                         \
      *                                                                                                                 \
      * @brief Complete iDMA copy operation                                                                             \
      *                                                                                                                 \
@@ -1421,6 +2004,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param len_bytes Size of data in bytes                                                                          \
      * @param transaction_id Transaction ID for this operation                                                         \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void idma_copy_##buf_name(                                                   \
         std::uint64_t src_addr,                                                                                        \
@@ -1439,6 +2023,8 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def noc_atomic_increment_cmdbuf_0                                                                              \
+     * @def noc_atomic_increment_cmdbuf_1                                                                              \
      *                                                                                                                 \
      * @brief Atomic increment function                                                                                \
      *                                                                                                                 \
@@ -1449,6 +2035,7 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param snoop_bit Flag for enabling snoop bit                                                                    \
      * @param flush_bit Flag for enabling flush bit                                                                    \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void noc_atomic_increment_##buf_name(                                        \
         std::uint64_t noc_coordinate,                                                                                  \
@@ -1470,45 +2057,86 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def free_space_cmdbuf_0                                                                                        \
+     * @def free_space_cmdbuf_1                                                                                        \
      *                                                                                                                 \
      * @brief Returns amount of free buffer space in virtual channel buffer                                            \
      *                                                                                                                 \
      * @param vc Virtual channel ID                                                                                    \
      * @return Amount in bytes                                                                                         \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t free_space_##buf_name(std::uint32_t vc) {                      \
         return CMDBUF_GET_VC_SPACE_VC(cmdbuf, vc);                                                                     \
     }                                                                                                                  \
-    /** @brief Return free space for the currently configured NoC request VC. */                                       \
+    /**                                                                                                                \
+     * @def free_space_cmdbuf_0                                                                                        \
+     * @def free_space_cmdbuf_1                                                                                        \
+     *                                                                                                                 \
+     * @brief Return free space for the currently configured NoC request VC.                                           \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t free_space_##buf_name() {                                      \
         return CMDBUF_GET_VC_SPACE(cmdbuf);                                                                            \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return free space for iDMA virtual channel @p vc. */                                                    \
+    /**                                                                                                                \
+     * @def idma_free_space_cmdbuf_0                                                                                   \
+     * @def idma_free_space_cmdbuf_1                                                                                   \
+     *                                                                                                                 \
+     * @brief Return free space for iDMA virtual channel @p vc.                                                        \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t idma_free_space_##buf_name(std::uint32_t vc) {                 \
         return CMDBUF_IDMA_GET_VC_SPACE_VC(cmdbuf, vc);                                                                \
     }                                                                                                                  \
-    /** @brief Return free space for the currently configured iDMA request VC. */                                      \
+    /**                                                                                                                \
+     * @def idma_free_space_cmdbuf_0                                                                                   \
+     * @def idma_free_space_cmdbuf_1                                                                                   \
+     *                                                                                                                 \
+     * @brief Return free space for the currently configured iDMA request VC.                                          \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) std::uint64_t idma_free_space_##buf_name() {                                 \
         return CMDBUF_IDMA_GET_VC_SPACE(cmdbuf);                                                                       \
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def noc_reads_acked_cmdbuf_0                                                                                   \
+     * @def noc_reads_acked_cmdbuf_1                                                                                   \
      *                                                                                                                 \
      * @brief Checks if transaction with argument trid is completed                                                    \
      *                                                                                                                 \
      * @param transaction_id Transaction id to check                                                                   \
      * @return True when the transaction has completed.                                                                \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) bool noc_reads_acked_##buf_name(std::uint32_t transaction_id) {              \
         return CMDBUF_TR_ACK_TRID(cmdbuf, transaction_id) == 0;                                                        \
     }                                                                                                                  \
-    /** @brief Return whether the current transaction ID has no pending NoC read acknowledgements. */                  \
+    /**                                                                                                                \
+     * @def noc_reads_acked_cmdbuf_0                                                                                   \
+     * @def noc_reads_acked_cmdbuf_1                                                                                   \
+     *                                                                                                                 \
+     * @brief Return whether the current transaction ID has no pending NoC read acknowledgements.                      \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) bool noc_reads_acked_##buf_name() { return CMDBUF_TR_ACK(cmdbuf) == 0; }     \
                                                                                                                        \
-    /** @brief Return whether every transaction ID reserved for this buffer has completed its NoC reads. */            \
+    /**                                                                                                                \
+     * @def all_noc_reads_acked_cmdbuf_0                                                                               \
+     * @def all_noc_reads_acked_cmdbuf_1                                                                               \
+     *                                                                                                                 \
+     * @brief Return whether every transaction ID reserved for this buffer has completed its NoC reads.                \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) bool all_noc_reads_acked_##buf_name() {                                      \
         bool all = true;                                                                                               \
         if (cmdbuf == CMDBUF_0) {                                                                                      \
@@ -1523,14 +2151,35 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         return all;                                                                                                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return whether @p transaction_id has no pending iDMA acknowledgements. */                               \
+    /**                                                                                                                \
+     * @def idma_acked_cmdbuf_0                                                                                        \
+     * @def idma_acked_cmdbuf_1                                                                                        \
+     *                                                                                                                 \
+     * @brief Return whether @p transaction_id has no pending iDMA acknowledgements.                                   \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) bool idma_acked_##buf_name(std::uint32_t transaction_id) {                   \
         return CMDBUF_IDMA_TR_ACK_TRID(cmdbuf, transaction_id) == 0;                                                   \
     }                                                                                                                  \
-    /** @brief Return whether the current transaction ID has no pending iDMA acknowledgements. */                      \
+    /**                                                                                                                \
+     * @def idma_acked_cmdbuf_0                                                                                        \
+     * @def idma_acked_cmdbuf_1                                                                                        \
+     *                                                                                                                 \
+     * @brief Return whether the current transaction ID has no pending iDMA acknowledgements.                          \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) bool idma_acked_##buf_name() { return CMDBUF_IDMA_TR_ACK(cmdbuf) == 0; }     \
                                                                                                                        \
-    /** @brief Return whether every transaction ID reserved for this buffer has completed its iDMA work. */            \
+    /**                                                                                                                \
+     * @def all_idma_acked_cmdbuf_0                                                                                    \
+     * @def all_idma_acked_cmdbuf_1                                                                                    \
+     *                                                                                                                 \
+     * @brief Return whether every transaction ID reserved for this buffer has completed its iDMA work.                \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) bool all_idma_acked_##buf_name() {                                           \
         bool all = true;                                                                                               \
         if (cmdbuf == CMDBUF_0) {                                                                                      \
@@ -1546,20 +2195,37 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def noc_writes_sent_cmdbuf_0                                                                                   \
+     * @def noc_writes_sent_cmdbuf_1                                                                                   \
      *                                                                                                                 \
      * @brief Checks if write with provided transaction ID is completed                                                \
      *                                                                                                                 \
      * @param transaction_id Transaction id to check                                                                   \
      * @return True when the write has been sent.                                                                      \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) bool noc_writes_sent_##buf_name(std::uint32_t transaction_id) {              \
         return CMDBUF_WR_SENT_TRID(cmdbuf, transaction_id) == 0;                                                       \
     }                                                                                                                  \
-    /** @brief Return whether the current transaction ID has no pending NoC write sends. */                            \
+    /**                                                                                                                \
+     * @def noc_writes_sent_cmdbuf_0                                                                                   \
+     * @def noc_writes_sent_cmdbuf_1                                                                                   \
+     *                                                                                                                 \
+     * @brief Return whether the current transaction ID has no pending NoC write sends.                                \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) bool noc_writes_sent_##buf_name() { return CMDBUF_WR_SENT(cmdbuf) == 0; }    \
                                                                                                                        \
-    /** @brief Return whether every transaction ID reserved for this buffer has sent its NoC writes. */                \
+    /**                                                                                                                \
+     * @def all_noc_writes_sent_cmdbuf_0                                                                               \
+     * @def all_noc_writes_sent_cmdbuf_1                                                                               \
+     *                                                                                                                 \
+     * @brief Return whether every transaction ID reserved for this buffer has sent its NoC writes.                    \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) bool all_noc_writes_sent_##buf_name() {                                      \
         bool all = true;                                                                                               \
         if (cmdbuf == CMDBUF_0) {                                                                                      \
@@ -1575,22 +2241,39 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def noc_nonposted_writes_acked_cmdbuf_0                                                                        \
+     * @def noc_nonposted_writes_acked_cmdbuf_1                                                                        \
      *                                                                                                                 \
      * @brief Checks if nonposted write transaction is acknowledged                                                    \
      *                                                                                                                 \
      * @param transaction_id Transaction id to check                                                                   \
      * @return True if nonposted write is acknowledged                                                                 \
      *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) bool noc_nonposted_writes_acked_##buf_name(std::uint32_t transaction_id) {   \
         return CMDBUF_TR_ACK_TRID(cmdbuf, transaction_id) == 0;                                                        \
     }                                                                                                                  \
-    /** @brief Return whether the current transaction ID has no pending non-posted write acknowledgements. */          \
+    /**                                                                                                                \
+     * @def noc_nonposted_writes_acked_cmdbuf_0                                                                        \
+     * @def noc_nonposted_writes_acked_cmdbuf_1                                                                        \
+     *                                                                                                                 \
+     * @brief Return whether the current transaction ID has no pending non-posted write acknowledgements.              \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) bool noc_nonposted_writes_acked_##buf_name() {                               \
         return CMDBUF_TR_ACK(cmdbuf) == 0;                                                                             \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Return whether all reserved transaction IDs have completed their non-posted writes. */                  \
+    /**                                                                                                                \
+     * @def all_noc_nonposted_writes_acked_cmdbuf_0                                                                    \
+     * @def all_noc_nonposted_writes_acked_cmdbuf_1                                                                    \
+     *                                                                                                                 \
+     * @brief Return whether all reserved transaction IDs have completed their non-posted writes.                      \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) bool all_noc_nonposted_writes_acked_##buf_name() {                           \
         bool all = true;                                                                                               \
         if (cmdbuf == CMDBUF_0) {                                                                                      \
@@ -1605,7 +2288,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         return all;                                                                                                    \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Configure the L1 atomic-accumulate format, saturation, and operation. */                                \
+    /**                                                                                                                \
+     * @def l1_atomic_instr_cmdbuf_0                                                                                   \
+     * @def l1_atomic_instr_cmdbuf_1                                                                                   \
+     *                                                                                                                 \
+     * @brief Configure the L1 atomic-accumulate format, saturation, and operation.                                    \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void l1_atomic_instr_##buf_name(                                             \
         std::uint32_t fmt, bool no_sat, std::uint32_t atomic_op) {                                                     \
         TT_ROCC_CMD_BUF_L1_ACCUM_CFG_reg_u l1_atomic_instr;                                                            \
@@ -1618,7 +2308,14 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_L1_ACCUM_CFG_REG_OFFSET, l1_atomic_instr.val);      \
     }                                                                                                                  \
                                                                                                                        \
-    /** @brief Configure this complex command buffer for iDMA L1 atomic accumulation. */                               \
+    /**                                                                                                                \
+     * @def idma_setup_as_atomic_accum_cmdbuf_0                                                                        \
+     * @def idma_setup_as_atomic_accum_cmdbuf_1                                                                        \
+     *                                                                                                                 \
+     * @brief Configure this complex command buffer for iDMA L1 atomic accumulation.                                   \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
+     */                                                                                                                \
     inline __attribute__((always_inline)) void idma_setup_as_atomic_accum_##buf_name(bool wrapping_en = true) {        \
         TT_ROCC_CMD_BUF_MISC_reg_u misc;                                                                               \
         misc.val = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;                                                                   \
@@ -1632,8 +2329,12 @@ constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /**                                                                                                                \
+     * @def idma_l1_atomic_accum_cmdbuf_0                                                                              \
+     * @def idma_l1_atomic_accum_cmdbuf_1                                                                              \
      * @brief Reset, configure, and issue one iDMA L1 atomic-accumulate transaction.                                   \
      * @note Resetting is unsafe while this command buffer has outstanding work.                                       \
+     *                                                                                                                 \
+     * @note DEFINE_CMD_BUFS generates one inline function for each complex command buffer.                            \
      */                                                                                                                \
     inline __attribute__((always_inline)) void idma_l1_atomic_accum_##buf_name(                                        \
         std::uint64_t src_addr,                                                                                        \
