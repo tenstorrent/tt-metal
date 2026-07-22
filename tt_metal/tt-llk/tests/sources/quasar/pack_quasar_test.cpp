@@ -43,6 +43,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
             }
+            else
+            {
+                // CFG persists across run types, so isolates must not inherit
+                // the L1_TO_L1 unpack-to-dest handshake.
+                std::uint32_t volatile* cfg                      = (std::uint32_t volatile*)TENSIX_CFG_BASE;
+                cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+            }
 
             DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
             if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
@@ -137,7 +144,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         {
             ZONE_SCOPED("INIT")
-            // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
+            // Only L1_TO_L1 and MATH_ISOLATE use the FPU→PACK dest-dvalid
+            // handshake; the remaining isolate modes have no FPU consumer.
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -232,7 +240,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
+            std::uint32_t volatile* cfg                 = (std::uint32_t volatile*)TENSIX_CFG_BASE;
             cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
