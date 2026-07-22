@@ -827,7 +827,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     std::holds_alternative<DataMovementGen1Config>(data_movement_config),
                     "KernelSpec '{}' targets Gen1 (WH/BH) but its DataMovementHardwareConfig holds a "
                     "DataMovementGen2Config. Supply a Gen1 config (e.g. "
-                    "CreateReader1xxDataMovementConfig()/CreateWriter1xxDataMovementConfig()).",
+                    "CreateReaderGen1DataMovementConfig()/CreateWriterGen1DataMovementConfig()).",
                     kernel.unique_id);
 
                 // Gen1 has exactly two DM processors: RISCV_0 (BRISC) and RISCV_1 (NCRISC).
@@ -2950,6 +2950,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
     // Step 3: Build the Program
     auto program_impl = std::make_shared<detail::ProgramImpl>();
+    program_impl->mark_created_from_spec();  // mark as Metal 2.0 ProgramSpec-created (for legality checks)
 
     // Register TensorParameters with the program for ValidateProgramRunArgs to consult at enqueue.
     for (const auto& tensor_parameter : spec.tensor_parameters) {
