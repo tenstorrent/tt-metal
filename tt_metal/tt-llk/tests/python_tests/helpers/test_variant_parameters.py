@@ -304,13 +304,18 @@ class APPROX_MODE(TemplateParameter):
 
 
 @dataclass
-class BLOCK_CT_DIM(TemplateParameter):
-    """Compile-time block width (in tiles) for the block-based reduce_block_max_row LLKs."""
+class REDUCE_BLOCK_CT_DIM(TemplateParameter):
+    """Compile-time block width (in tiles) for the block-based reduce_block_max_row LLKs.
+
+    Emits a dedicated ``REDUCE_BLOCK_CT_DIM`` symbol (not ``BLOCK_CT_DIM``) so it cannot
+    collide with the ``BLOCK_CT_DIM`` that ``INPUT_DIMENSIONS`` already emits — the header
+    generator concatenates every param's ``convert_to_cpp()`` with no de-dup.
+    """
 
     block_ct_dim: int
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t BLOCK_CT_DIM = {self.block_ct_dim};"
+        return f"constexpr std::uint32_t REDUCE_BLOCK_CT_DIM = {self.block_ct_dim};"
 
 
 @dataclass
@@ -335,8 +340,10 @@ class REINIT_MODE(TemplateParameter):
 
 @dataclass
 class CLOBBER_OP(TemplateParameter):
-    """Op run between reduce init and reinit to overwrite the reduce MOP/addrmods:
-    0=none, 1=eltwise binary (reconfig-escape guard for the reinit paths)."""
+    """Op run between reduce init and reinit to overwrite the reduce MOP/addrmods
+    (reconfig-escape guard for the reinit paths):
+    0=none, 1=eltwise binary (all addrmods + MOP), 2=minimal_safe (ADDR_MOD_1/2/6 only).
+    """
 
     clobber_op: int = 0
 

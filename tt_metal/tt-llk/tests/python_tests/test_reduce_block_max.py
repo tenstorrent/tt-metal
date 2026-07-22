@@ -21,8 +21,9 @@ pure MAX and the scaler is a no-op multiplier.
 Coverage (Blackhole + Wormhole B0):
   * compile-time path, ``block_ct_dim`` sweep, bf16 and fp32-dest;
   * runtime path (dynamic ``block_ct_dim``);
-  * reinit_short / reinit_minimal (compile-time = Blackhole-only lib fns; runtime
-    = both arches) re-arm after the init, guarding the reconfig-escape path.
+  * reinit_short / reinit_minimal re-arm after the init, guarding the reconfig-escape
+    path. Compile-time reinit_short/minimal are Blackhole-only lib fns; runtime
+    reinit_short runs on both arches, runtime reinit_minimal is Blackhole-only.
 """
 
 import pytest
@@ -35,8 +36,8 @@ from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    BLOCK_CT_DIM,
     CLOBBER_OP,
+    REDUCE_BLOCK_CT_DIM,
     REINIT_MODE,
     USE_RUNTIME,
 )
@@ -122,7 +123,7 @@ def _run_reduce_block_max(
         "sources/reduce_block_max_test.cpp",
         formats,
         templates=[
-            BLOCK_CT_DIM(block_ct_dim),
+            REDUCE_BLOCK_CT_DIM(block_ct_dim),
             USE_RUNTIME(use_runtime),
             REINIT_MODE(_REINIT_DEFINE[reinit]),
             CLOBBER_OP(_CLOBBER_DEFINE[clobber]),
@@ -197,9 +198,13 @@ def test_reduce_block_max_runtime(formats, block_ct_dim):
 def test_reduce_block_max_reinit(formats, block_ct_dim, reinit):
     """Reinit / reprogram after a clobbering op (reconfig-escape guard).
 
-    An eltwise binary op runs between init and reinit to overwrite the reduce MOP
-    and addrmods (as matmul / sub_exp do in the SDPA inner loop); the reinit must
-    restore them for the reduce to match golden.
+    A clobber runs between init and reinit to overwrite the reduce config, then the
+    reinit must restore it for the reduce to match golden. The clobber matches each
+    reinit's restore contract (``_CLOBBER_FOR_REINIT``):
+      * reinit_short pairs with an eltwise binary op (reprograms all addrmods + MOP,
+        as matmul / sub_exp do in the SDPA inner loop);
+      * reinit_minimal pairs with ``minimal_safe`` (an ADDR_MOD_1/2/6-only scramble
+        leaving ADDR_MOD_3 + MOP intact — the narrow escape it expects).
 
     Compile-time short/minimal reinit lib fns are Blackhole-only; skip on WH.
     """

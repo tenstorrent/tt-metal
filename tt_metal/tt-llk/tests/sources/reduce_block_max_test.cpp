@@ -7,7 +7,7 @@
 // Exercises the experimental reduce_block_max_row LLKs
 // (experimental/llk_{math,unpack_AB}_reduce_custom{,_runtime}.h):
 //
-//   out[row] = max over the whole block width (BLOCK_CT_DIM tiles, 32 cols each)
+//   out[row] = max over the whole block width (REDUCE_BLOCK_CT_DIM tiles, 32 cols each)
 //              of operand A, with the row-max landing in column [0] of the tile.
 //
 // The scaler B is a single face of 1.0 in F0 (the op's contract). The op does a
@@ -19,8 +19,10 @@
 //
 //   * USE_RUNTIME   - the runtime (dynamic block_ct_dim) LLK family.
 //   * CLOBBER_OP    - op run between init and reinit that overwrites the reduce
-//                     MOP/addrmods: 0 = none, 1 = eltwise binary init (as matmul /
-//                     sub_exp do in the SDPA inner loop).
+//                     MOP/addrmods: 0 = none, 1 = eltwise binary init (reprograms
+//                     ALL addrmods + MOP, as matmul / sub_exp do in the SDPA inner
+//                     loop), 2 = scramble ADDR_MOD_1/2/6 only (preserving ADDR_MOD_3
+//                     + MOP, the narrow escape reinit_minimal expects).
 //   * REINIT_MODE   - re-arm the reduce config after the clobber, matching the SDPA
 //                     inner-loop reinit paths: 0 = none, 1 = reinit_short (reprogram
 //                     MOP + addrmods), 2 = reinit_minimal (ADDR_MOD_1/2/6 only).
@@ -80,9 +82,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (USE_RUNTIME)
     {
         // reduce_block_max_row_init_runtime
-        _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(BLOCK_CT_DIM, RESPECT_TRIGGER, tensor_shape);
+        _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(REDUCE_BLOCK_CT_DIM, RESPECT_TRIGGER, tensor_shape);
 
-        // Operand A is BLOCK_CT_DIM contiguous tiles; scaler B is a single tile of 1.0.
+        // Operand A is REDUCE_BLOCK_CT_DIM contiguous tiles; scaler B is a single tile of 1.0.
         _llk_unpack_AB_reduce_block_max_row_runtime_(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), RESPECT_TRIGGER, OVERLAP_FIRST_HALF);
 
         _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(RESPECT_TRIGGER, OVERLAP_FIRST_HALF);
@@ -90,7 +92,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     else
     {
         // reduce_block_max_row_init
-        _llk_unpack_AB_reduce_block_max_row_init_<BLOCK_CT_DIM, is_fp32_dest_acc_en, RESPECT_TRIGGER>(tensor_shape);
+        _llk_unpack_AB_reduce_block_max_row_init_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en, RESPECT_TRIGGER>(tensor_shape);
 
         _llk_unpack_AB_reduce_block_max_row_<RESPECT_TRIGGER>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]));
 
@@ -130,12 +132,11 @@ static inline void clobber_reduce_config([[maybe_unused]] const ckernel::TensorS
         // Overwrite ADDR_MOD_1/2/6 with plainly wrong (zeroed) values; leave ADDR_MOD_3 and
         // the reduce MOP intact, matching reinit_minimal's contract. reinit_minimal must then
         // restore 1/2/6 for the reduce to produce the correct row-max.
-        ckernel::addr_mod_t {.srca = {.incr = 0, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 0}}.set(
-            ckernel::ADDR_MOD_1);
-        ckernel::addr_mod_t {.srca = {.incr = 0, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 0}}.set(
-            ckernel::ADDR_MOD_2);
-        ckernel::addr_mod_t {.srca = {.incr = 0, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 0}}.set(
-            ckernel::ADDR_MOD_6);
+        const ckernel::addr_mod_t zeroed = {
+            .srca = {.incr = 0, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 0}};
+        zeroed.set(ckernel::ADDR_MOD_1);
+        zeroed.set(ckernel::ADDR_MOD_2);
+        zeroed.set(ckernel::ADDR_MOD_6);
     }
 }
 
@@ -152,7 +153,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (USE_RUNTIME)
     {
-        _llk_math_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(BLOCK_CT_DIM, tensor_shape);
+        _llk_math_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(REDUCE_BLOCK_CT_DIM, tensor_shape);
 
         // Overwrite the reduce MOP/addrmods so the reinit below must restore them.
         clobber_reduce_config(tensor_shape);
@@ -160,7 +161,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (REINIT_MODE == 1)
         {
             // reduce_block_max_row_reinit_short_runtime: reprogram MOP + restore addrmods (both arches).
-            _llk_math_reduce_block_max_row_reinit_short_runtime_<is_fp32_dest_acc_en>(BLOCK_CT_DIM, tensor_shape);
+            _llk_math_reduce_block_max_row_reinit_short_runtime_<is_fp32_dest_acc_en>(REDUCE_BLOCK_CT_DIM, tensor_shape);
         }
 #ifdef ARCH_BLACKHOLE
         else if constexpr (REINIT_MODE == 2)
@@ -178,7 +179,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
-        _llk_math_reduce_block_max_row_init_<BLOCK_CT_DIM, is_fp32_dest_acc_en>(tensor_shape);
+        _llk_math_reduce_block_max_row_init_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en>(tensor_shape);
 
         // Overwrite the reduce MOP/addrmods so the reinit below must restore them.
         clobber_reduce_config(tensor_shape);
@@ -189,7 +190,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // reduce_block_max_row_reinit_short == reduce_max_row_configure_addrmod + mop_reprogram_only
             // (matches llk_math_reduce_block_max_row_reinit_with_mop). Blackhole-only lib path.
             reduce_max_row_configure_addrmod();
-            _llk_math_reduce_block_max_row_mop_reprogram_only_<BLOCK_CT_DIM>(tensor_shape);
+            _llk_math_reduce_block_max_row_mop_reprogram_only_<REDUCE_BLOCK_CT_DIM>(tensor_shape);
         }
         else if constexpr (REINIT_MODE == 2)
         {
@@ -199,7 +200,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
         _llk_math_wait_for_dest_available_<DST_SYNC>();
-        _llk_math_reduce_block_max_row_<BLOCK_CT_DIM, is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
+        _llk_math_reduce_block_max_row_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
         _llk_math_reduce_block_max_row_uninit_<is_fp32_dest_acc_en>();
