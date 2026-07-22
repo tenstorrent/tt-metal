@@ -1446,11 +1446,55 @@ FORCE_INLINE void coordinated_context_switch_finish_as_master(
     }
 }
 
+// [POST-RETRAIN HANDSHAKE] Re-run the init eth handshake after a spontaneous retrain, once config
+// (packet mode + ACCEPT_AHEAD) has been restored by recover_eth_link_if_down. Recovery analogue of the
+// init "both sides ready" gate: reconfirms the freshly-retrained link is bidirectionally alive before the
+// router resumes traffic. Reuses the SAME handshake_addr and is_handshake_sender role as init (that L1 is
+// dead at runtime -- verified -- so reusing it is safe).
+//
+// NOTE: like init, this SPINS until the peer responds (with periodic context switches). If our PCS is up
+// the peer's almost certainly is too (they had to sync to bring the link up), so a never-responding peer
+// is not expected -- but if that proves wrong, bound this with a max-attempt cap so a dead peer can't
+// stall the healthy side. Credit re-sync (receiver re-sends absolute completions) is a SEPARATE ERISC1
+// follow-on, not done here.
+template <typename RoutingTableT>
+FORCE_INLINE void run_post_retrain_handshake(
+    const RoutingTableT* routing_table_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    if constexpr (enable_ethernet_handshake) {
+        if constexpr (is_handshake_sender) {
+            erisc::datamover::handshake::fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
+                handshake_addr,
+                routing_table_l1->my_mesh_id,
+                routing_table_l1->my_device_id,
+                termination_signal_ptr,
+                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+        } else {
+            erisc::datamover::handshake::fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
+                handshake_addr,
+                routing_table_l1->my_mesh_id,
+                routing_table_l1->my_device_id,
+                termination_signal_ptr,
+                DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+        }
+    }
+}
+
 void run_routing_without_noc_sync_coordinated_as_master(
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     if constexpr (IS_RETRAIN_SYNC_MASTER()) {
         coordinated_context_switch_start_as_master(termination_signal_ptr);
         run_routing_without_noc_sync();
+        // [POST-RETRAIN HANDSHAKE] run_routing_without_noc_sync() above ran recover_eth_link_if_down, which
+        // restored config and set post_retrain_hs_pending if a retrain just completed. Do the handshake HERE
+        // -- inside the context switch, while ERISC1 is held idle by the start/finish coordination, and
+        // BEFORE we return to the main loop -- so no traffic resumes over the fresh link until both ends are
+        // confirmed alive. Clear the flag first to prevent re-entry from the handshake's own run_routing().
+        if (post_retrain_hs_pending) {
+            post_retrain_hs_pending = 0;
+            const auto* routing_table_l1 =
+                reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+            run_post_retrain_handshake(routing_table_l1, termination_signal_ptr);
+        }
         coordinated_context_switch_finish_as_master(termination_signal_ptr);
     }
 }

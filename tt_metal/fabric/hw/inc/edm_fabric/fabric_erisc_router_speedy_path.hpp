@@ -184,6 +184,11 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
     // We only want to actually bother checking for completions after a certain number of sent packets are outstanding
     // since the instructions to actually process each inbound completion from receiver is somewhat costly
+    //
+    // [TAIL-STALL FIX 2B - TEMPORARILY REVERTED for A/B confirmation] The force-poll-when-out-of-slots
+    // clause below is removed to confirm it was what eliminated the tail-stalls. If tail-stalls reappear
+    // with it gone, the fix is confirmed. Restore by re-adding:
+    //     || !outbound_to_receiver_channel_pointers.has_space_for_packet()
     bool check_completions = sender_state.sender_amort_counter >= SENDER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL;
     if (check_completions) {
         int32_t completions = sender_channel_from_receiver_credits
@@ -195,6 +200,16 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             sender_state.completion_count += completions;
         }
     }
+
+#if defined(ARCH_BLACKHOLE)
+    // [CRED-PROBE] If this channel is stalled (no free receiver slots, so it just polled completions above
+    // and still can't send), record the absolute completion count we've RECEIVED from the peer. Gated on the
+    // stall so only a stuck channel writes the debug slot -> the stalled channel's value persists. Compared
+    // in the log against the PEER core's RX count, the gap == completion credits lost over the link.
+    if (!outbound_to_receiver_channel_pointers.has_space_for_packet()) {
+        fabric_dbg_set_recvd_completions(*sender_channel_from_receiver_credits.completions_received_counter_ptr);
+    }
+#endif
 
     // Similarly only send back the credit to the worker very infrequently since it's a very
     // expensive operation.

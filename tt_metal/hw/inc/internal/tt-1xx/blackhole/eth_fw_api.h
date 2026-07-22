@@ -411,6 +411,14 @@ constexpr uint32_t RESUME_PHASE_LOOP_BOTTOM = 0x5E5E0033;        // reached bott
 // volatile so the main loop reliably observes the recovery-set value.
 inline volatile uint32_t was_retrained = 0;
 
+// [POST-RETRAIN HANDSHAKE] Edge-triggered request flag. ERISC0's recovery sets this to 1 on the retrain
+// up-edge, AFTER restoring config (packet mode + ACCEPT_AHEAD). The fabric router main loop (ERISC0) sees
+// it, runs the post-retrain handshake to reconfirm the link is bidirectionally alive (reusing the init
+// handshake on handshake_addr), then clears it back to 0. Lives here (base FW layer) because that's where
+// the retrain is detected; consumed in the kernel layer (fabric_erisc_router.cpp) where the handshake
+// symbols are in scope. volatile: written in the FW recovery path, polled in the kernel main loop.
+inline volatile uint32_t post_retrain_hs_pending = 0;
+
 // Number of post-retrain main-loop iterations to allow before the freeze gate stops the loop.
 // was_retrained is 1 on the retrain edge and ++ each iteration bottom, so it takes values 1..N across
 // the N allowed iterations; the gate freezes once it exceeds N (i.e. at N+1).
@@ -443,6 +451,20 @@ inline void fabric_dbg_inc_rx_pkt_count() {
     *p = *p + 1;
 #endif
 }
+
+// [CRED-PROBE] Sender's absolute count of COMPLETION credits it has RECEIVED from the peer receiver
+// (i.e. *completions_received_counter_ptr for a stalled sender channel), stored in the previously-unused
+// word[3] of the debug slot (MEM_AERISC_RESUME_PHASE_BASE + 12). ERISC0 (sender) writes it; ERISC0's
+// context-switch push emits it. Compare against the PEER core's RX count (MEM_AERISC_RX_PKT_COUNT_ADDR,
+// which ~= completions the peer SENT, since it emits one completion per received+flushed packet, and each
+// loudbox core is exactly one link): peer_RX - this_recvd_completions == completion credits lost over the
+// link. A nonzero gap on a tail-stalled sender is the smoking gun for signature (a) (lost final completion).
+constexpr uint32_t MEM_AERISC_CRED_RECVD_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 12;
+inline void fabric_dbg_set_recvd_completions([[maybe_unused]] uint32_t v) {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_CRED_RECVD_ADDR) = v;
+#endif
+}
 // Push the current TX packet count into the watcher ring buffer. Called on every context switch so the
 // per-core ring buffer becomes a time series of the counter -- if the values keep changing across
 // dumps, TX is advancing; if they flatline, TX has stalled. Replaces the old recovery/link-status
@@ -459,13 +481,16 @@ inline void fabric_dbg_inc_rx_pkt_count() {
 // (268M); the 100M-packet test is well within range (a 4G-packet budget would overflow the tag).
 constexpr uint32_t FABRIC_DBG_RINGBUF_TX_TAG = 0xA0000000;
 constexpr uint32_t FABRIC_DBG_RINGBUF_RX_TAG = 0xB0000000;
+constexpr uint32_t FABRIC_DBG_RINGBUF_CRED_TAG = 0xC0000000;  // sender's received-completion count
 constexpr uint32_t FABRIC_DBG_RINGBUF_VALUE_MASK = 0x0FFFFFFF;
 inline void fabric_dbg_ringbuf_push_txrx_counts() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     const uint32_t tx = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR);
     const uint32_t rx = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_PKT_COUNT_ADDR);
+    const uint32_t cred = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_CRED_RECVD_ADDR);
     WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_TX_TAG | (tx & FABRIC_DBG_RINGBUF_VALUE_MASK));
     WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_RX_TAG | (rx & FABRIC_DBG_RINGBUF_VALUE_MASK));
+    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_CRED_TAG | (cred & FABRIC_DBG_RINGBUF_VALUE_MASK));
 #endif
 }
 
@@ -668,6 +693,8 @@ static void recover_eth_link_if_down() {
         // the INIT baseline (PROBE 2) on ALL registers incl. ACCEPT_AHEAD (32/32) if the restore is complete.
         // [TXRX MODE] probe disabled.
         // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_PKTMODE);
+        // [POST-RETRAIN HANDSHAKE] Config is now restored; ask the router main loop to run the handshake.
+        post_retrain_hs_pending = 1;
         if (was_retrained == 0) {
             was_retrained = 1;  // edge-triggered freeze/debug flag; one-shot, matches WAS_RETRAINED gate
         }
