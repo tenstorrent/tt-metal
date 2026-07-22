@@ -325,3 +325,23 @@ post-compute critical-path component.
 
 **Status: diagnosis complete with numerical ceilings + experiments. NO prototype.** Lead = H-A (A1 diagnostic
 next). Artifacts: zone_raw_256x2048x1024.json, LTX_FLUX_OPT_LOG.md.
+
+### [DEEP-1 REV4] 256x2048x1024 — reduction realizability (NO_REDUCE overlap check; RECVWAIT-fraction red herring)
+A1 (RECVWAIT by chain position): mids(pos1-2) med 4.2us vs roots(pos3) 7.1us, ~2.4us/hop => PROPAGATION-
+latency-bound (not compute-imbalance). BUT the recoverable amount != RECVWAIT (overlap): NO_REDUCE realizable
+ceiling A/B (3x):
+| shape | Pk | AI/BW | base->NO_REDUCE | reduction ceiling |
+|---|---|---|---|---|
+| 256x2048x1024 | 4 | shallow-K, 258 GB/s (NOT DRAM-bound) | 22.3->18.8 | **16% (3.5us) — EXPOSED** |
+| 32x6144x1536 | 6 | deep-K, ~490 GB/s (DRAM-bound) | 40.5->39.4 | 3% (1.1us) — overlapped |
+| 32x6144x6144 | 6 | deep-K, DRAM-bound | 152.8->151.6 | 1% (1.3us) — overlapped |
+**RED HERRING CORRECTED:** deep-K root RECVWAIT is 80-91% of wall but OVERLAPS the in1-read floor (those
+shapes are DRAM-read-bound; earlier "floor" close was correct). Reduction is only recoverable on SHALLOW-K
+exposed shapes (256x2048x1024, 32x2048x512). A tree cuts propagation DEPTH (Pk4: 3->2 hops) not total adds,
+so realizable ~1-1.5us (~5-7%) on 256x2048x1024, ONLY on Pk>=3 shallow-K (Pk2 chain is already depth 1;
+deep-K DRAM-bound; Pk1 no reduction). Net: the reduction tree is a shallow-K-Pk>=3-only lever, ~5% on ~2
+corpus shapes, and reopens a previously-rejected direction — worth a gated prototype but modest+risky.
+
+**256x2048x1024 exposed-lever summary (wall 22.3us, ideal 11.3us):** matmul 9us (compute floor, lossless-
+irreducible) + in0-ring 4.9us exposed (foreclosed: scatter/exchange/repl/chunk all rejected on this shape) +
+reduction 3.5us exposed (tree ~1-1.5us realizable) + in1-wait 1.4us. Realizable headroom ~= tree only (~5%).
