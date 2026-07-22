@@ -288,23 +288,25 @@ class TTConv1d:
         self.K = K
 
         tdtype = torch.bfloat16 if compute_dtype == ttnn.bfloat16 else torch.float32
-        # OIHW: [out_ch, in_ch//groups, H=1, K_W=K] for ttnn.conv2d
+        # OIHW: [out_ch, in_ch//groups, H=1, K_W=K] for ttnn.conv2d.
+        # Kept on HOST (unprepared conv-weight layout): the first ttnn.conv2d call takes the
+        # clean host-preprocess path (a log_trace) and returns the device-prepared weight/bias
+        # via return_weights_and_bias, which we cache below. Putting an unprepared tensor on
+        # device instead makes conv2d log a "weights not properly prepared" warning and pull it
+        # back to host anyway. Warm-up runs every conv once before trace capture, so the prep
+        # happens at load time, outside the trace region.
         w4d = cw.weight.to(tdtype).unsqueeze(2).contiguous()
         self.weight = ttnn.as_tensor(
             w4d,
-            device=device,
             dtype=compute_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if cw.bias is not None:
             # conv2d requires bias as [1, 1, 1, out_ch]
             self.bias = ttnn.as_tensor(
                 cw.bias.to(tdtype).view(1, 1, 1, -1).contiguous(),
-                device=device,
                 dtype=compute_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
             self.bias = None
