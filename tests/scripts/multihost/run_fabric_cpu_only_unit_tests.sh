@@ -732,6 +732,12 @@ if run_group "bh-misc"; then
 # Runs split MPI communicators (4 ranks → two sub-contexts × 2 ranks): fabric KV exchange, subcommunicator vs job-world checks, launcher metadata / rank translation.
 run_test tt-run --mock-cluster-rank-binding "${MOCK_GALAXY_QUAD_2X4_FOUR_RANK_CLUSTER_DESC_MAPPING}" --rank-bindings-mapping tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="MpiSubContext.*"
 
+# Multi-MGD subcontext (-M / --mesh-graph-descriptor-mapping): bh_6u (non-torus) mock cluster, one MGD per sub-context.
+run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/bh_6u_cluster_desc.yaml --mesh-graph-descriptor-mapping tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_mesh_graph_descriptor_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="MpiSubContext.*"
+
+# Disaggregated prefill 2x4 pipeline decode 32x4 combined
+run_test env TT_METAL_OPERATION_TIMEOUT_SECONDS=600 TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mesh-graph-descriptor "${MGD_CUSTOM}/disaggregated_prefill_2x4_pipeline_decode_32x4_combined.textproto" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestControlPlaneInitNoMGD
+
 fi # bh-misc
 
 print_failure_summary

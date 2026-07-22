@@ -4281,6 +4281,46 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     EXPECT_GE(meshes_with_64_asics, 1u) << "16×4 MGD should yield at least one 64-ASIC physical mesh partition";
 }
 
+TEST_F(
+    TopologyMapperUtilsTest,
+    BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_DisaggregatedPrefill2x4PipelineDecode32x4Combined) {
+    // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
+    // Blitz 4x2 pipeline MGD (SP4 GLX mock: 64 physical meshes vs 48 on triple 16x8 / 12 ranks)
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    // Check if mock cluster descriptor is available (set by tt-run)
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+
+    // Create PSD from mock cluster
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    // Custom 10-stage 4×2 pipeline (8 ASICs/stage) — see bh_glx_10stage_4x2_pipeline.textproto
+    const std::filesystem::path mgd_path = std::filesystem::path(tt_metal_home) /
+                                           "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
+                                           "disaggregated_prefill_2x4_pipeline_decode_32x4_combined.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    MeshGraphDescriptor mgd{mgd_path};
+
+    // Build physical multi-mesh graph using PGD and PSD
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // Expect 48 + 1 groupings
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 49u);
+}
+
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_Blitz2x4) {
     // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
     // Blitz 4x2 pipeline MGD (SP4 GLX mock: 64 physical meshes vs 48 on triple 16x8 / 12 ranks)

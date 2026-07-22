@@ -40,6 +40,7 @@ from ttnn.distributed.ttrun import (
     read_stored_phase1_cache_key,
     PHASE2_MOCK_MAPPING_FILENAME,
     PHASE1_CACHE_ID_HEX_LEN,
+    RANK_BINDINGS_MAPPING_FILENAME,
 )
 
 # Import the module directly to avoid conflicts with distributed.py
@@ -106,13 +107,13 @@ class TestCommandLineArguments:
             ],
         )
         assert result.exit_code != 0
-        assert "mutually exclusive" in result.output.lower()
+        assert "do not combine" in result.output.lower()
 
     def test_no_mode_specified(self, runner):
         """Test that at least one mode must be specified."""
         result = runner.invoke(main, ["echo", "test"])
         assert result.exit_code != 0
-        assert "must be specified" in result.output.lower()
+        assert "specify exactly one" in result.output.lower()
 
     def test_new_mode_not_implemented(self, runner, sample_mesh_graph_descriptor):
         """Test that new mode requires --hosts or --mock-cluster-rank-binding."""
@@ -318,7 +319,7 @@ class TestPhase2Helpers:
         np_idx = cmd.index("-np")
         assert cmd[np_idx + 1] == "4"
 
-    def test_build_generate_rank_bindings_mpi_cmd_no_hosts_no_mock(self, temp_dir):
+    def test_build_generate_rank_bindings_mpi_cmd_no_hosts_no_mock(self, temp_dir, expect_error):
         """Test build_generate_rank_bindings_mpi_cmd raises ValueError if neither hosts nor mock provided."""
         executable = temp_dir / "generate_rank_bindings"
         executable.touch()
@@ -326,7 +327,7 @@ class TestPhase2Helpers:
         mgd_path.touch()
         output_dir = temp_dir / "output"
 
-        with pytest.raises(ValueError, match="Either hosts or mock_rank_to_desc must be provided"):
+        with expect_error(ValueError, "Either hosts or mock_rank_to_desc must be provided"):
             build_generate_rank_bindings_mpi_cmd(executable, mgd_path, None, output_dir, None)
 
     def test_legacy_mode_ignores_hosts(self, runner, sample_rank_binding_yaml):
@@ -362,7 +363,7 @@ class TestYAMLParsing:
         assert config.global_env["GLOBAL_VAR"] == "global_value"
         assert config.mesh_graph_desc_path.exists()
 
-    def test_invalid_rank_binding_duplicate_ranks(self, temp_dir):
+    def test_invalid_rank_binding_duplicate_ranks(self, temp_dir, expect_error):
         """Test that duplicate ranks are rejected."""
         yaml_content = {
             "rank_bindings": [
@@ -378,7 +379,7 @@ class TestYAMLParsing:
         with open(yaml_file, "w") as f:
             yaml.dump(yaml_content, f)
 
-        with pytest.raises(ValueError, match="Duplicate ranks"):
+        with expect_error(ValueError, "Duplicate ranks"):
             parse_binding_config(yaml_file)
 
 
@@ -394,9 +395,9 @@ class TestPathResolution:
         assert resolved.is_absolute()
         assert resolved.exists()
 
-    def test_resolve_path_not_found(self, temp_dir):
+    def test_resolve_path_not_found(self, temp_dir, expect_error):
         """Test that missing paths raise ValueError."""
-        with pytest.raises(ValueError, match="not found"):
+        with expect_error(ValueError, "not found"):
             resolve_path(temp_dir / "nonexistent.txt", must_exist=True)
 
 
@@ -582,7 +583,7 @@ class TestRankfileInjection:
         assert args[0] == "--rankfile"
         assert args[1] == os.path.relpath("/other/path/rankfile", str(temp_dir.resolve()))
 
-    def test_build_rankfile_args_invalid_syntax(self, temp_dir):
+    def test_build_rankfile_args_invalid_syntax(self, temp_dir, expect_error):
         """Test build_rankfile_args raises ValueError for invalid syntax."""
         rankfile = temp_dir / "rankfile"
         rankfile.touch()
@@ -593,7 +594,7 @@ class TestRankfileInjection:
 
         fake_syntax = FakeSyntax()
 
-        with pytest.raises(ValueError, match="Unknown rankfile syntax"):
+        with expect_error(ValueError, "Unknown rankfile syntax"):
             build_rankfile_args(fake_syntax, rankfile, cwd=temp_dir)  # type: ignore
 
     def test_inject_rankfile_mpi_args(self, temp_dir):
@@ -725,6 +726,25 @@ class TestPhase1CacheId:
         hosts = sorted(["n1"])
         assert compute_phase1_cache_id(mgd1, hosts, None) != compute_phase1_cache_id(mgd2, hosts, None)
 
+    def test_cache_fingerprint_includes_all_mapped_mgd_contents(self, temp_dir):
+        """Multi-MGD mapping fingerprint changes when any referenced .textproto changes."""
+        mgd_a = temp_dir / "a.textproto"
+        mgd_b = temp_dir / "b.textproto"
+        mgd_a.write_bytes(b"mgd-a")
+        mgd_b.write_bytes(b"mgd-b")
+        mapping = temp_dir / "map.yaml"
+        mapping.write_text("subcontext_id_to_mesh_graph_descriptor:\n" f"  0: {mgd_a.name}\n" f"  1: {mgd_b.name}\n")
+        hosts = sorted(["n1"])
+        fp0 = compute_phase1_cache_fingerprint_full(mapping, hosts, None)
+        cid0 = compute_phase1_cache_id(mapping, hosts, None)
+        mgd_a.write_bytes(b"mgd-a-v2")
+        assert compute_phase1_cache_fingerprint_full(mapping, hosts, None) != fp0
+        assert compute_phase1_cache_id(mapping, hosts, None) != cid0
+        mgd_a.write_bytes(b"mgd-a")
+        mgd_b.write_bytes(b"mgd-b-v2")
+        assert compute_phase1_cache_fingerprint_full(mapping, hosts, None) != fp0
+        assert compute_phase1_cache_id(mapping, hosts, None) != cid0
+
     def test_cache_id_mock_same_desc_bytes_different_paths(self, temp_dir):
         mgd = temp_dir / "m.textproto"
         mgd.write_bytes(b"mgd")
@@ -762,6 +782,17 @@ class TestPhase1CacheArtifacts:
         rb, rf = get_generate_rank_bindings_output_paths(run_dir)
         rb.write_text("x")
         rf.write_text("y")
+        assert phase1_outputs_ready(run_dir, mock_mode=False)
+
+    def test_phase1_outputs_ready_multi_mgd_uses_rank_bindings_mapping_yaml(self, temp_dir):
+        run_dir = temp_dir / "r"
+        run_dir.mkdir()
+        mapping = run_dir / RANK_BINDINGS_MAPPING_FILENAME
+        _, rf = get_generate_rank_bindings_output_paths(run_dir)
+        mapping.write_text("subcontext_id_to_rank_bindings:\n  0: rank_bindings_subctx_0.yaml\n")
+        rf.write_text("y")
+        rb_single = run_dir / "rank_bindings.yaml"
+        assert not rb_single.exists()
         assert phase1_outputs_ready(run_dir, mock_mode=False)
 
     def test_phase1_outputs_ready_mock_needs_phase2_mapping(self, temp_dir):
@@ -828,7 +859,32 @@ class TestRunPhase1GenerateRankBindings:
         assert result_rank_bindings == rank_bindings_path
         assert result_rankfile == rankfile_path
 
-    def test_run_phase1_generate_rank_bindings_failure(self, temp_dir):
+    def test_run_phase1_generate_rank_bindings_multi_mgd_returns_mapping_path(self, temp_dir):
+        """Rank bindings mapping YAML is Phase 2 entry when Phase 1 used -M (MGD mapping)."""
+        from unittest.mock import MagicMock
+
+        mgd_path = temp_dir / "mapping.yaml"
+        mgd_path.write_text("subcontext_id_to_mesh_graph_descriptor:\n  0: m.textproto\n")
+        (temp_dir / "m.textproto").touch()
+        hosts = ["node1"]
+        output_dir = temp_dir / "output"
+        output_dir.mkdir()
+
+        mapping_path = output_dir / RANK_BINDINGS_MAPPING_FILENAME
+        rankfile_path = output_dir / "rankfile"
+
+        def mock_run(cmd, cwd=None, **kwargs):
+            mapping_path.write_text("subcontext_id_to_rank_bindings:\n  0: rank_bindings_subctx_0.yaml\n")
+            rankfile_path.write_text("rank 0=node1 slot=0\n")
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            return mock_result
+
+        rb_out, rf_out = run_phase1_generate_rank_bindings(mgd_path, hosts, output_dir, subprocess_run=mock_run)
+        assert rb_out == mapping_path
+        assert rf_out == rankfile_path
+
+    def test_run_phase1_generate_rank_bindings_failure(self, temp_dir, expect_error):
         """Test Phase 1 failure handling."""
         from unittest.mock import MagicMock
 
@@ -843,9 +899,8 @@ class TestRunPhase1GenerateRankBindings:
             mock_result.returncode = 1
             return mock_result
 
-        with pytest.raises(RuntimeError) as exc_info:
+        with expect_error(RuntimeError, "generate_rank_bindings failed"):
             run_phase1_generate_rank_bindings(mgd_path, hosts, output_dir, subprocess_run=mock_run)
-        assert "generate_rank_bindings failed" in str(exc_info.value)
 
 
 class TestNewModeFlow:

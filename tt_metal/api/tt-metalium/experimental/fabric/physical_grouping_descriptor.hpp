@@ -158,6 +158,15 @@ public:
     static std::vector<GroupingInfo> get_mgd_mesh_groupings_for_placement(
         const MeshGraphDescriptor& mesh_graph_descriptor);
 
+    // Run get_valid_groupings_for_mgd for every MGD and merge into one map. Keys are prefixed "mgd{i}_"
+    // so the same logical instance name in different descriptors does not collide. For each (type,
+    // instance-name) tuple, drains each MGD's vector in round-robin (mgd0 head, mgd1 head, …, repeat)
+    // into the corresponding mgd{i}_ prefixed bucket. Contents per prefixed key match sequential per-MGD merge.
+    // mesh_graph_descriptors: const reference to the caller's vector (no copy of the container).
+    ValidGroupingsMap get_valid_groupings_for_mgds(
+        const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
+
     // Find any valid mapping of a grouping to a physical system descriptor
     // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
     // Returns empty set if no valid mapping exists
