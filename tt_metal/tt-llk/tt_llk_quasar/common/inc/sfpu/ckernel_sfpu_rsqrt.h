@@ -65,21 +65,11 @@ sfpi_inline sfpi::vFloat _sfpu_rsqrt_body_(const sfpi::vFloat x)
     return y;
 }
 
-// Programs the SFPU state the rsqrt op relies on:
-//   - ADDR_MOD_6: post-increment Dest by one SFPU pass (Quasar writes SFP_ROWS = 2 rows per pass),
-//     so the per-pass store advances Dest and the execute loop needs no separate increment.
-//   - vConstIntPrgm0/vConstFloatPrgm1/vConstFloatPrgm2: the SQRT_23-bits seed and refinement
-//     constants, only read by the full-precision path.
+// Programs vConstIntPrgm0/vConstFloatPrgm1/vConstFloatPrgm2, the seed and refinement constants read
+// only by the full-precision path.
 template <bool APPROXIMATION_MODE>
 inline void _init_rsqrt_()
 {
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = ckernel::math::SFP_ROWS},
-    }
-        .set(ADDR_MOD_6);
-
     if constexpr (!APPROXIMATION_MODE)
     {
         sfpi::vConstIntPrgm0   = 0x5f1110a0;
@@ -112,8 +102,8 @@ inline void _calculate_rsqrt_()
             result = _sfpu_rsqrt_body_(val);
         }
 
-        // Store back through ADDR_MOD_6 so the store both writes the result and advances Dest by one pass.
-        sfpi::dst_reg[0].mode<>(ckernel::ADDR_MOD_6) = result;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
     }
 }
 

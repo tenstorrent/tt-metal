@@ -38,8 +38,6 @@ void exp_init() {
     static_assert(scale == 0x3F800000, "Non-default scale not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");
     llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>();
-    // Program ADDR_MOD_6 (Dest post-increment of SFP_ROWS) the per-pass exp store walks Dest with.
-    _init_exp_();
 }
 
 }  // namespace sfpu

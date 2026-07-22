@@ -55,20 +55,10 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x)
     return y;
 }
 
-// Programs the SFPU state the reciprocal op relies on:
-//   - ADDR_MOD_6: post-increment Dest by one SFPU pass (Quasar writes SFP_ROWS = 2 rows per pass),
-//     so the per-pass store advances Dest and the execute loop needs no separate increment.
-//   - vConstFloatPrgm0 = 2.0f: the Newton-Raphson constant, only read by the non-approximate path.
+// Programs vConstFloatPrgm0 = 2.0f, the Newton-Raphson constant read only by the non-approximate path.
 template <bool APPROXIMATION_MODE>
 inline void _init_reciprocal_()
 {
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = ckernel::math::SFP_ROWS},
-    }
-        .set(ADDR_MOD_6);
-
     if constexpr (!APPROXIMATION_MODE)
     {
         sfpi::vConstFloatPrgm0 = 2.0f;
@@ -89,8 +79,8 @@ inline void _calculate_reciprocal_()
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::vFloat val = sfpi::dst_reg[0]; // load x from dest (SFPLOAD)
-        // Store back through ADDR_MOD_6 so the store both writes the result and advances Dest by one pass.
-        sfpi::dst_reg[0].mode<>(ckernel::ADDR_MOD_6) = _sfpu_reciprocal_<max_iter>(val);
+        sfpi::dst_reg[0] = _sfpu_reciprocal_<max_iter>(val);
+        sfpi::dst_reg++;
     }
 }
 

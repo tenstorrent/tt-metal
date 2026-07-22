@@ -90,19 +90,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a)
     return r * two_i;
 }
 
-// Programs the SFPU state the exp op relies on:
-//   - ADDR_MOD_6: post-increment Dest by one SFPU pass (Quasar writes SFP_ROWS = 2 rows per pass),
-//     so the per-pass store advances Dest and the execute loop needs no separate increment.
-inline void _init_exp_()
-{
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = ckernel::math::SFP_ROWS},
-    }
-        .set(ADDR_MOD_6);
-}
-
 // Calculates EXP over a full tile. Quasar exposes exactly two implementations:
 //   - approximate exp via the HW nonlinear lookup table (sfpi::approx_exp), and
 //   - full-precision fp32 exp (_sfpu_exp_fp32_accurate_, ported from Blackhole).
@@ -127,8 +114,8 @@ inline void _calculate_exp_()
             result = _sfpu_exp_fp32_accurate_(val);
         }
 
-        // Store back through ADDR_MOD_6 so the store both writes the result and advances Dest by one pass.
-        sfpi::dst_reg[0].mode<>(ckernel::ADDR_MOD_6) = result;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
     }
 }
 

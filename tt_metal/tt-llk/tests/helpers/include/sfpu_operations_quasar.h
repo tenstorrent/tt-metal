@@ -90,10 +90,6 @@ void init_unary_sfpu_operation_quasar()
     {
         _init_reciprocal_<APPROX>();
     }
-    else if constexpr (OPERATION == SfpuType::exponential)
-    {
-        _init_exp_();
-    }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
         _init_rsqrt_<APPROX>();

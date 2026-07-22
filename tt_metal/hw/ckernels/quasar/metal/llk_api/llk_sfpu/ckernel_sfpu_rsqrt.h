@@ -36,8 +36,7 @@ template <bool APPROXIMATION_MODE, [[maybe_unused]] bool legacy_compat = false>
 void rsqrt_init() {
     static_assert(!legacy_compat, "Non-default legacy_compat (true) not supported in Quasar rsqrt");
     llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt>();
-    // Program ADDR_MOD_6 (Dest post-increment of SFP_ROWS) and, for the non-approximate path, the
-    // SQRT_23-bits seed / refinement constants the full-precision rsqrt reads.
+    // Program the SQRT_23-bits seed / refinement constants the full-precision rsqrt reads.
     _init_rsqrt_<APPROXIMATION_MODE>();
 }
 

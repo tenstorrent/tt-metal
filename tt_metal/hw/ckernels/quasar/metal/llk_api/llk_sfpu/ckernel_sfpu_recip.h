@@ -28,8 +28,7 @@ template <bool APPROXIMATION_MODE, [[maybe_unused]] bool EN_32BIT_DEST, [[maybe_
 void recip_init() {
     static_assert(legacy_compat == true, "Non-default legacy_compat (false) not supported in Quasar reciprocal");
     llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>();
-    // Program ADDR_MOD_6 (Dest post-increment of SFP_ROWS) and, for the non-approximate path, the
-    // Newton-Raphson constant the reciprocal walks Dest / refines with.
+    // Program the Newton-Raphson constant the non-approximate reciprocal refines with.
     _init_reciprocal_<APPROXIMATION_MODE>();
 }
 

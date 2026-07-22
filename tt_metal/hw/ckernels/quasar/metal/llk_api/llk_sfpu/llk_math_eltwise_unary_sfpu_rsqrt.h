@@ -12,8 +12,8 @@ namespace ckernel {
 template <bool APPROXIMATE, [[maybe_unused]] bool legacy_compat = false>
 inline void llk_math_eltwise_unary_sfpu_rsqrt_init() {
     static_assert(legacy_compat == false, "Non-default legacy_compat (true) not supported in Quasar rsqrt");
-    // Run the global SFPU config init followed by rsqrt_init, which programs ADDR_MOD_6 and the
-    // full-precision SQRT_23-bits constants; the bare init<> form alone would skip that op setup.
+    // Run the global SFPU config init followed by rsqrt_init, which programs the full-precision
+    // SQRT_23-bits constants; the bare init<> form alone would skip that op setup.
     llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt>(sfpu::rsqrt_init<APPROXIMATE, legacy_compat>);
 }
 
