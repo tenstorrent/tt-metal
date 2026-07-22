@@ -206,9 +206,11 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
             _mark_optimized(demo_dir, m, status, result)
         _rekey_module_section(demo_dir, m, node, status, upsert_report_section, index=idx)
         _reorder_module_sections(demo_dir)
+        _pin_bringup_top(demo_dir)
 
     _write_rollup(demo_dir, rows, upsert_report_section)
     _reorder_module_sections(demo_dir)
+    _pin_bringup_top(demo_dir)
 
     if getattr(args, "then_e2e", False):
         print("\n  [optimize/module] --then-e2e: confirming module wins survive the full pipeline")
@@ -279,6 +281,28 @@ def _reorder_module_sections(demo_dir) -> None:
     out.append(txt[last:])
     try:
         p.write_text("".join(out))
+    except Exception:
+        pass
+
+
+def _pin_bringup_top(demo_dir) -> None:
+    """Hoist the ``bringup`` section above every ``module:*`` optimize block so the report always
+    reads bring-up first, then per-module optimize — regardless of write order. A fresh optimize on a
+    deleted report writes module 1 before the bring-up section is re-added, which otherwise leaves
+    bring-up wedged in the middle. Best-effort; no-op if bring-up is absent or already at the top.
+    Never raises."""
+    p = Path(demo_dir) / _REPORT_NAME
+    try:
+        txt = p.read_text()
+    except Exception:
+        return
+    bm = re.search(r"<!-- BEGIN bringup -->.*?<!-- END bringup -->", txt, re.S)
+    if bm is None or txt[: bm.start()].strip() == "":
+        return
+    block = bm.group(0).strip()
+    rest = (txt[: bm.start()] + txt[bm.end() :]).strip()
+    try:
+        p.write_text(block + "\n\n" + rest + "\n")
     except Exception:
         pass
 
