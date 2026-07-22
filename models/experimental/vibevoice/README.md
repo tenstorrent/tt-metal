@@ -37,9 +37,9 @@ vibevoice/
 │   ├── conftest.py            # pytest: reference/ on PYTHONPATH + shared fixtures
 │   └── pcc/
 │   ├── lm_pcc_common.py       # shared LM PCC helpers, probes, diagnostics
-│   ├── test_lm_prefill_pcc.py # prefill hidden-state PCC (+ ISL sweep)
-│   ├── test_lm_decode_pcc.py  # full-LM decode after prefill (+ diagnostics)
-│   └── test_decoder_layer_pcc.py  # Devstral-style layer-0 decode (no prefill)
+│   ├── test_decoder_layer_pcc.py  # Devstral-style layer-0 decode (no prefill)
+│   ├── test_full_prefill_pcc.py   # full prefill chain vs HF reference
+│   └── test_full_decode_pcc.py    # post-diffusion decode chain vs pinned ref conditions
 └── tt/                      # TTNN layers (empty initially)
 ```
 
@@ -126,111 +126,34 @@ vs the fine-tuned model's ~0.9 same-speaker / ~0 impostor separation). So the te
 a margin — which is robust to the compressed scale, rather than the paper's absolute same-speaker
 threshold.
 
-## Language model PCC tests
+## Language model / chain PCC tests
 
-Prefill and decode hidden-state PCC vs a **bf16 HuggingFace Qwen2** reference (`PCC >= 0.99`).
-Shared helpers live in `tests/pcc/lm_pcc_common.py`; fixtures (`vv_config`, `lm_state`) are in
+The LM prefill and decode paths are validated as part of the **full prefill / decode chain** PCC
+tests (vs a bf16 HuggingFace Qwen2 reference), plus a standalone decoder-layer regression. Shared
+helpers live in `tests/pcc/lm_pcc_common.py`; fixtures (`vv_config`, `lm_state`) are in
 `tests/conftest.py`.
 
-**Regression vs diagnostic:** only tests marked **regression** assert `PCC >= 0.99` and fail CI
-when drift appears. **Diagnostic** tests print probes/reports and always pass pytest unless setup
-breaks — run them while investigating, not as merge gates.
-
-### Prefill
-
-Compares full-sequence `last_hidden_state` after TT prefill vs HF forward (seed=0).
-
-**Reference dtype:** prefill uses a **bf16-only** HuggingFace Qwen2 reference (`model.to(bfloat16)` in
-`reference_lm_forward`). TT prefill also runs in bf16; PCC is computed after promoting both sides to
-float32. An fp32 HF reference was tried first and failed at longer ISLs (128+) because the dtype
-mismatch inflated the error — switching the reference to bf16 resolved prefill across the full ISL
-sweep.
+- **Decoder layer (regression):** `test_decoder_layer_pcc.py::test_decoder_layer_decode_pcc` —
+  Devstral-style layer-0 decode; random hidden states `[1, 1, H]`, empty KV cache, positions 0–9,
+  no prefill. Isolates decode SDPA at low cache depth (min PCC ~0.99997).
+- **Full prefill chain:** `test_full_prefill_pcc.py::test_full_prefill_chain_pcc` — the integrated
+  prefill path (acoustic tokenizer → connector → scatter into embeddings → LM prefill →
+  `last_hidden_state`) plus per-layer KV cache, vs the bf16 HF Qwen2 reference; synthetic-input ISL
+  sweep 2k … 64k, gated at `PCC >= 0.99`.
+- **Full decode chain:** `test_full_decode_pcc.py::test_decode_ref_cond_frame_pcc` — the
+  post-diffusion decode chain against pinned reference diffusion conditions.
 
 ```bash
-# Single sequence (S=32)
-pytest models/experimental/vibevoice/tests/pcc/test_lm_prefill_pcc.py::test_lm_prefill_hidden_state_pcc -v -s
+# Decoder-layer regression (fast)
+pytest models/experimental/vibevoice/tests/pcc/test_decoder_layer_pcc.py -v -s
 
-# ISL sweep: 32, 64, 128, 256, 512, 1024
-pytest models/experimental/vibevoice/tests/pcc/test_lm_prefill_pcc.py::test_lm_prefill_hidden_state_pcc_isl_sweep -v -s
-
-# Extended ISL sweep: 32 … 65536 with HF/TT wall-time per length (may take hours)
-pytest models/experimental/vibevoice/tests/pcc/test_lm_prefill_pcc.py::test_lm_prefill_hidden_state_pcc_isl_sweep_extended_with_timing -v -s
+# Full prefill / decode chain
+pytest models/experimental/vibevoice/tests/pcc/test_full_prefill_pcc.py \
+       models/experimental/vibevoice/tests/pcc/test_full_decode_pcc.py -v -s
 ```
 
-| Test | Type | Asserts PCC? | Status (Blackhole, seed=0) |
-|------|------|--------------|----------------------------|
-| `test_lm_prefill_hidden_state_pcc` | regression | yes (overall S=32) | **pass** (~0.997, bf16 HF ref) |
-| `test_lm_prefill_hidden_state_pcc_isl_sweep` | regression | yes (overall per ISL) | **pass** (ISL 32–1024 overall ≥ 0.99, bf16 HF ref) |
-
-Per-token minima can dip below 0.99 (e.g. ISL 1024 has a bad token at p956) while **overall**
-sequence PCC still passes the threshold.
-
-### Decode
-
-Two decode PCC modes (mirroring Devstral's split between layer decode and full-model paths):
-
-**Devstral-style (layer 0, recommended decode regression):** random hidden states `[1, 1, H]`,
-empty KV cache, positions **0–9**, no prefill. Isolates decode SDPA at low cache depth.
-
-```bash
-pytest models/experimental/vibevoice/tests/pcc/test_decoder_layer_pcc.py::test_decoder_layer_decode_pcc -v -s
-```
-
-**Full-LM integration:** single decode-step hidden state after a 32-token prefill (seed=0). Uses fused
-`scaled_dot_product_attention_decode` on TT; HF reference uses `attn_implementation="sdpa"`.
-
-```bash
-# Single decode step (step 0, position 32)
-pytest models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py::test_lm_decode_hidden_state_pcc -v -s
-```
-
-| Test | Type | Scope | Asserts PCC? | Status (Blackhole, seed=0) |
-|------|------|-------|--------------|----------------------------|
-| `test_decoder_layer_decode_pcc` | regression | layer 0, pos 0–9, no prefill | yes (all 10 steps) | **pass** (min 0.99997) |
-| `test_lm_decode_hidden_state_pcc` | regression | full LM, step 0 @ pos 32 | yes | **pass** |
-
-**Note:** full-LM multi-step decode (growing KV cache) is not gated at 0.99 — fused decode SDPA
-can drift below threshold after step 0. Diagnostic tests below localize that path; they do **not**
-assert the fused path meets 0.99:
-
-```bash
-# Layer-wise / L0 attention / SDPA stage probes at failing step 7
-pytest models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py::test_lm_decode_layerwise_pcc_at_failing_step -v -s
-pytest models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py::test_lm_decode_l0_attention_stage_pcc_at_failing_step -v -s
-pytest models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py::test_lm_decode_l0_sdpa_stage_pcc_at_failing_step -v -s
-
-# Manual fp32 SDPA vs fused (monkeypatch); HF reference mode comparison
-pytest models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py::test_lm_decode_multi_step_pcc_manual_fp32_sdpa_diagnostic -v -s
-pytest models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py::test_lm_decode_hf_reference_attn_comparison_diagnostic -v -s
-
-# Stage-wise fused vs manual fp32 SDPA report at step 7 (position 39)
-pytest models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py::test_lm_decode_fused_vs_manual_sdpa_report_at_step_7 -v -s
-```
-
-| Test | Type | Asserts PCC? | Status |
-|------|------|--------------|--------|
-| `test_lm_decode_layerwise_pcc_at_failing_step` | diagnostic | no (print only) | pass |
-| `test_lm_decode_l0_attention_pcc_at_failing_step` | diagnostic | no | pass |
-| `test_lm_decode_l0_attention_stage_pcc_at_failing_step` | diagnostic | no | pass |
-| `test_lm_decode_l0_sdpa_stage_pcc_at_failing_step` | diagnostic | no | pass |
-| `test_lm_decode_multi_step_pcc_manual_fp32_sdpa_diagnostic` | diagnostic | no (proves manual path passes) | pass |
-| `test_lm_decode_hf_reference_attn_comparison_diagnostic` | diagnostic | no | pass |
-| `test_lm_decode_fused_vs_manual_sdpa_report_at_step_7` | diagnostic | no (report only) | pass |
-
-Run **regression** gates only:
-
-```bash
-pytest models/experimental/vibevoice/tests/pcc/test_lm_prefill_pcc.py \
-       models/experimental/vibevoice/tests/pcc/test_decoder_layer_pcc.py \
-       models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py::test_lm_decode_hidden_state_pcc -v
-```
-
-Run all LM prefill + decode tests (including diagnostics):
-
-```bash
-pytest models/experimental/vibevoice/tests/pcc/test_lm_prefill_pcc.py \
-       models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py -v
-```
+Individual component PCC tests (acoustic/semantic tokenizers, connector, diffusion head, DPM
+scheduler, LM head) live alongside these in `tests/pcc/`.
 
 ## Porting notes
 

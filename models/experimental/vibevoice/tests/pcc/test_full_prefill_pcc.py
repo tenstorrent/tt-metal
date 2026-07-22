@@ -3,7 +3,7 @@
 
 """Full VibeVoice prefill-chain PCC vs HuggingFace reference.
 
-Exercises the integrated prefill path that ``test_lm_prefill_pcc.py`` does not cover:
+Exercises the integrated prefill path end to end:
 
   voice audio → acoustic tokenizer encode → scale/bias → acoustic connector
   → scatter into text embeddings → LM prefill → last_hidden_state
@@ -13,7 +13,7 @@ Uses synthetic random inputs (not demo scripts). ISL sweep: 2k … 64k (lengths 
 
 Speech embeds are compared against the fp32 acoustic path (high precision). The LM hidden
 state and the per-layer KV cache (post-RoPE keys, raw values) are compared against a **bf16**
-reference LM (the same HF Qwen2 ``test_lm_prefill_pcc.py`` validates TT against) so the gate
+reference LM (HF Qwen2) so the gate
 measures TT error rather than the fp32-vs-bf16 quantization gap, which for random-token hidden
 states is large and highly input-dependent. All are gated at >= 0.99.
 """
