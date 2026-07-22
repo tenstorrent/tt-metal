@@ -76,11 +76,15 @@ def test_trace_off_compat_feedback_passthrough(monkeypatch):
     assert perf_mcp._trace_compat_feedback("boom") == "boom"
 
 
-def test_wedged_ttlang_holds_indefinitely_never_cpp(monkeypatch):
+def test_wedged_ttlang_holds_until_cap_then_cpp(monkeypatch):
     monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
-    for n in (1, 3, 10, 50):
+    cap = perf_mcp._MAX_KERNEL_WEDGES
+    for n in range(1, cap):
         _, rung, _ = ladder(_op(), "MatmulDeviceOperation", _att("tt-lang", n, wedged=True))
-        assert rung == "tt-lang", "with %d wedges expected tt-lang held (no budget), got %s" % (n, rung)
+        assert rung == "tt-lang", "%d < cap wedges should hold tt-lang, got %s" % (n, rung)
+    for n in (cap, cap + 7):
+        _, rung, _ = ladder(_op(), "MatmulDeviceOperation", _att("tt-lang", n, wedged=True))
+        assert rung == "cpp", "%d >= cap wedges should advance to cpp, got %s" % (n, rung)
 
 
 def test_clean_ttlang_advances_to_cpp(monkeypatch):
@@ -89,14 +93,19 @@ def test_clean_ttlang_advances_to_cpp(monkeypatch):
     assert rung == "cpp"
 
 
-def test_wedged_cpp_holds_indefinitely_after_clean_ttlang(monkeypatch):
+def test_wedged_cpp_holds_until_cap_then_structural(monkeypatch):
     monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
     monkeypatch.setenv("TT_PERF_TRACE", "1")
-    for n in (1, 5, 20):
+    cap = perf_mcp._MAX_KERNEL_WEDGES
+    for n in range(1, cap):
         atts = _att("tt-lang", 1, wedged=False) + _att("cpp", n, wedged=True)
         done, rung, reason = ladder(_op(), "MatmulDeviceOperation", atts)
         assert (not done) and rung == "cpp"
-    assert "attempt" in reason and "PROVEN trace-safe recipe" in reason
+        assert "attempt" in reason and "PROVEN trace-safe recipe" in reason
+    for n in (cap, cap + 3):
+        atts = _att("tt-lang", 1, wedged=False) + _att("cpp", n, wedged=True)
+        _, rung, _ = ladder(_op(), "MatmulDeviceOperation", atts)
+        assert rung == "structural"
 
 
 def test_trace_compat_feedback_enriches_custom_rung(monkeypatch):

@@ -26,6 +26,7 @@ from pathlib import Path
 PERF_DIR = "models/experimental/perf_automation"
 CC_DIR = PERF_DIR + "/cc_optimize"
 DEFAULT_MAX_ROUNDS = 3
+_ROUND_SAFETY_CAP = int(os.environ.get("PERF_MCP_ROUND_SAFETY_CAP", "40"))
 _LAST_SCORECARD: dict = {}
 
 
@@ -259,6 +260,7 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
         "r=t()\n"
         "print('CANSTOP=' + str(bool(r.get('can_stop'))))\n"
         "print('HALT=' + str(bool(r.get('halt'))))\n"
+        "print('NBLOCK=' + str(len(r.get('blocking_ops') or [])))\n"
         "print('HALTREASON=' + str(r.get('halt_reason') or ''))"
     )
     env = cc_env(repo_root, devices)
@@ -276,10 +278,16 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
         return {"can_stop": False, "halt": False, "reason": ""}
     out = out or ""
     reason = ""
+    nblock = 0
     for line in out.splitlines():
         if line.startswith("HALTREASON="):
             reason = line[len("HALTREASON=") :]
-    return {"can_stop": "CANSTOP=True" in out, "halt": "HALT=True" in out, "reason": reason}
+        elif line.startswith("NBLOCK="):
+            try:
+                nblock = int(line[len("NBLOCK=") :])
+            except Exception:
+                nblock = 0
+    return {"can_stop": "CANSTOP=True" in out, "halt": "HALT=True" in out, "reason": reason, "n_blocking": nblock}
 
 
 def _reset_fullpipe_baselines() -> None:
@@ -1757,6 +1765,8 @@ def optimize_pipeline(
         print(f"  [optimize/cc] HITL on — pausing at each lever for your commit/revert/try (handshake {hitl_dir})")
     while rounds < max_rounds:
         st = _gate_status(repo_root, mcp_env, devices)
+        if rounds == 0 and not st.get("halt") and not st.get("can_stop"):
+            max_rounds = min(max(max_rounds, st.get("n_blocking", 0) * 3), _ROUND_SAFETY_CAP)
         if st.get("halt"):
             print(f"  [optimize/cc] HALT — install tt-lang first, then re-run: {st.get('reason')}")
             halted = True

@@ -236,6 +236,7 @@ _MATERIAL_GAP_ENV_SET = "PERF_MCP_MATERIAL_GAP_MS" in os.environ
 _MATERIAL_GAP_FRAC = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FRAC", "0.03"))
 _MATERIAL_GAP_FLOOR = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FLOOR", "0.05"))
 _MAX_KNOB_RETRIES = int(os.environ.get("PERF_MCP_MAX_KNOB_RETRIES", "2"))
+_MAX_KERNEL_WEDGES = int(os.environ.get("PERF_MCP_MAX_KERNEL_WEDGES", "3"))
 
 
 def _material_gap_ms(device_ms: float) -> float:
@@ -674,12 +675,24 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             "shard this memory-bound op's weights/activations into L1 (height/width shard) to cut DRAM reads; "
             "record_kernel_attempt(...,'shard',...) to mark it tried (even on a no-gain)",
         )
+    if _tp_candidate(open_op, op_code) and "tp-fracture" not in kinds:
+        return (
+            False,
+            "tp-fracture",
+            "single-chip levers exhausted and this dense matmul is still memory-bound on "
+            "a mesh -> tp_pick_degree(M,K,N) to MEASURE the fastest TP degree (best_tp=1 means keep it "
+            "single-chip). If best_tp>1, fracture the weight across the TP axis + insert the matching CCL "
+            "(GUIDELINES/08 §7), verify_tp_fracture(M,K,N,best_tp) to PROVE PCC, then commit; ALWAYS "
+            "record_kernel_attempt(...,'tp-fracture',...) even on a no-gain result",
+        )
     if _is_kernel_able(op_code):
         _tr = _trace_on()
         _suffix = _ISOLATE_FIRST if _tr else _EAGER_NOTE
         _tl_clean, _tl_wedged = _rung_state(matches, "tt-lang")
         _cpp_clean, _cpp_wedged = _rung_state(matches, "cpp")
-        if not _tl_clean and _ttl_available():
+        _tl_done = _tl_clean or _tl_wedged >= _MAX_KERNEL_WEDGES
+        _cpp_done = _cpp_clean or _cpp_wedged >= _MAX_KERNEL_WEDGES
+        if not _tl_done and _ttl_available():
             if _tl_wedged:
                 if _tr:
                     _r = (
@@ -700,7 +713,7 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
                 "tt-lang",
                 "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it." + _suffix,
             )
-        if (_tl_clean or not _ttl_available()) and not _cpp_clean:
+        if (_tl_done or not _ttl_available()) and not _cpp_done:
             if _cpp_wedged:
                 if _tr:
                     _r = (
@@ -722,16 +735,6 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
                 "tt-lang measured; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it."
                 + _suffix,
             )
-    if _tp_candidate(open_op, op_code) and "tp-fracture" not in kinds:
-        return (
-            False,
-            "tp-fracture",
-            "single-chip levers + both kernels exhausted and this dense matmul is still memory-bound on "
-            "a mesh -> tp_pick_degree(M,K,N) to MEASURE the fastest TP degree (best_tp=1 means keep it "
-            "single-chip). If best_tp>1, fracture the weight across the TP axis + insert the matching CCL "
-            "(GUIDELINES/08 §7), verify_tp_fracture(M,K,N,best_tp) to PROVE PCC, then commit; ALWAYS "
-            "record_kernel_attempt(...,'tp-fracture',...) even on a no-gain result",
-        )
     # BOX (4) STRUCTURAL (ALWAYS ON, GENERAL — no model/architecture knowledge) — the per-op ladder
     # above (grid+dtype+tt-lang+C++) is exhausted but a MATERIAL GAP REMAINS (this op is in the
     # blocking set, so its gap >= the material threshold). That is the universal, config-free signal
@@ -2133,10 +2136,16 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
         "-> O(capacity) recompute every token EVEN THOUGH it traces; add a KV-cache + single-token "
         "decode_step (recall_knobs(op_class='decode'))"
     )
+    host_ms = 0.0
+    for b in prof.get("buckets") or []:
+        if b.get("id") == "host_overhead":
+            host_ms = float(b.get("device_ms") or 0.0)
+            break
+    gap = max(host_ms, float(prof.get("per_token_ms") or 0.0), _MATERIAL_GAP_MS)
     return {
         "op": "generation_loop",
         "op_class": "decode",
-        "gap_ms": round(float(prof.get("per_token_ms") or _MATERIAL_GAP_MS), 4),
+        "gap_ms": round(gap, 4),
         "bound_by": "host",
         "grid": None,
         "weight_dtype": None,
@@ -2199,6 +2208,7 @@ def termination_check() -> dict:
     decode_block = _decode_gate(prof, attempts)
     if decode_block:
         blocking.append(decode_block)
+    blocking.sort(key=lambda b: -(b.get("gap_ms") or 0.0))
     can_stop = not blocking
     halt = next((b for b in blocking if b.get("next_rung") == "tt-lang:install-required"), None)
     # DETERMINISTIC SELECTION: the single op+rung the agent must work next (largest-gap blocking op).

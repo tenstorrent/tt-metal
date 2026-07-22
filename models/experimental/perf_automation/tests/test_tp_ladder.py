@@ -11,6 +11,11 @@ _KERNELS_DONE = [
     {"op_signature": "MatmulDeviceOperation", "kernel_kind": "tt-lang"},
     {"op_signature": "MatmulDeviceOperation", "kernel_kind": "cpp"},
 ]
+_KNOBS_DONE = [
+    {"op_signature": "MatmulDeviceOperation", "kernel_kind": "shard"},
+    {"op_signature": "MatmulDeviceOperation", "kernel_kind": "shard"},
+]
+_ALL_DONE = _KNOBS_DONE + _KERNELS_DONE
 _MATMUL = {"grid": "full", "weight_dtype": "bf8_b", "bound_by": "memory"}
 
 
@@ -21,14 +26,41 @@ def _reset_regime():
     perf_mcp.set_tp_regime(False)
 
 
-def test_tp_rung_offered_in_regime_after_kernels():
+def test_tp_rung_offered_in_regime_before_kernels():
     perf_mcp.set_tp_regime(True)
-    done, rung, _ = perf_mcp._op_ladder_status(_MATMUL, "MatmulDeviceOperation", _KERNELS_DONE)
+    done, rung, _ = perf_mcp._op_ladder_status(_MATMUL, "MatmulDeviceOperation", _KNOBS_DONE)
     assert not done and rung == "tp-fracture"
 
 
 def test_tp_rung_off_by_default_is_structural_not_tp():
-    done, rung, _ = perf_mcp._op_ladder_status(_MATMUL, "MatmulDeviceOperation", _KERNELS_DONE)
+    done, rung, _ = perf_mcp._op_ladder_status(_MATMUL, "MatmulDeviceOperation", _ALL_DONE)
+    assert rung == "structural"
+
+
+def test_tp_fracture_precedes_kernels(monkeypatch):
+    monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
+    monkeypatch.setattr(perf_mcp, "_is_kernel_able", lambda oc: True)
+    perf_mcp.set_tp_regime(True)
+    done, rung, _ = perf_mcp._op_ladder_status(_MATMUL, "MatmulDeviceOperation", _KNOBS_DONE)
+    assert rung == "tp-fracture"
+    after_tp = _KNOBS_DONE + [{"op_signature": "MatmulDeviceOperation", "kernel_kind": "tp-fracture"}]
+    done, rung, _ = perf_mcp._op_ladder_status(_MATMUL, "MatmulDeviceOperation", after_tp)
+    assert rung in ("tt-lang", "cpp")
+
+
+def test_kernel_rung_wedge_cap_advances(monkeypatch):
+    monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
+    monkeypatch.setattr(perf_mcp, "_is_kernel_able", lambda oc: True)
+    perf_mcp.set_tp_regime(False)
+    tl_wedged = _KNOBS_DONE + [
+        {"op_signature": "MatmulDeviceOperation", "kernel_kind": "tt-lang", "wedged": True}
+    ] * perf_mcp._MAX_KERNEL_WEDGES
+    done, rung, _ = perf_mcp._op_ladder_status(_MATMUL, "MatmulDeviceOperation", tl_wedged)
+    assert not done and rung == "cpp"
+    both = tl_wedged + [
+        {"op_signature": "MatmulDeviceOperation", "kernel_kind": "cpp", "wedged": True}
+    ] * perf_mcp._MAX_KERNEL_WEDGES
+    done, rung, _ = perf_mcp._op_ladder_status(_MATMUL, "MatmulDeviceOperation", both)
     assert rung == "structural"
 
 
