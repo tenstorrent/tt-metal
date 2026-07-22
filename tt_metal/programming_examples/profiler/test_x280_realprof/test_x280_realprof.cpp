@@ -83,12 +83,12 @@ static void pin_thread_to_core(std::thread& t, int core) {
 
 #include "prof_packet.h"
 
-// --tracy: feed decoded records into the existing RealtimeProfilerTracyHandler (Yusuf's branch) so the
-// zones render in Tracy. All no-ops unless the build is TRACY_ENABLE (build_Release is).
+// --tracy: feed decoded zones into the perf_debug profiler's Tracy handler so they render in Tracy.
+// All no-ops unless the build is TRACY_ENABLE (build_Release is). (Uses the perf_debug module's own
+// WorkerZonePacket + PerfDebugTracyHandler; the realtime-profiler versions were removed by the clean cut.)
 #if defined(TRACY_ENABLE)
-#include <tt-metalium/experimental/realtime_profiler_packets.hpp>
-#include "impl/dispatch/realtime_profiler_tracy_handler.hpp"
-#include "impl/profiler/profiler.hpp"  // loadZoneSourceLocationsHashesReadOnly (zone hash -> name)
+#include "tools/profiler/perf_debug_profiler_packets.hpp"
+#include "tools/profiler/perf_debug_profiler_tracy_handler.hpp"
 #endif
 
 using tt::Cluster;
@@ -975,7 +975,7 @@ int main(int argc, char** argv) {
     // the zones visualize. A SINGLE consumer -- per-lane START/END must be pushed in emission order (Tracy
     // nests by arrival), which the M stateless sink consumers would scramble. Contexts are pre-created here,
     // before draining (creation is ~ms; keep it off the hot path). ----
-    std::unique_ptr<tt::tt_metal::RealtimeProfilerTracyHandler> tracy_handler;
+    std::unique_ptr<tt::tt_metal::PerfDebugTracyHandler> tracy_handler;
     std::unordered_map<uint32_t, std::string> zone_names;  // hash -> name (stable storage backing name views)
     // Tracy's TT "frequency" is device cycles per NANOSECOND (GHz), NOT Hz. The handler does
     // gpuTime = round(ts / frequency) to turn the raw timestamp into ns-ticks (the context period is
@@ -988,7 +988,7 @@ int main(int argc, char** argv) {
     }
     if (do_tracy) {
         printf("[tracy] device aiclk = %.4f GHz (cyc/ns)\n", tracy_freq);
-        tracy_handler = std::make_unique<tt::tt_metal::RealtimeProfilerTracyHandler>();
+        tracy_handler = std::make_unique<tt::tt_metal::PerfDebugTracyHandler>();
         // host_start must be in TRACY's clock domain (tracy::Profiler::GetTime()), NOT system_clock epoch --
         // otherwise the device zones land on a bogus multi-hour timeline. Provisional here; the first marker
         // re-anchors (CalibrateDevice) so device-first-ts maps to tracy-now with exact relative spacing.
@@ -999,9 +999,8 @@ int main(int argc, char** argv) {
             worker_noc0.emplace_back(noc0x[c], noc0y[c]);
         }
         tracy_handler->PreCreateContexts((uint32_t)device_id, worker_noc0);
-        for (auto& [h, md] : loadZoneSourceLocationsHashesReadOnly()) {  // recorded zone hash -> name
-            zone_names[h] = md.marker_name;
-        }
+        // Zone-name resolution deferred with the clean cut (Yusuf's generateZoneSourceLocationsHashes is
+        // profiler.cpp-internal); unknown hashes fall back to "Zone_0x<hash>" below.
         zone_names[0x7FFFu] = "X280-STALL";  // PROFILER_STALL_ZONE_ID
         printf(
             "[tracy] handler up: %zu cores pre-created, %zu zone names loaded\n", (size_t)num_cores, zone_names.size());
@@ -1027,7 +1026,7 @@ int main(int argc, char** argv) {
                     std::snprintf(nb, sizeof(nb), "Zone_0x%x", r.zone);
                     it = zone_names.emplace(r.zone, nb).first;
                 }
-                tt::tt_metal::experimental::WorkerZonePacket zp{};
+                tt::tt_metal::perf_debug::WorkerZonePacket zp{};
                 zp.chip_id = (uint32_t)device_id;
                 zp.core_virtual_x = (uint32_t)vc[ci].x;
                 zp.core_virtual_y = (uint32_t)vc[ci].y;
@@ -1302,8 +1301,7 @@ int main(int argc, char** argv) {
         }
 #if defined(TRACY_ENABLE)
         if (do_tracy && tracy_handler) {
-            tracy_handler->RemoveDevice((uint32_t)device_id);  // orphan-end summary + destroy contexts
-            tracy_handler.reset();
+            tracy_handler.reset();  // dtor logs the orphan-end summary + destroys all Tracy contexts
             // The final std::_Exit is abrupt (skips atexit) -- give the in-process Tracy client a moment to
             // ship the queued zones to a connected tracy-capture/GUI before we bail.
             printf("[tracy] flushing zones to Tracy client (3s)...\n");
