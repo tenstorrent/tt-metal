@@ -155,8 +155,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t INPUT_NUM_BLOCKS          = params.INPUT_NUM_BLOCKS;
 #endif
-    DataFormat src_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
 
     if constexpr (!unpack_to_dest)
     {
@@ -167,6 +165,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
             }
+
+            DataFormat src_format = static_cast<DataFormat>(formats.math);
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
 
             const auto tensor_shape = tensor_shape_from_params(params);
 
@@ -248,7 +249,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
+            auto cfg                                    = (volatile std::uint32_t*)TENSIX_CFG_BASE;
             cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)

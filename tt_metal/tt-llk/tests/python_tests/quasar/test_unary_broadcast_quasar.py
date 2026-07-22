@@ -48,7 +48,6 @@ from helpers.utils import passed_test
 INPUT_DIMENSIONS = [[512, 32]]
 # Nested list of [H, W] pairs: a flat [H, W] is expanded by parametrize into
 # input_dimensions=H (int) and breaks generate_stimuli / rows, cols = dims.
-PERF_INPUT_DIMENSIONS = [[512, 32]]
 PERF_ONLY_INPUT_DIMENSIONS = [[512, 32]]
 TILE_DIMENSIONS = [32, 32]
 
