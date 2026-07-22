@@ -4600,6 +4600,40 @@ class TernarySFPUGolden:
 
 
 @register_golden
+class CausalConv1dSiluGolden:
+    """Golden for the fused causal conv1d + SiLU op (ckernel_sfpu_causal_conv1d_silu.h),
+    the KDA (Kimi Delta Attention) conv1d node from tt-blaze#2388/#2429.
+
+    Per channel: new_cache = a*x + b*y + c*z + d*w (a 4-tap weighted sum where every tap
+    weight is itself a per-channel tensor, not a scalar), then one output is
+    SiLU(new_cache) and the other is the 3-wide causal-cache shift [new_cache, x, y].
+    Returned in the same order the kernel packs its four Res tiles: (new_cache, x, y,
+    silu_out).
+    """
+
+    def __call__(self, wa, wb, wc, wd, x, y, z, w, data_format):
+        wa = wa.flatten().to(torch.float32)
+        wb = wb.flatten().to(torch.float32)
+        wc = wc.flatten().to(torch.float32)
+        wd = wd.flatten().to(torch.float32)
+        x = x.flatten().to(torch.float32)
+        y = y.flatten().to(torch.float32)
+        z = z.flatten().to(torch.float32)
+        w = w.flatten().to(torch.float32)
+
+        new_cache = wa * x + wb * y + wc * z + wd * w
+        silu_out = new_cache * torch.sigmoid(new_cache)
+
+        torch_format = format_dict[data_format]
+        return (
+            new_cache.to(torch_format).flatten(),
+            x.to(torch_format).flatten(),
+            y.to(torch_format).flatten(),
+            silu_out.to(torch_format).flatten(),
+        )
+
+
+@register_golden
 class ScalarBinopGolden:
     """Golden for the float unary-with-scalar binops in binop_with_unary.h
     (add / sub / mul / div / rsub).
