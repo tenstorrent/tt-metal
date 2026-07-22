@@ -49,3 +49,20 @@ models:
       text_file: "data/shakespeare.txt"
       hf_tokenizer: "/mnt/MLPerf/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659"
       output_file: "data/tokenized_shakespeare_llama8b"
+
+  # Reduced-depth (num_blocks 32 -> 4) variant of the TP=4 DDP=8 job above, used
+  # as a fast reproducer for the ring-CCL hang. Same parallelism, same ring_ring
+  # torus mgd, same collective shapes — just far fewer blocks so each trial is
+  # short enough to loop many times (see galaxy_perf_tests.yaml).
+  - name: "Llama 8B TP=4 DDP=8 Shakespeare (reduced repro)"
+    filename: "llama_8b_tp4_ddp8_reduced_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/llama8b/training_shakespeare_llama_8b_tp4_ddp8_reduced.yaml"
+      - "--track_memory"
+      - "--max_steps=64"
+    mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_8_4_ring_ring.textproto"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "/mnt/MLPerf/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659"
+      output_file: "data/tokenized_shakespeare_llama8b"

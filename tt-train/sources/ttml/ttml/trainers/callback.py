@@ -19,6 +19,27 @@ class TrainerCallback:
     def on_train_begin(self, trainer: Any) -> None:
         pass
 
+    def on_step_begin(self, trainer: Any, step: int) -> None:
+        """Fires at the top of each optimizer step, before the dataloader fetch.
+
+        ``step`` is the 0-based step index about to run. Useful for tracing the
+        dataloader + forward window, which is otherwise not bracketed by any hook.
+        """
+        pass
+
+    def on_before_forward(self, trainer: Any, batch: Any) -> None:
+        """Fires after the dataloader returns a batch, immediately before forward."""
+        pass
+
+    def on_after_model_forward(self, trainer: Any, batch: Any) -> None:
+        """Fires after the model forward, before loss computation.
+
+        Splits the forward window into model-forward vs loss so a stall can be
+        attributed to one or the other (e.g. a TP collective inside the model
+        vs. inside a vocab-parallel cross-entropy loss).
+        """
+        pass
+
     def on_after_forward(self, trainer: Any, batch: Any, loss: float) -> None:
         """Fires after each microbatch forward + loss extraction, before backward.
 

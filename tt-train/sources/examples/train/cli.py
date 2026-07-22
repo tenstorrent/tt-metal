@@ -33,6 +33,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override sequence length (default: from config)",
     )
+    g.add_argument(
+        "--num-blocks",
+        dest="num_blocks",
+        type=int,
+        default=None,
+        help="Override number of transformer blocks/layers (default: from model config). "
+        "Handy for sweeping model depth without a config file per depth.",
+    )
 
     g = p.add_argument_group("Training overrides")
     g.add_argument("--batch-size", dest="batch_size", type=int, default=None, help="Override batch size")
@@ -91,6 +99,7 @@ def _build_parser() -> argparse.ArgumentParser:
     for flag, dest, type_name in (
         ("--data_path", "data_path", "str"),
         ("--sequence_length", "sequence_length", "int"),
+        ("--num_blocks", "num_blocks", "int"),
         ("--batch_size", "batch_size", "int"),
         ("--max_steps", "max_steps", "int"),
         ("--checkpoint_dir", "checkpoint_dir", "str"),

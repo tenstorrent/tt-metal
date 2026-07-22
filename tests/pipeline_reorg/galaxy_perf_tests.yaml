@@ -144,11 +144,76 @@
 - name: Galaxy Llama 8B TP=4 DDP=8 train perf tests
   cmd: |
     ./tt-train/scripts/setup_pth.sh
+    export TT_TRAIN_TRACE_STEPS=1
+    export TT_METAL_WATCHER=10
+    export TT_METAL_WATCHER_DISABLE_ETH=1
+    # APPEND so a device reset/warmup pass does not clobber the failing dump, and
+    # DUMP_ALL so the full per-core state is written when the assert trips.
+    export TT_METAL_WATCHER_APPEND=1
+    export TT_METAL_WATCHER_DUMP_ALL=1
     python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp4_ddp8_shakespeare"
   model: llama_8b_tp4_ddp8_shakespeare
   skus:
     bh_galaxy_perf:
       timeout: 55
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  arch: blackhole
+  save-perf-data: false
+
+# Fast, model-free reproducer for the ring-CCL hang seen in the tp4_ddp8 job
+# above. It opens the same 8x4 ring_ring torus mesh and hammers the same
+# ttml.core.distributed collectives (ring reduce_scatter / all_reduce) across a
+# small->large size sweep, so it reaches the failing kernels in seconds instead
+# of ~55 min. The watcher is on (ETH disabled to keep kernels within budget) so
+# a torus-link deadlock becomes a named assert + watcher.log dump; --timeout
+# fails the job fast instead of burning the whole budget on a stall.
+- name: Galaxy CCL torus ring stress tests
+  cmd: |
+    ./tt-train/scripts/setup_pth.sh
+    export TT_METAL_WATCHER=10
+    export TT_METAL_WATCHER_DISABLE_ETH=1
+    export TT_METAL_WATCHER_APPEND=1
+    export TT_METAL_WATCHER_DUMP_ALL=1
+    python -m pytest tt-train/tests/python/test_ccl_torus_stress.py -v --timeout=180
+  model: ccl_torus_stress
+  skus:
+    bh_galaxy_perf:
+      timeout: 25
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  arch: blackhole
+  save-perf-data: false
+
+# Depth-bisection reproducer for the ring-CCL hang. Established facts: the full
+# 32-block TP=4 DDP=8 job hangs on the bad runner, but the isolated CCL op, the
+# torus health check, AND a 4-block version of this exact pipeline all pass. So
+# the trigger is aggregate/depth-driven (fabric congestion / memory pressure /
+# concurrent in-flight collectives), not any single op. This job sweeps model
+# depth upward on the SAME ring_ring torus with the SAME parallelism to find the
+# minimal num_blocks that still reproduces — that both confirms the mechanism and
+# yields the fastest reproducing config. num_blocks is overridden per-trial via
+# train.py's --num_blocks (no config file per depth). Watcher on so a stall
+# becomes a named assert + watcher.log dump; set -e stops at the first depth that
+# hangs, and the job log shows which depth (and trial) tripped it.
+- name: Galaxy Llama 8B TP=4 DDP=8 depth-sweep hang repro
+  cmd: |
+    set -e
+    ./tt-train/scripts/setup_pth.sh
+    # Watcher disabled for now; a hang will show as a stall until the job timeout.
+    # Ascending depths, one run each. Add trials / re-enable the watcher once a
+    # reproducing depth is known.
+    for depth in 4 8 16 24; do
+      echo "===== depth-sweep hang repro: num_blocks=${depth} ====="
+      python tt-train/scripts/run_models.py \
+        --model_config tt-train/scripts/run_models_configs/galaxy.yaml \
+        --filter-filenames "llama_8b_tp4_ddp8_reduced_shakespeare" \
+        --extra-args "--num_blocks=${depth} --max_steps=128"
+    done
+  model: llama_8b_tp4_ddp8_reduced_shakespeare
+  skus:
+    bh_galaxy_perf:
+      timeout: 45
   owner_id: U07K00A281X # Kevin Wu
   team: train
   arch: blackhole

@@ -60,6 +60,56 @@ class ThroughputCallback(TrainerCallback):
         self._tokens_in_step = 0
 
 
+class StepPhaseLogger(TrainerCallback):
+    """Fine-grained per-phase tracing to localize a hang within a training step.
+
+    Prints a timestamped, unbuffered line at every phase boundary of the loop
+    (step begin -> forward -> backward -> grad-sync -> optimizer step). When the
+    run stalls, the last printed phase pinpoints exactly where it hung — e.g. a
+    missing "grad sync done" after "backward done" implicates the collective
+    all-reduce in ``ttml.sync_gradients``.
+
+    Enabled by setting the ``TT_TRAIN_TRACE_STEPS`` env var (see train.py).
+    """
+
+    def __init__(self, log_interval: int = 1) -> None:
+        self._log_interval = max(1, int(log_interval))
+        self._t0 = time.time()
+        self._last = time.time()
+        self._active = True
+
+    def _log(self, msg: str) -> None:
+        if not self._active:
+            return
+        now = time.time()
+        # flush=True is belt-and-suspenders: run_models.py runs train.py with
+        # `python -u`, but an explicit flush guarantees the line escapes before a hang.
+        print(f"[phase] t={now - self._t0:8.2f}s (+{(now - self._last) * 1000:8.1f} ms) {msg}", flush=True)
+        self._last = now
+
+    def on_step_begin(self, trainer: SFTTrainer, step: int) -> None:
+        self._active = step % self._log_interval == 0
+        self._log(f"step {step}: begin -> dataloader fetch")
+
+    def on_before_forward(self, trainer: SFTTrainer, batch: Batch) -> None:
+        self._log("  dataloader done -> model forward")
+
+    def on_after_model_forward(self, trainer: SFTTrainer, batch: Batch) -> None:
+        self._log("  model forward done -> loss")
+
+    def on_after_forward(self, trainer: SFTTrainer, batch: Batch, loss: float) -> None:
+        self._log(f"  loss done (micro_loss={loss:.6f}) -> backward")
+
+    def on_after_backward(self, trainer: SFTTrainer, batch: Batch) -> None:
+        self._log("  backward done -> reset_graph / grad sync")
+
+    def on_before_optimizer_step(self, trainer: SFTTrainer) -> None:
+        self._log("  grad sync done -> optimizer.step")
+
+    def on_step_end(self, trainer: SFTTrainer, step: int, *args: Any, **kwargs: Any) -> None:
+        self._log(f"step {step}: optimizer.step done")
+
+
 class MemoryTrackerCallback(TrainerCallback):
     """In-loop FORWARD_PASS / BACKWARD_PASS / FIRST_ITERATION_COMPLETE snapshots over step 1, then deregister.
 

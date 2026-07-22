@@ -63,7 +63,10 @@ def run_and_save_log(cmd: list[str], log_path: Path) -> int:
         for line in proc.stdout:
             log_file.write(line)
             log_file.flush()
-            print(line, end="")
+            # flush the re-print too: without it this process's stdout (which feeds the CI
+            # console) is block-buffered, so console timestamps cluster at flush points and
+            # misrepresent when the child actually produced each line (masking real hangs).
+            print(line, end="", flush=True)
         proc.communicate()
         return proc.returncode
 
@@ -142,7 +145,7 @@ def main() -> int:
     # Check for required environment variables
     tt_metal_runtime_root = get_env("TT_METAL_RUNTIME_ROOT", required=True)
     # Turn off tt-logger to reduce log noise
-    os.environ["TT_LOGGER_LEVEL"] = "off"
+    # os.environ["TT_LOGGER_LEVEL"] = "off"
 
     # Save current git commit hash
     git_commit_hash = get_git_commit_hash()

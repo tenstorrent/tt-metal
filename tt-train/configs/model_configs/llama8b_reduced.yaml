@@ -1,0 +1,18 @@
+transformer_config:
+  model_type: "llama"
+  # Reduced-depth variant of llama8b.yaml used only as a fast reproducer for the
+  # ring-CCL hang in the TP=4 DDP=8 Galaxy job. ONLY num_blocks is reduced
+  # (32 -> 4): every other dim is kept identical so each TP/DDP collective — and
+  # in particular the vocab-parallel loss reduce_scatter suspected in the hang —
+  # has the exact same shape and memory config as the full 8B run, just with far
+  # fewer blocks to compile and far less memory/activation pressure.
+  num_heads: 32
+  num_groups: 8
+  embedding_dim: 4096
+  intermediate_dim: 14336
+  dropout_prob: 0.0
+  num_blocks: 4
+  vocab_size: 128256
+  max_sequence_length: 2048
+  runner_type: default
+  theta: 500000.0

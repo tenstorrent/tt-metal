@@ -56,6 +56,7 @@ from callbacks import (
     AverageLossCallback,
     MemoryTrackerCallback,
     MoECallback,
+    StepPhaseLogger,
     ThroughputCallback,
 )
 from checkpointing import (
@@ -502,6 +503,16 @@ def run_training(
     avg_loss_cb = AverageLossCallback()
     callbacks.append(avg_loss_cb)
 
+    # Opt-in per-phase hang tracing: set TT_TRAIN_TRACE_STEPS=1 (or an int log interval)
+    # to log every step phase boundary, so a stall shows exactly which phase hung.
+    trace_steps = os.environ.get("TT_TRAIN_TRACE_STEPS")
+    if trace_steps:
+        try:
+            trace_interval = int(trace_steps)
+        except ValueError:
+            trace_interval = 1
+        callbacks.append(StepPhaseLogger(log_interval=max(1, trace_interval)))
+
     # Diagnostics.
     if args.track_memory:
         callbacks.append(MemoryTrackerCallback())
@@ -785,6 +796,8 @@ def main() -> None:
         training_cfg.clip_grad_norm_max_norm = args.max_grad_norm
     if args.sequence_length is not None:
         model_cfg.max_sequence_length = args.sequence_length
+    if args.num_blocks is not None:
+        model_cfg.num_blocks = args.num_blocks
 
     if args.checkpoint_dir:
         os.makedirs(args.checkpoint_dir, exist_ok=True)

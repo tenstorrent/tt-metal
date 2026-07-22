@@ -1,0 +1,34 @@
+training_config:
+  project_name: tt_train_llama8b
+  seed: 5489
+  model_save_interval: 10000
+  batch_size: 16
+  num_epochs: 1
+  # Short per-trial step count: the full run hangs around step ~15, so 64 steps
+  # comfortably covers the danger window. The CI job loops this many times to get
+  # independent trials at the intermittent hang (see galaxy_perf_tests.yaml).
+  max_steps: 64
+  optimizer:
+    type: AdamW
+    lr: 1.0e-4
+    beta1: 0.9
+    beta2: 0.95
+    epsilon: 1.0e-8
+    weight_decay: 0.1
+  use_clip_grad_norm: false
+  clip_grad_norm_max_norm: 1.0
+  tokenizer_type: bpe
+  data_path: data/tokenized_shakespeare_llama8b.yaml
+  # Reduced-depth model (num_blocks 32 -> 4); all collective shapes preserved.
+  model_config: ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama8b_reduced.yaml
+  scheduler_type: warmup_linear
+  gradient_accumulation_steps: 1
+device_config:
+  enable_ddp: true
+  enable_tp: true
+  mesh_shape: [8, 4]
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0

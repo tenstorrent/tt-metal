@@ -235,6 +235,9 @@ class SFTTrainer:
         start_step = self.step
         bar = tqdm(range(self.step, cfg.max_steps), desc="SFTTrainer", disable=cfg.disable_progress_bar)
         for _ in bar:
+            for cb in list(self._callbacks):
+                cb.on_step_begin(self, self.step)
+
             # self.step is 0-based so external lr_schedule callables (e.g.
             # SpeedrunScheduler.lr_at) receive the expected step index.
             lr = self._lr_schedule(self.step)
@@ -246,7 +249,10 @@ class SFTTrainer:
                 batch = _next_batch()
                 profiler_marker(None, "dataloader_step_done")
 
-                loss = self._compute_loss(batch)
+                for cb in list(self._callbacks):
+                    cb.on_before_forward(self, batch)
+
+                loss = self._compute_loss(batch, fire_forward_callback=True)
                 micro_loss = float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean())
                 micro_losses.append(micro_loss)
                 profiler_marker(None, "forward_pass_done")
@@ -334,13 +340,20 @@ class SFTTrainer:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _compute_loss(self, batch: Batch):
+    def _compute_loss(self, batch: Batch, fire_forward_callback: bool = False):
         """Forward pass + loss computation.
 
         If *compute_loss_func* was provided it is called instead of the
         default masked cross-entropy.
+
+        When ``fire_forward_callback`` is set, ``on_after_model_forward`` fires
+        between the model forward and the loss so tracing callbacks can separate
+        the two phases (used by the training loop, not eval).
         """
         logits = self.model(batch.input_ids, self._attention_mask)  # [B, 1, T, V]
+        if fire_forward_callback:
+            for cb in list(self._callbacks):
+                cb.on_after_model_forward(self, batch)
         if self._compute_loss_override is not None:
             return self._compute_loss_override(logits, batch)
 
