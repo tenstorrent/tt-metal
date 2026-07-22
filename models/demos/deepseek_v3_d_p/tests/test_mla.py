@@ -7,18 +7,12 @@ This test verifies that both modules can be created and weights are loaded corre
 """
 
 import os
-from pathlib import Path
 
 import pytest
 import torch
 from loguru import logger
-from transformers.cache_utils import DynamicCache
-from ttnn.device import is_blackhole
 
 import ttnn
-from models.common.utility_functions import hf_cache_layer_kv
-from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
-from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -27,7 +21,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_positions,
     create_balanced_chunk_order,
     reorder_tensor_chunks,
-    reverse_reorder_tensor_chunks,
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
@@ -39,7 +32,6 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     single_trace,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
-from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -88,34 +80,31 @@ def run_mla_inference(
         tp_axis=tp_axis,
         is_balanced=is_balanced,
         topology=topology,
-        # Match the single-layer test cache (num_kvpe_cache_layers=1): the sparse single-shot write now
-        # goes through update_padded_kv_cache, which asserts cache_batch % layer_num == 0. Dense is
-        # unaffected (its single-shot write uses fill_cache_for_user_, which ignores layer_num).
+        # Match the single-layer test cache (num_kvpe_cache_layers=1): the single-shot write goes through
+        # update_padded_kv_cache, which asserts cache_batch % layer_num == 0.
         layer_num=1,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
-    # Sparse (DSA) single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
-    # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked
-    # path. Dense keeps natural rope + no index cache.
+    # Sparse (DSA) single-shot is folded onto the block-cyclic chunked path (one full-seq chunk at offset
+    # 0): it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked
+    # path. This helper drives only sparse variants (deepseek_v32 / glm_5_1 / glm_5_2), so the indexer is
+    # always present.
     has_indexer = resolve_has_indexer(config)
-    index_kv_cache = None
-    if has_indexer:
-        rope_tensors = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=seq_len)
-        # Layer-slot count mirrors the serving adapter: the indexer strides the folded user-major cache by
-        # num_full_indexer_layers (GLM-5.2 cross-layer reuse), so the cache must carry that many slots for
-        # update_padded_kv_cache's cache_batch % num_layers check. Falls back to 1 (no indexer_types).
-        index_kv_cache = init_kvpe_cache(
-            kvpe_cache_head_dim=config.index_head_dim,
-            mesh_device=mesh_device,
-            seq_len=seq_len,
-            mesh_shape=mesh_shape,
-            sp_axis=sp_axis,
-            num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
-            num_users=1,
-            dtype=ttnn.bfloat8_b,
-        )
-    else:
-        rope_tensors = rope_setup.get_rope_tensors(seq_len)
+    assert has_indexer, "run_mla_inference is the sparse single-shot driver; dense prefill is chunked-only"
+    rope_tensors = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=seq_len)
+    # Layer-slot count mirrors the serving adapter: the indexer strides the folded user-major cache by
+    # num_full_indexer_layers (GLM-5.2 cross-layer reuse), so the cache must carry that many slots for
+    # update_padded_kv_cache's cache_batch % num_layers check. Falls back to 1 (no indexer_types).
+    index_kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
+        num_users=1,
+        dtype=ttnn.bfloat8_b,
+    )
 
     # Verify TT MLA exists
     assert mla_tt is not None, "TT MLA should exist"
@@ -170,353 +159,6 @@ def run_mla_inference(
     if return_indices:
         return tt_output, hidden_states, chunk_order, shard_dims, indices
     return tt_output, hidden_states, chunk_order, shard_dims
-
-
-def run_model(
-    variant,
-    use_pretrained,
-    request,
-    mesh_device,
-    seq_len,
-    skip_host_comparison,
-    scale_down_sl,
-    is_balanced,
-    is_ci_env,
-    is_ci_v2_env,
-    device_params,
-):
-    if use_pretrained and not variant.supports_pretrained:
-        pytest.skip(f"{variant.name!r}: pretrained weights not available")
-
-    weight_type = "Pretrained" if use_pretrained else "Random"
-    logger.info("=" * 80)
-    logger.info(f"Test: Reference vs TT Comparison ({weight_type} Weights, variant={variant.name})")
-    logger.info("=" * 80)
-
-    # Conditionally load fixtures - only load what we need!
-    if use_pretrained:
-        config, sd = request.getfixturevalue("pretrained_transformer_weights")
-        weights = sd["layers"][0]["mla_weights"]
-    else:
-        config, weights = request.getfixturevalue("random_weights")
-
-    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
-    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
-
-    production_mesh = [32, 4]
-    sp_axis = 0
-    tp_axis = 1
-
-    mesh_shape = list(mesh_device.shape)
-
-    if scale_down_sl:
-        seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
-
-    # temp hack
-    config.max_seq_len = seq_len
-
-    # Create reference MLA
-    if use_pretrained:
-        logger.info("Creating reference MLA with pretrained weights...")
-        mla_ref = create_mla_reference(
-            config=config,
-            state_dict={"model.layers.0.self_attn." + k: v for k, v in weights.items()},
-            layer_idx=0,
-            module_path="model.layers.0.self_attn",
-        )
-    else:
-        logger.info("Creating reference MLA with random weights...")
-        mla_ref = create_mla_reference(
-            config=config,
-            state_dict={"model.layers.0.self_attn." + k: v for k, v in weights.items()},
-            layer_idx=0,
-            module_path="model.layers.0.self_attn",
-        )
-
-    # Verify reference MLA exists
-    assert mla_ref is not None, "Reference MLA should exist"
-
-    # Test forward pass comparison
-    logger.info("=" * 80)
-    logger.info(f"Testing forward pass comparison (seq_len={seq_len})")
-    logger.info("=" * 80)
-
-    # Initialize KVPE cache
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank  # 576
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
-        mesh_device=mesh_device,
-        seq_len=seq_len,
-        mesh_shape=mesh_shape,
-        sp_axis=sp_axis,
-        num_kvpe_cache_layers=1,
-    )
-
-    # Run MLA inference using utility function
-    tt_output, hidden_states, chunk_order, shard_dims = run_mla_inference(
-        config=config,
-        weights=weights,
-        mesh_device=mesh_device,
-        seq_len=seq_len,
-        mesh_shape=mesh_shape,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        is_balanced=is_balanced,
-        topology=topology,
-        tt_kvpe_cache=tt_kvpe_cache,
-    )
-
-    batch_size = 1
-
-    # Host comparison: Run reference forward pass if needed
-    if skip_host_comparison == False:
-        # Check for cached reference results to avoid expensive host attention computation
-        env = variant.mla_ref_cache_env or "DEEPSEEK_V3_MLA_REF_CACHE"
-        cache_dir = Path(os.environ.get(env, f"/tmp/{variant.name}_mla_ref_cache"))
-        cache_path = cache_dir / f"{weight_type.lower()}_seq{seq_len}.pt"
-
-        if cache_path.exists():
-            logger.info(f"Loading cached reference results from {cache_path}")
-            cached = torch.load(cache_path, weights_only=True)
-            ref_output = cached["ref_output"]
-            ref_kvpe = cached["ref_kvpe"]
-            logger.info(f"✓ Loaded cached reference results")
-            logger.info(f"  Output shape: {ref_output.shape}")
-        else:
-            assert not (
-                (is_ci_env or is_ci_v2_env) and not scale_down_sl
-            ), "We should not execute CPU computation in the CI for max sl, output cache is missing"
-
-            # Create position IDs
-            position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)
-
-            # Run reference forward pass with cache to capture KVPE
-            # Uses F.scaled_dot_product_attention with is_causal=True (no explicit mask needed)
-            logger.info("Running reference CPU forward pass...")
-            mla_ref = mla_ref.eval().to(torch.bfloat16)
-            ref_cache = DynamicCache()
-            with torch.no_grad():
-                ref_output, _, ref_cache = mla_ref(
-                    hidden_states=hidden_states,
-                    position_ids=position_ids,
-                    past_key_value=ref_cache,
-                    use_cache=True,
-                )
-
-            ref_kvpe = hf_cache_layer_kv(ref_cache, 0)[0]  # layer 0
-
-            if not (is_ci_env or is_ci_v2_env):
-                # Save to cache for future runs
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                torch.save({"ref_output": ref_output, "ref_kvpe": ref_kvpe}, cache_path)
-                logger.info(f"✓ Saved reference results to {cache_path}")
-
-            logger.info(f"✓ Reference forward pass complete")
-            logger.info(f"  Input shape:  {hidden_states.shape}")
-            logger.info(f"  Output shape: {ref_output.shape}")
-            logger.info(f"  Output dtype: {ref_output.dtype}")
-            logger.info(f"  Output mean:  {ref_output.mean().item():.4f}")
-            logger.info(f"  Output std:   {ref_output.std().item():.4f}")
-
-        # Compare TT output with reference output
-        tt_output_cpu = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
-        ).to(torch.bfloat16)
-
-        if is_balanced:
-            tt_output_cpu = reverse_reorder_tensor_chunks(tt_output_cpu, chunk_order, seq_dim=2)
-
-        _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output_cpu, 0.98)
-        logger.info(f"Output PCC is {pcc_message}")
-
-        # Validate KVPE cache contents
-        # Reference KVPE: [batch, 1, seq_len, kv_lora_rank + qk_rope_head_dim]
-        # ref_kvpe is already available (loaded from cache or computed above)
-
-        # Read back KVPE cache from device
-        # Cache is replicated across TP, so concat TP replicas on dim 1 (unused) and discard extras
-        tt_kvpe_cache_torch = ttnn.to_torch(
-            tt_kvpe_cache,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-        ).to(torch.bfloat16)
-        tt_kvpe_cache_torch = tt_kvpe_cache_torch[:1, :1, :, :]
-
-        logger.info("Starting synchronize call")
-        ttnn.synchronize_device(mesh_device)
-        logger.info("Synchronize call ended")
-
-        logger.debug("  Distributed synchronization started")
-        ttnn.distributed_context_barrier()
-        logger.debug("✓ Distributed synchronization completed")
-
-        if is_balanced:
-            tt_kvpe_cache_torch = reverse_reorder_tensor_chunks(tt_kvpe_cache_torch, chunk_order, seq_dim=2)
-
-        # Check PCC separately for KV (latent) and PE (rope) parts
-        kv_lora_rank = config.kv_lora_rank
-        _, kv_pcc_message = assert_with_pcc(
-            ref_kvpe[:, :, :, :kv_lora_rank], tt_kvpe_cache_torch[:, :, :, :kv_lora_rank], 0.99
-        )
-        logger.info(f"KVPE cache KV part PCC is {kv_pcc_message}")
-        _, pe_pcc_message = assert_with_pcc(
-            ref_kvpe[:, :, :, kv_lora_rank:], tt_kvpe_cache_torch[:, :, :, kv_lora_rank:], 0.99
-        )
-        logger.info(f"KVPE cache PE part PCC is {pe_pcc_message}")
-
-        # MLA reference check. Returns None when the variant has no reference.
-        # Only run reference for shorter sequence lengths so we don't go OOM on host.
-        if seq_len <= 5 * 1024:
-            position_ids_ref = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
-            logger.info(f"Running MLA reference (model={variant.name})")
-            ref_out = run_reference_mla(
-                variant,
-                config=config,
-                weights=weights,
-                hidden_states=hidden_states,
-                position_ids=position_ids_ref,
-            )
-            if ref_out is not None:
-                _, ref_pcc_message = assert_with_pcc(ref_out.unsqueeze(0), tt_output_cpu, variant.mla_pcc_threshold)
-                logger.info(f"[reference_output] PCC: {ref_pcc_message}")
-                del ref_out
-        else:
-            logger.info(f"Skipping MLA reference comparison for seq_len={seq_len}")
-    else:
-        logger.info("Starting synchronize call")
-        ttnn.synchronize_device(mesh_device)
-        logger.info("Synchronize call ended")
-
-        logger.debug("  Distributed synchronization started")
-        ttnn.distributed_context_barrier()
-        logger.debug("✓ Distributed synchronization completed")
-
-    logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")
-
-
-# sp x tp
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(32, 4), (8, 4), (2, 4)],
-    ids=["32x4", "8x4", "2x4"],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-    ],
-    ids=["line", "ring", "fabric2d"],
-    indirect=True,
-)
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
-@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
-@pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
-@pytest.mark.timeout(0)
-def test_ds_mla(
-    use_pretrained,
-    request,
-    mesh_device,
-    seq_len,
-    skip_host_comparison,
-    scale_down_sl,
-    is_balanced,
-    is_ci_env,
-    is_ci_v2_env,
-    device_params,
-    variant,
-):
-    run_model(
-        variant,
-        use_pretrained,
-        request,
-        mesh_device,
-        seq_len,
-        skip_host_comparison,
-        scale_down_sl,
-        is_balanced,
-        is_ci_env,
-        is_ci_v2_env,
-        device_params,
-    )
-
-
-@pytest.mark.parametrize("mesh_device", [(8, 4), (2, 4)], ids=["8x4", "2x4"], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-    ],
-    ids=["line", "ring", "fabric2d"],
-    indirect=True,
-)
-@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
-@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize(
-    "seq_len",
-    [5 * 1024, 25 * 1024],
-    ids=["seq5k", "seq25k"],
-)
-@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
-@pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
-@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
-@pytest.mark.timeout(0)
-def test_kimi_mla(
-    use_pretrained,
-    request,
-    mesh_device,
-    seq_len,
-    skip_host_comparison,
-    scale_down_sl,
-    is_balanced,
-    is_ci_env,
-    is_ci_v2_env,
-    device_params,
-    variant,
-):
-    run_model(
-        variant,
-        use_pretrained,
-        request,
-        mesh_device,
-        seq_len,
-        skip_host_comparison,
-        scale_down_sl,
-        is_balanced,
-        is_ci_env,
-        is_ci_v2_env,
-        device_params,
-    )
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -671,7 +313,6 @@ def _run_chunked_prefill(
         tp_axis=tp_axis,
         is_balanced=False,
         topology=topology,
-        is_chunked=True,
         slot_num=num_users,
         layer_num=1,
     )

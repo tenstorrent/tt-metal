@@ -258,7 +258,6 @@ class ttMLA:
         is_balanced: bool = False,
         topology=ttnn.Topology.Linear,
         weight_cache_path: Optional[Path] = None,
-        is_chunked: bool = False,
         slot_num: int = 1,
         layer_num: int = 61,
         kv_only: bool = False,
@@ -276,7 +275,6 @@ class ttMLA:
         self.kv_only = kv_only
         self.is_balanced = is_balanced
         self.weight_cache_path = weight_cache_path
-        self.is_chunked = is_chunked
         self.slot_num = slot_num
         self.layer_num = layer_num
 
@@ -292,10 +290,8 @@ class ttMLA:
             cache_name_prefix=f"layer_{layer_idx}.mla",
         )
 
-        # The RoPE op is fixed by the configured mode. It is bound AFTER self._has_indexer is resolved
-        # (below), because sparse always runs the block-cyclic path (single-shot is one full-seq chunk at
-        # offset 0) and so needs the indexed op even when not chunked. Dense keeps: chunked -> indexed,
-        # single-shot -> rotary_embedding_llama.
+        # The RoPE op is bound AFTER self._has_indexer is resolved (below). Prefill is chunked-only, so
+        # both dense and sparse use the indexed (block-cyclic) rotated path.
 
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
@@ -360,47 +356,21 @@ class ttMLA:
         self.ccl_num_links = 2 if is_blackhole() else 1  # Blackhole trains 2 fabric routing planes, others 1
         self.ccl_topology = topology
 
-        # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
-        # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
-        # holding both would waste DRAM. Both sets are owned once per model by TT_CCL and shared by
-        # every layer's MLA (uniform across layers, scratch / no per-layer state) instead of
-        # re-allocated per layer.
-        #
-        # kv_only (last layer) never reaches SDPA, so it needs no ring/gather buffers. Sparse (DSA) uses
-        # sparse_sdpa + the transient _gather_kvpe_prefix gather — neither the ring_mla chunked scratch nor
-        # the ring-joint-SDPA buffers — so it allocates none of these regardless of is_chunked.
+        # ring_mla gathered-KV scratch. kv_only (last layer) never reaches SDPA, and sparse (DSA) uses
+        # sparse_sdpa + the transient _gather_kvpe_prefix gather, so both skip this buffer. The dense
+        # chunked path needs one (1, 1, seq_len, kvpe_dim) scratch: K and V both come from the latent
+        # kvpe cache, and ring_mla's single-slot gather (kv_cache_batch_idx) writes only the active cache
+        # slot into gathered slot 0, so it is batch-1 regardless of slot_num * layer_num. Owned once per
+        # model by TT_CCL and shared by every layer's MLA (uniform across layers, scratch / no per-layer
+        # state) instead of re-allocated per layer.
         if kv_only or self._has_indexer:
             pass
-        elif self.is_chunked:
-            # Single combined gathered-KV scratch buffer for ring_mla: K and V both come from the
-            # latent kvpe cache, so one (1, 1, seq_len, kvpe_dim) buffer replaces the separate
-            # per-K/per-V ring-SDPA buffers (and the dummy joint tensors) used in the other mode.
-            # ring_mla's single-slot gather (kv_cache_batch_idx) writes only the active cache slot
-            # into gathered slot 0, so the scratch is batch-1 regardless of slot_num * layer_num.
+        else:
             self._chunked_kv_buf = self.tt_ccl.get_mla_chunked_kv_buffer(
                 cache_batch=1,
                 seq_len=seq_len,
                 kvpe_dim=self.kv_lora_rank + self.qk_rope_head_dim,
             )
-        else:
-            # All-gather K/V outputs + dummy joint_q/kv/v placeholders are uniform across layers
-            # (config + seq_len + mesh), so they're owned once per model by TT_CCL and shared by every
-            # layer's MLA instead of re-allocated per layer. forward() reads them off self exactly as
-            # before. See TT_CCL.get_mla_ring_attention_buffers.
-            ring_buffers = self.tt_ccl.get_mla_ring_attention_buffers(
-                seq_len=seq_len,
-                kv_lora_rank=self.kv_lora_rank,
-                qk_rope_head_dim=self.qk_rope_head_dim,
-                qk_head_dim=self.qk_head_dim,
-                v_head_dim=self.v_head_dim,
-                num_heads=self.num_heads,
-                tp_axis=self.tp_axis,
-            )
-            self.persistent_k_output_buffer = ring_buffers["persistent_k_output_buffer"]
-            self.persistent_v_output_buffer = ring_buffers["persistent_v_output_buffer"]
-            self.joint_q = ring_buffers["joint_q"]
-            self.joint_kv = ring_buffers["joint_kv"]
-            self.joint_v = ring_buffers["joint_v"]
 
         # Load weights to TT device. In kv_only mode the returned dict only
         # contains kv_a_layernorm / kv_a_proj_with_mqa; the Q-side / V / wo
@@ -475,21 +445,14 @@ class ttMLA:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
             self._indexer_reuse = False
 
-        # Bind the RoPE op now that self._has_indexer is known: sparse always uses the indexed
-        # (block-cyclic) op — single-shot is folded onto the block-cyclic path as one full-seq chunk at
-        # offset 0 — so its key cache persists layer-stacked (migratable to decode). Dense: chunked ->
-        # indexed, single-shot -> rotary_embedding_llama.
-        self._apply_rope = (
-            self._apply_rope_padded if (self.is_chunked or self._has_indexer) else self._apply_rope_one_shot
-        )
+        # Prefill is chunked-only: both dense and sparse use the indexed (block-cyclic) rotated RoPE, so
+        # the key cache persists layer-stacked (migratable to decode).
+        self._apply_rope = self._apply_rope_padded
 
-        # Bind the attention core once, by config. Sparse ALWAYS uses the block-cyclic
-        # _sparse_chunked_attn (single-shot = one full-seq chunk); dense splits by chunking. forward()
-        # then calls self._attention(...) with no mode ladder: the decision is made here, not per call.
-        if self._has_indexer:
-            self._attention = self._sparse_chunked_attn
-        else:
-            self._attention = self._dense_chunked_attn if self.is_chunked else self._dense_single_attn
+        # Bind the attention core once, by config: sparse uses the block-cyclic _sparse_chunked_attn,
+        # dense the chunked _dense_chunked_attn. forward() then calls self._attention(...) with no mode
+        # ladder -- the decision is made here, not per call.
+        self._attention = self._sparse_chunked_attn if self._has_indexer else self._dense_chunked_attn
 
     @staticmethod
     def kv_cache_to_host(kvpe_cache: ttnn.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int = 0):
@@ -544,15 +507,12 @@ class ttMLA:
     }
 
     def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
-        """Resolve the tuned matmul config for this weight/seq_len, applying head-count and
-        chunked-mode gating. Returns None when no tuned config applies (caller falls back to defaults).
+        """Resolve the tuned matmul config for this weight/seq_len, applying head-count gating. Returns
+        None when no tuned config applies (caller falls back to defaults).
 
-        The gating *tags* (num_heads / q_lora_rank / chunked_only) are declared in the config
-        (mla_config.py); only the *match* is resolved here at runtime, because it depends on this live
-        ttMLA. chunked_only in particular is a per-instance property (single-shot vs chunked runner) that
-        the static, shared config can't know — so keeping all three checks together at this single
-        consume-time point is more cohesive than splitting head/q_lora filtering into the config and
-        leaving chunked here.
+        The gating *tags* (num_heads / q_lora_rank) are declared in the config (mla_config.py); only the
+        *match* is resolved here at runtime, because it depends on this live ttMLA -- keeping both checks
+        at this single consume-time point is more cohesive than splitting them into the config.
         """
         cfg = self.mm_configs[weight_name].get(seq_len_local) if is_blackhole() else None
         # Some tuned configs are head-count specific (the chunked-prefill 640 set was tuned for Kimi's
@@ -566,11 +526,6 @@ class ttMLA:
         # though both have 64 heads. When a config declares a q_lora_rank that doesn't match this model,
         # fall back so a same-heads/same-seq variant doesn't pick up an invalid program_config.
         if cfg is not None and cfg.get("q_lora_rank") not in (None, self.q_lora_rank):
-            cfg = None
-        # The chunked-prefill 640 set is only dimensionally valid in chunked mode (e.g. wkv_b1/wkv_b2
-        # are true batched per-head matmuls over the per-head SDPA output; the single-shot path applies
-        # them to a batch=1 latent). Fall back to defaults when this ttMLA was not built for chunked.
-        if cfg is not None and cfg.get("chunked_only") and not self.is_chunked:
             cfg = None
         return cfg
 
@@ -656,9 +611,6 @@ class ttMLA:
         cap = cfg.get("dense_head_cap_non_dsa") if cfg is not None else None
         if cap is not None and self.num_heads > cap and not self._is_dsa_family:
             cfg = None
-        # The 640 chunk tiling drives ring joint attention and is only valid in chunked mode.
-        if cfg is not None and cfg.get("chunked_only") and not self.is_chunked:
-            cfg = None
         q_chunk_size = cfg["q_chunk_size"] if cfg else 32
         k_chunk_size = cfg["k_chunk_size"] if cfg else 32
         return ttnn.SDPAProgramConfig(
@@ -681,18 +633,6 @@ class ttMLA:
             rope_tensors["trans_matrix"],
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
-        )
-
-    def _apply_rope_one_shot(
-        self, t: ttnn.Tensor, rope_tensors: dict, kv_actual_isl: Optional[int] = None
-    ) -> ttnn.Tensor:
-        """Single-shot RoPE: natural-order rope_tensors + rotary_embedding_llama."""
-        return ttnn.experimental.rotary_embedding_llama(
-            t,
-            rope_tensors["cos_matrix"],
-            rope_tensors["sin_matrix"],
-            rope_tensors["trans_matrix"],
-            is_decode_mode=False,
         )
 
     def _chunked_attn(
@@ -982,20 +922,6 @@ class ttMLA:
             out = relaid
         return ttnn.clone(t) if out is t else out
 
-    def _write_kvpe(self, kvpe_cache: ttnn.Tensor, tt_kvpe: ttnn.Tensor, cache_layer_idx: int) -> None:
-        """DENSE single-shot cache fill: write this layer's whole kvpe slot (bf8/TILE, already in the
-        cache's dtype/layout via _to_cache_format). Chunked modes (dense + sparse) and sparse single-shot
-        write through update_padded_kv_cache instead; only dense single-shot still uses this TILE-only
-        fill_cache_for_user_ primitive.
-
-        TODO: unify dense single-shot onto update_padded_kv_cache too (one write op model-wide, drop this
-        helper). Blocked on the single-chip case: test_prefill_block_loop[mesh-1x1] runs dense single-shot
-        on a (1,1) mesh, where fill_cache_for_user_ is mesh-agnostic but update_padded_kv_cache's SP
-        cluster_axis / block-cyclic / tile-aligned-kv_actual_global path is not yet validated. Confirm
-        update_padded handles 1x1 (and sp=1), then switch _dense_single_attn onto it too (the sparse path
-        already folded its single-shot onto the block-cyclic update_padded write)."""
-        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_layer_idx)
-
     def _o_proj_epilogue(self, attn_out: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         """Shared nlp_concat_heads -> o_proj -> TP reduce-scatter epilogue."""
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1043,17 +969,15 @@ class ttMLA:
                 cache_user_id=cache_user_id,
             )
 
-        # Chunked-prefill mode is fixed at construction: self.is_chunked drives buffer allocation in
-        # __init__ and the rope variant, and forward honors that flag -- it does not infer the mode from
-        # the arguments. actual_start is the chunk parameter, supplied iff chunked.
-        assert (actual_start is not None) == self.is_chunked, (
-            f"actual_start ({'set' if actual_start is not None else 'None'}) does not match construction "
-            f"(self.is_chunked={self.is_chunked}); pass actual_start iff built with is_chunked=True"
-        )
+        # Prefill is chunked-only: dense reads/writes the block-cyclic cache at the actual_start chunk
+        # offset, so actual_start is required. Sparse folds its single full-seq chunk onto the same path
+        # (offset 0), so it accepts actual_start=None and coerces it below.
+        assert (
+            self._has_indexer or actual_start is not None
+        ), "dense chunked prefill requires actual_start (the chunk offset); sparse accepts None (folded to 0)"
 
         seq_len_local = hidden_states.shape[2]
         kv_actual_isl = actual_start
-        is_chunked = self.is_chunked
 
         # Sparse always runs the block-cyclic path (indexed rope + kvpe cache read-back), which treats
         # single-shot as one full-seq chunk at offset 0. Coerce the None single-shot offset to 0 so the
@@ -1139,40 +1063,9 @@ class ttMLA:
             return out, indices
         return out
 
-    # Attention core variants, one bound to self._attention at construction (sparsity × chunking).
-    # All four share the forward() call signature and ignore the kwargs they don't need (**_), so the
-    # bound name can be invoked uniformly. Bodies are the former mode-ladder branches, unchanged.
-
-    def _dense_single_attn(self, *, tt_q, tt_kvpe, tt_kv_nope, kvpe_cache, cache_layer_idx, seq_len_local, **_):
-        # Single-shot prefill: materialize V before causal ring SDPA.
-        self._write_kvpe(kvpe_cache, tt_kvpe, cache_layer_idx)
-        tt_v_embedding = self._apply_wkv_b2(tt_kv_nope, seq_len_local)
-        attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-            tt_q,
-            tt_kvpe,
-            tt_v_embedding,
-            self.joint_q,
-            self.joint_kv,
-            self.joint_v,
-            persistent_output_buffer_k=self.persistent_k_output_buffer,
-            persistent_output_buffer_v=self.persistent_v_output_buffer,
-            joint_strategy="rear",
-            logical_n=seq_len_local * self.sp_factor,
-            program_config=self._get_sdpa_program_config(seq_len_local),
-            compute_kernel_config=self.default_compute_kernel_config,
-            dim=2,
-            multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
-            num_links=self.ccl_num_links,
-            cluster_axis=self.sp_axis,
-            mesh_device=self.mesh_device,
-            topology=self.ccl_topology,
-            ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
-            use_column_major_ccl=True,
-            is_causal=True,
-            scale=self.scale,
-            is_balanced=self.is_balanced,
-        )
-        return attn_out
+    # Attention core variants, one bound to self._attention at construction by sparsity. Both share the
+    # forward() call signature and ignore the kwargs they don't need (**_), so the bound name can be
+    # invoked uniformly.
 
     def _cache_batch_idx(self, cache_user_id: int, cache_layer_idx: int) -> int:
         """Flat KVPE-cache slot for (user, layer). The cache batch dim is user-major: each user reserves

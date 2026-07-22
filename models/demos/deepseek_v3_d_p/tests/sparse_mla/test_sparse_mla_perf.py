@@ -636,7 +636,6 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, config_only
         seq_len=total,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        is_chunked=True,
         layer_num=1,
         has_indexer=has_indexer,  # sparse: DSA indexer + sparse_sdpa; dense: NullIndexer + ring MLA
     )

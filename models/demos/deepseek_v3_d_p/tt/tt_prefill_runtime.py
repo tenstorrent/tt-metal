@@ -153,7 +153,6 @@ class TtPrefillRuntime:
             shared_expert_weights_dtype=self.config.shared_expert_weights_dtype,
             weight_cache_path=self.config.weight_cache_path,
             lm_head_is_column_parallel=True,
-            is_chunked=True,
             slot_num=self.config.num_users,
             kv_only_last_layer=self.config.kv_only_last_layer,
             routing_use_l1_small_for_semaphores=self.config.routing_use_l1_small_for_semaphores,

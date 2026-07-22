@@ -128,7 +128,6 @@ class TtPrefillTransformer(LightweightModule):
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
         lm_head_is_column_parallel: bool = False,
-        is_chunked: bool = False,
         slot_num: int = 1,
         max_seq_len: Optional[int] = None,
         kv_only_last_layer: bool = False,
@@ -141,7 +140,6 @@ class TtPrefillTransformer(LightweightModule):
         self.mesh_device = mesh_device
         self.seq_len = seq_len
         self.padding_side = padding_side
-        self.is_chunked = is_chunked
         self.num_layers = num_layers
         self.kv_only_last_layer = kv_only_last_layer
         # Pipeline-parallel slicing. A rank owns layers [first_layer_idx, first_layer_idx+num_layers),
@@ -212,7 +210,6 @@ class TtPrefillTransformer(LightweightModule):
                 shared_expert_activations_dtype=shared_expert_activations_dtype,
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
                 weight_cache_path=weight_cache_path,
-                is_chunked=is_chunked,
                 slot_num=slot_num,
                 layer_num=num_layers,
                 max_seq_len=max_seq_len,
@@ -244,22 +241,14 @@ class TtPrefillTransformer(LightweightModule):
         # --- RoPE (computed once, reused across all layers) ---
         self.rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
 
-        # Chunked prefill uses the KV-pad-aware indexed rotated path: whole-cache cos/sin/trans built
-        # once here and reused for every chunk (only the runtime kv_actual offset varies). seq_len is
-        # the per-chunk size and max_seq_len the full per-user cache length.
-        #
-        # SPARSE (DSA) layers ALWAYS use the indexed rotated path — single-shot is folded onto the
-        # block-cyclic path as one full-seq chunk (chunk_size_global == seq_len), so build the indexed
-        # tables whenever the model is sparse too, not only when chunked. Dense single-shot keeps None
-        # (rotary_embedding_llama via get_rope_tensors).
+        # Prefill is chunked-only: the KV-pad-aware indexed rotated path uses whole-cache cos/sin/trans
+        # built once here and reused for every chunk (only the runtime kv_actual offset varies). seq_len
+        # is the per-chunk size and max_seq_len the full per-user cache length. Both dense and sparse use
+        # it (sparse folds its single full-seq chunk onto the same block-cyclic path).
         self._has_indexer = resolve_has_indexer(config)
-        self.indexed_rope = (
-            self.rope_setup.get_rope_tensors_indexed(
-                cache_seq_len_global=max_seq_len if max_seq_len is not None else seq_len,
-                chunk_size_global=seq_len,
-            )
-            if (is_chunked or self._has_indexer)
-            else None
+        self.indexed_rope = self.rope_setup.get_rope_tensors_indexed(
+            cache_seq_len_global=max_seq_len if max_seq_len is not None else seq_len,
+            chunk_size_global=seq_len,
         )
 
         # --- LM Head (last token-emitting rank only) ---
@@ -330,10 +319,10 @@ class TtPrefillTransformer(LightweightModule):
             read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
             temperature: Temperature for sampling. Can be a single float or list of floats.
                         If list, returns first temperature result but stores all in intermediates.
-            on_layer_complete: optional callback invoked by MLA after fill_cache_for_user_().
+            on_layer_complete: optional callback fired by each block after MLA writes the chunk's KV.
                 Called as on_layer_complete(layer_idx). Used for KV cache
-                migration in disaggregated prefill/decode. When set, MLA also zeros
-                the padding region of the cache before fill so migration sees valid KV
+                migration in disaggregated prefill/decode. When set, the block also zeros
+                the cache pad window past actual_end before firing, so migration sees valid KV
                 + zero padding. When None, no migration or zeroing.
 
         Returns:
@@ -348,19 +337,15 @@ class TtPrefillTransformer(LightweightModule):
                             where "first_token" is a list of results for each temperature
                             (None if return_intermediates=False)
         """
-        # Chunked prefill ([actual_start, actual_end) set) uses the prebuilt whole-cache indexed rope
-        # and writes this chunk at the actual_start offset of user cache_user_id's slot; the single-shot
-        # path builds per-call rope for this seq_len. The norm/lm_head/sample tail still runs and a token
-        # is returned, but the chunked caller ignores it (the populated cache is the output).
-        if actual_start is not None:
-            assert self.is_chunked, "actual_start requires the transformer to be built with is_chunked=True"
-            rope_tensors = self.indexed_rope
-        elif self._has_indexer:
-            # Sparse single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0),
-            # so it uses the indexed rope tables just like the chunked path.
-            rope_tensors = self.indexed_rope
-        else:
-            rope_tensors = self.rope_setup.get_rope_tensors(self.seq_len)
+        # Prefill is chunked-only: both dense and sparse use the prebuilt whole-cache indexed rope,
+        # writing this chunk at the actual_start offset of user cache_user_id's slot. Dense requires
+        # actual_start; sparse folds its single full-seq chunk onto the same path (offset 0) and accepts
+        # None. The norm/lm_head/sample tail still runs and a token is returned, but the chunked caller
+        # ignores it (the populated cache is the output).
+        assert (
+            self._has_indexer or actual_start is not None
+        ), "dense chunked prefill requires actual_start; sparse accepts None (folded to offset 0)"
+        rope_tensors = self.indexed_rope
         intermediates = {} if return_intermediates else None
 
         if self.is_first_rank:

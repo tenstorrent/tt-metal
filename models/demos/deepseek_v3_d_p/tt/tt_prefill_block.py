@@ -219,7 +219,6 @@ class TtPrefillBlock(LightweightModule):
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
-        is_chunked: bool = False,
         slot_num: int = 1,
         layer_num: Optional[int] = None,
         max_seq_len: Optional[int] = None,
@@ -228,9 +227,9 @@ class TtPrefillBlock(LightweightModule):
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
-        # In chunked prefill the flat KV-cache slot is cache_user_id * layer_num + cache_layer_idx, so
-        # layer_num must be the model's actual layer count — there is no safe default to fall back to.
-        assert not is_chunked or layer_num is not None, "chunked prefill requires layer_num (model layer count)"
+        # The flat KV-cache slot is cache_user_id * layer_num + cache_layer_idx, so layer_num must be the
+        # model's actual layer count — there is no safe default to fall back to.
+        assert layer_num is not None, "chunked prefill requires layer_num (model layer count)"
         self.mesh_device = mesh_device
         self.num_links = num_links
         # Per-axis CCL topology. A (row=SP-axis-0, col=TP-axis-1) tuple configures each mesh
@@ -269,9 +268,9 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # --- MLA ---
-        # In chunked prefill the MLA's seq_len sizes the gathered-KV ring buffer (= full per-user
-        # cache length), while the block's seq_len is the per-chunk size used by the MoE/FFN dispatch
-        # buffers. They are equal in the single-shot path (max_seq_len is None).
+        # The MLA's seq_len sizes the gathered-KV ring buffer (= full per-user cache length, via
+        # max_seq_len), while the block's seq_len is the per-chunk size used by the MoE/FFN dispatch
+        # buffers.
         self.mla = ttMLA(
             config,
             state_dict.get("mla_weights", {}),  # Empty dict if cache exists
@@ -283,7 +282,6 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,  # MLA's q/kv all-gathers run on the TP axis (cluster_axis=tp_axis)
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
-            is_chunked=is_chunked,
             slot_num=slot_num,
             layer_num=layer_num,
             kv_only=kv_only,
@@ -449,8 +447,8 @@ class TtPrefillBlock(LightweightModule):
             on_layer_complete: optional per-layer migration ack. In chunked prefill, after MLA writes
                 the chunk this block zeros the pad window past actual_end, flushes, then fires this.
             actual_start: chunked-prefill absolute KV pos of this chunk's first real token (the cache
-                write offset = cumulative valid-KV count before it; None for single-shot). Selects
-                MLA's chunked path; requires the block to have been built with is_chunked=True.
+                write offset = cumulative valid-KV count before it). Required for dense; sparse folds its
+                single full-seq chunk onto the same path and accepts None (offset 0).
             actual_end: absolute KV pos past this chunk's last real token (the migration pad-zero boundary).
             cache_user_id: chunked-prefill cache slot index (user-major batch).
             return_kv_intermediates: if True, MLA surfaces its 4 KV stages (tt_kv, tt_kv_nope,

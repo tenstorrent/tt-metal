@@ -8,8 +8,8 @@ Chunked-prefill test for TtPrefillTransformer (DeepSeek V3, N layers).
 Runs chunked prefill through a specified number of layers (5, 10, or 61 = full model), processing
 the sequence in 5*1024 = 5120-token chunks into a KV cache for ONE user of length 55*1024 = 56320.
 Each layer attends to its own cache slot; chunks are driven in order so a layer's KV is populated
-before the next chunk reads it. The MoE path is unchanged from the single-shot transformer; only
-the MLA path runs chunked (is_chunked=True).
+before the next chunk reads it. The MoE path is orthogonal to attention; only the MLA path
+exercises the chunked-prefill code.
 
 Per-layer decoder outputs are PCC-compared against the precomputed golden DeepSeek-R1 trace. To keep
 host memory bounded (61 full-sequence tensors would be ~100GB) the comparison is done per chunk per
@@ -437,7 +437,6 @@ def run_chunked_transformer_padded(
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
         lm_head_is_column_parallel=True,
-        is_chunked=True,
         slot_num=1,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
@@ -617,7 +616,6 @@ def run_chunked_transformer(
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
         lm_head_is_column_parallel=True,
-        is_chunked=True,
         slot_num=1,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
@@ -1227,7 +1225,6 @@ def run_chunked_transformer_no_pcc(
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
         lm_head_is_column_parallel=True,
-        is_chunked=True,
         slot_num=1,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )

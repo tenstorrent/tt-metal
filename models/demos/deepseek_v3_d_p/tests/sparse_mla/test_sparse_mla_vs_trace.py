@@ -303,7 +303,7 @@ def _skip_unsupported(model: str, mesh_device) -> None:
         pytest.skip(f"GLM sparse_sdpa needs per-chip H=64/tp≥32 → tp≤2 (mesh tp={mesh_device.shape[1]})")
 
 
-def _make_mla(model, config, layer, mesh_device, is_chunked=False):
+def _make_mla(model, config, layer, mesh_device):
     config.max_seq_len = SEQ_LEN  # rope-table length (same hack as v3 run_model / test_mla)
     weights = _weights_for(model, config, layer)  # canonical dict — same tensors the CPU truth uses
     return ttMLA(
@@ -314,7 +314,6 @@ def _make_mla(model, config, layer, mesh_device, is_chunked=False):
         seq_len=SEQ_LEN,
         sp_axis=0,
         tp_axis=1,
-        is_chunked=is_chunked,
         layer_num=1,
     )
 

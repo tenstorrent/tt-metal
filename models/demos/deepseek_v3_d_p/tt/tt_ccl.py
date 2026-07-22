@@ -113,76 +113,9 @@ class TT_CCL:
         # keeps the memory cost flat. See TtSharedExpert.forward.
         self.shared_rs_intermediate = None
 
-        # Persistent ring-attention buffers shared by every layer's MLA, keyed by their shape
-        # signature. One set for the whole model. See get_mla_ring_attention_buffers.
-        self.mla_ring_attention_buffers: dict[tuple, dict] = {}
-
         # Persistent chunked-prefill (ring_mla) gathered-KV scratch buffers shared by every layer's
         # MLA, keyed by shape signature. See get_mla_chunked_kv_buffer.
         self.mla_chunked_kv_buffers: dict[tuple, "ttnn.Tensor"] = {}
-
-    def get_mla_ring_attention_buffers(
-        self,
-        *,
-        seq_len,
-        kv_lora_rank,
-        qk_rope_head_dim,
-        qk_head_dim,
-        v_head_dim,
-        num_heads,
-        tp_axis,
-        dtype=ttnn.bfloat8_b,
-    ):
-        """Lazily allocate (once per mesh) and return the persistent ring-attention buffers shared by
-        every layer's MLA: the all-gather K/V output buffers plus the dummy joint_q/kv/v placeholders
-        (seq_len=0) that ring_joint_scaled_dot_product_attention requires. All MLA layers share one
-        config + seq_len + mesh, so a single set is reused at a stable address across layers -- layers
-        run sequentially (no in-flight overlap), and the fixed address also keeps the op's fabric
-        reduction order identical for bit-exact determinism. Cached by shape signature so distinct
-        configs/seq_lens on the same mesh get their own set. Returns a dict of ttnn.Tensor."""
-        import torch
-
-        key = (seq_len, kv_lora_rank, qk_rope_head_dim, qk_head_dim, v_head_dim, num_heads, tp_axis, dtype)
-        if key in self.mla_ring_attention_buffers:
-            return self.mla_ring_attention_buffers[key]
-
-        mesh_shape = tuple(self.mesh_device.shape)
-        num_heads_local = num_heads // self.mesh_device.shape[tp_axis]
-        v_shard_dims = [None, None]
-        v_shard_dims[tp_axis] = 1  # TP heads
-        k_shard_dims = [None, None]  # replicated across the mesh
-        joint_shard_dims = [None, None]
-        joint_shard_dims[tp_axis] = 1  # shard on head dimension
-
-        def _alloc(tensor, *, shard_dims=None, replicate=False):
-            mapper = (
-                ttnn.ReplicateTensorToMesh(self.mesh_device)
-                if replicate
-                else ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=mesh_shape, dims=shard_dims)
-            )
-            return ttnn.from_torch(
-                tensor,
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mapper,
-            )
-
-        assert num_heads_local * self.mesh_device.shape[tp_axis] == num_heads
-        buffers = {
-            "persistent_k_output_buffer": _alloc(
-                torch.zeros(1, 1, seq_len, kv_lora_rank + qk_rope_head_dim), shard_dims=k_shard_dims
-            ),
-            "persistent_v_output_buffer": _alloc(
-                torch.zeros(1, num_heads, seq_len, v_head_dim), shard_dims=v_shard_dims
-            ),
-            "joint_q": _alloc(torch.zeros(1, num_heads, 0, qk_head_dim), shard_dims=joint_shard_dims),
-            "joint_kv": _alloc(torch.zeros(1, 1, 0, kv_lora_rank + qk_rope_head_dim), replicate=True),
-            "joint_v": _alloc(torch.zeros(1, num_heads, 0, v_head_dim), shard_dims=joint_shard_dims),
-        }
-        self.mla_ring_attention_buffers[key] = buffers
-        return buffers
 
     def get_mla_chunked_kv_buffer(self, *, cache_batch, seq_len, kvpe_dim, dtype=ttnn.bfloat8_b):
         """Lazily allocate (once per mesh) and return the combined gathered-KV scratch buffer used by

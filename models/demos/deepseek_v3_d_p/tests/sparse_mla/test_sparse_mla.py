@@ -382,7 +382,6 @@ def run_sparse_mla_chunked_case(
         seq_len=seq_len,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        is_chunked=True,
         layer_num=1,
     )
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
@@ -495,7 +494,6 @@ def run_sparse_mla_rotated_case(
         seq_len=seq_len_cache,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        is_chunked=True,
         slot_num=1,
         layer_num=1,
     )
