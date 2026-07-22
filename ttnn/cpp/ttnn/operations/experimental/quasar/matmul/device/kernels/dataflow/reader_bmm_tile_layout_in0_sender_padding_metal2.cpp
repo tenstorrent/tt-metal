@@ -410,10 +410,16 @@ void kernel_main() {
                         // the DFB producer credit. Runs once per in0 block (each bare pair needs it).
                         {
                             static uint32_t ten4746_tdma_scratch[8] __attribute__((aligned(16)));
+                            // Convert the scratch's L1 symbol address to a uint32_t L1 offset via uintptr_t:
+                            // a direct (uint32_t)ptr is a pointer->smaller-int cast (rejected under
+                            // -fpermissive on this 64-bit-pointer target); (uint32_t)(uintptr_t)ptr is an
+                            // integer narrowing, which is allowed. The .bss scratch lives in L1 so the
+                            // truncated 32-bit offset is the correct NOC-addressable address.
+                            const uint32_t ten4746_scratch_addr = (uint32_t)(uintptr_t)ten4746_tdma_scratch;
                             UnicastEndpoint ten4746_ep;
                             noc.async_read(
                                 ten4746_ep,
-                                CoreLocalMem<uint32_t>((uint32_t)ten4746_tdma_scratch),
+                                CoreLocalMem<uint32_t>(ten4746_scratch_addr),
                                 16,
                                 {.noc_x = my_x[0], .noc_y = my_y[0], .addr = cb_in0.get_write_ptr()},
                                 {});
