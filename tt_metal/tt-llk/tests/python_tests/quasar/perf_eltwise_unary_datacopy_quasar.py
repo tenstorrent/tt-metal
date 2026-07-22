@@ -12,6 +12,7 @@ from quasar.test_eltwise_unary_datacopy_quasar import (
     test_eltwise_unary_datacopy_quasar as run_eltwise_unary_datacopy,
 )
 
+
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
