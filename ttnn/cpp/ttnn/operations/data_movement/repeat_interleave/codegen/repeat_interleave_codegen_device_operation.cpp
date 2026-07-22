@@ -31,7 +31,7 @@ void RepeatInterleaveCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor = tensor_args.input;
     TT_FATAL(
-        input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        input_tensor.storage_type() == StorageType::DEVICE,
         "Operands to repeat_interleave (codegen) need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
 
@@ -53,7 +53,7 @@ RepeatInterleaveCodegenDeviceOperation::compute_output_specs(
     auto output_shape = input_tensor.logical_shape();
     const uint32_t rep_dim = recover_rep_dim(operation_attributes.rep_dim, output_shape.rank());
     output_shape[rep_dim] *= operation_attributes.num_repeats;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(),
