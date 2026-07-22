@@ -77,6 +77,17 @@ void kernel_main() {
     const uint32_t valid_k = get_arg_val<uint32_t>(14);  // valid K tiles (rest of capacity zero-filled)
     const uint32_t valid_m = get_arg_val<uint32_t>(15);  // valid M tiles (rest zero / not written)
     const uint32_t valid_n = get_arg_val<uint32_t>(16);  // valid N tiles (rest zero / not written)
+#ifdef REDTREE
+    // Fan-in-2 reduction-tree runtime args (index 17+; never combined with fusion/chunks — see the factory).
+    const uint32_t tree_num_recv = get_arg_val<uint32_t>(17);      // incoming partials this core sums (0/1/2)
+    const uint32_t tree_parent_nrecv = get_arg_val<uint32_t>(18);  // parent's num_recv (sender slot cadence)
+    const uint32_t tree_channel = get_arg_val<uint32_t>(19);       // channel this core writes at its parent
+    const uint32_t red_sem2_id = get_arg_val<uint32_t>(20);        // channel-1 receive semaphore id
+    const uint32_t red_src0_x = get_arg_val<uint32_t>(21);         // channel-0 source (for reverse credit)
+    const uint32_t red_src0_y = get_arg_val<uint32_t>(22);
+    const uint32_t red_src1_x = get_arg_val<uint32_t>(23);  // channel-1 source
+    const uint32_t red_src1_y = get_arg_val<uint32_t>(24);
+#endif
 
     const auto in0 = TensorAccessor(in0_args, in0_addr, tile_bytes);
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
@@ -324,6 +335,82 @@ void kernel_main() {
         }
         cb_pop_front(out_cb, out_blk);
     }
+#elif defined(REDTREE)
+    // ---- Fan-in-2 reduction TREE (test-only; Pk==4). Depth 2 vs the chain's depth 3. ----
+    // This core RECEIVES tree_num_recv partials (0 = leaf, 1 = inner, 2 = root) on disjoint channels, then
+    // (if not the root) FORWARDS its summed block up to its parent on channel `tree_channel`. The reduce-CB
+    // (cb_reduce, 2 slots) is addressed exactly like the chain: the receiver reserves one slot per round and
+    // the sender writes reduce_base + slot*out_blk_bytes where slot = (nb*parent_nrecv + channel) % 2 — this
+    // matches the receiver's per-round FIFO reservation for both parent kinds (inner parent nrecv=1 =>
+    // double-buffered nb%2 like the chain; root parent nrecv=2 => channel-fixed slots 0/1). Channel 0 uses
+    // red_sem, channel 1 uses red_sem2 (disjoint counters => no cross-channel fungibility).
+    const uint32_t reduce_base = get_write_ptr(cb_reduce);
+    const uint32_t red_addr = get_semaphore(red_sem_id);    // my channel-0 receive counter
+    const uint32_t red2_addr = get_semaphore(red_sem2_id);  // my channel-1 receive counter
+    volatile tt_l1_ptr uint32_t* red_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_addr);
+    volatile tt_l1_ptr uint32_t* red2_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red2_addr);
+    const uint32_t redfree_addr = get_semaphore(redfree_sem_id);
+    volatile tt_l1_ptr uint32_t* redfree_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(redfree_addr);
+    // Reverse-credit targets: my channel-0/1 sources' redfree semaphores (I free their reduce slots).
+    const uint64_t src0_redfree = get_noc_addr(red_src0_x, red_src0_y, redfree_addr);
+    const uint64_t src1_redfree = get_noc_addr(red_src1_x, red_src1_y, redfree_addr);
+    // Forward target: my parent's channel-`tree_channel` receive counter (same L1 offset on every core).
+    const uint32_t parent_recv_addr = (tree_channel == 0u) ? red_addr : red2_addr;
+    const uint64_t next_recv = get_noc_addr(red_next_x, red_next_y, parent_recv_addr);
+
+    for (uint32_t nb = 0; nb < N_bpc; ++nb) {
+        if (tree_num_recv >= 1u) {  // channel 0 (from red_src0), reduced first
+            cb_reserve_back(cb_reduce, out_blk);
+            noc_semaphore_inc(src0_redfree, 1);
+            {
+                RA_ZONE("Z_P2_RECVWAIT");
+                noc_semaphore_wait_min(red_ptr, nb + 1);
+            }
+            cb_push_back(cb_reduce, out_blk);  // compute reduce-adds it (round 0)
+        }
+        if (tree_num_recv >= 2u) {  // channel 1 (from red_src1), reduced second -> out_cb
+            cb_reserve_back(cb_reduce, out_blk);
+            noc_semaphore_inc(src1_redfree, 1);
+            {
+                RA_ZONE("Z_P2_RECVWAIT");
+                noc_semaphore_wait_min(red2_ptr, nb + 1);
+            }
+            cb_push_back(cb_reduce, out_blk);  // compute reduce-adds it (round 1)
+        }
+        {
+            RA_ZONE("Z_P2_OUTWAIT");
+            cb_wait_front(out_cb, out_blk);  // compute produced this core's (summed) block nb
+        }
+        uint32_t r = get_read_ptr(out_cb);
+        if (tree_num_recv < 2u) {                         // not the root: forward my block up to my parent
+            noc_semaphore_wait_min(redfree_ptr, nb + 1);  // parent freed my target slot
+            const uint32_t slot = (nb * tree_parent_nrecv + tree_channel) & 1u;
+            uint64_t dst = get_noc_addr(red_next_x, red_next_y, reduce_base + slot * out_blk_bytes);
+            noc_async_write(r, dst, out_blk_bytes);
+            noc_semaphore_inc(next_recv, 1);  // ordered after payload (same peer + NoC, like the in0 ring)
+            noc_async_writes_flushed();       // payload departed L1 -> out_cb slot reusable
+        } else {                              // root (is_top): write the final block to DRAM
+            RA_ZONE("Z_P2_OUTWRITE");
+            const uint32_t n_off = n_start + nb * N_block;
+            for (uint32_t m = 0; m < M_block; ++m) {
+                for (uint32_t n = 0; n < N_block; ++n) {
+                    if (m < valid_m && (nb * N_block + n) < valid_n) {
+#if defined(OUT_CHUNKS)
+                        write_out_tile(m_start + m, n_off + n, r + (m * N_block + n) * tile_bytes);
+#else
+                        noc_async_write_page((m_start + m) * Nt + (n_off + n), out, r + (m * N_block + n) * tile_bytes);
+#endif
+                    }
+                }
+            }
+            noc_async_writes_flushed();
+        }
+        cb_pop_front(out_cb, out_blk);
+    }
+    // Single deferred completion (like the chain default): drain forwarded partial-sums / DRAM writes AND the
+    // non-posted reduction-readiness / reverse-credit atomics so no NoC transaction outlives the program.
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 #else
     // cb_reduce holds 2 blocks (double-buffered). reduce_base captured ONCE BEFORE any cb_reduce use (the
     // write ptr drifts after receives).

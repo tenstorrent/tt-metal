@@ -113,6 +113,7 @@ TEST_F(RegimeADiagFixture, Run) {
     constexpr uint32_t kIn1Preserve = (1u << 22) | (1u << 25);
     if (mask == 0 || mask == 1024 || mask == 2048 || mask == 4096 || mask == 16384 || mask == 65536 || mask == 262144 ||
         mask == 524288 || mask == 2097152 || mask == 32 /*DIAG_RINGDRAIN: source-lifetime/ordering-preserving*/ ||
+        mask == 64 /*DIAG_REDTREE: fan-in-2 tree, same fp32-acc adds (associative) => bit-exact*/ ||
         (mask != 0u && (mask & ~kIn1Preserve) == 0u)) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
@@ -181,9 +182,12 @@ TEST_F(RegimeADiagFixture, Correctness) {
     (void)Kt;
     (void)Nt;
 
-    // default progressive path (0) + the full-wait A/B baseline (1024); each fresh then cached (2nd
-    // invocation = cached program). Both run the DEFAULT ring transport; only the CB0 wait placement differs.
-    for (uint32_t mask : {0u, 1024u}) {
+    // default progressive path (0) + the full-wait A/B baseline (1024) + the fan-in-2 reduction tree
+    // (DIAG_REDTREE, 64 — this config is Pk=4/Sm=2, so both mm-groups form a real depth-2 tree); each fresh
+    // then cached (2nd invocation = cached program). The tree sums the SAME four k-slice partials in a
+    // different association order, so PCC vs the f32 golden must stay >= 0.99 (a mis-linked channel / dropped
+    // partial / slot aliasing would collapse it).
+    for (uint32_t mask : {0u, 1024u, 64u}) {
         for (int pass = 0; pass < 2; ++pass) {  // pass 0 = fresh/compile, pass 1 = cached-program replay
             Tensor out =
                 ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);

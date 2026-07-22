@@ -131,6 +131,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     if (diag & RegimeADiag::DIAG_RINGDRAIN) {  // test-only: phase-1 deferred-drain (writer only)
         wdefs["DIAG_RINGDRAIN"] = "1";
     }
+    if (diag & RegimeADiag::DIAG_REDTREE) {  // test-only: fan-in-2 reduction tree (Pk==4); writer + compute
+        TT_FATAL(Pk == 4u, "DIAG_REDTREE requires k_slices (Pk) == 4 (fan-in-2 depth-2 tree); got Pk={}", Pk);
+        wdefs["REDTREE"] = "1";
+        ddefs["REDTREE"] = "1";
+    }
     if (diag & RegimeADiag::DIAG_BARRIER_DRAIN) {
         wdefs["DIAG_BARRIER_DRAIN"] = "1";  // A/B baseline: OLD per-block phase-2 completion barrier
     }
@@ -438,6 +443,71 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             }
         }
     }
+    // ---- DIAG_REDTREE: rewrite the linear reduction chain into a fan-in-2 tree (Pk==4 only). ----
+    // Groups: fixing a bank b and a within-bank (nn,mm) sub-index `sub` in [0, mfac), the 4 k-slices are the
+    // cores i_kk = b*preaders + kk*mfac + sub for kk=0..3 (this is exactly the chain's reduction group). We
+    // re-link them as two level-0 pairs feeding one level-1 root:
+    //   kk0 --ch0--> kk1        (kk1 sums kk0's partial: num_recv=1)
+    //   kk2 --ch0--> kk3        (root channel 0)
+    //   kk1 --ch1--> kk3        (root channel 1; kk3 sums both: num_recv=2, is_top)
+    // Critical depth drops from 3 (chain) to 2. The root's two channels use disjoint semaphores (red_sem /
+    // red_sem2) and disjoint reduce-CB slots so partials never alias. Output is bit-identical to the chain
+    // (same fp32-acc adds, associativity). This mutates ONLY reduction fields (num_recv / red_channel /
+    // red_parent_nrecv / red_next_idx / red_src_idx / is_top / is_bottom); ring + ownership + placement are
+    // untouched, so mask-0 stays byte-identical and only this diagnostic program sees the tree.
+    if (diag & RegimeADiag::DIAG_REDTREE) {
+        const uint32_t mfac = geo.mfac;          // Ns*Sm
+        const uint32_t preaders = geo.preaders;  // Pk*Ns*Sm
+        for (uint32_t b = 0; b < 8u; ++b) {
+            for (uint32_t sub = 0; sub < mfac; ++sub) {
+                const uint32_t i0 = b * preaders + 0u * mfac + sub;
+                const uint32_t i1 = b * preaders + 1u * mfac + sub;
+                const uint32_t i2 = b * preaders + 2u * mfac + sub;
+                const uint32_t i3 = b * preaders + 3u * mfac + sub;
+                auto& c0 = P.cores[i0];
+                auto& c1 = P.cores[i1];
+                auto& c2 = P.cores[i2];
+                auto& c3 = P.cores[i3];
+                // kk0: leaf -> kk1 (channel 0)
+                c0.num_recv = 0u;
+                c0.is_bottom = true;
+                c0.is_top = false;
+                c0.red_next_idx = i1;
+                c0.red_channel = 0u;
+                c0.red_parent_nrecv = 1u;
+                c0.red_src_idx[0] = i0;
+                c0.red_src_idx[1] = i0;
+                // kk1: recv kk0 (channel 0) -> kk3 (channel 1)
+                c1.num_recv = 1u;
+                c1.is_bottom = false;
+                c1.is_top = false;
+                c1.red_next_idx = i3;
+                c1.red_channel = 1u;
+                c1.red_parent_nrecv = 2u;
+                c1.red_src_idx[0] = i0;
+                c1.red_src_idx[1] = i1;
+                // kk2: leaf -> kk3 (channel 0)
+                c2.num_recv = 0u;
+                c2.is_bottom = true;
+                c2.is_top = false;
+                c2.red_next_idx = i3;
+                c2.red_channel = 0u;
+                c2.red_parent_nrecv = 2u;
+                c2.red_src_idx[0] = i2;
+                c2.red_src_idx[1] = i2;
+                // kk3: root, recv kk2 (channel 0) + kk1 (channel 1)
+                c3.num_recv = 2u;
+                c3.is_bottom = false;
+                c3.is_top = true;
+                c3.red_next_idx = i3;
+                c3.red_channel = 0u;
+                c3.red_parent_nrecv = 0u;
+                c3.red_src_idx[0] = i2;  // channel 0 source
+                c3.red_src_idx[1] = i1;  // channel 1 source
+            }
+        }
+    }
+
     if (diag & RegimeADiag::DIAG_FULL_IN0_WAIT) {
         ddefs["DIAG_FULL_IN0_WAIT"] = "1";  // A/B baseline: old full-slice startup barrier (compute-only)
     }
@@ -518,6 +588,13 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     if (Sm > 1u) {
         in1valid_sem = CreateSemaphore(program, all_cores, 0u);
         in1ready_sem = CreateSemaphore(program, all_cores, 0u);
+    }
+    // DIAG_REDTREE only: the fan-in-2 root's SECOND receive channel (channel 1). Disjoint from red_sem so the
+    // two incoming partials never share a counter. Allocated only for the tree diagnostic (mask 0 unaffected);
+    // passed to the writer as a RUNTIME arg (below) so the writer's compile-time-arg layout is unchanged.
+    uint32_t red_sem2 = 0u;
+    if (diag & RegimeADiag::DIAG_REDTREE) {
+        red_sem2 = CreateSemaphore(program, all_cores, 0u);
     }
 
     // ---- Kernels ----
@@ -694,12 +771,33 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                 wa.push_back(tensor_return_value[c].buffer()->address());
             }
         }
+        // DIAG_REDTREE tree args (index 17+; never combined with fusion/chunks, which the diag entry disables).
+        // The writer reads these only under #ifdef REDTREE. red_src[0/1] are the channel-0/1 source cores this
+        // core reverse-credits; for leaves (num_recv==0) they point at self and are unused.
+        if (diag & RegimeADiag::DIAG_REDTREE) {
+            auto rs0 = phys(cp.red_src_idx[0]);
+            auto rs1 = phys(cp.red_src_idx[1]);
+            wa.push_back(cp.num_recv);          // 17 incoming partials to receive (0/1/2)
+            wa.push_back(cp.red_parent_nrecv);  // 18 parent's num_recv (sender reduce-slot cadence)
+            wa.push_back(cp.red_channel);       // 19 channel this core writes at its parent (0/1)
+            wa.push_back(red_sem2);             // 20 channel-1 receive semaphore id
+            wa.push_back(rs0.x);                // 21 channel-0 source x
+            wa.push_back(rs0.y);                // 22 channel-0 source y
+            wa.push_back(rs1.x);                // 23 channel-1 source x
+            wa.push_back(rs1.y);                // 24 channel-1 source y
+        }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
         // compute runtime args: fixed rectangular block over the schedule capacities. N_end spans ALL
         // N_bpc sub-blocks (spec §7); zero-filled tail positions contribute zero. When a fusion is active the
         // reduction-root flag (is_top) follows, then the addcmul scalar bits + gate-broadcast flag.
         std::vector<uint32_t> ca = {0u, geo.M_block_capacity, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u};
+        // DIAG_REDTREE (never combined with fusion): compute reads num_recv right after is_reduce_bottom and
+        // runs num_recv reduce-add rounds. Follows is_reduce_bottom (arg 4) so the fused is_reduce_top (arg 5,
+        // present only under fusion) never collides with it.
+        if (diag & RegimeADiag::DIAG_REDTREE) {
+            ca.push_back(cp.num_recv);
+        }
         if (has_bias || has_ternary || has_activation) {
             ca.push_back(cp.is_top ? 1u : 0u);
         }
