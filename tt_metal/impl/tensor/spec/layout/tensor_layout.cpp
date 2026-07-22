@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 
+#include "page_config_impl.hpp"
 #include "tensor_layout_impl.hpp"
 
 namespace tt::tt_metal {
@@ -121,7 +122,7 @@ void validate_alignment(const TensorLayoutImpl& tensor_layout) {
 
     const auto& page_config = tensor_layout.get_page_config();
     const auto& dtype = tensor_layout.get_data_type();
-    page_config.validate_alignment(alignment, dtype, memory_config);
+    validate_alignment(page_config, alignment, dtype, memory_config);
 }
 
 std::optional<std::string> get_shard_align_error(
@@ -170,7 +171,7 @@ TensorLayoutImpl::TensorLayoutImpl(
 }
 
 void TensorLayoutImpl::initialize_alignment() {
-    auto default_alignment = page_config_.create_default_alignment(dtype_, memory_config_);
+    auto default_alignment = create_default_alignment(page_config_, dtype_, memory_config_);
     if (alignment_.empty()) {
         alignment_ = default_alignment;
         return;
@@ -281,7 +282,7 @@ size_t TensorLayoutImpl::compute_page_size_bytes(const tt::tt_metal::Shape& shap
 }
 
 size_t TensorLayoutImpl::compute_page_size_bytes(const Shape2D& page_size) const {
-    return page_config_.get_page_size_bytes(page_size, dtype_);
+    return get_page_size_bytes(page_config_, page_size, dtype_);
 }
 
 size_t TensorLayoutImpl::compute_consumed_memory_bytes_per_bank(
@@ -383,7 +384,7 @@ Shape2D TensorLayoutImpl::compute_page_shape(const Shape2D& physical_size) const
         physical_shard_shape = get_physical_shard_shape();
     }
 
-    return page_config_.get_page_shape(physical_size, dtype_, memory_config_, physical_shard_shape);
+    return get_page_shape(page_config_, physical_size, dtype_, memory_config_, physical_shard_shape);
 }
 
 Strides TensorLayoutImpl::compute_strides(const tt::tt_metal::Shape& logical_shape) const {

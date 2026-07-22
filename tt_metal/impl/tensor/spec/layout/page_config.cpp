@@ -7,138 +7,43 @@
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 
 #include <tt-metalium/shape2d.hpp>
-#include <memory>
 #include <numeric>
+#include <type_traits>
+#include <utility>
+#include <variant>
 
 #include "impl/tensor/spec/layout/page_config_impl.hpp"
 
 namespace tt::tt_metal {
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
-PageConfig::PageConfig(const Config& config) : impl_(std::make_unique<PageConfigImpl>(config)) {}
+size_t rm_element_size_bytes(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16: return sizeof(bfloat16);
+        case DataType::FLOAT32: return sizeof(float);
+        case DataType::INT32: return sizeof(int32_t);
+        case DataType::UINT32: return sizeof(uint32_t);
+        case DataType::UINT16: return sizeof(uint16_t);
+        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
+        case DataType::UINT8: return sizeof(uint8_t);
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+            // To store block floats in RowMajor layout, we use a fallback and store full floats instead
+            return sizeof(float);
 
-PageConfig::PageConfig(Layout layout) : PageConfig(layout, std::nullopt) {}
-
-PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) :
-    impl_(std::make_unique<PageConfigImpl>(layout, tile)) {}
-
-PageConfig::~PageConfig() = default;
-
-PageConfig::PageConfig(const PageConfig& other) :
-    impl_(other.impl_ ? std::make_unique<PageConfigImpl>(*other.impl_) : nullptr) {}
-
-PageConfig& PageConfig::operator=(const PageConfig& other) {
-    if (this == &other) {
-        return *this;
+        default: TT_THROW("Unsupported data type!");
     }
-    impl_ = other.impl_ ? std::make_unique<PageConfigImpl>(*other.impl_) : nullptr;
-    return *this;
 }
 
-PageConfig::PageConfig(PageConfig&& other) noexcept = default;
-PageConfig& PageConfig::operator=(PageConfig&& other) noexcept = default;
+// Maximum possible device memory alignment for all devices and buffer types.
+constexpr uint32_t RECOMMENDED_MEMORY_ALIGNMENT_BYTES = 64;
 
-PageConfigImpl& PageConfig::impl() {
-    TT_FATAL(impl_ != nullptr, "PageConfig is in a moved-from state.");
-    return *impl_;
+Alignment create_default_alignment_tile(const TilePageConfig& config, DataType, const MemoryConfig&) {
+    return Alignment({config.tile.get_height(), config.tile.get_width()});
 }
 
-const PageConfigImpl& PageConfig::impl() const {
-    TT_FATAL(impl_ != nullptr, "PageConfig is in a moved-from state.");
-    return *impl_;
-}
-
-Alignment PageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
-    return impl().create_default_alignment(dtype, memory_config);
-}
-
-void PageConfig::validate_alignment(
-    const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const {
-    impl().validate_alignment(alignment, dtype, memory_config);
-}
-
-Shape2D PageConfig::get_page_shape(
-    const Shape2D& physical_size,
-    DataType dtype,
-    const MemoryConfig& memory_config,
-    const std::optional<Shape2D>& physical_shard_size) const {
-    return impl().get_page_shape(physical_size, dtype, memory_config, physical_shard_size);
-}
-
-size_t PageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const {
-    return impl().get_page_size_bytes(page_shape, dtype);
-}
-
-Layout PageConfig::get_layout() const { return impl().get_layout(); }
-
-Tile PageConfig::get_tile() const { return impl().get_tile(); }
-
-Alignment PageConfig::get_required_shard_shape_alignment() const { return impl().get_required_shard_shape_alignment(); }
-
-Alignment PageConfig::get_recommended_shard_shape_alignment(DataType dtype) const {
-    return impl().get_recommended_shard_shape_alignment(dtype);
-}
-
-bool PageConfig::operator==(const PageConfig& other) const { return impl().config() == other.impl().config(); }
-bool PageConfig::operator!=(const PageConfig& other) const { return !(*this == other); }
-
-std::tuple<const PageConfig::Config&> PageConfig::attribute_values() const {
-    return std::forward_as_tuple(impl().config());
-}
-
-TilePageConfig::TilePageConfig(const Tile& tile) : tile_(tile) {}
-
-Alignment TilePageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& /*memory_config*/) const {
-    return Alignment({tile_.get_height(), tile_.get_width()});
-}
-
-void TilePageConfig::validate_alignment(const Alignment& alignment, DataType /*dtype*/, const MemoryConfig&) const {
-    TT_FATAL(alignment.size() >= 2, "Alignment should have at least 2 dimensions for Tile layout");
-    const auto widthAlignment = alignment[-1];
-    TT_FATAL(
-        widthAlignment % tile_.get_width() == 0,
-        "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width "
-        "{}.",
-        alignment,
-        tile_.get_width());
-    auto heightAlignment = alignment[-2];
-    TT_FATAL(
-        (heightAlignment % tile_.get_height()) == 0,
-        "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of "
-        "tile height {}.",
-        alignment,
-        tile_.get_height());
-}
-
-Shape2D TilePageConfig::get_page_shape(
-    const Shape2D& /*physical_size*/,
-    DataType /*dtype*/,
-    const MemoryConfig& /*memory_config*/,
-    const std::optional<Shape2D>&) const {
-    return Shape2D(tile_.get_height(), tile_.get_width());
-}
-
-size_t TilePageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const {
-    const auto tiles_count = page_shape.height() / tile_.get_height() * page_shape.width() / tile_.get_width();
-    const auto size = tiles_count * tile_.get_tile_size(datatype_to_dataformat_converter(dtype));
-    return size;
-}
-
-const Tile& TilePageConfig::get_tile() const { return tile_; }
-
-Alignment TilePageConfig::get_recommended_shard_shape_alignment(DataType) const {
-    return get_required_shard_shape_alignment();
-}
-
-Alignment TilePageConfig::get_required_shard_shape_alignment() const {
-    return Alignment({tile_.get_height(), tile_.get_width()});
-}
-
-RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {
-    TT_FATAL(
-        tile == Tile{}, "Configuring a ROW MAJOR page config with a custom tile configuration is not supported.");
-}
-
-Alignment RowMajorPageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& memory_config) const {
+Alignment create_default_alignment_rm(const RowMajorPageConfig&, DataType, const MemoryConfig& memory_config) {
     if (memory_config.shard_spec().has_value()) {
         const auto& shard_spec = memory_config.shard_spec().value();
         return Alignment({shard_spec.shape[1]});
@@ -150,8 +55,26 @@ Alignment RowMajorPageConfig::create_default_alignment(DataType /*dtype*/, const
     return Alignment({1});
 }
 
-void RowMajorPageConfig::validate_alignment(
-    const Alignment& alignment, DataType /*dtype*/, const MemoryConfig& memory_config) const {
+void validate_alignment_tile(const TilePageConfig& config, const Alignment& alignment, DataType, const MemoryConfig&) {
+    TT_FATAL(alignment.size() >= 2, "Alignment should have at least 2 dimensions for Tile layout");
+    const auto widthAlignment = alignment[-1];
+    TT_FATAL(
+        widthAlignment % config.tile.get_width() == 0,
+        "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width "
+        "{}.",
+        alignment,
+        config.tile.get_width());
+    auto heightAlignment = alignment[-2];
+    TT_FATAL(
+        (heightAlignment % config.tile.get_height()) == 0,
+        "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of "
+        "tile height {}.",
+        alignment,
+        config.tile.get_height());
+}
+
+void validate_alignment_rm(
+    const RowMajorPageConfig&, const Alignment& alignment, DataType, const MemoryConfig& memory_config) {
     TT_FATAL(!alignment.empty(), "Alignment must contain at least one dimension for Row Major layout.");
     const uint32_t width_alignment = alignment[-1];
 
@@ -169,13 +92,19 @@ void RowMajorPageConfig::validate_alignment(
     }
 }
 
-Shape2D RowMajorPageConfig::get_page_shape(
+Shape2D get_page_shape_tile(
+    const TilePageConfig& config, const Shape2D&, DataType, const MemoryConfig&, const std::optional<Shape2D>&) {
+    return Shape2D(config.tile.get_height(), config.tile.get_width());
+}
+
+Shape2D get_page_shape_rm(
+    const RowMajorPageConfig&,
     const Shape2D& physical_size,
     DataType dtype,
     const MemoryConfig& memory_config,
-    const std::optional<Shape2D>& physical_shard_size) const {
+    const std::optional<Shape2D>& physical_shard_size) {
     if (physical_size.height() == 0 || physical_size.width() == 0) {
-        return Shape2D(1, sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype));
+        return Shape2D(1, sizeof(uint32_t) / rm_element_size_bytes(dtype));
     }
 
     if (memory_config.shard_spec().has_value() && memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -195,24 +124,152 @@ Shape2D RowMajorPageConfig::get_page_shape(
     return Shape2D(1, physical_size.width());
 }
 
-size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const {
-    const auto size = page_shape.height() * page_shape.width() * CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype);
-    return size;
+size_t get_page_size_bytes_tile(const TilePageConfig& config, const Shape2D& page_shape, DataType dtype) {
+    const auto tiles_count =
+        page_shape.height() / config.tile.get_height() * page_shape.width() / config.tile.get_width();
+    return tiles_count * config.tile.get_tile_size(datatype_to_dataformat_converter(dtype));
 }
 
-const Tile& RowMajorPageConfig::get_tile() const {
-    TT_FATAL(
-        tile_ == Tile{},
-        "Attempting to extract tile information out of a ROW MAJOR layout is not supported.");
-    return tile_;
+size_t get_page_size_bytes_rm(const RowMajorPageConfig&, const Shape2D& page_shape, DataType dtype) {
+    return page_shape.height() * page_shape.width() * rm_element_size_bytes(dtype);
 }
 
-Alignment RowMajorPageConfig::get_required_shard_shape_alignment() const { return Alignment({1}); }
+Alignment get_required_shard_shape_alignment_tile(const TilePageConfig& config) {
+    return Alignment({config.tile.get_height(), config.tile.get_width()});
+}
 
-Alignment RowMajorPageConfig::get_recommended_shard_shape_alignment(DataType dtype) const {
-    auto element_size_bytes = CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype);
-    auto alignment_bytes = std::lcm(CMAKE_UNIQUE_NAMESPACE::RECOMMENDED_MEMORY_ALIGNMENT_BYTES, element_size_bytes);
+Alignment get_required_shard_shape_alignment_rm(const RowMajorPageConfig&) { return Alignment({1}); }
+
+Alignment get_recommended_shard_shape_alignment_tile(const TilePageConfig& config, DataType) {
+    return get_required_shard_shape_alignment_tile(config);
+}
+
+Alignment get_recommended_shard_shape_alignment_rm(const RowMajorPageConfig&, DataType dtype) {
+    auto element_size_bytes = rm_element_size_bytes(dtype);
+    auto alignment_bytes = std::lcm(RECOMMENDED_MEMORY_ALIGNMENT_BYTES, element_size_bytes);
     return Alignment({static_cast<uint32_t>(alignment_bytes / element_size_bytes)});
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+PageConfig::PageConfig(Config config) : config_(std::move(config)) {}
+
+PageConfig::PageConfig(Layout layout) : PageConfig(layout, std::nullopt) {}
+
+PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
+    if (layout == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            !tile.has_value() || *tile == Tile{},
+            "Configuring a ROW MAJOR page config with a custom tile configuration is not supported.");
+        config_ = RowMajorPageConfig{};
+    } else {
+        config_ = TilePageConfig{tile.value_or(Tile())};
+    }
+}
+
+Layout PageConfig::get_layout() const {
+    if (std::holds_alternative<RowMajorPageConfig>(config_)) {
+        return Layout::ROW_MAJOR;
+    }
+    return Layout::TILE;
+}
+
+Tile PageConfig::get_tile() const {
+    if (const auto* tile_config = std::get_if<TilePageConfig>(&config_)) {
+        return tile_config->tile;
+    }
+    return Tile{};
+}
+
+Alignment PageConfig::get_recommended_shard_shape_alignment(DataType dtype) const {
+    return tt::tt_metal::get_recommended_shard_shape_alignment(*this, dtype);
+}
+
+Alignment create_default_alignment(const PageConfig& page_config, DataType dtype, const MemoryConfig& memory_config) {
+    return std::visit(
+        [&](const auto& config) -> Alignment {
+            using T = std::decay_t<decltype(config)>;
+            if constexpr (std::is_same_v<T, TilePageConfig>) {
+                return CMAKE_UNIQUE_NAMESPACE::create_default_alignment_tile(config, dtype, memory_config);
+            } else {
+                return CMAKE_UNIQUE_NAMESPACE::create_default_alignment_rm(config, dtype, memory_config);
+            }
+        },
+        page_config.get_config());
+}
+
+void validate_alignment(
+    const PageConfig& page_config, const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) {
+    std::visit(
+        [&](const auto& config) {
+            using T = std::decay_t<decltype(config)>;
+            if constexpr (std::is_same_v<T, TilePageConfig>) {
+                CMAKE_UNIQUE_NAMESPACE::validate_alignment_tile(config, alignment, dtype, memory_config);
+            } else {
+                CMAKE_UNIQUE_NAMESPACE::validate_alignment_rm(config, alignment, dtype, memory_config);
+            }
+        },
+        page_config.get_config());
+}
+
+Shape2D get_page_shape(
+    const PageConfig& page_config,
+    const Shape2D& physical_size,
+    DataType dtype,
+    const MemoryConfig& memory_config,
+    const std::optional<Shape2D>& physical_shard_size) {
+    return std::visit(
+        [&](const auto& config) -> Shape2D {
+            using T = std::decay_t<decltype(config)>;
+            if constexpr (std::is_same_v<T, TilePageConfig>) {
+                return CMAKE_UNIQUE_NAMESPACE::get_page_shape_tile(
+                    config, physical_size, dtype, memory_config, physical_shard_size);
+            } else {
+                return CMAKE_UNIQUE_NAMESPACE::get_page_shape_rm(
+                    config, physical_size, dtype, memory_config, physical_shard_size);
+            }
+        },
+        page_config.get_config());
+}
+
+size_t get_page_size_bytes(const PageConfig& page_config, const Shape2D& page_shape, DataType dtype) {
+    return std::visit(
+        [&](const auto& config) -> size_t {
+            using T = std::decay_t<decltype(config)>;
+            if constexpr (std::is_same_v<T, TilePageConfig>) {
+                return CMAKE_UNIQUE_NAMESPACE::get_page_size_bytes_tile(config, page_shape, dtype);
+            } else {
+                return CMAKE_UNIQUE_NAMESPACE::get_page_size_bytes_rm(config, page_shape, dtype);
+            }
+        },
+        page_config.get_config());
+}
+
+Alignment get_required_shard_shape_alignment(const PageConfig& page_config) {
+    return std::visit(
+        [&](const auto& config) -> Alignment {
+            using T = std::decay_t<decltype(config)>;
+            if constexpr (std::is_same_v<T, TilePageConfig>) {
+                return CMAKE_UNIQUE_NAMESPACE::get_required_shard_shape_alignment_tile(config);
+            } else {
+                return CMAKE_UNIQUE_NAMESPACE::get_required_shard_shape_alignment_rm(config);
+            }
+        },
+        page_config.get_config());
+}
+
+Alignment get_recommended_shard_shape_alignment(const PageConfig& page_config, DataType dtype) {
+    return std::visit(
+        [&](const auto& config) -> Alignment {
+            using T = std::decay_t<decltype(config)>;
+            if constexpr (std::is_same_v<T, TilePageConfig>) {
+                return CMAKE_UNIQUE_NAMESPACE::get_recommended_shard_shape_alignment_tile(config, dtype);
+            } else {
+                return CMAKE_UNIQUE_NAMESPACE::get_recommended_shard_shape_alignment_rm(config, dtype);
+            }
+        },
+        page_config.get_config());
 }
 
 }  // namespace tt::tt_metal

@@ -9,6 +9,7 @@
 
 #include <tt-metalium/experimental/tensor/spec/layout/alignment.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
 #include <memory>
