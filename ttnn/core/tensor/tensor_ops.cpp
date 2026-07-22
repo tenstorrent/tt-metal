@@ -24,6 +24,7 @@
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
 using tt::tt_metal::BufferRegion;
+using tt::tt_metal::DataType;
 using tt::tt_metal::DistributedHostBuffer;
 using tt::tt_metal::enqueue_read_tensor;
 using tt::tt_metal::enqueue_write_tensor;

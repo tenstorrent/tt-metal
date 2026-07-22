@@ -49,7 +49,6 @@ using tt::tt_metal::HostBuffer;
 using tt::tt_metal::HostTensor;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
-using tt::tt_metal::MemoryPin;
 using tt::tt_metal::MeshTensor;
 using tt::tt_metal::NdShardSpec;
 using tt::tt_metal::ShardSpec;

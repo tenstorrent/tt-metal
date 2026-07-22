@@ -13,7 +13,6 @@
 
 namespace ttnn::experimental::unit_mesh {
 using tt::tt_metal::MeshTensor;
-using tt::tt_metal::TensorTopology;
 
 namespace {
 

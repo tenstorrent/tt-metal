@@ -731,7 +731,6 @@ void D2DStreamServiceReceiver::release_fabric_links() {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 namespace distributed = tt::tt_metal::distributed;
-namespace stream_service_common = tt::tt_metal::stream_service_common;
 
 // Both kernels run on the single service core, RISCV_0. CB indices are private
 // to each program so the sender (scratch + headers) and receiver (headers only)
