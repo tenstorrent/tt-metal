@@ -90,6 +90,37 @@ static void dump_deep_path(
     }
 }
 
+// Print the first N top-level zones' name + duration (in device ticks/cycles) — to eyeball that the
+// per-zone spin durations landed (Zone0..Zone9). GUI ns = ticks * context.period.
+static void sample_top_zones(
+    const tracy::Worker& w, const tracy::Vector<tracy::short_ptr<tracy::GpuEvent>>& vec, int n) {
+    int printed = 0;
+    auto show = [&](const tracy::GpuEvent& e) {
+        if (printed >= n) {
+            return;
+        }
+        const char* nm = w.GetZoneName(e);
+        printf("      %-16s dur=%lld ticks\n", nm ? nm : "(null)", (long long)(e.GpuEnd() - e.GpuStart()));
+        printed++;
+    };
+    if (vec.is_magic()) {
+        auto& mv = *reinterpret_cast<const tracy::Vector<tracy::GpuEvent>*>(&vec);
+        for (auto& e : mv) {
+            if (printed >= n) {
+                break;
+            }
+            show(e);
+        }
+    } else {
+        for (auto& p : vec) {
+            if (printed >= n) {
+                break;
+            }
+            show(*p);
+        }
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: %s <trace.tracy>\n", argv[0]);
@@ -145,6 +176,14 @@ int main(int argc, char** argv) {
                         dump_deep_path(worker, td.second.timeline, 0);
                     }
                 }
+            }
+            static bool sampled = false;
+            if (!sampled && c->threadData.size() >= 5) {
+                sampled = true;
+                printf(
+                    "  --- sample top-level zone durations, tid=%llu ---\n",
+                    (unsigned long long)c->threadData.begin()->first);
+                sample_top_zones(worker, c->threadData.begin()->second.timeline, 12);
             }
             total_zones += c->count;
         }
