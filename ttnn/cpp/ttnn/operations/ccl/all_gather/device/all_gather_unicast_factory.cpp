@@ -161,8 +161,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) {
         workers_per_dir = 2;
     } else if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
-        // Large steady-state tensors use four workers per direction. For small
-        // row pages this also creates one worker per DRAM bank across two links,
+        // Large steady-state tensors use eight workers per direction. For small
+        // row pages this creates two workers per DRAM bank across two links,
         // enabling the bank-owned full-packet schedule below.
         const uint32_t txn_bytes = std::min(input_page_size, output_page_size);  // NOC transaction size
         const uint64_t total_output_bytes =
@@ -170,7 +170,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         const uint64_t per_link_bytes = total_output_bytes / std::max(1u, num_links);
         constexpr uint64_t bw_bound_link_bytes = 4500000ULL;  // gathered bytes/link where fabric link saturates
         if (txn_bytes > 0 && per_link_bytes >= bw_bound_link_bytes) {
-            workers_per_dir = 4;
+            workers_per_dir = 8;
         } else {
             workers_per_dir = 2;
         }
@@ -375,8 +375,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         input_tensor.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         output_tensor.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         output_chunks_per_page == 1 && split_factor == 1 && output_chunks_per_stripe == num_input_pages &&
-        total_slices == num_dram_banks && num_input_pages % total_slices == 0;
-    const uint32_t slice_step = bank_owned_schedule ? total_slices : 1;
+        total_slices >= num_dram_banks && total_slices % num_dram_banks == 0 && num_dram_banks % num_links == 0 &&
+        workers_per_dir % (num_dram_banks / num_links) == 0 && num_input_pages % total_slices == 0;
+    const uint32_t slice_step = bank_owned_schedule ? num_dram_banks : 1;
 
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
@@ -490,14 +491,21 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
             const uint32_t slice_idx = (link * workers_per_dir) + w;
             const uint32_t input_pages_per_slice = num_input_pages / total_slices;
             const uint32_t remainder = num_input_pages % total_slices;
-            const uint32_t input_tile_id_start =
-                bank_owned_schedule ? slice_idx : (slice_idx * input_pages_per_slice) + std::min(slice_idx, remainder);
+            uint32_t input_tile_id_start = (slice_idx * input_pages_per_slice) + std::min(slice_idx, remainder);
+            if (bank_owned_schedule) {
+                const uint32_t banks_per_link = num_dram_banks / num_links;
+                const uint32_t slices_per_bank = workers_per_dir / banks_per_link;
+                const uint32_t bank = link + (w / slices_per_bank) * num_links;
+                const uint32_t slice_in_bank = w % slices_per_bank;
+                input_tile_id_start =
+                    bank + static_cast<uint64_t>(slice_in_bank) * input_pages_per_slice * num_dram_banks;
+            }
             const uint32_t input_tile_id_end =
-                bank_owned_schedule ? num_input_pages
+                bank_owned_schedule ? input_tile_id_start + input_pages_per_slice * num_dram_banks
                                     : ((slice_idx + 1) * input_pages_per_slice) + std::min(slice_idx + 1, remainder);
             const uint32_t local_output_start =
                 bank_owned_schedule
-                    ? slice_idx
+                    ? input_tile_id_start
                     : (static_cast<uint64_t>(input_tile_id_start) * num_output_chunks) / num_input_pages;
             const uint32_t local_output_end =
                 bank_owned_schedule ? local_output_start + input_pages_per_slice
