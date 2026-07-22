@@ -338,7 +338,7 @@ Tensor Tensor::extract_shard(const CoreCoord& core) const {
 
 Tensor Tensor::extract_shard(const uint32_t& core_id) const { return tensor_impl::extract_shard(*this, core_id); }
 
-Tensor Tensor::to_layout(Layout target_layout, std::optional<Tile> tile) const {
+Tensor Tensor::to_layout(Layout target_layout, ttsl::optional_reference<const Tile> tile) const {
     return tt::tt_metal::to_layout(*this, target_layout, tile);
 }
 

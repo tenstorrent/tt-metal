@@ -14,7 +14,7 @@ ttnn::Tensor tilize(
     std::optional<DataType> output_dtype = std::nullopt,
     bool use_multicore = true,
     bool use_low_perf = false,
-    tt::tt_metal::Tile tile = {},
+    const tt::tt_metal::Tile& tile = {},
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::quasar

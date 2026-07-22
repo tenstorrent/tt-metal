@@ -70,7 +70,7 @@ ttnn::Tensor tilize_with_val_padding(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    tt::tt_metal::Tile tile) {
+    const tt::tt_metal::Tile& tile) {
     if (input_tensor.layout() == Layout::TILE) {
         TT_FATAL(
             input_tensor.tensor_spec().tile() == tile,
@@ -142,7 +142,7 @@ ttnn::Tensor tilize_with_val_padding(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    tt::tt_metal::Tile tile) {
+    const tt::tt_metal::Tile& tile) {
     TT_FATAL(
         tile == tt::tt_metal::Tile{},
         "Custom tile is not supported for tilize_with_val_padding (See: #50508). Please transfer the tensor to host "
@@ -178,7 +178,7 @@ ttnn::Tensor tilize_with_zero_padding(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    tt::tt_metal::Tile tile) {
+    const tt::tt_metal::Tile& tile) {
     using namespace tt::constants;
     if (input_tensor.layout() == Layout::TILE) {
         TT_FATAL(

@@ -97,7 +97,7 @@ ttnn::Tensor to_device(
     std::optional<QueueId> cq_id = std::nullopt);
 
 ttnn::Tensor to_layout(
-    const ttnn::Tensor& input_tensor, Layout target_layout, std::optional<Tile> tile = std::nullopt);
+    const ttnn::Tensor& input_tensor, Layout target_layout, ttsl::optional_reference<const Tile> tile = std::nullopt);
 
 ttnn::Tensor view(const ttnn::Tensor& input_tensor, const Shape& new_shape);
 ttnn::Tensor view(const ttnn::Tensor& input_tensor, const Shape& new_logical_shape, const Shape& new_padded_shape);

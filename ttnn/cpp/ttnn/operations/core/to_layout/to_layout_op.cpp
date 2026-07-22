@@ -23,7 +23,9 @@ namespace ttnn::operations::core::CMAKE_UNIQUE_NAMESPACE {
 namespace {
 
 void validate_tile_semantics(
-    const ttnn::Tensor& tensor, ttnn::Layout layout, const std::optional<tt::tt_metal::Tile>& requested_tile) {
+    const ttnn::Tensor& tensor,
+    ttnn::Layout layout,
+    ttsl::optional_reference<const tt::tt_metal::Tile> requested_tile) {
     if (layout == Layout::ROW_MAJOR) {
         TT_FATAL(
             !requested_tile.has_value(),
@@ -128,12 +130,12 @@ Tensor to_tile_layout_impl(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const float pad_value,
-    const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::optional_reference<const tt::tt_metal::Tile> tile) {
     auto tensor = tensor_arg;
     const auto& output_shape = tensor_arg.logical_shape();
     auto output_memory_config =
         memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
-    const auto target_tile = tile.value_or(tt::tt_metal::Tile{});
+    const auto target_tile = tile.has_value() ? *tile : tt::tt_metal::Tile{};
 
     // Padded shape only (dtype-independent). Use TensorLayout, not a TensorSpec: TensorSpec rejects
     // FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input; the real output dtype
@@ -264,7 +266,7 @@ Tensor to_layout_impl(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const float pad_value,
-    const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::optional_reference<const tt::tt_metal::Tile> tile) {
     validate_tile_semantics(tensor_arg, layout, tile);
 
     const bool needs_retile = layout == ttnn::TILE_LAYOUT && tile.has_value() &&
@@ -309,7 +311,7 @@ Tensor to_layout(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const float pad_value,
-    const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::optional_reference<const tt::tt_metal::Tile> tile) {
     return operations::core::CMAKE_UNIQUE_NAMESPACE::to_layout_impl(
         tensor_arg, layout, dtype, memory_config, sub_core_grids, pad_value, tile);
 }

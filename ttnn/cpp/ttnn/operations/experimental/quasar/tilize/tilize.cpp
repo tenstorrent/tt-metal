@@ -51,7 +51,7 @@ ttnn::Tensor tilize(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     bool use_low_perf,
-    tt::tt_metal::Tile tile,
+    const tt::tt_metal::Tile& tile,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     TT_FATAL(
         tile == tt::tt_metal::Tile{},
