@@ -812,6 +812,22 @@ inline bool topology_sat_solve_minimize_groups(
         solver, constraint_data, enc, /*all_or_nothing=*/false, occ, &used_per_group);
     const size_t num_present = occ.size();
 
+    if (topology_sat_profile_enabled()) {
+        std::map<size_t, int> size_hist;
+        for (const auto& upg : used_per_group) {
+            ++size_hist[upg.size()];
+        }
+        std::string hist;
+        for (const auto& [sz, cnt] : size_hist) {
+            hist += fmt::format("{}x{} ", cnt, sz);
+        }
+        log_info(
+            tt::LogFabric,
+            "[topo-sat-profile]   minimize.group_reachable_mesh_sizes : num_groups={} hist(count x reachable)={}",
+            num_present,
+            hist);
+    }
+
     if (num_present < 2) {  // nothing to minimize; just find any feasible model
         if (solver.solve() != TopologySatSolver::kSat) {
             return false;
@@ -2382,8 +2398,13 @@ bool topology_sat_search_n(
     // + full-packing lock and make the achieved cap PERMANENT (unit clause), so every enumerated solution occupies
     // the minimal host count -- not just the first. The primed model is the first solution; the loop below finds
     // the rest (warm, permanently capped, only a blocking clause added). See TOPOLOGY_OCCUPANCY_SOLVE_README §6.
-    const int kEnumLoopConflictBudget =
-        static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_CONFLICT_BUDGET", 1'000'000));
+    // Per-solve budget for the blocking-clause enumeration loop. DEFAULT 0 = UNBOUNDED: for --all-solutions we must
+    // NOT give up on a conflict budget -- a bounded solve that hits its cap returns kUnknown, which is
+    // indistinguishable from "no more solutions" and would silently truncate the enumeration (reporting fewer
+    // solutions than exist and a false "exhaustive"). Unbounded means each solve runs to a definite kSat (another
+    // solution) or kUnsat (genuinely exhausted). Set TT_TOPO_SAT_ENUM_BUDGET>0 only if you explicitly want a
+    // best-effort truncated enumeration. (Dedicated var so it doesn't perturb the single-solve objective budget.)
+    const int kEnumLoopConflictBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_ENUM_BUDGET", 0));
     if (constraint_data.max_same_rank_groups_used > 0 || constraint_data.minimize_same_rank_groups_used) {
         const int kDescentBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_DESCENT_BUDGET", 20'000));
         const int kLockBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_LOCK_BUDGET", 0));
@@ -2443,9 +2464,11 @@ bool topology_sat_search_n(
     auto last_enum_progress_log = enum_clock::now() - kEnumProgressLogInterval;
 
     while (all_mappings_out.size() < max_solutions) {
-        // Bounded so enumeration always terminates: each subsequent minimal-host solution is warm + capped, but a
-        // distinct packing can still be hard -- on unknown/unsat we stop and return what we have. (README §6 Step 3)
-        const int status = solver.solve_limited(kEnumLoopConflictBudget);
+        // Default (kEnumLoopConflictBudget==0): UNBOUNDED solve -- never give up on a budget, so we only stop on a
+        // real kUnsat (genuine exhaustion), never on a kUnknown that would silently truncate. If a budget is set,
+        // fall back to solve_limited (best-effort; kUnknown then stops the loop).
+        const int status = (kEnumLoopConflictBudget > 0) ? solver.solve_limited(kEnumLoopConflictBudget)
+                                                         : solver.solve();
         if (status != TopologySatSolver::kSat) {
             break;
         }
@@ -2508,8 +2531,9 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
     if (constraint_data.max_same_rank_groups_used > 0 || constraint_data.minimize_same_rank_groups_used) {
         const int kDescentBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_DESCENT_BUDGET", 20'000));
         const int kLockBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_LOCK_BUDGET", 0));
-        session->enum_loop_budget =
-            static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_CONFLICT_BUDGET", 1'000'000));
+        // 0 = UNBOUNDED (default): never give up on a budget during .next enumeration -- see the rationale in
+        // topology_sat_search_n. A kUnknown budget give-up would silently truncate the incremental enumeration.
+        session->enum_loop_budget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_ENUM_BUDGET", 0));
         size_t max_cap = 0;
         for (const auto& g : constraint_data.same_rank_groups) {
             max_cap = std::max(max_cap, g.size());
