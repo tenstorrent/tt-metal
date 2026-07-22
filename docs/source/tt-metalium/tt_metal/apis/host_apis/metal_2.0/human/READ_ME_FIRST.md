@@ -140,6 +140,11 @@ The first thing that Claude will do is to seek out the tests for your op. You wi
 
 For large, complex ops, Claude will port only one `ProgramFactory` at a time. If Claude has less than 50% context window remaining when he reports status, you should either trigger a compaction or use a fresh Claude for the next `ProgramFactory`.
 
+#### Check the port report
+
+After a successful port, be sure to read at least the headline findings of the porting report. Claude will sometimes tell you things that you really need to know! (e.g. "I hacked a workaround to this issue I found instead of reporting failure; the result is likely buggy.")
+
+Make sure to check in the reports so that they are part of your porting branch's commit history. You'll probably want to delete them before merging to main.
 
 ### Style fixup porting step
 
