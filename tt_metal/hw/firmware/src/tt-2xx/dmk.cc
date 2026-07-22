@@ -98,16 +98,16 @@ uint32_t _start() {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
+
+    // Setup after the go signal so the previous kernel has completed.
+    num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
+    my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
+
+    // Paint stack after all thread_local writes and CRT init are done.
+    mark_stack_usage();
+
     {
-        DeviceZoneScopedMainChildN("BRISC-KERNEL");
-
-        // Setup after the go signal so the previous kernel has completed.
-        num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
-        my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
-
-        // Paint stack after all thread_local writes and CRT init are done.
-        mark_stack_usage();
-
+        DeviceZoneScopedMainChildN("DM-KERNEL");
         EARLY_RETURN_FOR_DEBUG
 
         WAYPOINT("K");

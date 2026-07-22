@@ -38,7 +38,7 @@ uint32_t finding_scatter_dim(const ttnn::Tensor& input_tensor, size_t num_worker
 
     TT_FATAL(rank >= 2, "Expected input tensor to be of at least rank 2");
 
-    ttnn::SmallVector<uint32_t> shape_vec(padded_shape.cbegin(), padded_shape.cend());
+    ttsl::SmallVector<uint32_t> shape_vec(padded_shape.cbegin(), padded_shape.cend());
     if (layout == Layout::TILE) {
         const auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
         auto tile_shape_it = tile_shape.crbegin();
@@ -114,7 +114,7 @@ Tensor local_sum_float32(
         input_tensor = ttnn::to_layout(gathered_tensor, Layout::TILE);
     }
 
-    ttnn::SmallVector<uint32_t> reshape_dims_vec;
+    ttsl::SmallVector<uint32_t> reshape_dims_vec;
     for (int i = 0; i < rank; ++i) {
         if (i == reduce_dim) {
             reshape_dims_vec.push_back(num_devices);
@@ -191,7 +191,7 @@ ttnn::Tensor all_reduce_async(
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
 
         // Reshape (B, C, H, W) -> (1, B, C, H, W)
-        ttnn::SmallVector<uint32_t> ag_shape_vec(initial_shape.rank() + 1);
+        ttsl::SmallVector<uint32_t> ag_shape_vec(initial_shape.rank() + 1);
         ag_shape_vec[0] = 1;
         std::copy(initial_shape.cbegin(), initial_shape.cend(), ag_shape_vec.begin() + 1);
         auto reshaped_tensor = ttnn::reshape(working_input_tensor, ttnn::Shape(ag_shape_vec));
@@ -314,7 +314,7 @@ ttnn::Tensor all_reduce_async(
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
 
         // Reshape (B, C, H, W) -> (1, B, C, H, W)
-        ttnn::SmallVector<uint32_t> ag_shape_vec(initial_shape.rank() + 1);
+        ttsl::SmallVector<uint32_t> ag_shape_vec(initial_shape.rank() + 1);
         ag_shape_vec[0] = 1;
         std::copy(initial_shape.cbegin(), initial_shape.cend(), ag_shape_vec.begin() + 1);
         auto reshaped_tensor = ttnn::reshape(working_input_tensor, ttnn::Shape(ag_shape_vec));
@@ -408,14 +408,7 @@ ttnn::Tensor all_reduce_async(
             /*mesh_device*/ &mesh_device);
     } else {
         gathered = ttnn::all_gather(
-            scattered_tensor,
-            dim,
-            cluster_axis,
-            worker_subdevice_id_opt,
-            out_memory_config,
-            std::nullopt,
-            num_preferred_links,
-            topology_);
+            scattered_tensor, dim, cluster_axis, out_memory_config, std::nullopt, worker_subdevice_id_opt);
     }
     scattered_tensor.deallocate();
 

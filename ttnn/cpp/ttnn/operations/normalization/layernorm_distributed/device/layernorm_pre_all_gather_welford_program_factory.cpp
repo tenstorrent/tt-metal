@@ -84,10 +84,6 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
 
-    auto a_addr = a.buffer()->address();
-    auto dst_addr = output.buffer()->address();
-    auto b_addr = fuse_pre_add ? b->buffer()->address() : 0;
-
     // Sized for double-buffered block-sized chunks: the welford compute kernel waits on
     // block_size tiles at a time, so the reader must be able to fill that many while the
     // compute side processes the previous batch.
@@ -162,13 +158,14 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     const uint32_t reciprocal_CB_size_bytes = recip_tensor.buffer()->aligned_size_per_bank();
     constexpr tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
 
-    // Build runtime args per core
-    KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs writer_runtime_args;
-    KernelDescriptor::RuntimeArgs compute_runtime_args;
-    reader_runtime_args.reserve(num_cores);
-    writer_runtime_args.reserve(num_cores);
-    compute_runtime_args.reserve(num_cores);
+    // Build runtime args per core.  Buffer base addresses are bound via
+    // emplace_runtime_args() so the framework patches them on cache hits.
+    KernelDescriptor reader_kernel_desc;
+    KernelDescriptor writer_kernel_desc;
+    KernelDescriptor compute_kernel_desc;
+    reader_kernel_desc.runtime_args.reserve(num_cores);
+    writer_kernel_desc.runtime_args.reserve(num_cores);
+    compute_kernel_desc.runtime_args.reserve(num_cores);
 
     uint32_t curr_row = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -186,14 +183,18 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
         uint32_t in_tile_offset = curr_row * Wt;
         uint32_t out_tile_offset = curr_row * out0_tiles;
 
-        std::vector<uint32_t> reader_args = {a_addr, num_tile_rows_per_core, Wt, in_tile_offset};
+        KernelDescriptor::RTArgList reader_args;
+        reader_args.push_back(a.buffer());
+        reader_args.push_back(num_tile_rows_per_core);
+        reader_args.push_back(Wt);
+        reader_args.push_back(in_tile_offset);
         if (fuse_pre_add) {
-            reader_args.push_back(b_addr);
+            reader_args.push_back(b->buffer());
         }
-        reader_runtime_args.emplace_back(core, std::move(reader_args));
-        compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
-        writer_runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_addr, num_tile_rows_per_core * out0_tiles, out_tile_offset});
+        reader_kernel_desc.emplace_runtime_args(core, reader_args);
+        compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_per_core});
+        writer_kernel_desc.emplace_runtime_args(
+            core, {output.buffer(), num_tile_rows_per_core * out0_tiles, out_tile_offset});
 
         curr_row += num_tile_rows_per_core;
     }
@@ -204,7 +205,6 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     ProgramDescriptor program_descriptor;
 
     // Reader kernel
-    KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
         "reader_unary_interleaved_ln_rm_gb_pre_allgather.cpp";
@@ -212,19 +212,16 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     reader_kernel_desc.core_ranges = all_cores;
     reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
-    reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
     // Writer kernel
-    KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
         "writer_unary_interleaved_start_id_blocked.cpp";
     writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
     writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 
@@ -276,14 +273,12 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
 
     // Compute kernel
     // Welford uses fp32 accumulation; preserve fp32_dest_acc_en from compute config
-    KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source = compute_kernel_file;
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = std::move(compute_args);
     compute_kernel_desc.named_compile_time_args = std::move(compute_named_args);
     compute_kernel_desc.defines = KernelDescriptor::Defines(compute_defines.begin(), compute_defines.end());
-    compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

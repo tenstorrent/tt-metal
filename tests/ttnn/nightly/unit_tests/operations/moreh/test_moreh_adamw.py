@@ -263,6 +263,168 @@ def test_moreh_adamw_compute_kernel_options(
     )
 
 
+def torch_adamw_step(param, grad, exp_avg, exp_avg_sq, max_exp_avg_sq, lr, betas, eps, weight_decay, amsgrad, step):
+    """CPU reference for one moreh_adamw step (decoupled weight decay).
+
+    Runs entirely on the host, so it is IMMUNE to the device program cache and is
+    a trustworthy oracle even when the device path is buggy. Verified against the
+    kernel to within bf16 rounding (~5e-3 max abs error) on a cache-miss dispatch.
+    """
+    beta1, beta2 = betas
+    p = param.float()
+    g = grad.float()
+    m = exp_avg.float()
+    v = exp_avg_sq.float()
+
+    p = p - lr * weight_decay * p
+    m = beta1 * m + (1 - beta1) * g
+    v = beta2 * v + (1 - beta2) * g * g
+
+    bias_correction1 = 1 - beta1**step
+    bias_correction2 = 1 - beta2**step
+    if amsgrad:
+        vmax = torch.maximum(max_exp_avg_sq.float(), v)
+        denom = (vmax.sqrt() / (bias_correction2**0.5)) + eps
+        new_max = vmax
+    else:
+        denom = (v.sqrt() / (bias_correction2**0.5)) + eps
+        new_max = None
+    p = p - (lr / bias_correction1) * (m / denom)
+    return p, m, v, new_max
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [[32, 32], [2, 3, 64, 64]],
+)
+@pytest.mark.parametrize("lr", [1e-2])
+@pytest.mark.parametrize("betas", [[0.5, 0.555]])
+@pytest.mark.parametrize("eps", [1e-08])
+@pytest.mark.parametrize("weight_decay", [0.3])
+@pytest.mark.parametrize("amsgrad", [True, False])
+def test_moreh_adamw_inplace_cache_hit(shape, lr, betas, eps, weight_decay, amsgrad, device):
+    """Regression for the descriptor cache-hit fast-path bug (#48928 / a38e756c933).
+
+    tt-train's optimizer calls moreh_adamw IN-PLACE: param_out == param_in and the
+    moment outputs alias their inputs (see tt-train/sources/ttml/optimizers/
+    adamw_composite.cpp:75-92). Because the optional _out tensors live in tensor_args,
+    the aliased buffers appear twice within the input region, so the legacy
+    resolve_bindings fast-path bailed to EMPTY bindings. Under the old
+    get_dynamic_runtime_args mechanism (step/lr) that gate fired on a program-cache
+    hit with empty bindings, patched NO buffer addresses, and left the cached program
+    pointing at the PREVIOUS dispatch's DRAM addresses -> the update landed in stale
+    memory and the current output tensors were left UNCHANGED (equal to their inputs).
+    This PR migrates the op to override_runtime_arguments, which re-applies every
+    per-dispatch address on each cache hit; the test guards against regressing that fix.
+
+    The test primes the program cache with one in-place step, keeps those tensors
+    ALIVE so the next in-place step's fresh allocations get DIFFERENT addresses,
+    then runs an in-place step on the cache HIT and compares against a CPU torch
+    reference. The reference runs on the host, so it is unaffected by the device
+    cache -- unlike an on-device out-of-place run, which shares the same faulty
+    cache entry and would return the same stale values (comparing stale-vs-stale
+    would spuriously pass). The exp_avg / exp_avg_sq moment updates move far more
+    than the tiny single-step param update, so they are the sharp discriminator:
+    when the fast path skips the write they stay at their (random) input values,
+    which are ~0.5 off the correct result -- well beyond the tolerance below.
+    """
+    torch.manual_seed(2024)
+
+    def dev(t):
+        return None if t is None else ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def rand_state():
+        return {
+            "param": torch.rand(shape, dtype=torch.bfloat16),
+            "grad": torch.rand(shape, dtype=torch.bfloat16),
+            "exp_avg": torch.rand(shape, dtype=torch.bfloat16),
+            "exp_avg_sq": torch.rand(shape, dtype=torch.bfloat16),
+            "max_exp_avg_sq": torch.rand(shape, dtype=torch.bfloat16) if amsgrad else None,
+        }
+
+    def run_inplace(state, step, lr_step):
+        # Alias every _out to its _in (exactly what the tt-train optimizer does).
+        p = dev(state["param"])
+        g = dev(state["grad"])
+        m = dev(state["exp_avg"])
+        v = dev(state["exp_avg_sq"])
+        mx = dev(state["max_exp_avg_sq"])
+        ttnn.operations.moreh.adamw(
+            p,
+            g,
+            m,
+            v,
+            lr_step,
+            betas[0],
+            betas[1],
+            eps,
+            weight_decay,
+            step,
+            amsgrad,
+            max_exp_avg_sq_in=mx,
+            param_out=p,
+            exp_avg_out=m,
+            exp_avg_sq_out=v,
+            max_exp_avg_sq_out=mx,
+        )
+        # Return the (aliased) input==output tensors; the caller keeps them alive so
+        # the next allocation lands at a different address.
+        return p, m, v, mx
+
+    # Prime the program cache; HOLD these tensors so the cache-hit step's fresh
+    # allocations get different DRAM addresses (the condition that surfaces the bug).
+    keep_prime = run_inplace(rand_state(), step=1, lr_step=lr)
+    entries_after_prime = device.num_program_cache_entries()
+
+    # Cache HIT: in-place step on fresh (differently-addressed) tensors with a DIFFERENT
+    # step AND lr (both hash-excluded) — must re-derive on the hit, must not add a cache entry.
+    hit_lr = lr * 2.0
+    state = rand_state()
+    ip_param, ip_exp_avg, ip_exp_avg_sq, ip_max = run_inplace(state, step=2, lr_step=hit_lr)
+    assert entries_after_prime > 0, "expected a cached program to hit"
+    assert (
+        device.num_program_cache_entries() == entries_after_prime
+    ), "cache-hit dispatch with a different lr/step unexpectedly grew the program cache"
+
+    # CPU reference (host-side, immune to the device program cache).
+    ref_param, ref_exp_avg, ref_exp_avg_sq, ref_max = torch_adamw_step(
+        state["param"],
+        state["grad"],
+        state["exp_avg"],
+        state["exp_avg_sq"],
+        state["max_exp_avg_sq"],
+        hit_lr,
+        betas,
+        eps,
+        weight_decay,
+        amsgrad,
+        step=2,
+    )
+
+    # atol=0.05 separates a correct update (bf16 error ~5e-3) from a stale/skipped
+    # write (moments off by ~0.5). Assert max abs error directly for an unambiguous
+    # signal that the in-place cache-hit write actually happened.
+    atol = 0.05
+    checks = [
+        ("param", ref_param, ip_param),
+        ("exp_avg", ref_exp_avg, ip_exp_avg),
+        ("exp_avg_sq", ref_exp_avg_sq, ip_exp_avg_sq),
+    ]
+    if amsgrad:
+        checks.append(("max_exp_avg_sq", ref_max, ip_max))
+
+    del keep_prime  # done holding the priming tensors
+    for name, ref, got in checks:
+        got_host = ttnn.to_torch(got).reshape(shape).float()
+        max_err = (got_host - ref.reshape(shape)).abs().max().item()
+        logger.debug(f"in-place cache-hit {name}: max|err| vs CPU reference = {max_err}")
+        assert max_err < atol, (
+            f"in-place moreh_adamw '{name}' wrong on a program-cache hit "
+            f"(max|err|={max_err} >= {atol}); the fast path likely skipped patching "
+            f"the aliased buffer addresses and wrote to stale memory."
+        )
+
+
 @pytest.mark.parametrize(
     "shape",
     [[32, 32]],  # single

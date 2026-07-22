@@ -100,21 +100,22 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
 
     KernelSpec::CompileTimeArgs cta_bindings(cta_bindings_map);
 
+    DataMovementHardwareConfig sender_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        sender_hw_config = DataMovementGen2Config{};
+    } else {
+        sender_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = test_config.noc_id,
+        };
+    }
     KernelSpec sender_spec{
         .unique_id = KernelSpecName{"sender"},
         .source = sender_kernel_path,
         .num_threads = 1,
         .compile_time_args = cta_bindings,
         .runtime_arg_schema = {.runtime_arg_names = {"num_tx", "tx_size"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = test_config.noc_id,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = sender_hw_config,
     };
 
     ProgramSpec spec{
@@ -131,10 +132,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
-    sender_run_params.runtime_arg_values.push_back(
-        {.node = test_config.master_core_coord,
-         .args = {
-             {"num_tx", (uint32_t)test_config.num_of_transactions}, {"tx_size", (uint32_t)bytes_per_transaction}}});
+    AddRuntimeArgsForNode(
+        sender_run_params.runtime_arg_values,
+        test_config.master_core_coord,
+        {
+            {"num_tx", (uint32_t)test_config.num_of_transactions},
+            {"tx_size", (uint32_t)bytes_per_transaction},
+        });
     run_params.kernel_run_args.push_back(sender_run_params);
     SetProgramRunArgs(program, run_params);
 

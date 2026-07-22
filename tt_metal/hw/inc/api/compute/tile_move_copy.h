@@ -115,8 +115,32 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
         dst_tile_index, in_cb_id)));
 }
 
-ALWI void copy_block_matmul_partials(
-    uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
+// clang-format off
+/**
+ * Copies a block of `ntiles` consecutive tiles from the specified input CB into consecutive DST
+ * register slots. This is the uniform block entry point for the copy/datacopy op group. It uses the
+ * block unpack/datacopy llk paths and requires the same initialization as `copy_tile`
+ * (`copy_tile_init` / `copy_tile_to_dst_init_short`). The DST register buffer must be in acquired
+ * state via *acquire_dst* call, and `cb_wait_front(n)` must have made at least
+ * `start_in_tile_index + ntiles` tiles available in the input CB. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * NOTE: In the future the blocking must be folded further into a hardware MOP / REPLAY buffer (as
+ * is being done for Quasar) inside llk-lib, so the whole block issues as a single packed op, without
+ * changing this signature. Tracked under the Compute API Split effort (tt-metal#35739); the per-op
+ * push-down lands in tt-metal#47485.
+ *
+ * Return value: None
+ *
+ * | Argument             | Description                                                | Data type | Valid range                                         | required |
+ * |----------------------|------------------------------------------------------------|-----------|-----------------------------------------------------|----------|
+ * | in_cb_id             | The identifier of the source circular buffer (CB)          | uint32_t  | 0 to 31                                             | True     |
+ * | start_in_tile_index  | The index of the first tile to copy from the input CB      | uint32_t  | Must be less than the size of the CB                | True     |
+ * | start_dst_tile_index | The index of the first destination tile in the DST register| uint32_t  | Must be less than the size of the DST register (16) | True     |
+ * | ntiles               | The number of consecutive tiles to copy                    | uint32_t  | start_dst_tile_index + ntiles <= DST register size  | True     |
+ * */
+// clang-format on
+ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
@@ -124,6 +148,28 @@ ALWI void copy_block_matmul_partials(
         in_cb_id, start_in_tile_index, ntiles)));
     MATH((llk_math_eltwise_unary_datacopy_block<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         start_dst_tile_index, ntiles, in_cb_id)));
+}
+
+// clang-format off
+/**
+ * @deprecated Use `copy_block()`, which is functionally equivalent (same block unpack/datacopy paths).
+ * This forwarding shim is retained only for backwards compatibility and will be removed after
+ * August 15th, 2026 (see .github/deprecations.json).
+ *
+ * Return value: None
+ *
+ * | Argument             | Description                                                | Data type | Valid range                                         | required |
+ * |----------------------|------------------------------------------------------------|-----------|-----------------------------------------------------|----------|
+ * | in_cb_id             | The identifier of the source circular buffer (CB)          | uint32_t  | 0 to 31                                             | True     |
+ * | start_in_tile_index  | The index of the first tile to copy from the input CB      | uint32_t  | Must be less than the size of the CB                | True     |
+ * | start_dst_tile_index | The index of the first destination tile in the DST register| uint32_t  | Must be less than the size of the DST register (16) | True     |
+ * | ntiles               | The number of consecutive tiles to copy                    | uint32_t  | start_dst_tile_index + ntiles <= DST register size  | True     |
+ * */
+// clang-format on
+[[deprecated("Use copy_block(); copy_block_matmul_partials will be removed after August 15th, 2026.")]] ALWI void
+copy_block_matmul_partials(
+    uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
+    copy_block(in_cb_id, start_in_tile_index, start_dst_tile_index, ntiles);
 }
 
 }  // namespace ckernel

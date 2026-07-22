@@ -30,7 +30,7 @@ on:
 
 jobs:
   generate-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
     steps:
@@ -50,39 +50,36 @@ jobs:
 
           # Note: This matrix must be kept in sync with the original static matrix
           #
-          # The two Gemma4-31B vLLM entries below are temporarily disabled —
-          # the full unquantized KV cache for the global-attention layers
-          # runs out of DRAM on both 1x4 (BH-Quietbox-2) and 1x8 (WH-T3K).
-          # Re-enable once KV cache quantization lands — TODO: file follow-up issue.
+          # The WH-T3K Gemma4-26B-A4B entry below is temporarily disabled —
+          # DRAM OOM during KV cache allocation (layer 25/30) causes EngineCore
+          # init failure on WH-T3K. Full unquantized KV cache no longer fits.
+          # Re-enable once hybrid KV cache is enabled (which will size the
+          # sliding-window layers' KV cache to the window instead of the full
+          # sequence length, freeing the DRAM needed to fit the full model).
+          # Tracked in https://github.com/tenstorrent/tt-metal/issues/49257
           #
-          # Disabled entries preserved verbatim for the re-enable:
+          # Disabled entry preserved verbatim for the re-enable:
           #
           #   {
-          #     "name": "[WH-T3K] Gemma4-31B",
-          #     "model": "google/gemma-4-31B-it",
-          #     "server-timeout": 45,
-          #     "benchmark-timeout": 5,
+          #     "name": "[WH-T3K] Gemma4-26B-A4B",
+          #     "model": "google/gemma-4-26B-A4B-it",
+          #     "coherence-test": true,
+          #     "server-timeout": 30,
+          #     "benchmark-timeout": 10,
           #     "runner-label": "config-t3000",
           #     "arch": "arch-wormhole_b0",
           #     "mesh-device": "T3K",
-          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
-          #     "additional-server-args": "--async-scheduling",
+          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 200000000}",
+          #     "additional-server-args": "--max_num_seqs 1 --async-scheduling",
           #     "multimodal": false,
           #     "owner_id": "U08TJ70UFRT"
           #   },
-          #   {
-          #     "name": "[BH-QB-2] Gemma4-31B",
-          #     "model": "google/gemma-4-31B-it",
-          #     "server-timeout": 20,
-          #     "benchmark-timeout": 5,
-          #     "runner-label": "BH-Quietbox-2",
-          #     "arch": "arch-blackhole",
-          #     "mesh-device": "P150x4",
-          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
-          #     "additional-server-args": "--async-scheduling",
-          #     "multimodal": false,
-          #     "owner_id": "U08TJ70UFRT"
-          #   },
+          #
+          # KNOWN ERROR — [WH-T3K] Gemma4-31B (kept enabled below to track):
+          # device hang (fast-dispatch timeout) during decode on WH-T3K only;
+          # the same serving config passes on [BH-QB-2] Gemma4-31B. Not a
+          # serving/KV-config issue — a tt-metal dispatch-layer hang.
+          # Tracked in https://github.com/tenstorrent/tt-metal/issues/49494
           #
           # Disabled due to Metal timeout in reduce-scatter async tests
           # https://github.com/tenstorrent/vllm/issues/416
@@ -157,21 +154,7 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 400000000}",
-              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
-              "multimodal": false,
-              "owner_id": "U08TJ70UFRT"
-            },
-            {
-              "name": "[WH-T3K] Gemma4-26B-A4B",
-              "model": "google/gemma-4-26B-A4B-it",
-              "coherence-test": true,
-              "server-timeout": 30,
-              "benchmark-timeout": 10,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 200000000}",
-              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "additional-server-args": "--max_model_len 131072 --max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -185,12 +168,38 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 300000000}",
-              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "additional-server-args": "--max_model_len 131072 --max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
             {
-              "name": "[BH-QB-2] Qwen3.6-27B",
+              "name": "[WH-T3K] Gemma4-31B",
+              "model": "google/gemma-4-31B-it",
+              "server-timeout": 45,
+              "benchmark-timeout": 5,
+              "runner-label": "config-t3000",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "T3K",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+              "additional-server-args": "--max_model_len 32768 --max_num_seqs 1 --async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[BH-QB-2] Gemma4-31B",
+              "model": "google/gemma-4-31B-it",
+              "server-timeout": 20,
+              "benchmark-timeout": 5,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+              "additional-server-args": "--max_model_len 32768 --max_num_seqs 1 --async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[BH-QB-2] Qwen3.6-27B (multimodal B=1)",
               "model": "Qwen/Qwen3.6-27B",
               "coherence-test": true,
               "server-timeout": 30,
@@ -198,8 +207,23 @@ jobs:
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 268435456}",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 268435456, \"l1_small_size\": 24576}",
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "default-chat-template-kwargs": "{\"enable_thinking\": false}",
+              "multimodal": true,
+              "owner_id": "U08HL8X1ECD"
+            },
+            {
+              "name": "[BH-QB-2] Qwen3.6-27B (batch=8)",
+              "model": "Qwen/Qwen3.6-27B",
+              "coherence-test": true,
+              "server-timeout": 35,
+              "benchmark-timeout": 10,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 1073741824, \"l1_small_size\": 24576}",
+              "additional-server-args": "--max_num_seqs 8 --max_model_len 65536 --async-scheduling",
               "default-chat-template-kwargs": "{\"enable_thinking\": false}",
               "multimodal": false,
               "owner_id": "U08HL8X1ECD"
@@ -381,7 +405,7 @@ jobs:
               "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
               "structured-output": true,
               "multimodal": true,
-              "additional-server-args": "--async-scheduling",
+              "additional-server-args": "--max_model_len 131072 --async-scheduling",
               "co-owner-1-id": "U08H31YMN4Q"
             },
             {
@@ -575,6 +599,13 @@ jobs:
             google/gemma-4-*)
               export TT_LEAN_DECODE_WARMUP=1
               export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
+              # 31B: with hybrid KV groups disabled every layer allocates a
+              # full-length KV buffer, and the default all-user pool OOMs DRAM
+              # on QB2/T3K. Cap the pool (the real DRAM lever, distinct from
+              # --max_model_len). See tt-metal #49257 / #49083.
+              if [ "$HF_MODEL" = "google/gemma-4-31B-it" ]; then
+                export GEMMA4_MAX_TOKENS_ALL_USERS=32768
+              fi
               ;;
           esac
 

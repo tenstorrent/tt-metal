@@ -231,7 +231,7 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() co
         binary_op_type,
         lhs_activations,
         rhs_activations,
-        (is_where_op || is_quant_op) ? ttnn::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
+        (is_where_op || is_quant_op) ? ttsl::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
         memory_config,
         get_dtype(),
         compute_kernel_config,
@@ -579,6 +579,10 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         "Input tensor B must be on device, got storage type: {}",
         input_tensor_b.storage_type());
 
+    // Valid input is allocated
+    TT_FATAL(input_tensor_a.is_allocated(), "Input Tensor A is not allocated");
+    TT_FATAL(input_tensor_b.is_allocated(), "Input Tensor B is not allocated");
+
     // Resolve sub_device_id to sub_core_grids if provided (after device validation)
     auto resolved_sub_core_grids = sub_core_grids;
     if (sub_device_id.has_value()) {
@@ -717,6 +721,9 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         input_tensor_a.storage_type() == StorageType::DEVICE,
         "Input tensor A must be on device, got storage type: {}",
         input_tensor_a.storage_type());
+
+    // Valid input is allocated
+    TT_FATAL(input_tensor_a.is_allocated(), "Input Tensor is not allocated");
 
     // Resolve sub_device_id to sub_core_grids if provided (after device validation)
     auto resolved_sub_core_grids = sub_core_grids;

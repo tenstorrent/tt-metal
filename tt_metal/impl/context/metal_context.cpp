@@ -267,7 +267,6 @@ void MetalContext::initialize(
     }
 
     if (rtoptions().get_profiler_enabled()) {
-        TT_FATAL(hal().get_arch() != ARCH::QUASAR, "Device profiler is not yet supported on Quasar.");
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
 
@@ -716,8 +715,13 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
 void MetalContext::init_context_descriptor(
     int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
+    // Source the mock flag from rtoptions (the centralized env-var/programmatic parsing)
+    // rather than re-detecting env vars here. get_target_device() == Mock is true for both
+    // env-var and programmatic mock, and -- crucially -- false for Emule (which sets the same
+    // TT_METAL_MOCK_CLUSTER_DESC_PATH but functionally executes kernels and must not skip
+    // firmware init) and for Simulator.
     std::string mock_cluster_desc_path =
-        env_->get_descriptor().is_mock_device() ? env_->get_descriptor().mock_cluster_desc_path() : "";
+        rtoptions().get_target_device() == tt::TargetDevice::Mock ? rtoptions().get_mock_cluster_desc_path() : "";
     context_descriptor_ = std::make_shared<ContextDescriptor>(
         env_,
         this,

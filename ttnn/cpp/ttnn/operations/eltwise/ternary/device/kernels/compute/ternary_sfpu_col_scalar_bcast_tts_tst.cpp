@@ -10,6 +10,7 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
+#include "api/dataflow/dataflow_buffer.h"
 
 ALWI void process_tile(
     uint32_t predicate_cb_id,
@@ -21,46 +22,46 @@ ALWI void process_tile(
     uint32_t scalar) {
     using namespace ckernel;
 
-    CircularBuffer predicate_cb(predicate_cb_id);
-    CircularBuffer tensor_cb(tensor_cb_id);
-    CircularBuffer cb_out(cb_out_id);
+    DataflowBuffer predicate_dfb(predicate_cb_id);
+    DataflowBuffer tensor_dfb(tensor_cb_id);
+    DataflowBuffer dfb_out(cb_out_id);
 
 #if BCAST_A
-    predicate_cb.wait_front(num_tiles_per_cycle);  // predicate_cb is broadcast
+    predicate_dfb.wait_front(num_tiles_per_cycle);  // predicate_dfb is broadcast
 #endif
 #if BCAST_B && !BCAST_C  // TTS case: true tensor is broadcast
-    tensor_cb.wait_front(num_tiles_per_cycle);
+    tensor_dfb.wait_front(num_tiles_per_cycle);
 #endif
 #if BCAST_C && !BCAST_B  // TST case: false tensor is broadcast
-    tensor_cb.wait_front(num_tiles_per_cycle);
+    tensor_dfb.wait_front(num_tiles_per_cycle);
 #endif
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         // Wait for non-broadcast CBs inside loop
 #if !BCAST_A
-        predicate_cb.wait_front(num_tiles_per_cycle);
+        predicate_dfb.wait_front(num_tiles_per_cycle);
 #endif
 #if !(BCAST_B && !BCAST_C) && !(BCAST_C && !BCAST_B)  // Neither or both broadcast
-        tensor_cb.wait_front(num_tiles_per_cycle);
+        tensor_dfb.wait_front(num_tiles_per_cycle);
 #endif
 
-        cb_out.reserve_back(num_tiles_per_cycle);
+        dfb_out.reserve_back(num_tiles_per_cycle);
 
         tile_regs_acquire();
 
         // Copy predicate to destination register 0
-        copy_tile_init(predicate_cb.get_cb_id());
-        copy_tile(predicate_cb.get_cb_id(), 0, 0);
+        copy_tile_init(predicate_dfb.get_id());
+        copy_tile(predicate_dfb.get_id(), 0, 0);
 
         // Fill scalar and copy tensor based on variant
         fill_tile_init();
-        copy_tile_init(tensor_cb.get_cb_id());
+        copy_tile_init(tensor_dfb.get_id());
 
         // TTS: scalar=false (reg 2), tensor=true (reg 1)
         // TST: scalar=true (reg 1), tensor=false (reg 2)
         if constexpr (get_compile_time_arg_val(1) == 0) {  // TTS: scalar is false
             // Copy true tensor to reg 1
-            copy_tile(tensor_cb.get_cb_id(), 0, 1);
+            copy_tile(tensor_dfb.get_id(), 0, 1);
             // Fill false scalar to reg 2
 #ifdef FILL_WITH_VALUE_FLOAT
             const auto scalar_val = reinterpret_cast<const float*>(&scalar);
@@ -79,7 +80,7 @@ ALWI void process_tile(
             FILL_LLK(1, scalar);
 #endif
             // Copy false tensor to reg 2
-            copy_tile(tensor_cb.get_cb_id(), 0, 2);
+            copy_tile(tensor_dfb.get_id(), 0, 2);
         }
 
         // Perform the ternary operation
@@ -90,29 +91,29 @@ ALWI void process_tile(
 
         tile_regs_wait();
 
-        pack_tile(0, cb_out.get_cb_id());  // result is stored in predicate register
+        pack_tile(0, dfb_out.get_id());  // result is stored in predicate register
         tile_regs_release();
 
-        cb_out.push_back(num_tiles_per_cycle);
+        dfb_out.push_back(num_tiles_per_cycle);
 
         // Pop non-broadcast CBs inside loop
 #if !BCAST_A
-        predicate_cb.pop_front(num_tiles_per_cycle);
+        predicate_dfb.pop_front(num_tiles_per_cycle);
 #endif
 #if !(BCAST_B && !BCAST_C) && !(BCAST_C && !BCAST_B)  // Neither or both broadcast
-        tensor_cb.pop_front(num_tiles_per_cycle);
+        tensor_dfb.pop_front(num_tiles_per_cycle);
 #endif
     }
 
     // Pop broadcast CBs outside loop
 #if BCAST_A
-    predicate_cb.pop_front(num_tiles_per_cycle);
+    predicate_dfb.pop_front(num_tiles_per_cycle);
 #endif
 #if BCAST_B && !BCAST_C  // TTS case: true tensor is broadcast
-    tensor_cb.pop_front(num_tiles_per_cycle);
+    tensor_dfb.pop_front(num_tiles_per_cycle);
 #endif
 #if BCAST_C && !BCAST_B  // TST case: false tensor is broadcast
-    tensor_cb.pop_front(num_tiles_per_cycle);
+    tensor_dfb.pop_front(num_tiles_per_cycle);
 #endif
 }
 

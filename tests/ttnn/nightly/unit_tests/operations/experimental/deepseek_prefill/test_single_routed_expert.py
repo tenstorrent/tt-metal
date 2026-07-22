@@ -49,10 +49,11 @@ def run_single_routed_expert(
     num_tokens: int,
     emb_dim: int,
     hidden_dim: int,
+    x_row_major: bool = False,
 ):
     """
     Simplest scenario: 1 chip, 1 expert. Shared body for the per-model entrypoints below — they
-    differ only on the (emb_dim, hidden_dim) shape axis.
+    differ only on the (emb_dim, hidden_dim) shape axis and the x input layout.
 
     Perfect for profiling the core FFN computation without any mesh complexity.
     """
@@ -85,12 +86,15 @@ def run_single_routed_expert(
     logger.debug(f"Torch output shape: {torch_output.shape}")
 
     # Create TTNN input: 2D (num_tokens, emb_dim), replicated across the 1-device mesh.
+    # The composite op branches on x layout: ROW_MAJOR is bf16 (tilized and bf8-packed
+    # inside the op), TILE is consumed directly as bf8. Pair the dtype with the layout so
+    # each variation drives its real device path.
     tt_input = ttnn.from_torch(
         torch_input,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT if x_row_major else ttnn.TILE_LAYOUT,
         device=mesh_device,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16 if x_row_major else ttnn.bfloat8_b,
     )
     logger.debug(f"TTNN input shape: {tt_input.shape}")
 
@@ -122,6 +126,7 @@ def run_single_routed_expert(
         torch_weights=[weights],  # List with single expert weights
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
+        activation=ttnn.RoutedExpertActivation.Silu,
     )
 
     # Run TTNN forward
@@ -164,30 +169,15 @@ SINGLE_EXPERT_MODELS = [
 ]
 
 
-# Currently-failing single-routed-expert cases, keyed by the exact "{model}-{tag}" param id ->
-# xfail reason (with tracking issue), so CI stays green while the linked issues are worked on. The
-# failures are blackhole-specific (gptoss_120b hits a K_gate divisibility error at 25k; dsv4_pro
-# overflows L1) and these cases pass on other arches, so _TOKEN_SWEEP_XFAIL is applied (strict) only
-# on blackhole by _xfail_blackhole_token_sweep. Delete an entry once resolved.
-_GPTOSS_KGATE_XFAIL = (
-    "GPT-OSS 120B single routed expert: K_gate_tiles not divisible by in0_block_w_gu — "
-    "https://github.com/tenstorrent/tt-metal/issues/47622"
-)
-_DSV4_PRO_CB_XFAIL = (
-    "DeepSeek V4 Pro single routed expert: circular buffers grow beyond L1 — "
-    "https://github.com/tenstorrent/tt-metal/issues/46486"
-)
-
-_TOKEN_SWEEP_XFAIL = {
-    "gptoss_120b-25k": _GPTOSS_KGATE_XFAIL,
-    "dsv4_pro-1k": _DSV4_PRO_CB_XFAIL,
-    "dsv4_pro-25k": _DSV4_PRO_CB_XFAIL,
-}
-_FAKED_XFAIL = {
-    "gptoss_120b-25k-alloc-4k-active": _GPTOSS_KGATE_XFAIL,
-    "dsv4_pro-1k-alloc-0k-active": _DSV4_PRO_CB_XFAIL,
-    "dsv4_pro-25k-alloc-4k-active": _DSV4_PRO_CB_XFAIL,
-}
+# Registry of currently-failing single-routed-expert cases, keyed by the exact "{model}-{tag}"
+# param id -> xfail reason (with tracking issue), so CI stays green while linked issues are worked
+# on. _TOKEN_SWEEP_XFAIL is applied (strict) only on blackhole by _xfail_blackhole_token_sweep;
+# _FAKED_XFAIL by single_routed_expert_faked_params. Both are empty: the factory's adaptive L1 guard
+# (shrinks per-core CBs to fit L1 and picks an in0_block_w_gu that divides K_gate_tiles) resolved the
+# prior dsv4_pro L1 and gptoss_120b K_gate failures. Add an entry when a new blackhole-specific
+# failure appears (these pass on other arches); delete it once resolved.
+_TOKEN_SWEEP_XFAIL = {}
+_FAKED_XFAIL = {}
 
 
 def single_routed_expert_token_sweep_params():
@@ -226,8 +216,11 @@ def _xfail_blackhole_token_sweep(request, silicon_arch_name):
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-def test_single_routed_expert_models(mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int):
-    run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim)
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+def test_single_routed_expert_models(
+    mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int, x_row_major: bool
+):
+    run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim, x_row_major)
 
 
 # (allocated_tokens, active_tokens, id) sweep for the count-aware sparsity test, applied per
@@ -245,6 +238,7 @@ def run_single_routed_expert_faked_token_count(
     active_tokens: int,
     emb_dim: int,
     hidden_dim: int,
+    x_row_major: bool = False,
 ):
     """
     Verifies the unified kernel honors expert_token_counts and skips work on
@@ -275,12 +269,15 @@ def run_single_routed_expert_faked_token_count(
     with torch.no_grad():
         torch_output_active = torch_expert(torch_active)
 
+    # ROW_MAJOR is bf16 (tilized + bf8-packed in-op), TILE is consumed directly as bf8.
+    # With active_tokens < allocated_tokens the ROW_MAJOR variant is what exercises the
+    # reader's clamp-read of the inactive rows past the runtime count.
     tt_input = ttnn.from_torch(
         torch_input,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT if x_row_major else ttnn.TILE_LAYOUT,
         device=mesh_device,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16 if x_row_major else ttnn.bfloat8_b,
     )
 
     def _make_idx_tensor(values):
@@ -305,6 +302,7 @@ def run_single_routed_expert_faked_token_count(
         torch_weights=[weights],
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
+        activation=ttnn.RoutedExpertActivation.Silu,
     )
 
     tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
@@ -351,10 +349,17 @@ def single_routed_expert_faked_params():
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
 def test_single_routed_expert_faked_token_count_models(
-    mesh_device, device_params, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int
+    mesh_device,
+    device_params,
+    allocated_tokens: int,
+    active_tokens: int,
+    emb_dim: int,
+    hidden_dim: int,
+    x_row_major: bool,
 ):
     run_single_routed_expert_faked_token_count(
-        mesh_device, device_params, allocated_tokens, active_tokens, emb_dim, hidden_dim
+        mesh_device, device_params, allocated_tokens, active_tokens, emb_dim, hidden_dim, x_row_major
     )

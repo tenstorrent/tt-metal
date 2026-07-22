@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 // Generalized TILE-layout split writer: each core writes to exactly one output chunk.
@@ -31,13 +31,13 @@ void kernel_main() {
     // One shared TensorAccessorArgs — all output chunks have the same buffer type and page size.
     constexpr auto out_tensor_args = TensorAccessorArgs<5>();
 
-    constexpr uint32_t cb_id_out0 = 0;
+    constexpr uint32_t dfb_id_out0 = 0;
     constexpr uint32_t onetile = 1;
 
     const auto s = TensorAccessor(out_tensor_args, out_tensor_addr);
     Noc noc;
-    CircularBuffer cb_out(cb_id_out0);
-    const uint32_t single_tile_size_bytes = cb_out.get_tile_size();
+    DataflowBuffer dfb_out(dfb_id_out0);
+    const uint32_t single_tile_size_bytes = dfb_out.get_entry_size();
 
     uint32_t z_stride_cum = 0;
     for (uint32_t k = 0; k < z; k++) {
@@ -45,11 +45,11 @@ void kernel_main() {
         for (uint32_t j = 0; j < out_num_tiles_per_tensor_y; j++) {
             for (uint32_t i = 0; i < out_num_tiles_per_tensor_x; i++) {
                 uint32_t tile_id = y_stride_cum + z_stride_cum + i;
-                cb_out.wait_front(onetile);
+                dfb_out.wait_front(onetile);
                 noc.async_write(
-                    cb_out, s, single_tile_size_bytes, {.offset_bytes = 0}, {.page_id = tile_id + out_tensor_tile_id});
+                    dfb_out, s, single_tile_size_bytes, {.offset_bytes = 0}, {.page_id = tile_id + out_tensor_tile_id});
                 noc.async_write_barrier();
-                cb_out.pop_front(onetile);
+                dfb_out.pop_front(onetile);
             }
             y_stride_cum += y_stride;
         }

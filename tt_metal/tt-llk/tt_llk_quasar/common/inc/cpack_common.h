@@ -34,13 +34,26 @@ union pack_untilize_stride_cfg_u
     pack_untilize_stride_cfg_t f;
 };
 
-constexpr static std::uint32_t TRISC_ID = 2;
-static std::uint32_t clear_dest_bank_id = 0;
+constexpr static std::uint32_t PACR_STRIDE_OFFSET_ROWS = 8;
+static std::uint32_t clear_dest_bank_id                = 0;
 
 inline void _update_clear_dest_bank_id_()
 {
     clear_dest_bank_id = 1 - clear_dest_bank_id;
 }
+
+// Edge Mask configs for pack reduce
+constexpr std::uint32_t EDGE_MASK_MODE_ZERO    = 0x0; // masked datums -> 0
+constexpr std::uint32_t EDGE_MASK_MODE_NEG_INF = 0x1; // masked datums -> -inf
+
+constexpr std::uint32_t EDGE_MASK_ROW_DATUMS_NONE     = 0x0000; // mask no datums in a row
+constexpr std::uint32_t EDGE_MASK_ROW_DATUMS_ALL      = 0xFFFF; // mask all datums in a row
+constexpr std::uint32_t EDGE_MASK_ROW_DATUMS_EXCEPT_0 = 0xFFFE; // mask datums[1:15], leave datum[0]
+
+constexpr std::uint32_t EDGE_MASK_FACE_ALL_ROWS_MASK_0  = 0x00000000; // apply mask0 to all rows
+constexpr std::uint32_t EDGE_MASK_FACE_ALL_ROWS_MASK_1  = 0x55555555; // apply mask1 to all rows
+constexpr std::uint32_t EDGE_MASK_FACE_ROW0_MASK_1      = 0x00000001; // apply mask1 to row 0, mask0 to rows [1:15]
+constexpr std::uint32_t EDGE_MASK_FACE_ROW0_ROW8_MASK_1 = 0x00010001; // apply mask1 to row 0, row 8
 
 namespace
 {

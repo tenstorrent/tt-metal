@@ -4,7 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     constexpr int onetile = 1;
@@ -16,23 +16,23 @@ void kernel_main() {
     const bool do_mask_w = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
-    CircularBuffer cb_in0_obj(cb_in0);
+    DataflowBuffer dfb_in0_obj(cb_in0);
     constexpr auto cb_scaler = tt::CBIndex::c_1;
-    CircularBuffer cb_scaler_obj(cb_scaler);
+    DataflowBuffer dfb_scaler_obj(cb_scaler);
     constexpr auto cb_mask_h_w = tt::CBIndex::c_2;
-    CircularBuffer cb_mask_h_w_obj(cb_mask_h_w);
+    DataflowBuffer dfb_mask_h_w_obj(cb_mask_h_w);
     constexpr auto cb_intermed0 = tt::CBIndex::c_24;
-    CircularBuffer cb_intermed0_obj(cb_intermed0);
+    DataflowBuffer dfb_intermed0_obj(cb_intermed0);
     constexpr auto cb_intermed1 = tt::CBIndex::c_25;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
 
     binary_op_init_common(cb_in0, cb_in0, cb_out0);
-    cb_scaler_obj.wait_front(onetile);
+    dfb_scaler_obj.wait_front(onetile);
 
     if (do_mask_h || do_mask_w) {
-        cb_mask_h_w_obj.wait_front(onetile * 2);
+        dfb_mask_h_w_obj.wait_front(onetile * 2);
     }
 
     uint32_t num_tiles = batch_num * Ht;
@@ -47,7 +47,7 @@ void kernel_main() {
 
                 if (do_mask) {
                     // get tile from reader and apply mask
-                    cb_in0_obj.wait_front(onetile);
+                    dfb_in0_obj.wait_front(onetile);
                     tile_regs_acquire();
 #if defined FP32_DEST_ACC_EN
                     reconfig_data_format_srca(cb_in0);
@@ -77,15 +77,15 @@ void kernel_main() {
                     tile_regs_commit();
 
                     tile_regs_wait();
-                    cb_intermed0_obj.reserve_back(onetile);
+                    dfb_intermed0_obj.reserve_back(onetile);
 #if defined FP32_DEST_ACC_EN
                     pack_reconfig_data_format(cb_intermed0);
 #endif
                     pack_tile(dst0, cb_intermed0);
-                    cb_intermed0_obj.push_back(onetile);
+                    dfb_intermed0_obj.push_back(onetile);
                     tile_regs_release();
 
-                    cb_in0_obj.pop_front(onetile);
+                    dfb_in0_obj.pop_front(onetile);
                 }
 
                 const auto reduce_block = compute_kernel_lib::ReduceInputBlockShape::single();

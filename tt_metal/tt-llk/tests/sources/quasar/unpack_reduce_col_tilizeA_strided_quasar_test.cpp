@@ -142,7 +142,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
 
     _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
-    _llk_pack_reduce_mask_config_<REDUCE_DIM>();
+    _llk_pack_reduce_mask_config_<REDUCE_DIM>(ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_(0, 0, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
     _llk_pack_reduce_mask_clear_();
