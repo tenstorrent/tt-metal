@@ -76,6 +76,15 @@ record mode (printed, not gated), so the gate can be armed one metric at a time.
 metric is not part of the CI flow; it can be captured locally where the realtime profiler
 is active.
 
+The CI run sets `TT_METAL_PROFILER_ACCUMULATE=1`: the profiler accumulates markers in
+per-RISC L1 and defers the L1→DRAM dump instead of flushing after every program. Without
+it, that ~3 µs per-program dump lands inside the op2op gap and inflates the measured
+latency (reviewer feedback). The gated firmware KERNEL zones and our lean
+`DeviceRecordEvent` markers both survive accumulate mode (`DeviceTimestampedData` is
+compiled out, which is why `PROG_ID` is the only such marker left and the lean markers use
+events). Both goldens currently ship `null` (record mode) while the accumulate baseline is
+collected on CI; they get re-armed once the numbers are stable.
+
 ## Where it runs
 
 On the **(Runtime) Performance Tests** pipeline (`.github/workflows/runtime-perf-tests.yaml`,
@@ -95,7 +104,8 @@ cmake --build build --target test_op_to_op_latency -j
 
 # the exact CI flow: run the pinned config, then post-process + gate vs golden
 # (add --use-realtime-profiler to also capture the optional RT metric where supported)
-TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/op_to_op_latency/test_op_to_op_latency \
+TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_ACCUMULATE=1 \
+  ./build/test/tt_metal/perf_microbenchmark/op_to_op_latency/test_op_to_op_latency \
   --use-trace --trace-warmup-replays 2 --num-programs 8 --num-pages-per-core 4 \
   --compute-nops 2000 --use-device-profiler
 
@@ -106,6 +116,33 @@ python3 tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_po
 python3 tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_postprocess.py \
   --min-prog-id 3 --golden tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_golden.json
 ```
+
+## Sweeping (characterization)
+
+`op_to_op_sweep.py` drives the same binary across a set of configs and post-processes
+each run into one summary table. It is a **characterization** tool for exploring knobs
+and picking which config to promote to a gated golden next — it does **not** gate, and
+CI does not run it (CI gates only the single pinned config above).
+
+Every config is the pinned base plus per-config overrides that *replace* the base value
+in place (the binary's arg parser takes the first occurrence of a flag), so a sweep only
+exercises knobs the binary already supports.
+
+```bash
+export TT_METAL_HOME=$(pwd)
+S=tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_sweep.py
+
+python3 $S --list                              # show the built-in preset axes
+python3 $S --preset reader-mode --dry-run      # print the commands without touching HW
+python3 $S --preset compute-nops --accumulate  # run the sweep (device profiler + accumulate)
+python3 $S --config "nops0:--compute-nops 0" \
+          --config "batch:--reader-batch-push" # ad-hoc named configs
+```
+
+Presets cover compute load, program/page counts, reader modes (0/1/2), writer end-barrier
+modes, NoC assignment, active-core count, read-only, and page size. Additional research
+axes that need new binary modes (e.g. `--kernel-unroll`, `--reader-read-bytes`, per-core
+placement) can be added to `PRESETS` once those knobs land in the binary.
 
 ## Populating / updating the golden
 
@@ -123,7 +160,8 @@ To enable the gate:
 ## Notes
 
 - The pinned config is intentionally fixed for run-to-run comparability. Do not
-  add sweeps here — sweeping/tuning belongs in the research benchmark.
+  add sweeps to the pinned CI config — sweeping/tuning belongs in `op_to_op_sweep.py`
+  (characterization, ungated).
 - `--compute-nops` is set so the program is comfortably long vs dispatch noise;
   the exact value is arch-dependent and folded into the golden, so it can be
   retuned when populating the golden.
