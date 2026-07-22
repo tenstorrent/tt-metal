@@ -411,3 +411,21 @@ previously rejected on these shapes; the reduction tree is the sole non-foreclos
 deferred. Prior picker phase had already banked 4 wins (-2.1..-3.7%) on the M-scaling LTX/FLUX shapes.
 Reusable deep-diagnostic assets committed: DIAG_ZONES instrumentation (compute in0/in1-wait + writer ring/
 reduction sub-zones), zone_parse.py, ltxflux_corpus_decomp.py + .json, ltxflux_opt.py sweeps.
+
+### Post-win confirmation: the 4 picker-win shapes are now at floor (deep zones)
+| shape | cfg | wall | w/id | GB/s | mm | in0w | in1w | bound |
+|---|---|---|---|---|---|---|---|---|
+| 64x4608x6144 | (2,3,1,2,3) | 118.9 | 1.05 | 488 | 29.8 | 5.3 | 81.2 | DRAM-read floor |
+| 64x15360x1536 | (1,6,1,2,3) | 101.3 | 1.05 | 487 | 29.9 | 8.2 | 60.5 | DRAM-read floor |
+| 64x6144x1536 | (1,3,1,8,2) | 42.8 | 1.10 | 464 | 23.2 | 5.0 | 12.8 | compute+read (near floor) |
+| 32x6144x2304 | (1,3,1,4,5) | 58.8 | 1.04 | 491 | 19.2 | 3.0 | 35.7 | DRAM-read floor |
+=> the picker wins moved these to their floor (in1-wait dominant, at/near read ceiling). No residual lever.
+The ENTIRE LTX/FLUX Mt<=8 space (deep-9 corpus + 4 picker-win shapes) is confirmed at its practical limit.
+
+## CAMPAIGN COMPLETE (both phases; branch cglagovich/regime-a-ltxflux-opt, pushed)
+Phase 1 (picker): 4 wins (-2.1..-3.7%), regression-clean, config=None. Phase 2 (deep kernel): fine-grained
+DIAG_ZONES instrumentation, full corpus causal decomposition, all shapes closed with evidence at practical
+floor; sole lever (reduction tree, ~5%/1.2us on the worst shape) documented+deferred (poor risk/reward:
+negligible absolute + negative config-level realizability signal + rejected direction + high rewrite risk).
+Production byte-identical (60-shape corpus PCC 1.0000, 0 drift; instrumentation compile-gated). Standalone
+report: LTX_FLUX_DEEP_REPORT.md.
