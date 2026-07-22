@@ -76,6 +76,25 @@ int main(int argc, char** argv) {
         return golden_self_test() ? 0 : 2;
     }
 
+    // `--list [device_id]`: open the device and print every ACTIVE ethernet core with
+    // its logical + physical/NOC coord, so you can pick the eth_idx for the BF3 rail
+    // (after the FW reports it PORT_UP, it joins this list — match it by NOC X-Y / speed).
+    if (argc > 1 && std::strcmp(argv[1], "--list") == 0) {
+        const int dev_id = (argc > 2) ? std::atoi(argv[2]) : 0;
+        auto md = distributed::MeshDevice::create_unit_mesh(dev_id);
+        IDevice* dev = md->get_devices()[0];
+        const auto act = dev->get_active_ethernet_cores(/*skip_reserved=*/true);
+        std::vector<CoreCoord> cs(act.begin(), act.end());
+        std::cout << "device " << dev_id << ": " << cs.size() << " active ethernet core(s):\n";
+        for (size_t i = 0; i < cs.size(); ++i) {
+            const CoreCoord p = dev->ethernet_core_from_logical_core(cs[i]);
+            std::cout << "  eth_idx " << i << ": logical=(" << cs[i].x << "," << cs[i].y << ")  physical/NOC=(" << p.x
+                      << "," << p.y << ")\n";
+        }
+        std::cout.flush();
+        return 0;
+    }
+
     // argv: [device_id] [eth_idx] [dst_mac] [count] [spin] [hold_s]
     const int device_id = (argc > 1) ? std::atoi(argv[1]) : 0;
     const size_t eth_idx = (argc > 2) ? std::atoi(argv[2]) : 0;
