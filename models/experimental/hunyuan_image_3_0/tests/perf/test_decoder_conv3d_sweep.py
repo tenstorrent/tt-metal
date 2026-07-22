@@ -334,7 +334,7 @@ def _sweep_latent_shapes() -> list[tuple[int, int]]:
 
 def _build_sweep_cases() -> tuple[list, list[str]]:
     include_chunks = os.environ.get("HY_CONV3D_SWEEP_CHUNKS", "1").strip().lower() not in ("0", "false", "no")
-    chunk_mode = os.environ.get("HY_CONV3D_SWEEP_CHUNK_MODE", "representative").strip().lower()
+    chunk_mode = os.environ.get("HY_CONV3D_SWEEP_CHUNK_MODE", "all").strip().lower()
     spatial = _sweep_env_int("HY_CONV3D_SWEEP_SPATIAL", 2)
     cases: list[tuple] = []
     ids: list[str] = []

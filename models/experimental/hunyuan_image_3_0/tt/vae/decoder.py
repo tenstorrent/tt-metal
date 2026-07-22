@@ -24,7 +24,9 @@ from models.experimental.hunyuan_image_3_0.ref.vae.decoder import (
 from models.experimental.hunyuan_image_3_0.tt.vae.conv3d import (
     HunyuanSymmetricConv3d,
     _TAIL_CONV_OUT_CHUNK_ELEMS,
+    conv3d_h_chunk_size,
     conv3d_h_chunk_size_for_conv,
+    conv3d_valid_input_h_chunk,
     promote_conv3d_fallback_to_exact,
 )
 from models.experimental.hunyuan_image_3_0.tt.vae.pointwise import HunyuanPointwiseLinear
@@ -63,6 +65,7 @@ def dcae_depth_to_space_bthwc(
     r1: int,
     r2: int = 2,
     r3: int = 2,
+    h_chunk: int | None = None,
 ) -> ttnn.Tensor:
     """Depth-to-space on BTHWC: (B,T,H,W,r1*r2*r3*C) -> (B,T*r1,H*r2,W*r3,C).
 
@@ -86,8 +89,11 @@ def dcae_depth_to_space_bthwc(
     if flat <= _D2S_CHUNK_ELEMS or h <= 1:
         return _d2s(x_bthwc)
 
-    n_chunks = (flat + _D2S_CHUNK_ELEMS - 1) // _D2S_CHUNK_ELEMS
-    hc = (h + n_chunks - 1) // n_chunks
+    if h_chunk is not None:
+        hc = h_chunk
+    else:
+        n_chunks = (flat + _D2S_CHUNK_ELEMS - 1) // _D2S_CHUNK_ELEMS
+        hc = (h + n_chunks - 1) // n_chunks
     last = x_bthwc.shape[-1]
     outs = []
     for o in range(0, h, hc):
@@ -305,25 +311,27 @@ class ResnetBlockTTNN(Module):
         if prefix:
             self._prefix = prefix
 
-    def _gn(self, norm, x):
-        # Spatial-parallel: gather H/W -> GroupNorm -> re-shard (per-group stats need
-        # full spatial). Replicated path (no _sp_ccl) runs the norm directly.
+    def _gn_silu(self, norm, x):
+        # GroupNorm followed by SiLU. Spatial-parallel path fuses SiLU into the distributed
+        # normalize's `add` (no separate full-spatial activation pass); the replicated path
+        # (no _sp_ccl) runs the norm then SiLU directly. SiLU inherits the norm output's
+        # memory (L1 for small activations, DRAM otherwise) so the norm -> SiLU -> conv chain
+        # stays resident without a DRAM hop.
         ccl = getattr(self, "_sp_ccl", None)
         if ccl is None:
-            return norm(x)
-        return norm_sharded(norm, x, ccl, h_mesh_axis=self._sp_h, w_mesh_axis=self._sp_w)
+            h = norm(x)
+            return ttnn.silu(h, memory_config=h.memory_config())
+        return norm_sharded(
+            norm, x, ccl, h_mesh_axis=self._sp_h, w_mesh_axis=self._sp_w, activation=ttnn.UnaryOpType.SILU
+        )
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
         residual = self.nin_shortcut(x_bthwc) if self.nin_shortcut is not None else x_bthwc
 
-        # SiLU inherits the GroupNorm output's memory (L1 for small activations, DRAM
-        # otherwise) so the norm -> SiLU -> conv chain stays resident without a DRAM hop.
-        h = self._gn(self.norm1, x_bthwc)
-        h = ttnn.silu(h, memory_config=h.memory_config())
+        h = self._gn_silu(self.norm1, x_bthwc)
         h = self.convs.forward_conv1(h)
 
-        h = self._gn(self.norm2, h)
-        h = ttnn.silu(h, memory_config=h.memory_config())
+        h = self._gn_silu(self.norm2, h)
         h = self.convs.forward_conv2(h)
 
         return ttnn.add(residual, h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -494,14 +502,38 @@ class UpsampleDCAETTNN(Module):
             w=w,
         )
 
+    def _upsample_chunk_plan(self, x_bthwc: ttnn.Tensor) -> tuple[int | None, int | None, int | None]:
+        """Return (conv_out_h_chunk, shortcut_d2s_h_chunk, conv_out_d2s_h_chunk)."""
+        _, t, h, w, _ = x_bthwc.shape
+        conv = self.conv
+        hc_out = conv3d_h_chunk_size(
+            t=t,
+            h=h,
+            w=w,
+            in_channels=conv.in_channels,
+            valid_conv=conv.spatial_sharded,
+        )
+        if hc_out is None:
+            return None, None, None
+        hc_in = conv3d_valid_input_h_chunk(hc_out)
+        # Valid conv (spatial sharded): output H = input H - (kH - 1), kH = 3.
+        conv_out_h = h - 2 if conv.spatial_sharded else h
+        hc_conv_d2s = hc_out if conv_out_h > hc_out else None
+        return hc_out, hc_in, hc_conv_d2s
+
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
+        hc_out, hc_shortcut_d2s, hc_conv_d2s = self._upsample_chunk_plan(x_bthwc)
+        self.conv._h_chunk_override = hc_out
+
         # Shortcut before conv lowers peak DRAM (conv activations + repeat buffer).
         shortcut_in = ttnn.repeat_interleave(x_bthwc, self.repeats, dim=4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        shortcut_up = dcae_depth_to_space_bthwc(shortcut_in, out_channels=self.out_channels, r1=self.r1)
+        shortcut_up = dcae_depth_to_space_bthwc(
+            shortcut_in, out_channels=self.out_channels, r1=self.r1, h_chunk=hc_shortcut_d2s
+        )
         ttnn.deallocate(shortcut_in, force=False)
 
         conv_out = self.conv(x_bthwc)
-        h_up = dcae_depth_to_space_bthwc(conv_out, out_channels=self.out_channels, r1=self.r1)
+        h_up = dcae_depth_to_space_bthwc(conv_out, out_channels=self.out_channels, r1=self.r1, h_chunk=hc_conv_d2s)
         ttnn.deallocate(conv_out, force=False)
 
         return ttnn.add(h_up, shortcut_up, memory_config=ttnn.DRAM_MEMORY_CONFIG)

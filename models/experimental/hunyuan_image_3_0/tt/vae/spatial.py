@@ -103,14 +103,18 @@ def _spatial_sum(x: ttnn.Tensor, *, ncores: int = 110) -> ttnn.Tensor:
 
 
 def _gn_ones_gcg(norm, device, G: int, Cg: int) -> ttnn.Tensor:
-    """Cached [1,1,G,Cg] ones — ``ttnn.ones`` H2D is illegal during trace capture."""
+    """Cached [1,1,G,Cg] ones — ``ttnn.ones`` H2D is illegal during trace capture.
+
+    Built in the norm's activation dtype (bf16) so the per-group mean/inv expand is a
+    pure-bf16 multiply; an fp32 ones forces a BF16xFP32 broadcast (1.0 is exact in both,
+    so no precision cost)."""
     cache = getattr(norm, "_gn_ones_gcg_cache", None)
     if cache is None:
         cache = {}
         norm._gn_ones_gcg_cache = cache
     key = (G, Cg)
     if key not in cache:
-        cache[key] = ttnn.ones([1, 1, G, Cg], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        cache[key] = ttnn.ones([1, 1, G, Cg], dtype=norm.dtype, layout=ttnn.TILE_LAYOUT, device=device)
     return cache[key]
 
 
@@ -126,7 +130,9 @@ def _all_reduce_sum(ccl, t: ttnn.Tensor, *, mesh_axis: int) -> ttnn.Tensor:
     return s
 
 
-def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None, w_mesh_axis=None) -> ttnn.Tensor:
+def group_norm_distributed(
+    norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None, w_mesh_axis=None, activation=None
+) -> ttnn.Tensor:
     """GroupNorm on an H/W-sharded input WITHOUT gathering full spatial.
 
     Per-group statistics pool over (channels-in-group x T x H x W). Each device computes
@@ -231,9 +237,16 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
     # Normalize (mul + add) and the ROW_MAJOR hand-off to SiLU/conv stay in L1 for small
     # activations so these pointwise passes don't round-trip through DRAM; large ones fall
     # back to DRAM (see _affine_mem_config). conv3d accepts L1-interleaved ROW_MAJOR input.
+    # Fold the following activation (e.g. SiLU) into the normalize `add` as a fused
+    # post-activation so the ResnetBlock's SiLU doesn't cost a separate full-spatial pass.
+    # SiLU is elementwise, so applying it here (in TILE, pre-untilize) is identical to
+    # applying it to the ROW_MAJOR output.
     mem = _affine_mem_config(B * n_local * C)
+    add_kwargs = {"memory_config": mem}
+    if activation is not None:
+        add_kwargs["activations"] = [ttnn.UnaryWithParam(activation)]
     prod = ttnn.multiply(x, scale_c, memory_config=mem)  # broadcast [1,1,1,C] over [1,1,n,C]
-    out = ttnn.add(prod, shift_c, memory_config=mem)
+    out = ttnn.add(prod, shift_c, **add_kwargs)
     ttnn.deallocate(prod)
     ttnn.deallocate(x)
     ttnn.deallocate(scale_c)
@@ -266,18 +279,29 @@ def partition_hw(x_bthwc: ttnn.Tensor, *, h_mesh_axis=None, w_mesh_axis=None) ->
     return x
 
 
-def norm_sharded(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None, w_mesh_axis=None) -> ttnn.Tensor:
+def norm_sharded(
+    norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None, w_mesh_axis=None, activation=None
+) -> ttnn.Tensor:
     """Run a full-spatial op `norm` on a spatially-sharded input.
 
     Default: distributed group_norm (no full-spatial gather; fits L1 at any resolution)
     when the norm carries raw affine (a GroupNorm3D loaded via the VAE weight loader).
-    Falls back to gather -> op -> re-shard for other norms or when HY_GN_MODE=gather."""
+    Falls back to gather -> op -> re-shard for other norms or when HY_GN_MODE=gather.
+
+    `activation` (a ttnn.UnaryOpType, e.g. SILU) is fused into the distributed normalize
+    to skip a separate full-spatial activation pass; the gather fallback applies it after
+    the norm (same result)."""
     if _GN_MODE == "dist" and hasattr(norm, "_raw_gamma"):
-        return group_norm_distributed(norm, x_bthwc, ccl, h_mesh_axis=h_mesh_axis, w_mesh_axis=w_mesh_axis)
+        return group_norm_distributed(
+            norm, x_bthwc, ccl, h_mesh_axis=h_mesh_axis, w_mesh_axis=w_mesh_axis, activation=activation
+        )
     full = gather_hw(ccl, x_bthwc, h_mesh_axis=h_mesh_axis, w_mesh_axis=w_mesh_axis)
     normed = norm(full)
     ttnn.deallocate(full)
-    return partition_hw(normed, h_mesh_axis=h_mesh_axis, w_mesh_axis=w_mesh_axis)
+    normed = partition_hw(normed, h_mesh_axis=h_mesh_axis, w_mesh_axis=w_mesh_axis)
+    if activation is not None:
+        normed = ttnn.unary_chain(normed, [ttnn.UnaryWithParam(activation)], memory_config=normed.memory_config())
+    return normed
 
 
 def enable_vae_spatial(module, ccl, *, h_mesh_axis, w_mesh_axis) -> None:
