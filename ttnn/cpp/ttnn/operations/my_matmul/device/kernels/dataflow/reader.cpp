@@ -55,33 +55,3 @@ void kernel_main() {
         cb_push_back(cb_in1, k_block_B);
     }
 }
-
-// // TODO: fix block sizes
-// cb_reserve_back(cb_id_in0, block_size_A);
-// uint32_t in0_l1_write_addr = get_write_ptr(cb_id_in0);
-// const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-// for (uint32_t block_iter_m = top; block_iter_m < bot; block_iter_m += sub_block_m) {
-//     for (uint32_t sub_block_iter_m = block_iter_m; sub_block_iter_m < block_iter_m + sub_block_m; block_iter_m++) {
-//         const uint32_t row = sub_block_iter_m * Kt;
-//         for (int kt = 0; kt < Kt; kt++)
-//         {
-//             noc_async_read_page(row + kt, s0, in0_l1_write_addr);
-//             in0_l1_write_addr += in0_tile_bytes;
-//         }
-//     }
-// }
-
-// cb_reserve_back(cb_id_in1, block_size_B);
-// uint32_t in1_l1_write_addr = get_write_ptr(cb_id_in1);
-// const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
-// for (uint32_t kt = 0; kt < Kt; kt++) {
-//     for(uint32_t block_iter_n = left; block_iter_n < right; block_iter_n += sub_block_n) {
-//         const uint32_t row = kt * Nt;
-//         for (uint32_t subblock_iter_n = block_iter_n; subblock_iter_n < block_iter_n + sub_block_n;
-//         subblock_iter_n++)
-//         {
-//             noc_async_read_page(row + sub_block_iter_n, s1, in1_l1_write_addr);
-//             in1_l1_write_addr += in1_tile_bytes;
-//         }
-//     }
-// }

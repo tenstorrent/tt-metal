@@ -155,11 +155,18 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
         }}},
     });
 
-    // TODO: this will fail for smaller matmuls
-    CoreRangeSet in0_in1_sender_cores{CoreCoord(0, 0)};
-    CoreRangeSet in0_sender_cores{CoreRange{CoreCoord{0, 1}, CoreCoord{0, y_cores - 1}}};
-    CoreRangeSet in1_sender_cores{CoreRange{CoreCoord{1, 0}, CoreCoord{x_cores - 1, 0}}};
-    CoreRangeSet receiver_cores{CoreRange{CoreCoord{1, 1}, CoreCoord{x_cores - 1, y_cores - 1}}};
+    // Helper for 1-wide/1-tall shapes
+    auto to_range_set = [](CoreCoord start, CoreCoord end) -> CoreRangeSet {
+        if (end.x < start.x || end.y < start.y) {
+            return CoreRangeSet{};  // no cores in this role
+        }
+        return CoreRangeSet{CoreRange{start, end}};
+    };
+
+    CoreRangeSet in0_in1_sender_cores{CoreCoord(0, 0)};  // corner (0,0) always exists
+    CoreRangeSet in0_sender_cores = to_range_set(CoreCoord{0, 1}, CoreCoord{0, y_cores - 1});
+    CoreRangeSet in1_sender_cores = to_range_set(CoreCoord{1, 0}, CoreCoord{x_cores - 1, 0});
+    CoreRangeSet receiver_cores = to_range_set(CoreCoord{1, 1}, CoreCoord{x_cores - 1, y_cores - 1});
 
     /// READER KERNEL DESCRIPTORS
     std::vector<uint32_t> reader_in0_in1_sender_ct_args;
@@ -417,10 +424,17 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
         }
     }
 
-    desc.kernels.push_back(std::move(reader_in0_in1_sender_desc));
-    desc.kernels.push_back(std::move(reader_in0_sender_desc));
-    desc.kernels.push_back(std::move(reader_in1_sender_desc));
-    desc.kernels.push_back(std::move(reader_receiver_desc));
+    // Only place a reader kernel where its role has cores; empty roles are skipped
+    desc.kernels.push_back(std::move(reader_in0_in1_sender_desc));  // corner (0,0) always present
+    if (!in0_sender_cores.ranges().empty()) {
+        desc.kernels.push_back(std::move(reader_in0_sender_desc));
+    }
+    if (!in1_sender_cores.ranges().empty()) {
+        desc.kernels.push_back(std::move(reader_in1_sender_desc));
+    }
+    if (!receiver_cores.ranges().empty()) {
+        desc.kernels.push_back(std::move(reader_receiver_desc));
+    }
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc));
 
