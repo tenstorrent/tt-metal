@@ -14,6 +14,7 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForCond
 
 import ttnn
 from models.common.sampling import SamplingParams
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.qwen25_vl.tt.common import (
     PagedAttentionConfig,
     merge_vision_tokens,
@@ -80,7 +81,23 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
-    state_dict = tt_model_args.load_state_dict()
+    # Warm ttnn cache => skip the HF from_pretrained load for the (text) Transformer weights; they
+    # build from .tensorbin. Pure placeholder is safe here: the vision path uses a SEPARATE live HF
+    # reference model (see this demo's from_pretrained), so it never sees this state_dict. Partial
+    # win by design -- the vision reference load is not skipped (tracked as follow-up). (#45400)
+    cache_dir = tt_model_args.weight_cache_path(dtype)
+    cache_identity = dict(
+        model_name=tt_model_args.model_name,
+        n_layers=tt_model_args.n_layers,
+        mesh_shape=tuple(tt_model_args.mesh_device.shape),
+    )
+    loaded_real_weights = False
+    if not getattr(tt_model_args, "dummy_weights", False) and weight_cache_is_complete(cache_dir, **cache_identity):
+        logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (text Transformer).")
+        state_dict = build_cached_state_dict(cache_dir)
+    else:
+        state_dict = tt_model_args.load_state_dict()
+        loaded_real_weights = bool(state_dict) and not getattr(tt_model_args, "dummy_weights", False)
 
     paged_attention_config = (
         PagedAttentionConfig(
@@ -101,6 +118,9 @@ def create_tt_model(
     )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if use_paged_kv_cache else None
+
+    if loaded_real_weights:
+        mark_weight_cache_complete(cache_dir, state_dict, **cache_identity)
 
     return tt_model_args, model, paged_attention_config, tt_kv_cache
 
