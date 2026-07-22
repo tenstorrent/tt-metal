@@ -12,6 +12,9 @@
 // Define the sentinel value for a page table entry that indicates a skip.
 constexpr uint32_t SKIP_PAGE_TABLE_ENTRY = (uint32_t)-1;
 
+// Tile height in rows (Blackhole/Wormhole tiles are 32x32).
+constexpr uint32_t TILE_H = 32;
+
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(
     uint32_t seq_tile_idx, uint32_t cur_head, volatile tt_l1_ptr const uint32_t* const page_table_ptr) {
@@ -56,6 +59,13 @@ void kernel_main() {
     constexpr uint32_t batch_idx_num_elements = get_compile_time_arg_val(11);
     constexpr uint32_t num_blocks_per_batch = get_compile_time_arg_val(12);  // num_heads * input_seq_len_t
     constexpr uint32_t capacity_t = get_compile_time_arg_val(13);
+    // Optional valid_seq_len tensor: when use_valid_seq_len is true, runtime arg 6 is
+    // the address of a 1-element int tensor holding the block-aligned real fill length
+    // (in tokens). It restricts the bounded ring window to end at valid_seq_len rather
+    // than the padded input end (see below).
+    constexpr bool use_valid_seq_len = get_compile_time_arg_val(14) == 1;
+    constexpr uint32_t cb_id_valid_seq_len = get_compile_time_arg_val(15);
+    constexpr uint32_t valid_seq_len_stick_size = get_compile_time_arg_val(16);
     constexpr bool batched_fill = batch_idx_num_elements > 1;
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -65,18 +75,22 @@ void kernel_main() {
     // Arg 4 is either batch_idx_tensor_addr or batch_idx_fallback scalar
     uint32_t batch_arg = get_arg_val<uint32_t>(4);
     uint32_t noop = get_arg_val<uint32_t>(5);
+    uint32_t valid_seq_len_addr = get_arg_val<uint32_t>(6);
 
     if (noop == 1) {
         return;  // Early exit, no work done
     }
 
-    constexpr auto s0_args = TensorAccessorArgs<14>();
+    constexpr auto s0_args = TensorAccessorArgs<17>();
     constexpr auto page_table_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto batch_idx_tensor_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
+    constexpr auto valid_seq_len_tensor_args =
+        TensorAccessorArgs<batch_idx_tensor_args.next_compile_time_args_offset()>();
 
     CircularBuffer cb_in(cb_id_in);
     CircularBuffer cb_page_table(cb_id_page_table);
     CircularBuffer cb_batch_idx(cb_id_batch_idx);
+    CircularBuffer cb_valid_seq_len(cb_id_valid_seq_len);
 
     // Resolve batch_idx source. For use_batch_idx_tensor=true we load the
     // (small) 1D tensor into an L1 CB once so per-row lookups stay local.
@@ -101,6 +115,31 @@ void kernel_main() {
         scalar_batch_idx = batch_arg;
     }
 
+    // Resolve the optional valid_seq_len. When present, `effective_end` (in tiles)
+    // caps the surviving window at the last real token instead of the padded end.
+    uint32_t effective_end = num_blocks_of_work_per_head;
+    if constexpr (use_valid_seq_len) {
+        const auto valid_gen = TensorAccessor(valid_seq_len_tensor_args, valid_seq_len_addr);
+        cb_valid_seq_len.reserve_back(1);
+        const uint32_t valid_cb_wr_ptr = cb_valid_seq_len.get_write_ptr();
+        noc.async_read(
+            valid_gen, CoreLocalMem<uint32_t>(valid_cb_wr_ptr), valid_seq_len_stick_size, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        const uint32_t valid_seq_len_tokens = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_cb_wr_ptr);
+        // Round the real length up to a whole tile (TILE_HEIGHT == 32, >> 5) and then
+        // up to a whole block_size_t: the surviving ring window [effective_end -
+        // capacity_t, effective_end) must be block-aligned so the wrapped page_table
+        // lookup preserves intra-block layout. This equals the host cap's
+        // ceil(valid/block)*block, so the kernel can take the raw valid length.
+        uint32_t valid_tiles = (valid_seq_len_tokens + (TILE_H - 1)) >> 5;
+        if (block_size_t > 0) {
+            valid_tiles = ((valid_tiles + block_size_t - 1) / block_size_t) * block_size_t;
+        }
+        if (valid_tiles > 0 && valid_tiles < num_blocks_of_work_per_head) {
+            effective_end = valid_tiles;
+        }
+    }
+
     const uint32_t tile_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);
 
@@ -121,8 +160,13 @@ void kernel_main() {
     // count once so we can consume those earlier input tiles without committing
     // them to DRAM — a strict bandwidth win for prefills longer than the bounded
     // capacity. For prefills <= capacity_t this is 0 and the legacy path runs.
-    const uint32_t skip_tiles =
-        (capacity_t > 0 && num_blocks_of_work_per_head > capacity_t) ? (num_blocks_of_work_per_head - capacity_t) : 0;
+    // With an optional valid_seq_len cap, the ring window ends at effective_end
+    // (== num_blocks_of_work_per_head when uncapped). skip_tiles drops the earliest
+    // tiles that a later wrapped write would overwrite anyway, so that exactly the
+    // last capacity_t tiles *ending at effective_end* survive — the last real tokens,
+    // not the padding tail. Tiles at/after effective_end are padding and are skipped
+    // in the loop below.
+    const uint32_t skip_tiles = (capacity_t > 0 && effective_end > capacity_t) ? (effective_end - capacity_t) : 0;
 
     for (uint32_t row_id = start_row_num; row_id < start_row_num + num_rows; ++row_id) {
         // Decode row_id → (cur_batch, cur_head, seq_tile_id).
@@ -145,9 +189,11 @@ void kernel_main() {
         uint32_t seq_tile_id = row_within_batch % num_blocks_of_work_per_head;
 
         // Drop the early-prefill tiles whose final slot would be overwritten by a
-        // later iteration anyway. The input CB still has to be drained so the
-        // reader doesn't stall, but no NOC writes go out.
-        if (seq_tile_id < skip_tiles) {
+        // later iteration anyway, and (with a valid_seq_len cap) the trailing padding
+        // tiles at/after effective_end that would otherwise wrap over the real recent
+        // window. The input CB still has to be drained so the reader doesn't stall,
+        // but no NOC writes go out.
+        if (seq_tile_id < skip_tiles || seq_tile_id >= effective_end) {
             cb_in.wait_front(Wt);
             cb_in.pop_front(Wt);
             continue;

@@ -54,7 +54,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
 
         _llk_unpack_A_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, reuse_dest_type, unpack_to_dest>(
-            UNPACK_TRANSPOSE_FACES, UNPACK_TRANSPOSE_WITHIN_FACE, FACE_R_DIM, num_faces, formats.unpack_A_src, formats.unpack_A_dst);
+            UNPACK_TRANSPOSE_FACES,
+            UNPACK_TRANSPOSE_WITHIN_FACE,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+            formats.unpack_A_src,
+            formats.unpack_A_dst);
         PROFILER_SYNC();
     }
     {
@@ -122,7 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-        test_utils::call_binary_sfpu_operation_init<APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS>();
+        test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, ITERATIONS>();
         PROFILER_SYNC();
     }
     {

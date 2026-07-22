@@ -884,6 +884,27 @@ void LaunchProgram(
     LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
 }
 
+// Returns true iff the program has kernels and every core it targets is a DRAM programmable core.
+// Such programs (e.g. the persistent tensor-prefetcher DRISC senders) are disjoint from the FD
+// worker grid and dispatch column, so launching them via slow dispatch does not perturb an active
+// FD session. Used to scope the force-slow-dispatch guard in LaunchProgram.
+bool program_targets_only_dram_cores(const Program& program) {
+    const auto& logical_cores_used_in_program = program.impl().logical_cores();
+    const auto& hal = MetalContext::instance().hal();
+    bool has_any_core = false;
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        if (logical_cores_used_in_program[programmable_core_type_index].empty()) {
+            continue;
+        }
+        has_any_core = true;
+        if (hal.get_programmable_core_type(programmable_core_type_index) != HalProgrammableCoreType::DRAM) {
+            return false;
+        }
+    }
+    return has_any_core;
+}
+
 void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
         ZoneScoped;
@@ -900,8 +921,13 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             // Scope the service bypass to this device
             const bool service_active =
                 !tt::tt_metal::MetalContext::instance().get_service_core_manager().claimed_cores(device->id()).empty();
+            // DRAM-only programs (e.g. the persistent tensor-prefetcher DRISC senders) run on the DRAM
+            // programmable cores, which are disjoint from the FD worker grid and dispatch column. Launching
+            // them via slow dispatch does not touch FD-owned cores or the FD pipeline, so it is safe to mix
+            // with an active FD session regardless of profiler init state.
+            const bool dram_only = detail::program_targets_only_dram_cores(program);
             TT_ASSERT(
-                !(fd_active && rt_done) || service_active,
+                !(fd_active && rt_done) || service_active || dram_only,
                 "Cannot force slow dispatch while fast dispatch firmware is active and real-time profiler init has "
                 "completed on this device.");
         }
@@ -1016,6 +1042,9 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
         program.impl().validate_circular_buffer_core_ranges(validation_device);
         program.impl().validate_circular_buffer_region(validation_device);
         program.impl().allocate_dataflow_buffers(validation_device);
+        // Pre-size Metal 2.0 RTA/CRTA buffers from schema when not already reserved
+        // (e.g. MakeProgramFromSpec). Idempotent if SetProgramRunArgs already sized them.
+        program.impl().reserve_runtime_arg_buffers();
         // Metal 2.0 scratchpads stack on the DFB allocations, so allocate them AFTER the DFBs are placed.
         // Scratchpads are passed as implicit CRTAs, so they must be allocated before the CRTAs are committed.
         program.impl().allocate_scratchpads(validation_device);
@@ -1055,7 +1084,9 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
                 const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
                 const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
-                if (!cbs_on_core.empty()) {
+                const bool scans_remote_cb_configs =
+                    kernel_group->launch_msg.view().kernel_config().min_remote_cb_start_index() < max_cbs;
+                if (!cbs_on_core.empty() || scans_remote_cb_configs) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     std::vector<uint32_t> circular_buffer_config_vec(
                         program.impl().get_program_config(index).cb_size / sizeof(uint32_t));
@@ -1688,17 +1719,6 @@ GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
     return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
 }
-
-namespace experimental {
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> initial_value,
-    BufferType buffer_type,
-    uint64_t address) {
-    return GlobalSemaphore(device, cores, initial_value, buffer_type, address);
-}
-}  // namespace experimental
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
     return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);

@@ -29,7 +29,7 @@ from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
-from ttexalens.hardware.risc_debug import CallstackEntryVariable
+from ttexalens.elf import CallstackEntryVariable
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
@@ -175,7 +175,7 @@ def dump_lightweight_asserts(
         if not dispatcher_data.risc_enabled(risc_name):
             return None
 
-        risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
+        risc_debug = location.device.get_block(location).get_risc_debug(risc_name)
 
         # We don't care about cores that are in reset
         if risc_debug.is_in_reset():

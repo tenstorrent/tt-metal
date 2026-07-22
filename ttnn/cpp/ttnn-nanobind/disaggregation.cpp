@@ -374,7 +374,7 @@ void bind_disaggregation_api(nb::module_& mod) {
         R"(
         Read a KV chunk's raw bytes over UMD from a device-less process, CONCURRENT with the running
         server. Uses a bare tt::umd::Cluster, selecting the chip by ASIC unique_id and the DRAM
-        view/offset from noc_addr = (view << 32) | local_addr. Mirrors the migration worker's device_io
+        view/offset from noc_addr = (dram_view << 32) | local_addr. Mirrors the migration worker's device_io
         read path.
         )");
 }

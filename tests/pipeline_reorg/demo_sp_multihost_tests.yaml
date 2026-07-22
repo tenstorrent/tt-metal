@@ -7,7 +7,7 @@
 #   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   sp_config: Single pod configuration (spsg, sp1, sp4) to run this test on.
+#   sp_config: Supercluster configuration (sc1, sc4, sc16) to run this test on.
 
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> e2e)
 
@@ -15,7 +15,7 @@
 # BH Single Galaxy Tests
 # ============================================================================
 
-# todo)) proven to work by itself but mess up SP1 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
+# todo)) proven to work by itself but mess up SC4 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
 # - name: "Single Galaxy - Host I/O Loopback (DeepSeek V3 B1)"
 #   cmd: |
 #     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /etc/ttop/hostfile | sed 's/,$//')
@@ -35,14 +35,14 @@
 #       python3 -m pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io_decoder_sweep_chunked_trace.py::test_run_host_io_decoder_sweep_chunked_trace_world_size_4 \
 #       --timeout=1200
 #   skus:
-#     bh_spsg:
+#     bh_sc1:
 #       timeout: 20
 #   owner_id: U0ALAR9B78T # Brayden Zhang
 #   team: scaleout
-#   sp_config: spsg
+#   sp_config: sc1
 
 # ============================================================================
-# BH SP1 Multihost Pipeline Tests (4 connected galaxies)
+# BH SC4 Multihost Pipeline Tests (4 connected galaxies)
 # ============================================================================
 
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
@@ -63,11 +63,11 @@
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
   skus:
-    bh_sp1-blitz:
+    bh_sc4-blitz:
       timeout: 30
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sp1-blitz
+  sp_config: sc4-blitz
 
 - name: "Stress Test (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
@@ -88,14 +88,14 @@
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
   skus:
-    bh_sp1-blitz:
+    bh_sc4-blitz:
       timeout: 60
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sp1-blitz
+  sp_config: sc4-blitz
 
 # ============================================================================
-# BH SP4 Multihost Pipeline Tests (4 connected SP1 = 16 galaxies)
+# BH SC16 Multihost Pipeline Tests (4 connected SC4 = 16 galaxies)
 # ============================================================================
 
 - name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
@@ -120,11 +120,11 @@
         --output-file output1_teacher_forcing_results.json \
         --chunk-accuracy 256
   skus:
-    bh_sp4:
+    bh_sc16:
       timeout: 30
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sp4
+  sp_config: sc16
 
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
@@ -147,11 +147,11 @@
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
   skus:
-    bh_sp4:
+    bh_sc16:
       timeout: 60
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sp4
+  sp_config: sc16
 
 - name: "Stress Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
@@ -175,8 +175,8 @@
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
   skus:
-    bh_sp4:
+    bh_sc16:
       timeout: 60
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sp4
+  sp_config: sc16

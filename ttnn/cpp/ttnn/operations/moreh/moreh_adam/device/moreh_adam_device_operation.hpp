@@ -7,9 +7,11 @@
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::operations::moreh::moreh_adam {
 struct MorehAdamOperation {
@@ -36,7 +38,7 @@ struct MorehAdamOperation {
         const std::vector<std::optional<Tensor>> output_tensors;
     };
 
-    using spec_return_value_t = std::vector<std::optional<TensorSpec>>;
+    using spec_return_value_t = std::vector<std::optional<tt::tt_metal::TensorSpec>>;
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
     static tt::tt_metal::ProgramDescriptor create_descriptor(
@@ -50,6 +52,17 @@ struct MorehAdamOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    // lr and step are excluded from compute_program_hash (so calls differing only in those
+    // values cache-hit).  Buffer addresses are patched on a hit via BufferBinding, but the
+    // descriptor is never rebuilt, so lr/step baked at the first miss would otherwise stay
+    // frozen.  Re-apply them here every dispatch.  Mirrors the reader/compute runtime-arg
+    // layout in create_descriptor exactly.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output_tensor,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 }  // namespace ttnn::operations::moreh::moreh_adam
 

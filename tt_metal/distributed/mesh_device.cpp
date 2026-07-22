@@ -884,7 +884,7 @@ bool MeshDeviceImpl::close() {
 }
 
 bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
-    ZoneScoped;
+    TTZoneScopedD(MISC);
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
@@ -934,6 +934,13 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
                         }
                     }
                 }
+            }
+        }
+
+        for (auto* device : view_->get_devices()) {
+            if (auto* physical_device = dynamic_cast<Device*>(device)) {
+                // Ensure slow dispatch is disabled regardless of current state
+                physical_device->set_smc_dispatch_telemetry_slow_dispatch_enabled(false);
             }
         }
 
@@ -1136,6 +1143,33 @@ std::vector<CoreCoord> MeshDeviceImpl::worker_cores_from_logical_cores(
 }
 std::vector<CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
     return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+}
+std::unordered_map<uint32_t, CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(
+    NOC noc, const MeshCoordinate& coord) {
+    // The assignment is a device-local physical property that can only be queried for a local device.
+    // If `coord` maps to a local device, use it. Otherwise (a remote device) fall back to an arbitrary
+    // local device's assignment; this is a best-effort approximation that is exact only when the mesh
+    // is homogeneously harvested. Fail only when there is no local device to fall back to.
+    IDevice* device = nullptr;
+    if (view_->impl().is_local(coord)) {
+        device = view_->impl().get_device(coord);
+    } else {
+        const auto local_devices = this->get_devices();
+        TT_FATAL(
+            !local_devices.empty(),
+            "get_optimal_dram_bank_to_logical_worker_assignment: MeshCoordinate {} maps to a remote device and this "
+            "mesh has no local devices to fall back to.",
+            coord);
+        device = local_devices.front();
+    }
+    // The underlying assignment is a per-bank list indexed by DRAM bank id; expose it as an explicit
+    // bank-id -> worker-core map so consumers do not treat the position in a flat list as incidental.
+    const auto per_bank = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    std::unordered_map<uint32_t, CoreCoord> assignment;
+    for (uint32_t bank_id = 0; bank_id < per_bank.size(); ++bank_id) {
+        assignment.emplace(bank_id, per_bank[bank_id]);
+    }
+    return assignment;
 }
 CoreCoord MeshDeviceImpl::virtual_core_from_logical_core(
     const CoreCoord& logical_coord, const CoreType& core_type) const {
@@ -1348,7 +1382,7 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
 }
 
 void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
-    ZoneScoped;
+    TTZoneScopedD(DISPATCH);
     TracyTTMetalReplayMeshTrace(this->get_device_ids(), *trace_id);
     auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
     const auto& trace_buffer = active_sub_device_manager->get_trace(trace_id);
@@ -1441,6 +1475,11 @@ bool MeshDeviceImpl::initialize_impl(
                 active_distributed_context_));
         }
     } else {
+        for (auto* device : this->get_devices()) {
+            if (auto* physical_device = dynamic_cast<Device*>(device)) {
+                physical_device->set_smc_dispatch_telemetry_slow_dispatch_enabled(true);
+            }
+        }
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(
                 pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));
@@ -1713,6 +1752,10 @@ std::vector<CoreCoord> MeshDevice::ethernet_cores_from_logical_cores(
 }
 std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
     return pimpl_->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+}
+std::unordered_map<uint32_t, CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(
+    NOC noc, const MeshCoordinate& coord) {
+    return pimpl_->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord);
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
     return pimpl_->virtual_core_from_logical_core(logical_coord, core_type);

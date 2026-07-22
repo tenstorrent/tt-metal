@@ -67,7 +67,7 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec PaddedSliceDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec PaddedSliceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     ttsl::SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
@@ -94,7 +94,7 @@ TensorSpec PaddedSliceDeviceOperation::compute_output_specs(
     ttnn::Shape output_tensor_shape(std::move(out_shape));
     auto output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
     auto tensor_layout = TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), args.output_mem_config);
-    return TensorSpec(output_tensor_shape, tensor_layout);
+    return tt::tt_metal::TensorSpec(output_tensor_shape, tensor_layout);
 }
 
 Tensor PaddedSliceDeviceOperation::create_output_tensors(

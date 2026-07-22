@@ -9,33 +9,31 @@
 # distinguished in Snowflake; combined hours shown under bh_p300.
 
 # ── CIv2 (tt-ubuntu-2204-* runner labels) ──────────────────────────────────
-wh_n150_civ2:             2108
-wh_n300_civ2:             7358
-wh_llmbox_civ2:            647
-bh_p100a_civ2_viommu:       94
-bh_p150b_civ2_viommu:     1279
-bh_p150b_civ2:            2798
-bh_loudbox_civ2_viommu:      0  # no observed tt-metal jobs in last 28d
+wh_n150_civ2: 2108
+wh_n300_civ2: 7358
+wh_llmbox_civ2: 647
+bh_p100a_civ2_viommu: 94
+bh_p150b_civ2_viommu: 1279
+bh_p150b_civ2: 2798
+bh_loudbox_civ2_viommu: 0 # no observed tt-metal jobs in last 28d
 
 # ── CIv1 (comma-separated tag runner labels) ───────────────────────────────
-wh_n150:                   859
-wh_n300:                   683
-wh_n300_perf:               70
-wh_llmbox:                 684
-wh_llmbox_perf:            267
-wh_galaxy:                 202
-wh_galaxy_perf:            291
-bh_p100:                   357
-bh_p100_perf:                0
-bh_p150:                   210
-bh_p150_perf:               38
-bh_loudbox:                502
-bh_p300:                   189  # includes bh_p300_viommu (indistinguishable in Snowflake)
-bh_p300_viommu:              0  # see bh_p300
-bh_quietbox_2:             106
-bh_galaxy:                  38
-bh_galaxy_perf:             15
-bh_sp1:                      0  # exabox-multihost-with-nfs; no observed tt-metal jobs
-bh_sp4:                      0  # exabox-multihost-with-nfs; same label as bh_sp1
-bh_sp4-blitz:                0  # exabox-multihost-with-nfs; same label as bh_sp1
-bh_sp4-mgd:                  0  # exabox-multihost-with-nfs; same label as bh_sp1
+wh_n150: 859
+wh_n300: 683
+wh_n300_perf: 70
+wh_llmbox: 684
+wh_llmbox_perf: 267
+wh_galaxy: 202
+wh_galaxy_perf: 291
+bh_p100: 357
+bh_p100_perf: 0
+bh_p150: 210
+bh_p150_perf: 38
+bh_loudbox: 502
+bh_p300: 189 # includes bh_p300_viommu (indistinguishable in Snowflake)
+bh_p300_viommu: 0 # see bh_p300
+bh_quietbox_2: 106
+bh_galaxy: 38
+bh_galaxy_perf: 15
+bh_sc4: 0 # exabox-multihost-with-nfs; no observed tt-metal jobs
+bh_sc16: 0 # exabox-multihost-with-nfs; same label as bh_sc4

@@ -101,8 +101,8 @@
 
 - name: Llama 3.2-1B e2e tests
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.2-1B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-1B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    export HF_MODEL=meta-llama/Llama-3.2-1B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.2-1B-Instruct MESH_DEVICE=N150
+    pytest --timeout 600 models/common/tests/demos/llama32_1b/demo.py -k "token-accuracy and performance"
   model: llama3.2-1b
   skus:
     wh_n150:
@@ -213,11 +213,11 @@
 - name: Qwen3-32B e2e tests (Galaxy)
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
-    pytest --timeout 1000 models/demos/llama3_70b_galaxy/tests/test_qwen_accuracy.py
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "ci-token-matching"
   model: qwen3-32b-galaxy
   skus:
     wh_galaxy_perf:
-      timeout: 10
+      timeout: 30
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -337,13 +337,14 @@
 
 - name: Qwen3.6-27B e2e tests
   cmd: |
-    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image"
   model: qwen3.6-27b
   skus:
     bh_quietbox_2:
-      timeout: 30
+      timeout: 45
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
@@ -699,3 +700,89 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+
+# ── Stable Diffusion XL ────────────────────────────────────────────
+
+- name: Stable Diffusion XL (base) e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 40
+      tier: 2
+    bh_p150b_civ2:
+      timeout: 40
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+# tensor parralel requires 2 chips, so it is split out to a separate test
+- name: Stable Diffusion XL (base tensor-parallel) e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and use_cfg_parallel" --timeout=600
+  model: sdxl
+  skus:
+    wh_n300:
+      timeout: 30
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL (lora) e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_lora.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 30
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL (base + refiner) e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 40
+      tier: 2
+    bh_p150b_civ2:
+      timeout: 40
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL (img2img + inpainting) e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    exit $exit_code
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 40
+      tier: 2
+    bh_p150b_civ2:
+      timeout: 40
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+# ── Panoptic DeepLab ───────────────────────────────────────────────
+- name: panoptic-deeplab e2e tests
+  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1020
+  model: panoptic-deeplab
+  skus:
+    bh_p150b_civ2:
+      timeout: 18
+      tier: 3
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: shield

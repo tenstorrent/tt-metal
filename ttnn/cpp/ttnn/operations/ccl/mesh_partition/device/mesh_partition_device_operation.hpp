@@ -30,7 +30,7 @@ struct MeshPartitionDeviceOperation {
         const std::optional<ttnn::Tensor> optional_output_tensor;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
 
     using tensor_return_value_t = ttnn::Tensor;
 
@@ -38,9 +38,9 @@ struct MeshPartitionDeviceOperation {
         using OverrideRuntimeArgsCallback = std::function<void(
             const void*,
             tt::tt_metal::Program&,  // ‼  no const, exact type
-            const std::vector<tt::tt_metal::Tensor>&,
-            const std::vector<std::optional<const tt::tt_metal::Tensor>>&,
-            const std::vector<tt::tt_metal::Tensor>&)>;
+            const std::vector<ttnn::Tensor>&,
+            const std::vector<std::optional<const ttnn::Tensor>>&,
+            const std::vector<ttnn::Tensor>&)>;
 
         // -- shared variables --------------------------------------------
         // Slice factories are ProgramDescriptor-based; on cache hit we re-run

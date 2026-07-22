@@ -485,7 +485,7 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     )
 
 
-def comp_pcc(golden, calculated, pcc=0.99):
+def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     golden = torch.Tensor(golden)
     calculated = torch.Tensor(calculated)
 
@@ -500,10 +500,13 @@ def comp_pcc(golden, calculated, pcc=0.99):
         logger.error("One tensor is all nan, the other is not.")
         return False, 0.0
 
-    # Test if either is completely zero
+    # Test if either is completely zero — but a zero tensor is also a constant tensor,
+    # so fall back to allclose instead of a hard 0.0: zero-vs-small-constant may be
+    # within the caller's tolerances.
     if torch.any(golden.bool()) != torch.any(calculated.bool()):
-        logger.error("One tensor is all zero")
-        return False, 0.0
+        logger.warning("One tensor is all zero. PCC undefined; falling back to allclose.")
+        result = torch.allclose(golden, calculated, rtol=rtol, atol=atol)
+        return result, float(result)
 
     golden = torch.squeeze(golden).flatten()
     calculated = torch.squeeze(calculated).flatten()
@@ -542,12 +545,24 @@ def comp_pcc(golden, calculated, pcc=0.99):
     g_centered = golden - (golden.sum(dtype=torch.float64) / n).to(golden.dtype)
     c_centered = calculated - (calculated.sum(dtype=torch.float64) / n).to(calculated.dtype)
     cov = (g_centered * c_centered).sum(dtype=torch.float64)
-    denom = torch.sqrt(g_centered.pow(2).sum(dtype=torch.float64) * c_centered.pow(2).sum(dtype=torch.float64))
+    g_sq_sum = g_centered.pow(2).sum(dtype=torch.float64)
+    c_sq_sum = c_centered.pow(2).sum(dtype=torch.float64)
+    denom = torch.sqrt(g_sq_sum * c_sq_sum)
+    # pow/sum stay in float32 before the reduction; large-magnitude tensors (e.g. ldexp)
+    # can overflow to inf here even though float64 accumulation would be finite.
+    if not math.isfinite(denom.item()) or not math.isfinite(cov.item()):
+        g_centered64 = g_centered.to(torch.float64)
+        c_centered64 = c_centered.to(torch.float64)
+        cov = (g_centered64 * c_centered64).sum()
+        denom = torch.sqrt(g_centered64.pow(2).sum() * c_centered64.pow(2).sum())
     cal_pcc = (cov / denom).item()
 
-    # Zero variance -> denom == 0 -> cal_pcc is nan: treat as a perfect match.
+    # Zero variance -> denom == 0 -> cal_pcc is nan: PCC is undefined for constant tensors.
+    # Fall back to allclose rather than returning a misleading 1.0.
     if math.isnan(cal_pcc):
-        return True, 1.0
+        logger.warning("PCC is NaN (zero variance / constant tensor). Falling back to allclose check.")
+        result = torch.allclose(golden, calculated, rtol=rtol, atol=atol)
+        return result, float(result)
 
     return cal_pcc >= pcc, cal_pcc
 
@@ -739,7 +754,7 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
     passing &= passing_allclose
     output += output_allclose
     if torch.numel(golden) != 1:
-        passing_pcc, output_pcc = comp_pcc(golden, calculated, pcc)
+        passing_pcc, output_pcc = comp_pcc(golden, calculated, pcc, rtol=rtol, atol=atol)
         passing &= passing_pcc
         output += f", pcc={output_pcc}"
 
@@ -1114,12 +1129,17 @@ def ttl_complex_2_torch_complex(tt_tensor):
     return result
 
 
-def pad_and_fold_conv_filters_for_unity_stride(filter_pyt_nchw_tensor, stride_h, stride_w):
+def pad_and_fold_conv_filters_for_unity_stride(filter_pyt_nchw_tensor, stride_h, stride_w, align_c=4):
     assert stride_h == stride_w
     assert filter_pyt_nchw_tensor.shape[2] == filter_pyt_nchw_tensor.shape[3]
+    assert isinstance(align_c, int) and align_c > 0
     # Fold activation for unity stride
-    # Pad channel size to 4. This is to make sure L1 read addresses are 16 bit aligned
-    C = _nearest_y(filter_pyt_nchw_tensor.shape[1], 4)
+    # Pad channel size to align_c. This keeps L1 read addresses aligned; extra channels become
+    # zero-valued weights that contribute nothing to the convolution. align_c=4 is the WH/BH default
+    # (16B alignment for bf16 gives C a multiple of 4 with a tiled conv reader). Quasar's row-major
+    # fold needs align_c=8 (bf16 row-major shard width must be a multiple of 8) so the first conv
+    # folds to groups*8 input channels and consumes the aligned output without per-group padding strip.
+    C = _nearest_y(filter_pyt_nchw_tensor.shape[1], align_c)
     # Pad filter to nearest stride
     Padded_filter_height = _nearest_y(filter_pyt_nchw_tensor.shape[2], stride_h)
     Padded_filter_width = _nearest_y(filter_pyt_nchw_tensor.shape[3], stride_w)

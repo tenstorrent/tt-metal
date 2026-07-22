@@ -5,16 +5,16 @@
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple, Union
 
 import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.common.prefill.adapter import KvCaches
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
+from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 
 
@@ -30,7 +30,9 @@ class TtPrefillRuntimeConfig:
     sp_axis: int = 0
     tp_axis: int = 1
     num_links: int = 1
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    # Scalar applies to both mesh axes; a (sp_axis_0, tp_axis_1) tuple configures each independently.
+    # Derived from the opened fabric via tt_ccl.per_axis_topology() in the runner.
+    topology: Union[ttnn.Topology, Tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear
     capacity_factor: int = 2
     gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL
     routed_expert_activations_dtype: ttnn.DataType = ttnn.bfloat8_b
@@ -199,10 +201,10 @@ class TtPrefillRuntime:
             )
         return self.make_placeholder_activation()
 
-    def compile(self, kv_caches: KvCaches) -> None:
+    def compile(self, kv_caches: MlaKvCaches) -> None:
         """Warm up one chunk so the per-chunk loop hits no first-run cost. The engine passes the
-        `KvCaches` tuple it owns; the warm-up writes into them (slot 0) and is harmless. The runtime
-        holds NO cache state — the same `kv_caches` is passed back into every prefill_chunk."""
+        `MlaKvCaches` it owns; the warm-up writes into it (slot 0) and is harmless. The runtime holds NO
+        cache state — the same `kv_caches` is passed back into every prefill_chunk."""
         assert self.model_built
         chunk = self.config.chunk_size
         logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
@@ -219,7 +221,7 @@ class TtPrefillRuntime:
     def prefill_chunk(
         self,
         input_tensor: ttnn.Tensor,
-        kv_caches: KvCaches,
+        kv_caches: MlaKvCaches,
         slot_id: int,
         actual_start: int,
         actual_end: int,
@@ -248,10 +250,9 @@ class TtPrefillRuntime:
             input_tensor: on the first rank, one chunk's tokens as an SP-sharded uint32 ROW_MAJOR DRAM
                 tensor (prepare_prefill_input_tensor, block-cyclic, chip-major); on a non-first rank,
                 the upstream hidden-state activation. Deallocated here.
-            kv_caches: the engine-owned KV cache(s) (from the adapter's allocate_kv_cache), an ordered
-                tuple — index 0 the primary KV cache this chunk's KV is written into, index 1+ any
-                secondary caches (a sparse/DSA model's index cache at 1). The same tuple is passed on
-                every call; the runtime holds none of it.
+            kv_caches: the engine-owned KV cache (from the adapter's allocate_kv_cache): ``.kvpe`` is the
+                primary cache this chunk's KV is written into; ``.index`` is the sparse/DSA indexer cache
+                (None for dense). The same object is passed on every call; the runtime holds none of it.
             slot_id: cache user slot to fill, in [0, num_users).
             actual_start: absolute KV pos of the chunk's first real token (the cache write offset).
             actual_end: absolute KV pos past the chunk's last real token.
@@ -269,13 +270,13 @@ class TtPrefillRuntime:
 
         out = self.model.forward(
             input_tensor,
-            kv_caches[0],
+            kv_caches.kvpe,
             actual_isl=actual_end - actual_start,
             on_layer_complete=self._on_layer_complete,
             actual_start=actual_start,
             actual_end=actual_end,
             cache_user_id=slot_id,
-            index_kv_cache=kv_caches[1] if len(kv_caches) > 1 else None,
+            index_kv_cache=kv_caches.index,
         )
         ttnn.deallocate(input_tensor)
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
@@ -302,8 +303,8 @@ class TtPrefillRuntime:
 
         self._on_layer_complete = on_layer_complete
 
-    def build_kv_chunk_table(self, kv_caches: KvCaches, path: str) -> str:
-        """Build + serialize the KV-chunk address table for the engine-owned `KvCaches` to
+    def build_kv_chunk_table(self, kv_caches: MlaKvCaches, path: str) -> str:
+        """Build + serialize the KV-chunk address table for the engine-owned `MlaKvCaches` to
         `path` and return it.
 
         The table maps each natural KV position to its true block-cyclic storage chip + offset
@@ -312,14 +313,14 @@ class TtPrefillRuntime:
         cache layout; it issues no migration comms. Single-rank only (config.num_layers == the
         full model).
 
-        For a sparse/DSA model (a secondary cache at index 1), the result is a single MERGED table
-        describing BOTH caches — config 0 = the KVPE cache, config 1 = the index-key cache. A dense
-        model (only index 0) → the usual single-config table over the KVPE cache alone."""
+        For a sparse/DSA model (``.index`` present) the result is a single MERGED table describing BOTH
+        caches — config 0 = the KVPE cache, config 1 = the index-key cache. A dense model (``.index`` None)
+        → the usual single-config table over the KVPE cache alone."""
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
-            kvpe_cache=kv_caches[0],
+            kvpe_cache=kv_caches.kvpe,
             seq_len=self.config.max_seq_len,
             num_layers=self.config.num_layers,
             mesh_shape=self.config.mesh_shape,
@@ -327,18 +328,47 @@ class TtPrefillRuntime:
             num_users=self.config.num_users,
             chunk_size_global=self.config.chunk_size,  # block-cyclic period (prefill chunk size)
             path=path,
-            index_kv_cache=kv_caches[1] if len(kv_caches) > 1 else None,
+            index_kv_cache=kv_caches.index,
         )
 
+    def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):
+        """Read one slot's KV cache from device to host: the `.kvpe` block as a single host tensor
+        ``[num_layers, 1, seq_cache, kvpe]`` (one TP replica), in the raw on-device (block-cyclic) layout —
+        not un-rotated to natural token order. DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is
+        ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host
+        read-back."""
+        mesh_device = self.mesh_device
+        num_layers = self.config.num_layers
+        kvpe = kv_caches.kvpe
+        s = list(kvpe.shape)
+        sl = ttnn.slice(
+            kvpe,
+            [slot * num_layers, 0, 0, 0],
+            [(slot + 1) * num_layers, s[1], s[2], s[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        block = ttnn.to_torch(
+            sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+        ).float()[
+            :, :1
+        ]  # [num_layers, 1, seq_cache, kvpe]
+        ttnn.deallocate(sl)
+        return [block]
+
     def kv_cache_pcc_check(
-        self, kv_caches: KvCaches, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0
+        self, kv_caches: MlaKvCaches, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0
     ) -> float:
         """Optional bring-up hook (not part of the core runtime contract; never called in production
-        serving). PCC the populated engine-owned primary KV cache (`kv_caches[0]`) for `slot_id`
-        against the golden trace; returns the min per-layer PCC and asserts on failure (unless
+        serving). PCC the populated engine-owned primary KV cache (`.kvpe`) for `slot_id` against the
+        golden trace; returns the min per-layer PCC and asserts on failure (unless
         PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's validation module."""
         from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import kv_cache_pcc_check
 
         return kv_cache_pcc_check(
-            self, kv_caches[0], slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir, first_layer_idx=first_layer_idx
+            self,
+            kv_caches.kvpe,
+            slot_id=slot_id,
+            n_chunks=n_chunks,
+            trace_dir=trace_dir,
+            first_layer_idx=first_layer_idx,
         )

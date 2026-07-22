@@ -126,10 +126,12 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     squeeze/squeeze.cpp
     stack/stack.cpp
     tilize/device/tilize_device_operation.cpp
-    tilize/device/tilize_multi_core_default_program_factory.cpp
     tilize/device/tilize_multi_core_block_program_factory.cpp
+    tilize/device/tilize_multi_core_default_program_factory.cpp
+    tilize/device/tilize_multi_core_retile_program_factory.cpp
     tilize/device/tilize_single_core_program_factory.cpp
     tilize/device/tilize_multi_core_sharded_program_factory.cpp
+    tilize/device/tilize_multi_core_sharded_retile_program_factory.cpp
     tilize/tilize.cpp
     tilize_with_val_padding/device/tilize_with_val_padding_device_operation.cpp
     tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.cpp
@@ -208,4 +210,61 @@ set(TTNN_OP_DATA_MOVEMENT_API_HEADERS
     transpose/transpose.hpp
     untilize/untilize.hpp
     untilize_with_unpadding/untilize_with_unpadding.hpp
+)
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/data_movement/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_DATA_MOVEMENT_NANOBIND_SRCS
+    data_movement_nanobind.cpp
+    concat/concat_nanobind.cpp
+    bcast/bcast_nanobind.cpp
+    chunk/chunk_nanobind.cpp
+    clone/clone_nanobind.cpp
+    concat/concat_nanobind.cpp
+    copy/copy_nanobind.cpp
+    chunk/chunk_nanobind.cpp
+    expand/expand_nanobind.cpp
+    fill_pad/fill_pad_nanobind.cpp
+    fill_rm/fill_rm_nanobind.cpp
+    fold/fold_nanobind.cpp
+    indexed_fill/indexed_fill_nanobind.cpp
+    narrow/narrow_nanobind.cpp
+    moe_expert_token_remap/moe_expert_token_remap_nanobind.cpp
+    moe_routing_remap/moe_routing_remap_nanobind.cpp
+    move/move_nanobind.cpp
+    non_zero_indices/non_zero_indices_nanobind.cpp
+    pad/pad_nanobind.cpp
+    permute/permute_nanobind.cpp
+    repeat/repeat_nanobind.cpp
+    repeat_interleave/repeat_interleave_nanobind.cpp
+    reshape_view/reshape_nanobind.cpp
+    reshape_on_device/reshape_nanobind.cpp
+    reshape_view/reshape_nanobind.cpp
+    reshape_on_device/reshape_nanobind.cpp
+    roll/roll_nanobind.cpp
+    stack/stack_nanobind.cpp
+    scatter/scatter_nanobind.cpp
+    scatter/tosa_scatter_nanobind.cpp
+    sharded/interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp
+    sharded/reshard/reshard_nanobind.cpp
+    sharded/sharded_to_interleaved/sharded_to_interleaved_nanobind.cpp
+    sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_nanobind.cpp
+    sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_nanobind.cpp
+    slice/slice_nanobind.cpp
+    split/split_nanobind.cpp
+    squeeze/squeeze_nanobind.cpp
+    stack/stack_nanobind.cpp
+    tilize/tilize_nanobind.cpp
+    tilize_with_val_padding/tilize_with_val_padding_nanobind.cpp
+    transpose/transpose_nanobind.cpp
+    unsqueeze/unsqueeze_nanobind.cpp
+    untilize/untilize_nanobind.cpp
+    untilize_with_unpadding/untilize_with_unpadding_nanobind.cpp
+    view/view_nanobind.cpp
+    sort/sort_nanobind.cpp
+    gather/gather_nanobind.cpp
+    gather/tosa/gather_tosa_nanobind.cpp
 )

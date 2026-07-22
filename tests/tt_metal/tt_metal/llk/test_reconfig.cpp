@@ -459,10 +459,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
                   "src5_addr",
                   "src5_bank_id",
                   "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 
     experimental::KernelSpec writer_spec{
@@ -476,10 +473,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
             .access_pattern = DFBAccess::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 
     experimental::KernelSpec compute_spec{
@@ -495,12 +489,12 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
              dfb_binding(INP5_DFB, DFBEndpoint::CONSUMER),
              dfb_binding(OUT_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode =
-                    {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
-                     {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
+            experimental::ComputeGen2Config{
+                .fpu_math_fidelity = MathFidelity::HiFi4,
+                .enable_32_bit_dest = true,
+                .unpack_modes =
+                    {{INP2_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
+                     {INP3_DFB, tt::tt_metal::UnpackMode::UnpackToSrc}},
             },
     };
 
@@ -602,27 +596,27 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
-                   {"src0_bank_id", 0u},
-                   {"src1_addr", static_cast<uint32_t>(inp1_dram->address())},
-                   {"src1_bank_id", 0u},
-                   {"src2_addr", static_cast<uint32_t>(inp2_dram->address())},
-                   {"src2_bank_id", 0u},
-                   {"src3_addr", static_cast<uint32_t>(inp3_dram->address())},
-                   {"src3_bank_id", 0u},
-                   {"src4_addr", static_cast<uint32_t>(inp4_dram->address())},
-                   {"src4_bank_id", 0u},
-                   {"src5_addr", static_cast<uint32_t>(inp5_dram->address())},
-                   {"src5_bank_id", 0u},
-                   {"num_tiles", 1u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", static_cast<uint32_t>(inp1_dram->address())},
+                 {"src1_bank_id", 0u},
+                 {"src2_addr", static_cast<uint32_t>(inp2_dram->address())},
+                 {"src2_bank_id", 0u},
+                 {"src3_addr", static_cast<uint32_t>(inp3_dram->address())},
+                 {"src3_bank_id", 0u},
+                 {"src4_addr", static_cast<uint32_t>(inp4_dram->address())},
+                 {"src4_bank_id", 0u},
+                 {"src5_addr", static_cast<uint32_t>(inp5_dram->address())},
+                 {"src5_bank_id", 0u},
+                 {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", static_cast<uint32_t>(out_dram->address())}, {"bank_id", 0u}, {"num_tiles", kNumOps}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", static_cast<uint32_t>(out_dram->address())}, {"bank_id", 0u}, {"num_tiles", kNumOps}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -775,15 +769,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
             .num_threads = 1,
             .dfb_bindings = {experimental::ConsumerOf(out_dfb, "in")},
             .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen1_config =
-                        experimental::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                            .noc = tt_metal::NOC::RISCV_0_default},
-                    .gen2_config =
-                        experimental::DataMovementHardwareConfig::Gen2Config{
-                            .disable_dfb_implicit_sync_for_all = true}},
+            .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
         };
     };
 
@@ -813,10 +799,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
                   "src5_addr",
                   "src5_bank_id",
                   "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 
     experimental::KernelSpec writer0_spec = make_writer_spec(WRITER0, OUT0_DFB);
@@ -838,12 +821,12 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
              dfb_binding(OUT1_DFB, DFBEndpoint::PRODUCER),
              dfb_binding(OUT2_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode =
-                    {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
-                     {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
+            experimental::ComputeGen2Config{
+                .fpu_math_fidelity = MathFidelity::HiFi4,
+                .enable_32_bit_dest = true,
+                .unpack_modes =
+                    {{INP2_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
+                     {INP3_DFB, tt::tt_metal::UnpackMode::UnpackToSrc}},
             },
     };
 
@@ -959,39 +942,36 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
-                   {"src0_bank_id", 0u},
-                   {"src1_addr", static_cast<uint32_t>(inp1_dram->address())},
-                   {"src1_bank_id", 0u},
-                   {"src2_addr", static_cast<uint32_t>(inp2_dram->address())},
-                   {"src2_bank_id", 0u},
-                   {"src3_addr", static_cast<uint32_t>(inp3_dram->address())},
-                   {"src3_bank_id", 0u},
-                   {"src4_addr", static_cast<uint32_t>(inp4_dram->address())},
-                   {"src4_bank_id", 0u},
-                   {"src5_addr", static_cast<uint32_t>(inp5_dram->address())},
-                   {"src5_bank_id", 0u},
-                   {"num_tiles", 1u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", static_cast<uint32_t>(inp1_dram->address())},
+                 {"src1_bank_id", 0u},
+                 {"src2_addr", static_cast<uint32_t>(inp2_dram->address())},
+                 {"src2_bank_id", 0u},
+                 {"src3_addr", static_cast<uint32_t>(inp3_dram->address())},
+                 {"src3_bank_id", 0u},
+                 {"src4_addr", static_cast<uint32_t>(inp4_dram->address())},
+                 {"src4_bank_id", 0u},
+                 {"src5_addr", static_cast<uint32_t>(inp5_dram->address())},
+                 {"src5_bank_id", 0u},
+                 {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER0,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", static_cast<uint32_t>(out0_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", static_cast<uint32_t>(out0_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER1,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", static_cast<uint32_t>(out1_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", static_cast<uint32_t>(out1_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER2,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", static_cast<uint32_t>(out2_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", static_cast<uint32_t>(out2_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

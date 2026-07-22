@@ -95,11 +95,9 @@ inline m2::KernelSpec make_dm_kernel(
         .source = std::filesystem::path{source_path},
         .num_threads = num_threads,
         .hw_config =
-            m2::DataMovementHardwareConfig{
-                .gen2_config =
-                    m2::DataMovementHardwareConfig::Gen2Config{
-                        .disable_dfb_implicit_sync_for = std::move(disable_implicit_sync_for),
-                    }},
+            m2::DataMovementGen2Config{
+                .disable_dfb_implicit_sync_for = std::move(disable_implicit_sync_for),
+            },
     };
 }
 
@@ -109,16 +107,15 @@ inline m2::KernelSpec make_compute_kernel(
         .unique_id = unique_id,
         .source = std::filesystem::path{source_path},
         .num_threads = num_threads,
-        .hw_config = m2::ComputeHardwareConfig{},
+        .hw_config = m2::ComputeGen2Config{},
     };
 }
 
 inline void disable_implicit_sync_for(m2::KernelSpec& kernel, m2::DFBSpecName dfb_name) {
     auto& dm_cfg = std::get<m2::DataMovementHardwareConfig>(kernel.hw_config);
-    if (!dm_cfg.gen2_config) {
-        dm_cfg.gen2_config = m2::DataMovementHardwareConfig::Gen2Config{};
-    }
-    dm_cfg.gen2_config->disable_dfb_implicit_sync_for.push_back(std::move(dfb_name));
+    TT_FATAL(std::holds_alternative<m2::DataMovementGen2Config>(dm_cfg), "Can only set implicit sync for Gen2 Kernel");
+    auto& gen2_cfg = std::get<m2::DataMovementGen2Config>(dm_cfg);
+    gen2_cfg.disable_dfb_implicit_sync_for.push_back(std::move(dfb_name));
 }
 
 inline void maybe_disable_implicit_sync(m2::KernelSpec& kernel, bool implicit_sync, m2::DFBSpecName dfb_name) {
@@ -193,477 +190,24 @@ inline uint32_t default_num_entries(uint32_t num_p, uint32_t num_c) {
 }
 
 // ---- shared skip macros + ring-size helper (used by base + overrides) ----
-#define DFB_SKIP_IF_UNSUPPORTED(num_p, num_c)                                                           \
-    if (devices_.at(0)->arch() != ARCH::QUASAR && (GetParam() || (num_p) > 1 || (num_c) > 1)) {        \
-        GTEST_SKIP();                                                                                   \
+#define DFB_SKIP_IF_UNSUPPORTED(num_p, num_c)                                                   \
+    if (devices_.at(0)->arch() != ARCH::QUASAR && (GetParam() || (num_p) > 1 || (num_c) > 1)) { \
+        GTEST_SKIP();                                                                           \
     }
 
-// DM -> ALL DM is unsupported with implicit_sync today.
-
-#define DFB_NO_EXTRA_SKIP ((void)0)
-
-constexpr uint32_t dfb_default_num_entries(uint32_t num_p, uint32_t num_c) {
-    const uint32_t m = (num_p / std::gcd(num_p, num_c)) * num_c;
-    return ((16u + m - 1u) / m) * m;
-}
-
-// ---- cross-category program drivers ----
-
-void run_single_dfb_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    experimental::dfb::DataflowBufferConfig& dfb_config,
-    DFBPorCType producer_type,
-    DFBPorCType consumer_type,
-    const CoreRangeSet& core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))),
-    std::optional<uint32_t> num_entries_in_buffer = std::nullopt) {
-
-    TT_FATAL(
-        !(producer_type == DFBPorCType::TENSIX && consumer_type == DFBPorCType::TENSIX),
-        "Both producer and consumer cannot be Tensix. At least one must be a DM kernel for NOC transfers.");
-    TT_FATAL(
-        core_range_set.num_cores() == 1 ||
-            (producer_type == DFBPorCType::DM && consumer_type == DFBPorCType::DM),
-        "Multi-core DFB programs only support DM producer and consumer.");
-
-    const auto arch = mesh_device->get_devices()[0]->arch();
-
-    if (arch != ARCH::QUASAR) {
-        // WH/BH DM: one BRISC (RISCV_0) as producer and one NCRISC (RISCV_1) as consumer.
-        // Configs with num_producers > 1 or num_consumers > 1 require multi-threaded DM
-        // which is not available on WH/BH.
-        if (dfb_config.num_producers > 1 || dfb_config.num_consumers > 1) {
-            GTEST_SKIP() << "WH/BH DFB supports only 1 DM producer (BRISC) and 1 DM consumer (NCRISC)";
-        }
-        // Implicit sync (NocOptions::TXN_ID) is declared only under #ifdef ARCH_QUASAR
-        // in api/dataflow/noc.h. Force it off so the device-side kernel's
-        // `if constexpr (implicit_sync)` branch is dead code on WH/BH.
-        dfb_config.enable_producer_implicit_sync = false;
-        dfb_config.enable_consumer_implicit_sync = false;
-    }
-
-    const uint32_t num_cores = core_range_set.num_cores();
-    const uint32_t entries_per_core = num_entries_in_buffer.has_value() ? num_entries_in_buffer.value() : dfb_config.num_entries;
-    const uint32_t entry_size = dfb_config.entry_size;
-    // page_size = entry_size makes every entry independently addressable by page_id.
-    const uint32_t total_buffer_size = num_cores * entries_per_core * entry_size;
-    const uint32_t total_entries = num_cores * entries_per_core;
-    const bool is_all = (dfb_config.cap == dfb::AccessPattern::ALL);
-
-    // Ceiling division so every producer gets a loop bound that covers the largest slice.
-    // Producers whose page_id would exceed entries_per_core use the runtime bounds
-    // check in the kernel to skip the out-of-range iteration.
-    const uint32_t num_entries_per_producer =
-        (entries_per_core + dfb_config.num_producers - 1) / dfb_config.num_producers;
-    const uint32_t num_entries_per_consumer =
-        is_all ? entries_per_core : (entries_per_core + dfb_config.num_consumers - 1) / dfb_config.num_consumers;
-
-    // Build a per-core chunk-offset map (used for both runtime args and L1 pre-fill/verify).
-    std::map<CoreCoord, uint32_t> core_to_chunk_offset;
-    {
-        uint32_t core_idx = 0;
-        for (const CoreRange& cr : core_range_set.ranges()) {
-            for (auto y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
-                for (auto x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
-                    core_to_chunk_offset[CoreCoord(x, y)] = core_idx++ * entries_per_core;
-                }
-            }
-        }
-    }
-
-    const experimental::DFBSpecName DFB_NAME{"dfb"};
-    const experimental::KernelSpecName PRODUCER{"producer"};
-    const experimental::KernelSpecName CONSUMER{"consumer"};
-    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
-    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
-
-    // Only DM kernels bind to DRAM tensors; Tensix kernels operate purely on L1 DFB rings
-    // (host pre-fills L1 for Tensix producers; verifies via L1 read for Tensix consumers).
-    // Declaring an unbound TensorParameter triggers ProgramSpec validation failure.
-    const bool need_in_tensor = (producer_type == DFBPorCType::DM);
-    const bool need_out_tensor = (consumer_type == DFBPorCType::DM);
-
-    std::optional<MeshTensor> in_tensor;
-    std::optional<MeshTensor> out_tensor;
-    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, total_entries);
-    if (need_in_tensor) {
-        in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-        log_info(
-            tt::LogTest,
-            "In Tensor:  [address: {} B, size: {} B]",
-            in_tensor->mesh_buffer().get_reference_buffer()->address(),
-            in_tensor->mesh_buffer().get_reference_buffer()->size());
-    }
-    if (need_out_tensor) {
-        out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-        log_info(
-            tt::LogTest,
-            "Out Tensor: [address: {} B, size: {} B]",
-            out_tensor->mesh_buffer().get_reference_buffer()->address(),
-            out_tensor->mesh_buffer().get_reference_buffer()->size());
-    }
-
-    const auto consumer_pattern =
-        is_all ? experimental::DFBAccessPattern::ALL : experimental::DFBAccessPattern::STRIDED;
-
-    // Per-DM-kernel disable_dfb_implicit_sync_for_all flags below mirror the boolean derived from
-    // dfb_config.enable_producer_implicit_sync (the lower-level legacy config still drives the value).
-    // Each DM kernel here binds exactly one DFB, so opting out for all bound DFBs opts out for that DFB.
-    experimental::DataflowBufferSpec dfb_spec{
-        .unique_id = DFB_NAME,
-        .entry_size = entry_size,
-        .num_entries = dfb_config.num_entries,
-        .data_format_metadata = dfb_config.data_format,
-    };
-
-    // DM kernel configs supply both Gen1 (BRISC for producer / NCRISC for consumer) and
-    // Gen2 (auto-assigned) variants so the same KernelSpec runs on WH/BH and Quasar.
-    const experimental::DataMovementHardwareConfig dm_producer_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
-    const experimental::DataMovementHardwareConfig dm_consumer_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
-
-    experimental::KernelSpec producer_spec;
-    if (producer_type == DFBPorCType::DM) {
-        producer_spec = experimental::KernelSpec{
-            .unique_id = PRODUCER,
-            .source =
-
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
-            .num_threads = dfb_config.num_producers,
-            .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
-            .tensor_bindings = {{
-                .tensor_parameter_name = IN_TENSOR,
-                .accessor_name = "src_tensor",  // kernel: tensor::src_tensor
-            }},
-            .compile_time_args =
-                {
-                    {"num_entries_per_producer", num_entries_per_producer},
-                    {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
-                    {"num_producers", dfb_config.num_producers},
-                },
-            .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
-            .hw_config = dm_producer_cfg,
-        };
-    } else {
-        producer_spec = experimental::KernelSpec{
-            .unique_id = PRODUCER,
-            .source =
-
-                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp",
-            .num_threads = dfb_config.num_producers,
-            .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
-            .compile_time_args = {{"num_entries_per_producer", num_entries_per_producer}},
-            .hw_config = experimental::ComputeHardwareConfig{},
-        };
-    }
-
-    experimental::KernelSpec consumer_spec;
-    if (consumer_type == DFBPorCType::DM) {
-        consumer_spec = experimental::KernelSpec{
-            .unique_id = CONSUMER,
-            .source =
-
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
-            .num_threads = dfb_config.num_consumers,
-            .dfb_bindings = {{
-                .dfb_spec_name = DFB_NAME,
-                .accessor_name = "in",
-                .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                .access_pattern = consumer_pattern,
-            }},
-            .tensor_bindings = {{
-                .tensor_parameter_name = OUT_TENSOR,
-                .accessor_name = "dst_tensor",  // kernel: tensor::dst_tensor
-            }},
-            .compile_time_args =
-                {
-                    {"num_entries_per_consumer", num_entries_per_consumer},
-                    {"blocked_consumer", static_cast<uint32_t>(is_all ? 1u : 0u)},
-                    {"implicit_sync", static_cast<uint32_t>(dfb_config.enable_producer_implicit_sync ? 1u : 0u)},
-                    {"num_consumers", dfb_config.num_consumers},
-                },
-            .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
-            .hw_config = dm_consumer_cfg,
-        };
-    } else {
-        consumer_spec = experimental::KernelSpec{
-            .unique_id = CONSUMER,
-            .source =
-
-                "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
-            .num_threads = dfb_config.num_consumers,
-            .dfb_bindings = {{
-                .dfb_spec_name = DFB_NAME,
-                .accessor_name = "in",
-                .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                .access_pattern = consumer_pattern,
-            }},
-            .compile_time_args = {{"num_entries_per_consumer", num_entries_per_consumer}},
-            .hw_config = experimental::ComputeHardwareConfig{},
-        };
-    }
-
-    // Each DM endpoint votes on opting out of implicit sync (for the single DFB it binds).
-    const bool disable_isync = !dfb_config.enable_producer_implicit_sync;
-    if (producer_type == DFBPorCType::DM && disable_isync) {
-        std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_dfb_implicit_sync_for_all = true;
-    }
-    if (consumer_type == DFBPorCType::DM && disable_isync) {
-        std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config)
-            .gen2_config->disable_dfb_implicit_sync_for_all = true;
-    }
-
-    experimental::WorkUnitSpec wu{
-        .name = "main",
-        .kernels = {PRODUCER, CONSUMER},
-        .target_nodes = core_range_set,
-    };
-
-    std::vector<experimental::TensorParameter> tensor_parameters;
-    if (need_in_tensor) {
-        tensor_parameters.push_back({.unique_id = IN_TENSOR, .spec = in_tensor->tensor_spec()});
-    }
-    if (need_out_tensor) {
-        tensor_parameters.push_back({.unique_id = OUT_TENSOR, .spec = out_tensor->tensor_spec()});
-    }
-
-    experimental::ProgramSpec spec{
-        .name = "single_dfb",
-        .kernels = {producer_spec, consumer_spec},
-        .dataflow_buffers = {dfb_spec},
-        .tensor_parameters = tensor_parameters,
-        .work_units = {wu},
-    };
-
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-
-    using RuntimeArgValues = decltype(experimental::ProgramRunArgs::KernelRunArgs::runtime_arg_values);
-    using NodeRuntimeArgs = RuntimeArgValues::value_type;
-    auto build_dm_named_rtas = [&]() {
-        RuntimeArgValues result;
-        for (const auto& [core, chunk_offset] : core_to_chunk_offset) {
-            result.push_back(NodeRuntimeArgs{
-                experimental::NodeCoord{core.x, core.y},
-                {{"chunk_offset", chunk_offset}, {"entries_per_core", entries_per_core}}});
-        }
-        return result;
-    };
-
-    experimental::ProgramRunArgs run_params;
-    experimental::ProgramRunArgs::KernelRunArgs producer_params{};
-    producer_params.kernel = PRODUCER;
-    if (producer_type == DFBPorCType::DM) {
-        producer_params.runtime_arg_values = build_dm_named_rtas();
-    }
-    experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
-    consumer_params.kernel = CONSUMER;
-    if (consumer_type == DFBPorCType::DM) {
-        consumer_params.runtime_arg_values = build_dm_named_rtas();
-    }
-    run_params.kernel_run_args = {producer_params, consumer_params};
-    if (need_in_tensor) {
-        run_params.tensor_args.emplace(IN_TENSOR, experimental::TensorArgument{*in_tensor});
-    }
-    if (need_out_tensor) {
-        run_params.tensor_args.emplace(OUT_TENSOR, experimental::TensorArgument{*out_tensor});
-    }
-    experimental::SetProgramRunArgs(program, run_params);
-
-    // Generate input once; shared by tensor/buffer write, L1 pre-fill, and verification.
-    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_buffer_size / sizeof(uint32_t));
-
-    IDevice* device = mesh_device->get_devices()[0];
-
-    // For Tensix → DM: pre-fill each core's DFB L1 with its input chunk so the
-    // Tensix producer kernel can read from L1 while DM consumer drains to DRAM.
-    //
-    // Single-DFB programs always place the DFB at the L1 base allocator address
-    // on every core where it's bound, so we use that directly here (instead of
-    // introspecting dfb->groups[].l1_by_core, which is only populated after legacy
-    // program compilation).
-    //
-    // IMPORTANT: the slice written to L1 must be exactly the physical ring size
-    // (num_entries * entry_size). Writing more than the ring size would corrupt
-    // L1 beyond the ring. For ring-pressure tests (entries_per_core > num_entries)
-    // only the first num_entries slots are filled; the producer kernel cycles
-    // through those same slots repeatedly.
-    const uint32_t ring_total_bytes = dfb_config.num_entries * entry_size;
-    const uint32_t ring_words = ring_total_bytes / sizeof(uint32_t);
-    if (producer_type == DFBPorCType::TENSIX) {
-        const uint32_t dfb_l1_addr =
-            static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
-        for (const auto& [core, co] : core_to_chunk_offset) {
-            const uint32_t wpe = entry_size / sizeof(uint32_t);
-            std::vector<uint32_t> slice(ring_words, 0);
-            for (uint32_t p = 0; p < dfb_config.num_producers; p++) {
-                for (uint32_t e = 0; e < num_entries_per_producer; e++) {
-                    const uint32_t page_id = co + e * dfb_config.num_producers + p;
-                    if (page_id >= co + entries_per_core) {
-                        break;
-                    }
-                    // Ring layout depends on stride_in_entries, which is set by the
-                    // consumer access pattern:
-                    //   STRIDED: stride = num_producers → interleaved (slot = e*P + p)
-                    //   ALL: stride = 1 → TC-first   (slot = p*E + e)
-                    const uint32_t dst_slot = (dfb_config.cap == dfb::AccessPattern::ALL)
-                                                  ? (p * num_entries_per_producer + e)
-                                                  : (e * dfb_config.num_producers + p);
-
-                    // Stop once all physical ring slots are filled; for ring-pressure
-                    // tests the remaining iterations would alias back to already-filled
-                    // slots, so there is nothing new to write.
-                    if (dst_slot >= dfb_config.num_entries) {
-                        break;
-                    }
-
-                    std::copy(
-                        input.begin() + page_id * wpe,
-                        input.begin() + page_id * wpe + wpe,
-                        slice.begin() + dst_slot * wpe);
-                }
-            }
-            detail::WriteToDeviceL1(device, core, dfb_l1_addr, slice);
-        }
-    }
-
-    // For Tensix → DM ring-pressure tests (entries_per_core > num_entries), the
-    // Tensix producer cycles through the same num_entries ring slots indefinitely.
-    // Each STRIDED consumer c always reads ring slot (c % num_entries), which was
-    // pre-filled with input page c.  The expected out_buffer page p therefore
-    // contains the data from ring slot (p % num_consumers) % num_entries, not
-    // input[p].  Build the corrected expected vector so the verification is sound.
-    std::optional<std::vector<uint32_t>> tensix_dm_expected;
-    if (producer_type == DFBPorCType::TENSIX && consumer_type == DFBPorCType::DM &&
-        entries_per_core > dfb_config.num_entries && dfb_config.cap == dfb::AccessPattern::STRIDED) {
-        const uint32_t wpe = entry_size / sizeof(uint32_t);
-        tensix_dm_expected.emplace(num_cores * entries_per_core * wpe, 0u);
-        for (const auto& [core, co] : core_to_chunk_offset) {
-            for (uint32_t p = 0; p < entries_per_core; p++) {
-                // Consumer c = p % num_consumers always reads the ring slot it
-                // was assigned (slot = c % num_entries), which holds input[co + c].
-                const uint32_t ring_slot = (p % dfb_config.num_consumers) % dfb_config.num_entries;
-                std::copy(
-                    input.begin() + (co + ring_slot) * wpe,
-                    input.begin() + (co + ring_slot + 1) * wpe,
-                    tensix_dm_expected->begin() + (co + p) * wpe);
-            }
-        }
-    }
-
-    // Launch program; verify out_tensor only for DM → DM paths (Tensix consumer does
-    // not write to DRAM, so out_tensor verification is skipped there). Tensor
-    // parameters are conditionally declared: only DM kernels carry tensor bindings,
-    // so the I/O flow is inlined here to skip operations on unallocated tensors.
-    const bool verify_output = (consumer_type == DFBPorCType::DM);
-    if (need_in_tensor) {
-        detail::WriteToBuffer(*in_tensor->mesh_buffer().get_reference_buffer(), input);
-        if (arch == ARCH::QUASAR) {
-            // TODO #38042: Need to wait for data to be written, the barrier needs to be uplifted for Quasar
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            std::vector<uint32_t> rdback_dram;
-            detail::ReadFromBuffer(*in_tensor->mesh_buffer().get_reference_buffer(), rdback_dram);
-            tt_driver_atomics::mfence();
-            EXPECT_EQ(rdback_dram, input);
-        }
-    }
-
-    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
-
-    if (verify_output) {
-        std::vector<uint32_t> output;
-        detail::ReadFromBuffer(*out_tensor->mesh_buffer().get_reference_buffer(), output);
-        const std::vector<uint32_t>& expected = tensix_dm_expected ? *tensix_dm_expected : input;
-        if (expected != output) {
-            log_info(tt::LogTest, "Printing expected");
-            for (auto i : expected) {
-                std::cout << i << " ";
-            }
-            std::cout << std::endl;
-            log_info(tt::LogTest, "Printing output");
-            for (auto i : output) {
-                std::cout << i << " ";
-            }
-        }
-        EXPECT_EQ(expected, output);
-    }
-
-    // For DM → Tensix: verify each core's DFB L1 against the expected input chunk.
-    // Single-DFB programs place the DFB at the L1 base allocator address on every
-    // bound core, so we iterate core_to_chunk_offset directly (works for both the
-    // metal2 path and the legacy path).
-    if (consumer_type == DFBPorCType::TENSIX) {
-        const uint32_t dfb_l1_addr =
-            static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
-        const uint32_t total_ring_words = ring_words;
-        const uint32_t wpe_v = entry_size / sizeof(uint32_t);
-        for (const auto& [core, co] : core_to_chunk_offset) {
-            std::vector<uint32_t> l1_data;
-            detail::ReadFromDeviceL1(device, core, dfb_l1_addr, ring_total_bytes, l1_data);
-            // Physical ring holds dfb_config.num_entries entries; for ring-pressure
-            // tests (entries_per_core > dfb_config.num_entries) the ring wraps and
-            // only the last ring_capacity writes per producer survive in L1.
-            std::vector<uint32_t> expected(total_ring_words, 0);
-            if (dfb_config.cap == dfb::AccessPattern::ALL) {
-                // ALL consumer: ring is TC-first (stride_in_entries=1).
-                // Each producer p has ring_capacity consecutive ring slots.
-                // After wrapping, only the last ring_capacity entries from each
-                // producer survive: e in [num_entries_per_producer - ring_capacity, ...).
-                const uint32_t ring_capacity = dfb_config.num_entries / dfb_config.num_producers;
-                const uint32_t last_e_base = num_entries_per_producer - ring_capacity;
-                for (uint32_t p = 0; p < dfb_config.num_producers; p++) {
-                    for (uint32_t c = 0; c < ring_capacity; c++) {
-                        const uint32_t ring_slot = p * ring_capacity + c;
-                        const uint32_t e = last_e_base + c;
-                        const uint32_t page_id = co + e * dfb_config.num_producers + p;
-                        if (page_id >= co + entries_per_core) {
-                            break;
-                        }
-                        std::copy(
-                            input.begin() + page_id * wpe_v,
-                            input.begin() + page_id * wpe_v + wpe_v,
-                            expected.begin() + ring_slot * wpe_v);
-                    }
-                }
-            } else {
-                // STRIDED consumer: ring is interleaved, matching sequential input order.
-                // For ring-pressure tests (entries_per_core > dfb_config.num_entries) only
-                // the last dfb_config.num_entries entries survive in L1; copy that suffix.
-                const uint32_t ring_start_page = co + entries_per_core - dfb_config.num_entries;
-                std::copy(
-                    input.begin() + ring_start_page * wpe_v,
-                    input.begin() + ring_start_page * wpe_v + total_ring_words,
-                    expected.begin());
-            }
-            if (expected != l1_data) {
-                std::cout << "expected: ";
-                for (const auto& e : expected) {
-                    std::cout << e << " ";
-                }
-                std::cout << std::endl;
-                std::cout << "l1_data: ";
-                for (const auto& l : l1_data) {
-                    std::cout << l << " ";
-                }
-                std::cout << std::endl;
-            }
-            EXPECT_EQ(expected, l1_data) << "DFB L1 mismatch on core (" << core.x << "," << core.y << ")";
-        }
-    }
-}
+// ---- single-DFB program driver ----
 
 inline void run_single_dfb_program_2_0(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const M2SingleDFBParams& p) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "M2 path is Quasar-only";
+    // The DFB 2.0 host/device path is arch-abstracted: on WH/BH a DFB has no tile-counter
+    // registers so it lowers to a 4-word circular-buffer config, and the _2_0 kernels' explicit
+    // path is arch-agnostic (only the implicit async_read/write<TXN_ID> path is #ifdef ARCH_QUASAR).
+    // So the simple 1x1 explicit-sync cases run on WH/BH too; only implicit-sync and multi-core
+    // are Quasar-only (mirrors the legacy DFB_SKIP_IF_UNSUPPORTED gate).
+    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR &&
+        (p.implicit_sync || p.num_producers > 1 || p.num_consumers > 1)) {
+        GTEST_SKIP() << "M2 non-Quasar: only 1x1 explicit-sync DFB runs on WH/BH "
+                        "(implicit-sync + multi-core are Quasar-only)";
     }
     // Tensix→Tensix is unsupported (legacy parity).
     if (p.producer_type == M2PorCType::TENSIX && p.consumer_type == M2PorCType::TENSIX) {
@@ -761,16 +305,35 @@ inline void run_single_dfb_program_2_0(
          .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = p.cap}};
 
-    // Restore the all-pass `dfb_spec.disable_implicit_sync = !p.implicit_sync` semantics.
-    // #45160 moved that flag off DataflowBufferSpec onto the Gen2 DM config, so it is now
-    // expressed per-DM-kernel via disable_implicit_sync_for. For ImplicitSyncFalse this keeps
-    // the host from programming implicit-sync ISR/txn metadata on top of the kernels' explicit
-    // credit-flow path. Only DM endpoints carry the flag; Tensix endpoints have no DM side.
-    if (p.producer_type == M2PorCType::DM) {
-        maybe_disable_implicit_sync(producer, p.implicit_sync, DFB);
-    }
-    if (p.consumer_type == M2PorCType::DM) {
-        maybe_disable_implicit_sync(consumer, p.implicit_sync, DFB);
+    // Config is arch-specific (the _2_0 kernels are the same either way): Gen2 on Quasar,
+    // Gen1 on WH/BH. On WH/BH a DFB lowers to a circular buffer and ValidateProgramSpec rejects
+    // a Gen2 config, so mirror the legacy driver -- DM producer -> RISCV_0, DM consumer ->
+    // RISCV_1/NOC_1, Tensix -> ComputeGen1. The make_*_kernel helpers default to Gen2; override
+    // to Gen1 on WH/BH here (only 1x1 explicit-sync cases reach WH/BH per the skip gate above).
+    if (mesh_device->get_devices()[0]->arch() == ARCH::QUASAR) {
+        // Gen2 implicit-sync opt-out (#45160): only DM endpoints carry the per-kernel flag; for
+        // ImplicitSyncFalse it keeps the host from programming implicit ISR/txn metadata over the
+        // kernels' explicit credit-flow path. Tensix endpoints have no DM side.
+        if (p.producer_type == M2PorCType::DM) {
+            maybe_disable_implicit_sync(producer, p.implicit_sync, DFB);
+        }
+        if (p.consumer_type == M2PorCType::DM) {
+            maybe_disable_implicit_sync(consumer, p.implicit_sync, DFB);
+        }
+    } else {
+        // WH/BH: Gen1 config (Gen1 has no implicit sync, so no disable knob needed).
+        if (p.producer_type == M2PorCType::DM) {
+            producer.hw_config =
+                m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
+        } else {
+            producer.hw_config = m2::ComputeGen1Config{};
+        }
+        if (p.consumer_type == M2PorCType::DM) {
+            consumer.hw_config = m2::DataMovementGen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1};
+        } else {
+            consumer.hw_config = m2::ComputeGen1Config{};
+        }
     }
 
     m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
@@ -797,8 +360,8 @@ inline void run_single_dfb_program_2_0(
     if (p.producer_type == M2PorCType::DM) {
         params.kernel_run_args.push_back({
             .kernel = PRODUCER,
-            .runtime_arg_values =
-                {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
         });
     } else {
         params.kernel_run_args.push_back({.kernel = PRODUCER});
@@ -806,8 +369,8 @@ inline void run_single_dfb_program_2_0(
     if (p.consumer_type == M2PorCType::DM) {
         params.kernel_run_args.push_back({
             .kernel = CONSUMER,
-            .runtime_arg_values =
-                {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
         });
     } else {
         params.kernel_run_args.push_back({.kernel = CONSUMER});
@@ -840,7 +403,7 @@ inline void run_single_dfb_program_2_0(
     //            the k-th entry), so producer p's e-th entry (input page e*P + p) must sit at
     //            slot p*E + e for the drained order to reconstruct the identity output. A
     //            linear copy only works for a single producer; with P>1 it drains a P-way
-    //            transpose of the input. (Mirrors the legacy run_single_dfb_program fill.)
+    //            transpose of the input.
     if (p.producer_type == M2PorCType::TENSIX) {
         const uint32_t dfb_l1_addr =
             static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
@@ -853,17 +416,14 @@ inline void run_single_dfb_program_2_0(
                 if (page_id >= entries_per_core) {
                     break;
                 }
-                const uint32_t dst_slot =
-                    is_all ? (prod * num_entries_per_producer + e) : (e * p.num_producers + prod);
+                const uint32_t dst_slot = is_all ? (prod * num_entries_per_producer + e) : (e * p.num_producers + prod);
                 // Ring-pressure: stop once the physical ring is full; later pages alias
                 // back onto already-filled slots (the producer cycles them).
                 if (dst_slot >= p.num_entries) {
                     break;
                 }
                 std::copy(
-                    input.begin() + page_id * wpe,
-                    input.begin() + (page_id + 1) * wpe,
-                    slice.begin() + dst_slot * wpe);
+                    input.begin() + page_id * wpe, input.begin() + (page_id + 1) * wpe, slice.begin() + dst_slot * wpe);
             }
         }
         detail::WriteToDeviceL1(device, CoreCoord(0, 0), dfb_l1_addr, slice);

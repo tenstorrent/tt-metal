@@ -308,15 +308,15 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     // HAL offsets are the same for all devices (same arch).
     const auto& hal = MetalContext::instance(context_id_).hal();
     const auto& factory = hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
-    // realtime_profiler_msg_t lives in the REALTIME_PROFILER_MSG dispatch-core-local L1 region (reachable on dispatch
-    // cores and the reserved RT tensix).
+    // TODO: When realtime profiler is supported on Quasar, we'll need to pass in the command queue id(s) here.
     const auto& dispatch_mem_map = MetalContext::instance(context_id_).dispatch_mem_map();
+    // TODO: When realtime profiler is supported on Quasar, we'll need to pass in the command queue id(s).
     const uint32_t realtime_profiler_base_addr =
-        dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
+        dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG, /*cq_id=*/0);
     // RealtimeProfilerCoreL1 (ring + D2H sender config) sits past the dispatch carve-outs; the core is off the L1 bank
     // table so the allocator never lands here.
     const uint32_t rt_profiler_core_l1_base =
-        dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, /*cq_id=*/0);
     const auto rt_profiler_core_l1_addrs = compute_rt_profiler_core_l1_addrs(rt_profiler_core_l1_base);
 
     // RT_PROFILER_SOCKET_CONFIG_SIZE has headroom over today's SocketSenderSize, but assert
@@ -768,9 +768,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 return false;
             }
 
-            // TODO: Uncomment this and apply a debug verbosity level when
-            // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-            // ZoneScopedN("ProcessPage");
+            TTZoneScopedDN(RT_PROFILER, "ProcessPage");
             dev_state.socket->read(page_buf.data(), 1);
             uint32_t* read_ptr = page_buf.data();
 
@@ -800,9 +798,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             // Skip records with id==0 (non-GO dispatch commands like SET_NUM_WORKER_SEMS):
             // they have no valid program and may carry stale end timestamps.
             if (start_id != 0) {
-                // TODO: Uncomment this and apply a debug verbosity level when
-                // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-                // ZoneScopedN("InvokeCallbacks");
+                TTZoneScopedDN(RT_PROFILER, "InvokeCallbacks");
                 tt::ProgramRealtimeRecord record{
                     .runtime_id = start_id,
                     .chip_id = dev_state.chip_id,
@@ -828,9 +824,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 continue;
             }
 
-            // TODO: Uncomment this and apply a debug verbosity level when
-            // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-            // ZoneScopedN("PollLoop");
+            TTZoneScopedDN(RT_PROFILER, "PollLoop");
             bool any_data = false;
 
             for (auto& dev_state : devices_) {
@@ -848,18 +842,14 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             }
 
             if (!any_data) {
-                // TODO: Uncomment this and apply a debug verbosity level when
-                // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-                // ZoneScopedN("Idle");
+                TTZoneScopedDN(RT_PROFILER, "Idle");
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         }
 
         // Drain in-flight PCIe pages until all sockets stay empty for several rounds.
         {
-            // TODO: Uncomment this and apply a debug verbosity level when
-            // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-            // ZoneScopedN("DrainShutdown");
+            TTZoneScopedDN(RT_PROFILER, "DrainShutdown");
             constexpr uint32_t kDrainQuietRounds = 10;
             uint64_t drain_pages = 0;
             uint32_t quiet_rounds = 0;

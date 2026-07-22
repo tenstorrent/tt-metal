@@ -78,9 +78,9 @@
 - name: "(bh loudbox) GLM-5.1 Prefill modules"
   cmd: |
     # GLM-5.1 counterparts to the Kimi lines above. GLM's MLA is DSA/sparse (no absorbed-MLA analog), so
-    # it's its own stage. sparse MLA: `line` fabric (ring/fabric2d don't train on a partial-Galaxy box) +
-    # its own MLA ref cache; no EXPECT_NUM_TESTS since _sparse_cases emits a box-dependent seq count.
-    DS_SPARSE_FABRIC=line GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_1 and 2x4 and line" -vvv --tb=short
+    # it's its own stage with its own MLA ref cache; no EXPECT_NUM_TESTS since _sparse_cases emits a
+    # box-dependent seq count.
+    DS_SPARSE_FABRIC=fabric2d GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_1 and 2x4 and fabric2d" -vvv --tb=short
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "linear-8 and pcc-device-glm-256 and not pad50" -vvv --tb=short --timeout=1800
   model: deepseek_prefill
   skus:
@@ -239,7 +239,7 @@
 
 - name: Galaxy Wan2.2 demo tests
   cmd: |
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500
   model: wan22
   skus:
