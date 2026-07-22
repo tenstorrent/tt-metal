@@ -403,10 +403,11 @@ def test_deepseek_v3_mla_tilize_trace_mode(
       - INTERLEAVED: no sharding
       - WIDTH_SHARDED: width-wise sharding configuration as defined by the test's shard_spec
     """
-    # TT_FATAL: trace buffers needed (4112384B) exceed allocated trace_region_size (1671168B).
+    # Both variants are failing in CI:
+    #   interleaved  — TT_FATAL: trace buffers (4112384B) exceed trace_region_size (1671168B)
+    #   width_sharded — TT_FATAL: not on_dispatch_core (program.cpp:146)
     # Tracked in: https://github.com/tenstorrent/tt-metal/issues/50679
-    if memory_config_type == "interleaved":
-        pytest.skip("Skipping interleaved variant: trace region too small (needs 4112384B, got 1671168B) — #50679")
+    pytest.skip(f"Skipping {memory_config_type} variant: known CI failure — #50679")
     torch.manual_seed(2003)
 
     # Create random tensor for input
@@ -553,6 +554,10 @@ def test_tilize_width_sharded_dram_input_45331(device, shard_shape):
 
 
 def test_tilize_width_sharded_dram_input_to_l1_sharded_output_49107(device):
+    # RuntimeError: No core coordinate found at location: (8, 0, TENSIX, LOGICAL)
+    # DRAM grid x-size (9 on BH) exceeds the valid Tensix logical core range on this board.
+    # Tracked in: https://github.com/tenstorrent/tt-metal/issues/50689
+    pytest.skip("Skipping: DRAM grid x-size maps outside valid Tensix logical cores — #50689")
     torch.manual_seed(0)
     num_cores = device.dram_grid_size().x
     shard_shape = (32, 64)
