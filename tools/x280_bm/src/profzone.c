@@ -833,15 +833,21 @@ int main(uint64_t hartid) {
     uint64_t num_cores = r64(P_NUM_CORES);
     uint64_t hring_words = r64(P_HRING_WORDS);
     uint64_t pcie_enc = r64(P_PCIE_ENC);
-    uint64_t read_noc = r64(P_NONCE) & 1ull;
-    uint64_t direct = (r64(P_NONCE) >> 8) & 1ull;     /* NONCE bit 8: DIRECT drain (no reader/relay split) */
-    uint64_t splitnoc = (r64(P_NONCE) >> 9) & 1ull;   /* NONCE bit 9: each drain hart reads over NoC (hartid&1) */
-    uint64_t wnoc = (r64(P_NONCE) >> 11) & 1ull;      /* NONCE bit 11: route the posted PCIe write over NoC1 */
-    uint64_t fullread = (r64(P_NONCE) >> 13) & 1ull;  /* NONCE bit 13: reader always drains a FULL buffer (bench) */
-    uint64_t bulkcore = (r64(P_NONCE) >> 14) & 1ull;  /* NONCE bit 14: one bulk NoC read per core (all 5 rings) */
-    uint64_t dualrelay = (r64(P_NONCE) >> 15) & 1ull; /* NONCE bit 15: one relay hart PER READER (decouple halves) */
-    uint64_t adaptive = (r64(P_NONCE) >> 16) & 1ull;  /* NONCE bit 16: per-core adaptive bulk-vs-per-risc switch */
-    uint64_t use_socket = (r64(P_NONCE) >> 17) & 1ull; /* NONCE bit 17: relay uses the D2HSocket transport */
+    /* Read P_NONCE ONCE into a local and extract every mode bit from it. The X280 returns a param FRESH only
+     * on the FIRST (cold) load; a later re-read of the same param can return STALE (0). Nine separate
+     * r64(P_NONCE) reads meant the later bits -- dualrelay (15), adaptive (16), use_socket (17) -- could read
+     * stale 0, silently disabling dualrelay so the device ran 1 relay while the host set up 2 rings -> the 2nd
+     * ring never fills -> flusher WALL TIMEOUT (the "2x regression": the fast 2r+2relay config hung). */
+    uint64_t nonce = r64(P_NONCE);
+    uint64_t read_noc = nonce & 1ull;
+    uint64_t direct = (nonce >> 8) & 1ull;      /* NONCE bit 8: DIRECT drain (no reader/relay split) */
+    uint64_t splitnoc = (nonce >> 9) & 1ull;    /* NONCE bit 9: each drain hart reads over NoC (hartid&1) */
+    uint64_t wnoc = (nonce >> 11) & 1ull;       /* NONCE bit 11: route the posted PCIe write over NoC1 */
+    uint64_t fullread = (nonce >> 13) & 1ull;   /* NONCE bit 13: reader always drains a FULL buffer (bench) */
+    uint64_t bulkcore = (nonce >> 14) & 1ull;   /* NONCE bit 14: one bulk NoC read per core (all 5 rings) */
+    uint64_t dualrelay = (nonce >> 15) & 1ull;  /* NONCE bit 15: one relay hart PER READER (decouple halves) */
+    uint64_t adaptive = (nonce >> 16) & 1ull;   /* NONCE bit 16: per-core adaptive bulk-vs-per-risc switch */
+    uint64_t use_socket = (nonce >> 17) & 1ull; /* NONCE bit 17: relay uses the D2HSocket transport */
     /* P_NREAD carries the drain-hart count in direct mode, the reader count in split mode */
     uint64_t nread_or_drain = r64(P_NREAD);
     uint64_t ndrain = 1, nread = 2;
@@ -879,16 +885,13 @@ int main(uint64_t hartid) {
          * hugepage/sysmem channel (D2HSocket forces the hugepage path for L2CPU senders), reachable at
          * pcie_base|offset exactly like the raw ring. get_noc_addr gave a bare sysmem offset (hi=0). */
         uint64_t pbase = 0x1000000000000000ull;
-        /* ISOLATION: if host_base already carries bit60 it's a SINGLE full PCIe fifo addr passed exactly like
-         * the raw path's host_base (used directly) -- distinguishes a packing-value bug from a socket-mode
-         * param-read staleness. Otherwise it's the 2-socket lo32 pack. */
-        if ((packed >> 60) & 1ull) {
-            sk_fifo[0] = packed;
-            sk_fifo[1] = packed;
-        } else {
-            sk_fifo[0] = pbase | (packed & 0xffffffffull);
-            sk_fifo[1] = pbase | ((packed >> 32) & 0xffffffffull);
-        }
+        /* P_HOST_BASE packs the two sockets' FIFO lo32 offsets: socket0 in [31:0], socket1 in [63:32] (both
+         * hi=0 from get_noc_addr on BH). Reconstruct each full PCIe addr as pbase|lo32 (bit60 outbound routing).
+         * For nread=1 only sk_fifo[0] is used (socket1 lo32 is 0 -> unused). NOTE: pbase|lo32 == pcie_base+lo32
+         * (lo32 < 2^32, no carry into bit60), so a single-socket run passing the full pcie_base|addr form still
+         * reconstructs sk_fifo[0] identically -- this always-unpack path is correct for both 1 and 2 sockets. */
+        sk_fifo[0] = pbase | (packed & 0xffffffffull);
+        sk_fifo[1] = pbase | ((packed >> 32) & 0xffffffffull);
         for (uint64_t h = 0; h < nread && h < 2; h++) {
             sk_fbytes[h] = total;
             sk_bsent[h] = sk_fifo[h] + total; /* D2HSocket: bytes_sent buffer immediately follows the FIFO */
@@ -923,8 +926,7 @@ int main(uint64_t hartid) {
         if (use_socket) {
             relay_run_socket(hartid, pcie_enc, rlo, rhi, bulkcore || adaptive, sk_fifo, sk_bsent, sk_fbytes, sk_bsent0);
         } else {
-            relay_run(
-                hartid, host_base, rlo, rhi, hring_words, pcie_enc, (r64(P_NONCE) >> 12) & 1ull, bulkcore || adaptive);
+            relay_run(hartid, host_base, rlo, rhi, hring_words, pcie_enc, (nonce >> 12) & 1ull, bulkcore || adaptive);
         }
     }
 

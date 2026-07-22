@@ -497,13 +497,12 @@ int main(int argc, char** argv) {
                 c[14],
                 cfg_sz);
         }
-        // Pass the FIFO addrs to profzone via P_HOST_BASE (unused in socket mode) -- read FRESH as a param.
-        // ISOLATION: for a single socket, pass the FULL pcie_base|off addr (bit60 set) exactly like the raw
-        // path's host_base -> profzone uses it directly. Distinguishes a packing bug from param staleness.
-        // Pass the FULL pcie_base|offset FIFO addr (bit60 set) EXACTLY like the raw path's host_base -- the
-        // X280 reads that fresh, but a bare lo32 offset reads stale/wrong (a value-form-sensitive param quirk).
-        // Single socket via P_HOST_BASE; dualrelay (2 full addrs) needs a 2nd param slot -- TODO.
-        bcfg.host_base = pcie_base + (uint64_t)fifo_lo[0];
+        // Pass BOTH sockets' FIFO lo32 offsets packed into the single P_HOST_BASE param: socket0 in [31:0],
+        // socket1 in [63:32] (get_noc_addr hi=0 on BH, verified above -> lossless). profzone reconstructs each
+        // as pbase|lo32 (bit60 PCIe-outbound). For nread=1, fifo_lo[1]=0 (unused). This wires the dual-relay
+        // 2-socket path: relay hart hri drains reader hri into socket hri (sk_fifo[hri]). Note pbase|lo32 ==
+        // pcie_base+lo32, so the single-socket case reconstructs identically to the old full-addr form.
+        bcfg.host_base = (uint64_t)fifo_lo[0] | ((uint64_t)fifo_lo[1] << 32);
         printf(
             "[socket] created %llu D2HSocket(s), %llu B FIFO each, page 64 B; P_HOST_BASE packed=0x%llx\n",
             (unsigned long long)ndh,
