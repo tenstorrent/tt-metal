@@ -103,10 +103,10 @@ uint32_t _start() {
     wait_for_go_message();
     RecordPerfCounters();
 
-    DeviceZoneScopedMainChildN("TRISC-KERNEL");
-
     // Paint stack after all thread_local writes and CRT init are done.
     mark_stack_usage();
+
+    DeviceZoneScopedMainChildN("TRISC-KERNEL");
 
     EARLY_RETURN_FOR_DEBUG
 

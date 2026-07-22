@@ -21,7 +21,7 @@ using namespace tt::tt_metal;
 ProgramDescriptor ReshapeTileProgramFactory::create_descriptor(
     const ttnn::prim::ReshapeOnDeviceParams& /*operation_attributes*/,
     const ttnn::prim::ReshapeOnDeviceInputs& tensor_args,
-    tt::tt_metal::Tensor& output_tensor) {
+    ttnn::Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
 
     const CoreRangeSet core_ranges{CoreRange{{0, 0}, {0, 0}}};

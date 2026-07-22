@@ -475,8 +475,9 @@ def generate_input_dim(
     srcB: tuple[int],
     block_ct_dim: int = None,
     block_rt_dim: int = None,
+    tile_dimensions: tuple[int, int] = (32, 32),
 ):
-    num_rows, num_cols = 32, 32
+    num_rows, num_cols = tile_dimensions
     validate_tile_dimensions(srcA[0], num_rows)
     validate_tile_dimensions(srcA[1], num_cols)
     validate_tile_dimensions(srcB[0], num_rows)
@@ -632,10 +633,10 @@ class NUM_GUARD_TILES(RuntimeParameter):
 
 @dataclass
 class INPUT_TILE_CNT(RuntimeParameter):
-    tile_cnt: int = 0
+    input_tile_cnt: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int INPUT_TILE_CNT = {self.tile_cnt};"
+        return f"constexpr int INPUT_TILE_CNT = {self.input_tile_cnt};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "int INPUT_TILE_CNT;", "i"
@@ -643,10 +644,10 @@ class INPUT_TILE_CNT(RuntimeParameter):
 
 @dataclass
 class OUTPUT_TILE_CNT(RuntimeParameter):
-    tile_cnt: int = 0
+    output_tile_cnt: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int OUTPUT_TILE_CNT = {self.tile_cnt};"
+        return f"constexpr int OUTPUT_TILE_CNT = {self.output_tile_cnt};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "int OUTPUT_TILE_CNT;", "i"

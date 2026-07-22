@@ -61,7 +61,7 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.semaphore.size());
 }
 
-std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs(
+std::vector<tt::tt_metal::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs(
     const ReduceScatterMinimalAsyncParams& operation_attributes, const ReduceScatterMinimalAsyncInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto inter_shape = input_tensor.padded_shape();
@@ -93,11 +93,11 @@ std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::compute_
     output_shape[operation_attributes.dim] /= operation_attributes.ring_size;
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             inter_shape,
             TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), adjusted_intermediate_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             output_shape,
             TensorLayout(
                 input_tensor.dtype(),

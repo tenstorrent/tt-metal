@@ -31,6 +31,7 @@
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
+using ttnn::Tensor;
 
 namespace {
 

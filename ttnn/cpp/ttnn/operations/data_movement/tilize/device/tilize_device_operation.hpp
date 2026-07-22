@@ -10,6 +10,8 @@
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
+#include "tilize_multi_core_sharded_retile_program_factory.hpp"
+#include "tilize_multi_core_retile_program_factory.hpp"
 #include "tilize_device_operation_types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -20,13 +22,15 @@ namespace ttnn::prim {
 struct TilizeDeviceOperation {
     using operation_attributes_t = ttnn::prim::TilizeParams;
     using tensor_args_t = ttnn::prim::TilizeInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         TilizeMultiCoreDefaultProgramFactory,
         TilizeMultiCoreBlockProgramFactory,
         TilizeSingleCoreProgramFactory,
-        TilizeMultiCoreShardedProgramFactory>;
+        TilizeMultiCoreShardedProgramFactory,
+        TilizeMultiCoreShardedRetileProgramFactory,
+        TilizeMultiCoreRetileProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -53,5 +57,6 @@ ttnn::Tensor tilize(
     bool enough_space_width,
     bool enough_space_height,
     bool use_low_perf,
+    const tt::tt_metal::Tile& tile,
     const std::optional<CoreRangeSet>& sub_core_grids);
 }  // namespace ttnn::prim

@@ -76,7 +76,7 @@ uint32_t estimate_interm_tile_size(
     return result;
 }
 
-uint32_t get_max_l1_space(const tt::tt_metal::Tensor& input_tensor_a) {
+uint32_t get_max_l1_space(const ttnn::Tensor& input_tensor_a) {
     auto* device = input_tensor_a.device();
     auto lowest_address = device->lowest_occupied_compute_l1_address();
     uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();

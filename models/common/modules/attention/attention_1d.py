@@ -71,10 +71,6 @@ MAX_QKV_MM_SEQ_LEN = 2048  # Maximum sequence length for single QKV matmul
 # Source: TTTv1 model_config.py "MAX_MM_SEQ_LEN": 1024
 MAX_MM_SEQ_LEN = 1024
 
-# Total tokens in KV cache must fit in device DRAM. The 128K limit is a hardware
-# constraint for Wormhole devices (by 12GB DRAM per chip) - exceeding it causes OOM based on previous tests.
-MAX_TOTAL_TOKENS = 128 * 1024  # 131072 tokens
-
 # =============================================================================
 # Attention1DConfig dataclass
 # =============================================================================
@@ -122,6 +118,13 @@ class Attention1DConfig:
     num_reduce_scatter_links: int | None = None
     num_all_gather_links: int | None = None
 
+    # Optional CCL dtype for the prefill output reduce-scatter. When the fused all-gather+WO path is
+    # not selected, attention runs a separate reduce-scatter on the bf16 WO output; reducing it in a
+    # smaller dtype (e.g. bfloat8_b) halves the cross-device payload — matching TTTv1's bfloat8_b
+    # ccl_dtype (model_config.py) and the MLP w2 reduce. None keeps the WO output dtype (no cast,
+    # default — byte-identical to leaving the reduce untouched).
+    prefill_reduce_ccl_dtype: ttnn.DataType | None = None
+
     # Model dimensions (derived from weights if None)
     dim: int | None = None
     n_heads: int | None = None
@@ -150,6 +153,7 @@ class Attention1DConfig:
     # - None: Set externally before forward (e.g., via from_model_args or direct assignment)
     # - tuple[LazyWeight, LazyWeight]: (keys, values) backed by cache files, resolved lazily
     # - tuple[ttnn.Tensor, ttnn.Tensor]: Pre-allocated (keys, values) tensors (e.g., from vLLM)
+    # When enabled, KV cache allocation and capacity are owned by the caller.
     use_vllm_paged_kv_cache: bool = False
     kv_cache: "tuple[LazyWeight, LazyWeight] | tuple[ttnn.Tensor, ttnn.Tensor] | None" = None
     paged_attention_config: "PagedAttentionConfig | None" = None  # type: ignore
@@ -186,6 +190,14 @@ class Attention1DConfig:
     prefill_wo_prg_config: Callable[[int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig] | None = None  # f(seq_len)
     prefill_kv_memcfg: Callable[[int], ttnn.MemoryConfig] | None = None  # f(seq_len) for KV cache write
 
+    # Optional: use ttnn.experimental.minimal_matmul (instead of ttnn.linear) for the QKV prefill
+    # matmul above seq_len > 128 — matches TTTv1's long-prefill path (attention.py L907-913), which is
+    # ~2x faster on the large folded-batch QKV matmul. Default OFF so untouched models / decode stay
+    # byte-identical; the caller opts in. The factory yields a ttnn.MinimalMatmulConfig keyed on the
+    # folded seq_len (sibling to prefill_xqkv_prg_config, NOT a replacement — both coexist).
+    prefill_qkv_minimal_matmul: bool = False
+    prefill_xqkv_minimal_matmul_config: Callable[[int], "ttnn.MinimalMatmulConfig"] | None = None  # f(seq_len)
+
     # Fused all-gather matmul (Ring topology only, decode path)
     use_fused_all_gather_matmul: bool | None = None  # None = auto-detect based on topology + dim
     decode_all_gather_matmul_prg_config: "ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None" = (
@@ -214,6 +226,15 @@ class Attention1DConfig:
     # Internal: pre-computed bias LazyWeights (materialized in __init__)
     _wqkv_bias_decode: list[LazyWeight] | None = field(default=None, repr=False)
     _wqkv_bias_prefill: LazyWeight | None = field(default=None, repr=False)
+
+    def use_minimal_qkv_matmul(self, seq_len: int) -> bool:
+        """Whether the QKV prefill matmul should use ttnn.experimental.minimal_matmul.
+
+        Mirrors TTTv1 ``use_minimal_qkv_prefill_matmul`` (model_config.py:1659) — minimal_matmul
+        only above ``seq_len > 128`` (the folded-batch / long-prompt regime), and only when the
+        per-model opt-in is set. ``seq_len`` is the folded ``B*S`` length.
+        """
+        return bool(self.prefill_qkv_minimal_matmul) and seq_len > 128
 
     def is_resolved(self) -> bool:
         """Check if all required fields are resolved."""
@@ -344,27 +365,37 @@ class Attention1D(LightweightModule):
         self,
         x: ttnn.Tensor | LazyWeight,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
-        user_id: int = 0,
+        user_id: int | list[int] = 0,
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
         """
         Prefill forward - multiple tokens.
 
         Args:
-            x: Input tensor, shape (1, 1, seq_len, dim), TILE_LAYOUT.
+            x: Input tensor, shape (1, 1, seq_len, dim), TILE_LAYOUT. For batched prefill
+                (``batch_size > 1``) the leading dims hold ``batch_size`` users' tokens folded
+                into the sequence axis: shape ``(1, 1, batch_size * S, dim)``.
                 Memory config: DRAM interleaved (default ``prefill_input_memcfg``).
                 If ``LazyWeight``, it is automatically placed with the correct memory config.
             rot_mats: Tuple of (cos, sin) rotation matrices for rotary embedding,
                 each shape (1, 1, head_dim, head_dim), TILE_LAYOUT, DRAM interleaved.
-            user_id: User ID for KV cache fill (selects which user's cache to write).
-            page_table: Page table for paged attention (optional).
+            user_id: User ID for KV cache fill (selects which user's cache to write). For batched
+                prefill this is the *list* of valid slot indices, one per user in the batch.
+            page_table: Page table for paged attention (optional). For batched prefill this is the
+                full ``[batch_size, num_blocks]`` table; each user's row is selected by ``batch_idx``.
             chunk_page_table: Page table for chunked prefill (optional).
-            chunk_start_idx: Start index for chunked prefill (optional).
+            chunk_start_idx: Start index for chunked prefill (optional). Batched prefill always uses
+                the non-chunked path (the executor predicate keeps chunked prompts sequential).
+            batch_size: Number of users batched into one forward pass. ``1`` = the single-user path
+                (unchanged). ``> 1`` unfolds ``[1,1,B*S,*] -> [B,1,S,*]`` only for the
+                create_qkv_heads → rotary → KV-fill → SDPA → concat_heads window, mirroring TTTv1.
 
         Returns:
-            Output tensor (1, 1, seq_len, dim), DRAM interleaved.
+            Output tensor (1, 1, seq_len, dim), DRAM interleaved. For batched prefill the output is
+            the folded ``(1, 1, batch_size * S, dim)`` hidden state.
 
         Note:
             seq_len must be divisible by 128 and > 0.
@@ -373,28 +404,46 @@ class Attention1D(LightweightModule):
         x = _load_input_device_tensor(x, self.config, mode="prefill")
         cfg = self.config
 
-        seq_len = x.shape[-2]
+        seq_len = x.shape[-2]  # folded length (batch_size * S) when batched
         assert seq_len % 128 == 0 and seq_len > 0, "seq_len must be divisible by 128"
+        assert seq_len % batch_size == 0, f"folded seq_len {seq_len} must be divisible by batch_size {batch_size}"
+        # Per-user sequence length (== seq_len when batch_size == 1).
+        per_user_seq_len = seq_len // batch_size
+        if batch_size > 1:
+            assert chunk_start_idx is None, "batched prefill does not support chunked SDPA"
 
         num_devices = cfg.mesh_device.get_num_devices()
         n_local_heads = cfg.n_heads // num_devices
         n_local_kv_heads = cfg.n_kv_heads // num_devices
 
         # --- STAGE 1: Reshape for long sequences ---
+        # The QKV matmul runs on the folded [1,1,seq_len,dim] tensor (seq_len = B*S), exactly like a
+        # single long sequence — so the batch axis is folded into the sequence here (TTTv1 parity).
         if seq_len > MAX_QKV_MM_SEQ_LEN:
             if seq_len % MAX_QKV_MM_SEQ_LEN != 0:
                 raise ValueError(f"seq_len {seq_len} must be divisible by {MAX_QKV_MM_SEQ_LEN}")
             x = ttnn.reshape(x, [1, seq_len // MAX_QKV_MM_SEQ_LEN, MAX_QKV_MM_SEQ_LEN, -1])
 
         # --- STAGE 2: QKV Matmul ---
-        xqkv_fused = ttnn.linear(
-            x,
-            self.wqkv,
-            dtype=cfg.activation_dtype or ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=cfg.li_qkv_prefill_compute_kernel_cfg,
-            program_config=cfg.prefill_xqkv_prg_config(seq_len),
-        )
+        # Above seq_len > 128 the folded-batch QKV matmul is large; minimal_matmul is ~2x faster than
+        # ttnn.linear there (TTTv1 parity). Opt-in via prefill_qkv_minimal_matmul; output shape is
+        # identical to the ttnn.linear path so everything downstream is unchanged.
+        if cfg.use_minimal_qkv_matmul(seq_len):
+            xqkv_fused = ttnn.experimental.minimal_matmul(
+                x,
+                self.wqkv,
+                compute_kernel_config=cfg.li_qkv_prefill_compute_kernel_cfg,
+                config=cfg.prefill_xqkv_minimal_matmul_config(seq_len),
+            )
+        else:
+            xqkv_fused = ttnn.linear(
+                x,
+                self.wqkv,
+                dtype=cfg.activation_dtype or ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=cfg.li_qkv_prefill_compute_kernel_cfg,
+                program_config=cfg.prefill_xqkv_prg_config(seq_len),
+            )
 
         # Add bias if present
         if self.wqkv_bias_prefill is not None:
@@ -408,6 +457,12 @@ class Attention1D(LightweightModule):
         # Reshape back
         if seq_len > MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+
+        # Batched prefill: unfold the folded sequence axis into a real batch axis so each user's
+        # tokens become an independent row for head-splitting / rotary / SDPA (TTTv1 attention.py
+        # L945-946). Single-user (batch_size == 1) is a no-op.
+        if batch_size > 1:
+            xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, per_user_seq_len, -1])
 
         ttnn.deallocate(x)
 
@@ -456,7 +511,10 @@ class Attention1D(LightweightModule):
         ttnn.deallocate(v_heads)
 
         # --- STAGE 8: Shard KV for long sequences ---
-        if seq_len >= cfg.min_kv_prefill_shard_seqlen and page_table is None:
+        # The shard memcfg is derived for the folded seq_len and assumes a [1,*,S,*] layout, so it
+        # only applies to single-user prefill. Batched prefill is always paged (page_table set), so
+        # this branch is naturally skipped; the extra batch_size==1 guard makes that explicit.
+        if seq_len >= cfg.min_kv_prefill_shard_seqlen and page_table is None and batch_size == 1:
             k_fill = ttnn.interleaved_to_sharded(k_heads_cache_dtype, cfg.prefill_kv_memcfg(seq_len))
             v_fill = ttnn.interleaved_to_sharded(v_heads_cache_dtype, cfg.prefill_kv_memcfg(seq_len))
         else:
@@ -464,12 +522,18 @@ class Attention1D(LightweightModule):
             v_fill = v_heads_cache_dtype
 
         # --- STAGE 9: KV Cache Fill ---
-        # Method bound at construction based on paged_attention_config (see _bind_forward_methods)
-        self._kv_fill_prefill(keys, values, k_fill, v_fill, user_id, page_table, chunk_page_table)
+        # Method bound at construction based on paged_attention_config (see _bind_forward_methods).
+        # Batched prefill fills one user per call in a loop: paged_fill_cache reads batch_idx_ptr[0]
+        # for all rows, so a per-row batch_idx in a single call is unsupported (TTTv1 attention.py
+        # L1013-1040). Device-verified correct (kernel probe E: per-slot readback pcc=1.0).
+        if batch_size > 1:
+            self._kv_fill_prefill_batched(keys, values, k_fill, v_fill, user_id, page_table, chunk_page_table)
+        else:
+            self._kv_fill_prefill(keys, values, k_fill, v_fill, user_id, page_table, chunk_page_table)
 
         # Deallocate sharded k_fill/v_fill only in non-paged mode (paged mode uses sliced views)
         is_paged = cfg.paged_attention_config is not None
-        if seq_len >= cfg.min_kv_prefill_shard_seqlen and not is_paged:
+        if seq_len >= cfg.min_kv_prefill_shard_seqlen and not is_paged and batch_size == 1:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
 
@@ -496,6 +560,9 @@ class Attention1D(LightweightModule):
                 program_config=cfg.prefill_sdpa_prg_config(seq_len, chunk_start_idx),
             )
         else:
+            # Batched: q/k/v are [B, n_heads, per_user_seq_len, head_dim]; is_causal masks each row to
+            # its own sequence (device-verified: kernel probe C, pcc 0.9998, row0 independent). The
+            # program config keys on the per-user seq len, not the folded length.
             attn_output = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_sdpa,
                 k_heads_cache_dtype,
@@ -504,7 +571,7 @@ class Attention1D(LightweightModule):
                 sliding_window_size=cfg.sliding_window,
                 scale=cfg.scale,
                 compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
-                program_config=cfg.prefill_sdpa_prg_config(seq_len, None),
+                program_config=cfg.prefill_sdpa_prg_config(per_user_seq_len, None),
             )
 
         ttnn.deallocate(q_heads_sdpa)
@@ -512,10 +579,20 @@ class Attention1D(LightweightModule):
         ttnn.deallocate(v_heads_cache_dtype)
 
         # --- STAGE 11: Reshape and Concat Heads ---
-        attn_output = ttnn.reshape(attn_output, [1, n_local_heads, -1, cfg.head_dim])
+        # Single-user: [1, n_heads, S, hd]. Batched: keep [B, n_heads, S, hd] — reshaping to
+        # [1, n_heads, B*S, hd] before concat would scramble data across the head axis (TTTv1
+        # attention.py L1112-1119). nlp_concat_heads handles the real batch axis natively.
+        if batch_size == 1:
+            attn_output = ttnn.reshape(attn_output, [1, n_local_heads, -1, cfg.head_dim])
 
         attn_output_concat = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
+
+        # Batched: nlp_concat_heads emits [B, 1, S, n_heads*hd]; refold the batch axis back into the
+        # sequence ([1, 1, B*S, n_heads*hd]) so the WO matmul runs as one long-sequence matmul. This
+        # MUST happen after concat_heads to preserve layout (TTTv1 attention.py L1130-1134).
+        if batch_size > 1:
+            attn_output_concat = ttnn.reshape(attn_output_concat, [1, 1, seq_len, -1])
 
         # --- STAGE 12: Reshape for long sequences (to fit WO matmul on device) ---
         if seq_len > MAX_MM_SEQ_LEN:
@@ -673,11 +750,12 @@ class Attention1D(LightweightModule):
         x: ttnn.Tensor | LazyWeight,
         current_pos: ttnn.Tensor | None,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
-        user_id: int = 0,
+        user_id: int | list[int] = 0,
         mode: str = "decode",
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
         """Dispatch to the appropriate forward method based on mode."""
         if mode == "prefill":
@@ -688,6 +766,7 @@ class Attention1D(LightweightModule):
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                batch_size=batch_size,
             )
         else:
             return self.decode_forward(
@@ -803,6 +882,38 @@ class Attention1D(LightweightModule):
         cfg = self.config
         ttnn.fill_cache(keys, k_fill, user_id % cfg.max_batch_size)
         ttnn.fill_cache(values, v_fill, user_id % cfg.max_batch_size)
+
+    def _kv_fill_prefill_batched(self, keys, values, k_fill, v_fill, user_id, page_table, chunk_page_table) -> None:
+        """Batched prefill KV fill — one fill call per user (loop), mirroring TTTv1 attention.py
+        L1013-1040.
+
+        ``k_fill`` / ``v_fill`` are ``[batch_size, n_kv_heads, per_user_seq_len, head_dim]`` and
+        ``user_id`` is the list of *local* valid row indices (padded slots are excluded). ``batch_idx``
+        is a scalar per call because ``paged_fill_cache`` reads ``batch_idx_ptr[0]`` for all rows — a
+        per-row batch_idx in one call is unsupported. The executor builds ``page_table`` with one row
+        per local user, so local row ``i`` selects that user's physical blocks. Device-verified
+        correct (kernel probe E: per-slot readback pcc 1.0).
+        """
+        cfg = self.config
+        is_paged = cfg.paged_attention_config is not None
+        valid_slots = user_id if isinstance(user_id, (list, tuple)) else list(range(k_fill.shape[0]))
+
+        if is_paged:
+            block_size = keys.shape[2]
+            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+            page_len = fill_page_table.shape[1] * block_size
+            seq_len_per_user = k_fill.shape[2]
+            for slot_idx in valid_slots:
+                k_user = k_fill[slot_idx : slot_idx + 1, :, :, :]
+                v_user = v_fill[slot_idx : slot_idx + 1, :, :, :]
+                k_user = k_user[:, :, :page_len, :] if page_len < seq_len_per_user else k_user
+                v_user = v_user[:, :, :page_len, :] if page_len < seq_len_per_user else v_user
+                ttnn.experimental.paged_fill_cache(keys, k_user, fill_page_table, batch_idx=slot_idx)
+                ttnn.experimental.paged_fill_cache(values, v_user, fill_page_table, batch_idx=slot_idx)
+        else:
+            for slot_idx in valid_slots:
+                ttnn.fill_cache(keys, k_fill[slot_idx : slot_idx + 1, :, :, :], slot_idx % cfg.max_batch_size)
+                ttnn.fill_cache(values, v_fill[slot_idx : slot_idx + 1, :, :, :], slot_idx % cfg.max_batch_size)
 
     # =========================================================================
     # Bound All-Gather/Reduce Methods for Prefill (fused vs non-fused)
@@ -1038,8 +1149,17 @@ class Attention1D(LightweightModule):
             return output
 
         # For 1D topologies: reduce_scatter across devices
-        # Prefill uses interleaved memory, ensure we're in DRAM
+        # Prefill uses interleaved memory, ensure we're in DRAM.
         output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+
+        # When the fused all-gather+WO path is off, the WO output (bf16) is reduce-scattered here.
+        # Optionally cast it to a smaller CCL dtype first to halve the cross-device payload (matches
+        # TTTv1's bfloat8_b ccl_dtype). None (default) leaves the dtype unchanged. to_memory_config
+        # does not cast an already-DRAM tensor, so an explicit typecast is required.
+        if cfg.prefill_reduce_ccl_dtype is not None and output.dtype != cfg.prefill_reduce_ccl_dtype:
+            output_cast = ttnn.typecast(output, cfg.prefill_reduce_ccl_dtype)
+            ttnn.deallocate(output)
+            output = output_cast
 
         reduced = ttnn.experimental.reduce_scatter_minimal_async(
             output,
@@ -1435,16 +1555,6 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             "Typically: head_dim = hidden_size // num_attention_heads."
         )
 
-    # --- Phase 1b: Token budget validation (fail-fast for memory) ---
-    total_tokens = config.max_batch_size * config.max_seq_len
-    if total_tokens > MAX_TOTAL_TOKENS:
-        raise ValueError(
-            f"Total token budget exceeded: max_batch_size ({config.max_batch_size}) × "
-            f"max_seq_len ({config.max_seq_len}) = {total_tokens:,} tokens, "
-            f"but maximum is {MAX_TOTAL_TOKENS:,} tokens (128K). "
-            f"Reduce max_batch_size or max_seq_len to fit in device DRAM."
-        )
-
     # Reject sliding_window + paged attention (chunked prefill doesn't support window masking)
     if config.sliding_window is not None and config.paged_attention_config is not None:
         raise ValueError(
@@ -1648,6 +1758,22 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             )
 
         to_set["prefill_xqkv_prg_config"] = xqkv_prefill_prg_config
+
+    # minimal_matmul config for QKV (only materialized when the opt-in is set). Block sizes and grid
+    # mirror TTTv1 (model_config.py:1626-1632): a full 8x8 (8x10 on BH) compute grid, 8/8/8 blocks.
+    if config.prefill_qkv_minimal_matmul and config.prefill_xqkv_minimal_matmul_config is None:
+        minimal_qkv_grid = ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8)
+
+        @lru_cache
+        def xqkv_minimal_matmul_config(seq_len: int):
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=8,
+                N_block_size=8,
+                compute_with_storage_grid_size=minimal_qkv_grid,
+            )
+
+        to_set["prefill_xqkv_minimal_matmul_config"] = xqkv_minimal_matmul_config
 
     if config.prefill_sdpa_prg_config is None:
 
@@ -1951,6 +2077,8 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     # --- Phase 11: Resolve KV cache ---
     # KV cache is a static configuration, allocated once and reused for all forward calls.
     # If use_paged_kv_cache=True, the cache is managed externally (e.g., by vLLM) and not created here.
+    # Attention1D does not validate KV-cache DRAM/token capacity; callers own sizing.
+    # Allocation will fail at device memory allocation time if the cache does not fit.
     if not config.use_vllm_paged_kv_cache:
         n_local_kv_heads = n_kv_heads // num_devices
         kv_cache_dtype = config.kv_cache_dtype
@@ -1964,26 +2092,6 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
                 mesh_shape_override=ttnn.MeshShape([num_devices]),
             ),
         )
-
-        # Validate paged attention has enough blocks for the specified token budget
-        if config.paged_attention_config is not None:
-            paged_cfg = config.paged_attention_config
-            block_size = paged_cfg.block_size
-            max_num_blocks = paged_cfg.max_num_blocks
-            # Each user needs ceil(max_seq_len / block_size) blocks
-            blocks_per_user = (config.max_seq_len + block_size - 1) // block_size
-            required_blocks = blocks_per_user * config.max_batch_size
-            paged_cache_max_seq_len = (block_size * max_num_blocks) // config.max_batch_size
-
-            if required_blocks > max_num_blocks:
-                raise ValueError(
-                    f"Paged attention block budget exceeded: "
-                    f"max_batch_size ({config.max_batch_size}) × "
-                    f"ceil(max_seq_len ({config.max_seq_len}) / block_size ({block_size})) = "
-                    f"{required_blocks} blocks required, but max_num_blocks is only {max_num_blocks}. "
-                    f"With current config, max supported seq_len is {paged_cache_max_seq_len}. "
-                    f"Either increase max_num_blocks or reduce max_seq_len/max_batch_size."
-                )
 
         if config.kv_cache is None:
             # Create default kv_cache LazyWeights

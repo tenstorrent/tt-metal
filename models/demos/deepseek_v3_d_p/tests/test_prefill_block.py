@@ -586,6 +586,41 @@ def run_model(
             id="torus-y-8x4",
         ),
         pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            1,
+            # FABRIC_2D_TORUS_X wraps ONLY the TP axis (dim 1) into a ring → Ring for the TP-axis
+            # collectives (RMS-norm, MLA, dense-FFN, shared-expert, gate); the SP axis (dim 0) stays
+            # a line → Linear for the SP-axis MoE dispatch/combine. Production full-galaxy X-ring
+            # case (matches the [LINE,RING] pipeline descriptors); no sub-torus carve needed.
+            (ttnn.Topology.Linear, ttnn.Topology.Ring),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-x-8x4",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            1,
+            # FABRIC_2D_TORUS_XY wraps BOTH axes: SP (dim 0) and TP (dim 1) are each a ring. The
+            # SP-axis MoE dispatch/combine + ring-attention SDPA ride the SP ring (the path #48225's
+            # ring-aware dispatch/combine kernels support), and the TP-axis collectives ring on dim 1.
+            (ttnn.Topology.Ring, ttnn.Topology.Ring),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+        pytest.param(
             (4, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
@@ -617,6 +652,25 @@ def run_model(
             (ttnn.Topology.Ring, ttnn.Topology.Ring),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-xy-4x4",
+        ),
+        pytest.param(
+            (4, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2,
+            # 4x4 sub-torus: Ring-4 on the TP/X axis (dim 1), Linear on the SP/Y axis (dim 0). Only
+            # the TP axis is physically wrapped, so TP-axis collectives (RMS-norm, MLA, dense-FFN,
+            # shared-expert, gate) ring while the SP-axis MoE dispatch/combine stay a line — a scalar
+            # Ring here would deadlock dispatch/combine on a non-existent row wrap link.
+            # Run with TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH=...subtorus_x4...
+            (ttnn.Topology.Linear, ttnn.Topology.Ring),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -880,13 +934,15 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
         pytest.param(
             (8, 4),
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
             },
             2,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="fabric2d-mesh-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
