@@ -42,6 +42,14 @@ enum RegimeADiag : uint32_t {
     // (round 0 then round 1) into the same reduce-add math as the chain, so output is bit-identical (addition
     // is associative). Host-side topology post-process only (factory rewrites red links + num_recv/channel);
     // the chain remains the production default and this bit selects the tree A/B. Must stay PCC-exact.
+    // A/B OUTCOME (2026-07-22, fixed-config, 2 reversed batches x 10 relaunches, IQR-separated): the tree does
+    // NOT beat the chain on the reduction-EXPOSED primary 256x2048x1024 (Sm=2) — it REGRESSES +1.07% (the
+    // reduction tail is already overlapped by the 9us matmul floor, so the depth 3->2 saving is smaller than
+    // the tree's extra channel-1 semaphore + serial 2-round root + reduced per-channel reduce-CB buffering).
+    // It is neutral (-0.01%) on the deep-K read-bound control (32x6144x1536), but a real -4.31% WIN on the
+    // tiny shallow 32x2048x512 (Sm=1, minimal compute -> reduction depth is a larger critical-path fraction).
+    // => NOT adopted as the global default (regresses the primary); kept as this diagnostic. The 32x2048x512
+    // win is a candidate for SHAPE-SELECTIVE (picker-gated) tree use — a separate, future decision.
     DIAG_REDTREE = 1u << 6,
     // A/B baseline for the progressive-cumulative-wait schedule. The default (this bit CLEAR) resident-in0
     // compute path begins matmul as each ring shard arrives (cumulative cb_wait_front during the first N
