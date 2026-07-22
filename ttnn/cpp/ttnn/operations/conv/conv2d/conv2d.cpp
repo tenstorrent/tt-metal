@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -167,6 +168,84 @@ Result conv2d_L1(
         kernel_size[1],
         dilation[1],
         input_tensor_post_tm.dtype());
+
+    // ── Auto-enable block-sharded loop-overhead optimizations when L1 permits ───────────────────
+    // Small / channel-deep block-sharded convs are dominated NOT by matmul FMA (which is a negligible
+    // fraction of kernel time on Blackhole — verified by a SKIP_COMPUTE microbench: eliding the FMA
+    // left the kernel time unchanged) but by PER-K-BLOCK PIPELINE OVERHEAD: the K-loop runs
+    // conv_act_c_blocks × filter_h iterations, each paying CB wait/pop + tile_regs handshakes + a
+    // tilize, while the readers feed activations/weights serially with the compute.
+    //   • full_inner_dim folds the filter_h slicing into one K-block (window_outer 3→1), cutting the
+    //     K-block count (and thus the per-K-block overhead) by filter_h — a structural change to the
+    //     reader/compute loop, not just a buffer-size knob.
+    //   • act/weights double-buffering lets the readers prefetch the next block while compute works,
+    //     breaking the reader↔compute serialization the single-buffered CBs impose.
+    // Both are pure perf wins gated ONLY by L1 footprint (see Conv2dConfig field docs). Measured on
+    // Blackhole P100 across a block-sharded shape spread: full_inner_dim alone −14%..−47% and with
+    // double-buffering −37%..−60% DEVICE KERNEL DURATION, PCC-identical. They default OFF because the
+    // factory never decided them from the L1 budget. Enable here only when the projected L1 usage with
+    // the flags ON fits within a conservative fraction of unreserved L1, so L1-tight convs (large
+    // spatial dims) are left untouched and cannot OOM. Skipped for activation-reuse (its own buffering
+    // model — see the disable just above) and depthwise (different compute kernel). Mirrors the
+    // determine_packer_l1_acc auto-gate philosophy: override the conservative default when it is a
+    // free, L1-safe win for this shape.
+    const bool bs_loopopt_eligible = parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED &&
+                                     !conv_is_1d_depthwise && !conv_config.enable_activation_reuse &&
+                                     (!conv_config.full_inner_dim || !conv_config.enable_act_double_buffer ||
+                                      !conv_config.enable_weights_double_buffer);
+    if (bs_loopopt_eligible) {
+        Conv2dConfig probe_config = conv_config;
+        // calculate_L1_usage_for_conv_op → get_cb_info requires weights_dtype to be set; the user may
+        // leave it unset on the incoming config (it is resolved downstream). Use the same resolution as
+        // weight_dtype above so the L1 estimate is valid regardless of whether the caller set it.
+        probe_config.weights_dtype = weight_dtype;
+        probe_config.full_inner_dim = true;
+        probe_config.enable_act_double_buffer = true;
+        probe_config.enable_weights_double_buffer = true;
+        const auto probe_l1 = calculate_L1_usage_for_conv_op(
+            batch_size,
+            in_channels,
+            out_channels,
+            input_height,
+            input_width,
+            output_height,
+            output_width,
+            kernel_size,
+            stride,
+            padding_n4,
+            dilation,
+            groups,
+            bias_tensor.has_value(),
+            input_tensor_post_tm.dtype(),
+            output_dtype,
+            input_tensor_post_tm.layout(),
+            compute_grid_size,
+            mm_conv,
+            TensorMemoryLayout::BLOCK_SHARDED,
+            compute_config,
+            probe_config,
+            std::nullopt);
+        // Leave generous headroom (75% of unreserved L1) for the halo intermediate, output tensor,
+        // and any allocator fragmentation that the per-core CB estimate does not capture.
+        const uint32_t l1_budget = (tt::tt_metal::hal::get_max_worker_l1_unreserved_size() / 4) * 3;
+        if (probe_l1.total_size <= l1_budget) {
+            conv_config.full_inner_dim = true;
+            conv_config.enable_act_double_buffer = true;
+            conv_config.enable_weights_double_buffer = true;
+            log_debug(
+                tt::LogOp,
+                "conv2d: auto-enabled full_inner_dim + act/weights double-buffer for block-sharded conv "
+                "(projected L1 {} <= budget {}); cuts K-loop pipeline overhead.",
+                probe_l1.total_size,
+                l1_budget);
+        } else {
+            log_debug(
+                tt::LogOp,
+                "conv2d: block-sharded loop-overhead opts NOT auto-enabled (projected L1 {} > budget {}).",
+                probe_l1.total_size,
+                l1_budget);
+        }
+    }
 
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,

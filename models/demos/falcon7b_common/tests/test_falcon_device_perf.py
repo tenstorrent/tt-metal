@@ -104,7 +104,9 @@ def test_device_perf(llm_mode, batch, seq_len, kv_cache_len, model_config_str, s
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     subdir = "falcon7b"
 
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch * seq_len, has_signposts=True)
+    post_processed_results = run_device_perf(
+        command, subdir, num_iterations, cols, batch * seq_len, has_signposts=True, op_support_count=2500
+    )
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
     expected_perf_cols = {inference_time_key: samples}
