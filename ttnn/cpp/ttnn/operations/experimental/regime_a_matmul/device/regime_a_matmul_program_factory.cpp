@@ -523,29 +523,34 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     }
 
     // ---- DIAG_RSCATTER: assign the ring reduce-scatter cyclic order over each group's Pk cores. ----
-    // For each (bank b, within-bank sub) group, order the Pk k-slice cores into a Hamiltonian CYCLE with small
-    // NoC hops (a poor wraparound edge would serialize the whole ring). Pk==4 keeps the exact min-(maxedge,tot)
-    // 3!-search; Pk>4 uses a greedy nearest-neighbour cycle over physical worker-coord Manhattan distance
-    // (P! is infeasible). rs_pos = cycle position; rs_next/prev_idx = cyclic neighbours; rs_own_chunk =
-    // (rs_pos+1)%Pk (the tile-chunk this core finally owns + writes). Mutates only rs_* fields.
+    // For each (bank b, within-bank sub) group, order the Pk k-slice cores into a Hamiltonian CYCLE minimizing
+    // the worst DIRECTED NoC hop (a poor wraparound edge would serialize the whole ring). The edge cost a->b
+    // is the SENDER a's send on ITS writer NoC (noc==0 -> writer NOC1; noc==1 -> writer NOC0), measured with
+    // get_worker_noc_hop_distance (logical->physical + directed torus routing) — asymmetric, unlike a coord
+    // proxy, and correct because each core forwards on its own writer NoC. Pk==4 keeps the exact
+    // min-(maxedge,total) 3!-search; Pk>4 uses greedy nearest-neighbour (P! infeasible). rs_pos = cycle
+    // position; rs_next/prev_idx = cyclic neighbours; rs_own_chunk = (rs_pos+1)%Pk. Mutates only rs_* fields.
     if (diag & RegimeADiag::DIAG_RSCATTER) {
+        namespace expdev = tt::tt_metal::experimental::Device;
         const uint32_t mfac = geo.mfac;
         const uint32_t preaders = geo.preaders;
-        auto phys_xy = [&](uint32_t idx) {
-            const auto& c = P.cores[idx].coord;
-            auto w = device->worker_core_from_logical_core(CoreCoord{c.x, c.y});
-            return std::pair<int, int>{static_cast<int>(w.x), static_cast<int>(w.y)};
-        };
         for (uint32_t b = 0; b < 8u; ++b) {
             for (uint32_t sub = 0; sub < mfac; ++sub) {
                 std::vector<uint32_t> idx(Pk);
-                std::vector<std::pair<int, int>> xy(Pk);
                 for (uint32_t kk = 0; kk < Pk; ++kk) {
                     idx[kk] = b * preaders + kk * mfac + sub;
-                    xy[kk] = phys_xy(idx[kk]);
                 }
-                auto dist = [&](uint32_t a, uint32_t c) {
-                    return std::abs(xy[a].first - xy[c].first) + std::abs(xy[a].second - xy[c].second);
+                auto lc = [&](uint32_t li) {
+                    const auto& c = P.cores[idx[li]].coord;
+                    return CoreCoord{c.x, c.y};
+                };
+                // directed edge a->b cost = hops on the SENDER a's writer NoC (opposite the reader's).
+                auto dist = [&](uint32_t a, uint32_t c) -> uint32_t {
+                    if (a == c) {
+                        return 0u;
+                    }
+                    const NOC wnoc = (P.cores[idx[a]].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
+                    return expdev::get_worker_noc_hop_distance(device, lc(a), lc(c), wnoc);
                 };
                 std::vector<uint32_t> ord(Pk);
                 if (Pk == 4u) {

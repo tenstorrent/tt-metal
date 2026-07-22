@@ -43,7 +43,7 @@ r = subprocess.run(
 if "[  PASSED  ]" not in r.stdout:
     print("RUN FAILED", r.stdout[-500:], r.stderr[-300:])
     sys.exit(1)
-summ = zp.summarize(oa.BIN_CSV, freq_hz=FREQ)
+summ = zp.summarize_per_iter(oa.BIN_CSV, freq_hz=FREQ)  # per-ITERATION summed cost (corrected aggregation)
 order = [
     "Z_RING",
     "Z_R_INJECT",

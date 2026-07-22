@@ -14,6 +14,7 @@
 
 #include <gtest/gtest.h>
 #include <fmt/base.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <random>
@@ -62,6 +63,37 @@ double pcc(const std::vector<float>& a, const std::vector<float>& b) {
         vb += db * db;
     }
     return (va > 0 && vb > 0) ? cov / std::sqrt(va * vb) : (va == 0 && vb == 0 ? 1.0 : 0.0);
+}
+
+// Elementwise error of `got` vs a reference `ref` (the chain output): absolute max/mean/p99, worst relative
+// error (ref magnitude > 1e-6), and the fraction of BF16 elements that DIFFER at all. Reassociating reductions
+// (tree / reduce-scatter) are PCC-preserving but NOT bit-identical, so these quantify how far from the chain.
+struct ErrMetrics {
+    double max_abs, mean_abs, p99_abs, max_rel;
+    double frac_diff;
+};
+ErrMetrics err_metrics(const std::vector<float>& got, const std::vector<float>& ref) {
+    const size_t n = std::min(got.size(), ref.size());
+    std::vector<double> ad;
+    ad.reserve(n);
+    double sum = 0, mx = 0, mrel = 0;
+    size_t diff = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const double d = std::abs(static_cast<double>(got[i]) - static_cast<double>(ref[i]));
+        ad.push_back(d);
+        sum += d;
+        mx = std::max(mx, d);
+        if (got[i] != ref[i]) {
+            diff++;
+        }
+        const double denom = std::abs(static_cast<double>(ref[i]));
+        if (denom > 1e-6) {
+            mrel = std::max(mrel, d / denom);
+        }
+    }
+    std::sort(ad.begin(), ad.end());
+    const double p99 = ad.empty() ? 0.0 : ad[std::min(ad.size() - 1, static_cast<size_t>(ad.size() * 0.99))];
+    return {mx, n ? sum / n : 0.0, p99, mrel, n ? static_cast<double>(diff) / n : 0.0};
 }
 }  // namespace
 
@@ -228,56 +260,68 @@ TEST_F(RegimeADiagFixture, RScatterGeneral) {
         {256, 2048, 1024, 1, 4, 2, 2, 4, "pk4_rowpart"},  // Pk=4, T=16, chunk=4==N_block (row-partition)
     };
     auto* device = device_;
-    std::mt19937 rng(321);
     std::normal_distribution<float> dist(0.0f, 1.0f);
+    const std::vector<uint32_t> seeds = {321u, 777u, 20240722u};  // several random seeds per config
     for (const auto& c : cfgs) {
         const uint32_t M = c.M, K = c.K, N = c.N;
-        std::vector<bfloat16> a(static_cast<size_t>(M) * K), b(static_cast<size_t>(K) * N);
-        std::vector<float> af(a.size()), bf(b.size());
-        for (size_t i = 0; i < a.size(); ++i) {
-            a[i] = bfloat16(dist(rng));
-            af[i] = static_cast<float>(a[i]);
-        }
-        for (size_t i = 0; i < b.size(); ++i) {
-            b[i] = bfloat16(dist(rng));
-            bf[i] = static_cast<float>(b[i]);
-        }
-        std::vector<float> golden(static_cast<size_t>(M) * N, 0.0f);
-        for (uint32_t i = 0; i < M; ++i) {
-            for (uint32_t kk = 0; kk < K; ++kk) {
-                const float aik = af[static_cast<size_t>(i) * K + kk];
-                const float* brow = &bf[static_cast<size_t>(kk) * N];
-                float* crow = &golden[static_cast<size_t>(i) * N];
-                for (uint32_t j = 0; j < N; ++j) {
-                    crow[j] += aik * brow[j];
-                }
-            }
-        }
         const MemoryConfig il{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
         const TensorLayout lay(DataType::BFLOAT16, PageConfig(Layout::TILE), il);
-        Tensor in0 = Tensor::from_vector(a, TensorSpec(ttnn::Shape({M, K}), lay)).to_device(device, il);
         const MemoryConfig wcfg = ttnn::experimental::prim::create_regime_a_weight_memory_config(
             ttnn::Shape({K, N}), DataType::BFLOAT16, device);
-        Tensor in1 = Tensor::from_vector(b, TensorSpec(ttnn::Shape({K, N}), lay)).to_device(device, wcfg);
         const ttnn::experimental::prim::RegimeAMatmulConfig cfg{
             .k_slices = c.Pk, .n_slices = c.Ns, .m_slices = c.Sm, .k_block_tiles = c.kb, .n_subblock_tiles = c.nsb};
-        std::vector<float> chain_ref;
-        for (uint32_t mask : {0u, 128u}) {
-            for (int pass = 0; pass < 2; ++pass) {
-                Tensor out =
-                    ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
-                const std::vector<float> got = out.to_vector<float>();
-                const double p = pcc(got, golden);
-                if (mask == 0u && pass == 0) {
-                    chain_ref = got;
+        for (uint32_t seed : seeds) {
+            std::mt19937 rng(seed);
+            std::vector<bfloat16> a(static_cast<size_t>(M) * K), b(static_cast<size_t>(K) * N);
+            std::vector<float> af(a.size()), bf(b.size());
+            for (size_t i = 0; i < a.size(); ++i) {
+                a[i] = bfloat16(dist(rng));
+                af[i] = static_cast<float>(a[i]);
+            }
+            for (size_t i = 0; i < b.size(); ++i) {
+                b[i] = bfloat16(dist(rng));
+                bf[i] = static_cast<float>(b[i]);
+            }
+            std::vector<float> golden(static_cast<size_t>(M) * N, 0.0f);
+            for (uint32_t i = 0; i < M; ++i) {
+                for (uint32_t kk = 0; kk < K; ++kk) {
+                    const float aik = af[static_cast<size_t>(i) * K + kk];
+                    const float* brow = &bf[static_cast<size_t>(kk) * N];
+                    float* crow = &golden[static_cast<size_t>(i) * N];
+                    for (uint32_t j = 0; j < N; ++j) {
+                        crow[j] += aik * brow[j];
+                    }
                 }
-                double maxdiff = 0.0;
-                for (size_t k = 0; k < got.size() && k < chain_ref.size(); ++k) {
-                    maxdiff = std::max(maxdiff, std::abs(static_cast<double>(got[k]) - chain_ref[k]));
+            }
+            Tensor in0 = Tensor::from_vector(a, TensorSpec(ttnn::Shape({M, K}), lay)).to_device(device, il);
+            Tensor in1 = Tensor::from_vector(b, TensorSpec(ttnn::Shape({K, N}), lay)).to_device(device, wcfg);
+            std::vector<float> chain_ref;
+            for (uint32_t mask : {0u, 128u}) {
+                for (int pass = 0; pass < 2; ++pass) {  // fresh (compile) then cached-program
+                    Tensor out =
+                        ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
+                    const std::vector<float> got = out.to_vector<float>();
+                    const double p = pcc(got, golden);
+                    if (mask == 0u && pass == 0) {
+                        chain_ref = got;
+                    }
+                    const ErrMetrics e = err_metrics(got, chain_ref);
+                    // Raw per-(config,seed,mask,pass) sample line: PCC vs f32 golden + full error vs chain.
+                    fmt::print(
+                        "DIAGRSGEN {} seed={} mask={} pass={} pcc={:.5f} maxabs={:.5f} meanabs={:.6f} "
+                        "p99abs={:.5f} maxrel={:.5f} fracdiff={:.4f}\n",
+                        c.tag,
+                        seed,
+                        mask,
+                        pass,
+                        p,
+                        e.max_abs,
+                        e.mean_abs,
+                        e.p99_abs,
+                        e.max_rel,
+                        e.frac_diff);
+                    EXPECT_GT(p, 0.99) << "rscatter-general " << c.tag << " seed=" << seed << " mask=" << mask;
                 }
-                fmt::print(
-                    "DIAGRSGEN {} mask={} pass={} pcc={:.5f} maxdiff_vs_chain={:.5f}\n", c.tag, mask, pass, p, maxdiff);
-                EXPECT_GT(p, 0.99) << "rscatter-general " << c.tag << " mask=" << mask << " pass=" << pass;
             }
         }
     }

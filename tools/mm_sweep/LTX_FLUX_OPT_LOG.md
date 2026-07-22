@@ -636,3 +636,26 @@ reduction regime (Pk>=4, K shallow-ish, N>=1024, tile-partitionable). Full-corpu
 the N_bpc>1 generalization (mostly adds read-bound deep-K shapes -> small expected gains). All PCC-preserving
 (gtest RScatterGeneral: Pk=2/4/6 PCC 0.99999 fresh+cached; 10/10 watcher-clean stress; 111/111 regression).
 Results: tools/mm_sweep/ab_rscatter_corpus_results.json.
+
+### [RS ring order: writer-NoC hop distance] + [zone aggregation fix]
+**Ring order (get_worker_noc_hop_distance on each sender's actual writer NoC, directed):** replaced the
+worker-coord Manhattan proxy in the reduce-scatter ring-order post-process with the directed writer-NoC hop
+distance (edge a->b = sender a's send on its writer NoC; asymmetric). Remeasured all 10 feasible cases
+(coord-proxy -> NoC-hop): 128x2048x2048 -8.80->**-9.13**, 256x2048x1024 -8.26->**-8.97**, 128x2048x1024
+-6.68->**-7.07**, 64x2048x1024 -5.22->**-5.58**, 256x15360x1536 -3.19->**-3.46**; Pk=2 regressions shrank
+(+0.9->+0.4/+0.8); the 2 small Pk=6 deep-K wobbled within noise (128x15360x768 -1.54->-1.17). Net: the NoC-hop
+directed order is a consistent small improvement on the Pk=4 win cluster (best -8.80 -> -9.13). Results:
+ab_rscatter_corpus_results.json (NoC-hop) vs ab_rscatter_corpus_coordproxy.json.
+
+**Zone aggregation fix (zone_parse.summarize_per_iter):** SUM repeated same-zone instances WITHIN each kernel
+iteration (launch) BEFORE cross-iteration/core stats (bucket by the once-per-launch *-KERNEL count). Corrects
+the earlier per-INSTANCE view which under-counted multi-instance zones. Re-decomposed primary 256x2048x1024:
+Z_R_RECVWAIT 0.73->**5.96us** (7 ring hops/iter summed), Z_R_FWD 0.06->0.49us; Z_R_INJECT 3.94us,
+Z_P2_RECVWAIT 6.05us (1/iter, ~unchanged). **Key conclusion UNCHANGED: Z_C_IN0WAIT (compute's exposure to in0)
+median ~0.11us -> the ring's ~6us recv-wait runs on the writer RISC and OVERLAPS compute; the dominant EXPOSED
+tail is the reduction root Z_P2_RECVWAIT ~6us**, which reduce-scatter distributes (the -9% win).
+
+**RS numerical characterization (gtest RScatterGeneral, 3 seeds x Pk=2/4/6, vs chain):** PCC 0.99999 all;
+NOT bit-identical (fracdiff 18-55% of BF16 elems differ from reassociation) but numerically equivalent
+(mean-abs 0.03-0.31 on outputs O(10-120), p99-abs <=2.0). (maxrel large = near-zero-denominator artifact;
+PCC + mean-abs are the trustworthy metrics.)

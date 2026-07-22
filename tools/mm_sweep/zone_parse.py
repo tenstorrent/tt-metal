@@ -57,6 +57,75 @@ def summarize(csv_path, freq_hz=1.0e9):
     return out
 
 
+def parse_per_iter(csv_path):
+    """CORRECTED aggregation: SUM repeated instances of a zone WITHIN each kernel iteration (launch) BEFORE
+    any cross-iteration/core statistic. A zone inside a loop (e.g. Z_C_IN1WAIT fires K_num_blocks times/launch,
+    Z_P2_RECVWAIT N_bpc times/launch) has (instances/launch)*launches raw pairs; the old per-instance median
+    reported the per-INSTANCE time, not the per-ITERATION cost that maps to the wall. Here we bucket each
+    zone's instances into L equal consecutive groups (L = the launch count from that core+RISC's once-per-
+    launch *-KERNEL zone; profiler appends in launch order), sum each group -> per-launch totals, then drop the
+    warmup launch (group 0). Whole-RISC *-KERNEL / *-FW zones fire once/launch (per_iter==1) => unchanged.
+    Returns {(x,y,risc,zone): [per-launch summed cycles, warmup dropped]}."""
+    rows = list(csv.reader(open(csv_path)))
+    raw = defaultdict(list)  # (x,y,risc,zone) -> [(type, cycle)] in file (launch) order
+    for row in rows[2:]:
+        if len(row) < 12:
+            continue
+        zone = row[10].strip()
+        if not zone:
+            continue
+        raw[(row[1].strip(), row[2].strip(), row[3].strip(), zone)].append((row[11].strip(), int(row[5])))
+    dur = {}
+    for k, lst in raw.items():
+        ds, st = [], None
+        for t, c in lst:
+            if t == "ZONE_START":
+                st = c
+            elif t == "ZONE_END" and st is not None:
+                ds.append(c - st)
+                st = None
+        if ds:
+            dur[k] = ds
+    # launches L per (x,y,risc) from that RISC's once-per-launch *-KERNEL zone.
+    Lmap = {}
+    for (x, y, r, zone), ds in dur.items():
+        if zone.endswith("-KERNEL"):
+            Lmap[(x, y, r)] = max(Lmap.get((x, y, r), 0), len(ds))
+    out = {}
+    for (x, y, r, zone), ds in dur.items():
+        L = Lmap.get((x, y, r), 1) or 1
+        n = len(ds)
+        if L >= 1 and n >= L and n % L == 0:
+            k = n // L  # instances per launch
+            sums = [sum(ds[i * k : (i + 1) * k]) for i in range(L)]
+        else:
+            sums = ds  # can't cleanly bucket (unexpected) -> fall back to per-instance
+        out[(x, y, r, zone)] = sums[1:] if len(sums) > 1 else sums  # drop warmup launch
+    return out
+
+
+def summarize_per_iter(csv_path, freq_hz=1.0e9):
+    """Per-zone across cores using the per-ITERATION summed cost (parse_per_iter): per core take the median
+    per-launch sum, then report the min/median/max of that across cores."""
+    pi = parse_per_iter(csv_path)
+    byzone = defaultdict(list)
+    for (x, y, r, zone), sums in pi.items():
+        if sums:
+            byzone[zone].append(statistics.median(sums))
+    us = lambda c: c / freq_hz * 1e6
+    out = {}
+    for zone, vals in byzone.items():
+        vals = sorted(vals)
+        out[zone] = {
+            "ncores": len(vals),
+            "min_us": round(us(vals[0]), 2),
+            "med_us": round(us(statistics.median(vals)), 2),
+            "max_us": round(us(vals[-1]), 2),
+            "spread_pct": round((vals[-1] - vals[0]) / vals[0] * 100, 1) if vals[0] else None,
+        }
+    return out
+
+
 def print_summary(csv_path, freq_hz=1.0e9, title=""):
     s = summarize(csv_path, freq_hz)
     # order: custom Z_* zones first (sorted), then -KERNEL whole-RISC zones
@@ -102,8 +171,12 @@ def roles_and_timeline(csv_path, freq_hz=1.0e9):
     for (x, y, r, zone), pairs in raw.items():
         durs = sorted(e - s for s, e in pairs)[1:] or [pairs[-1][1] - pairs[-1][0]]  # drop warmup
         med = durs[len(durs) // 2]
-        cores[(x, y)][zone] = {"med_us": round(us(med), 2), "risc": r,
-                               "start": min(s for s, _ in pairs), "end": max(e for _, e in pairs)}
+        cores[(x, y)][zone] = {
+            "med_us": round(us(med), 2),
+            "risc": r,
+            "start": min(s for s, _ in pairs),
+            "end": max(e for _, e in pairs),
+        }
     return cores
 
 
