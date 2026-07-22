@@ -172,6 +172,17 @@ def _make_row_major_mesh_tensor(mesh_device, torch_input, dtype, mesh_mapper):
     return ttnn.typecast(tensor, dtype) if dtype == ttnn.fp8_e4m3 else tensor
 
 
+def _fp8_device_payloads(tensor, mesh_device):
+    """Read each logical device tensor as opaque FP8 payload bytes."""
+    assert tensor.dtype == ttnn.fp8_e4m3
+    device_tensors = ttnn.get_device_tensors(tensor)
+    local_shape = tuple(device_tensors[0].shape)
+    host_bytes = (
+        ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).contiguous().view(torch.uint8)
+    )
+    return host_bytes.reshape(len(device_tensors), *local_shape)
+
+
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -645,13 +656,13 @@ def test_all_gather_fabric_2d_receiver_layout_fallbacks(mesh_device, fallback_ca
 @pytest.mark.parametrize("mesh_device", [(8, 1)], indirect=True)
 @pytest.mark.parametrize("use_persistent_output", [False, True], ids=["fresh_output", "persistent_output"])
 @pytest.mark.parametrize(
-    "dtype,width,pcc",
+    "dtype,width",
     [
-        pytest.param(ttnn.bfloat16, 576, 1.0, id="bf16_1152b_rows"),
-        pytest.param(ttnn.fp8_e4m3, 656, 0.99, id="scaled_fp8_704b_rows"),
+        pytest.param(ttnn.bfloat16, 576, id="bf16_1152b_rows"),
+        pytest.param(ttnn.fp8_e4m3, 656, id="scaled_fp8_704b_rows"),
     ],
 )
-def test_all_gather_matched_large_single_axis_correctness(mesh_device, dtype, width, pcc, use_persistent_output):
+def test_all_gather_matched_large_single_axis_correctness(mesh_device, dtype, width, use_persistent_output):
     """Check the same large eight-rank gather under native 1D and physical 2D Fabric."""
     assert ttnn.get_tt_fabric_max_payload_size_bytes() == 14 * 1024
     rows_per_device = 65536
@@ -692,47 +703,15 @@ def test_all_gather_matched_large_single_axis_correctness(mesh_device, dtype, wi
         tt_output = run_ag()
         ttnn.synchronize_device(mesh_device)
 
-    check_output = ttnn.typecast(tt_output, ttnn.bfloat16) if dtype == ttnn.fp8_e4m3 else tt_output
     if dtype == ttnn.fp8_e4m3:
-        # Compare against the values actually carried by the gather. Comparing
-        # FP8 output directly with the pre-quantized random input confounds CCL
-        # correctness with FP8 conversion error.
-        check_input = ttnn.typecast(tt_input, ttnn.bfloat16)
-        expected = torch.cat(
-            [ttnn.to_torch(device_tensor) for device_tensor in ttnn.get_device_tensors(check_input)], dim=2
-        )
+        input_shards = _fp8_device_payloads(tt_input, mesh_device)
+        output_shards = _fp8_device_payloads(tt_output, mesh_device)
+        expected = torch.cat(list(input_shards), dim=2)
     else:
+        output_shards = [ttnn.to_torch(device_tensor) for device_tensor in ttnn.get_device_tensors(tt_output)]
         expected = torch_input
-    for device_index, device_tensor in enumerate(ttnn.get_device_tensors(check_output)):
-        actual = ttnn.to_torch(device_tensor)
-        mismatch = actual != expected
-        mismatch_rows = mismatch.nonzero()[:, 2].unique().tolist() if mismatch.any() else []
-        first_mismatch = mismatch.nonzero()[0].tolist() if mismatch.any() else None
-        first_actual = actual[tuple(first_mismatch)].item() if first_mismatch is not None else None
-        first_expected = expected[tuple(first_mismatch)].item() if first_mismatch is not None else None
-        candidate_rows = []
-        if first_mismatch is not None:
-            actual_row = actual[0, 0, first_mismatch[2]]
-            candidate_rows = (expected[0, 0, :, :16] == actual_row[:16]).all(dim=1).nonzero().flatten().tolist()
-        if dtype == ttnn.fp8_e4m3:
-            # The input and output are independently typecast to BF16 for host
-            # comparison, so a tiny number of boundary values may round in
-            # opposite directions. Bound that conversion noise tightly enough
-            # to reject the regular missing-row corruption this test exposed.
-            mismatch_fraction = mismatch.sum().item() / mismatch.numel()
-            assert mismatch_fraction < 5e-5, (
-                f"device {device_index} gather mismatch_fraction={mismatch_fraction} "
-                f"first={first_mismatch} actual={first_actual} expected={first_expected} "
-                f"candidate_rows={candidate_rows} rows={mismatch_rows}"
-            )
-            assert_with_pcc(actual, expected, pcc=0.9999)
-        else:
-            assert torch.equal(actual, expected), (
-                f"device {device_index} gather mismatch: "
-                f"max_abs={(actual.float() - expected.float()).abs().max().item()} "
-                f"mismatched_elements={mismatch.sum().item()} first={first_mismatch} "
-                f"actual={first_actual} expected={first_expected} candidate_rows={candidate_rows} rows={mismatch_rows}"
-            )
+    for actual in output_shards:
+        assert torch.equal(actual, expected)
 
 
 @pytest.mark.parametrize(
@@ -814,22 +793,15 @@ def test_all_gather_fabric_2d_matched_large_cached_stability(mesh_device, dtype,
         f"samples_ms={[round(value / 1e6, 3) for value in durations_ns]}"
     )
 
-    check_output = ttnn.typecast(persistent_output, ttnn.bfloat16) if dtype == ttnn.fp8_e4m3 else persistent_output
     if dtype == ttnn.fp8_e4m3:
-        check_input = ttnn.typecast(tt_input, ttnn.bfloat16)
-        expected = torch.cat(
-            [ttnn.to_torch(device_tensor) for device_tensor in ttnn.get_device_tensors(check_input)], dim=2
-        )
+        input_shards = _fp8_device_payloads(tt_input, mesh_device)
+        output_shards = _fp8_device_payloads(persistent_output, mesh_device)
+        expected = torch.cat(list(input_shards), dim=2)
     else:
+        output_shards = [ttnn.to_torch(device_tensor) for device_tensor in ttnn.get_device_tensors(persistent_output)]
         expected = torch_input
-    for device_tensor in ttnn.get_device_tensors(check_output):
-        actual = ttnn.to_torch(device_tensor)
-        if dtype == ttnn.fp8_e4m3:
-            mismatch_fraction = (actual != expected).sum().item() / actual.numel()
-            assert mismatch_fraction < 5e-5
-            assert_with_pcc(actual, expected, pcc=0.9999)
-        else:
-            assert torch.equal(actual, expected)
+    for actual in output_shards:
+        assert torch.equal(actual, expected)
 
 
 def _make_matched_two_rank_line_tensors(mesh_device, dtype, width):
@@ -890,14 +862,12 @@ def test_all_gather_matched_two_rank_line_correctness(mesh_device, dtype, width,
         ttnn.synchronize_device(mesh_device)
 
     if dtype == ttnn.fp8_e4m3:
-        carried_input = ttnn.typecast(tt_input, ttnn.bfloat16)
-        input_shards = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(carried_input)]
-        check_output = ttnn.typecast(tt_output, ttnn.bfloat16)
-        output_shards = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(check_output)]
-        for group_start in range(0, len(input_shards), 2):
-            expected = torch.cat(input_shards[group_start : group_start + 2], dim=2)
+        input_shards = _fp8_device_payloads(tt_input, mesh_device)
+        output_shards = _fp8_device_payloads(tt_output, mesh_device)
+        for group_start in range(0, input_shards.shape[0], 2):
+            expected = torch.cat(list(input_shards[group_start : group_start + 2]), dim=2)
             for actual in output_shards[group_start : group_start + 2]:
-                assert_with_pcc(actual, expected, pcc=0.9999)
+                assert torch.equal(actual, expected)
     else:
         expected = torch_input
         check_output = tt_output
@@ -977,46 +947,24 @@ def test_all_gather_fabric_2d_matched_four_rank_line_correctness(
         tt_output = run_ag()
         ttnn.synchronize_device(mesh_device)
 
-    check_output = ttnn.typecast(tt_output, ttnn.bfloat16) if dtype == ttnn.fp8_e4m3 else tt_output
     if dtype == ttnn.fp8_e4m3:
-        check_input = ttnn.typecast(tt_input, ttnn.bfloat16)
-        input_shards = ttnn.get_device_tensors(check_input)
+        input_shards = _fp8_device_payloads(tt_input, mesh_device)
+        output_shards = _fp8_device_payloads(tt_output, mesh_device)
         mesh_rows, mesh_cols = tuple(mesh_device.shape)
         expected_by_device = []
-        for device_index in range(len(input_shards)):
+        for device_index in range(input_shards.shape[0]):
             if cluster_axis == 0:
                 column = device_index % mesh_cols
                 gather_group = [input_shards[row * mesh_cols + column] for row in range(mesh_rows)]
             else:
                 row_start = (device_index // mesh_cols) * mesh_cols
-                gather_group = input_shards[row_start : row_start + mesh_cols]
-            expected_by_device.append(
-                torch.cat([ttnn.to_torch(device_tensor) for device_tensor in gather_group], dim=2)
-            )
+                gather_group = list(input_shards[row_start : row_start + mesh_cols])
+            expected_by_device.append(torch.cat(gather_group, dim=2))
     else:
-        expected_by_device = [torch_input] * len(ttnn.get_device_tensors(check_output))
-    for device_index, (device_tensor, expected) in enumerate(
-        zip(ttnn.get_device_tensors(check_output), expected_by_device)
-    ):
-        actual = ttnn.to_torch(device_tensor)
-        if dtype == ttnn.fp8_e4m3:
-            mismatch = actual != expected
-            mismatch_fraction = mismatch.sum().item() / actual.numel()
-            mismatch_rows = mismatch.nonzero()[:, 2].unique().tolist() if mismatch.any() else []
-            first_mismatch = mismatch.nonzero()[0].tolist() if mismatch.any() else None
-            first_actual = actual[tuple(first_mismatch)].item() if first_mismatch is not None else None
-            first_expected = expected[tuple(first_mismatch)].item() if first_mismatch is not None else None
-            candidate_fractions = [
-                (actual != candidate).sum().item() / actual.numel() for candidate in expected_by_device
-            ]
-            assert mismatch_fraction < 5e-5, (
-                f"device={device_index} mismatch_fraction={mismatch_fraction} first={first_mismatch} "
-                f"actual={first_actual} expected={first_expected} rows={mismatch_rows} "
-                f"candidate_fractions={candidate_fractions}"
-            )
-            assert_with_pcc(actual, expected, pcc=0.9999)
-        else:
-            assert torch.equal(actual, expected)
+        output_shards = [ttnn.to_torch(device_tensor) for device_tensor in ttnn.get_device_tensors(tt_output)]
+        expected_by_device = [torch_input] * len(output_shards)
+    for actual, expected in zip(output_shards, expected_by_device):
+        assert torch.equal(actual, expected)
 
 
 @pytest.mark.parametrize(

@@ -208,9 +208,10 @@ program-cache entry, hang, corruption, or timeout:
 | scaled FP8 | 3.526 ms | 3.527 ms | 91.592 GB/s | 3.518, 3.526, 3.525, 3.526, 3.519, 3.521, 3.531, 3.527, 3.527, 3.527 |
 
 The p90/median ratios are 1.0010 and 1.0003, comfortably inside the 1.05
-stability gate. Final BF16 replicas were exact; scaled-FP8 replicas passed the
-bounded conversion-noise and PCC checks. Full-size fresh-output BF16 and FP8
-cases also passed and selected the native unicast writer.
+stability gate. Final BF16 and scaled-FP8 replicas were exact. FP8 validation
+compares the opaque device payload bytes directly, avoiding a second device
+typecast during validation. Full-size fresh-output BF16 and FP8 cases also
+passed and selected the native unicast writer.
 
 ### Commands
 
@@ -238,15 +239,17 @@ The two allocator tests verify the seven-slot Mesh/Torus worker channel, the
 unchanged relay/receiver depths, complete use of whole-slot capacity, and the
 unchanged eight-slot Fabric1D Ring allocation.
 
-### Open correctness issue in the small-message scatter path
+### Small-message FP8 validation resolution
 
-The added four-rank, 128-row/device scaled-FP8 case currently exposes sparse,
-run-to-run corruption with both fresh and persistent output buffers. The BF16
-case with the same topology and worker schedule passes exactly, and the full
-512K-row scaled-FP8 case above remains correct and stable. Diagnostics rule out
-an incorrect gather group and confirm that the native unicast writer is used.
-The failure is currently isolated to the small-message, two-worker schedule,
-which emits four 704-byte chunks through the Fabric scatter-write path. This is
-left as an explicit failing regression test for the next debugging step; no
-tolerance was weakened and the unsuccessful CB write-barrier experiment was
-removed.
+The apparent four-rank, 128-row/device scaled-FP8 corruption was a validation
+artifact rather than a Fabric scatter-write defect. Two independent device
+`FP8 -> BF16` typecasts of the same payload can differ at rounding boundaries,
+so converting the input and output separately made the comparison
+nondeterministic.
+
+The regression matrix now reads FP8 tensors as opaque host bytes and compares
+the carried payload exactly. Both axes, BF16 and FP8, and fresh and persistent
+outputs pass for the four-rank case (`8/8`). The two-rank matrix also passes
+`8/8`, and the full 8x1 matrix passes `8/8` across Fabric1D and Fabric2D. The
+diagnostic scatter bypass and CB write-barrier experiments were removed because
+neither addressed a collective defect.
