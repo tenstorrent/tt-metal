@@ -492,6 +492,8 @@ The `#ifdef` runs at the preprocessor stage, before the C++ compiler sees the co
 
 The temptation is strongest when adding `#ifdef` blocks — the new structure may feel like it "obviates" an old explanatory comment that sat above the conditional. It doesn't. The explanation of *why* the conditional exists is still valuable; the change in HOW it's gated doesn't retire the WHY. Keep the comments.
 
+The opposite trap: a comment on a line you're *right* to delete. Rules 1–2 remove hardcoded CB-index constants (e.g. `constexpr uint32_t cb_id_in1 = 1;  // mcast receives all kv_heads; compute picks which to matmul`) — but that comment was never about the magic number; it documented the **buffer's role**, which survives as the DFB. Don't let the explanation die with the deleted line: **relocate it** to where the concept now lives — the `DFBBinding` on the host `KernelSpec`, or the `DataflowBuffer` construction / first use in the kernel.
+
 **9. No edits to kernel code outside the op's directory.** Shared kernels (under `ttnn/cpp/ttnn/kernel_lib/`, framework primitive locations, or anywhere outside this op's own top-level directory) are vetted for Metal 2.0 compatibility *before* op porting begins. If you find you need to edit one to complete the port, that's a signal the vetting missed something — and the most valuable thing you can do is surface that fact, not bundle the fix. Document in the port report:
 
 - The shared kernel file (path).
