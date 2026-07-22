@@ -8,13 +8,12 @@ replays it with near-zero host dispatch overhead. This single test runs the WHOL
 model — text -> audio codes -> waveform — through traces:
 
   1. **GPT autoregressive decode** — normally untraceable (per-step host readback + a
-     concat-growing KV cache). The parallel STATIC-KV path (``decode_static``: fixed-size cache
-     written in place at a device-driven position, masked attention over the whole cache) makes
-     every decode step the same static-shape op sequence, so ``TtXttsGenerator.generate_traced``
+     concat-growing KV cache). The fixed-KV decode (``decode_on_device``: fixed-size cache written
+     in place at a device-driven position, masked attention over the whole cache) makes every
+     decode step the same static-shape op sequence, so ``TtXttsGenerator.generate_ondevice_traced``
      captures it ONCE and replays it per token (canonical tt_transformers decode-trace pattern:
      persistent input buffers refreshed with ``copy_host_to_device_tensor`` + ``execute_trace``;
-     greedy selection on host between replays — ``ttnn.rand`` can't be traced, so no in-trace
-     sampling, and greedy keeps it deterministic for a hard PCC gate).
+     on-device Gumbel sampling over pre-drawn noise — ``ttnn.rand`` can't be traced).
   2. **HiFi-GAN vocoder** — a single static-shape conv stack; captured and replayed on the
      generated (fixed-length) latents.
 
