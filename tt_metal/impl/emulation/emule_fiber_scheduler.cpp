@@ -9,6 +9,8 @@
 #include <ucontext.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <dlfcn.h>    // dladdr — parked-fiber stack symbolization (TT_EMULE_DUMP_PARKED_STACKS)
+#include <cxxabi.h>   // __cxa_demangle
 
 #include <atomic>
 #include <chrono>
@@ -484,13 +486,24 @@ std::string FiberSchedulerImpl::dump_parked() {
             // Best-effort key naming: a CB if the key lands in this fiber's cbs[] array.
             const auto* ctx = f->owned_ctx.get();
             const char* name = nullptr;
-            char buf[64];
+            char buf[160];
             if (ctx && ctx->cbs) {
                 auto base = reinterpret_cast<uintptr_t>(ctx->cbs);
                 auto k = reinterpret_cast<uintptr_t>(key);
                 if (k >= base && k < base + sizeof(tt_emule::CBSyncState) * 32) {
-                    std::snprintf(buf, sizeof(buf), "CB %zu",
-                                  (k - base) / sizeof(tt_emule::CBSyncState));
+                    // Print the CB's live counters: distinguishes "producer never pushed"
+                    // (occupied==0, producer==null) from "pushed but this waiter not woken"
+                    // (occupied>=waited) — the rigorous discriminator for a CB lost-wakeup.
+                    const auto* cbp = reinterpret_cast<const tt_emule::CBSyncState*>(key);
+                    std::snprintf(buf, sizeof(buf),
+                                  "CB %zu [occ=%u recv_c=%u acked=%u npages=%u prod=%p multi=%d]",
+                                  (k - base) / sizeof(tt_emule::CBSyncState),
+                                  cbp->occupied.load(std::memory_order_relaxed),
+                                  cbp->received_compute.load(std::memory_order_relaxed),
+                                  cbp->acked.load(std::memory_order_relaxed),
+                                  cbp->num_pages,
+                                  cbp->producer.load(std::memory_order_relaxed),
+                                  (int)cbp->multi_producer.load(std::memory_order_relaxed));
                     name = buf;
                 }
             }
@@ -505,6 +518,50 @@ std::string FiberSchedulerImpl::dump_parked() {
                 }
             }
             os << " waiting on " << (name ? name : "sync object") << " (key " << key << ")\n";
+            // Opt-in (TT_EMULE_DUMP_PARKED_STACKS): walk the parked fiber's saved frame-pointer
+            // chain and symbolize each return address via dladdr + [module +offset], so a deadlock
+            // dump names the op each fiber is stuck in (not just the CB/sem it waits on). Frame
+            // pointers are reliable only when kernels are built with -fno-omit-frame-pointer (a
+            // TT_METAL_EMULE_ASAN build); the module+offset still feeds `addr2line -ifCe` for a
+            // separately-built debug .so. Verbose (up to 12 frames × every parked fiber), hence
+            // opt-in; the CB-counter line above is always printed. Guarded stack-range read.
+            static const bool dump_stacks = std::getenv("TT_EMULE_DUMP_PARKED_STACKS") != nullptr;
+            if (dump_stacks) {
+                auto sym = [&os](void* addr) {
+                    Dl_info di{};
+                    if (dladdr(addr, &di) && di.dli_fname) {
+                        const char* b = std::strrchr(di.dli_fname, '/');
+                        const char* mod = b ? b + 1 : di.dli_fname;
+                        uintptr_t off = reinterpret_cast<uintptr_t>(addr) -
+                                        reinterpret_cast<uintptr_t>(di.dli_fbase);
+                        os << "        ";
+                        if (di.dli_sname) {
+                            int st = 0;
+                            char* dem = abi::__cxa_demangle(di.dli_sname, nullptr, nullptr, &st);
+                            os << (st == 0 && dem ? dem : di.dli_sname) << "  ";
+                            std::free(dem);
+                        }
+                        // Module + load-relative offset: `addr2line -ifCe <mod> <off>` decodes the
+                        // -g DWARF inline chain (recovers the -O2-inlined op the frame is really in).
+                        os << "[" << mod << " +0x" << std::hex << off << std::dec << "]\n";
+                    } else {
+                        os << "        0x" << std::hex << reinterpret_cast<uintptr_t>(addr) << std::dec << "\n";
+                    }
+                };
+                auto rip = reinterpret_cast<void*>(f->ctx.uc_mcontext.gregs[REG_RIP]);
+                auto rbp = static_cast<uintptr_t>(f->ctx.uc_mcontext.gregs[REG_RBP]);
+                auto slo = reinterpret_cast<uintptr_t>(f->ctx.uc_stack.ss_sp);
+                auto shi = slo + f->ctx.uc_stack.ss_size;
+                sym(rip);
+                for (int depth = 0; depth < 12 && rbp >= slo && rbp + 16 <= shi; ++depth) {
+                    auto ret = *reinterpret_cast<uintptr_t*>(rbp + 8);
+                    auto nxt = *reinterpret_cast<uintptr_t*>(rbp);
+                    if (ret == 0) break;
+                    sym(reinterpret_cast<void*>(ret));
+                    if (nxt <= rbp) break;  // frame pointers must ascend
+                    rbp = nxt;
+                }
+            }
         }
     }
     if (!quiescence_deferred_.empty()) {
