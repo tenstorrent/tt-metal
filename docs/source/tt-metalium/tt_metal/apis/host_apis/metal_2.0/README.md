@@ -10,7 +10,7 @@ follow the route.
 | **A human** getting oriented | [`human/READ_ME_FIRST.md`](human/READ_ME_FIRST.md) | [`human/intro_to_metal_2.0.md`](human/intro_to_metal_2.0.md)|
 | **An AI porter** (Claude) porting an op | [`ai/audit/metal2_audit.md`](ai/audit/metal2_audit.md) — host/spec port-readiness audit | [`ai/port/metal2_port.md`](ai/port/metal2_port.md) — do the port |
 | **An AI porter** uplifting a Metal 2.0 op to **Quasar** | [`ai/audit/quasar_audit.md`](ai/audit/quasar_audit.md) — Quasar-uplift feasibility audit | uplift / semantic recipes forthcoming |
-| **An AI porter / reviewer** auditing **kernel CB→DFB** readiness | [`ai/audit/cb_dfb_quasar_audit_helper.md`](ai/audit/cb_dfb_quasar_audit_helper.md) — **standalone device-side CB audit** ([How to use](ai/audit/cb_dfb_quasar_audit_helper.md#how-to-use-this-doc)) | Optional: cross-ref the host audit if doing a full op port |
+| **An AI porter / reviewer** auditing **kernel CB→DFB** readiness | [`ai/audit/cb_dfb_quasar_audit_helper.md`](ai/audit/cb_dfb_quasar_audit_helper.md) — **standalone device-side CB or DFB audit** ([How to use](ai/audit/cb_dfb_quasar_audit_helper.md#how-to-use-this-doc)) | Optional: cross-ref the host audit if doing a full op port |
 | **An AI** who needs the concepts / API reference | [`ai/shared/migration_guide.md`](ai/shared/migration_guide.md) | — |
 
 ## Directory map
@@ -24,12 +24,11 @@ forthcoming) — over a `shared/` pool of reference docs the phases draw on.
     - `quasar_audit.md` — the **Quasar-uplift** feasibility audit: run *after* the WH/BH Metal 2.0
       port, to gate uplifting the op to Quasar. A young scaffold; delegates the CB→DFB
       analysis to the kernel audit below.
-    - `cb_dfb_quasar_audit_helper.md` — **standalone device-side** CB→DFB kernel audit
-      (per-op CB portability report; no host-audit prerequisite). The CB→DFB analysis
-      `quasar_audit.md` delegates to.
-    - `temp_cb_dfb_reference_info.md` — *temporary* frozen snapshot that keeps the
-      device-side CB audit's links pointed at stable content during the CB→DFB pivot;
-      to be deleted once the kernel audit is self-contained.
+    - `cb_dfb_quasar_audit_helper.md` — **standalone device-side** CB/DFB kernel audit
+      (per-op buffer portability report for Quasar; classifies CBs **or** already-ported DFBs;
+      no host-audit prerequisite). The analysis `quasar_audit.md` delegates to.
+    - `temp_cb_dfb_reference_info.md` — *stub*; content absorbed into
+      `cb_dfb_quasar_audit_helper.md` (§ Sync-free and single-ended). Safe to delete.
   - **[`ai/port/`](ai/port/)** — the port procedures.
     - `metal2_port.md` — the Metal 2.0 port procedure itself.
   - **[`ai/shared/`](ai/shared/)** — cross-cutting reference, drawn on by both the audits and the recipes.
