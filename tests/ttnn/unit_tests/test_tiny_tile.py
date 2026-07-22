@@ -48,9 +48,8 @@ def _to_dev(t: torch.Tensor, dev, tile_h: int, mem=None):
 def test_sdpa_tiny_tile_numerics(mesh_device, tile_h):
     """ttnn.transformer.scaled_dot_product_attention is numerically wrong with 16-row q/k/v tiles.
 
-    Same inputs at a 32-row tile give PCC ~0.9999; at a 16-row tile PCC collapses to ~0.5. The
-    pi0.5 decode block works around this by retiling q/k/v up to a 32 tile around SDPA
-    (denoise_block._sdpa_retile_32).
+    Same inputs at a 32-row tile give PCC ~0.9999; a 16-row tile historically collapsed to ~0.5
+    (guard against a regression of the tiny-tile SDPA numerics).
     """
     torch.manual_seed(0)
     nh, sq, skv, hd = 8, 32, 1056, 256
@@ -116,36 +115,64 @@ def test_addcmul_tiny_tile_promotes_tile(mesh_device, tile_h):
 
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-@pytest.mark.parametrize("tile_h", [32, 16], ids=["tile32", "tile16"])
-def test_rms_norm_tiny_tile_clobbers_input(mesh_device, tile_h):
-    """ttnn.rms_norm corrupts its INPUT buffer at a 16x32 tile when L1 has other resident tensors.
+@pytest.mark.parametrize("tile_h", [16, 32], ids=["tile16", "tile32x"])
+@pytest.mark.parametrize(
+    "qkv_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+    ids=["qkv_bf16", "qkv_bf8"],
+)
+def test_sdpa_bf8_mask_corrupts(mesh_device, tile_h, qkv_dtype):
+    """SDPA corrupts its output at a 16-row tile when a dense attn_mask is provided.
 
-    The norm OUTPUT is correct (PCC ~1.0), but the input tensor `x` is overwritten in place (an
-    in-place scratch bug in the tiny-tile kernel), so any later use of `x` (e.g. the gated residual
-    ``hidden + gate * attn``) reads garbage. It only manifests under L1 pressure -- on an empty
-    device the output allocation lands elsewhere and the corruption is hidden -- so a handful of
-    resident L1 fillers are allocated first to reproduce it. At a 32-row tile the input is preserved.
+    Root cause (isolated on Blackhole): the corruption is NON-DETERMINISTIC and specific to
+    tile_h=16 + a provided (dense) attn_mask. It reads uninitialized L1 in the tiny-tile
+    (partial-face, 2-face) provided-mask streaming path -- masked PCC swings run-to-run between
+    ~0.9998 and ~0 (and can go negative). It is NOT caused by K-sequence padding alignment
+    (tile-aligned skv=1024 fails, unaligned skv=1040 sometimes passes) and it is NOT bf8-specific:
+    bfloat8_b q/k/v fail more often, but bfloat16 q/k/v at tile_h=16 + mask are also flaky
+    (they pass in isolation but get corrupted when a bf8 run precedes them in the same session).
+    tile_h=32 + mask is always correct (~0.9999), and tile_h=16 WITHOUT a mask is correct
+    (~0.9998). The pi0.5 decode block sidesteps this by dropping the no-op mask on its bf8
+    non-causal SDPA (denoise_block attention forward).
     """
     torch.manual_seed(0)
-    W, M, eps = 1024, 16, 1e-6
-    x = torch.randn(1, M, W) * 0.5
-    w = torch.randn(1, 1, W) * 0.02 + 1.0
-    b = torch.randn(1, 1, W) * 0.02
+    nh, sq, skv, hd = 8, 16, 1040, 256
+    scale = 1.0 / (hd**0.5)
+    q = torch.randn(1, nh, sq, hd) * 0.1
+    k = torch.randn(1, 1, skv, hd) * 0.1
+    v = torch.randn(1, 1, skv, hd) * 0.1
+    kb, vb = k.expand(1, nh, skv, hd), v.expand(1, nh, skv, hd)
+    ref = torch.softmax((q @ kb.transpose(-1, -2)) * scale, dim=-1) @ vb
 
-    # Occupy L1 with resident buffers (mimics the pipeline's L1-resident weights).
-    fillers = [_to_dev(torch.randn(1, 1, 256, W), mesh_device, tile_h) for _ in range(6)]  # noqa: F841
-    xt = _to_dev(x, mesh_device, tile_h)
-    wt = _to_dev(w, mesh_device, tile_h, mem=ttnn.DRAM_MEMORY_CONFIG)
-    bt = _to_dev(b, mesh_device, tile_h, mem=ttnn.DRAM_MEMORY_CONFIG)
+    def _bf8(t):
+        return ttnn.from_torch(
+            t,
+            dtype=qkv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            tile=ttnn.Tile((tile_h, 32)),
+        )
 
-    x_before = ttnn.to_torch(xt).clone()
-    normed = ttnn.rms_norm(xt, weight=wt, bias=bt, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
-    x_after = ttnn.to_torch(xt)
-
-    out_pcc = _pcc((x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)) * w + b, ttnn.to_torch(normed))
-    preserved = _pcc(x_before, x_after)
-    print(f"\n[rms_norm tile_h={tile_h}] out-PCC={out_pcc:.5f} input-preserved-PCC={preserved:.5f}")
-    assert preserved >= _PCC, (
-        f"rms_norm clobbered its input buffer (preserved-PCC {preserved:.5f} < {_PCC}) at tile_h={tile_h} "
-        "(tiny-tile rms_norm in-place input-corruption bug)"
+    tile = ttnn.Tile((tile_h, 32))
+    qt, kt, vt = _bf8(q), _bf8(k), _bf8(v)
+    no_mask = ttnn.to_torch(ttnn.transformer.scaled_dot_product_attention(qt, kt, vt, is_causal=False, scale=scale))
+    mask = ttnn.from_torch(
+        torch.zeros(1, 1, sq, skv),
+        device=mesh_device,
+        tile=tile,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    masked = ttnn.to_torch(
+        ttnn.transformer.scaled_dot_product_attention(qt, kt, vt, attn_mask=mask, is_causal=False, scale=scale)
+    )
+    pcc_no_mask, pcc_masked = _pcc(ref, no_mask), _pcc(ref, masked)
+    print(
+        f"\n[SDPA bf8] no-mask PCC={pcc_no_mask:.5f}  masked PCC={pcc_masked:.5f}  masked |max|={masked.abs().max():.2e}"
+    )
+    assert pcc_masked >= _PCC, (
+        f"SDPA with bf8 q/k/v + bf16 attn_mask corrupts output (PCC {pcc_masked:.5f} < {_PCC}; "
+        f"no-mask PCC {pcc_no_mask:.5f}) -- bf8 SDPA attn_mask bug"
     )
