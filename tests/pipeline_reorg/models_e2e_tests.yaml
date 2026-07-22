@@ -255,12 +255,14 @@
 
 - name: Qwen2.5-7B e2e tests
   cmd: |
-    export HF_MODEL=Qwen/Qwen2.5-7B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-7B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    export HF_MODEL=Qwen/Qwen2.5-7B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-7B-Instruct MESH_DEVICE=N300
+    # Extra time budget vs a warm run: the first CI run must generate the TTTv2 weight cache at
+    # TT_CACHE_PATH (cold-cache 7B weight conversion) before the demo runs; warm re-runs are faster.
+    pytest --timeout 900 models/common/tests/demos/qwen25_7b/demo.py -k "token-accuracy and performance"
   model: qwen2.5-7b
   skus:
     wh_n300:
-      timeout: 5
+      timeout: 15
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
