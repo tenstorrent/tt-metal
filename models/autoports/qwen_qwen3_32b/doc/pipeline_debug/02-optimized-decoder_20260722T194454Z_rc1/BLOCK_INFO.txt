@@ -1,0 +1,4 @@
+rc=1
+terminal=
+run=/home/mvasiljevic/codex-runs/v2-qwen-qwen3-32b-02-optimized-decoder-20260722T194454Z
+captured_at=2026-07-22T19:44:54Z
