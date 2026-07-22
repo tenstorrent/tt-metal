@@ -17,6 +17,12 @@ name: "Fabric DC Validation (single galaxy)"
 
 on:
   workflow_dispatch:
+  # TEMPORARY: trigger on pushes to the feature branch so this new workflow can be
+  # trialed on hardware before it lands on the default branch (workflow_dispatch only
+  # works once the file is on the default branch). Remove this push: block before merge.
+  push:
+    branches:
+      - sanjaysundaram/add-fabric-dc-validation-ci
   schedule:
     - cron: "0 7 * * *" # daily 07:00 UTC
 
