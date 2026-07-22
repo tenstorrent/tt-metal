@@ -142,12 +142,6 @@ bool is_demoted(const PadCodegenParams& operation_attributes, const PadCodegenIn
     if (shape_is(1, 1, 32, 32, 0, 0, 0, 0, 1, 1, 39, 41) && value_is(3) && dtype_in(kAllFourDtypes)) {
         return true;
     }
-    // [3, 32, 32]|padding=[[0,1],[0,32],[0,32]]&value=0|int32|row_major (3D: dim0=3 becomes C,
-    // back-padded 3->4; shares the H=W=32/out=64x64 bucket with entries above but is the only
-    // C=3 one -- phase 7's back-to-translate finding)
-    if (shape_is(1, 3, 32, 32, 0, 0, 0, 0, 1, 4, 64, 64) && value_is(0) && dtype_in({DataType::INT32})) {
-        return true;
-    }
     // [32, 32]|padding=[[0,32],[0,32]]&value=0|{float32}|row_major (2D: unsqueeze_to_4D prepends
     // N=1, C=1)
     if (shape_is(1, 1, 32, 32, 0, 0, 0, 0, 1, 1, 64, 64) && value_is(0) && dtype_in({DataType::FLOAT32})) {
