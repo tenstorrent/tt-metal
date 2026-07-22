@@ -21,7 +21,8 @@
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
 
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
     '
@@ -43,7 +44,8 @@
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
     export DEEPSEEK_V3_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/test_mla_output
 
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "8x4 and random and max_sl and check_pcc and balanced and fabric2d" -vvv --tb=short
     '
@@ -59,7 +61,8 @@
 - name: "Blaze - MLA Chunked"
   cmd: |
 
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 8x4 and fabric2d" -vvv --tb=short
     '
@@ -80,7 +83,8 @@
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
 
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kv_cache_table -k "line and pretrained" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "line" -vvv --tb=short
@@ -102,7 +106,8 @@
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
 
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and pcc and iter1 and no_determinism and fabric2d and pretrained" -vvv --tb=short --timeout=900
     '
@@ -124,7 +129,8 @@
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
 
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_ds_prefill_transformer -k "fabric2d-mesh-8x4 and 61_layers and e256_device_fp32 and longbook_qa_eng and 25600 and iter1 and pcc and no_determinism and pretrained and balanced and right_pad" -vvv --tb=short --timeout=3600
     '
@@ -141,7 +147,8 @@
   cmd: |
     export KIMI_MLA_REF_CACHE=/mnt/models/kimi-prefill-cache/test_mla_output
 
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "8x4 and random and max_sl and check_pcc and sequential and line and (seq5k or seq25k)" -vvv --tb=short
     '
   test_type: kimi_mla
@@ -159,7 +166,8 @@
     export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache
     export DS_SPARSE_FABRIC=fabric2d
 
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "deepseek_v32 and 8x4 and fabric2d" -vvv --tb=short
     '
 
@@ -180,7 +188,8 @@
     # GLM-5.1 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference, plus the GLM-5.2 indexer-reuse
     # equivalence case (inject a prior-layer top-k == recompute). Random weights + on-the-fly CPU truth
     # -> no staged weights. Reuse shares the warm sparse-MLA JIT for this job (same op graph; glm_5_2 == glm_5_1 dims).
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "(glm_5_1 and 8x4 and fabric2d) or indexer_reuse" -vvv --tb=short
     '
   test_type: dsa_mla_glm
@@ -196,7 +205,8 @@
   cmd: |
     export MESH_DEVICE=TG
     # GLM-5.1 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "mesh-8x4 and (pcc-device-glm-256 or perf-device-glm-256)" -vvv --tb=short
     '
   test_type: glm_moe
@@ -219,7 +229,8 @@
     # composed CPU reference on the fabric2d transport. Real weights via the prebuilt ttnn cache when present
     # (random fallback otherwise; never rebuilds). -k glm51 so the shared glm_5_2 parametrization is not run
     # here: its MoE block is skipped under the degenerate gate, and GLM-5.2 is covered by the DSA-MLA/MoE jobs.
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and fabric2d-mesh-8x4 and glm51" -vvv --tb=short --timeout=300
     '
   test_type: glm_prefill_block
@@ -234,7 +245,8 @@
 - name: "Blaze - Kimi MoE"
   cmd: |
 
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "mesh-8x4 and (kimi-5k-pcc or kimi-25k-perf)" -vvv --tb=short
     '
   test_type: kimi_moe
@@ -252,7 +264,8 @@
     export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2.6-Cache/CI
 
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_5k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1800
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_25k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1800
     '
@@ -275,7 +288,8 @@
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
     export MESH_DEVICE=TG
 
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and perf-prompt_25k and with_determinism and iter2 and not iter25 and not iter2000 and moe-gate_device and balanced and not non_balanced and pretrained" -vvv --tb=short --timeout=900
     '
@@ -297,7 +311,8 @@
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
 
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_ds_prefill_transformer -k "mesh-8x4 and 5_layers and e256_device_fp32 and longbook_qa_eng and 25600 and iter2 and not iter25 and not iter2000 and smoke and with_determinism and random and balanced and right_pad" -vvv --tb=short --timeout=3600
     '
@@ -319,7 +334,8 @@
   cmd: |
     export MESH_DEVICE=TG
 
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       rc=0
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv || rc=1
@@ -351,7 +367,8 @@
     export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/kimi-prefill-cache/vllm-kimi-k26-codedebug-56320
-    mpirun --pernode --tag-output bash -lc '
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_no_pcc[blackhole-kimi-mesh-8x4-L61-preload0-chunks_eleven-ten_iters-margin5pct] -xvs
     '
   test_type: kimi_chunked
