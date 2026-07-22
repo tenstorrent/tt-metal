@@ -31,14 +31,14 @@ def geom(M, K, N, cfg):
 
 
 def feasible(cfg, geo):
+    # Matches the kernel guard: Pk>1 and each output SUB-block (T=M_block*N_sub) tile-partitions into Pk
+    # chunks. N_bpc>1 now supported (one reduce-scatter per sub-block).
     Ns, Pk, Sm, kb, nsb = cfg
     Mblk, Nsub, Nbpc, T = geo
     if Pk <= 1:
         return False, "Pk==1 (no split-K reduction)"
-    if Nbpc != 1:
-        return False, f"N_bpc={Nbpc}>1 (multi-subblock; not yet supported)"
     if T < Pk or T % Pk != 0:
-        return False, f"block T={T} not partitionable into Pk={Pk} chunks"
+        return False, f"sub-block T={T} not partitionable into Pk={Pk} chunks"
     return True, "ok"
 
 
@@ -51,12 +51,14 @@ def med_ab(M, K, N, cfg):
                 if r.get("ok") and r.get("wall_us") is not None:
                     walls[mask].append(r["wall_us"])
                 else:
-                    return None, None, f"run fail mask={mask} cls={r.get('cls')}"
-    return statistics.median(walls[CHAIN]), statistics.median(walls[RS]), None
+                    return None, None, None, f"run fail mask={mask} cls={r.get('cls')}"
+    return statistics.median(walls[CHAIN]), statistics.median(walls[RS]), walls, None
 
 
 def main():
     corpus = json.load(open(f"{ds.HERE}/regime_a_current_perf.json"))["mt8"]
+    # Prioritize the shallow-K (K<=2048, exposed-reduction) shapes first, then the rest (deep-K).
+    corpus = sorted(corpus, key=lambda r: (r["K"] > 2048, r["K"], r["M"], r["N"]))
     out = {"n_relaunch": N_RELAUNCH, "iters": ITERS, "shapes": []}
     for r in corpus:
         M, K, N, cfg = r["M"], r["K"], r["N"], tuple(r["cfg"])
@@ -75,15 +77,17 @@ def main():
             "T": geo[3],
         }
         if feas:
-            cw, rw, err = med_ab(M, K, N, cfg)
+            cw, rw, walls, err = med_ab(M, K, N, cfg)
             if err:
                 rec["error"] = err
             else:
                 rec["chain_us"] = cw
                 rec["rscatter_us"] = rw
                 rec["delta_pct"] = (rw - cw) / cw * 100.0
+                rec["chain_samples"] = walls[CHAIN]  # raw per-relaunch wall samples (both batches)
+                rec["rscatter_samples"] = walls[RS]
             tag = f"chain={cw:.2f} rs={rw:.2f} delta={rec.get('delta_pct',0):+.2f}%" if not err else err
-            print(f"[FEAS] {M}x{K}x{N} cfg={cfg} Pk={cfg[1]} T={geo[3]} -> {tag}", flush=True)
+            print(f"[FEAS] {M}x{K}x{N} cfg={cfg} Pk={cfg[1]} Nbpc={geo[2]} T={geo[3]} -> {tag}", flush=True)
         else:
             print(f"[skip] {M}x{K}x{N} cfg={cfg} -> {reason}", flush=True)
         out["shapes"].append(rec)
