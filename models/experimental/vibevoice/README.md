@@ -97,6 +97,36 @@ python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_
 |------|---------|-------|-------|
 | `--trace` | `VV_TRACE_SEGMENT=1` | whole segment, device-driven (llama shape) | fused frame replayed per frame; ~1.4 GB trace region + 2 CQs |
 
+## Speaker similarity (SIM) test
+
+`tests/pcc/test_e2e_sim.py` checks that on-device TTNN generation preserves the *cloned speaker's
+identity*: it voice-clones a target speaker on TT, embeds the generated audio and the
+reference/impostor voices with a speaker-verification (SV) model, and asserts the generated speech
+is closer to the intended target than to any impostor (standard SIM-O verification), including a
+4-speaker self-identification confusion matrix.
+
+```bash
+pytest models/experimental/vibevoice/tests/pcc/test_e2e_sim.py -v -s
+```
+
+**SV backend — why `microsoft/wavlm-base-plus-sv`, not the model from the paper.** The
+[VibeVoice technical report](https://arxiv.org/abs/2508.19205) computes SIM with a **WavLM-large
+fine-tuned** SV model — the UniSpeech `wavlm_large_finetune.pth` (WavLM-large backbone + an
+ECAPA-TDNN x-vector head). We deliberately do **not** ship that model. Its code and checkpoint
+([microsoft/UniSpeech](https://github.com/microsoft/UniSpeech), which in turn borrows from the
+unlicensed [lawlict/ECAPA-TDNN](https://github.com/lawlict/ECAPA-TDNN)) are licensed
+**CC BY-SA 3.0**, whose *ShareAlike* clause requires derivative works to carry the same license —
+incompatible with this repo's **Apache-2.0**. Instead the test uses
+**`microsoft/wavlm-base-plus-sv`**, a WavLM x-vector head that ships with 🤗 transformers
+(Apache-2.0), needs no extra dependency or separately-licensed checkpoint, and keeps the whole path
+license-clean.
+
+Trade-off: base_plus produces a *compressed* cosine scale (different speakers still score ~0.5-0.7,
+vs the fine-tuned model's ~0.9 same-speaker / ~0 impostor separation). So the test asserts a
+**relative** target-vs-impostor margin — the SV model must still rank the correct speaker first, by
+a margin — which is robust to the compressed scale, rather than the paper's absolute same-speaker
+threshold.
+
 ## Language model PCC tests
 
 Prefill and decode hidden-state PCC vs a **bf16 HuggingFace Qwen2** reference (`PCC >= 0.99`).
