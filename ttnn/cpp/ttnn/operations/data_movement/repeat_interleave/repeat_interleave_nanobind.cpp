@@ -8,6 +8,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 
@@ -26,6 +27,7 @@ void bind_repeat_interleave(nb::module_& mod) {
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            implementation (str, optional): dispatch path -- "auto" (default), "native", or "codegen".
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -39,7 +41,8 @@ void bind_repeat_interleave(nb::module_& mod) {
         nb::arg("repeats"),
         nb::arg("dim"),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("implementation") = "auto");
 }
 
 }  // namespace ttnn::operations::data_movement::detail
