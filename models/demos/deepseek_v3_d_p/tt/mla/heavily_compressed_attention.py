@@ -155,3 +155,110 @@ class TtHCACompressor(LightweightModule):
             block_bias = hca_block_bias(position_ids, n_windows, self.compress_rate)
 
         return compressed_kv, block_bias
+
+
+class TtHCAQueryPath(LightweightModule):
+    """DeepSeek-V4 HCA query path (TTNN prefill). Mirrors ``DeepseekV4Attention``
+    lines 817-820: q_a_proj (LoRA down) -> weighted RMSNorm -> q_b_proj (up, heads)
+    -> unweighted RMSNorm over head_dim -> partial RoPE on the trailing rope_head_dim
+    at per-token positions (compress rope). Output ``q`` [B, num_heads, S, head_dim]."""
+
+    def __init__(
+        self,
+        device,
+        *,
+        q_a_proj_weight: torch.Tensor,
+        q_a_norm_weight: torch.Tensor,
+        q_b_proj_weight: torch.Tensor,
+        rotary_emb,
+        num_heads: int,
+        head_dim: int,
+        rope_head_dim: int,
+        rms_norm_eps: float = 1e-6,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ):
+        self.device = device
+        self.dtype = dtype
+        self.memory_config = memory_config
+        self.num_heads = int(num_heads)
+        self.head_dim = int(head_dim)
+        self.rope_head_dim = int(rope_head_dim)
+        self.rotary_emb = rotary_emb
+        self.rms_norm_eps = float(rms_norm_eps)
+
+        self.wq_a = self._to_tt_linear_weight(q_a_proj_weight)
+        self.wq_b = self._to_tt_linear_weight(q_b_proj_weight)
+        self.q_a_norm_weight = self._from_torch(q_a_norm_weight.detach().reshape(1, 1, 1, -1))
+        self.q_b_norm_weight = self._from_torch(torch.ones(1, 1, 1, self.head_dim))
+        self.trans_mat = ttnn.from_torch(
+            get_rot_transformation_mat(),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=memory_config,
+        )
+
+    @classmethod
+    def from_reference(cls, device, reference, config, **kwargs) -> "TtHCAQueryPath":
+        return cls(
+            device,
+            q_a_proj_weight=reference.q_a_proj.weight,
+            q_a_norm_weight=reference.q_a_norm.weight,
+            q_b_proj_weight=reference.q_b_proj.weight,
+            rotary_emb=reference.compressor.rotary_emb,
+            num_heads=config.num_attention_heads,
+            head_dim=config.head_dim,
+            rope_head_dim=config.qk_rope_head_dim,
+            rms_norm_eps=config.rms_norm_eps,
+            **kwargs,
+        )
+
+    def _to_tt_linear_weight(self, weight: torch.Tensor):
+        torch_weight = weight.detach().transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0).to(torch.bfloat16)
+        return ttnn.from_torch(
+            torch_weight,
+            device=self.device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.memory_config,
+        )
+
+    def _from_torch(self, x: torch.Tensor):
+        return ttnn.from_torch(
+            x.to(torch.bfloat16),
+            device=self.device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.memory_config,
+        )
+
+    def _cos_sin(self, position_ids: torch.Tensor):
+        positions = position_ids[:1].to(torch.long)
+        cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions, layer_type="compress")
+        cos = cos.repeat_interleave(2, dim=-1).unsqueeze(1)
+        sin = sin.repeat_interleave(2, dim=-1).unsqueeze(1)
+        return self._from_torch(cos), self._from_torch(sin)
+
+    def forward(self, hidden_states, position_ids: torch.Tensor):
+        """``hidden_states``: TTNN [B, 1, S, hidden]. ``position_ids``: torch [B, S].
+        Returns ``q`` TTNN [B, num_heads, S, head_dim]."""
+        input_shape = tuple(hidden_states.shape)
+        if len(input_shape) != 4 or input_shape[1] != 1:
+            raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
+        batch, seq_len = input_shape[0], input_shape[2]
+
+        q = ttnn.linear(hidden_states, self.wq_a, memory_config=self.memory_config)
+        q = ttnn.rms_norm(q, weight=self.q_a_norm_weight, epsilon=self.rms_norm_eps)
+        q = ttnn.linear(q, self.wq_b, memory_config=self.memory_config)
+
+        q = ttnn.reshape(q, [batch, seq_len, self.num_heads, self.head_dim])
+        q = ttnn.permute(q, (0, 2, 1, 3))
+        q = ttnn.rms_norm(q, weight=self.q_b_norm_weight, epsilon=self.rms_norm_eps)
+
+        nope_dim = self.head_dim - self.rope_head_dim
+        nope = ttnn.slice(q, [0, 0, 0, 0], [batch, self.num_heads, seq_len, nope_dim])
+        rope = ttnn.slice(q, [0, 0, 0, nope_dim], [batch, self.num_heads, seq_len, self.head_dim])
+        cos, sin = self._cos_sin(position_ids)
+        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
+        return ttnn.concat([nope, rope], dim=-1)
