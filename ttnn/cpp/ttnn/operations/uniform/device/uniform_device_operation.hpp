@@ -34,7 +34,7 @@ struct UniformDeviceOperation {
         const Tensor& input;
     };
 
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     static tt::tt_metal::ProgramDescriptor create_descriptor(

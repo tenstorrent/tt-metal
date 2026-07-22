@@ -107,6 +107,31 @@ bool get_exp_approx_mode(const std::optional<ttnn::operations::transformer::SDPA
     return true;
 }
 
+// Effective (num_kv_heads_k, num_kv_heads_v, block_size) for an HMA-shared paged buffer.
+// Apply PagedCacheGeometryOverride only when !use_mla: MLA never passes overrides (validated
+// upstream), and applying num_kv_heads to V under MLA would skip the elems/block check.
+struct EffectiveKvGeometry {
+    uint32_t nkh = 0;
+    uint32_t nvh = 0;
+    uint32_t block_size = 0;
+};
+
+EffectiveKvGeometry resolve_effective_kv_geometry(
+    const ttnn::operations::transformer::PagedCacheGeometryOverride& geo,
+    bool use_mla,
+    uint32_t k_num_heads,
+    uint32_t v_num_heads,
+    uint32_t k_block_size) {
+    if (use_mla || !geo.active()) {
+        return {k_num_heads, v_num_heads, k_block_size};
+    }
+    return {
+        geo.num_kv_heads.value_or(k_num_heads),
+        geo.num_kv_heads.value_or(v_num_heads),
+        geo.block_size.value_or(k_block_size),
+    };
+}
+
 // Chunked prefill parameters collected from page table layout.
 struct ChunkedParams {
     uint32_t chunked_q_chunk_offset = 0;
@@ -200,8 +225,17 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const auto& k_shape = input_tensor_k.logical_shape();
     const auto& v_shape = input_tensor_v.logical_shape();
     const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
-    const uint32_t NKH = k_shape[1];
-    const uint32_t NVH = v_shape[1];
+    // Geometry overrides for an HMA-shared paged buffer (see PagedCacheGeometryOverride): when
+    // the paged K/V cache was allocated for a different layer's view, the reader must address it
+    // with this call's num_kv_heads / block_size (Q already drives head_dim via DHt) rather than
+    // the cache's declared shape. Unset ⇒ the cache's own num_kv_heads / block_size. The reader
+    // computes physical tile ids manually from these as compile-time args
+    // (dataflow_common.hpp virtual_seq_tile_id_to_physical_tile_id).
+    const auto kv_geo = resolve_effective_kv_geometry(
+        operation_attributes.paged_cache_geometry, use_mla, k_shape[1], v_shape[1], k_shape[2]);
+    const uint32_t NKH = kv_geo.nkh;
+    const uint32_t NVH = kv_geo.nvh;
+    const uint32_t effective_kv_block_size = kv_geo.block_size;
 
     // In flash mla prefill, we have to support the case where NKH != NVH
     // We are calling op with the following shapes:
@@ -217,7 +251,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // For flexible chunked: max prefix length = page_table num_pages * block_size (from K/V layout).
     uint32_t max_prefix_tokens_flexible = 0;
     if (is_chunked && flexible_chunked) {
-        const uint32_t block_size_for_sk = k_shape[2];
+        const uint32_t block_size_for_sk = effective_kv_block_size;
         const uint32_t max_blocks = page_table.value().padded_shape()[1];
         max_prefix_tokens_flexible = max_blocks * block_size_for_sk;
     }
@@ -292,7 +326,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "sliding_window_size: {}", sliding_window_size.has_value() ? sliding_window_size.value() : 0);
 
     const auto chunked = compute_chunked_params(
-        is_chunked, is_chunked_legacy, flexible_chunked, chunk_start_idx, page_table, k_shape[2], q_chunk_size);
+        is_chunked,
+        is_chunked_legacy,
+        flexible_chunked,
+        chunk_start_idx,
+        page_table,
+        effective_kv_block_size,
+        q_chunk_size);
     const uint32_t chunked_q_chunk_offset = chunked.chunked_q_chunk_offset;
     const uint32_t block_size = chunked.block_size;
     const uint32_t block_size_t = chunked.block_size_t;

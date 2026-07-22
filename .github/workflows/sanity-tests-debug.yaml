@@ -48,7 +48,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   determine-debug-flags:
     name: Determine debug flags
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enable-watcher: ${{ steps.check.outputs.enable-watcher }}
       enable-llk-asserts: ${{ steps.check.outputs.enable-llk-asserts }}
