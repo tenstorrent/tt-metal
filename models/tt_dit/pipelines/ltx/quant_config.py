@@ -107,8 +107,9 @@ class QuantConfig:
     def all_bf8_lofi() -> QuantConfig:
         """Weights bfloat8_b, LoFi compute. SDPA stays bf16/HiFi2.
 
-        ``activation_dtype`` is bf8 here but is inert unless ``LTX_QUANT_ACTIVATIONS`` is set, so by
-        default this preset is matmul-internal only: the collectives still move bf16.
+        ``activation_dtype`` is bf8 and active by default (``LTX_QUANT_ACTIVATIONS`` defaults on), so
+        the collectives move bf8; set ``LTX_QUANT_ACTIVATIONS=0`` for a matmul-internal-only cast that
+        keeps the collectives at bf16.
 
         Carve-out: both ``self_attn_out`` (attn1) and the video ``cross_attn_out`` (attn2)
         run the fused ``dit_minimal_matmul_addcmul_fused`` / ``all_gather_minimal_matmul_async``
@@ -268,8 +269,9 @@ def apply_quant_config_to_block(block, config: QuantConfig, arch, has_audio: boo
         _apply_linear_quant(attn.to_out, config.self_attn_out)
         attn.mm_compute_kernel_config = qkv_compute
         attn.sdpa_compute_kernel_config = sdpa_compute
-        if sdpa_input_dtype is not None:
-            attn._sdpa_input_dtype = sdpa_input_dtype
+        # Assign unconditionally (incl. None) so re-applying a preset that requests no SDPA cast
+        # clears a prior preset's cast instead of leaving it active.
+        attn._sdpa_input_dtype = sdpa_input_dtype
 
     def _quant_cross_attn(attn):
         if attn is None:

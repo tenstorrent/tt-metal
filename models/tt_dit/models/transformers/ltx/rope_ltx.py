@@ -254,6 +254,8 @@ def prepare_video_rope(
     v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
     v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps
     if anchor_frames:
+        if any(f < 0 or f >= latent_frames for f in anchor_frames):
+            raise ValueError(f"anchor_frames {anchor_frames} out of range [0, {latent_frames})")
         hw = latent_height * latent_width
         v_positions = torch.cat(
             [v_positions] + [v_positions[:, :, f * hw : (f + 1) * hw, :] for f in anchor_frames], dim=2
@@ -359,6 +361,8 @@ def prepare_av_cross_pe(
     if anchor_frames:
         # Append-token anchors ride the tail carrying their target frame's temporal phase, so the
         # video cross-PE stays length-matched to the extended video token sequence.
+        if any(f < 0 or f >= latent_frames for f in anchor_frames):
+            raise ValueError(f"anchor_frames {anchor_frames} out of range [0, {latent_frames})")
         hw = latent_height * latent_width
         v_temporal = torch.cat(
             [v_temporal] + [v_temporal[:, :, f * hw : (f + 1) * hw, :] for f in anchor_frames], dim=2
