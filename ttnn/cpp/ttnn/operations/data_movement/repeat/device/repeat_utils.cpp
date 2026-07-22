@@ -6,6 +6,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::data_movement::repeat {
 
@@ -249,10 +250,10 @@ std::optional<ShardSpec> generate_repeat_shard_spec(
         orientation = input_tensor.shard_spec()->orientation;
     }
 
-    // For BLOCK sharding, place the shards on exactly the sub-grid they occupy instead of the whole
-    // compute grid. Reporting the full grid would leave the tensor's shard_spec inconsistent with its
-    // physical buffer (tt-metal trims the grid to the used cores at allocation), which hides the real
-    // layout from the op-constraints query and can corrupt consumers that trust the reported grid.
+    // Place the shards on exactly the sub-grid they occupy instead of the whole compute grid.
+    // Reporting the full grid would leave the tensor's shard_spec inconsistent with its physical
+    // buffer (tt-metal trims the grid to the used cores at allocation), which hides the real layout
+    // from the op-constraints query and can corrupt consumers that trust the reported grid.
     CoreRangeSet shard_grid = all_cores;
     if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         const uint32_t num_shards_along_height =
@@ -267,38 +268,75 @@ std::optional<ShardSpec> generate_repeat_shard_spec(
             return std::nullopt;
         }
         shard_grid = CoreRangeSet(CoreRange({0, 0}, {grid_x - 1, grid_y - 1}));
+    } else {
+        // HEIGHT/WIDTH are 1D: use exactly num_shards cores (matching the buffer's 1D trim order), so
+        // num_cores == num_shards and the buffer performs no trimming. num_cores_to_corerangeset may
+        // return an up-to-3-range set, which HEIGHT/WIDTH validation allows (unlike block).
+        const uint32_t num_shards = static_cast<uint32_t>(
+            memory_layout == TensorMemoryLayout::HEIGHT_SHARDED
+                ? tt::div_up(tensor_height, static_cast<uint64_t>(shard_shape[0]))
+                : tt::div_up(tensor_width, static_cast<uint64_t>(shard_shape[1])));
+        if (num_shards == 0 || num_shards > num_cores) {
+            return std::nullopt;
+        }
+        shard_grid =
+            num_cores_to_corerangeset(num_shards, compute_grid_size, orientation == ShardOrientation::ROW_MAJOR);
     }
     return ShardSpec(shard_grid, shard_shape, orientation);
 }
 
-void validate_block_shard_grid_not_over_provisioned(
+void validate_shard_grid_not_over_provisioned(
     const MemoryConfig& mem_config, uint32_t physical_height, uint32_t physical_width) {
-    if (mem_config.memory_layout() != TensorMemoryLayout::BLOCK_SHARDED || !mem_config.shard_spec().has_value()) {
+    if (!mem_config.is_sharded() || !mem_config.shard_spec().has_value()) {
         return;
     }
     const auto& shard_spec = *mem_config.shard_spec();
-    if (shard_spec.grid.ranges().size() != 1 || shard_spec.shape[0] == 0 || shard_spec.shape[1] == 0) {
+    if (shard_spec.shape[0] == 0 || shard_spec.shape[1] == 0) {
         return;
     }
-    const uint32_t num_shards_along_height = tt::div_up(physical_height, shard_spec.shape[0]);
-    const uint32_t num_shards_along_width = tt::div_up(physical_width, shard_spec.shape[1]);
-    // Row-major maps width-shards to grid columns (x) and height-shards to rows (y); column-major swaps.
-    const bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-    const uint32_t needed_x = row_major ? num_shards_along_width : num_shards_along_height;
-    const uint32_t needed_y = row_major ? num_shards_along_height : num_shards_along_width;
-    const auto grid = shard_spec.grid.bounding_box().grid_size();
-    TT_FATAL(
-        grid.x <= needed_x && grid.y <= needed_y,
-        "ttnn.repeat: requested block-sharded output grid {}x{} (rows x columns) is larger than the {}x{} "
-        "shards the {}x{} output occupies; the extra cores would be silently trimmed at allocation, leaving "
-        "the reported grid inconsistent with the physical buffer. Request a grid matching the shard count, "
-        "or omit the output shard_spec to have it derived.",
-        grid.y,
-        grid.x,
-        needed_y,
-        needed_x,
-        physical_height,
-        physical_width);
+    const auto memory_layout = mem_config.memory_layout();
+    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        if (shard_spec.grid.ranges().size() != 1) {
+            return;  // non-rectangular grid: no well-defined bounding box to compare
+        }
+        const uint32_t num_shards_along_height = tt::div_up(physical_height, shard_spec.shape[0]);
+        const uint32_t num_shards_along_width = tt::div_up(physical_width, shard_spec.shape[1]);
+        // Row-major maps width-shards to grid columns (x) and height-shards to rows (y); column-major swaps.
+        const bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+        const uint32_t needed_x = row_major ? num_shards_along_width : num_shards_along_height;
+        const uint32_t needed_y = row_major ? num_shards_along_height : num_shards_along_width;
+        const auto grid = shard_spec.grid.bounding_box().grid_size();
+        TT_FATAL(
+            grid.x <= needed_x && grid.y <= needed_y,
+            "ttnn.repeat: requested block-sharded output grid {}x{} (rows x columns) is larger than the {}x{} "
+            "shards the {}x{} output occupies; the extra cores would be silently trimmed at allocation, leaving "
+            "the reported grid inconsistent with the physical buffer. Request a grid matching the shard count, "
+            "or omit the output shard_spec to have it derived.",
+            grid.y,
+            grid.x,
+            needed_y,
+            needed_x,
+            physical_height,
+            physical_width);
+    } else if (
+        memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        // HEIGHT/WIDTH are 1D: the used cores are min(num_cores, num_shards); a grid with more cores than
+        // shards is silently trimmed, so the reported grid diverges from the physical buffer.
+        const bool is_height = memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
+        const uint32_t num_shards = is_height ? tt::div_up(physical_height, shard_spec.shape[0])
+                                              : tt::div_up(physical_width, shard_spec.shape[1]);
+        TT_FATAL(
+            shard_spec.num_cores() <= num_shards,
+            "ttnn.repeat: requested {}-sharded output grid has {} cores, larger than the {} shards the {}x{} output "
+            "occupies; the extra cores would be silently trimmed at allocation, leaving the reported grid "
+            "inconsistent with the physical buffer. Request a grid matching the shard count, or omit the output "
+            "shard_spec to have it derived.",
+            is_height ? "height" : "width",
+            shard_spec.num_cores(),
+            num_shards,
+            physical_height,
+            physical_width);
+    }
 }
 
 }  // namespace ttnn::operations::data_movement::repeat

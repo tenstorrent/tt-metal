@@ -82,13 +82,13 @@ RepeatDeviceOperation::spec_return_value_t RepeatDeviceOperation::compute_output
             if (derived.has_value()) {
                 mem_config = MemoryConfig(mem_config.memory_layout(), mem_config.buffer_type(), derived);
             }
-        } else if (mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
-            // Reject an explicitly-requested block-sharded grid larger than the shards the output
-            // occupies (would be silently trimmed -> reported grid inconsistent with the buffer).
+        } else {
+            // Reject an explicitly-requested sharded grid larger than the shards the output occupies
+            // (would be silently trimmed -> reported grid inconsistent with the buffer).
             const tt::tt_metal::TensorLayout probe_layout(
                 input_tensor_a.dtype(), tt::tt_metal::PageConfig(input_tensor_a.layout()), mem_config);
             const auto physical_shape = probe_layout.compute_physical_shape(output_shape);
-            operations::data_movement::repeat::validate_block_shard_grid_not_over_provisioned(
+            operations::data_movement::repeat::validate_shard_grid_not_over_provisioned(
                 mem_config,
                 static_cast<uint32_t>(physical_shape.height()),
                 static_cast<uint32_t>(physical_shape.width()));

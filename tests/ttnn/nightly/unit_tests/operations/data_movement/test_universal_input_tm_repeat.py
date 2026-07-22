@@ -1019,24 +1019,30 @@ def test_repeat_composite_edge_cases(shape, repeat_shape, in_mc_fn, out_mc_fn, p
     )
 
 
-def test_repeat_block_sharded_explicit_over_provisioned_grid_errors(device, expect_error):
-    """A falsely-reported (over-provisioned) explicit block-sharded output grid must be a catchable
-    error, not a silent trim that leaves the reported grid inconsistent with the physical buffer.
-
-    1x1x8x128 = 32x128 padded = 1 tile tall x 4 tiles wide = 4 shards, so an explicit 8x8 (64-core)
-    grid is over-provisioned and must be rejected rather than silently trimmed to 4 cores.
+@pytest.mark.parametrize(
+    "over_provisioned_output_fn",
+    [
+        # For the 1x1x8x128 result (32x128 padded): BLOCK needs 1x4=4 shards, HEIGHT needs 1, WIDTH needs 4.
+        pytest.param(lambda d: _explicit_block_shard_config(d, grid_y=8, grid_x=8, sh=32, sw=32), id="block_8x8"),
+        pytest.param(lambda d: _explicit_height_shard_config(d, 8, 32, 128), id="height_8core"),
+        pytest.param(lambda d: _explicit_width_shard_config(d, 8, 32, 32), id="width_8core"),
+    ],
+)
+def test_repeat_sharded_explicit_over_provisioned_grid_errors(device, expect_error, over_provisioned_output_fn):
+    """A falsely-reported (over-provisioned) explicit sharded output grid must be a catchable error,
+    not a silent trim that leaves the reported grid inconsistent with the physical buffer -- for any
+    sharded layout (BLOCK/HEIGHT/WIDTH). Each config below asks for more cores than the output's
+    shard count and must be rejected.
     """
     torch.manual_seed(0)
     x = torch.rand((1, 1, 1, 128), dtype=torch.bfloat16)
 
     input_mem_config = _explicit_block_shard_config(device, grid_y=1, grid_x=4, sh=32, sw=32)
-    over_provisioned_output = _explicit_block_shard_config(device, grid_y=8, grid_x=8, sh=32, sw=32)
-
     ttnn_in = ttnn.from_torch(
         x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=input_mem_config
     )
     with expect_error(RuntimeError, "larger than the"):
-        ttnn.repeat(ttnn_in, [1, 1, 8, 1], memory_config=over_provisioned_output)
+        ttnn.repeat(ttnn_in, [1, 1, 8, 1], memory_config=over_provisioned_output_fn(device))
 
 
 @pytest.mark.parametrize(
@@ -1089,3 +1095,46 @@ def test_repeat_block_sharded_derived_grid_scales_with_shape(
     # without this fix -- PCC would not discriminate. The reported grid above is the regression. The
     # corruption this fix prevents only surfaces in the compiled program (reader args baked from the
     # advertised grid); data correctness of repeat itself is covered by the run_repeat_test cases.
+
+
+@pytest.mark.parametrize(
+    "memory_layout, num_repeats, expected_num_cores",
+    [
+        # HEIGHT: full-width shard, ceil(N/32) shards along height.
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 8, 1),
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 64, 2),
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 128, 4),
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 256, 8),
+        # WIDTH: 128 wide = 128/32 = 4 shards, independent of the repeat count.
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, 8, 4),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, 256, 4),
+    ],
+)
+def test_repeat_1d_sharded_derived_grid_is_minimal(device, memory_layout, num_repeats, expected_num_cores):
+    """Height/width-sharded sibling of test_repeat_block_sharded_derived_grid_scales_with_shape: a
+    derived (no explicit shard spec) 1D-sharded output must report exactly the cores its shards
+    occupy, not the full compute grid (which would be silently trimmed at allocation). repeat
+    [1,1,N,1] on [1,1,1,128] -> [1,1,N,128]; HEIGHT uses ceil(N/32) cores (full-width shard), WIDTH
+    uses 128/32 = 4 cores regardless of N. (num_cores, not grid dims, is the meaningful 1D metric.)
+    """
+    compute_grid = device.compute_with_storage_grid_size()
+    if expected_num_cores > compute_grid.x * compute_grid.y:
+        pytest.skip(f"device has {compute_grid.x * compute_grid.y} cores, need {expected_num_cores}")
+
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, 1, 128), dtype=torch.bfloat16)
+
+    input_mem_config = _explicit_block_shard_config(device, grid_y=1, grid_x=4, sh=32, sw=32)
+    # No explicit output shard spec -> repeat derives the grid via generate_repeat_shard_spec.
+    derived_output = _sharded_no_spec(memory_layout)(device)
+
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=input_mem_config
+    )
+    result = ttnn.repeat(ttnn_in, [1, 1, num_repeats, 1], memory_config=derived_output)
+
+    shard_spec = result.memory_config().shard_spec
+    assert shard_spec is not None, "expected a sharded output"
+    assert (
+        shard_spec.num_cores() == expected_num_cores
+    ), f"expected {expected_num_cores} cores, got {shard_spec.num_cores()} ({shard_spec.grid})"

@@ -40,13 +40,13 @@ std::optional<tt::tt_metal::ShardSpec> generate_repeat_shard_spec(
     tt::tt_metal::TensorMemoryLayout memory_layout,
     std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt);
 
-// TT_FATAL if a BLOCK_SHARDED output config requests a grid larger than the shards the given physical
-// (padded) output extents occupy. tt-metal would silently trim such a grid to the used cores at
-// allocation, leaving the reported grid inconsistent with the physical buffer -- a falsely reported
-// grid that corrupts consumers (and the op-constraints query) that trust it. No-op for non-block
-// layouts, a missing/non-rectangular shard spec, or a grid that matches (or is smaller than) the
-// shard count.
-void validate_block_shard_grid_not_over_provisioned(
+// TT_FATAL if a sharded output config (BLOCK, HEIGHT, or WIDTH) requests a grid larger than the shards
+// the given physical (padded) output extents occupy. tt-metal would silently trim such a grid to the
+// used cores at allocation, leaving the reported grid inconsistent with the physical buffer -- a
+// falsely reported grid that corrupts consumers (and the op-constraints query) that trust it. No-op
+// for interleaved/unsharded, a missing shard spec, a non-rectangular block grid, or a grid that
+// matches (or is smaller than) the shard count.
+void validate_shard_grid_not_over_provisioned(
     const tt::tt_metal::MemoryConfig& mem_config, uint32_t physical_height, uint32_t physical_width);
 
 }  // namespace ttnn::operations::data_movement::repeat
