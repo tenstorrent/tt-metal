@@ -50,13 +50,14 @@ void emit_runtime_args_hc_tiled(
 
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
         const CoreCoord& core = cores[i];
-        uint32_t num_tiles_per_core = 0;
+        uint32_t num_tiles_per_core;
 
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
-        } else {
-            TT_ASSERT(core_group_2.contains(core));
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
+        } else {
+            TT_THROW("Core not in specified core ranges");
         }
 
         uint32_t h = num_tiles_read / CtWt % H;

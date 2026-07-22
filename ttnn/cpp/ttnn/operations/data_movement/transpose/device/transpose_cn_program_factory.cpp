@@ -116,12 +116,13 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     writer_desc.runtime_args.reserve(num_cores);
     for (uint32_t i = 0, num_pages_read = 0; i < num_cores; i++) {
         const CoreCoord& core = cores[i];
-        uint32_t num_pages_per_core = 0;
+        uint32_t num_pages_per_core;
         if (core_group_1.contains(core)) {
             num_pages_per_core = num_pages_per_core_group_1;
-        } else {
-            TT_ASSERT(core_group_2.contains(core));
+        } else if (core_group_2.contains(core)) {
             num_pages_per_core = num_pages_per_core_group_2;
+        } else {
+            TT_THROW("Core not in specified core ranges");
         }
 
         uint32_t hw = num_pages_read % HtWt;
