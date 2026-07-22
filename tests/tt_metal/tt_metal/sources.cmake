@@ -40,5 +40,6 @@ set(UNIT_TESTS_LEGACY_SRC
     test_unaligned_read_write_core.cpp
     test_riscv_atomics.cpp
     test_noc_self_atomic.cpp
+    test_sem_scope.cpp
     test_globals_tls.cpp
 )
