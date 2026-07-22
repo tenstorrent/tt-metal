@@ -28,7 +28,6 @@ void validate_device_tensor(const Tensor& tensor, const std::string& name) {
     TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
-    TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR layout", name);
 }
 
 ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape) {
@@ -46,8 +45,12 @@ ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape) {
 }  // namespace
 
 PerTokenCastToFp8DeviceOperation::program_factory_t PerTokenCastToFp8DeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return PerTokenCastToFp8ProgramFactory{};
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    if (tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE) {
+        return PerTokenCastToFp8TileProgramFactory{};
+    } else {
+        return PerTokenCastToFp8RowMajorProgramFactory{};
+    }
 }
 
 void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
@@ -156,6 +159,7 @@ ttsl::hash::hash_t PerTokenCastToFp8DeviceOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<PerTokenCastToFp8DeviceOperation>(
         attrs,
         input.dtype(),
+        input.layout(),  // ROW_MAJOR and TILE select different program factories
         input.memory_config(),
         input.logical_shape(),
         tile_shape[0],

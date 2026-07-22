@@ -18,7 +18,26 @@ struct PerTokenCastToFp8SharedVariables {
     std::vector<CoreCoord> all_cores_vec;
 };
 
-struct PerTokenCastToFp8ProgramFactory {
+// ROW_MAJOR-layout input variant. Compute kernel does not skip tilization of input.
+struct PerTokenCastToFp8RowMajorProgramFactory {
+    using shared_variables_t = PerTokenCastToFp8SharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+    using tensor_return_value_t = std::tuple<Tensor, Tensor>;
+
+    static cached_program_t create(
+        const PerTokenCastToFp8Params& operation_attributes,
+        const PerTokenCastToFp8Inputs& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const PerTokenCastToFp8Params& operation_attributes,
+        const PerTokenCastToFp8Inputs& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+};
+
+// TILE-layout input variant. Compute kernel skips tilization of input.
+struct PerTokenCastToFp8TileProgramFactory {
     using shared_variables_t = PerTokenCastToFp8SharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor>;
