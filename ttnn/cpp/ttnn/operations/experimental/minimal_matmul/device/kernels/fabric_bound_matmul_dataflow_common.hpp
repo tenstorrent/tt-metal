@@ -82,14 +82,21 @@ void read_in0_block_sync(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    // When false, issue the async reads but skip the completion barrier, so a caller reading the
+    // block in M-row bands can keep band s's reads in flight while it waits for band s+1's data and
+    // barrier once after the last band.
+    bool issue_barrier = true,
+    // Byte offset from the CB base at which this (sub-)block's writes begin. A caller streaming the
+    // block in M-row bands passes each band's offset so bands land at their slots instead of the base.
+    uint32_t write_ptr_offset = 0) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
     Noc noc;
     CircularBuffer cb(cb_id);
     const uint32_t cb_base_write_ptr = cb.get_write_ptr();
-    uint32_t write_ptr = cb_base_write_ptr;
+    uint32_t write_ptr = cb_base_write_ptr + write_ptr_offset;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -116,7 +123,9 @@ void read_in0_block_sync(
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (K_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc_async_read_barrier();
+    if (issue_barrier) {
+        noc_async_read_barrier();
+    }
     noc.write_zeros_l1_barrier();
 }
 
@@ -134,13 +143,16 @@ void read_in1_block_sync(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    // Byte offset from the CB base at which this block's writes begin. Lets a caller stage several
+    // blocks into distinct slots of one scratch CB (e.g. the fwd/bwd pair of AG_INTERLEAVE_BANDS).
+    uint32_t write_ptr_offset = 0) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
     Noc noc;
     CircularBuffer cb(cb_id);
     const uint32_t cb_base_write_ptr = cb.get_write_ptr();
-    uint32_t write_ptr = cb_base_write_ptr;
+    uint32_t write_ptr = cb_base_write_ptr + write_ptr_offset;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
@@ -309,8 +321,14 @@ void write_block_sync_granular(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
-    for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
+    uint32_t d1_end,
+    // Restrict the write to the block's M-row sub-range [m_id_start, m_id_end). Used by the two-NoC output
+    // split: each DM writer drains only its half of a separate out CB and writes only its rows. The per-row
+    // cb_wait_front/pop happen once per iterated row, so the pop count matches what compute pushed to that
+    // CB. Defaults span the whole block (single-writer baseline).
+    uint32_t m_id_start = 0,
+    uint32_t m_id_end = M_block_tiles) {
+    for (uint32_t m_id = m_id_start; m_id < m_id_end; m_id++) {
         cb_wait_front(cb_id_out, N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
         if (m_tile < d0_end && m_tile < shape.logical_d0) {
