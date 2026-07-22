@@ -23,10 +23,10 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& config = operation_attributes.config;
 
-    TT_FATAL(act_tensor.storage_type() == StorageType::DEVICE, "variable_matmul activation must be on device");
+    TT_FATAL(act_tensor.storage_type() == ttnn::StorageType::DEVICE, "variable_matmul activation must be on device");
     auto* device = act_tensor.device();
     auto check_on_device = [device](const ttnn::Tensor& t, const char* name) {
-        TT_FATAL(t.storage_type() == StorageType::DEVICE, "variable_matmul {} must be on device", name);
+        TT_FATAL(t.storage_type() == ttnn::StorageType::DEVICE, "variable_matmul {} must be on device", name);
         TT_FATAL(t.buffer() != nullptr, "variable_matmul {} must be allocated in a device buffer", name);
         TT_FATAL(t.device() == device, "variable_matmul {} must reside on the same device as the input", name);
     };

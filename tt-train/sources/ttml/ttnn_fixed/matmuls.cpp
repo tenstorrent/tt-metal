@@ -51,7 +51,6 @@ std::pair<ttnn::Tensor, ttnn::Tensor> matmul_backward(
         // A was used as is.
         // grad_A = reshaped_grad * ( (transpose_b ? B^T : B) )^T.
         // If transpose_b is false: (B)^T = B^T, if true: (B^T)^T = B.
-        // Qualify: with Tensor in ttnn, unqualified matmul is ambiguous against ttnn::matmul (ADL).
         reshaped_a_grad = ttnn_fixed::matmul(reshaped_grad, b, false, !transpose_b);
     } else {
         // A was transposed in the forward pass (i.e. we used A^T).
