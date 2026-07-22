@@ -15,6 +15,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ckernel.h"  // ckernel::load_blocking (store-drain in copy_via_memmove)
 
 constexpr uint64_t ALIGN_REQ_64 = 64;
 constexpr uint64_t MASK_64 = 0xFFFFFFFFFFFFFFC0;
@@ -85,6 +86,26 @@ FORCE_INLINE noc_traits_t<UnicastEndpoint>::dst_args_type self_l1_dst_args(Noc n
     return {.noc_x = my_x[id], .noc_y = my_y[id], .addr = addr};
 }
 
+// CPU memmove of an L1 region, with the store-visibility drain the NoC datamover paths get for free.
+// A memmove is baby-RISCV stores; a store can retire before its write-request lands in L1, and the RISCV
+// core and the NoC are different L1 clients with no program-order guarantee between them
+// (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). When the copy is not deferred (!copy_async), drain
+// the last written word (blocking load + memory clobber) so the copy is processed before the caller
+// publishes / NoC-reads the destination -- the counterpart of the NoC path's completion barrier.
+template <bool copy_async>
+FORCE_INLINE void copy_via_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
+    invalidate_l1_cache();
+    memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+    if constexpr (!copy_async) {
+        if (bytes != 0) {
+            // Drain the 4B-aligned word holding the last written byte: in-bounds and aligned for any
+            // size/alignment (dst may be sub-word-aligned on the misaligned path).
+            (void)ckernel::load_blocking(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>((dst_l1_addr + bytes - 1) & ~uint32_t{3}));
+        }
+    }
+}
+
 template <bool guaranteed_16B_aligned, bool copy_async, bool use_read_datamover, uint32_t max_transfer_size>
 FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
     constexpr uint32_t page_size = max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size;
@@ -94,8 +115,7 @@ FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t
     // to the CPU memmove, which copies in the safe direction. Non-overlapping copies (the common
     // cross-buffer case) are unaffected.
     if ((dst_l1_addr < src_l1_addr + bytes) && (src_l1_addr < dst_l1_addr + bytes)) {
-        invalidate_l1_cache();
-        memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+        copy_via_memmove<copy_async>(dst_l1_addr, src_l1_addr, bytes);
         return;
     }
     if constexpr (use_read_datamover) {
@@ -121,8 +141,7 @@ FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t
                     noc.async_read_barrier();
                 }
             } else {
-                invalidate_l1_cache();
-                memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+                copy_via_memmove<copy_async>(dst_l1_addr, src_l1_addr, bytes);
             }
         }
     } else {
@@ -148,8 +167,7 @@ FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t
                     noc.async_write_barrier();
                 }
             } else {
-                invalidate_l1_cache();
-                memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+                copy_via_memmove<copy_async>(dst_l1_addr, src_l1_addr, bytes);
             }
         }
     }

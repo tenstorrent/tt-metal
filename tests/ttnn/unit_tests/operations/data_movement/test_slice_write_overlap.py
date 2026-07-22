@@ -21,6 +21,7 @@ overlapping writes) so this passes even without the fix; it guards against a
 regression that reroutes overlap onto the raw NoC self-copy. The mechanism is proven
 in the PR via a forced write-before-read ordering (deterministic corruption).
 """
+
 import pytest
 import torch
 import ttnn
@@ -30,7 +31,7 @@ from tests.ttnn.utils_for_testing import assert_equal
 @pytest.mark.parametrize(
     "H, W_in, begin_last",
     [
-        (4, 6000, 8),   # page_offset=16B, row=12000B (multi-packet)
+        (4, 6000, 8),  # page_offset=16B, row=12000B (multi-packet)
         (4, 6000, 16),  # page_offset=32B
         (4, 6000, 24),  # page_offset=48B
         (2, 16000, 8),  # page_offset=16B, row=32000B (~4 packets)
