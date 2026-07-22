@@ -28,6 +28,13 @@ enum DispatchWorkerType : uint32_t {
     COUNT,
 };
 
+struct CommandQueueDispatchLayout {
+    // Whether a CQ's FD kernels are on the same dispatch core
+    bool fd_kernels_on_same_core;
+    // Number of CQs assigned to each dispatch core
+    uint8_t num_cqs_per_core;
+};
+
 CoreType get_core_type_from_config(const DispatchCoreConfig& config);
 
 // Resolve the dispatch core axis from a DispatchCoreConfig without depending on MetalContext.

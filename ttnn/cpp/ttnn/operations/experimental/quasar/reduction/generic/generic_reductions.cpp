@@ -729,8 +729,7 @@ Tensor std(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    bool /*use_legacy - deprecated and non-functional, kept for API compatibility*/) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return operations::experimental::quasar::reduce<reduction_common::ReduceType::Std>(
         input_tensor_arg,
         dim_arg,
@@ -750,8 +749,7 @@ Tensor var(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    bool /*use_legacy - deprecated and non-functional, kept for API compatibility*/) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return operations::experimental::quasar::reduce<reduction_common::ReduceType::Var>(
         input_tensor_arg,
         dim_arg,

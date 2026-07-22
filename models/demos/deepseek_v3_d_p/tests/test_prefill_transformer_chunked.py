@@ -51,6 +51,13 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.test_utils import (
+    cache_half_pccs,
+    gather_cache_tp0,
+    interleave_pe,
+    read_sharded_rows,
+    unrotate_cache_layer,
+)
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CHUNK = 5 * 1024  # 5120 tokens per chunk
@@ -105,6 +112,12 @@ LAYER_PCC_THRESHOLD = 0.88
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
 GATED_LAYER_DEPTH = 10
+# Record-only warn floors for the deep KV / indexer-K cache PCC: a WARNING, never a test stop. Set at the
+# observed L78 minimum (not below it) so a future regression trips the warning. KVPE nope bottoms ~0.86
+# (glm_5_2 @L75); indexer-K nope 0.952 (glm_5_1 @L52; glm_5_1 captures all 78 layers, glm_5_2's
+# 0-2+every-4th subsample only reaches 0.980).
+KV_CACHE_PCC_WARN_THRESHOLD = 0.85
+INDEXER_K_PCC_WARN_THRESHOLD = 0.95
 
 # Per-chunk baseline medians (seconds) for the no-PCC perf gate, pulled from a known-good CI run. Keyed
 # by (num_layers, n_chunks, num_iters) so only the exact config we have a CI number for is gated; every
@@ -138,20 +151,6 @@ _LAYOUT_SINGLE_FILE = "single_file"
 _LAYOUT_CHUNKED_GROUP_A = "chunked_group_a_v1"
 
 
-def _read_sharded_rows(tensor_dir: Path, key: str, start: int, end: int) -> torch.Tensor:
-    """Read rows [start:end] of `key` from a chunked_group_a_v1 shard directory, concatenating the
-    rows_<s>_<e>.safetensors shards that overlap the range (partial read, natural order)."""
-    parts = []
-    for shard in sorted(tensor_dir.glob("rows_*.safetensors")):
-        s, e = (int(x) for x in shard.stem.split("_")[1:3])
-        if e <= start or s >= end:
-            continue
-        with safe_open(shard, framework="pt") as f:
-            parts.append(f.get_slice(key)[max(start, s) - s : min(end, e) - s].to(torch.float32))
-    assert parts, f"no shards overlap rows [{start}:{end}] in {tensor_dir}"
-    return torch.cat(parts, dim=0)
-
-
 def _load_layer_rows(
     trace_dir: Path, layout: str, group: str, layer: int, key: str, start: int, end: int
 ) -> torch.Tensor:
@@ -165,7 +164,7 @@ def _load_layer_rows(
             tensor_dir = trace_dir / "dsa" / key
         else:
             tensor_dir = trace_dir / "kv_cache" / f"layer_{layer}"
-        return _read_sharded_rows(tensor_dir, key, start, end)
+        return read_sharded_rows(tensor_dir, key, start, end)
     path = trace_dir / group / f"layer_{layer}.safetensors"
     with safe_open(path, framework="pt") as f:
         return f.get_slice(key)[start:end].to(torch.float32)
@@ -177,35 +176,71 @@ def _ref_layer_slice(trace_dir: Path, layout: str, layer: int, start: int, end: 
 
 
 def _record_kv_cache_pcc(
-    trace_dir, layout, tt_kvpe_cache, mesh_device, sp, num_layers, seq_len_cache, total_len, kvpe_dim, kv_lora
+    trace_dir, layout, tt_kvpe_cache, mesh_device, sp, num_layers, seq_len_cache, total_len, kv_lora
 ):
-    """Record-only: gather the device KV cache, un-rotate the block-cyclic layout, and PCC each
-    layer's valid region [:total_len] against the golden kv_post_transform trace. nope is compared
-    directly; the RoPE (pe) slice uses the Meta-interleaved basis (golden stores HF half-split).
-    Does NOT assert — mirrors the per-layer decoder_output record-only reporting."""
+    """Record-only: gather the device KV cache, un-rotate the block-cyclic layout, and PCC each layer's
+    valid region [:total_len] against the golden kv_post_transform trace ([nope | pe], the pe half re-based
+    to the device Meta interleave via cache_half_pccs). Per-layer cache — slot == layer. Does NOT assert."""
     logger.info("Device KV cache vs golden kv_post_transform (record-only):")
-    # One gather: [num_layers, tp_replicas, seq_len_cache, kvpe] -> collapse TP replicas via [:, :1].
-    cache_full = ttnn.to_torch(
-        tt_kvpe_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.float32)[
-        :, :1
-    ]  # [num_layers, 1, seq_len_cache, kvpe]
+    cache_full = gather_cache_tp0(tt_kvpe_cache, mesh_device)  # [num_layers, seq_len_cache, kvpe]
     p = blockcyclic_positions(sp, CHUNK, seq_len_cache)
     cache_min_pcc = {}
     for i in range(num_layers):
-        nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
-        nat[p] = cache_full[i, 0]  # un-rotate block-cyclic -> natural order
-        dev_cache = nat[:total_len]
+        dev_cache = unrotate_cache_layer(cache_full[i], p, total_len)
         g_post = _load_layer_rows(trace_dir, layout, "kv_cache", i, f"kv_post_transform_layer_{i}", 0, total_len)
-        _, pcc_nope = comp_pcc(g_post[:, :kv_lora], dev_cache[:, :kv_lora])
-        ref_pe = g_post[:, kv_lora:]
-        d = ref_pe.shape[-1]
-        ref_pe_int = torch.stack([ref_pe[:, : d // 2], ref_pe[:, d // 2 :]], dim=-1).reshape(-1, d)  # HF -> Meta
-        _, pcc_pe = comp_pcc(ref_pe_int, dev_cache[:, kv_lora:])
+        pcc_nope, pcc_pe = cache_half_pccs(g_post, dev_cache, kv_lora, pe_interleave=True)
         cache_min_pcc[i] = min(pcc_nope, pcc_pe)
         logger.info(f"  cache layer {i} PCC: nope={pcc_nope:.6f} pe(interleaved)={pcc_pe:.6f}")
-    logger.info(f"KV cache min PCC across layers: {min(cache_min_pcc.values()):.6f}")
+        if cache_min_pcc[i] < KV_CACHE_PCC_WARN_THRESHOLD:
+            logger.warning(
+                f"  KV cache layer {i} PCC {cache_min_pcc[i]:.6f} below warn floor "
+                f"{KV_CACHE_PCC_WARN_THRESHOLD} (record-only, not asserted)"
+            )
+    kv_min = min(cache_min_pcc.values())
+    logger.info(f"KV cache min PCC across layers: {kv_min:.6f}")
+    if kv_min < KV_CACHE_PCC_WARN_THRESHOLD:
+        logger.warning(f"KV cache min PCC {kv_min:.6f} below warn floor {KV_CACHE_PCC_WARN_THRESHOLD} (record-only)")
+
+
+def _record_indexer_k_cache_pcc(
+    trace_dir, layout, tt_index_kv_cache, mesh_device, sp, num_layers, seq_len_cache, total_len, config
+):
+    """Record-only: gather the device DSA indexer-K cache, un-rotate the block-cyclic layout, and PCC
+    each captured layer's valid region [:total_len] against the golden dsa/indexer_k trace. The
+    index_head_dim key is [rope | nope] (rope = first half, indexed-RoPE; nope = second half, no rope);
+    BOTH compare directly because GLM's indexer RoPE is natively interleaved and the vLLM golden stores
+    that same basis (verified on device: the half-split reindex gives ~0 PCC, direct gives ~0.9999).
+    Same gather/un-rotate as the KVPE cache (caller-owned tensor, ConcatMesh2dToTensor dims=(2,1),
+    blockcyclic_positions). indexer_k is captured for a subset of layers (glm_5_1: all; glm_5_2: 0-2 +
+    every 4th) — layers without a golden are skipped. Does NOT assert; GLM DSA variants only."""
+    logger.info("Device indexer-K cache vs golden dsa/indexer_k (record-only):")
+    cache_full = gather_cache_tp0(tt_index_kv_cache, mesh_device)  # [num_full_indexer_layers or num_layers, T, D]
+    layers = [i for i in range(num_layers) if (trace_dir / "dsa" / f"indexer_k_layer_{i}").exists()]
+    if not layers:
+        logger.info("  (no indexer_k golden layers present -- skipping)")
+        return
+    p = blockcyclic_positions(sp, CHUNK, seq_len_cache)
+    rope = config.index_head_dim // 2  # [rope | nope]
+    idx_min_pcc = {}
+    for i in layers:
+        # Compact index cache (GLM-5.2 cross-layer reuse): layer i's slot is its full-indexer rank, not i
+        # (rank == i for glm_5_1, where every layer is full). Matches the indexer's own write addressing.
+        dev_cache = unrotate_cache_layer(cache_full[full_indexer_rank(config, i)], p, total_len)
+        g = _load_layer_rows(trace_dir, layout, "dsa", i, f"indexer_k_layer_{i}", 0, total_len)
+        pcc_rope, pcc_nope = cache_half_pccs(g, dev_cache, rope, pe_interleave=False)
+        idx_min_pcc[i] = min(pcc_nope, pcc_rope)
+        logger.info(f"  indexer cache layer {i} PCC: nope={pcc_nope:.6f} rope={pcc_rope:.6f}")
+        if idx_min_pcc[i] < INDEXER_K_PCC_WARN_THRESHOLD:
+            logger.warning(
+                f"  indexer-K cache layer {i} PCC {idx_min_pcc[i]:.6f} below warn floor "
+                f"{INDEXER_K_PCC_WARN_THRESHOLD} (record-only, not asserted)"
+            )
+    idx_min = min(idx_min_pcc.values())
+    logger.info(f"Indexer-K cache min PCC across {len(layers)} captured layers: {idx_min:.6f}")
+    if idx_min < INDEXER_K_PCC_WARN_THRESHOLD:
+        logger.warning(
+            f"Indexer-K cache min PCC {idx_min:.6f} below warn floor {INDEXER_K_PCC_WARN_THRESHOLD} (record-only)"
+        )
 
 
 def _preload_kvpe_prefix_from_trace(
@@ -244,14 +279,12 @@ def _preload_kvpe_prefix_from_trace(
     # x SEQ_CACHE_NOPCC the float32 tensor would be ~19 GB. Per-layer transients (randn/blockcyclic) are
     # freed each iteration, so the peak is this one bf16 tensor plus a single layer's working set.
     cache_host = torch.zeros(num_layers, 1, seq_len_cache, kvpe_dim, dtype=torch.bfloat16)
-    d = kvpe_dim - kv_lora
     gen = torch.Generator().manual_seed(1234)  # deterministic random tail
     for i in range(num_layers):
         kv_prior = torch.randn(preload_isl, kvpe_dim, generator=gen).to(torch.bfloat16)
         if real_len > 0:
             real = _load_layer_rows(trace_dir, layout, "kv_cache", i, f"kv_post_transform_layer_{i}", 0, real_len)
-            pe = real[:, kv_lora:]
-            real[:, kv_lora:] = torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(pe.shape[0], d)
+            real[:, kv_lora:] = interleave_pe(real[:, kv_lora:])
             kv_prior[:real_len] = real.to(torch.bfloat16)
         cache_host[i, 0] = blockcyclic_cache_host(kv_prior, sp, CHUNK, seq_len_cache, kvpe_dim)[0, 0]
     cache_shard_dims = [None, None]
@@ -501,7 +534,6 @@ def run_chunked_transformer_padded(
         num_layers,
         seq_len_cache,
         total_len,
-        kvpe_dim,
         config.kv_lora_rank,
     )
 
@@ -709,9 +741,20 @@ def run_chunked_transformer(
         num_layers,
         SEQ_CACHE,
         total_len,
-        kvpe_dim,
         config.kv_lora_rank,
     )
+    if tt_index_kv_cache is not None and (trace_dir / "dsa" / "indexer_k_layer_0").exists():
+        _record_indexer_k_cache_pcc(
+            trace_dir,
+            layout,
+            tt_index_kv_cache,
+            mesh_device,
+            sp,
+            num_layers,
+            SEQ_CACHE,
+            total_len,
+            config,
+        )
 
     profiler.end("total_test_time")
     logger.success(

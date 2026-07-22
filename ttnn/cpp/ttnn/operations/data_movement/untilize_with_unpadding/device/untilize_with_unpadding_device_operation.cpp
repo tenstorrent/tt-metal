@@ -221,7 +221,7 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
     ttsl::SmallVector<uint32_t> out_shape;
     const auto& input_tensor_a = input;
@@ -271,10 +271,11 @@ TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
             operation_attributes.output_mem_config.buffer_type(),
             shard_spec);
 
-        return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), mem_config));
+        return tt::tt_metal::TensorSpec(
+            output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), mem_config));
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.output_mem_config));
 }

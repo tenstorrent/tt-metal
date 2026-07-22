@@ -106,7 +106,7 @@ MorehSumBackwardOperation::spec_return_value_t MorehSumBackwardOperation::comput
         return tensor_args.input_grad->tensor_spec();
     }
     TT_FATAL(tensor_args.input.has_value(), "input tensor should not be std::nullopt.");
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         tensor_args.input->logical_shape(),
         TensorLayout(tensor_args.input->dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };

@@ -349,6 +349,10 @@ public:
     // Dispatches detail::collect_kernel_meta, device is nullable
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
+    // Metal 2.0: Mark this Program as created from ProgramSpec
+    // This enables legality checks against illegal mixing of Metal 2.0 idioms with legacy Programs.
+    void mark_created_from_spec() { created_from_spec_ = true; }
+
     // Metal 2.0: Add name -> handle mappings (temporary indirection)
     void register_kernel_spec_name(const std::string& name, KernelHandle handle);
     void register_dfb_spec_name(const std::string& name, uint32_t dfb_id);
@@ -530,6 +534,12 @@ private:
         std::vector<std::pair<uint32_t, std::string>> dfb_borrowed_bindings;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
+
+    // True only for Programs minted by BuildProgramFromSpec (the sole legitimate source of
+    // Metal 2.0 kernels). Metal 2.0 named bindings require the ProgramSpec path; add_kernel
+    // rejects an is_metal2_kernel() kernel added to any other Program (e.g. the
+    // ProgramDescriptor ctor path or a legacy CreateKernel program).
+    bool created_from_spec_ = false;
 
     // Semaphores
     std::vector<Semaphore> semaphores_;
