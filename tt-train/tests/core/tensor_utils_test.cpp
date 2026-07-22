@@ -448,7 +448,7 @@ TEST_F(TensorUtilsTest, TestZeros) {
 TEST_F(TensorUtilsTest, TestIsInitialized) {
     auto* device = &ttml::autograd::ctx().get_device();
 
-    tt::tt_metal::Tensor tensor;
+    ttnn::Tensor tensor;
     EXPECT_FALSE(ttml::core::is_tensor_initialized(tensor));
 
     auto shape = ttnn::Shape({1, 2, 3, 4});

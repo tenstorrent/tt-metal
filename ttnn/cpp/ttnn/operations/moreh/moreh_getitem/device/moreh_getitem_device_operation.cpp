@@ -142,7 +142,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
 
         output_shape = ttnn::Shape(std::move(output_size_vec));
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(
             tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));

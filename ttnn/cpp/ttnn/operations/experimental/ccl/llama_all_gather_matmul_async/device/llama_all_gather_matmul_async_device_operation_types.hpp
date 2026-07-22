@@ -81,8 +81,8 @@ struct LlamaAllGatherMatmulAsyncResult {
 };
 
 struct LlamaAllGatherMatmulAsyncResultSpec {
-    TensorSpec mm;
-    TensorSpec aggregated;
+    tt::tt_metal::TensorSpec mm;
+    tt::tt_metal::TensorSpec aggregated;
 };
 
 struct LlamaAllGatherMatmulAsyncInputs {

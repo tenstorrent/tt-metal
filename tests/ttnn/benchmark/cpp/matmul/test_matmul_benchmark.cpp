@@ -242,7 +242,7 @@ void RunMatmulBenchmark(
     const std::vector<float> in0_data(m * k, 1.0f);
     ttnn::Tensor input_tensor_0 = ttnn::Tensor::from_vector(
         in0_data,
-        ttnn::TensorSpec(
+        tt::tt_metal::TensorSpec(
             ttnn::Shape({m, k}), tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, in0_memory_config)),
         dev_ptr);
     // In1 is random data
@@ -254,7 +254,7 @@ void RunMatmulBenchmark(
 
     ttnn::Tensor input_tensor_1 = ttnn::Tensor::from_vector(
         in1_data,
-        ttnn::TensorSpec(
+        tt::tt_metal::TensorSpec(
             ttnn::Shape({k, n}),
             tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
         dev_ptr);
@@ -283,7 +283,7 @@ void RunMatmulBenchmark(
         /*default_throttle_level=*/ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
 
     const ttnn::MemoryConfig out_mem_config =
-        out_sharded ? ttnn::MemoryConfig{ttnn::TensorMemoryLayout::BLOCK_SHARDED, ttnn::BufferType::L1}
+        out_sharded ? ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, ttnn::BufferType::L1}
                     : ttnn::DRAM_MEMORY_CONFIG;
 
     const auto output_tile =

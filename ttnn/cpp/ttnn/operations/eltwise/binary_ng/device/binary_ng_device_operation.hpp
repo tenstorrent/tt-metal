@@ -32,7 +32,7 @@ enum class SubtileBroadcastType {
 SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w);
 
 struct BinaryNgDeviceOperation {
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct operation_attributes_t {
