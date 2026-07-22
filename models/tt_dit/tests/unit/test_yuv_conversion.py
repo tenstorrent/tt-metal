@@ -32,31 +32,22 @@ def _host_yuv_reference(rgb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, 
     R = rgb[0].float()  # (H, W, T)
     G = rgb[1].float()
     B = rgb[2].float()
+    H, W, T_ = R.shape
 
-    def linear(r, g, b, coeff):
+    def linear(coeff):
         w_r, w_g, w_b, off = coeff
-        return (w_r * r + w_g * g + w_b * b + off + 0.5).clamp(0, 255).to(torch.uint8)
+        return w_r * R + w_g * G + w_b * B + off  # (H, W, T) float
 
-    Y = linear(R, G, B, _Y_COEFF)  # (H, W, T)
-    Cb = linear(R, G, B, _CB_COEFF)
-    Cr = linear(R, G, B, _CR_COEFF)
+    Y = (linear(_Y_COEFF) + 0.5).clamp(0, 255).to(torch.uint8)
 
-    # Subsample Cb and Cr: average 2×2 blocks in H, W (before uint8 cast)
-    def subsample(plane):
-        R_f = rgb[0].float()
-        G_f = rgb[1].float()
-        B_f = rgb[2].float()
-        # We need float-domain average then quantise
-        w_r, w_g, w_b, off = _CB_COEFF if (plane == "cb") else _CR_COEFF
-        val = w_r * R_f + w_g * G_f + w_b * B_f + off  # (H, W, T) float
-        # Average 2×2 blocks: (H, W, T) → (H/2, W/2, T)
-        H, W, T_ = val.shape
-        val = val.view(H // 2, 2, W // 2, 2, T_).mean(dim=(1, 3))  # (H/2, W/2, T)
+    # Cb/Cr are 4:2:0 subsampled: average each non-overlapping 2×2 block in
+    # (H, W) in the float domain, then quantise once.  (RGB→chroma is affine, so
+    # averaging RGB then converting equals converting then averaging.)
+    def subsample(coeff):
+        val = linear(coeff).view(H // 2, 2, W // 2, 2, T_).mean(dim=(1, 3))  # (H/2, W/2, T)
         return (val + 0.5).clamp(0, 255).to(torch.uint8)
 
-    Cb_sub = subsample("cb")
-    Cr_sub = subsample("cr")
-    return Y, Cb_sub, Cr_sub
+    return Y, subsample(_CB_COEFF), subsample(_CR_COEFF)
 
 
 def _make_device() -> ttnn.Device:
