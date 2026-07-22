@@ -564,7 +564,7 @@ params.kernel_run_args = {{
 
 Named and vararg forms can coexist on the same kernel. Vararg indices are stable across schema changes — promoting a named RTA to a CRTA, or adding/removing named args, does not shift vararg indices. Common runtime varargs (`num_common_runtime_varargs`, retrieved on the device via `get_common_vararg(i)`) work analogously, broadcast across all nodes.
 
-> The vararg form is for arguments the kernel reaches **as elements of an indexed collection** — a variable-count loop (CTA- or runtime-bounded), or an element **selected by a data-computed index**. An argument read once as a **distinct field** reads more clearly as a **named** arg — even if its legacy retrieval walked a running `arg_index++`, and even if its legacy offset fell after a variable-count block (Metal 2.0 addresses named args in a section separate from the varargs, so the offset is irrelevant).
+> The vararg form is for an **indexed-collection element** (a variable-count loop, CTA- or runtime-bounded, or an element selected by a data-computed index); an argument read once as a **distinct field** is a **named** arg. See the [patterns catalog caution](port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary) for the full rule and its `arg_index++` / separate-section subtleties.
 
 ---
 
@@ -719,7 +719,7 @@ void kernel_main() {
 
 Common runtime varargs are analogous: declare with `num_common_runtime_varargs`, retrieve on the device with `get_common_vararg(i)`. Same loop-retrieval criterion applies.
 
-> When porting a legacy kernel with positional RTAs, the natural Metal 2.0 form is named RTAs — one per distinct field. A translation into vararg slots compiles and runs (and may be a useful interim step on a large kernel), but named is the recommended endpoint. Reach for varargs only when the kernel reaches an argument **as an element of an indexed collection** — a variable-count loop, or a data-selected index — *not* merely because the legacy code walked its args with an `arg_index++` counter, and *not* because a distinct field's legacy offset happens to be runtime-dependent.
+> Porting positional RTAs, the natural Metal 2.0 form is named RTAs — one per distinct field. Translating into varargs compiles and runs (a fine interim step on a large kernel), but named is the recommended endpoint; reach for varargs only for a true **indexed-collection element** (see the [caution](port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary)).
 
 Vararg indices are stable across schema changes: promoting a named RTA to a CRTA, or adding or removing named arguments, does not shift vararg indices. (This stability lets you migrate incrementally — rename arguments to named form one at a time without disturbing the remaining varargs.)
 
@@ -1204,7 +1204,7 @@ Common pitfalls when migrating from `ProgramDescriptor`:
 - **DFB placement is derived, not specified.** Don't pass a node range to `DataflowBufferSpec` — the DFB lives wherever its bound producer / consumer kernels run. `DataflowBufferSpec` has no `target_nodes` field by design.
 - **Local DFB invariant.** A local DFB's producer and consumer kernels must share *identical* `WorkUnitSpec` membership.
 - **Compile-time arguments are named only.** Positional CTAs are not part of the Metal 2.0 API; use named CTAs throughout.
-- **Runtime varargs are for indexed-collection elements.** `num_runtime_varargs` (and `num_common_runtime_varargs`) is the right fit for arguments a kernel reaches **by index** — a variable-count loop (e.g. an N-dimensional shape gated on a CTA-known `rank`), or an element selected by a data-computed index. For a **distinct field read a fixed number of times**, named RTAs are the recommended form — even when porting from a positional legacy interface, even via a running `arg_index++`, and even when the field's legacy offset falls after a variable-count block (named args live in a section separate from the varargs).
+- **Runtime varargs are for indexed-collection elements.** `num_runtime_varargs` / `num_common_runtime_varargs` fit an argument reached **by index** — a variable-count loop, or a data-selected index. A **distinct field read a fixed number of times** is a named RTA (see the [patterns caution](port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary) for the `arg_index++` / separate-section subtleties).
 - **`ProgramRunArgs` requires that every named RTA must be set on every node.** Missing an entry for a node where the kernel runs causes `SetProgramRunArgs` to error. The same applies to varargs. (Note: There is also a power-user `ProgramRunArgsView` API that provides a stateful view into the dispatch buffers; it is not yet supported.)
 
 ### Cryptic error → likely cause
