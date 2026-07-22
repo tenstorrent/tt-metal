@@ -297,17 +297,20 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "frame_seqlen ({}) must be a multiple of TILE_HEIGHT ({})",
             fsl,
             tt::constants::TILE_HEIGHT);
-        const uint32_t fsl_tiles = fsl / tt::constants::TILE_HEIGHT;
+        // SDPAProgramConfig.q_chunk_size / k_chunk_size are in TOKENS (see how the program factory
+        // converts them via `/ TILE_HEIGHT` at ring_joint_sdpa_program_factory.cpp:349). The
+        // sparse-frames path requires each chunk to hold exactly one frame => q/k_chunk_size
+        // (tokens) == frame_seqlen (tokens).
         TT_FATAL(
-            args.get_q_chunk_size() == fsl_tiles,
-            "sparse-frames requires q_chunk_size ({}) == frame_seqlen/TILE_HEIGHT ({})",
+            args.get_q_chunk_size() == fsl,
+            "sparse-frames requires q_chunk_size ({}) tokens == frame_seqlen ({}) tokens",
             args.get_q_chunk_size(),
-            fsl_tiles);
+            fsl);
         TT_FATAL(
-            args.get_k_chunk_size() == fsl_tiles,
-            "sparse-frames requires k_chunk_size ({}) == frame_seqlen/TILE_HEIGHT ({})",
+            args.get_k_chunk_size() == fsl,
+            "sparse-frames requires k_chunk_size ({}) tokens == frame_seqlen ({}) tokens",
             args.get_k_chunk_size(),
-            fsl_tiles);
+            fsl);
         TT_FATAL(
             nf_pad > 0 && nf_pad <= 32,
             "num_frames_padded ({}) must be in [1, 32] for the packed-bit representation",
