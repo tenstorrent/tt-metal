@@ -53,28 +53,6 @@ _MESH_CONFIGS = [
 
 
 # ---------------------------------------------------------------------------
-# Availability guard — skip when the op wasn't rebuilt with the extension.
-# ---------------------------------------------------------------------------
-
-
-def _sparse_frames_available() -> bool:
-    """True iff `ring_joint_scaled_dot_product_attention` exposes the sparse-frames kwargs.
-
-    nanobind writes kwarg names into `__doc__` (see sdpa_nanobind.cpp bind_function). Cheaper
-    than a mesh-touching probe."""
-    fn = getattr(ttnn.transformer, "ring_joint_scaled_dot_product_attention", None)
-    if fn is None or not fn.__doc__:
-        return False
-    return "frame_allow_packed" in fn.__doc__ and "frame_seqlen" in fn.__doc__
-
-
-requires_sparse_frames = pytest.mark.skipif(
-    not _sparse_frames_available(),
-    reason="ring_joint SDPA missing the sparse-frames extension (frame_allow / frame_seqlen kwargs)",
-)
-
-
-# ---------------------------------------------------------------------------
 # Helpers: build the windowed frame_allow pattern + torch reference.
 # ---------------------------------------------------------------------------
 
@@ -374,7 +352,6 @@ class TestSparseFramesRing:
         mesh_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor, _id = mesh_config
         return mesh_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor
 
-    @requires_sparse_frames
     @pytest.mark.parametrize(
         "mesh_device",
         [c[0] for c in _MESH_CONFIGS],
@@ -416,7 +393,6 @@ class TestSparseFramesRing:
             all_gather_topology=all_gather_topology,
         )
 
-    @requires_sparse_frames
     @pytest.mark.parametrize(
         "mesh_device",
         [c[0] for c in _MESH_CONFIGS],
@@ -453,7 +429,6 @@ class TestSparseFramesRing:
             all_gather_topology=all_gather_topology,
         )
 
-    @requires_sparse_frames
     @pytest.mark.parametrize(
         "mesh_device",
         [c[0] for c in _MESH_CONFIGS],
@@ -491,7 +466,6 @@ class TestSparseFramesRing:
             all_gather_topology=all_gather_topology,
         )
 
-    @requires_sparse_frames
     @pytest.mark.parametrize(
         "mesh_device",
         [c[0] for c in _MESH_CONFIGS],
@@ -533,7 +507,6 @@ class TestSparseFramesRing:
             all_gather_topology=all_gather_topology,
         )
 
-    @requires_sparse_frames
     @pytest.mark.parametrize(
         "mesh_device",
         [c[0] for c in _MESH_CONFIGS],
