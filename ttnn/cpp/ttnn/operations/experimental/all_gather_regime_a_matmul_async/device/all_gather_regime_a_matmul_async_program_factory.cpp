@@ -255,10 +255,16 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     const CoreCoord inj_logical = take_free_core();
     const CoreRangeSet inj_crs(CoreRange(inj_logical, inj_logical));
 
-    // gather_ready fan-out semaphore, created on compute cores UNION injector core so both share its L1 address.
-    std::set<CoreRange> ready_set = all_set;
-    ready_set.insert(CoreRange(inj_logical, inj_logical));
-    const uint32_t gather_ready_sem = CreateSemaphore(program, CoreRangeSet(ready_set), 0u);
+    // Coordination uses two GlobalSemaphores (multi_device_global_semaphore[0]=gather_progress, [1]=gather_ready)
+    // rather than program-local CreateSemaphores: GlobalSemaphores can be reset host-side between launches, so
+    // the barrier is correct on program-cache replay (a program-local semaphore would keep its accumulated value
+    // across launches and defeat the barrier). Both live on the CCL sub-device CRS (all cores), so their address
+    // is valid on every compute core AND the injector core.
+    TT_FATAL(
+        op.multi_device_global_semaphore.size() >= 2,
+        "all_gather_regime_a_matmul_async needs >=2 global semaphores (gather_progress, gather_ready), got {}",
+        op.multi_device_global_semaphore.size());
+    const uint32_t gather_ready_addr = op.multi_device_global_semaphore.at(1).address();
 
     // Injector L1 scratch: payload tile CB (c_0) + packet-header CB (c_1).
     const uint32_t aligned_hdr = align_up((uint32_t)tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
@@ -356,7 +362,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             cp.valid_k,              // 14
             cp.valid_m,              // 15
             cp.valid_n,              // 16
-            gather_ready_sem,        // 17 (AGMM_FULL_GATHER_BARRIER) fan-out sem id
+            gather_ready_addr,       // 17 (AGMM_FULL_GATHER_BARRIER) gather_ready GlobalSemaphore L1 address
             D - 1u};                 // 18 (AGMM_FULL_GATHER_BARRIER) expected remote-shard count
         SetRuntimeArgs(program, wh, cores[i], wa);
 
@@ -386,7 +392,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         progress_addr,                  // a8 gather_progress GlobalSemaphore L1 address (on neighbour)
         (uint32_t)inj_virtual.x,        // a9 neighbour injector core x (== ours; where its gather_progress lives)
         (uint32_t)inj_virtual.y,        // a10 neighbour injector core y
-        gather_ready_sem,               // a11 local fan-out sem id
+        gather_ready_addr,              // a11 gather_ready GlobalSemaphore L1 address (local fan-out target)
         D - 1u,                         // a12 expected remote-shard count before fan-out
         geo.num_cores};                 // a13 number of compute cores to fan out to
     // followed by each compute core's (x,y) for the local gather_ready fan-out.

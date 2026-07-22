@@ -77,12 +77,11 @@ void kernel_main() {
     const uint32_t valid_n = get_arg_val<uint32_t>(16);  // valid N tiles (rest zero / not written)
 
 #if defined(AGMM_FULL_GATHER_BARRIER)
-    // Fused full-gather barrier: RT arg 17 = gather_ready semaphore id (injector fans it out once every remote
-    // in0 K-shard has landed in this device's gather buffer); RT arg 18 = expected count (unused: fan-out is +1).
-    const uint32_t agmm_ready_sem_id = get_arg_val<uint32_t>(17);
+    // Fused full-gather barrier: RT arg 17 = gather_ready GlobalSemaphore L1 address (injector fans it out once
+    // every remote in0 K-shard has landed in this device's gather buffer); RT arg 18 = expected count (unused).
+    const uint32_t agmm_ready_addr = get_arg_val<uint32_t>(17);
     (void)get_arg_val<uint32_t>(18);
-    volatile tt_l1_ptr uint32_t* agmm_ready_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(agmm_ready_sem_id));
+    volatile tt_l1_ptr uint32_t* agmm_ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(agmm_ready_addr);
 #endif
 
     const auto in0 = TensorAccessor(in0_args, in0_addr, tile_bytes);

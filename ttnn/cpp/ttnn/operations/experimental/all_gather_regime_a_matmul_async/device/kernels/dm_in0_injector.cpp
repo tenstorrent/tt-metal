@@ -28,7 +28,7 @@
 //   a8  progress_sem_addr         (gather_progress GlobalSemaphore L1 address; local read + remote target)
 //   a9  nbr_inj_x                 (neighbour injector core x — where its gather_progress lives)
 //   a10 nbr_inj_y                 (neighbour injector core y)
-//   a11 ready_sem_id              (local gather_ready semaphore id, fanned out to compute cores)
+//   a11 ready_addr                (gather_ready GlobalSemaphore L1 address, fanned out to compute cores)
 //   a12 expected_remote           (remote shards to await before fan-out = D-1)
 //   a13 num_compute_cores
 //   a14.. per compute core: (x, y)  [num_compute_cores pairs]
@@ -55,7 +55,7 @@ void kernel_main() {
     const uint32_t progress_sem_addr = get_arg_val<uint32_t>(a++);
     const uint32_t nbr_inj_x = get_arg_val<uint32_t>(a++);
     const uint32_t nbr_inj_y = get_arg_val<uint32_t>(a++);
-    const uint32_t ready_sem_id = get_arg_val<uint32_t>(a++);
+    const uint32_t ready_addr = get_arg_val<uint32_t>(a++);  // gather_ready GlobalSemaphore L1 address
     const uint32_t expected_remote = get_arg_val<uint32_t>(a++);
     const uint32_t num_compute_cores = get_arg_val<uint32_t>(a++);
 
@@ -128,7 +128,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* progress_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(progress_sem_addr);
     noc_semaphore_wait_min(progress_ptr, expected_remote);
 
-    const uint32_t ready_addr = get_semaphore(ready_sem_id);
     for (uint32_t i = 0; i < num_compute_cores; ++i) {
         noc_semaphore_inc(get_noc_addr(cc_x[i], cc_y[i], ready_addr), 1);
     }

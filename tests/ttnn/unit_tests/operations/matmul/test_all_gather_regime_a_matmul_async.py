@@ -110,6 +110,7 @@ def _run_full_gather(D, mesh_shape, fabric_config, topology):
     t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)  # in1 [K_global, N], replicated
     ref = (t0.float() @ t1.float())[0, 0]
 
+    md = a = b = out = sems = None
     ttnn.set_fabric_config(fabric_config)
     full = ttnn.open_mesh_device(ttnn.MeshShape(*mesh_shape))
     try:
@@ -119,7 +120,10 @@ def _run_full_gather(D, mesh_shape, fabric_config, topology):
         ccl_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
         md.load_sub_device_manager(md.create_sub_device_manager([ttnn.SubDevice([ccl_crs])], 0))
         md.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
-        gather_progress_sem = ttnn.create_global_semaphore(md, ccl_crs, 0)
+        # [0] gather_progress (fabric atomic-inc target), [1] gather_ready (injector -> compute fan-out).
+        # GlobalSemaphores (not program-local sems) so they can be reset between launches -> the barrier stays
+        # correct on program-cache replay.
+        sems = [ttnn.create_global_semaphore(md, ccl_crs, 0) for _ in range(2)]
 
         a = ttnn.from_torch(
             t0,
@@ -145,27 +149,34 @@ def _run_full_gather(D, mesh_shape, fabric_config, topology):
         )
         cfg = ttnn.RegimeAMatmulConfig(k_slices=3, n_slices=1, m_slices=1, k_block_tiles=4, n_subblock_tiles=6)
 
-        out = ttnn.experimental.all_gather_regime_a_matmul_async(
-            a,
-            b,
-            config=cfg,
-            cluster_axis=1,
-            topology=topology,
-            num_links=1,
-            num_workers_per_link=1,
-            multi_device_global_semaphore=[gather_progress_sem],
-        )
-        ttnn.synchronize_device(md)
-
-        # Output [M, N] is computed (replicated) on every device — each must match the full matmul.
-        per_dev = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(md, dim=0))
-        for d in range(D):
-            assert_with_pcc(ref, per_dev[d].float().reshape(ref.shape), 0.999)
-        del a, b, out, md  # drop device buffers so close_mesh_device can fully release all devices
+        # Two invocations: iteration 0 is a fresh program (cache miss), iteration 1 replays the cached program
+        # through override_runtime_arguments (exercises the custom compute_program_hash + arg relocation).
+        out = None
+        for _it in range(2):
+            for s in sems:
+                ttnn.reset_global_semaphore_value(s, 0)  # fresh barrier state each launch (cache replay safe)
+            out = ttnn.experimental.all_gather_regime_a_matmul_async(
+                a,
+                b,
+                config=cfg,
+                cluster_axis=1,
+                topology=topology,
+                num_links=1,
+                num_workers_per_link=1,
+                multi_device_global_semaphore=sems,
+            )
+            ttnn.synchronize_device(md)
+            # Output [M, N] is computed (replicated) on every device — each must match the full matmul.
+            per_dev = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(md, dim=0))
+            for d in range(D):
+                assert_with_pcc(ref, per_dev[d].float().reshape(ref.shape), 0.999)
     finally:
+        # Drop device buffers (even on assertion failure) so close_mesh_device fully releases all devices and
+        # the next parametrization can re-set the fabric config without "devices still open".
+        a = b = out = md = sems = None
+        gc.collect()
         ttnn.close_mesh_device(full)
-        del full
-        gc.collect()  # ensure no device is still open before the next test changes the fabric config
+        gc.collect()
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
