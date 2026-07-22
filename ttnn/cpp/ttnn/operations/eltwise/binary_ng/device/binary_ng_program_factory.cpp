@@ -1353,7 +1353,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     return desc;
 }
 
-void BinaryNgDeviceOperation::override_runtime_arguments(
+void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
