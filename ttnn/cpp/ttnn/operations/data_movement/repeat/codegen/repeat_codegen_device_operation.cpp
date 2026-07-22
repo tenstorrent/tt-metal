@@ -21,7 +21,7 @@ RepeatCodegenDeviceOperation::program_factory_t RepeatCodegenDeviceOperation::se
 void RepeatCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input = tensor_args.input;
-    TT_FATAL(input.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to repeat need to be on device!");
+    TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to repeat need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(
         ttnn::operations::data_movement::repeat_codegen::supported_by_codegen(
@@ -34,7 +34,7 @@ RepeatCodegenDeviceOperation::spec_return_value_t RepeatCodegenDeviceOperation::
     const auto& input = tensor_args.input;
     auto output_shape = input.logical_shape();
     output_shape[operation_attributes.rep_dim] *= operation_attributes.num_repeats;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             input.dtype(), tt::tt_metal::PageConfig(input.layout()), operation_attributes.output_mem_config));

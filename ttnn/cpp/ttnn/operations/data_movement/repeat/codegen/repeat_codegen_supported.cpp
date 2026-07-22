@@ -47,7 +47,7 @@ namespace {
 // output without a repeat-scaled CB) instead of TT_THROWing out of circular
 // buffer allocation at program-compile time.
 bool last_dim_rm_fits_in_l1(const Tensor& input, uint32_t reps) {
-    if (input.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+    if (input.storage_type() != ttnn::StorageType::DEVICE) {
         // Not yet on device (e.g. host-side probing); nothing to bound against.
         // Tensor::device() throws for a non-device tensor, so check first.
         return true;
