@@ -33,8 +33,8 @@ from models.common.modules.tt_ccl import (
     get_tt_ccl,
 )
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim, pad_dim_to_size
+from models.common.transformer_types import Mode, OpGroup, TensorGroup
 from models.common.utility_functions import is_blackhole
-from models.tt_transformers.tt.common import Mode
 
 # =============================================================================
 # Top-level config dataclass
@@ -392,8 +392,7 @@ class MLP1D(LightweightModule):
 
     def forward(self, x: ttnn.Tensor | LazyWeight, mode: str | Mode) -> ttnn.Tensor:
         """Dispatch to the appropriate forward method based on mode."""
-        if isinstance(mode, Mode):
-            mode = mode.value
+        mode = mode.value if isinstance(mode, Mode) else mode
         if mode == "decode":
             return self.decode_forward(x)
         else:
@@ -498,8 +497,6 @@ class MLP1D(LightweightModule):
             raise ValueError("MLP1D cannot be used for Galaxy devices.")
 
         import torch
-
-        from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
         # Get model_config for overrides - use passed model_config if provided
         if model_config is None:
@@ -690,7 +687,7 @@ def _find_prefill_grid(row_tiles: int, col_tiles: int, max_rows: int = 8, max_co
 
 def _get_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
     """Get output subblock width that divides per_core_n and satisfies constraints."""
-    # [ALIGNED] Exactly matching models/tt_transformers/tt/common.py:get_out_subblock_w
+    # Matches the legacy TTTv1 output subblock selection.
     out_subblock_w = 4  # TODO: Check with LLK team if this is the true bound, might be 8 now
     while out_subblock_w > 1:
         if out_subblock_w * out_subblock_h <= 4 and per_core_n % out_subblock_w == 0:

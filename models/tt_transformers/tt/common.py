@@ -16,6 +16,7 @@ from pydantic import AliasChoices, BaseModel, Field
 
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat as get_rot_transformation_mat_v2
+from models.common.transformer_types import Mode  # noqa: F401
 
 
 class URL(BaseModel):
@@ -46,11 +47,6 @@ InterleavedTextMedia = Union[
     ImageMedia,
     List[Union[str, ImageMedia]],
 ]
-
-
-class Mode(Enum):
-    DECODE = "decode"
-    PREFILL = "prefill"
 
 
 class HostEmbedding(torch.nn.Module):

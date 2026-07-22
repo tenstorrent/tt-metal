@@ -32,8 +32,8 @@ from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _matmul_config
 from models.common.tensor_utils import TILE_SIZE
+from models.common.transformer_types import Mode
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.common import Mode
 
 
 def get_mlp_weights_from_ref_model(reference_mlp) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -229,6 +229,20 @@ def test_mlp_1d_config_power_user_overrides():
     assert config.decode_mlp2_input_memcfg is mock_mem_config
     assert config.decode_residual_memcfg is mock_mem_config
     assert config.activation_dtype == ttnn.bfloat16
+
+
+def test_mlp_1d_forward_accepts_common_mode():
+    """Common Mode values and legacy strings should route through the dispatcher."""
+    from models.common.modules.mlp.mlp_1d import MLP1D
+
+    model = object.__new__(MLP1D)
+    model.decode_forward = lambda x: ("decode", x)
+    model.prefill_forward = lambda x: ("prefill", x)
+
+    assert model.forward("input", Mode.DECODE) == ("decode", "input")
+    assert model.forward("input", Mode.PREFILL) == ("prefill", "input")
+    assert model.forward("input", "decode") == ("decode", "input")
+    assert model.forward("input", "prefill") == ("prefill", "input")
 
 
 # Pulled from deduped perf sweep of existing model tests in CI
