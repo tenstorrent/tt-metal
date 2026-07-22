@@ -494,7 +494,9 @@ kk2->kk3 at level 0; kk1->kk3 at level 1; critical depth 2). kk3 stays the is_to
 **Implementation** (compile-gated `DIAG_REDTREE` = 1<<6; mask 0 byte-identical, 111/111 public regression):
 - Two DISJOINT root receive channels (ch0=kk2 on `red_sem`, ch1=kk1 on a new `red_sem2`) — avoids the
   single-counter fungibility hazard of a shared semaphore. Root sums the two partials serially (round 0 then
-  round 1) into the SAME fp32-acc reduce_add math -> output bit-identical (addition associative).
+  round 1) with the SAME reduce_add math as the chain. CORRECTION (orchestrator): the tree RE-ASSOCIATES the
+  sum ((p0+p1)+(p2+p3) vs chain ((p0+p1)+p2)+p3) and partials round to bf16 per hop (cb_reduce bf16), so the
+  output is NOT bit-identical to the chain — only PCC-preserving (>=0.999). Do NOT claim FP add is associative.
 - Reduce-CB slot = `(nb*parent_nrecv + channel) % 2` matches the receiver's per-round FIFO reservation for
   both parent kinds (inner nrecv=1 => nb%2 double-buffered like the chain; root nrecv=2 => channel-fixed
   slots 0/1). No CB-size change; existing 2-slot cb_reduce reused (1 slot per channel at the root).
@@ -532,3 +534,45 @@ Chain stays production default (already the state — the tree is compile-gated 
 low-AI Pk=4 shapes (Sm=1, minimal compute -> reduction depth is a larger critical-path fraction). This is a
 candidate for SHAPE-SELECTIVE (picker-gated) tree use — a separate decision, out of scope for the
 256x2048x1024 mandate.
+
+### [Reduce-scatter — DONE + STRONG WIN] Pk=4 ring reduce-scatter (DIAG_RSCATTER, commit bda8edfc38b)
+The orchestrator's strongest remaining macro-level reduction lever, IMPLEMENTED (diagnostic-only) + measured.
+Replaces the chain (propagate a whole output block through Pk-1 serial hops to one root) with a ring
+reduce-scatter over the Pk=4 cores: the output block is row-partitioned (M_block=Pk=4 rows, one row per core),
+and over Pk-1 rounds every core sends one row-chunk and reduces one received chunk, so each core ends owning
+ONE fully-reduced row and writes it to DRAM itself. Distributes reduction adds + output writes across all Pk
+cores and eliminates the single-root receive-wait tail (the measured ~7.1us root RECVWAIT).
+
+**Implementation** (DIAG_RSCATTER=1<<7; mask 0 byte-identical, 111/111 regression):
+- Resident fp32 matmul partial in intermediate_cb; only bf16 4-tile chunks cross the ring. Compute seeds
+  cb_send (c_4) with its own row, then per round adds its resident row d to the received chunk and forwards
+  (rounds < Pk-2) or writes the owned row (last round) -> out_cb.
+- Writer ferries chunks around an optimized 4-cycle (min-max-edge Hamiltonian over physical coords) using the
+  in0-ring payload->credit protocol (red_sem/redfree_sem). Dedicated 2-slot recv CB (c_5) so the FIFO period
+  matches the writer's t%2 remote-write offset (a first cut reused cb_reduce's 8-slot buffer -> period desync
+  -> PCC 0.38; fixed by the 2-slot recv CB).
+- Reassociates the K-sum + rounds bf16 per hop -> PCC-preserving, NOT bit-identical: PCC 0.99999 fresh+cached,
+  elementwise maxdiff_vs_chain 1.0 (small vs the O(sqrt(K)) output magnitudes). Guarded to Pk==4 &&
+  M_block==Pk && N_bpc==1 (row-partitionable); unfused only (v1).
+
+**A/B (chain mask0 vs tree mask64 vs rscatter mask128; SAME cfg (1,4,2,2,4); 2 reversed batches x10 relaunch =
+20 samples each; tools/mm_sweep/ab_rscatter.py):**
+| variant | median us | IQR | delta vs chain |
+|---|---|---|---|
+| chain | 22.46 | [22.33, 22.55] | +0.00% |
+| tree | 22.64 | [22.54, 22.71] | +0.79% (consistent with the earlier +1.07%) |
+| **reduce-scatter** | **20.44** | **[20.37, 20.57]** | **-9.01%** |
+
+IQR-separated, 0 correctness fails. CONFIRMED by an independent 2nd A/B run: chain 22.35 / tree +1.08% /
+**rscatter -8.49%** (20.46us) — so the win reproduces at ~-8.5..-9.0%, tree regression at +0.8..+1.1%.
+**Reduce-scatter is a decisive ~-9% (~2us) win on the primary
+256x2048x1024** — the shape the tree REGRESSED and that the deep-phase had marked in0-ring/reduction-exposed.
+It confirms the root receive-wait tail was the bottleneck and that distributing it (not shortening chain
+depth) is the fix. Materially different from the rejected reduction tree and the rejected in0
+scatter/exchange (which were in0-delivery, not split-K output reduction).
+
+**Status:** diagnostic-only (compile-gated) per the session mandate. This CLEARS the >=2%-on-primary adoption
+bar decisively, so PRODUCTIONIZATION is now a live orchestrator decision. Productionizing needs: (a) multi-
+shape confirmation (no regression on the 9/60-shape corpora), (b) generalizing beyond M_block==Pk / N_bpc==1
+(row-partition when M_block!=Pk, or fall back to chain), (c) fusion (bias/act/addcmul applied per owned shard),
+(d) picker/planner gating. Reported to the orchestrator; NOT flipped to default this session.
