@@ -600,3 +600,39 @@ per-core medians (tools/mm_sweep/rscatter_ring_zones.py):
    the slowest root) — precisely what ring reduce-scatter distributes across the Pk cores. This is measured
    corroboration (not just plausibility) for the -9% reduce-scatter win: the chain's single-root tail was the
    bottleneck; distributing it is the fix. (DIAG_ZONES perturbs ~1-2%; the RELATIVE breakdown is the signal.)
+
+### [Reduce-scatter — 60-shape corpus A/B @ picker config] (harness ab_rscatter_corpus.py)
+Generalized reduce-scatter to arbitrary Pk + tile-partition (chunk_tiles = M_block*N_sub/Pk); measured chain
+(mask 0) vs reduce-scatter (mask 128) at the DEPLOYED picker config for every corpus shape where it can be
+enabled (2 reversed batches x6 relaunch, median).
+
+**Coverage (why only 10/60 enable at the picker config):** Pk==1 (no reduction) = 1; block not tile-
+partitionable into Pk chunks (tiny per-core block vs large picker Pk) = 8; **N_bpc>1 (wide-N multi-subblock,
+not yet supported by this pass) = 41**; feasible+measured = 10. The 41 N_bpc>1 are overwhelmingly deep-K
+(K=6144/15360) — read-bound shapes where the earlier NO_REDUCE ablation showed the reduction is HIDDEN
+(1-4.6%), so their reduce-scatter win would be small regardless (corroborated by the 3 deep-K shapes that ARE
+feasible: -0.5 to -3.2%).
+
+| shape | Pk | Sm | chain us | rscatter us | delta |
+|---|---|---|---|---|---|
+| 128x2048x2048 | 4 | 1 | 27.12 | 24.73 | **-8.80%** |
+| 256x2048x1024 | 4 | 2 | 22.38 | 20.53 | **-8.26%** |
+| 128x2048x1024 | 4 | 2 | 16.12 | 15.04 | **-6.68%** |
+| 64x2048x1024 | 4 | 1 | 12.87 | 12.20 | **-5.22%** |
+| 256x15360x1536 | 6 | 2 | 140.11 | 135.63 | **-3.19%** |
+| 128x15360x768 | 6 | 1 | 65.14 | 64.14 | -1.54% |
+| 256x15360x768 | 6 | 2 | 95.32 | 94.85 | -0.49% |
+| 32x2048x2048 | 2 | 1 | 19.35 | 19.53 | +0.91% |
+| 64x2048x2048 | 2 | 1 | 21.47 | 21.68 | +0.96% |
+| 128x2048x512 | 4 | 2 | 11.28 | 11.55 | +2.33% |
+
+**5/10 are wins (<=-2%); best -8.80%; mean over feasible -3.00%, median -2.37%.**
+Pattern: reduce-scatter wins where the split-K reduction ROOT TAIL is EXPOSED — low-AI **Pk=4 K=2048 with
+N>=1024** (-5.2..-8.8%) and the widest deep-K (256x15360x1536, -3.2%). It is neutral-to-slightly-negative
+where the tail is NOT exposed: **Pk=2** (+0.9%, chain is already a single hop), **narrow N=512** (+2.3%, tiny
+tail), and **read-bound deep-K** (-0.5..-1.5%, reduction hidden). So reduce-scatter is a strong, shape-
+selective reduction optimizer, not a blanket win — production adoption should PICKER-GATE it to the exposed-
+reduction regime (Pk>=4, K shallow-ish, N>=1024, tile-partitionable). Full-corpus coverage additionally needs
+the N_bpc>1 generalization (mostly adds read-bound deep-K shapes -> small expected gains). All PCC-preserving
+(gtest RScatterGeneral: Pk=2/4/6 PCC 0.99999 fresh+cached; 10/10 watcher-clean stress; 111/111 regression).
+Results: tools/mm_sweep/ab_rscatter_corpus_results.json.
