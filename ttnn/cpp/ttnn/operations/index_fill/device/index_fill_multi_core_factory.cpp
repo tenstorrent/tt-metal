@@ -18,8 +18,8 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const tt::tt_metal::Tensor& index = tensor_args.index;
-    const tt::tt_metal::Tensor& input = tensor_args.input;
+    const ttnn::Tensor& index = tensor_args.index;
+    const ttnn::Tensor& input = tensor_args.input;
     uint32_t dim = operation_attributes.dim;
 
     const auto input_shape = input.padded_shape();

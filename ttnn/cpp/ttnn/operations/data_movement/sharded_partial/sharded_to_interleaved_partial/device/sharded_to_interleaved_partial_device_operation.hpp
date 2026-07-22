@@ -14,14 +14,14 @@ namespace ttnn::prim {
 struct ShardedToInterleavedPartialDeviceOperation {
     using operation_attributes_t = ShardedToInterleavedPartialParams;
     using tensor_args_t = ShardedToInterleavedPartialInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<ShardedToInterleavedPartialProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    static TensorSpec compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tt::tt_metal::TensorSpec compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static Tensor create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 

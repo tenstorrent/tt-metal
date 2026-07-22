@@ -274,7 +274,7 @@ std::vector<Tensor> topk(
 
         // Creating indices tensor on host and copying to device (there is no direct way to write
         // to a device tensor with a scalar value).
-        const TensorSpec& indices_spec = indices.tensor_spec();
+        const tt::tt_metal::TensorSpec& indices_spec = indices.tensor_spec();
         TT_FATAL(indices_spec.data_type() == DataType::UINT16, "Indices tensor must be UINT16 for rank 0 input tensor");
         // Although we only need to store one value, have to account for extra padding
         // in the tile layout. So host buffer size needs to match device buffer size.

@@ -51,12 +51,12 @@ DeepseekGroupedGateDeviceOperation::spec_return_value_t DeepseekGroupedGateDevic
     auto output_shape = shape;
     output_shape[-1] = attributes.n_activated_experts;
 
-    return std::array<TensorSpec, 2>{
-        TensorSpec(
+    return std::array<tt::tt_metal::TensorSpec, 2>{
+        tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 scores.dtype(), tt::tt_metal::PageConfig(scores.layout()), attributes.output_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 DataType::UINT16, tt::tt_metal::PageConfig(scores.layout()), attributes.output_mem_config))};
