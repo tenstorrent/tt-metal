@@ -100,6 +100,11 @@ def load_speaker_weights(ckpt_path=None):
     return {k: v for k, v in w.items() if not k.startswith("torch_spec.")}
 
 
+def load_hifigan_weights(ckpt_path=None):
+    """Raw vocoder-generator weights (weight_norm parametrizations kept, for coqui to fold)."""
+    return _extract_weights("hifigan_decoder.waveform_decoder.", ckpt_path)
+
+
 def build_coqui_gpt(gpt_weights):
     """Instantiate coqui's real GPT (from vendored TTS/) and load the gpt.* weights into it."""
     _clear_tts_modules()  # ensure the real package imports, not a leftover stub
@@ -166,6 +171,35 @@ def build_coqui_speaker(speaker_weights):
 def coqui_speaker(enc, logmel):
     """Run coqui's core from logmel (front-end disabled): logmel [1,64,T] -> d-vector [1,512]."""
     return enc(logmel.clone(), l2_norm=True)
+
+
+def build_coqui_hifigan(weights):
+    """coqui HifiganGenerator (as configured in HifiDecoder) with raw weights loaded.
+
+    hifigan_generator.py imports `from trainer.io import load_fsspec`; stub trainer so it imports.
+    Weight-norm parametrizations are loaded as-is and recomputed on forward (== our folded weights)."""
+    _clear_tts_modules()
+    _force_stub(["trainer", "trainer.io"])
+    if REF_DIR not in sys.path:
+        sys.path.insert(0, REF_DIR)
+    from TTS.vocoder.models.hifigan_generator import HifiganGenerator
+
+    gen = HifiganGenerator(
+        1024, 1, "1",
+        [[1, 3, 5], [1, 3, 5], [1, 3, 5]], [3, 7, 11], [16, 16, 4, 4], 512, [8, 8, 2, 2],
+        inference_padding=0, cond_channels=512,
+        conv_pre_weight_norm=False, conv_post_weight_norm=False, conv_post_bias=False,
+        cond_in_each_up_layer=True,
+    )
+    gen.eval()
+    gen.load_state_dict(weights, strict=False)
+    return gen
+
+
+@torch.no_grad()
+def coqui_hifigan(gen, z, g):
+    """Run coqui's generator: z [1,1024,L] + d-vector g [1,512,1] -> waveform [1,1,L*256]."""
+    return gen(z, g=g)
 
 
 @torch.no_grad()
