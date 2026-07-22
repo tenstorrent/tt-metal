@@ -12,6 +12,15 @@ namespace ttnn::experimental::prim {
 struct DropoutProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const DropoutParams& args, const DropoutInputs& tensor_args, Tensor& output);
+
+    // Re-derives the per-dispatch seed (hash-excluded) and the input/output addresses and writes them
+    // in place on every cache hit.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const DropoutParams& args,
+        const DropoutInputs& tensor_args,
+        Tensor& output,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 struct DropoutMeshWorkloadFactory {
@@ -24,6 +33,14 @@ struct DropoutMeshWorkloadFactory {
         const DropoutInputs& tensor_args,
         Tensor& output,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+
+    // Same as DropoutProgramFactory but the seed carries the per-device offset from the coordinate.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const DropoutParams& args,
+        const DropoutInputs& tensor_args,
+        Tensor& output,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim
