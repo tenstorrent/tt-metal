@@ -11,7 +11,7 @@
 // PCC drop. CbA/CbB/CbC carry distinct dtypes, so the reconfig actually fires (not elided).
 
 #include <cstdint>
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 void kernel_main() {
@@ -27,16 +27,8 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(total_tiles),
-        CopyTile<cb_a, Dst::D0>{},
-        BinaryFpu<
-            cb_b,
-            cb_c,
-            BinaryFpuOp::Add,
-            BroadcastDim::None,
-            InputLifecycle::Streaming,
-            InputLifecycle::Streaming,
-            BinaryDataFormatReconfig::Input,
-            Dst::D1>{},
+        CopyTile<input(cb_a)>{},
+        BinaryFpu<input(cb_b), input(cb_c), BinaryFpuOp::Add, BroadcastDim::None, Dst::D1>{},
         AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{});
+        PackTile<output(cb_out)>{});
 }
