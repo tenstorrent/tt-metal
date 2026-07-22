@@ -1,7 +1,7 @@
 # Uplifting an Op to Quasar — Feasibility Audit
 
 > **Status:** Living document (2026-07-19). **Scaffold** — the Quasar-uplift audit is
-> young. Today it covers two checks (device-side CB→DFB redesign, non-zero-initialized
+> young. Today it covers two checks (device-side CB/DFB redesign, non-zero-initialized
 > semaphores); more Gen1-legal-but-Quasar-unsupported constructs will be added as they surface.
 
 ## Read this first
@@ -25,16 +25,17 @@ formalize as the audit matures; for now, a checklist against the sections below.
 
 ## Checks
 
-### 1. Device-side CB → DFB redesign
+### 1. Device-side CB / DFB redesign
 
 Delegated to the standalone kernel audit:
-**[`cb_dfb_quasar_audit_helper.md`](cb_dfb_quasar_audit_helper.md)**. It classifies every kernel
-CB and flags those whose WH/BH `evil_*` mechanical port is a **workaround carrying Quasar
+**[`cb_dfb_quasar_audit_helper.md`](cb_dfb_quasar_audit_helper.md)**. It classifies every in-scope kernel
+**buffer** — still a `CircularBuffer` **or** already a `DataflowBuffer` after the WH/BH Metal 2.0 port —
+with the same Classes 1–6, and flags those whose WH/BH `evil_*` mechanical port is a **workaround carrying Quasar
 redesign debt** — the ones needing a scratchpad + semaphores, `LocalTensorAccessor`, compute
 self-loop, or strided DFB on Quasar. It also covers **self-loop DFBs**, including the **DM
 self-loop that Quasar rejects**.
 
-Run that audit and roll up its **2xx (Quasar end-state)** column here: any CB left at
+Run that audit and roll up its **2xx (Quasar end-state)** column here: any buffer left at
 `NEEDS-DESIGN-DECISION` on the 2xx track is a Quasar-uplift blocker until its redesign is chosen.
 
 ### 2. Non-zero-initialized semaphores
