@@ -183,7 +183,7 @@
   model: qwen3.6-27b
   skus:
     bh_quietbox_2:
-      timeout: 35
+      timeout: 28
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models

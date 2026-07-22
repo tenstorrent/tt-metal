@@ -179,17 +179,33 @@ def parametrize_mesh_tp(max_tp=4):
     keys) are readable.
     """
     shape = _resolve_mesh_shape(max_tp)
+    # Local import to keep this test helper's module load light (see module docstring).
+    from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
 
     def decorator(fn):
-        fn = pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)(
-            fn
-        )
+        fn = pytest.mark.parametrize(
+            "device_params",
+            # l1_small_size required by ttnn.conv1d in the GDN prefill path
+            [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE}],
+            indirect=True,
+        )(fn)
         fn = pytest.mark.parametrize("mesh_device", [pytest.param(shape, id=f"{shape[0]}x{shape[1]}")], indirect=True)(
             fn
         )
         return fn
 
     return decorator
+
+
+def parametrize_batch(batches=(1, 8, 32)):
+    """Parametrize a decode test over batch sizes (the ``B`` fixture argument).
+
+    B must be a power of two <= 32 so the ``kv_update_shard_cfg`` core grid in
+    ``Qwen35ModelArgs._init_tp_config`` factors cleanly (one user per core, grid
+    sized to ``max_batch_size``). Ids are ``B1``/``B8``/``B32`` so node names and
+    ``pcc_thresholds.json`` stay readable.
+    """
+    return pytest.mark.parametrize("B", [pytest.param(b, id=f"B{b}") for b in batches])
 
 
 def parametrize_mesh_only(max_tp=4):
@@ -222,5 +238,24 @@ def replicate_to_device(mesh_device, t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LA
         layout=layout,
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def shard_to_device(mesh_device, t, dim=-1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+    """Shard a torch tensor across the mesh on ``dim`` (last dim by default).
+
+    Use this for the PREFILL activation fed to ``forward_prefill``: the fused in-proj
+    all-gather-matmul (all_gather_minimal_matmul_async) expects a K-sharded input, since
+    the model's prefill RMSNorm skips its post-norm all-gather (layer.py ``_fuse_norm_agmm``)
+    and hands attention/GDN a ``[.,S,dim/tp]`` activation. The fused op gathers it back to
+    full ``dim`` before the matmul, so a host reference over the full tensor still matches.
+    """
+    return ttnn.from_torch(
+        t,
+        dtype=dtype,
+        layout=layout,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
