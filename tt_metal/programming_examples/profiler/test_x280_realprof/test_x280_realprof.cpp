@@ -110,6 +110,8 @@ static uint64_t harthb(int h) { return 0x08011040ULL + 0x100 + (uint64_t)h * 8; 
 
 static constexpr uint64_t DEFAULT_WIN_STRIDE = 0x200000ULL;  // 2 MB default host-ring budget; --winmb overrides
 static constexpr uint64_t NOC_2M_STRIDE = 0x200000ULL;       // X280 posted-write TLB window = HARD 2 MiB (noc.h)
+static constexpr int WRITE_WIN_BASE = 200;   // raw host-ring posted write windows (MUST match profzone.c)
+static constexpr int SOCKET_WIN_BASE = 208;  // socket windows start here -> raw rings must stay in [200,208)
 static constexpr int NRISC = 5;
 static constexpr uint32_t RING_CAP = 512;  // worker L1 ring depth (words) -- MUST match profstream.c/producer
 
@@ -190,9 +192,12 @@ int main(int argc, char** argv) {
     int device_id = 0, l2cpu = 0, pll = 1000;
     uint64_t nmarkers = 2000, nread = 2, ts_step = 0x1000000ull, ndrain = 1;
     uint64_t win_stride = DEFAULT_WIN_STRIDE;  // --winmb: host-ring budget (rings share it); capped by chan_sz/2
-    uint32_t prog_id = 0xA5A5A5A5u, hring_words = 65536, prod_delay = 0;  // 256 KB/ring: relay never hostfull-stalls
-                                                                          // (gives the push-to-host headroom over
-                                                                          // the readers); fits 4 rings in the 2 MB win
+    uint32_t prog_id = 0xA5A5A5A5u, hring_words = 1048560, prod_delay = 0;  // 4 MiB-64/ring (nwin=2, 2 TLB windows).
+    // Sized for LIVE TRACY capture, the production case: with a connected tracy-capture the Tracy serialize+send
+    // is a slow/bursty sink that fills the host ring, so ring size sets the knee. Sweep (nread=2 dualrelay, capture
+    // connected): 256 KB knee ~4400, 1 MB ~2800, 2 MiB ~1000, 4 MiB ~850 == the no-Tracy drain floor (~830) -> live
+    // Tracy is essentially free at 4 MiB. Uses 4 of 8 raw TLB windows [200,208) at nread=2 (so nread<=4). Below
+    // ~600 every size craters to the worker-L1-ring floor (total_markers/256) that no host buffer can beat.
     bool do_reset = false, direct = false;  // --direct: direct drain (no reader/relay split); --ndrain N: N drainers
     bool rr_consumer = false;  // --rrconsumer: one host thread round-robins all rings (else one thread per ring)
     bool split_noc = false;    // --splitnoc: drain hart h reads its slice over NoC (h&1) to relieve read contention
@@ -394,24 +399,29 @@ int main(int argc, char** argv) {
     uint64_t data_off = (chan_sz / 2) & ~((win_stride > NOC_2M_STRIDE ? win_stride : NOC_2M_STRIDE) - 1);
     uint64_t host_base = pcie_base + data_off;
     uint64_t hring_bytes = (uint64_t)hring_words * 4;
-    // Each host ring occupies its OWN 2 MiB posted-write TLB window on the X280 (NOC_2M_STRIDE, hardware-fixed),
-    // so rings are STRIDED at 2 MiB -- NOT packed contiguously. Packing made ring h>=1 start at a nonzero
-    // in-window offset, and any ring whose extent crossed the 2 MiB edge had its tail + SENT trailer spill into
-    // the next (unconfigured) TLB window -> dropped writes -> that ring's flusher WALL TIMEOUT (the 1 MB wedge).
-    // With 2 MiB striding every ring starts at in-window offset 0 and may use the full window (data + 64 B
-    // trailer <= 2 MiB). --winmb now only aligns data_off; it no longer gates (a raised budget can't enlarge the
-    // hardware window). ring_stride = round_up(data + trailer, 2 MiB).
-    uint64_t ring_stride = (hring_bytes + 64 + (NOC_2M_STRIDE - 1)) & ~(NOC_2M_STRIDE - 1);
+    // The X280 reaches host sysmem through 2 MiB posted-write TLB windows (NOC_2M_STRIDE, hardware-fixed). A ring
+    // spans nwin = ceil((data + 64 B trailer)/2 MiB) CONSECUTIVE windows mapping CONSECUTIVE host pages; because
+    // window addresses are contiguous (win*STRIDE) and each covers exactly one page, a linear write across a
+    // boundary routes transparently -> the ring behaves as one nwin*2 MiB region. Rings are STRIDED at nwin*2 MiB.
+    // (Packing rings sub-2-MiB made ring h>=1 start at a nonzero in-window offset so a >256 KB ring's tail spilled
+    // into an unconfigured window -> flusher WALL TIMEOUT: the old 1 MB wedge.) --winmb now only aligns data_off.
+    uint64_t nwin = (hring_bytes + 64 + (NOC_2M_STRIDE - 1)) / NOC_2M_STRIDE;  // 2 MiB windows this ring spans
+    uint64_t ring_stride = nwin * NOC_2M_STRIDE;
     uint64_t ndh = direct ? ndrain : nread;   // # host rings: direct = 1/drain hart; split = 1/reader (relay
                                               // writes reader h -> ring h), each drained by its own host thread
     // SENT pointer for ring h lives in sysmem at data_off + h*ring_stride + hring_bytes (the trailer).
     auto sent_off = [&](uint64_t h) { return data_off + h * ring_stride + hring_bytes; };
-    if (!socket_mode && hring_bytes + 64 > NOC_2M_STRIDE) {
+    // Raw write windows occupy [WRITE_WIN_BASE, SOCKET_WIN_BASE); each ring consumes nwin of them.
+    if (!socket_mode && ndh * nwin > (uint64_t)(SOCKET_WIN_BASE - WRITE_WIN_BASE)) {
         fprintf(
             stderr,
-            "[d2h] --hring %u (%llu B) + 64 B trailer exceeds one 2 MiB TLB window -- lower --hring\n",
+            "[d2h] %llu rings x %llu windows (--hring %u = %llu B) exceed %d raw TLB windows -- lower "
+            "--hring/--nread\n",
+            (unsigned long long)ndh,
+            (unsigned long long)nwin,
             hring_words,
-            (unsigned long long)hring_bytes);
+            (unsigned long long)hring_bytes,
+            SOCKET_WIN_BASE - WRITE_WIN_BASE);
         std::_Exit(2);
     }
     // data_off starts at chan_sz/2, so the rings have the whole second half of the PCIe channel to grow into;

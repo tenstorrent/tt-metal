@@ -402,27 +402,33 @@ static void relay_run(
      * the fence + PCIe posted-write ordering), so the host polls its OWN RAM (~ns) instead of reading the
      * pointer from device LIM (~18 us/poll -- the old 215 MB/s wall). HACKED stays in LIM (host->device write
      * is posted/fast). SENT slot @ hbase[h] + hring_words*4. */
-    /* Rings are STRIDED at 2 MiB (NOC_2M_WINDOW_STRIDE), one per TLB window, so every ring starts at in-window
-     * offset 0 and may use the full window -- see the host's ring_stride note. MUST match the host layout. */
-    uint64_t rstride = ((uint64_t)hring_words * 4 + 64 + (NOC_2M_WINDOW_STRIDE - 1)) & ~(NOC_2M_WINDOW_STRIDE - 1);
+    /* A ring may exceed one 2 MiB TLB window: it spans nwin CONSECUTIVE windows mapping CONSECUTIVE 2 MiB host
+     * pages (indices WRITE_WIN_BASE + h*nwin + k). Because window (wbase+k)'s NoC base = NOC_2M_WINDOW_BASE +
+     * (wbase+k)*STRIDE and it maps host page mhb+k*2MiB, a LINEAR write to hbase[h]+off (off in [0, nwin*2MiB))
+     * routes through the correct window transparently -> the ring behaves as one nwin*2MiB region. rstride
+     * (host layout) = nwin*2MiB; mhb is 2MiB-aligned so the in-window offset is 0. MUST match the host layout. */
+    uint64_t nwin = ((uint64_t)hring_words * 4 + 64 + (NOC_2M_WINDOW_STRIDE - 1)) / NOC_2M_WINDOW_STRIDE;
+    uint64_t rstride = nwin * NOC_2M_WINDOW_STRIDE;
     uint64_t hbase[4];
     for (uint64_t h = rlo; h < rhi; h++) {
         uint64_t mhb = host_base + h * rstride;
-        uint32_t win_p = WRITE_WIN_BASE + (uint32_t)h;
-        noc_tlb_2m_t wt;
-        wt.data[0] = 0;
-        wt.data[1] = 0;
-        wt.data[2] = 0;
-        wt.data[3] = 0;
-        wt.addr = mhb >> 21;
-        wt.x_end = (uint32_t)(pcie_enc & 0x3f);
-        wt.y_end = (uint32_t)((pcie_enc >> 6) & 0x3f);
-        wt.x_start = (uint32_t)(pcie_enc & 0x3f);
-        wt.y_start = (uint32_t)((pcie_enc >> 6) & 0x3f);
-        wt.noc_selector = 0;
-        wt.posted = 1;
-        (void)noc_configure_tlb_2m_ext(win_p, &wt, 0);
-        hbase[h] = NOC_2M_WINDOW_BASE + (uint64_t)win_p * NOC_2M_WINDOW_STRIDE + (mhb & (NOC_2M_WINDOW_STRIDE - 1ULL));
+        uint32_t wbase = WRITE_WIN_BASE + (uint32_t)(h * nwin);
+        for (uint64_t k = 0; k < nwin; k++) {
+            noc_tlb_2m_t wt;
+            wt.data[0] = 0;
+            wt.data[1] = 0;
+            wt.data[2] = 0;
+            wt.data[3] = 0;
+            wt.addr = (mhb + k * NOC_2M_WINDOW_STRIDE) >> 21;
+            wt.x_end = (uint32_t)(pcie_enc & 0x3f);
+            wt.y_end = (uint32_t)((pcie_enc >> 6) & 0x3f);
+            wt.x_start = (uint32_t)(pcie_enc & 0x3f);
+            wt.y_start = (uint32_t)((pcie_enc >> 6) & 0x3f);
+            wt.noc_selector = 0;
+            wt.posted = 1;
+            (void)noc_configure_tlb_2m_ext(wbase + (uint32_t)k, &wt, 0);
+        }
+        hbase[h] = NOC_2M_WINDOW_BASE + (uint64_t)wbase * NOC_2M_WINDOW_STRIDE + (mhb & (NOC_2M_WINDOW_STRIDE - 1ULL));
     }
     fence_();
 
@@ -708,8 +714,9 @@ static void drain_direct(
     if (lo > num_cores) {
         lo = num_cores;
     }
-    /* 2 MiB-strided rings (one TLB window each) -- MUST match relay_run + the host layout. */
-    uint64_t rstride = ((uint64_t)hring_words * 4 + 64 + (NOC_2M_WINDOW_STRIDE - 1)) & ~(NOC_2M_WINDOW_STRIDE - 1);
+    /* Multi-window rings: nwin consecutive 2 MiB windows / consecutive host pages -- MUST match relay_run + host. */
+    uint64_t nwin = ((uint64_t)hring_words * 4 + 64 + (NOC_2M_WINDOW_STRIDE - 1)) / NOC_2M_WINDOW_STRIDE;
+    uint64_t rstride = nwin * NOC_2M_WINDOW_STRIDE;
     uint64_t my_host_base = host_base + (uint64_t)hartid * rstride; /* ring + 64 B SENT trailer */
     uint64_t ctrl_off = prof_l1 & (NOC_2M_WINDOW_STRIDE - 1ULL);
     uint64_t off_w = my_host_base & (NOC_2M_WINDOW_STRIDE - 1ULL);
@@ -729,23 +736,25 @@ static void drain_direct(
         rt.noc_selector = (uint32_t)read_noc;
         (void)noc_configure_tlb_2m_ext((uint32_t)c, &rt, 0);
     }
-    /* one posted write window to THIS hart's host ring (index = WRITE_WIN_BASE+hartid -> disjoint) */
-    uint32_t win_p = WRITE_WIN_BASE + (uint32_t)hartid;
-    noc_tlb_2m_t wt;
-    wt.data[0] = 0;
-    wt.data[1] = 0;
-    wt.data[2] = 0;
-    wt.data[3] = 0;
-    wt.addr = my_host_base >> 21;
-    wt.x_end = (uint32_t)(pcie_enc & 0x3f);
-    wt.y_end = (uint32_t)((pcie_enc >> 6) & 0x3f);
-    wt.x_start = (uint32_t)(pcie_enc & 0x3f);
-    wt.y_start = (uint32_t)((pcie_enc >> 6) & 0x3f);
-    wt.noc_selector = (uint32_t)wnoc; /* route the posted PCIe write over NoC0 (0) or NoC1 (1) */
-    wt.posted = 1;
-    (void)noc_configure_tlb_2m_ext(win_p, &wt, 0);
+    /* nwin consecutive posted write windows to THIS hart's ring (indices WRITE_WIN_BASE + hartid*nwin + k). */
+    uint32_t wbase = WRITE_WIN_BASE + (uint32_t)(hartid * nwin);
+    for (uint64_t k = 0; k < nwin; k++) {
+        noc_tlb_2m_t wt;
+        wt.data[0] = 0;
+        wt.data[1] = 0;
+        wt.data[2] = 0;
+        wt.data[3] = 0;
+        wt.addr = (my_host_base + k * NOC_2M_WINDOW_STRIDE) >> 21;
+        wt.x_end = (uint32_t)(pcie_enc & 0x3f);
+        wt.y_end = (uint32_t)((pcie_enc >> 6) & 0x3f);
+        wt.x_start = (uint32_t)(pcie_enc & 0x3f);
+        wt.y_start = (uint32_t)((pcie_enc >> 6) & 0x3f);
+        wt.noc_selector = (uint32_t)wnoc; /* route the posted PCIe write over NoC0 (0) or NoC1 (1) */
+        wt.posted = 1;
+        (void)noc_configure_tlb_2m_ext(wbase + (uint32_t)k, &wt, 0);
+    }
     fence_();
-    uint64_t hbase = NOC_2M_WINDOW_BASE + (uint64_t)win_p * NOC_2M_WINDOW_STRIDE + off_w;
+    uint64_t hbase = NOC_2M_WINDOW_BASE + (uint64_t)wbase * NOC_2M_WINDOW_STRIDE + off_w;
 
     /* per-hart heads region in the direct-mode-unused STAGE space (64 KiB/hart -> disjoint cache lines,
      * no cross-hart LIM false sharing at slice boundaries) */
