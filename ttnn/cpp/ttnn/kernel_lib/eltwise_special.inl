@@ -11,7 +11,6 @@
 #include "api/compute/eltwise_unary/i0.h"
 #include "api/compute/eltwise_unary/i1.h"
 #include "api/compute/eltwise_unary/digamma.h"
-#include "api/compute/eltwise_unary/tanh_derivative.h"
 #include "api/compute/eltwise_unary/where.h"
 #include "api/compute/eltwise_unary/lgamma.h"
 
@@ -41,8 +40,6 @@ ELTWISE_DECLARE_UNARY(Erfinv, erfinv)
 ELTWISE_DECLARE_UNARY(I0, i0)
 ELTWISE_DECLARE_UNARY(I1, i1)
 ELTWISE_DECLARE_UNARY(Digamma, digamma)
-// TanhDerivative is defined in eltwise_activations.hpp. The tanh_derivative.h
-// include above provides its LLK declarations.
 
 #undef ELTWISE_DECLARE_UNARY
 

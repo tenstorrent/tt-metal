@@ -26,19 +26,22 @@ void kernel_main() {
     constexpr DestReuseType R = (reuse == 0) ? DestReuseType::DEST_TO_SRCA : DestReuseType::DEST_TO_SRCB;
     constexpr BinaryFpuOp OP = (op == 0) ? BinaryFpuOp::Add : ((op == 1) ? BinaryFpuOp::Sub : BinaryFpuOp::Mul);
 
+    using CbOnSrcA = DestReuseBinary<input(cb_c), BinaryFpuOp::Add, DestReuseType::DEST_TO_SRCB>;
+    using CbOnSrcB = DestReuseBinary<input(cb_c), BinaryFpuOp::Add, DestReuseType::DEST_TO_SRCA>;
+    using ReconfigDisabled = DestReuseBinary<
+        input(cb_c, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+        BinaryFpuOp::Add,
+        DestReuseType::DEST_TO_SRCA>;
+    static_assert(CbOnSrcA::reconfig_srca_dfb == cb_c && CbOnSrcA::reconfig_srcb_dfb == NO_PREV_DFB);
+    static_assert(CbOnSrcB::reconfig_srca_dfb == NO_PREV_DFB && CbOnSrcB::reconfig_srcb_dfb == cb_c);
+    static_assert(
+        ReconfigDisabled::reconfig_srca_dfb == NO_PREV_DFB && ReconfigDisabled::reconfig_srcb_dfb == NO_PREV_DFB);
+
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
     eltwise_chain(
         EltwiseShape::tiles(n),
-        BinaryFpu<
-            cb_a,
-            cb_b,
-            BinaryFpuOp::Add,
-            BroadcastDim::None,
-            InputLifecycle::Streaming,
-            InputLifecycle::Streaming,
-            BinaryDataFormatReconfig::Input,
-            Dst::D0>{},
-        DestReuseBinary<cb_c, OP, R, InputLifecycle::Streaming, DestReuseReconfig::Input, Dst::D0, Dst::D0>{},
-        PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{});
+        BinaryFpu<input(cb_a), input(cb_b)>{},
+        DestReuseBinary<input(cb_c), OP, R>{},
+        PackTile<output(cb_out)>{});
 }
