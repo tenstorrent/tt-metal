@@ -77,6 +77,11 @@
 #define TT_RDMA_TX_BUF1_ADDR (TT_RDMA_L1_BASE + TT_RDMA_TX_BUF1_OFF)
 #define TT_RDMA_READ_CORR_ADDR (TT_RDMA_L1_BASE + TT_RDMA_READ_CORR_OFF)
 
+// BH.0 bring-up gate slots: the RCB is "header + doorbells + dbg counters", so the first two
+// words carry the heartbeat and a host->kernel graceful-stop doorbell (both inside RCB_SIZE 0x200).
+#define TT_RDMA_HB_ADDR (TT_RDMA_RCB_ADDR + 0x0u)    // heartbeat counter: kernel -> observer/host
+#define TT_RDMA_STOP_ADDR (TT_RDMA_RCB_ADDR + 0x4u)  // graceful-stop flag: host -> kernel (0=run, !=0=stop)
+
 // NOTE: the SEND landing ring (RxWqeRing) is NOT in L1 — it is DMA-pushed to a host hugepage
 // at +128 KB (reverse of the TX DMA-pull). See tt-rdma-fw-arch-rx.md / host-sdk.md.
 

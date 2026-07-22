@@ -29,8 +29,9 @@ build compiles everything *except* `EthernetConfig`). So:
 
 Two in-tree build products (both already wired):
 - **Standalone tool `bh0_heartbeat`** (#1) — `add_subdirectory(... tt_metal/tt_rdma/bh0 ...)` is in
-  `tests/tt_metal/tt_metal/CMakeLists.txt` (next to `deployment`); persistent kernel (num_beats=0),
-  run + observe + reset. Full 10-min gate.
+  `tests/tt_metal/tt_metal/CMakeLists.txt` (next to `deployment`); runs the kernel until `hold_s`
+  elapses, then sets the L1 stop flag so the kernel RETURNS and is reaped cleanly (no chip reset,
+  clean `close_device()`, lock released). Run + observe + graceful stop.
 - **gtest `TtRdmaBH0CoexistenceHeartbeat`** (#4) — `tests/tt_metal/tt_metal/deployment/eth/test_bh0_coexistence.cpp`
   in `unit_tests_deployment` (added to `deployment/sources.cmake`); bounded kernel, CI-friendly
   ~seconds smoke, asserts `ensure_links()` before AND after. Guaranteed-compile (reuses the
@@ -38,7 +39,7 @@ Two in-tree build products (both already wired):
 
 ```bash
 ./build_metal.sh                                   # build_Release/ already exists on this box
-# standalone tool (persistent):
+# standalone tool (holds for hold_s, then graceful-stops — clean exit, no reset):
 TT_METAL_HOME=<repo-root> ./build_Release/.../bh0_heartbeat  [device_id] [eth_idx] [spin] [hold_s]
 # gtest (bounded smoke):
 ./build_Release/test/tt_metal/unit_tests_deployment --gtest_filter='*TtRdmaBH0Coexistence*'
@@ -46,7 +47,9 @@ TT_METAL_HOME=<repo-root> ./build_Release/.../bh0_heartbeat  [device_id] [eth_id
 - **`eth_idx`** picks which active eth core (argv[2], default 0) — the "pin the core" knob. On start
   the tool **prints the chosen core's logical AND physical/NOC coords**, so you know exactly which
   `X-Y` to watch with `erisc_ports.sh` / `tt-exalens` (the logical eth coord ≠ the NOC coord).
-- `spin` paces the heartbeat writes; `hold_s` is the resident window (default 600 = 10 min).
+- `spin` paces the heartbeat writes; `hold_s` is the resident window (default 600 = 10 min). After
+  it elapses the tool writes the stop flag at `TT_RDMA_STOP_ADDR`, the kernel returns, and the tool
+  exits cleanly — no chip reset needed, and back-to-back runs work without clearing the UMD lock.
 
 If a standalone `main()` can't link against `test_metal_common_libs`, fall back to the **gtest form**:
 add `bh0_heartbeat_host.cpp` to `UNIT_TESTS_DEPLOYMENT_SRC` and drive it from a `TEST()` using the
@@ -56,11 +59,13 @@ add `bh0_heartbeat_host.cpp` to `UNIT_TESTS_DEPLOYMENT_SRC` and drive it from a 
 ```bash
 # link stays UP:
 /home/alex/tenstorrent/bh-erisc-fpga/scripts/erisc_ports.sh <X-Y>
-# heartbeat advances (TT_RDMA_RCB_ADDR — compute from tt_rdma_l1_layout.h; default base 0x42000):
+# heartbeat advances (TT_RDMA_HB_ADDR — compute from tt_rdma_l1_layout.h; default base 0x42000 -> 0x46800):
 TTX=/home/alex/tenstorrent/tt-exalens
-$TTX/.venv/bin/python $TTX/tt-exalens.py --commands "brxy <X-Y> <TT_RDMA_RCB_ADDR> 1 -d 0; x" </dev/null
+$TTX/.venv/bin/python $TTX/tt-exalens.py --commands "brxy <X-Y> <TT_RDMA_HB_ADDR> 1 -d 0; x" </dev/null
 ```
-To stop the persistent kernel: `sudo reboot` (or `tt-smi -r --eth_train_skip`).
+The tool graceful-stops itself after `hold_s` (kernel returns, RISC1 idles). To stop it early, set the
+stop flag at `TT_RDMA_STOP_ADDR` (`bwxy <X-Y> <TT_RDMA_STOP_ADDR> 1`) or just Ctrl-C the tool and
+`tt-smi -r` if you interrupted before the graceful stop ran.
 
 ## Risks / what BH.0 actually tests (log the answers)
 - **Does the link survive a resident RISC1 kernel?** — the whole point. This is the empirical

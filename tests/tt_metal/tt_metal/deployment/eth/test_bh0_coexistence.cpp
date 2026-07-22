@@ -54,7 +54,9 @@ TEST_F(MeshDispatchFixture, TtRdmaBH0CoexistenceHeartbeat) {
     EthernetConfig cfg{.processor = DataMovementProcessor::RISCV_1};
     eth_test_common::set_arch_specific_eth_config(cfg);
     const KernelHandle k = CreateKernel(program, "tt_metal/tt_rdma/bh0/kernels/bh_rdma_heartbeat.cpp", eth_core, cfg);
-    SetRuntimeArgs(program, k, eth_core, {counter_addr, kSpinPerBeat, kNumBeats});
+    // arg3 stop_addr=0: bounded run only (num_beats>0), no host stop flag. Kernel returns after
+    // kNumBeats and is reaped by Finish() below — the same clean lifecycle the soak tool now uses.
+    SetRuntimeArgs(program, k, eth_core, {counter_addr, kSpinPerBeat, kNumBeats, /*stop_addr=*/0u});
 
     // Run the bounded kernel to completion (deterministic; no counter-rate timeout).
     distributed::MeshWorkload workload;

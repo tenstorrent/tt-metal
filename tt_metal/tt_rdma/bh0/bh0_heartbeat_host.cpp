@@ -5,8 +5,14 @@
 // coexistence gate can be observed. See docs/tt-rdma-v1/tt-rdma-bh-bf3-impl-plan.md.
 //
 // GATE: with this running, `port_status` on the chosen eth core stays UP for
-// 10 min (bh-erisc-fpga/scripts/erisc_ports.sh) AND the heartbeat word at
-// TT_RDMA_RCB_ADDR advances (tt-exalens brxy). See README.md.
+// the hold window (bh-erisc-fpga/scripts/erisc_ports.sh) AND the heartbeat word
+// at TT_RDMA_HB_ADDR advances (tt-exalens brxy). See README.md.
+//
+// GRACEFUL STOP (no reset needed): the kernel runs until we set the stop flag at
+// TT_RDMA_STOP_ADDR. After the hold we write it, Finish() the queue (the kernel
+// returns -> RISC0 go-loop reaps it -> RISC1 goes idle), then close cleanly. A
+// never-returning busy-spin would pin RISC1 in an active power state until a
+// chip reset; this avoids that entirely.
 //
 // Reconciled to this checkout's API: distributed::MeshDevice + MeshWorkload
 // (pattern from tt_metal/programming_examples/hello_world_datamovement_kernel).
@@ -14,16 +20,17 @@
 // this repo root (see README). Build: self-contained CMake (find_package TT-Metalium).
 
 #include <chrono>
-#include <cstdlib>  // std::_Exit
 #include <iostream>
 #include <thread>
+#include <vector>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include "impl/kernels/kernel.hpp"  // EthernetConfig + Eth (internal API; not in public host_api.hpp)
+#include "impl/kernels/kernel.hpp"         // EthernetConfig + Eth (internal API; not in public host_api.hpp)
+#include "impl/context/metal_context.hpp"  // MetalContext -> cluster().write_core (set the stop flag)
 
-#include "tt_metal/hw/inc/internal/ethernet/tt_rdma_l1_layout.h"  // TT_RDMA_RCB_ADDR (heartbeat slot)
+#include "tt_metal/hw/inc/internal/ethernet/tt_rdma_l1_layout.h"  // TT_RDMA_HB_ADDR / TT_RDMA_STOP_ADDR
 
 int main(int argc, char** argv) {
     using namespace tt;
@@ -51,8 +58,8 @@ int main(int argc, char** argv) {
     const CoreCoord eth_phys = device->ethernet_core_from_logical_core(eth_logical);
     std::cout << "BH.0: device " << device_id << " eth core logical=(" << eth_logical.x << "," << eth_logical.y
               << ")  physical/NOC=(" << eth_phys.x << "," << eth_phys.y << ")  -- monitor this coord\n";
-    std::cout << "BH.0: heartbeat @ 0x" << std::hex << TT_RDMA_RCB_ADDR << std::dec << ", spin=" << spin
-              << ", hold=" << hold_s << "s\n";
+    std::cout << "BH.0: heartbeat @ 0x" << std::hex << TT_RDMA_HB_ADDR << ", stop-flag @ 0x" << TT_RDMA_STOP_ADDR
+              << std::dec << ", spin=" << spin << ", hold=" << hold_s << "s\n";
 
     // RISC1 (subordinate) = the free data mover; base FW owns NOC0 on RISC0, so RISC1 uses NOC1.
     Program program = CreateProgram();
@@ -64,9 +71,10 @@ int main(int argc, char** argv) {
     };
     const KernelHandle k =
         CreateKernel(program, "tt_metal/tt_rdma/bh0/kernels/bh_rdma_heartbeat.cpp", eth_logical, cfg);
-    SetRuntimeArgs(program, k, eth_logical, {TT_RDMA_RCB_ADDR, spin, /*num_beats=*/0u});  // 0 = persistent
+    // num_beats=0 -> run until the stop flag; arg3 = stop-flag address (kernel clears it on entry).
+    SetRuntimeArgs(program, k, eth_logical, {TT_RDMA_HB_ADDR, spin, /*num_beats=*/0u, TT_RDMA_STOP_ADDR});
 
-    // Dispatch NON-BLOCKING (kernel is persistent -> do NOT Finish()).
+    // Dispatch NON-BLOCKING so we can hold the kernel resident for the observation window.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
@@ -75,17 +83,20 @@ int main(int argc, char** argv) {
 
     std::cout << "BH.0: kernel dispatched to RISC1. Observe from another terminal:\n"
               << "  erisc_ports.sh <X-Y>   (port_status stays UP)\n"
-              << "  tt-exalens brxy <X-Y> 0x" << std::hex << TT_RDMA_RCB_ADDR << std::dec << " 1   (heartbeat advances)"
-              << std::endl;  // endl = flush (SIGTERM-safe)
+              << "  tt-exalens brxy <X-Y> 0x" << std::hex << TT_RDMA_HB_ADDR << std::dec << " 1   (heartbeat advances)"
+              << std::endl;  // endl = flush
 
     std::this_thread::sleep_for(std::chrono::seconds(hold_s));
 
-    // The kernel is still running (persistent). Stop it by resetting the chip
-    // (sudo reboot, or tt-smi -r --eth_train_skip). We intentionally do NOT
-    // Finish()/close() cleanly here — a never-returning kernel can't be reaped.
-    std::cout << "BH.0: hold elapsed. Kernel still resident; reset the chip to stop." << std::endl;
-    // Skip C++ destructors: a clean MeshDevice close_device() HANGS waiting for the never-returning
-    // persistent kernel (observed: process hung at teardown). Reset the chip (tt-smi -r / reboot)
-    // to actually stop the kernel + free the device.
-    std::_Exit(0);
+    // Graceful stop: write the stop flag in the eth core's L1. The kernel polls it and RETURNS,
+    // so Finish() completes, the RISC0 go-loop reaps the kernel, and RISC1 returns to idle — no
+    // chip reset required, and close_device() tears down cleanly (destructors below).
+    const std::vector<uint32_t> stop_val{1u};
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        device->id(), device->ethernet_core_from_logical_core(eth_logical), stop_val, TT_RDMA_STOP_ADDR);
+    std::cout << "BH.0: hold elapsed -> stop flag set; waiting for the kernel to finish..." << std::endl;
+
+    distributed::Finish(cq);  // returns once the (now-terminating) kernel completes
+    std::cout << "BH.0: kernel finished and reaped; RISC1 idle. Clean shutdown." << std::endl;
+    return 0;  // MeshDevice destructor closes the device cleanly (no resident kernel to hang on)
 }
