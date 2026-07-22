@@ -171,10 +171,10 @@ void bind_tensor_prefetcher(nb::module_& mod) {
     ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d", "ttnn.experimental.">(
         mod,
         R"doc(
-            Build a DRAM-sender GlobalCircularBuffer sized to feed one or more gather_in0 or
-            mcast_in0 1D matmuls with their weight tensors. The weight's DRAM layout is
-            auto-detected (legacy WIDTH_SHARDED K-row-major vs receiver-contiguous NdShardSpec)
-            and validated/sized accordingly.
+            Build a DRAM-sender GlobalCircularBuffer sized to feed one or more gather_in0,
+            mcast_in0, or bank-striped mcast_in1 1D matmuls with their weight tensors. The
+            weight's DRAM layout is auto-detected (legacy WIDTH_SHARDED K-row-major vs
+            receiver-contiguous NdShardSpec) and validated/sized accordingly.
 
             Args:
                 mesh_device: The mesh device.
@@ -205,14 +205,15 @@ void bind_tensor_prefetcher(nb::module_& mod) {
     ttnn::bind_function<"tensor_prefetcher_block_count_for_matmul_1d", "ttnn.experimental.">(
         mod,
         R"doc(
-            Compute and validate the block_count to pair with a receiver-contiguous DRAM weight
-            in queue_tensor_prefetcher_request for a gather_in0 or mcast_in0 1D matmul fed via
-            global_cb. Gather returns the receiver/ring count. Mcast returns
-            weight_K_tiles / in0_block_w and uses natural FIFO order.
+            Compute and validate the block_count for queue_tensor_prefetcher_request when a
+            gather_in0, mcast_in0, or bank-striped mcast_in1 1D matmul consumes via global_cb.
+            Gather returns the receiver/ring count. Both multicast modes return
+            weight_K_tiles / in0_block_w and use natural FIFO order.
 
             Args:
                 program_config: The 1D matmul program config that will consume the weight.
-                weight: The receiver-contiguous (NdShardSpec) DRAM weight tensor.
+                weight: The receiver-contiguous (gather/mcast_in0) or bank-striped
+                    WIDTH_SHARDED (mcast_in1) DRAM weight tensor.
                 global_cb: The DRAM-sender GCB the prefetcher and matmul share.
 
             Returns:

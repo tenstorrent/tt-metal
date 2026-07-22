@@ -383,15 +383,196 @@ uint32_t validate_recv_contig_weight_for_matmul_1d(
     return block_count;
 }
 
+struct KRowMcastIn1Geometry {
+    uint32_t block_count = 0;
+    uint32_t page_bytes = 0;
+};
+
+KRowMcastIn1Geometry validate_krow_mcast_in1_weight_for_matmul_1d(
+    const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
+    const tt::tt_metal::Tensor& weight,
+    uint32_t num_banks) {
+    TT_FATAL(
+        !program_config.gather_in0 && !program_config.mcast_in0,
+        "bank-striped Tensor prefetcher mcast-in1 requires gather_in0=false and mcast_in0=false");
+    TT_FATAL(
+        !program_config.stream_in1, "mcast-in1 consumes bank stripes in natural order and requires stream_in1=false");
+    TT_FATAL(
+        program_config.num_global_cb_receivers == 1,
+        "bank-striped mcast-in1 requires num_global_cb_receivers=1 (one relay worker per DRAM bank), got {}",
+        program_config.num_global_cb_receivers);
+    TT_FATAL(num_banks > 0, "bank-striped mcast-in1 requires at least one DRAM bank");
+
+    TT_FATAL(weight.buffer() != nullptr && weight.buffer()->is_dram(), "mcast-in1 weight must live in DRAM");
+    TT_FATAL(
+        weight.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+            weight.buffer()->has_shard_spec(),
+        "bank-striped mcast-in1 requires a legacy WIDTH_SHARDED DRAM weight with one full-K shard per bank");
+
+    const auto& wp = weight.padded_shape();
+    TT_FATAL(wp.rank() >= 2, "mcast-in1 weight must be at least 2D; got rank {}", wp.rank());
+    const auto& tile = weight.tensor_spec().tile();
+    const uint32_t tile_h = tile.get_height();
+    const uint32_t tile_w = tile.get_width();
+    const uint32_t weight_K = wp[-2];
+    const uint32_t weight_N = wp[-1];
+    TT_FATAL(
+        weight_K % tile_h == 0 && weight_N % tile_w == 0,
+        "mcast-in1 weight shape ({}, {}) must be tile-aligned (tile {}x{})",
+        weight_K,
+        weight_N,
+        tile_h,
+        tile_w);
+    const uint32_t weight_K_tiles = weight_K / tile_h;
+    const uint32_t weight_N_tiles = weight_N / tile_w;
+
+    const auto& shard_shape = weight.buffer()->shard_spec().shape();
+    const uint32_t shard_K = shard_shape[0];
+    const uint32_t shard_N = shard_shape[1];
+    TT_FATAL(shard_K == weight_K, "mcast-in1 weight DRAM shard K ({}) must equal full K ({})", shard_K, weight_K);
+    TT_FATAL(
+        static_cast<uint64_t>(shard_N) * num_banks == weight_N,
+        "mcast-in1 weight DRAM shard N ({}) * num_banks ({}) must equal full N ({})",
+        shard_N,
+        num_banks,
+        weight_N);
+    TT_FATAL(
+        shard_N % tile_w == 0, "mcast-in1 weight per-bank N ({}) must be tile-aligned (tile_w={})", shard_N, tile_w);
+    TT_FATAL(
+        program_config.per_core_N == weight_N_tiles,
+        "mcast-in1 program_config.per_core_N ({}) must equal full weight N ({} tiles); every matmul worker "
+        "receives the assembled full-width in1 block",
+        program_config.per_core_N,
+        weight_N_tiles);
+    TT_FATAL(program_config.in0_block_w > 0, "mcast-in1 requires in0_block_w > 0");
+    TT_FATAL(
+        weight_K_tiles % program_config.in0_block_w == 0,
+        "mcast-in1 weight K ({} tiles) must be divisible by in0_block_w ({})",
+        weight_K_tiles,
+        program_config.in0_block_w);
+
+    const uint32_t block_count = weight_K_tiles / static_cast<uint32_t>(program_config.in0_block_w);
+    const uint32_t stripe_N_tiles = shard_N / tile_w;
+    const uint32_t bytes_per_tile = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(weight.dtype()));
+    const uint32_t page_bytes = static_cast<uint32_t>(program_config.in0_block_w) * stripe_N_tiles * bytes_per_tile;
+    TT_FATAL(block_count > 0 && page_bytes > 0, "mcast-in1 block_count and page_bytes must be non-zero");
+    return {.block_count = block_count, .page_bytes = page_bytes};
+}
+
 }  // namespace
 
 uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const tt::tt_metal::Tensor& weight,
     const GlobalCircularBuffer& gcb) {
+    if (!program_config.gather_in0 && !program_config.mcast_in0) {
+        TT_FATAL(
+            !is_receiver_contiguous_weight(weight),
+            "bank-striped mcast-in1 requires a legacy WIDTH_SHARDED weight, not a receiver-contiguous NdShardSpec");
+        const auto& mapping = gcb.sender_receiver_core_mapping();
+        const uint32_t num_banks = static_cast<uint32_t>(mapping.size());
+        TT_FATAL(num_banks > 0, "global_cb has no DRAM-bank senders");
+        for (size_t i = 0; i < mapping.size(); ++i) {
+            const auto& [sender, receivers] = mapping[i];
+            TT_FATAL(
+                receivers.num_cores() == 1,
+                "mcast-in1 global_cb requires one relay receiver per bank; sender {} has {} receivers",
+                sender,
+                receivers.num_cores());
+        }
+        const auto geometry = validate_krow_mcast_in1_weight_for_matmul_1d(program_config, weight, num_banks);
+        TT_FATAL(
+            gcb.size() % geometry.page_bytes == 0,
+            "mcast-in1 global_cb size {} must be a multiple of its per-bank stripe page size {}",
+            gcb.size(),
+            geometry.page_bytes);
+        TT_FATAL(
+            gcb.size() >= 2 * geometry.page_bytes,
+            "mcast-in1 global_cb requires a two-page streaming window: size {} must be at least {}",
+            gcb.size(),
+            2 * geometry.page_bytes);
+        return geometry.block_count;
+    }
+
     const uint32_t receiver_count = gcb.receiver_cores().num_cores();
     TT_FATAL(receiver_count > 0, "global_cb has no receivers");
     return validate_recv_contig_weight_for_matmul_1d(program_config, weight, receiver_count);
+}
+
+// Builds the bank-striped mcast-in1 GCB. Each K-row-major DRAM bank owns one N stripe and unicasts
+// it to exactly one relay worker. The relay workers assemble full in1 blocks on all matmul workers
+// with worker-side multicast; the Tensor prefetcher itself remains unicast-only.
+static GlobalCircularBuffer build_matmul_1d_gcb_krow_major_mcast_in1(
+    MeshDevice* mesh_device,
+    const std::vector<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_configs,
+    const std::vector<tt::tt_metal::Tensor>& weights,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    uint32_t size,
+    BufferType buffer_type) {
+    TT_FATAL(size > 0, "size must be > 0");
+    TT_FATAL(!bank_to_receivers.empty(), "bank_to_receivers must be non-empty");
+
+    const uint32_t num_banks = static_cast<uint32_t>(bank_to_receivers.size());
+    std::vector<bool> seen_banks(num_banks, false);
+    for (size_t i = 0; i < bank_to_receivers.size(); ++i) {
+        const auto& [bank, receivers] = bank_to_receivers[i];
+        TT_FATAL(
+            bank < num_banks && !seen_banks[bank],
+            "mcast-in1 bank ids must be dense and unique in [0, {}); bank_to_receivers[{}] has bank {}",
+            num_banks,
+            i,
+            bank);
+        seen_banks[bank] = true;
+        TT_FATAL(
+            receivers.num_cores() == 1,
+            "mcast-in1 requires exactly one relay worker per DRAM bank; bank {} has {} receivers",
+            bank,
+            receivers.num_cores());
+    }
+
+    uint32_t max_page_bytes = 0;
+    for (size_t i = 0; i < program_configs.size(); ++i) {
+        const auto& cfg = program_configs[i];
+        const uint32_t grid_capacity = cfg.compute_with_storage_grid_size.x * cfg.compute_with_storage_grid_size.y;
+        TT_FATAL(
+            grid_capacity >= num_banks,
+            "mcast-in1 program_configs[{}] grid {}x{} has {} workers but needs at least one relay for each of {} "
+            "DRAM banks",
+            i,
+            cfg.compute_with_storage_grid_size.x,
+            cfg.compute_with_storage_grid_size.y,
+            grid_capacity,
+            num_banks);
+        const auto geometry = validate_krow_mcast_in1_weight_for_matmul_1d(cfg, weights[i], num_banks);
+        TT_FATAL(
+            size % geometry.page_bytes == 0,
+            "mcast-in1 GCB size {} must be a multiple of program_configs[{}] stripe page size {}",
+            size,
+            i,
+            geometry.page_bytes);
+        max_page_bytes = std::max(max_page_bytes, geometry.page_bytes);
+    }
+
+    constexpr uint32_t kMaxCbPagesBytes = 131072u * 16u;
+    constexpr uint32_t kFifoMinWindowBlocks = 2;
+    TT_FATAL(
+        size >= kFifoMinWindowBlocks * max_page_bytes,
+        "mcast-in1 GCB size ({} B) must hold at least two largest stripe pages (2 * {} B = {} B)",
+        size,
+        max_page_bytes,
+        kFifoMinWindowBlocks * max_page_bytes);
+    TT_FATAL(
+        size <= kMaxCbPagesBytes,
+        "GCB size ({} B) exceeds the remote-CB page-count cap ({} B). Reduce size.",
+        size,
+        kMaxCbPagesBytes);
+
+    auto ordered_bank_to_receivers = bank_to_receivers;
+    std::sort(ordered_bank_to_receivers.begin(), ordered_bank_to_receivers.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.first < rhs.first;
+    });
+    return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device, ordered_bank_to_receivers, size, buffer_type, /*support_multi_receiver_shards=*/true);
 }
 
 // Builds the GCB for a receiver-contiguous (NdShardSpec) weight: num_shards == ring_size, each shard
@@ -519,6 +700,31 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
             "weights[{}] has a different DRAM layout than weights[0]; all weights sharing one GCB must be either "
             "all receiver-contiguous (NdShardSpec) or all legacy K-row-major (WIDTH_SHARDED)",
             i);
+    }
+
+    const bool mcast_in1 = !program_configs.front().gather_in0 && !program_configs.front().mcast_in0;
+    for (size_t i = 0; i < program_configs.size(); ++i) {
+        const bool config_mcast_in1 = !program_configs[i].gather_in0 && !program_configs[i].mcast_in0;
+        TT_FATAL(
+            config_mcast_in1 == mcast_in1,
+            "All program configs sharing one GCB must use the same consumer mode; config[0] mcast-in1={} but "
+            "config[{}] mcast-in1={}",
+            mcast_in1,
+            i,
+            config_mcast_in1);
+    }
+
+    if (mcast_in1) {
+        TT_FATAL(
+            !recv_contig,
+            "bank-striped mcast-in1 requires legacy K-row-major WIDTH_SHARDED weights, not receiver-contiguous "
+            "NdShardSpec weights");
+        TT_FATAL(
+            support_multi_receiver_shards.value_or(true),
+            "bank-striped mcast-in1 uses one K-row-major shard and one relay per bank, so dual DRAM senders are "
+            "not supported");
+        return build_matmul_1d_gcb_krow_major_mcast_in1(
+            mesh_device, program_configs, weights, bank_to_receivers, size, buffer_type);
     }
 
     if (recv_contig) {

@@ -1157,6 +1157,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     std::optional<UnaryWithParam> fused_activation,
     const MeshTensor& in0_tensor,
     const MeshTensor& in1_tensor,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     ttsl::optional_reference<const MeshTensor> bias_tensor,
     const MeshTensor& out_tensor,
     const tt::tt_metal::Tile& in0_tile,
@@ -1172,6 +1173,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     bool untilize_out,
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0}) {
+    const bool use_global_cb = global_cb.has_value();
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
@@ -1228,7 +1230,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     uint32_t in0_aligned_tile_size =
         in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
+    uint32_t in1_aligned_tile_size =
+        use_global_cb ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
     // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
     // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
     // Mirrors in0/in1 above and the dram_sharded factory. No-op on Wormhole and for
@@ -1310,9 +1313,46 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     CoreRange in1_mcast_receiver_cores_bounding_box = all_cores.bounding_box();
     uint32_t in1_mcast_receiver_num_cores = in1_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
-    CoreRange in1_mcast_sender(start_core, start_core);
+    TT_FATAL(
+        !use_global_cb || all_cores.num_cores() == in1_mcast_receiver_num_cores,
+        "bank-striped mcast-in1 requires active workers to fill their multicast bounding box; active cores {} have "
+        "bounding-box size {}",
+        all_cores.num_cores(),
+        in1_mcast_receiver_num_cores);
+
+    CoreRangeSet in1_mcast_senders(CoreRange(start_core, start_core));
     CoreRangeSet in1_mcast_receivers;
-    if (in1_mcast_receiver_num_cores > 1) {
+    CoreCoord relay_coordinator_core = start_core;
+    if (use_global_cb) {
+        in1_mcast_senders = global_cb->receiver_cores();
+        TT_FATAL(
+            all_cores.contains(in1_mcast_senders),
+            "All bank-striped mcast-in1 relays must be active matmul workers. Workers: {}; relays: {}",
+            all_cores,
+            in1_mcast_senders);
+        std::vector<CoreRange> receiver_ranges;
+        receiver_ranges.reserve(num_cores - in1_mcast_senders.num_cores());
+        for (const auto& core : corerange_to_cores(all_cores, std::nullopt, row_major)) {
+            if (!in1_mcast_senders.contains(core)) {
+                receiver_ranges.emplace_back(core);
+            }
+        }
+        in1_mcast_receivers = CoreRangeSet(receiver_ranges);
+
+        const auto& sender_mapping = global_cb->sender_receiver_core_mapping();
+        for (size_t relay_index = 0; relay_index < sender_mapping.size(); ++relay_index) {
+            const auto& [sender, receivers] = sender_mapping[relay_index];
+            TT_FATAL(
+                receivers.num_cores() == 1,
+                "bank-striped mcast-in1 requires one relay per DRAM bank; bank {} has {}",
+                sender.x,
+                receivers.num_cores());
+            if (relay_index == 0) {
+                relay_coordinator_core = corerange_to_cores(receivers, std::nullopt, /*row_wise=*/true).front();
+            }
+        }
+        TT_FATAL(!sender_mapping.empty(), "bank-striped mcast-in1 global_cb has no relay coordinator");
+    } else if (in1_mcast_receiver_num_cores > 1) {
         // Check against the actual rectangle width (instead of bare grid_size.x-1) so that
         // sub-devices anchored away from (0, 0) wrap correctly.
         auto receiver_start_core = compute_with_storage_grid_size.x > 1 ? CoreCoord{start_core.x + 1, start_core.y}
@@ -1320,15 +1360,24 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         in1_mcast_receivers = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
             receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
     }
+    const uint32_t num_relay_cores = in1_mcast_senders.num_cores();
+    TT_FATAL(
+        !use_global_cb || (num_relay_cores > 0 && N % num_relay_cores == 0),
+        "bank-striped mcast-in1 full N ({} tiles) must divide evenly across {} relay workers",
+        N,
+        num_relay_cores);
+    const uint32_t relay_stripe_w_tiles = use_global_cb ? N / num_relay_cores : 0;
 
     // Mcast args
     auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_relay_go_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto relay_coordinator_core_physical = device->worker_core_from_logical_core(relay_coordinator_core);
 
     const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
     const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
@@ -1522,6 +1571,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
     }
+    if (use_global_cb) {
+        mm_kernel_in1_sender_writer_defines["ENABLE_GLOBAL_CB_MCAST_IN1"] = "1";
+        mm_kernel_in1_receiver_writer_defines["ENABLE_GLOBAL_CB_MCAST_IN1"] = "1";
+    }
 
     mm_kernel_in0_sender_defines["SKIP_MCAST"] = "1";
 
@@ -1571,21 +1624,41 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 {"cb_sparsity", tt::CBIndex::c_6},
             }});
 
+    std::unordered_map<std::string, uint32_t> in1_sender_named_compile_args = {
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_bias", tt::CBIndex::c_3},
+        {"cb_out", tt::CBIndex::c_4},
+        {"cb_sparsity", tt::CBIndex::c_7},
+    };
+    std::unordered_map<std::string, uint32_t> in1_receiver_named_compile_args = {
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_bias", tt::CBIndex::c_3},
+        {"cb_out", tt::CBIndex::c_4},
+    };
+    if (use_global_cb) {
+        const std::initializer_list<std::pair<const std::string, uint32_t>> relay_args = {
+            {"mcast_in1_relay_go_sem", in1_mcast_relay_go_semaphore_id},
+            {"mcast_in1_num_relays", num_relay_cores},
+            {"mcast_in1_num_workers", num_cores},
+            {"mcast_in1_coordinator_noc_x", relay_coordinator_core_physical.x},
+            {"mcast_in1_coordinator_noc_y", relay_coordinator_core_physical.y},
+        };
+        in1_sender_named_compile_args.insert(relay_args);
+        in1_receiver_named_compile_args.insert(relay_args);
+        in1_sender_named_compile_args.emplace("cb_in1_prefetch", tt::CBIndex::c_8);
+        in1_sender_named_compile_args.emplace("mcast_in1_relay_stripe_w", relay_stripe_w_tiles);
+    }
+
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
-        in1_mcast_sender,
+        in1_mcast_senders,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
             .defines = mm_kernel_in1_sender_writer_defines,
-            .named_compile_args = {
-                {"cb_in1", tt::CBIndex::c_1},
-                {"cb_bias", tt::CBIndex::c_3},
-                {"cb_out", tt::CBIndex::c_4},
-                {"cb_sparsity", tt::CBIndex::c_7},
-            }});
+            .named_compile_args = in1_sender_named_compile_args});
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
     if (in1_mcast_receivers.num_cores() > 0) {
@@ -1599,11 +1672,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 .noc = in1_noc,
                 .compile_args = in1_receiver_writer_compile_time_args,
                 .defines = mm_kernel_in1_receiver_writer_defines,
-                .named_compile_args = {
-                    {"cb_in1", tt::CBIndex::c_1},
-                    {"cb_bias", tt::CBIndex::c_3},
-                    {"cb_out", tt::CBIndex::c_4},
-                }});
+                .named_compile_args = in1_receiver_named_compile_args});
     }
 
     // Compute kernel compile time args
@@ -1725,7 +1794,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_aligned_tile_size)
             .set_tile_dims(src1_cb_index, in1_tile);
-    tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -1733,6 +1802,29 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         in1_single_tile_size,
         in1_CB_size / in1_single_tile_size,
         in1_CB_size);
+
+    tt::tt_metal::CBHandle cb_in1_prefetch = 0;
+    if (use_global_cb) {
+        constexpr uint32_t prefetch_cb_index = tt::CBIndex::c_8;
+        constexpr uint32_t remote_cb_index = tt::CBIndex::c_31;
+        const uint32_t stripe_block_tiles = in0_block_w * relay_stripe_w_tiles;
+        const uint32_t stripe_block_bytes = stripe_block_tiles * in1_single_tile_size;
+        TT_FATAL(
+            global_cb->size() % stripe_block_bytes == 0,
+            "mcast-in1 global_cb size {} must be a multiple of stripe block size {}",
+            global_cb->size(),
+            stripe_block_bytes);
+        tt_metal::CircularBufferConfig remote_cb_config(global_cb->size());
+        remote_cb_config.remote_index(remote_cb_index)
+            .set_page_size(stripe_block_bytes)
+            .set_data_format(in1_data_format);
+        remote_cb_config.index(prefetch_cb_index)
+            .set_page_size(in1_single_tile_size)
+            .set_data_format(in1_data_format)
+            .set_tile_dims(in1_tile);
+        cb_in1_prefetch =
+            tt_metal::experimental::CreateCircularBuffer(program, in1_mcast_senders, remote_cb_config, *global_cb);
+    }
 
     uint32_t output_cb_index = tt::CBIndex::c_4;
     uint32_t interm0_cb_index = tt::CBIndex::c_5;
@@ -1833,18 +1925,32 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     }
 
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
+    const auto relay_index_for_core = [&](const CoreCoord& core) -> uint32_t {
+        const auto& sender_mapping = global_cb->sender_receiver_core_mapping();
+        for (size_t relay_index = 0; relay_index < sender_mapping.size(); ++relay_index) {
+            const auto& receivers = sender_mapping[relay_index].second;
+            if (receivers.contains(core)) {
+                return static_cast<uint32_t>(relay_index);
+            }
+        }
+        TT_FATAL(false, "No DRAM-bank relay index found for mcast-in1 sender core {}", core);
+        return 0u;
+    };
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
         uint32_t output_idx_x = i / num_blocks_y;
         uint32_t output_idx_y = i % num_blocks_y;
+        const bool is_in1_sender = use_global_cb ? in1_mcast_senders.contains(core) : core == start_core;
 
         // in0 sender and in1 sender
-        if (core == start_core) {
+        if (is_in1_sender) {
+            const uint32_t in1_source_index =
+                use_global_cb ? relay_index_for_core(core) : in1_tensor_start_tile_id_stride * output_idx_x;
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
                 (std::uint32_t)in1_tensor.address(),
-                (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
+                in1_source_index,  // in1_tensor_start_tile_id or DRAM-bank relay index
                 // in1 mcast args
                 (std::uint32_t)start_core_noc.x,  // in1_mcast_dest_noc_start_x
                 (std::uint32_t)start_core_noc.y,  // in1_mcast_dest_noc_start_y
@@ -1893,8 +1999,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             std::vector<uint32_t> mm_in1_receiver_writer_args = {
                 // READER
                 // in1 mcast args
-                (std::uint32_t)top_left_core_physical.x,  // in1_mcast_sender_noc_x
-                (std::uint32_t)top_left_core_physical.y,  // in1_mcast_sender_noc_y
+                (std::uint32_t)(use_global_cb ? relay_coordinator_core_physical.x : top_left_core_physical.x),
+                (std::uint32_t)(use_global_cb ? relay_coordinator_core_physical.y : top_left_core_physical.y),
 
                 // WRITER
                 // out tensor args
@@ -1962,7 +2068,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     }
     return MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t{
         {mm_kernel_in0_sender_id, mm_kernel_in1_sender_writer_id, mm_kernel_in1_receiver_writer_id},
-        {cb_src0, cb_src2, cb_output},
+        {cb_src0, cb_src2, cb_output, cb_src1, cb_in1_prefetch},
         extract_shard_sub_blocks,
         start_core,
         cores,
@@ -2752,6 +2858,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 inline void override_mcast_in1_program_parameters(
     tt_metal::Program& program,
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& override_variables,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const ttnn::prim::MatmulInputs& tensor_args,
     const std::vector<ttnn::Tensor>& output_tensors) {
     const auto& input_tensors = tensor_args.input_tensors;
@@ -2782,14 +2889,29 @@ inline void override_mcast_in1_program_parameters(
 
     auto& reader_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
 
-    // Manually unroll sender core
-    {
-        // in0 sender
+    auto& receiver_writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(2));
+
+    if (global_cb.has_value()) {
+        const auto& relay_cores = global_cb->receiver_cores();
+        auto& sender_writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(1));
+        for (const auto& core : override_variables.cores) {
+            reader_runtime_args_by_core[core.x][core.y][0] = src_a_tensor.address();
+            if (relay_cores.contains(core)) {
+                auto& sender_writer_runtime_args = sender_writer_runtime_args_by_core[core.x][core.y];
+                sender_writer_runtime_args[7] = dst_tensor.address();
+                if (bias_tensor.has_value()) {
+                    sender_writer_runtime_args[18] = bias_mesh_tensor->address();
+                }
+            } else {
+                receiver_writer_runtime_args_by_core[core.x][core.y][2] = dst_tensor.address();
+            }
+        }
+    } else {
+        // Manually unroll the single sender core.
         auto& reader_runtime_args =
             reader_runtime_args_by_core[override_variables.start_core.x][override_variables.start_core.y];
         reader_runtime_args[0] = src_a_tensor.address();
 
-        // in1 sender
         auto& sender_writer_runtime_args =
             GetRuntimeArgs(program, override_variables.kernels.at(1), override_variables.start_core);
         sender_writer_runtime_args[0] = src_b_tensor.address();
@@ -2797,21 +2919,12 @@ inline void override_mcast_in1_program_parameters(
         if (bias_tensor.has_value()) {
             sender_writer_runtime_args[18] = bias_mesh_tensor->address();
         }
-    }
 
-    auto& receiver_writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(2));
-
-    for (uint32_t i = 1; i < override_variables.cores.size(); ++i) {
-        const CoreCoord& core = override_variables.cores[i];
-
-        auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
-
-        auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
-
-        // in0 sender
-        reader_runtime_args[0] = src_a_tensor.address();
-        // in1 receiver
-        writer_runtime_args[2] = dst_tensor.address();
+        for (uint32_t i = 1; i < override_variables.cores.size(); ++i) {
+            const CoreCoord& core = override_variables.cores[i];
+            reader_runtime_args_by_core[core.x][core.y][0] = src_a_tensor.address();
+            receiver_writer_runtime_args_by_core[core.x][core.y][2] = dst_tensor.address();
+        }
     }
 
     if (src0_sharded) {
@@ -2959,7 +3072,8 @@ void override_program_parameters(
             break;
         }
         case ttnn::prim::Matmul1DType::MCAST_IN1:
-            override_mcast_in1_program_parameters(program, override_variables, tensor_args, tensor_return_value);
+            override_mcast_in1_program_parameters(
+                program, override_variables, global_cb, tensor_args, tensor_return_value);
             break;
     }
 }
@@ -5149,6 +5263,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         fused_activation,
         in0_tensor,
         in1_tensor,
+        global_cb,
         bias_mesh_tensor,
         output,
         in0_tile,

@@ -183,7 +183,7 @@ void kernel_main() {
     constexpr uint32_t in1_aligned_tile_size_bytes =
         (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
 #if !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED) && \
-    !defined(ENABLE_GLOBAL_CB)
+    !defined(ENABLE_GLOBAL_CB) && !defined(ENABLE_GLOBAL_CB_MCAST_IN1)
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_aligned_tile_size_bytes;
 #else
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
@@ -198,6 +198,22 @@ void kernel_main() {
     CircularBuffer cb_out(cb_id_out0);
     Semaphore<> sender_sem(get_compile_time_arg_val(10));
     Semaphore<> receiver_sem(get_compile_time_arg_val(11));
+#ifdef ENABLE_GLOBAL_CB_MCAST_IN1
+    constexpr uint32_t relay_go_sem_id = get_named_compile_time_arg_val("mcast_in1_relay_go_sem");
+    constexpr uint32_t num_relay_cores = get_named_compile_time_arg_val("mcast_in1_num_relays");
+    constexpr uint32_t num_mcast_workers = get_named_compile_time_arg_val("mcast_in1_num_workers");
+    constexpr uint32_t relay_coordinator_noc_x = get_named_compile_time_arg_val("mcast_in1_coordinator_noc_x");
+    constexpr uint32_t relay_coordinator_noc_y = get_named_compile_time_arg_val("mcast_in1_coordinator_noc_y");
+    constexpr uint32_t relay_stripe_w = get_named_compile_time_arg_val("mcast_in1_relay_stripe_w");
+    constexpr uint32_t relay_stripe_tiles = relay_stripe_w * in1_block_h;
+    constexpr uint32_t relay_stripe_row_bytes = relay_stripe_w * in1_single_tile_size_bytes;
+    constexpr uint32_t full_in1_row_bytes = in1_block_w * in1_single_tile_size_bytes;
+    constexpr uint32_t prefetch_cb_id = get_named_compile_time_arg_val("cb_in1_prefetch");
+    constexpr uint32_t remote_cb_id = tt::CBIndex::c_31;
+    const uint32_t relay_index = in1_tensor_start_tile_id;
+    Semaphore<> relay_go_sem(relay_go_sem_id);
+    CircularBuffer cb_in1_prefetch(prefetch_cb_id);
+#endif
 #ifdef FUSE_BIAS
     CircularBuffer cb_in3(cb_id_in3);
 #endif
@@ -206,11 +222,11 @@ void kernel_main() {
 #ifdef IN1_SHARDED
     cb_in1.reserve_back(in1_block_num_tiles * num_blocks_inner_dim);
     cb_in1.push_back(in1_block_num_tiles * num_blocks_inner_dim);
-#elif !defined(ENABLE_GLOBAL_CB)
+#elif !defined(ENABLE_GLOBAL_CB) && !defined(ENABLE_GLOBAL_CB_MCAST_IN1)
     uint32_t l1_write_addr_in1;
 
     [[maybe_unused]] const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
-#endif  // IN1_SHARDED / ENABLE_GLOBAL_CB
+#endif  // IN1_SHARDED / global-CB modes
 
 #ifdef ENABLE_GLOBAL_CB
     constexpr uint32_t remote_cb_id = tt::CBIndex::c_31;
@@ -228,7 +244,7 @@ void kernel_main() {
     CircularBuffer cb_sparsity(cb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
-#ifndef SKIP_MCAST
+#if !defined(SKIP_MCAST) && !defined(ENABLE_GLOBAL_CB_MCAST_IN1)
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     receiver_sem.set(VALID);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
@@ -237,7 +253,7 @@ void kernel_main() {
 #ifdef IN1_SHARDED
     uint64_t in1_start_address = cb_in1.get_write_ptr();
 #endif  // IN1_SHARDED
-#endif  // SKIP_MCAST
+#endif  // !SKIP_MCAST && !ENABLE_GLOBAL_CB_MCAST_IN1
 
     uint32_t l1_write_addr_sparsity = 0;
     if constexpr (batchB > 0) {
@@ -301,7 +317,70 @@ void kernel_main() {
                             fused_op_receiver.update_current_block_start_tile_id(
                                 block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
                         }
-#if defined(ENABLE_GLOBAL_CB)
+#if defined(ENABLE_GLOBAL_CB_MCAST_IN1)
+                        static_assert(num_mcast_workers > 1, "bank-striped mcast-in1 requires at least two workers");
+                        cb_in1.reserve_back(in1_block_num_tiles);
+                        cb_in1_prefetch.reserve_back(relay_stripe_tiles);
+                        experimental::remote_cb_wait_front(remote_cb_id, 1);
+                        cb_in1_prefetch.push_back(relay_stripe_tiles);
+
+                        // Use a NoC atomic even for the coordinator's own contribution; a local
+                        // read-modify-write can race remote atomic increments and lose readiness.
+                        sender_sem.up(noc, relay_coordinator_noc_x, relay_coordinator_noc_y, 1);
+                        if (relay_index == 0) {
+                            sender_sem.wait_min(num_mcast_workers);
+                            sender_sem.set(0);
+                            relay_go_sem.set(VALID);
+                            relay_go_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
+                                noc,
+                                in1_mcast_dest_noc_start_x,
+                                in1_mcast_dest_noc_start_y,
+                                in1_mcast_dest_noc_end_x,
+                                in1_mcast_dest_noc_end_y,
+                                num_mcast_workers);
+                        }
+                        relay_go_sem.wait(VALID);
+                        relay_go_sem.set(INVALID);
+
+                        uint32_t relay_src_addr = cb_in1_prefetch.get_read_ptr();
+                        uint32_t relay_dst_addr = cb_in1.get_write_ptr() + relay_index * relay_stripe_row_bytes;
+                        for (uint32_t h = 0; h < in1_block_h; ++h) {
+                            MulticastEndpoint mcast_dst;
+                            noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                                CoreLocalMem<uint32_t>(relay_src_addr),
+                                mcast_dst,
+                                relay_stripe_row_bytes,
+                                num_mcast_workers,
+                                {},
+                                {.noc_x_start = in1_mcast_dest_noc_start_x,
+                                 .noc_y_start = in1_mcast_dest_noc_start_y,
+                                 .noc_x_end = in1_mcast_dest_noc_end_x,
+                                 .noc_y_end = in1_mcast_dest_noc_end_y,
+                                 .addr = relay_dst_addr},
+                                false);
+                            relay_src_addr += relay_stripe_row_bytes;
+                            relay_dst_addr += full_in1_row_bytes;
+                        }
+
+                        // The staging page cannot be returned to the DRAM-core prefetcher, and workers
+                        // cannot publish c1, until this relay's stripe has landed everywhere.
+                        noc.async_write_barrier();
+                        cb_in1_prefetch.pop_front(relay_stripe_tiles);
+                        experimental::remote_cb_pop_front(remote_cb_id, 1);
+
+                        const uint32_t noc_id = noc.get_noc_id();
+                        receiver_sem.up(noc, my_x[noc_id], my_y[noc_id], 1);
+                        receiver_sem.inc_multicast(
+                            noc,
+                            in1_mcast_dest_noc_start_x,
+                            in1_mcast_dest_noc_start_y,
+                            in1_mcast_dest_noc_end_x,
+                            in1_mcast_dest_noc_end_y,
+                            1,
+                            num_mcast_workers - 1);
+                        receiver_sem.wait_min(num_relay_cores);
+                        receiver_sem.set(0);
+#elif defined(ENABLE_GLOBAL_CB)
                         // The tensor prefetcher pushes this receiver's K-blocks in natural order.
                         // Keep one block of lookahead: publish the current block to compute, then
                         // wait for the unpack engine to drain the previous block before returning
@@ -426,7 +505,7 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
-#ifndef SKIP_MCAST
+#if !defined(SKIP_MCAST) && !defined(ENABLE_GLOBAL_CB_MCAST_IN1)
                         // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
                         // zero for the next block
@@ -468,7 +547,7 @@ void kernel_main() {
                             in1_mcast_dest_noc_end_x,
                             in1_mcast_dest_noc_end_y,
                             in1_mcast_num_cores);
-#endif  // SKIP_MCAST
+#endif  // !SKIP_MCAST && !ENABLE_GLOBAL_CB_MCAST_IN1
 
 #ifndef IN1_SHARDED
                         cb_in1.push_back(in1_block_num_tiles);
@@ -502,52 +581,56 @@ void kernel_main() {
                             cb_in3.get_write_ptr();         // copy start address of block, to be used for mcasting
                         uint32_t in3_block_size_bytes = 0;  // can be optimized later, pass it to kernel
 
+#ifdef ENABLE_GLOBAL_CB_MCAST_IN1
+                        if (relay_index == 0) {
+#endif
 #ifdef IN1_DRAM_WIDTH_SHARDED
-                        uint32_t l1_write_addr_in3_offset = 0;
-                        uint32_t next_bank_id_and_dram_stride_index = 0;
+                            uint32_t l1_write_addr_in3_offset = 0;
+                            uint32_t next_bank_id_and_dram_stride_index = 0;
 
-                        AllocatorBank<AllocatorBankType::DRAM> bias_dram_bank;
-                        for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                            uint32_t bias_shard_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
-                            uint32_t bias_shard_base_addr = in3_tensor_addr;
-                            if (i == 0) {
-                                // dram_tensor_start_offset is in in1 tile bytes; convert to
-                                // bias tile bytes since bias_dtype may differ from in1_dtype.
-                                bias_shard_base_addr += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
-                                                        bias_single_tile_size_bytes;
-                            }
+                            AllocatorBank<AllocatorBankType::DRAM> bias_dram_bank;
+                            for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
+                                uint32_t bias_shard_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
+                                uint32_t bias_shard_base_addr = in3_tensor_addr;
+                                if (i == 0) {
+                                    // dram_tensor_start_offset is in in1 tile bytes; convert to
+                                    // bias tile bytes since bias_dtype may differ from in1_dtype.
+                                    bias_shard_base_addr += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
+                                                            bias_single_tile_size_bytes;
+                                }
 
-                            noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-                                bias_dram_bank,
-                                bias_single_tile_size_bytes,
-                                {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr},
-                                NocOptVals{.vc = vc});
-
-                            uint32_t l1_read_addr_in3 = 0;
-                            l1_write_addr_in3 = cb_in3.get_write_ptr() + l1_write_addr_in3_offset;
-                            // in1_block_w_dram_stride_bytes is in in1 tile bytes, so divide
-                            // by in1_single_tile_size_bytes (not bias) to get the tile count.
-                            uint32_t in3_block_w_dram =
-                                in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index] /
-                                in1_single_tile_size_bytes;
-
-                            for (uint32_t w = 0; w < in3_block_w_dram; ++w) {
-                                noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+                                noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                     bias_dram_bank,
-                                    CoreLocalMem<uint32_t>(l1_write_addr_in3),
                                     bias_single_tile_size_bytes,
-                                    {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr + l1_read_addr_in3},
-                                    {},
+                                    {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr},
                                     NocOptVals{.vc = vc});
-                                l1_read_addr_in3 += bias_single_tile_size_bytes;
-                                l1_write_addr_in3 += bias_single_tile_size_bytes;
-                                in3_block_size_bytes += bias_single_tile_size_bytes;
+
+                                uint32_t l1_read_addr_in3 = 0;
+                                l1_write_addr_in3 = cb_in3.get_write_ptr() + l1_write_addr_in3_offset;
+                                // in1_block_w_dram_stride_bytes is in in1 tile bytes, so divide
+                                // by in1_single_tile_size_bytes (not bias) to get the tile count.
+                                uint32_t in3_block_w_dram =
+                                    in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index] /
+                                    in1_single_tile_size_bytes;
+
+                                for (uint32_t w = 0; w < in3_block_w_dram; ++w) {
+                                    noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+                                        bias_dram_bank,
+                                        CoreLocalMem<uint32_t>(l1_write_addr_in3),
+                                        bias_single_tile_size_bytes,
+                                        {.bank_id = bias_shard_bank_id,
+                                         .addr = bias_shard_base_addr + l1_read_addr_in3},
+                                        {},
+                                        NocOptVals{.vc = vc});
+                                    l1_read_addr_in3 += bias_single_tile_size_bytes;
+                                    l1_write_addr_in3 += bias_single_tile_size_bytes;
+                                    in3_block_size_bytes += bias_single_tile_size_bytes;
+                                }
+                                // Advance L1 offset in bias tile bytes, not in1 stride bytes.
+                                l1_write_addr_in3_offset += in3_block_w_dram * bias_single_tile_size_bytes;
+                                next_bank_id_and_dram_stride_index += 2;
                             }
-                            // Advance L1 offset in bias tile bytes, not in1 stride bytes.
-                            l1_write_addr_in3_offset += in3_block_w_dram * bias_single_tile_size_bytes;
-                            next_bank_id_and_dram_stride_index += 2;
-                        }
-                        noc.async_read_barrier();
+                            noc.async_read_barrier();
 #else
                         // Copy in1 block into CB, as the default kernel
                         uint32_t in3_tensor_tile_id = in3_tensor_current_w_dim_block_tile_id;
@@ -567,8 +650,44 @@ void kernel_main() {
                         // Barrier! make sure the reads are done
                         noc.async_read_barrier();
 #endif  // IN1_DRAM_WIDTH_SHARDED
+#ifdef ENABLE_GLOBAL_CB_MCAST_IN1
+                        }
+#endif
 
-#ifndef SKIP_MCAST
+#ifdef ENABLE_GLOBAL_CB_MCAST_IN1
+                        sender_sem.up(noc, relay_coordinator_noc_x, relay_coordinator_noc_y, 1);
+                        if (relay_index == 0) {
+                            sender_sem.wait_min(num_mcast_workers);
+                            sender_sem.set(0);
+
+                            MulticastEndpoint mcast_dst;
+                            noc.async_write_multicast(
+                                CoreLocalMem<uint32_t>(static_cast<uint32_t>(in3_start_address)),
+                                mcast_dst,
+                                in3_block_size_bytes,
+                                num_mcast_workers - 1,
+                                {},
+                                {.noc_x_start = in1_mcast_dest_noc_start_x,
+                                 .noc_y_start = in1_mcast_dest_noc_start_y,
+                                 .noc_x_end = in1_mcast_dest_noc_end_x,
+                                 .noc_y_end = in1_mcast_dest_noc_end_y,
+                                 .addr = static_cast<uint32_t>(in3_start_address)},
+                                true);
+#ifdef ARCH_BLACKHOLE
+                            noc.async_writes_flushed();
+#endif
+                            receiver_sem.set(VALID);
+                            receiver_sem.set_multicast(
+                                noc,
+                                in1_mcast_dest_noc_start_x,
+                                in1_mcast_dest_noc_start_y,
+                                in1_mcast_dest_noc_end_x,
+                                in1_mcast_dest_noc_end_y,
+                                num_mcast_workers - 1);
+                        }
+                        receiver_sem.wait(VALID);
+                        receiver_sem.set(INVALID);
+#elif !defined(SKIP_MCAST)
 
                         // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
@@ -609,7 +728,7 @@ void kernel_main() {
                             in1_mcast_dest_noc_end_x,
                             in1_mcast_dest_noc_end_y,
                             in1_mcast_num_cores);
-#endif  // SKIP_MCAST
+#endif  // ENABLE_GLOBAL_CB_MCAST_IN1 / !SKIP_MCAST
 
                         cb_in3.push_back(in1_block_w);
 #else
@@ -716,7 +835,7 @@ void kernel_main() {
     cb_out.wait_front(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
-#ifdef ENABLE_GLOBAL_CB
+#if defined(ENABLE_GLOBAL_CB) || defined(ENABLE_GLOBAL_CB_MCAST_IN1)
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
     noc.async_atomic_barrier();
 #endif

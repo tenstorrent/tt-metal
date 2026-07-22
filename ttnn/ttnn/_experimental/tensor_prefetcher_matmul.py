@@ -15,8 +15,10 @@ couplings nothing enforces.
 ``prefetch_and_linear`` issues the pair from one call site so they cannot drift:
 it derives ``block_count``, queues the request, then runs the consuming
 ``ttnn.linear`` with the same GCB and program config. Gather-in0 uses one block
-per ring receiver. Mcast-in0 uses ``K_tiles / in0_block_w`` natural-order blocks
-per receiver and requires a receiver-contiguous weight.
+per ring receiver. Mcast-in0 and bank-striped mcast-in1 use
+``K_tiles / in0_block_w`` natural-order blocks. Mcast-in1 keeps the DRAM-core
+prefetcher unicast-only: one worker relay per DRAM bank receives an N stripe and
+the relay workers assemble the full in1 block with worker-side multicast.
 
 This is a host-side composition, not a device-level fusion: the prefetch still
 runs on the DRAM-core (DRISC) path off the command queue while the matmul is
@@ -41,13 +43,15 @@ def prefetch_and_linear(
     1D matmul (``ttnn.linear``) that consumes it.
 
     Gather-in0 preserves its existing batched/streaming behavior selected by
-    ``program_config.stream_in1``. Mcast-in0 always uses natural FIFO order with
-    ``stream_in1=False`` and can consume from a shallow GCB without a rotation table.
+    ``program_config.stream_in1``. Both multicast modes use natural FIFO order
+    with ``stream_in1=False`` and can consume from a shallow GCB without a
+    rotation table.
 
     Args:
         input_tensor_a: Activation (in0).
-        weight: DRAM-sharded weight (in1) to prefetch and multiply by. Streaming gather
-            and GCB-backed mcast require a receiver-contiguous weight layout.
+        weight: DRAM-sharded weight (in1) to prefetch and multiply by. Streaming
+            gather and mcast-in0 require a receiver-contiguous weight layout;
+            mcast-in1 requires a bank-striped WIDTH_SHARDED layout.
         global_cb: DRAM-sender GlobalCircularBuffer shared by the prefetch and
             the matmul.
         program_config: 1D matmul program config driving the matmul.
@@ -61,7 +65,7 @@ def prefetch_and_linear(
         The ``ttnn.linear`` output tensor.
     """
     device = input_tensor_a.device()
-    if program_config.mcast_in0 or program_config.stream_in1:
+    if not program_config.gather_in0 or program_config.stream_in1:
         block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(program_config, weight, global_cb)
     else:
         # Gather consumes one K-block per ring position.

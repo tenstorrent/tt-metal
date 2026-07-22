@@ -1068,3 +1068,219 @@ def test_tensor_prefetcher_streaming_mcast_in0(device, distribution_strategy):
     passing, output_str = comp_pcc(expected, out_torch, 0.999)
     logger.info(f"[streaming_mcast_in0 {distribution_strategy}] {output_str}")
     assert passing, f"streaming_mcast_in0 PCC failed: {output_str}"
+
+
+@pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "bias"])
+def test_tensor_prefetcher_bank_striped_mcast_in1(device, use_bias):
+    """One worker per DRAM bank relays its N stripe; all workers assemble the full in1 block."""
+    num_dram_banks = device.dram_grid_size().x
+    ring_cols = num_dram_banks
+    ring_rows = 2
+    num_workers = ring_cols * ring_rows
+    worker_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
+    )
+
+    dtype = ttnn.bfloat16
+    M = num_workers * ttnn.TILE_SIZE
+    k_tiles = 2 * num_dram_banks
+    K = k_tiles * ttnn.TILE_SIZE
+    N = num_dram_banks * ttnn.TILE_SIZE
+    in0_block_w = 1
+    assert k_tiles != num_dram_banks  # Proves the paired helper cannot use GCB receiver_count as block_count.
+
+    torch.manual_seed(zlib.crc32(f"bank_striped_mcast_in1_bias={use_bias}".encode()))
+    pt_weight = torch.randn(1, 1, K, N)
+    dram_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
+    )
+    weight_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            dram_core_range_set,
+            [K, N // num_dram_banks],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    tt_weight = ttnn.as_tensor(
+        pt_weight,
+        device=device,
+        dtype=dtype,
+        memory_config=weight_mem_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    pt_act = torch.randn(1, 1, M, K)
+    act_mem_config = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, K),
+        core_grid=worker_cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_act = ttnn.from_torch(
+        pt_act,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=act_mem_config,
+    )
+
+    pt_bias = torch.randn(N) if use_bias else None
+    tt_bias = (
+        ttnn.from_torch(
+            pt_bias.reshape(1, N),
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        if use_bias
+        else None
+    )
+
+    n_tiles = N // ttnn.TILE_SIZE
+    out_subblock_w = min(n_tiles, 4)
+    while n_tiles % out_subblock_w != 0:
+        out_subblock_w -= 1
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(ring_cols, ring_rows),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=1,
+        out_block_w=n_tiles,
+        per_core_M=1,
+        per_core_N=n_tiles,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=1,
+        untilize_out=False,
+        stream_in1=False,
+    )
+
+    # Bank b unicasts only to relay (b, 0). Row 1 contains ordinary matmul workers, so the
+    # test exercises both the relay-sender and receiver kernels.
+    bank_to_receivers = [
+        (
+            bank,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0))}),
+        )
+        for bank in range(num_dram_banks)
+    ]
+    stripe_page_bytes = in0_block_w * _bytes_per_tile(dtype)
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
+        device,
+        [program_config],
+        [tt_weight],
+        bank_to_receivers=bank_to_receivers,
+        size=2 * stripe_page_bytes,
+    )
+
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, N),
+        core_grid=worker_cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+
+    with tensor_prefetcher_session(device):
+        tt_out = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+            tt_act,
+            tt_weight,
+            global_cb=gcb,
+            program_config=program_config,
+            memory_config=output_mem_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+            bias=tt_bias,
+        )
+
+    expected = pt_act.float() @ pt_weight.float()
+    if pt_bias is not None:
+        expected += pt_bias.float()
+    out_torch = ttnn.to_torch(tt_out)
+    passing, output_str = comp_pcc(expected, out_torch, 0.999)
+    logger.info(f"[bank_striped_mcast_in1 bias={use_bias}] {output_str}")
+    assert passing, f"bank_striped_mcast_in1 PCC failed: {output_str}"
+
+
+@pytest.mark.parametrize("invalid_case", ["two_relays_per_bank", "one_page_window"])
+def test_tensor_prefetcher_bank_striped_mcast_in1_rejects_invalid_gcb(device, expect_error, invalid_case):
+    num_dram_banks = device.dram_grid_size().x
+    K = 2 * num_dram_banks * ttnn.TILE_SIZE
+    N = num_dram_banks * ttnn.TILE_SIZE
+    pt_weight = torch.zeros(1, 1, K, N)
+    dram_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
+    weight_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            dram_cores,
+            [K, N // num_dram_banks],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    tt_weight = ttnn.as_tensor(
+        pt_weight,
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=weight_mem_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(num_dram_banks, 2),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=num_dram_banks,
+        per_core_M=1,
+        per_core_N=num_dram_banks,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=1,
+        untilize_out=False,
+        stream_in1=False,
+    )
+
+    receivers_per_bank = 2 if invalid_case == "two_relays_per_bank" else 1
+    bank_to_receivers = [
+        (
+            bank,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(bank, 0),
+                        ttnn.CoreCoord(bank, receivers_per_bank - 1),
+                    )
+                }
+            ),
+        )
+        for bank in range(num_dram_banks)
+    ]
+    page_bytes = _bytes_per_tile(ttnn.bfloat16)
+    expected_error = "exactly one relay worker" if receivers_per_bank == 2 else "at least two largest stripe pages"
+    with expect_error(RuntimeError, expected_error):
+        ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
+            device,
+            [program_config],
+            [tt_weight],
+            bank_to_receivers=bank_to_receivers,
+            size=2 * page_bytes if receivers_per_bank == 2 else page_bytes,
+        )
