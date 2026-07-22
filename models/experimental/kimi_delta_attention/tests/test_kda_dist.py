@@ -9,7 +9,7 @@ import ttnn
 from loguru import logger
 
 from models.experimental.kimi_delta_attention.torch_functional import KimiDeltaAttentionRef
-from models.experimental.kimi_delta_attention.tt.ttnn_kda_dist import TtKimiDeltaAttentionMesh
+from models.experimental.kimi_delta_attention.tt.ttnn_kda import TtKimiDeltaAttention
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.common.utility_functions import comp_pcc
 
@@ -36,7 +36,7 @@ def test_kda_dist_tp(mesh_device, T, use_conv):
     with torch.no_grad():
         y_ref = m(x)
 
-    tt = TtKimiDeltaAttentionMesh(m, mesh_device)
+    tt = TtKimiDeltaAttention(m, mesh_device)
     y = tt.forward(x)
 
     ok, pcc = comp_pcc(y_ref, y, pcc=0.98)

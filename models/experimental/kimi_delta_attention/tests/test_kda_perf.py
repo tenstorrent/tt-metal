@@ -11,7 +11,7 @@ import ttnn
 from loguru import logger
 
 from models.experimental.kimi_delta_attention.torch_functional import KimiDeltaAttentionRef
-from models.experimental.kimi_delta_attention.tt.ttnn_kda_dist import TtKimiDeltaAttentionMesh
+from models.experimental.kimi_delta_attention.tt.ttnn_kda import TtKimiDeltaAttention
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
@@ -77,7 +77,7 @@ def test_kda_perf_before(mesh_device, T):
     """Before distribution: TP=1 (8,1) — all 32 heads per chip, no head-shard, no TP all-reduce."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("realtime profiler not active")
-    _run(mesh_device, TtKimiDeltaAttentionMesh(_mk_ref(), mesh_device), T, "before(8,1)TP1")
+    _run(mesh_device, TtKimiDeltaAttention(_mk_ref(), mesh_device), T, "before(8,1)TP1")
 
 
 @pytest.mark.parametrize("device_params", [_F2D], indirect=True)
@@ -87,4 +87,4 @@ def test_kda_perf_after(mesh_device, T):
     """After distribution: TP=4 head-shard (8 heads/chip) on LoudBox (2,4)."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("realtime profiler not active")
-    _run(mesh_device, TtKimiDeltaAttentionMesh(_mk_ref(), mesh_device), T, "after(2,4)TP4")
+    _run(mesh_device, TtKimiDeltaAttention(_mk_ref(), mesh_device), T, "after(2,4)TP4")

@@ -98,9 +98,10 @@ def test_conv1d_op(device, T):
     assert ok, f"PCC too low: {pcc}"
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("T,use_conv", [(1, True), (8, True), (16, True), (8, False), (128, True), (128, False)])
-def test_kda_layer(device, T, use_conv):
-    """End-to-end ttnn KDA layer vs torch reference layer (shared weights)."""
+def test_kda_layer(mesh_device, T, use_conv):
+    """End-to-end ttnn KDA layer vs torch reference, single-device via a (1,1) mesh (TP=1, no fabric)."""
     hidden, head_dim, nh = 256, 64, 4
     torch.manual_seed(1)
     m = KimiDeltaAttentionRef(
@@ -111,7 +112,7 @@ def test_kda_layer(device, T, use_conv):
     with torch.no_grad():
         y_ref = m(x)
 
-    tt_layer = TtKimiDeltaAttention(m, device)
+    tt_layer = TtKimiDeltaAttention(m, mesh_device)
     y_tt = tt_layer.forward(x)
 
     ok, pcc = comp_pcc(y_ref, y_tt, pcc=0.98)
