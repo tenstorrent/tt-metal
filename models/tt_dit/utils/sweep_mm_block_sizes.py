@@ -265,6 +265,27 @@ SHAPES = [
     (32, 3072, 1536, 11, 10, False, "plain_gelu"),
     (32, 3072, 384, 11, 10, False, "to_out"),
     (32, 4096, 384, 11, 10, False, "plain"),
+    # --- FIBO DiT prompt-branch matmuls at M=864 (long JSON caption -> 833 tokens tile-padded to 864,
+    # the 27-tile prompt sequence; the committed fibo_vlm_prompt.json). The DiT prompt branch runs
+    # UNPADDED at the true token length (encoder unpads at text_encoder.py:160), so a long prompt lands
+    # at M=864, distinct from the M=128 (~128-token) and M=32 (short/uncond) twins already tuned. Captured
+    # 2026-07-16 from get_matmul_config [fallback] warnings in test_fibo_denoise_device_profile at
+    # prompt_seq_len=833 (all 7 fell back). Same use_cases as the M=128 prompt shapes.
+    (864, 4096, 384, 12, 10, False, "plain"),  # context_embedder (joint_attention_dim 4096)
+    (864, 2048, 1536, 12, 10, False, "plain"),  # caption_projection (text_encoder_dim 2048)
+    (864, 3072, 1152, 12, 10, False, "qkv"),  # to_qkv prompt (chunks=3, approx)
+    (864, 3072, 384, 12, 10, False, "to_out"),  # attn to_add_out prompt (addcmul, approx)
+    (864, 3072, 1536, 12, 10, False, "plain_gelu"),  # ff_context.ff1 prompt (fused GELU)
+    (864, 1536, 3072, 12, 10, False, "plain"),  # ff_context.ff2 prompt (RowParallel)
+    (864, 1920, 3072, 12, 10, False, "plain"),  # single proj_out prompt
+    # Same 7 at 11x10 (fallback grid).
+    (864, 4096, 384, 11, 10, False, "plain"),  # context_embedder
+    (864, 2048, 1536, 11, 10, False, "plain"),  # caption_projection
+    (864, 3072, 1152, 11, 10, False, "qkv"),  # to_qkv prompt
+    (864, 3072, 384, 11, 10, False, "to_out"),  # attn to_add_out prompt
+    (864, 3072, 1536, 11, 10, False, "plain_gelu"),  # ff_context.ff1 prompt
+    (864, 1536, 3072, 11, 10, False, "plain"),  # ff_context.ff2 prompt
+    (864, 1920, 3072, 11, 10, False, "plain"),  # single proj_out prompt
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]

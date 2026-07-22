@@ -87,6 +87,18 @@ def _register_fibo_matmul_configs() -> None:
                 (128, 4096, 384): (2, 8, 2, (2, 2)),  # context_embedder — 25822 ns
                 (32, 3072, 1152): (2, 8, 6, (2, 2)),  # single-block time_embed — 37902 ns
                 (32, 3072, 2304): (2, 6, 6, (2, 2)),  # norm1 modulation — 64667 ns
+                # DiT prompt-branch matmuls at M=864 (long structured-JSON caption -> 833 tokens tile-padded
+                # to 864; the committed fibo_vlm_prompt.json). The prompt branch runs UNPADDED at the true
+                # token length (encoder unpads at text_encoder.py:160), so a long prompt lands at M=864 --
+                # distinct from the M=128 (~128-token) / M=32 (short) twins above. Swept 2026-07-16 via
+                # sweep_mm_block_sizes.py (bh_4x8_fibo, 12x10, all 7 measured 0-OOM). ns = HiFi2 per-op.
+                (864, 4096, 384): (3, 8, 2, (3, 1)),  # context_embedder — 49220 ns
+                (864, 2048, 1536): (3, 4, 4, (1, 4)),  # caption_projection — 46424 ns
+                (864, 3072, 1152): (3, 4, 4, (1, 4)),  # to_qkv prompt (chunks=3, approx) — 52626 ns
+                (864, 3072, 384): (3, 8, 2, (3, 1)),  # attn to_add_out prompt (addcmul, approx) — 39992 ns
+                (864, 3072, 1536): (3, 6, 4, (1, 4)),  # ff_context.ff1 prompt (fused GELU) — 81504 ns
+                (864, 1536, 3072): (3, 4, 8, (1, 4)),  # ff_context.ff2 prompt — 61876 ns
+                (864, 1920, 3072): (3, 4, 16, (1, 4)),  # single proj_out prompt — 71226 ns
                 # SmolLM3 text encoder (tensor-parallel, tp=8) matmuls on the 4x8 Galaxy. M=32 (short
                 # prompt, one tile), K=2048=hidden. Swept 2026-07-15 (bh_4x8_fibo). SmolLM3 has no matmul
                 # registration of its own and FIBO is its only user, so its configs live here (additive,

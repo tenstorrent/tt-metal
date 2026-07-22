@@ -249,9 +249,7 @@ class BriaFiboPipeline:
 
         assert height % (_VAE_SCALE_FACTOR) == 0 and width % (_VAE_SCALE_FACTOR) == 0
 
-        # CFG is active only when guidance_scale > 1 (matches the diffusers reference). At gs <= 1 the
-        # uncond branch is mathematically dead (noise = uncond + 1*(cond - uncond) = cond), so we skip
-        # encoding and running it entirely -- a ~2x cheaper denoise on the gs <= 1 path.
+        # CFG is active only when guidance_scale > 1 (matches the diffusers reference).
         do_cfg = guidance_scale > 1
 
         # 1-3. Encode, then build per-branch conditioning + schedule + latents.
@@ -283,7 +281,7 @@ class BriaFiboPipeline:
         """Encode the positive prompt (and, when CFG is active, the negative prompt) SEPARATELY.
 
         When ``do_cfg`` is False (``guidance_scale <= 1``) the negative branch is unused, so it is not
-        encoded and the uncond entries are returned as ``None`` (the diffusers reference skips it too).
+        encoded and the uncond entries are returned as ``None``.
         """
         logger.info("encoding prompts...")
         # SP x TP encoder on the whole mesh; positive and negative prompts are encoded sequentially,

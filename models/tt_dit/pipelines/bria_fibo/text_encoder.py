@@ -15,7 +15,7 @@ No CFG concatenation happens here -- the pipeline calls ``encode_prompt`` once p
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 from transformers import AutoConfig, AutoTokenizer, SmolLM3ForCausalLM
@@ -196,7 +196,7 @@ class SmolLM3TextEncoderWrapper:
         """
         if self._sp_factor <= 1:
             return tt_tensor.to_torch(x)
-        rows, cols = tuple(self._device.shape)
+        rows, cols = tuple[Any, ...](self._device.shape)
         shards = ttnn.get_device_tensors(x)
         # SP shards live along self._sp_axis at index 0 of the other (replicated) axis.
         idxs = list(range(cols)) if self._sp_axis == 1 else [r * cols for r in range(rows)]
