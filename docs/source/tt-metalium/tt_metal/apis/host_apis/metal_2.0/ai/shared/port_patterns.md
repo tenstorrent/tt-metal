@@ -161,15 +161,15 @@ See [CB endpoints](../audit/metal2_audit.md#cb-endpoints) for the authoritative 
 // binding the one output DFB with OPPOSITE roles — 1P+1C, no flag:
 KernelSpec reader{
     .unique_id = RESHARD_READER, .source = "reshard_reader.cpp",
-    .compile_time_args = compile_args,
     .dfb_bindings = {DFBBinding{.dfb_spec_name = OUT, .accessor_name = "shard",
                                 .endpoint_type = DFBEndpointType::PRODUCER}},
+    .compile_time_args = compile_args,
 };
 KernelSpec writer{
     .unique_id = RESHARD_WRITER, .source = "reshard_reader.cpp",  // same source
-    .compile_time_args = compile_args,
     .dfb_bindings = {DFBBinding{.dfb_spec_name = OUT, .accessor_name = "shard",
                                 .endpoint_type = DFBEndpointType::CONSUMER}},
+    .compile_time_args = compile_args,
 };
 // Kernel side is UNCHANGED — `dfb.get_write_ptr() + offset` is a public peek that
 // either role permits; the CONSUMER-bound instance still writes its page range.
@@ -199,13 +199,13 @@ This applies verbatim to `tensor::<name>` (optional tensors) and `sem::<name>` �
 // Host:
 const bool fuse_pre_add = ...;
 KernelSpec compute{
-    .compile_time_args = { /* ... */ },
     .compiler_options = {.defines = fuse_pre_add
         ? Table<std::string, std::string>{{"FUSE_PRE_ADD", "1"}}
         : Table<std::string, std::string>{}},
     .dfb_bindings = fuse_pre_add
         ? Group<DFBBinding>{INPUT, OUTPUT, FUSION}
         : Group<DFBBinding>{INPUT, OUTPUT},
+    .compile_time_args = { /* ... */ },
 };
 
 // Kernel:
@@ -424,8 +424,8 @@ auto make_compute = [&](KernelSpecName unique_id, uint32_t Ht) {
     return KernelSpec{
         .unique_id = std::move(unique_id),
         .source = "reduce.cpp",
-        .compile_time_args = {{"Ht", Ht}, {"Wt", Wt}, {"NC", NC}},
         .dfb_bindings = { /* INPUT consumer, OUTPUT producer */ },
+        .compile_time_args = {{"Ht", Ht}, {"Wt", Wt}, {"NC", NC}},
         // ...
     };
 };
