@@ -39,6 +39,11 @@ class Qwen36ModelArgs(ModelArgs):
         # Mirror CKPT_DIR -> checkpoint_dir for weight_cache_path / load_state_dict.
         self.checkpoint_dir = self.CKPT_DIR
 
+        # Base class only enables the cheap force-argmax sampling fast path (1 all-gather vs.
+        # 3) for Llama-3.1-8B on Galaxy; enable it here too so greedy/temp=0 decode requests
+        # don't pay for the full top-k/top-p on-device sampling pipeline.
+        self.model_config["SAMPLING_AG_CONFIG"]["allow_force_argmax"] = True
+
         # Qwen3.5-specific params from HF text config (base sets dim, heads, layers, etc.).
         text_config = self.hf_config.get_text_config()
 
