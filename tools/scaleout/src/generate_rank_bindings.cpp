@@ -79,7 +79,8 @@ struct TopologyMappingInputs {
  * 2. Builds logical multi-mesh graph from MGD (via MeshGraph)
  * 3. Configures topology mapping (validation modes, MGD + galaxy-corner pinnings, mesh-rank bindings)
  *
- * The result feeds both run_topology_mapping (single solution) and run_topology_mapping_n (all solutions).
+ * The result feeds both run_topology_mapping (single solution) and the --all-solutions streaming enumeration
+ * (MultiMeshSolutionEnumerator).
  */
 TopologyMappingInputs build_topology_mapping_inputs(
     const PhysicalSystemDescriptor& psd,
@@ -201,38 +202,6 @@ TopologyMappingResult run_topology_mapping(
         inputs.fabric_node_id_to_mesh_rank);
 }
 
-// Multi-solution mapping (--all-solutions): enumerate up to max_solutions distinct solutions.
-// max_solutions == 0 means "all up to the solver safety cap".
-//
-// `unique_shapes` is the SOLVER-level dedup: it collapses solutions whose set of physical graph nodes
-// (for this multi-mesh solve, the physical meshes/sub-meshes used) is identical up to permutation, so the
-// solver does not re-emit automorphic footprints. It is ALWAYS ON by default (see main(): only the hidden
-// --allow-shape-permutations turns it off). Note this is NOT the same as distinct *host* sets: for MGDs
-// whose meshes are smaller than a host (e.g. 8-chip blitz meshes on 128-chip galaxies), two shape-distinct
-// solutions can still occupy the same set of hosts. Host-set dedup (--distinct-host-sets) is applied later,
-// in main(), on the resolved hostnames — see the write loop.
-std::vector<TopologyMappingResult> run_topology_mapping_n(
-    const PhysicalSystemDescriptor& psd,
-    const PhysicalGroupingDescriptor& pgd,
-    const MeshGraphDescriptor& mgd,
-    const std::filesystem::path& mgd_path,
-    std::size_t max_solutions,
-    bool unique_shapes) {
-    auto inputs = build_topology_mapping_inputs(psd, pgd, mgd, mgd_path);
-    log_info(
-        tt::LogFabric,
-        "Enumerating topology mapping solutions (max_solutions={}, unique_shapes={})...",
-        max_solutions,
-        unique_shapes);
-    return map_multi_mesh_to_physical_n(
-        inputs.logical_graph,
-        inputs.physical_graph,
-        inputs.config,
-        max_solutions,
-        unique_shapes,
-        inputs.asic_id_to_mesh_rank,
-        inputs.fabric_node_id_to_mesh_rank);
-}
 
 /**
  * @brief Extract rank bindings from topology mapping result with topology-aware splitting.
@@ -671,27 +640,51 @@ int main(int argc, char** argv) {
                 log_info(tt::LogFabric, "Extracted {} rank binding(s)", rank_bindings.size());
                 write_solution_artifacts(rank_bindings, output_dir);
             } else {
-                // --all-solutions: one artifact set per solution in a content-hash subdirectory, plus a
-                // top-level solutions_index.yaml summarizing them all.
-                log_info(tt::LogFabric, "Stage: Enumerating all topology mapping solutions...");
+                // --all-solutions (STREAMING): write each solution's artifact set into a content-hash subdirectory
+                // the instant it is found, and rewrite the top-level solutions_index.yaml after every solution.
+                // Enumeration runs on one persistent incremental SAT session (same SAT path + ring/snake/reflection
+                // shortcuts + minimal-host prime as the single solve; one warm solve per solution). Benefits: a
+                // caller can pick up / test solution k while k+1 is still being searched, and a crash or timeout
+                // leaves a valid index for every solution already written (no more "all-or-nothing at the end").
+                log_info(tt::LogFabric, "Stage: Enumerating all topology mapping solutions (streaming)...");
                 // Solver-level unique_shapes dedup is ALWAYS ON (collapses automorphic physical footprints);
                 // only the hidden --allow-shape-permutations turns it off.
                 const bool unique_shapes = !args.allow_shape_permutations;
-                std::vector<TopologyMappingResult> results =
-                    run_topology_mapping_n(psd, pgd, mgd, mgd_path, args.max_solutions, unique_shapes);
-                log_info(tt::LogFabric, "Enumerated {} solution(s)", results.size());
-
                 const std::string enumeration_mode = args.distinct_host_sets ? "distinct-host-sets" : "all";
-                std::vector<SolutionIndexEntry> index_entries;
+                log_info(
+                    tt::LogFabric,
+                    "Enumerating topology mapping solutions (max_solutions={}, unique_shapes={}, streaming)...",
+                    args.max_solutions,
+                    unique_shapes);
 
+                auto inputs = build_topology_mapping_inputs(psd, pgd, mgd, mgd_path);
+                std::vector<SolutionIndexEntry> index_entries;
                 // --distinct-host-sets: dedup written solutions by their resolved set of HOSTS. This is coarser
                 // than the solver's unique_shapes (which dedups by physical-mesh footprint): for sub-host meshes,
                 // several shape-distinct solutions can share one host set, and this keeps only the first.
                 std::set<std::set<std::string>> seen_host_sets;
+                const std::filesystem::path index_path = output_dir / "solutions_index.yaml";
 
-                for (const auto& mapping_result : results) {
-                    std::vector<RankBindingConfig> rank_bindings =
-                        extract_rank_bindings(psd, mapping_result, mesh_graph);
+                // Pull-based enumeration: ask the enumerator for one solution at a time and write it immediately.
+                // (next() == std::nullopt => exhausted.) A driver that interleaves testing could run a test on
+                // solution k here before requesting k+1; here we simply write each as it arrives.
+                MultiMeshSolutionEnumerator enumerator(
+                    inputs.logical_graph,
+                    inputs.physical_graph,
+                    inputs.config,
+                    unique_shapes,
+                    inputs.asic_id_to_mesh_rank,
+                    inputs.fabric_node_id_to_mesh_rank);
+
+                std::size_t emitted = 0;
+                while (args.max_solutions == 0 || emitted < args.max_solutions) {
+                    std::optional<TopologyMappingResult> solution = enumerator.next();
+                    if (!solution.has_value()) {
+                        break;  // enumeration exhausted (genuine UNSAT -- no budget give-up)
+                    }
+                    ++emitted;
+
+                    std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(psd, *solution, mesh_graph);
 
                     const std::set<std::string> hosts = solution_host_set(rank_bindings);
                     if (args.distinct_host_sets && !seen_host_sets.insert(hosts).second) {
@@ -725,11 +718,32 @@ int main(int argc, char** argv) {
                     entry.num_hosts = static_cast<int>(hosts.size());
                     entry.host_set.assign(hosts.begin(), hosts.end());
                     index_entries.push_back(std::move(entry));
-                }
 
-                // truncated == true when a positive cap bounded the output (more solutions may exist).
-                const bool truncated = args.max_solutions != 0 && results.size() >= args.max_solutions;
-                const std::filesystem::path index_path = output_dir / "solutions_index.yaml";
+                    // Rewrite the index after every solution so the on-disk index always reflects everything written
+                    // so far (crash/timeout resilient). The truncated flag is finalized after enumeration ends.
+                    write_solutions_index_yaml(
+                        args.mesh_graph_descriptor_path,
+                        enumeration_mode,
+                        args.max_solutions,
+                        /*truncated=*/false,
+                        index_entries,
+                        index_path.string());
+                    fsync_path(index_path);
+                    log_info(
+                        tt::LogFabric,
+                        "Wrote solution {} ({} hosts) [{} written so far]",
+                        solution_id,
+                        hosts.size(),
+                        index_entries.size());
+                }
+                log_info(
+                    tt::LogFabric,
+                    "Enumerated {} solution(s) ({} written after host-set dedup)",
+                    emitted,
+                    index_entries.size());
+
+                // truncated == true when a positive cap bounded the enumeration (more solutions may exist).
+                const bool truncated = args.max_solutions != 0 && emitted >= args.max_solutions;
                 write_solutions_index_yaml(
                     args.mesh_graph_descriptor_path,
                     enumeration_mode,

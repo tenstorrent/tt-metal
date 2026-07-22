@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -560,6 +561,11 @@ TopologyMappingResult map_multi_mesh_to_physical(
  *        placements that occupy the same physical meshes/hosts but differ only in assignment collapse to one.
  *        Maps to the `unique_shapes` knob of solve_topology_mapping_n.
  * @return Vector of successful TopologyMappingResults (empty if none exist). Each has success == true.
+ *
+ * @note Currently UNUSED. The generate_rank_bindings --all-solutions path uses the pull-based
+ *       MultiMeshSolutionEnumerator (below) instead, which streams each solution as it is found. This batch
+ *       collect-all form is kept for a future caller that wants all solutions in one call (benchmarked within
+ *       noise of the pull enumerator for small N -- both are dominated by the one-time minimal-host prime).
  */
 std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
     const LogicalMultiMeshGraph& adjacency_map_logical,
@@ -569,6 +575,71 @@ std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
     bool unique_shapes = false,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+
+/**
+ * @brief Pull-based multi-solution enumerator: call next() to get one more distinct solution each time.
+ *
+ * A lazy, incremental alternative to map_multi_mesh_to_physical_n's collect-everything-then-return. Construct it once
+ * with the logical/physical graphs + config, then call next() repeatedly:
+ *
+ *   MultiMeshSolutionEnumerator e(logical, physical, config, unique_shapes, asic_map, fnode_map);
+ *   while (auto solution = e.next()) {
+ *       ... use / write / test *solution ...   // solution k is ready before k+1 is even searched for
+ *   }                                          // next() == std::nullopt => enumeration exhausted
+ *
+ * Internally it drives ONE persistent incremental SAT enumeration session (TopologyMappingEnumerationSession) — the
+ * SAME SAT path, ring/snake/reflection symmetry shortcuts, and minimal-host prime as the single/batch solve. The hard
+ * CNF is encoded and the minimal-host cap is primed exactly ONCE (on the first next()); every later next() is a warm
+ * solve on the same solver (reusing all learned clauses + phase saving) plus one blocking clause. So enumerating N
+ * solutions this way costs the same as the batch path, but you get each solution as soon as it is found and can stop
+ * at any time by simply not calling next() again.
+ *
+ * Lifetime: the enumerator holds references to the graphs/config/rank maps passed to the constructor; the caller must
+ * keep those alive for as long as the enumerator is used.
+ */
+class MultiMeshSolutionEnumerator {
+public:
+    MultiMeshSolutionEnumerator(
+        const LogicalMultiMeshGraph& adjacency_map_logical,
+        const PhysicalMultiMeshGraph& adjacency_map_physical,
+        const TopologyMappingConfig& config,
+        bool unique_shapes = false,
+        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+
+    // Constructed in place and used via next(); the persistent SAT session is move-only, so this is too.
+    MultiMeshSolutionEnumerator(const MultiMeshSolutionEnumerator&) = delete;
+    MultiMeshSolutionEnumerator& operator=(const MultiMeshSolutionEnumerator&) = delete;
+
+    /**
+     * @brief Return the next distinct, intra-mesh-completed solution, or std::nullopt when the enumeration is
+     *        exhausted (a genuine UNSAT -- no budget give-up). Each returned result has success == true.
+     */
+    std::optional<TopologyMappingResult> next();
+
+    /** Number of solutions returned by next() so far. */
+    std::size_t solutions_returned() const { return emitted_; }
+
+private:
+    // Caller-owned inputs -- must outlive this enumerator.
+    const LogicalMultiMeshGraph& adjacency_map_logical_;
+    const PhysicalMultiMeshGraph& adjacency_map_physical_;
+    const TopologyMappingConfig& config_;
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank_;
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank_;
+    bool unique_shapes_;
+
+    // Derived once from config/graphs.
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints_;
+    ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode_;
+
+    // One persistent incremental SAT session (same SAT path + shortcuts + minimal-host prime as the single solve)
+    // plus the running exclusion / dedup bookkeeping.
+    ::tt::tt_fabric::TopologyMappingEnumerationSession<MeshId, MeshId> session_;
+    std::vector<std::map<MeshId, MeshId>> excluded_;  // found placements, blocked on subsequent next()
+    std::set<std::string> seen_signatures_;
+    std::size_t emitted_ = 0;
+};
 
 /** Log inter-mesh and per-mesh intra-mesh degree histograms at INFO (one line each). */
 void log_logical_multi_mesh_adjacency_histograms(const LogicalMultiMeshGraph& multi_mesh_graph);

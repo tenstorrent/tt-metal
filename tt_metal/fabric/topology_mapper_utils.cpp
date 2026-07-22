@@ -2918,6 +2918,11 @@ std::string full_mapping_signature(const TopologyMappingResult& result) {
 
 }  // namespace
 
+// NOTE: currently UNUSED. generate_rank_bindings' --all-solutions path uses the pull-based
+// MultiMeshSolutionEnumerator below instead (streams each solution as it is found). This batch
+// collect-all-then-return form is kept for a future caller that wants all solutions in one call --
+// benchmarked within noise of the pull enumerator for small N (both dominated by the one-time
+// minimal-host prime). Re-enable by calling it directly; do not delete.
 std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
     const LogicalMultiMeshGraph& adjacency_map_logical,
     const PhysicalMultiMeshGraph& adjacency_map_physical,
@@ -2993,6 +2998,69 @@ std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
 
     log_info(tt::LogFabric, "map_multi_mesh_to_physical_n: returning {} distinct solution(s)", solutions.size());
     return solutions;
+}
+
+MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
+    const LogicalMultiMeshGraph& adjacency_map_logical,
+    const PhysicalMultiMeshGraph& adjacency_map_physical,
+    const TopologyMappingConfig& config,
+    bool unique_shapes,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) :
+    adjacency_map_logical_(adjacency_map_logical),
+    adjacency_map_physical_(adjacency_map_physical),
+    config_(config),
+    asic_id_to_mesh_rank_(asic_id_to_mesh_rank),
+    fabric_node_id_to_mesh_rank_(fabric_node_id_to_mesh_rank),
+    unique_shapes_(unique_shapes),
+    inter_mesh_constraints_(build_inter_mesh_constraints(
+        config, adjacency_map_physical, adjacency_map_logical.mesh_level_graph_, asic_id_to_mesh_rank)),
+    inter_mesh_validation_mode_(determine_inter_mesh_validation_mode(config)) {}
+
+std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
+    using namespace ::tt::tt_fabric;
+    const auto& mesh_logical_graph = adjacency_map_logical_.mesh_level_graph_;
+    const auto& mesh_physical_graph = adjacency_map_physical_.mesh_level_graph_;
+    while (true) {
+        // One warm solve on the persistent session. On the first call this also encodes the hard CNF (with the
+        // ring/snake/reflection shortcuts) and primes the minimal-host cap. UNBOUNDED (no budget give-up): a null
+        // result means a genuine UNSAT -> the enumeration is exhausted.
+        MappingResult<MeshId, MeshId> placement = session_.next(
+            mesh_logical_graph,
+            mesh_physical_graph,
+            inter_mesh_constraints_,
+            excluded_,
+            inter_mesh_validation_mode_,
+            /*quiet_mode=*/true,
+            // SAT explicitly: only the SAT backend honors the same-rank-group host-count constraints.
+            TopologyMappingSolverEngine::Sat,
+            unique_shapes_);
+        if (!placement.success) {
+            return std::nullopt;  // genuinely exhausted (real UNSAT) or a hard-encode failure
+        }
+
+        // Block this inter-mesh placement (by shape when unique_shapes) so the next warm solve returns a new one.
+        excluded_.emplace_back(placement.target_to_global.begin(), placement.target_to_global.end());
+
+        std::unordered_map<MeshId, MeshId> mesh_mappings(
+            placement.target_to_global.begin(), placement.target_to_global.end());
+        TopologyMappingResult full = complete_intra_mesh_for_placement(
+            mesh_mappings,
+            adjacency_map_logical_,
+            adjacency_map_physical_,
+            config_,
+            inter_mesh_validation_mode_,
+            asic_id_to_mesh_rank_,
+            fabric_node_id_to_mesh_rank_);
+        if (!full.success) {
+            continue;  // this placement has no valid intra-mesh completion; try the next warm solve
+        }
+        if (!seen_signatures_.insert(full_mapping_signature(full)).second) {
+            continue;  // duplicate full assignment already returned
+        }
+        ++emitted_;
+        return full;
+    }
 }
 
 }  // namespace tt::tt_metal::experimental::tt_fabric

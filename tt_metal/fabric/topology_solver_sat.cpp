@@ -2479,13 +2479,15 @@ bool topology_sat_search_n(
         }
         all_mappings_out.push_back(std::move(current_mapping));
 
-        if (!quiet_mode) {
+        // Progress: emit in non-quiet mode, and ALSO whenever profiling is on (so a long quiet enumeration -- e.g.
+        // map_multi_mesh_to_physical_n runs quiet -- still gives a live per-solution count under TT_TOPO_SAT_PROFILE).
+        if (!quiet_mode || topology_sat_profile_enabled()) {
             const auto now = enum_clock::now();
             const bool reached_cap = all_mappings_out.size() >= max_solutions;
             if (reached_cap || now - last_enum_progress_log >= kEnumProgressLogInterval) {
                 log_info(
                     tt::LogFabric,
-                    "topology_sat_search_n: found {} / {} solution(s) so far",
+                    "topology_sat_search_n: found {} solution(s) so far (max={})",
                     all_mappings_out.size(),
                     max_solutions);
                 last_enum_progress_log = now;
