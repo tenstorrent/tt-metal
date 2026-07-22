@@ -38,53 +38,35 @@ void kernel_main() {
     CircularBuffer cb_b_obj(cb_b);
 
     // A: streaming. B: held single tile (Scalar index, relative tile 0). Output: streaming.
-    auto pack = PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{};
+    auto pack = PackTile<output(cb_out, OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{};
 
     if constexpr (life == 0) {  // Bulk — chain owns both edges
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                cb_a,
-                cb_b,
+                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(cb_b, InputLifecycle::Bulk, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
-                BroadcastDim::None,
-                InputLifecycle::Streaming,
-                InputLifecycle::Bulk,
-                BinaryDataFormatReconfig::None,
-                Dst::D0,
-                OperandKind::Scalar,
-                OperandKind::Scalar>{},
+                BroadcastDim::None>{},
             pack);
     } else if constexpr (life == 1) {  // HeldBulk — chain waits upfront, caller pops after
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                cb_a,
-                cb_b,
+                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(cb_b, InputLifecycle::HeldBulk, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
-                BroadcastDim::None,
-                InputLifecycle::Streaming,
-                InputLifecycle::HeldBulk,
-                BinaryDataFormatReconfig::None,
-                Dst::D0,
-                OperandKind::Scalar,
-                OperandKind::Scalar>{},
+                BroadcastDim::None>{},
             pack);
         cb_b_obj.pop_front(1);
     } else if constexpr (life == 2) {  // HeldStream — chain waits per-iter, caller pops after
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                cb_a,
-                cb_b,
+                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(cb_b, InputLifecycle::HeldStream, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
-                BroadcastDim::None,
-                InputLifecycle::Streaming,
-                InputLifecycle::HeldStream,
-                BinaryDataFormatReconfig::None,
-                Dst::D0,
-                OperandKind::Scalar,
-                OperandKind::Scalar>{},
+                BroadcastDim::None>{},
             pack);
         cb_b_obj.pop_front(1);
     } else if constexpr (life == 3) {  // CallerManaged — chain emits nothing for B
@@ -92,16 +74,10 @@ void kernel_main() {
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                cb_a,
-                cb_b,
+                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(cb_b, InputLifecycle::CallerManaged, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
-                BroadcastDim::None,
-                InputLifecycle::Streaming,
-                InputLifecycle::CallerManaged,
-                BinaryDataFormatReconfig::None,
-                Dst::D0,
-                OperandKind::Scalar,
-                OperandKind::Scalar>{},
+                BroadcastDim::None>{},
             pack);
         cb_b_obj.pop_front(1);
     } else {  // life == 4: DeferredPop — caller waits before, chain pops at end
@@ -109,16 +85,10 @@ void kernel_main() {
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                cb_a,
-                cb_b,
+                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(cb_b, InputLifecycle::DeferredPop, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
-                BroadcastDim::None,
-                InputLifecycle::Streaming,
-                InputLifecycle::DeferredPop,
-                BinaryDataFormatReconfig::None,
-                Dst::D0,
-                OperandKind::Scalar,
-                OperandKind::Scalar>{},
+                BroadcastDim::None>{},
             pack);
     }
 }
