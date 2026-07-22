@@ -154,9 +154,9 @@ private:
     std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
 
-    // Owns the real-time profiler subsystem (per-device sockets, receiver thread, Tracy
-    // handler). Constructed by init_realtime_profiler_socket() and torn down in close_impl()
-    // before the rest of the mesh shutdown so its receiver thread observes a live device.
+    // Owns this MeshDevice's real-time profiler producers (per-device sockets, receiver thread, and record ring).
+    // Constructed by init_realtime_profiler_socket() and torn down in close_impl() before the rest of the mesh shutdown
+    // so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
 
     // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.
@@ -302,7 +302,6 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
-    void trigger_realtime_profiler_sync_check();
     RealtimeProfilerManager* get_realtime_profiler() const;
 
     // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for

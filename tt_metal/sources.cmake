@@ -84,6 +84,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/pinned_memory.hpp
     api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/experimental/program_descriptor_patching.hpp
+    api/tt-metalium/experimental/realtime_profiler.hpp
     api/tt-metalium/experimental/sockets/d2h_socket.hpp
     api/tt-metalium/experimental/sockets/h2d_socket.hpp
     api/tt-metalium/experimental/sockets/mesh_socket.hpp

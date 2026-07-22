@@ -1477,12 +1477,6 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
 }
 
-void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
-    if (realtime_profiler_) {
-        realtime_profiler_->trigger_sync_check();
-    }
-}
-
 RealtimeProfilerManager* MeshDeviceImpl::get_realtime_profiler() const { return realtime_profiler_.get(); }
 
 ::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() {

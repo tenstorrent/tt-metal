@@ -11,6 +11,7 @@
 #include <cstdint>
 #include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/socket_api.h"
 #include "hostdev/realtime_profiler_msgs.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
@@ -59,51 +60,6 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a)
     }
 }
 
-// Handle sync requests from host: capture device timestamp and enqueue
-// a sync marker record into the ring buffer for the NCRISC pusher.
-__attribute__((noinline)) void realtime_profiler_sync() {
-    DPRINT("REALTIME: entering sync\n");
-
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-
-    uint32_t sync_count = 0;
-    while (rt_profiler_msg->sync_request) {
-        invalidate_l1_cache();
-
-        uint32_t host_time = rt_profiler_msg->sync_host_timestamp;
-        if (host_time > 0) {
-            DPRINT("REALTIME: sync got host_time={}\n", host_time);
-
-            // Spin until ring buffer has space
-            while (rt_ring_full(ring_buffer)) {
-                invalidate_l1_cache();
-            }
-
-            uint32_t slot_addr = rt_ring_data_addr(ring_buffer, ring_buffer->write_index);
-            tt_l1_ptr uint32_t* l1_data = reinterpret_cast<tt_l1_ptr uint32_t*>(slot_addr);
-
-            uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-            uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
-
-            l1_data[0] = time_hi;
-            l1_data[1] = time_lo;
-            l1_data[2] = host_time;
-            l1_data[3] = REALTIME_PROFILER_SYNC_MARKER_ID;
-            l1_data[4] = 0;
-            l1_data[5] = 0;
-            l1_data[6] = 0;
-            l1_data[7] = 0;
-
-            ring_buffer->write_index++;
-
-            rt_profiler_msg->sync_host_timestamp = 0;
-            sync_count++;
-            DPRINT("REALTIME: sync pushed count={}\n", sync_count);
-        }
-    }
-    DPRINT("REALTIME: exiting sync, total={}\n", sync_count);
-}
-
 void kernel_main() {
     DPRINT("REALTIME BRISC: kernel started\n");
 
@@ -120,12 +76,7 @@ void kernel_main() {
         RealtimeProfilerState state = static_cast<RealtimeProfilerState>(rt_profiler_msg->realtime_profiler_state);
 
         switch (state) {
-            case REALTIME_PROFILER_STATE_IDLE:
-                if (rt_profiler_msg->sync_request) {
-                    DPRINT("REALTIME: sync_request detected!\n");
-                    realtime_profiler_sync();
-                }
-                continue;
+            case REALTIME_PROFILER_STATE_IDLE: continue;
 
             case REALTIME_PROFILER_STATE_PUSH_A:
                 realtime_profiler_read_and_enqueue(true);

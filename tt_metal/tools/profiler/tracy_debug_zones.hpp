@@ -130,6 +130,16 @@ constexpr bool zone_name_valid(const char* name) { return name != nullptr; }
 #define TTMessageDLCS(category, txt, color, depth) \
     TT_TRACY_EMIT(category, (void(sizeof(txt) + sizeof(color) + sizeof(depth))), TracyMessageLCS(txt, color, depth))
 
+// True only while a Tracy server is connected (always false when Tracy is compiled out). Not category-gated: it is a
+// runtime check for gating Tracy emission that would otherwise buffer unboundedly while disconnected. That buffering
+// drives Tracy's allocator into a continuous mmap storm that starves other threads (e.g. the RT-profiler receiver's
+// D2H drain), so any high-rate emitter should skip its work unless this is true.
+#if defined(TRACY_ENABLE)
+#define TTTracyConnected() (::tracy::GetProfiler().IsConnected())
+#else
+#define TTTracyConnected() (false)
+#endif
+
 #define TTPlotD(category, name, val) TT_TRACY_EMIT(category, (void(sizeof(name) + sizeof(val))), TracyPlot(name, val))
 #define TTPlotConfigD(category, name, type, step, fill, color)                                                 \
     TT_TRACY_EMIT(                                                                                             \

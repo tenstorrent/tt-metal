@@ -100,28 +100,29 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 
 ## 3. Sync (Timestamp Calibration)
 
-Host and device timestamps are aligned so that Tracy (or other consumers) can relate device cycles to host time.
+Host and device timestamps are aligned so consumers (Tracy, callbacks) can relate device cycles to host time. The host keeps a per-chip affine mapping `device_cycle = frequency * host_ns + device_cycle_offset`: `frequency` is fit once at init; `device_cycle_offset` is re-anchored continuously by a free-running servo on the receiver thread (~every 50 ms).
+
+Each handshake is one-shot. The host writes a 32-bit token into `sync_host_timestamp`; the profiler core (IDLE state) sees it non-zero, captures the device WALL_CLOCK, and returns it two ways.
 
 ```
-  HOST                              REAL-TIME PROFILER CORE
+  HOST                                   REAL-TIME PROFILER CORE
 
-    |  Write sync_request = 1 (L1)        |
-    | ---------------------------------> |  Poll sync_request
-    |  Write sync_host_timestamp = T     |
-    | ---------------------------------> |  See host_ts > 0
-    |                                    |  Capture device wall clock (D)
-    |                                    |  Push page: (D_hi, D_lo, T,
-    |                                    |    REALTIME_PROFILER_SYNC_MARKER_ID)
-    |                                    |  Clear sync_host_timestamp
-    |  wait_for_pages(1)                 |
-    | <--------------------------------- |  (D2H page arrives)
-    |  Parse device_time D, host_time T  |
-    |  Repeat for N samples              |
-    |  Write sync_request = 0 (L1)       |
-    | ---------------------------------> |  Exit sync loop
-    |  Linear regression -> frequency,   |
-    |  first_timestamp for this device   |
+    |  Write sync_host_timestamp = T (L1)  |
+    | -----------------------------------> |  IDLE: see host_ts != 0
+    |                                      |  Capture device wall clock (D)
+    |                                      |  Store D in sync_ack_device_time (L1)
+    |  (fast path)                         |  NOC-write token T to host's pinned
+    |  Poll pinned ACK word until == T;    |    ACK word (bypasses record FIFO)
+    | <------------- token --------------- |
+    |  read D from L1; re-anchor offset    |  Enqueue FIFO marker page
+    |  at the round-trip midpoint          |    (D_hi, D_lo, T, SYNC_MARKER_ID)
+    |                                      |  Clear sync_host_timestamp
+    |  (fallback: no ACK pin)              |
+    |  read the marker page in the drain   | <----- (D2H marker page arrives)
+    |  and re-anchor from it instead       |
 ```
+
+**Init** repeats the handshake ~100 times (reading `D` from the FIFO marker page) and fits `frequency` by linear regression. **Steady state:** the servo issues one handshake per device every 50 ms and re-anchors `device_cycle_offset` to track clock drift. The fast path is taken when the host could NOC-pin the ACK word (`sync_ack_pcie_xy_enc != 0`); otherwise the FIFO marker page drives the re-anchor.
 
 ---
 
@@ -130,7 +131,7 @@ Host and device timestamps are aligned so that Tracy (or other consumers) can re
 | Location | Contents (`realtime_profiler_msg_t`) |
 |----------|----------------------------------------|
 | **Dispatch_s L1** | Ping-pong buffers, program_id_fifo, **realtime_profiler_core_noc_xy**, **realtime_profiler_remote_state_addr**, realtime_profiler_state. Host writes NOC XY and the profiler tensix L1 address of `realtime_profiler_state` for NOC signaling. |
-| **Profiler tensix L1** | **config_buffer_addr**, **realtime_profiler_state**, sync_request, sync_host_timestamp. |
+| **Profiler tensix L1** | **config_buffer_addr**, **realtime_profiler_state**, sync_host_timestamp (host->device token), sync_ack_device_time and sync_ack_* (device->host WALL_CLOCK + pinned-ACK address), sync_request (L1 staging for the ACK NOC-write). |
 
 Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::realtime_profiler_msgs`. Not in `mailboxes_t`.
 
@@ -144,4 +145,4 @@ Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::
 | Real-time profiler kernel | `tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp` |
 | Host init, sync, receiver thread | `mesh_device.cpp`, `realtime_profiler_manager.cpp` |
 | Shared struct + HAL accessors | `realtime_profiler_msgs.h` → `realtime_profiler_msgs` (generated) |
-| Callbacks (Tracy, user) | `tt_metal/impl/dispatch/data_collector.cpp`, `realtime_profiler_tracy_handler.cpp` |
+| Record fan-out (service, Tracy, user) | `tt_metal/impl/dispatch/data_collector.cpp`, `tt_metal/impl/realtime_profiler/realtime_profiler_service.cpp`, `realtime_profiler_tracy_consumer.cpp` |

@@ -25,12 +25,6 @@ and can be selected individually with pytest ``-k``:
                                        and verify 1:1 correspondence between
                                        host ``EnqueueProgram`` TracyMessages
                                        and device real-time records.
-* ``test_sync_accuracy``             — Launch a workload under Tracy capture
-                                       and verify every host/device
-                                       ``SYNC_CHECK``/``FINISH_SYNC`` pair is
-                                       aligned to within ±20µs on the Tracy
-                                       timeline (host anchor versus Tracy
-                                       message stamp plus CI variance on WH).
 """
 
 from __future__ import annotations
@@ -66,7 +60,6 @@ ARTIFACTS_ROOT = PROFILER_ARTIFACTS_DIR / "realtime_profiler_tests"
 # scripts because Tracy capture must see a fresh process.
 WORKLOAD_DIR = Path(__file__).parent
 CORRELATION_WORKLOAD = WORKLOAD_DIR / "host_device_correlation_workload.py"
-SYNC_WORKLOAD = WORKLOAD_DIR / "realtime_profiler_sync_workload.py"
 CROSS_REFERENCE_WORKLOAD = WORKLOAD_DIR / "cross_reference_workload.py"
 MATMUL_WORKLOAD = WORKLOAD_DIR / "matmul_workload.py"
 
@@ -152,16 +145,6 @@ def _export_messages(tracy_file: Path, out_csv: Path):
     with open(out_csv, "w") as f:
         subprocess.run(
             [str(CSVEXPORT_TOOL), "-m", "-s", ";", str(tracy_file)],
-            stdout=f,
-            stderr=subprocess.DEVNULL,
-            check=True,
-        )
-
-
-def _export_zones_unwrapped(tracy_file: Path, out_csv: Path):
-    with open(out_csv, "w") as f:
-        subprocess.run(
-            [str(CSVEXPORT_TOOL), "-u", "-s", ";", str(tracy_file)],
             stdout=f,
             stderr=subprocess.DEVNULL,
             check=True,
@@ -675,151 +658,4 @@ def test_host_device_correlation(tmp_path):
             "device_records.json": device_records_json,
             "workload_output.log": workload_log,
         },
-    )
-
-
-# ---------------------------------------------------------------------------
-# 6. Host/device sync accuracy (runs workload under Tracy capture)
-# ---------------------------------------------------------------------------
-
-# ±20 µs: host sync anchor is sampled immediately before TracyMessageL while the
-# message records GetTime() inside Tracy — small systematic skew plus N300/CI
-# scheduling can exceed ±10 µs without indicating broken calibration.
-SYNC_DIFF_THRESHOLD_NS = 20_000
-SYNC_PAIRING_WINDOW_NS = 100_000  # ±100 µs — gross-error safety window
-
-HOST_SYNC_MESSAGES = {"SYNC_CHECK", "FINISH_SYNC"}
-
-
-def _parse_host_sync_messages(csv_path: Path) -> list[tuple[str, int]]:
-    out = []
-    with open(csv_path, "r", newline="") as f:
-        reader = csv.reader(f, delimiter=";")
-        next(reader, None)  # header
-        for row in reader:
-            if len(row) < 2:
-                continue
-            name, ns = row[0], row[1]
-            if name in HOST_SYNC_MESSAGES:
-                out.append((name, int(ns)))
-    return out
-
-
-def _parse_device_sync_zones(csv_path: Path) -> list[int]:
-    out = []
-    with open(csv_path, "r", newline="") as f:
-        reader = csv.DictReader(f, delimiter=";")
-        for row in reader:
-            if row.get("name") == "SYNC_CHECK" and row.get("src_file") == "sync_check":
-                try:
-                    out.append(int(row["ns_since_start"]))
-                except (KeyError, ValueError):
-                    continue
-    out.sort()
-    return out
-
-
-def _pair_sync(host_msgs, device_zones):
-    """
-    Pair host messages with device zones in strict timeline order.
-
-    Each device timestamp is consumed at most once (1:1 pairing), preventing
-    duplicate matches that can happen with independent nearest-neighbor picks.
-    """
-    pairs = []
-    next_device_idx = 0
-    total_devices = len(device_zones)
-    total_hosts = len(host_msgs)
-
-    for host_idx, (name, h_ns) in enumerate(host_msgs):
-        if next_device_idx >= total_devices:
-            pairs.append((name, h_ns, None, None))
-            continue
-
-        # Keep enough device points for remaining host points.
-        remaining_hosts_after = total_hosts - host_idx - 1
-        last_allowed_idx = total_devices - remaining_hosts_after - 1
-        if next_device_idx > last_allowed_idx:
-            pairs.append((name, h_ns, None, None))
-            continue
-
-        best_idx = min(
-            range(next_device_idx, last_allowed_idx + 1),
-            key=lambda idx: abs(device_zones[idx] - h_ns),
-        )
-        best = device_zones[best_idx]
-        pairs.append((name, h_ns, best, best - h_ns))
-        next_device_idx = best_idx + 1
-    return pairs
-
-
-@pytest.mark.timeout(600)
-def test_sync_accuracy(tmp_path):
-    """
-    Run a short workload under Tracy capture, pair each host
-    ``SYNC_CHECK``/``FINISH_SYNC`` Tracy message with the nearest
-    device-side ``SYNC_CHECK`` GPU zone on the timeline, and verify each
-    pair is within ±20µs (tight bound on host/device timeline alignment).
-    """
-    assert CAPTURE_TOOL.exists(), f"Tracy capture tool not found: {CAPTURE_TOOL}"
-    assert CSVEXPORT_TOOL.exists(), f"Tracy csvexport tool not found: {CSVEXPORT_TOOL}"
-    assert SYNC_WORKLOAD.exists(), f"Workload script not found: {SYNC_WORKLOAD}"
-
-    tracy_file = tmp_path / "trace.tracy"
-    messages_csv = tmp_path / "messages.csv"
-    zones_csv = tmp_path / "zones.csv"
-    workload_log = tmp_path / "workload_output.log"
-
-    rc, stdout = _run_under_tracy(SYNC_WORKLOAD, tracy_file, log_path=workload_log, timeout_s=300)
-    print(f"\n--- Workload output (tail) ---\n{stdout[-4000:]}\n--- End workload output ---")
-    assert rc == 0, f"Workload failed (rc={rc})"
-    assert tracy_file.exists(), f"Tracy trace file not generated: {tracy_file}"
-
-    _export_messages(tracy_file, messages_csv)
-    _export_zones_unwrapped(tracy_file, zones_csv)
-
-    host_msgs = _parse_host_sync_messages(messages_csv)
-    device_zones = _parse_device_sync_zones(zones_csv)
-    assert host_msgs, "No host SYNC_CHECK/FINISH_SYNC messages in trace"
-    assert device_zones, (
-        "No device SYNC_CHECK GPU zones found. If csvexport was built without the "
-        "GPU-zone fix the zones won't be emitted — rebuild tracy-csvexport."
-    )
-
-    pairs = _pair_sync(host_msgs, device_zones)
-    print(f"\nMatched {len(pairs)} host sync message(s) against {len(device_zones)} device SYNC_CHECK zone(s).")
-    for name, h_ns, d_ns, diff in pairs:
-        if d_ns is None:
-            print(f"  {name:>12} @ {h_ns:>14,}ns  -> NO MATCH")
-        else:
-            print(f"  {name:>12} @ {h_ns:>14,}ns  -> {d_ns:>14,}ns  diff={diff:+.0f}ns")
-
-    _save_artifacts(
-        "test_sync_accuracy",
-        **{
-            "trace.tracy": tracy_file,
-            "messages.csv": messages_csv,
-            "zones.csv": zones_csv,
-            "workload_output.log": workload_log,
-        },
-    )
-
-    missing = [(n, h) for (n, h, d, _diff) in pairs if d is None]
-    assert not missing, f"{len(missing)} host messages had no matching device zone: {missing[:5]}"
-
-    far = [(n, h, d, diff) for (n, h, d, diff) in pairs if abs(diff) > SYNC_PAIRING_WINDOW_NS]
-    assert not far, (
-        f"{len(far)} pair(s) outside ±{SYNC_PAIRING_WINDOW_NS}ns window "
-        f"(dropped message or gross mis-calibration): {far[:5]}"
-    )
-
-    bad = [(n, h, d, diff) for (n, h, d, diff) in pairs if abs(diff) > SYNC_DIFF_THRESHOLD_NS]
-    assert not bad, f"{len(bad)}/{len(pairs)} sync pair(s) exceeded ±{SYNC_DIFF_THRESHOLD_NS}ns:\n" + "\n".join(
-        f"  {n} host={h}ns device={d}ns diff={diff:+.0f}ns" for (n, h, d, diff) in bad
-    )
-
-    diffs = [diff for (_n, _h, _d, diff) in pairs]
-    print(
-        f"\nAll {len(pairs)} sync pairs within ±{SYNC_DIFF_THRESHOLD_NS}ns "
-        f"(min={min(diffs):+.0f}ns, max={max(diffs):+.0f}ns, mean={sum(diffs)/len(diffs):+.0f}ns)."
     )

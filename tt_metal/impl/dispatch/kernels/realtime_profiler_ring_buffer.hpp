@@ -57,12 +57,15 @@ struct RtProfilerRingBuffer {
     // BRISC (cq_realtime_profiler): incremented once per enqueue attempt blocked on a full ring
     volatile uint32_t ring_full_wait_count;
     RtProfilerNcriscDebug ncrisc_debug;
+    // Source page for the NCRISC's out-of-band sync marker. Lives in the carved ring region (a known NOC-readable L1
+    // address) rather than a kernel-local static, whose linker-assigned address is not a valid NOC read source.
+    volatile uint32_t sync_marker_scratch[RT_PROFILER_ENTRY_SIZE / sizeof(uint32_t)];
     uint8_t data[RT_PROFILER_RING_CAPACITY][RT_PROFILER_ENTRY_SIZE];
 };
 
-// 64 + 4096*64 = 262208 bytes total
-static_assert(sizeof(RtProfilerRingBuffer) == 64 + RT_PROFILER_RING_CAPACITY * RT_PROFILER_ENTRY_SIZE);
-static_assert(offsetof(RtProfilerRingBuffer, data) == 64);
+// (64 header + 64 scratch) + 4096*64 = 262272 bytes total
+static_assert(sizeof(RtProfilerRingBuffer) == 128 + RT_PROFILER_RING_CAPACITY * RT_PROFILER_ENTRY_SIZE);
+static_assert(offsetof(RtProfilerRingBuffer, data) == 128);
 
 // NCRISC L1 debug stores (cq_realtime_profiler_push.cpp). Off by default; define RT_PROFILER_NCRISC_DEBUG
 // in that file (before including this header) to compile in heartbeat stores.
