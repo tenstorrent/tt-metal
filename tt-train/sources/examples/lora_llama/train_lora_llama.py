@@ -74,6 +74,11 @@ def llama_config_from_yaml(yaml_config: dict, vocab_size: int, use_tp: bool = Fa
 
     return LlamaConfig(
         hidden_size=tc.get("embedding_dim", 384),
+        # Read the MLP intermediate size from the yaml. When absent, LlamaConfig
+        # falls back to the SwiGLU default (~8/3*hidden), which does NOT match real
+        # Llama-3 checkpoints (e.g. 8B uses 14336, not the derived 11008) and would
+        # fail weight loading with a down_proj shape mismatch.
+        intermediate_size=tc.get("intermediate_dim", None),
         num_hidden_layers=tc.get("num_blocks", 6),
         num_attention_heads=tc.get("num_heads", 6),
         num_key_value_heads=tc.get("num_groups", 3),
