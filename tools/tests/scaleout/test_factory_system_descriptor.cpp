@@ -11,12 +11,14 @@
 #include <yaml-cpp/yaml.h>
 
 #include <cabling_generator/cabling_generator.hpp>
+#include <factory_system_descriptor/query.hpp>
 #include <factory_system_descriptor/utils.hpp>
 #include <node/node_types.hpp>
 
 // Include generated protobuf headers
 #include "protobuf/deployment.pb.h"
 #include "protobuf/cluster_config.pb.h"
+#include "protobuf/factory_system_descriptor.pb.h"
 
 namespace tt::scaleout_tools {
 
@@ -440,6 +442,80 @@ TEST(CablingGenerator, PruneDeadChannelsIgnoresUnknownChannel) {
 
     EXPECT_TRUE(gen.prune_dead_channels({bogus}).empty());  // no cable matched
     EXPECT_EQ(gen.get_chip_connections().size(), before);   // FSD unchanged
+}
+
+namespace {
+
+// Build an FSD with the given (hostname, instance_path) hosts, indexed by host_id in order.
+fsd::proto::FactorySystemDescriptor make_fsd_with_paths(
+    const std::vector<std::pair<std::string, std::vector<std::string>>>& hosts) {
+    fsd::proto::FactorySystemDescriptor fsd;
+    for (const auto& [hostname, path] : hosts) {
+        auto* host = fsd.add_hosts();
+        host->set_hostname(hostname);
+        for (const auto& segment : path) {
+            host->add_instance_path(segment);
+        }
+    }
+    return fsd;
+}
+
+}  // namespace
+
+TEST(FsdQuery, LongestCommonPrefixByHostId) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"sp_0", "node_0", "h_0"}},
+        {"node1", {"sp_0", "node_0", "h_1"}},
+        {"node2", {"sp_0", "node_1", "h_0"}},
+        {"node3", {"sp_1", "node_0", "h_0"}},
+    });
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.longest_common_prefix(0u, 1u), (std::vector<std::string>{"sp_0", "node_0"}));
+    EXPECT_EQ(query.longest_common_prefix(0u, 2u), (std::vector<std::string>{"sp_0"}));
+    EXPECT_EQ(query.longest_common_prefix(0u, 3u), (std::vector<std::string>{}));
+    // Same host is a prefix of itself.
+    EXPECT_EQ(query.longest_common_prefix(2u, 2u), (std::vector<std::string>{"sp_0", "node_1", "h_0"}));
+    // Order does not matter.
+    EXPECT_EQ(query.longest_common_prefix(1u, 0u), query.longest_common_prefix(0u, 1u));
+}
+
+TEST(FsdQuery, LongestCommonPrefixByHostname) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"sp_0", "node_0"}},
+        {"node1", {"sp_0", "node_1"}},
+    });
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.longest_common_prefix("node0", "node1"), (std::vector<std::string>{"sp_0"}));
+    EXPECT_EQ(query.longest_common_prefix("node0", "node0"), (std::vector<std::string>{"sp_0", "node_0"}));
+}
+
+TEST(FsdQuery, HandlesEmptyAndUnequalLengthPaths) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {}},
+        {"node1", {"sp_0"}},
+        {"node2", {"sp_0", "node_0", "h_0"}},
+    });
+    FsdQuery query(fsd);
+
+    // Empty path shares nothing with anyone.
+    EXPECT_EQ(query.longest_common_prefix(0u, 1u), (std::vector<std::string>{}));
+    // Shorter path is a full prefix of the longer one.
+    EXPECT_EQ(query.longest_common_prefix(1u, 2u), (std::vector<std::string>{"sp_0"}));
+}
+
+TEST(FsdQuery, ThrowsOnUnknownHostIdOrHostname) {
+    auto fsd = make_fsd_with_paths({{"node0", {"sp_0"}}});
+    FsdQuery query(fsd);
+
+    EXPECT_THROW(query.longest_common_prefix(0u, 5u), std::out_of_range);
+    EXPECT_THROW(query.longest_common_prefix("node0", "missing"), std::runtime_error);
+}
+
+TEST(FsdQuery, ThrowsOnDuplicateHostname) {
+    auto fsd = make_fsd_with_paths({{"dup", {"sp_0"}}, {"dup", {"sp_1"}}});
+    EXPECT_THROW(FsdQuery{fsd}, std::runtime_error);
 }
 
 }  // namespace tt::scaleout_tools

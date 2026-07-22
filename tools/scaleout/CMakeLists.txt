@@ -49,6 +49,7 @@ target_sources(
             cabling_generator/cabling_generator.hpp
             cabling_generator/regen_descriptors.hpp
             connector/connector.hpp
+            factory_system_descriptor/query.hpp
             factory_system_descriptor/utils.hpp
             node/node_types.hpp
     PRIVATE
@@ -58,6 +59,7 @@ target_sources(
         cabling_generator/cabling_generator.cpp
         cabling_generator/regen_descriptors.cpp
         connector/connector.cpp
+        factory_system_descriptor/query.cpp
         factory_system_descriptor/utils.cpp
         ${GENERATED_PROTO_SRCS}
 )
