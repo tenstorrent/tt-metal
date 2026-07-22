@@ -1622,6 +1622,26 @@ tt::scaleout_tools::fsd::proto::FactorySystemDescriptor CablingGenerator::genera
         deployment_hosts_, host_id_to_node_, chip_connections_, host_id_to_instance_path);
 }
 
+// Resolve the node_descriptor key for a node: prefer the descriptor name the child was bound to in
+// its source file, then fall back to a shape-based lookup.
+static std::string node_descriptor_key_for(
+    const std::string& node_name, const Node& node, const std::unordered_map<std::string, Node>& node_templates) {
+    std::optional<std::string> template_key;
+    if (!node.node_descriptor_name.empty() && node_templates.contains(node.node_descriptor_name)) {
+        template_key = node.node_descriptor_name;
+    } else {
+        template_key = find_template_key_for_node(node, node_templates);
+    }
+    if (!template_key) {
+        throw std::runtime_error(fmt::format(
+            "Could not find node descriptor for node '{}' with motherboard '{}' and {} boards",
+            node_name,
+            node.motherboard,
+            node.boards.size()));
+    }
+    return *template_key;
+}
+
 // Helper to convert ResolvedGraphInstance back to GraphTemplate protobuf
 static void resolved_graph_to_protobuf(
     const ResolvedGraphInstance& resolved,
@@ -1639,23 +1659,7 @@ static void resolved_graph_to_protobuf(
         const auto& node = it->second;
         auto* child = template_proto->add_children();
         child->set_name(name);
-        auto* node_ref = child->mutable_node_ref();
-
-        // Prefer the descriptor name the child was bound to in its source file.
-        std::optional<std::string> template_key;
-        if (!node.node_descriptor_name.empty() && node_templates.contains(node.node_descriptor_name)) {
-            template_key = node.node_descriptor_name;
-        } else {
-            template_key = find_template_key_for_node(node, node_templates);
-        }
-        if (!template_key) {
-            throw std::runtime_error(fmt::format(
-                "Could not find node descriptor for node '{}' with motherboard '{}' and {} boards",
-                name,
-                node.motherboard,
-                node.boards.size()));
-        }
-        node_ref->set_node_descriptor(*template_key);
+        child->mutable_node_ref()->set_node_descriptor(node_descriptor_key_for(name, node, node_templates));
     }
 
     // Add internal_connections
@@ -1697,6 +1701,88 @@ static void resolved_graph_to_protobuf(
                 }
             }
             port_b->add_path(node_b_name);
+            port_b->set_tray_id(*tray_b);
+            port_b->set_port_id(*port_b_id);
+        }
+    }
+}
+
+// Flatten a nested ResolvedGraphInstance tree into a single-level GraphTemplate (the shape produced
+// by the CableGen web tool / "extracted_topology" descriptors): every leaf node becomes a direct
+// node_ref child named by its deployment hostname, and every graph-level connection from any depth is
+// rewritten with single-segment (hostname) paths. Connections at every level already reference global
+// HostIds (see reassign_host_ids_dfs), so flattening is a straight collect-and-rename. Children and
+// child_mappings are emitted in host_id order so the DFS host_id reassignment on reload is a no-op.
+static void flatten_resolved_graph_to_protobuf(
+    const ResolvedGraphInstance& root,
+    const std::vector<Host>& deployment_hosts,
+    const std::unordered_map<std::string, Node>& node_templates,
+    cabling_generator::proto::GraphTemplate* template_proto,
+    cabling_generator::proto::GraphInstance* root_inst) {
+    // Stable, unique, delimiter-safe flat name for a leaf: its deployment hostname (fallback host_<id>).
+    auto flat_name_for = [&](HostId hid) -> std::string {
+        if (*hid < deployment_hosts.size() && !deployment_hosts[*hid].hostname.empty()) {
+            return deployment_hosts[*hid].hostname;
+        }
+        return "host_" + std::to_string(*hid);
+    };
+
+    // Collect every leaf node across the whole tree, keyed (and thus ordered) by global host_id.
+    std::map<HostId, const Node*> leaves;
+    auto collect_leaves = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
+        for (const auto& [name, node] : graph.nodes) {
+            leaves[node.host_id] = &node;
+        }
+        for (const auto& [name, subgraph] : graph.subgraphs) {
+            self(self, *subgraph);
+        }
+    };
+    collect_leaves(collect_leaves, root);
+
+    // Emit one node_ref child + one flat child_mapping per leaf, in host_id order.
+    for (const auto& [hid, node_ptr] : leaves) {
+        const std::string name = flat_name_for(hid);
+        auto* child = template_proto->add_children();
+        child->set_name(name);
+        child->mutable_node_ref()->set_node_descriptor(node_descriptor_key_for(name, *node_ptr, node_templates));
+        (*root_inst->mutable_child_mappings())[name].set_host_id(*hid);
+    }
+
+    // Collect internal (graph-level) connections from every level of the tree, grouped by port type.
+    std::map<PortType, std::vector<PortConnection>> all_connections;
+    auto gather_connections = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
+        for (const auto& [port_type, connections] : graph.internal_connections) {
+            auto& dst = all_connections[port_type];
+            dst.insert(dst.end(), connections.begin(), connections.end());
+        }
+        for (const auto& [name, subgraph] : graph.subgraphs) {
+            self(self, *subgraph);
+        }
+    };
+    gather_connections(gather_connections, root);
+
+    for (const auto& [port_type, connections] : all_connections) {
+        std::string port_type_str;
+        switch (port_type) {
+            case PortType::QSFP_DD: port_type_str = "QSFP_DD"; break;
+            case PortType::WARP100: port_type_str = "WARP100"; break;
+            case PortType::WARP400: port_type_str = "WARP400"; break;
+            default: continue;
+        }
+
+        auto* port_conns = (*template_proto->mutable_internal_connections())[port_type_str].mutable_connections();
+        for (const auto& conn : connections) {
+            auto* conn_proto = port_conns->Add();
+
+            const auto& [host_a, tray_a, port_a_id] = conn.first;
+            auto* port_a = conn_proto->mutable_port_a();
+            port_a->add_path(flat_name_for(host_a));
+            port_a->set_tray_id(*tray_a);
+            port_a->set_port_id(*port_a_id);
+
+            const auto& [host_b, tray_b, port_b_id] = conn.second;
+            auto* port_b = conn_proto->mutable_port_b();
+            port_b->add_path(flat_name_for(host_b));
             port_b->set_tray_id(*tray_b);
             port_b->set_port_id(*port_b_id);
         }
@@ -1767,16 +1853,28 @@ void CablingGenerator::emit_cabling_descriptor(const std::string& output_path) c
 
     // Convert root_instance to graph template
     if (root_instance_) {
-        auto& template_proto = (*cluster_desc.mutable_graph_templates())[root_instance_->template_name];
-        resolved_graph_to_protobuf(*root_instance_, &template_proto, node_templates_);
-
-        // Add root_instance with child_mappings
         auto* root_inst = cluster_desc.mutable_root_instance();
-        root_inst->set_template_name(root_instance_->template_name);
 
-        // Add child_mappings for all nodes (map node name -> host_id)
-        for (const auto& [name, node] : root_instance_->nodes) {
-            (*root_inst->mutable_child_mappings())[name].set_host_id(*node.host_id);
+        if (root_instance_->subgraphs.empty()) {
+            // Single-level topology: emit node instance names directly (unchanged legacy behavior).
+            auto& template_proto = (*cluster_desc.mutable_graph_templates())[root_instance_->template_name];
+            root_inst->set_template_name(root_instance_->template_name);
+            resolved_graph_to_protobuf(*root_instance_, &template_proto, node_templates_);
+
+            // Add child_mappings for all nodes (map node name -> host_id)
+            for (const auto& [name, node] : root_instance_->nodes) {
+                (*root_inst->mutable_child_mappings())[name].set_host_id(*node.host_id);
+            }
+        } else {
+            // Nested topology: flatten the whole tree into a single-level, hostname-keyed descriptor.
+            // The legacy path above only serializes the root's direct leaf children, which for a deep
+            // hierarchy (e.g. a SuperPod template) yields an empty/invalid descriptor. Use the same
+            // "extracted_topology" template key that the CableGen web tool emits for flat descriptors.
+            static constexpr const char* kFlatTemplateName = "extracted_topology";
+            auto& template_proto = (*cluster_desc.mutable_graph_templates())[kFlatTemplateName];
+            root_inst->set_template_name(kFlatTemplateName);
+            flatten_resolved_graph_to_protobuf(
+                *root_instance_, deployment_hosts_, node_templates_, &template_proto, root_inst);
         }
     }
 
