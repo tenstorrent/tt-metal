@@ -47,7 +47,7 @@ MorehDotOperation::spec_return_value_t MorehDotOperation::compute_output_specs(
     const auto& input = tensor_args.input_a;
     auto output_shape = input.logical_shape();
     output_shape[3] = 1;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape, TensorLayout(input.dtype(), PageConfig(input.layout()), operation_attributes.memory_config));
 }
 

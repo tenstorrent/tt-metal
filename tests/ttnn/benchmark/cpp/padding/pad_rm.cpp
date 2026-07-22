@@ -32,7 +32,7 @@ ttnn::Tensor GenInputTensor(const ttsl::SmallVector<uint32_t>& shape) {
     for (size_t i = 0; i < volume; ++i) {
         input_data.push_back(static_cast<T>(dist(gen)));
     }
-    return Tensor(HostBuffer{input_data}, ttnn::Shape(shape), DataType::BFLOAT16, Layout::ROW_MAJOR);
+    return ttnn::Tensor(HostBuffer{input_data}, ttnn::Shape(shape), DataType::BFLOAT16, Layout::ROW_MAJOR);
 }
 
 void BM_pad_rm_2d_last_dim_right(benchmark::State& state) {

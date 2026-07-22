@@ -136,13 +136,13 @@ jobs:
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 30
         with:
-          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          environmentName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           allocationNamespace: ttop-ci
           workerRepository: ${{ steps.parse-image.outputs.repository }}
           workerTag: ${{ steps.parse-image.outputs.tag }}
-          useDevHostMount: 'true'
-          sharedVolumeEnabled: 'true'
+          useDevHostMount: "true"
+          sharedVolumeEnabled: "true"
           path: /etc/ttop
 
       - name: 📦 Download Build Artifact
@@ -181,8 +181,9 @@ jobs:
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
           sudo rm -rf /home/user/tt-metal
-          sudo mkdir -p /home/user/tt-metal
-          sudo chown "$(id -u):$(id -g)" /home/user/tt-metal
+          sudo mkdir -p /home/user
+          sudo chown "$(id -u):$(id -g)" /home/user
+          cp -r /ci/tt-metal /home/user/
           tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
 
           mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
@@ -308,14 +309,14 @@ jobs:
         if: always()
         uses: ./.github/actions/ttop-delete-environment
         with:
-          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          environmentName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
 
       - name: Delete allocation
         if: always()
         uses: ./.github/actions/ttop-delete-allocation
         with:
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main

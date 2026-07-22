@@ -9,7 +9,6 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
 #include <cmath>
 
 using namespace tt::tt_metal;
@@ -170,7 +169,7 @@ CoreRangeSet get_worker_grid(
 
     if (is_native_L1_sharding(
             input_tensor_a.tensor_spec(),
-            input_tensor_b ? std::optional<TensorSpec>{input_tensor_b->tensor_spec()} : std::nullopt,
+            input_tensor_b ? std::optional<tt::tt_metal::TensorSpec>{input_tensor_b->tensor_spec()} : std::nullopt,
             memory_config_actual)) {
         if (input_tensor_a.is_sharded()) {
             log_debug(
@@ -223,30 +222,6 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
     }
 
     TT_THROW("Invalid subtile broadcast type");
-}
-
-ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
-    // TODO: a more generalized way to skip the hashing of an EltwiseUnaryWithParam?
-    auto base_hash = ttsl::hash::hash_objects_with_default_seed(
-        binary_op_type,
-        lhs_activations,
-        rhs_activations,
-        (is_where_op || is_quant_op) ? ttsl::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
-        memory_config,
-        get_dtype(),
-        compute_kernel_config,
-        sub_core_grids,
-        subtile_broadcast_type,
-        is_sfpu,
-        is_quant_op,
-        is_where_op,
-        input_layout_a,
-        input_layout_b,
-        output_layout);
-    if (binary_op_type == BinaryOpType::ISCLOSE) {
-        base_hash = ttsl::hash::hash_objects(base_hash, equal_nan);
-    }
-    return base_hash;
 }
 
 DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
@@ -488,7 +463,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
             }
         }
 
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             output_shape,
             TensorLayout(
                 output_dtype,
@@ -497,7 +472,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     }
 
     // If not sharded, use the memory config from input a that is interleaved
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape, TensorLayout(output_dtype, PageConfig(attributes.output_layout), attributes.memory_config));
 }
 
@@ -510,32 +485,6 @@ BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_o
 
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
-}
-
-ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& input_tensor_b = tensor_args.input_tensor_b;
-
-    TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
-
-    if (input_tensor_b.has_value()) {
-        TT_FATAL(is_device_tensor(*input_tensor_b), "Unexpected Tensor type {}", input_tensor_b->storage_type());
-
-        const auto shard_volumes = get_shard_volumes(
-            input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), compute_output_specs(attributes, tensor_args));
-
-        return operation::hash_operation<BinaryNgDeviceOperation>(
-            attributes,
-            input_tensor_a.dtype(),
-            input_tensor_a.memory_config(),
-            input_tensor_b->dtype(),
-            input_tensor_b->memory_config(),
-            shard_volumes);
-    }
-
-    return operation::hash_operation<BinaryNgDeviceOperation>(
-        attributes, input_tensor_a.dtype(), input_tensor_a.memory_config());
 }
 
 bool BinaryNgDeviceOperation::skip_launch(
@@ -694,9 +643,21 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         equal_nan,
         input_tensor_a.layout(),
         input_tensor_b.layout(),
-        output_layout};
+        output_layout,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt};
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
+    const auto shard_volumes = ttnn::operations::binary_ng::get_shard_volumes(
+        input_tensor_a.tensor_spec(),
+        input_tensor_b.tensor_spec(),
+        OperationType::compute_output_specs(operation_attributes, tensor_args));
+    if (shard_volumes.has_value()) {
+        operation_attributes.a_shard_volume = shard_volumes->a_shard_volume;
+        operation_attributes.b_shard_volume = shard_volumes->b_shard_volume;
+        operation_attributes.c_shard_volume = shard_volumes->c_shard_volume;
+    }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
@@ -769,7 +730,10 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         /*equal_nan=*/false,
         input_tensor_a.layout(),
         Layout::INVALID,
-        output_layout};
+        output_layout,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt};
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

@@ -18,7 +18,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 struct UnifiedRoutedExpertFfnDeviceOperation {
     using operation_attributes_t = UnifiedRoutedExpertFfnParams;
     using tensor_args_t = UnifiedRoutedExpertFfnInputs;
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
     using program_factory_t = std::variant<UnifiedRoutedExpertFfnProgramFactory>;
 
@@ -48,6 +48,9 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<ttnn::Tensor>& optional_output,
     const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
     ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation =
-        ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation::Silu);
+        ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation::Silu,
+    const std::optional<ttnn::Tensor>& gate_bias = std::nullopt,
+    const std::optional<ttnn::Tensor>& up_bias = std::nullopt,
+    const std::optional<ttnn::Tensor>& down_bias = std::nullopt);
 
 }  // namespace ttnn::prim

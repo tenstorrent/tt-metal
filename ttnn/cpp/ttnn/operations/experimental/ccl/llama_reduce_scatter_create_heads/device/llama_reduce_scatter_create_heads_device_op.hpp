@@ -40,7 +40,7 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         Tensor intermediate_packet_buffer;
     };
 
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
 

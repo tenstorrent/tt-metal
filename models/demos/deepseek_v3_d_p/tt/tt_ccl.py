@@ -3,6 +3,8 @@
 
 from typing import Optional
 
+from loguru import logger
+
 import ttnn
 
 # NOTE: This file is forked from models/common/modules/tt_ccl.py
@@ -112,6 +114,14 @@ class TT_CCL:
         # determinism. One buffer for the whole model (layers share the shape and run sequentially)
         # keeps the memory cost flat. See TtSharedExpert.forward.
         self.shared_rs_intermediate = None
+
+        # Keepalive for the shared-expert reduce_scatter INPUT (output_full). The overlapped
+        # dispatch must not reuse this buffer's DRAM slot mid-flight, so it is held until the next
+        # shared-expert forward. Stored here (one slot, shared across all layers that run
+        # sequentially) rather than on each per-layer TtSharedExpert instance — a per-instance
+        # reference would never be released (every layer object stays alive for the whole model),
+        # leaking one RS input per layer. See set_shared_rs_input_keepalive / TtSharedExpert.forward.
+        self.shared_rs_input_keepalive = None
 
         # Persistent ring-attention buffers shared by every layer's MLA, keyed by their shape
         # signature. One set for the whole model. See get_mla_ring_attention_buffers.
@@ -227,6 +237,15 @@ class TT_CCL:
             )
         return self.shared_rs_intermediate
 
+    def set_shared_rs_input_keepalive(self, input_tensor):
+        """Hold the shared-expert reduce_scatter INPUT alive until the next shared-expert forward,
+        so the concurrent (overlapped) dispatch cannot reuse its DRAM slot mid-flight. A single slot
+        shared across all sequentially-run layers: each layer's forward overwrites it, releasing the
+        previous layer's input (its refcount drops to zero and the DRAM is freed). This must live on
+        tt_ccl (one instance for the whole model), NOT on the per-layer TtSharedExpert object — the
+        latter would pin one RS input per layer for the model's lifetime, leaking DRAM every layer."""
+        self.shared_rs_input_keepalive = input_tensor
+
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
         semaphore_index = 2 if cluster_axis is None else cluster_axis
         current_idx = self.barrier_semaphore_idx[semaphore_index]
@@ -269,6 +288,50 @@ def default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
         # NOTE: this should be a fallback when the ring is not available
         return ttnn.Topology.Linear
     return None
+
+
+# Per-axis CCL topology. Mesh dim 0 = rows = "Y" = sp_axis; dim 1 = cols = "X" = tp_axis.
+# A torus fabric physically wraps a given axis; Ring is only valid on a wrapped axis (otherwise the
+# collective hangs forever on a wrap link the fabric does not service — get_usable_topology() keeps
+# Ring because the coords span the axis). Reading the *active* fabric config keeps the returned
+# topology consistent with whatever was opened, so a (descriptor, fabric, topology) mismatch can't
+# silently ask Ring on an unwrapped axis.
+_FABRIC_PER_AXIS_TOPOLOGY = {
+    # fabric_config: (sp_topology [dim 0 / Y], tp_topology [dim 1 / X])
+    ttnn.FabricConfig.FABRIC_2D_TORUS_X: (ttnn.Topology.Linear, ttnn.Topology.Ring),
+    ttnn.FabricConfig.FABRIC_2D_TORUS_Y: (ttnn.Topology.Ring, ttnn.Topology.Linear),
+    ttnn.FabricConfig.FABRIC_2D_TORUS_XY: (ttnn.Topology.Ring, ttnn.Topology.Ring),
+    ttnn.FabricConfig.FABRIC_1D_RING: (ttnn.Topology.Ring, ttnn.Topology.Linear),
+}
+
+
+def per_axis_topology(
+    fabric_config: Optional[ttnn.FabricConfig] = None,
+) -> tuple[ttnn.Topology, ttnn.Topology]:
+    """Return the per-axis CCL topology ``(sp_topology, tp_topology)`` for the fabric.
+
+    ``sp_topology`` drives cluster_axis=0 (rows / Y) collectives, ``tp_topology`` drives
+    cluster_axis=1 (cols / X). Ring is returned only for an axis the fabric physically wraps; every
+    other axis is Linear. When ``fabric_config`` is None the currently-active fabric is queried so
+    the result always matches the opened fabric.
+    """
+    if fabric_config is None:
+        fabric_config = ttnn.get_fabric_config()
+    mapped = _FABRIC_PER_AXIS_TOPOLOGY.get(fabric_config)
+    if mapped is not None:
+        return mapped
+    # Unknown fabric → all-Linear. If the fabric name looks ring/torus-capable, this means a wrap-
+    # capable fabric was opened but has no per-axis mapping here: collectives would silently run
+    # all-Linear (correct but no ring speedup, and a likely sign the mapping needs updating). Warn
+    # loudly rather than degrade silently.
+    name = getattr(fabric_config, "name", str(fabric_config))
+    if "TORUS" in name.upper() or "RING" in name.upper():
+        logger.warning(
+            f"per_axis_topology: fabric {name} is ring/torus-capable but has no entry in "
+            "_FABRIC_PER_AXIS_TOPOLOGY; defaulting to (Linear, Linear) so no axis will ring. "
+            "Add it to the mapping if a ring topology is intended."
+        )
+    return (ttnn.Topology.Linear, ttnn.Topology.Linear)
 
 
 # =============================================================================

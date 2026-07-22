@@ -21,7 +21,7 @@ namespace ttnn::experimental::prim {
 struct RepeatAndInterleaveEltwiseMulDeviceOperation {
     using operation_attributes_t = RepeatMulParams;
     using tensor_args_t = RepeatMulInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<RepeatAndInterleaveEltwiseMulProgramFactory>;
 
