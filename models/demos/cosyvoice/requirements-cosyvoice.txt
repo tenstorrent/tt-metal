@@ -17,13 +17,13 @@
 #   - deepspeed, lightning, tensorboard       : training-only; reference inference does not import them.
 #   - tensorrt-cu12*                          : TRT runtime path; legacy inference uses plain torch flow.
 #   - grpcio, grpcio-tools, fastapi, fastapi-cli, gradio, uvicorn : webui/server; not the demo path.
-#   - diffusers==0.29.0                       : NEEDED after all — imported at top of
+#   - diffusers==0.39.0                                : NEEDED after all — imported at top of
 #                                              matcha/models/components/decoder.py
 #                                              (vendored Matcha submodule) as
 #                                              `from diffusers.models.activations import get_activation`;
 #                                              the import is unconditional even though CV2's estimator
 #                                              only uses the ResnetBlock1D / BasicTransformerBlock path,
-#                                              so the package must be importable. Pin to upstream ref ver.
+#                                              so the package must be importable. See pin below (>=0.38.0).
 #   - conformer==0.3.2                         : NEEDED after all — Matcha's matcha/models/components/
 #                                              decoder.py imports `from conformer import ConformerBlock`
 #                                              unconditionally at module top. CV2's flow estimator does
@@ -62,9 +62,11 @@ inflect                    # cli/frontend.py English number normalization
 wetext                     # Chinese text normalization fallback (preferred over empty frontend)
 modelscope                 # imported at top of cli/cosyvoice.py (snapshot_download fallback)
 soundfile                  # load_wav / wav write helpers (librosa dep but explicit)
-diffusers==0.29.0          # matcha/models/components/decoder.py imports get_activation at module top
+diffusers==0.39.0          # matcha/models/components/decoder.py imports get_activation at module top
+                            # >=0.38.0 fixes CVE-2026-45804 + CVE-2026-44513 (HIGH)
 conformer==0.3.2           # matcha/models/components/decoder.py imports ConformerBlock at module top
 hydra-core                 # matcha/models/components/flow_matching.py imports hydra at module top
-lightning==2.2.4           # matcha/utils/pylogger.py: `from lightning.pytorch.utilities import rank_zero_only`
+lightning>=2.3.3           # matcha/utils/pylogger.py: `from lightning.pytorch.utilities import rank_zero_only`
+                            # >=2.3.3 fixes CVE-2024-5452 + CVE-2024-5980 (CRITICAL)
 gdown                      # matcha/utils/utils.py imports gdown at module top (pulled by matcha.utils.__init__)
 wget                       # matcha/utils/utils.py imports wget at module top (same chain)

@@ -7,7 +7,7 @@ anyascii==0.3.3
 coloredlogs==15.0.1
 conformer==0.3.2
 contractions==0.1.73
-diffusers==0.29.0
+diffusers==0.39.0
 einops==0.8.2
 einx==0.4.3
 filelock==3.31.2
@@ -21,7 +21,7 @@ hyperpyyaml==1.2.3
 inflect==7.5.0
 kaldifst==1.8.0
 librosa==0.10.0
-lightning==2.2.4
+lightning==2.6.5
 matplotlib==3.10.9
 modelscope==1.38.1
 modelscope-hub==0.1.8
