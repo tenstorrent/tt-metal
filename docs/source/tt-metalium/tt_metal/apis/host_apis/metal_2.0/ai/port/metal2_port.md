@@ -141,33 +141,30 @@ If you have no existing tt-metal checkout, follow [`workspace_setup.md`](../shar
 - `PYTHONPATH` must be `$(pwd)` from inside your clone, not a path copied from someone else's instructions.
 - Iterative rebuilds during the port: just re-run `./build_metal.sh --build-tests` — it rebuilds incrementally.
 
-### Use a subagent for builds and tests
+### Running builds and tests without flooding your context
 
-Builds and test runs produce large output that will pollute your working context — `./build_metal.sh` writes thousands of lines, gtest output on a full op test directory is even worse. **Delegate every build and every test run to a subagent.** The subagent runs the command, captures all output to a log file, and returns only a tight summary (exit code + extracted errors + log path). You do the reasoning; the subagent absorbs the noise.
+Builds and test runs are extremely noisy — `./build_metal.sh` writes thousands of lines (each failed compile dumps its full multi-KB clang invocation), and a full gtest/pytest run is worse. Keep that output out of your working context with a two-step pattern.
 
-**Subagent prompt template:**
+**1. Run it in the background from your (primary) session, piped to a log.** Use your Bash tool's background mode: the job is *turn-durable* — it keeps running across your turns and re-invokes you when it *actually* exits, so completion is a real signal — and its output lands in the log, not your context:
+
+```bash
+./build_metal.sh --build-tests > /tmp/metal2_build.log 2>&1   # Bash background mode (run_in_background)
+```
+
+Run this from your primary session, not inside a subagent: a subagent's backgrounded build dies when the subagent's turn ends, and a cold build exceeds the ~10-minute foreground timeout, so a subagent can't run it in the foreground either. Only the primary session's background execution survives to completion.
+
+**2. When it exits, hand the log to a subagent to read and report.** The subagent absorbs the log's noise and returns a tight summary; you never load the raw output. **Use a Sonnet subagent** — extracting the result from a log is rote, and Sonnet is well-suited and cheap for it. Prompt template:
 
 ````
-You are a build/test helper for a Metal 2.0 op porter. Run the command below, capture all output to <log_path>, and return ONLY a tight summary.
+You are a log reader for a Metal 2.0 op porter. Read the log at <log_path> and return ONLY a tight summary. Do NOT run anything, read other files, or suggest fixes.
 
-Command: <command>
-Working directory: <cwd>
-Log path: <log_path>
-
-Return format:
-- Exit code: <code>
-- Status: SUCCESS / FAILURE / TIMEOUT
-- Key errors (if FAILURE): up to 10 lines of compiler or test errors, no boilerplate stack frames unless they show the cause.
-- Log path for deep dive: <log_path>
-
-Do NOT try to fix anything. Do NOT run other commands. Do NOT read unrelated files. Do NOT make recommendations about next steps.
-
-If the build or test hangs (>15 min with no log progress), kill it, return TIMEOUT, and report the last 20 lines logged.
+Return:
+- Status: SUCCESS / FAILURE
+- Key errors (if FAILURE): up to ~10 lines of the actual compiler / test errors — the root cause, not cascade noise; do NOT paste the multi-KB clang command lines.
+- Log path: <log_path>
 ````
 
-**When to use:** every build, every gtest run, every pytest run. If you are iterating on a single failing test and have already seen the error once, reading the log file directly is fine — but the first invocation of any build or test command should always go through the helper to get a clean error extract.
-
-**Don't use the helper to make decisions.** The helper runs and reports. You read the report and decide what to do next. If you need to investigate a specific error in detail, read the log file the helper points you at.
+You read the subagent's summary and decide what to do next. If you then need to dig into a specific failure, read that targeted slice of the log yourself — a few lines around the error, not the whole file.
 
 ---
 
@@ -715,7 +712,7 @@ In the *default* DM and compute cases the arch-agnostic helpers already emit a c
 
 ### Build
 
-Build via the [build/test helper subagent](#use-a-subagent-for-builds-and-tests), always through `./build_metal.sh` (never hand-targeted cmake — [why](../shared/workspace_setup.md#build)):
+Build in the background and read the log ([Running builds and tests](#running-builds-and-tests-without-flooding-your-context)), always through `./build_metal.sh` (never hand-targeted cmake — [why](../shared/workspace_setup.md#build)):
 
 ```bash
 ./build_metal.sh --build-tests
@@ -729,11 +726,11 @@ The helper returns SUCCESS / FAILURE + key errors. On FAILURE, common causes:
 - Unresolved symbol for `override_runtime_arguments` → some code path still calls it. Should only happen for the framework adapter, which doesn't for `MetalV2FactoryConcept` factories. Re-audit.
 - Error referencing `metal_v2_artifacts.hpp` (or other framework header) not found → the framework dependency is not on this branch. Stop and report; the framework PR was a precondition for the audit (which should have failed pre-port).
 - `kernel_args_generated.h` mentions a name that doesn't exist → host added a named CTA / RTA without the kernel referencing it (or vice versa). Reconcile.
-- Linker error `undefined reference to 'dfb::...'` inside a kernel TU → the kernel `#include`s the wrong generated header. `dfb::*` lives in `kernel_bindings_generated.h`, `args::*` in `kernel_args_generated.h`. The only `#include` a ported kernel should add is `experimental/kernel_args.h`; the framework injects both generated headers automatically.
+- Linker error `undefined reference to 'dfb::...'` inside a kernel TU → the kernel `#include`s the wrong generated header. `dfb::*` lives in `kernel_bindings_generated.h`, `args::*` in `kernel_args_generated.h` — both are injected by the framework, so a ported kernel must **not** `#include` them itself (for the headers a port *does* add, see the [kernel-side whitelist](#kernel-side-whitelist)).
 
 ### Run tests
 
-Run the op's correctness tests via the helper — the **confirmed test set** from [Locate and confirm the op's tests](#locate-and-confirm-the-ops-tests). Two layers:
+Run the op's correctness tests the same way — in the background, reading the log ([Running builds and tests](#running-builds-and-tests-without-flooding-your-context)) — over the **confirmed test set** from [Locate and confirm the op's tests](#locate-and-confirm-the-ops-tests). Two layers:
 
 ```bash
 # C++ gtests — fast, fails fast on a broken port
