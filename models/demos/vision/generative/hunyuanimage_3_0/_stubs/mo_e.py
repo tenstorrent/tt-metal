@@ -84,6 +84,45 @@ def _is_mesh_device(device) -> bool:
     return hasattr(device, "get_num_devices") and hasattr(device, "get_device_ids")
 
 
+# --- env-gated CHEAP perf knobs (ladder rungs 1/2/5), OFF by default ----------
+# Shared by the mo_e MoE matmuls AND the image3_decoder_layer attention (which
+# imports this module). Each is an isolated experiment for the perf sweep.
+def _mm_cfg():
+    """compute_kernel_config from HUNYUAN_MM_FIDELITY (lofi|hifi2|hifi3|hifi4);
+    None => ttnn default. LoFi = 1-pass math -> biggest throughput on a
+    compute-bound matmul (decode already uses LoFi). Token/PCC-gate."""
+    f = os.environ.get("HUNYUAN_MM_FIDELITY", "").lower()
+    fid = {
+        "lofi": ttnn.MathFidelity.LoFi,
+        "hifi2": ttnn.MathFidelity.HiFi2,
+        "hifi3": ttnn.MathFidelity.HiFi3,
+        "hifi4": ttnn.MathFidelity.HiFi4,
+    }.get(f)
+    if fid is None:
+        return None
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fid, math_approx_mode=True, fp32_dest_acc_en=False, packer_l1_acc=True
+    )
+
+
+def _mm_grid(device):
+    """Full CoreGrid from HUNYUAN_MM_FULLGRID=1 (else None => op default). Forces
+    matmuls that don't already pin a grid (e.g. the gate_up + attn linears) onto
+    the whole grid for max DRAM-read/compute throughput."""
+    if os.environ.get("HUNYUAN_MM_FULLGRID") != "1":
+        return None
+    g = device.compute_with_storage_grid_size()
+    return ttnn.CoreGrid(y=g.y, x=g.x)
+
+
+def _ccl_links():
+    """num_links for collectives from HUNYUAN_CCL_LINKS (default 1)."""
+    try:
+        return max(1, int(os.environ.get("HUNYUAN_CCL_LINKS", "1")))
+    except ValueError:
+        return 1
+
+
 class _TtMoE:
     def __init__(self, device, torch_module):
         self.device = device
@@ -240,10 +279,10 @@ class _TtMoE:
         bytes) on every chip before a local reduce; the ring all_reduce moves ~2×
         the shard bytes/chip and drops the separate sum — the exact prefill-MoE
         reduce gpt_oss/gemma4/deepseek use. Same math, same shape."""
-        return ttnn.all_reduce(x, cluster_axis=self.tp_axis, num_links=1, topology=ttnn.Topology.Linear)
+        return ttnn.all_reduce(x, cluster_axis=self.tp_axis, num_links=_ccl_links(), topology=ttnn.Topology.Linear)
 
     def _swiglu(self, x, gu_w, down_w, inter):
-        gu = ttnn.linear(x, gu_w)
+        gu = ttnn.linear(x, gu_w, compute_kernel_config=_mm_cfg(), core_grid=_mm_grid(self.device))
         x1 = ttnn.slice(gu, [0, 0, 0], [gu.shape[0], gu.shape[1], inter])
         x2 = ttnn.slice(gu, [0, 0, inter], [gu.shape[0], gu.shape[1], 2 * inter])
         ttnn.deallocate(gu)
@@ -251,7 +290,7 @@ class _TtMoE:
         act = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
-        out = ttnn.linear(act, down_w)
+        out = ttnn.linear(act, down_w, compute_kernel_config=_mm_cfg(), core_grid=_mm_grid(self.device))
         ttnn.deallocate(act)
         return out
 
@@ -297,7 +336,9 @@ class _TtMoE:
         ttnn.deallocate(router_local)
         ttnn.deallocate(idx_e)
 
-        gu = ttnn.matmul(x_g, self.exp_gu_cat)  # [1, C, 2*epd*I]
+        gu = ttnn.matmul(
+            x_g, self.exp_gu_cat, compute_kernel_config=_mm_cfg(), core_grid=_mm_grid(self.device)
+        )  # [1, C, 2*epd*I]
         ttnn.deallocate(x_g)
         x1 = ttnn.slice(gu, [0, 0, 0], [1, C, eI])
         x2 = ttnn.slice(gu, [0, 0, eI], [1, C, 2 * eI])
@@ -307,7 +348,9 @@ class _TtMoE:
         ttnn.deallocate(x2)
         act = ttnn.multiply(act, rl_g)
         ttnn.deallocate(rl_g)
-        comb_g = ttnn.matmul(act, self.exp_down_stack, core_grid=self.mm_core_grid)  # [1, C, H]
+        comb_g = ttnn.matmul(
+            act, self.exp_down_stack, core_grid=self.mm_core_grid, compute_kernel_config=_mm_cfg()
+        )  # [1, C, H]
         ttnn.deallocate(act)
 
         # scatter [1,C,H] back into a per-device zeroed [1,S,H] at the gathered rows
@@ -365,7 +408,9 @@ class _TtMoE:
         # permute/expert-sum overhead is gone.
         I = self.expert_inter
         eI = self.experts_per_dev * I
-        gu = ttnn.matmul(x, self.exp_gu_cat)  # [1, S, 2*epd*I] = [all gates | all ups]
+        gu = ttnn.matmul(
+            x, self.exp_gu_cat, compute_kernel_config=_mm_cfg(), core_grid=_mm_grid(self.device)
+        )  # [1, S, 2*epd*I] = [all gates | all ups]
         x1 = ttnn.slice(gu, [0, 0, 0], [gu.shape[0], gu.shape[1], eI])  # gates [1,S,epd*I]
         x2 = ttnn.slice(gu, [0, 0, eI], [gu.shape[0], gu.shape[1], 2 * eI])  # ups   [1,S,epd*I]
         ttnn.deallocate(gu)
@@ -376,7 +421,7 @@ class _TtMoE:
         act = ttnn.multiply(act, router_local)  # per-expert-column router weight
         ttnn.deallocate(router_local)
         combined = ttnn.matmul(
-            act, self.exp_down_stack, core_grid=self.mm_core_grid
+            act, self.exp_down_stack, core_grid=self.mm_core_grid, compute_kernel_config=_mm_cfg()
         )  # [1, S, H] (down + expert-sum fused)
         ttnn.deallocate(act)
 

@@ -346,7 +346,9 @@ class _TtDecoderLayer:
         all_gather along the TP axis (cluster_axis) then sum, so every device on
         that axis holds the full result. Confined to the TP axis so the
         DP-replicated columns each keep their own identical full result."""
-        g = ttnn.all_gather(x, dim=0, cluster_axis=self.tp_axis, num_links=1, topology=ttnn.Topology.Linear)
+        g = ttnn.all_gather(
+            x, dim=0, cluster_axis=self.tp_axis, num_links=_mo_e._ccl_links(), topology=ttnn.Topology.Linear
+        )
         r = ttnn.sum(g, dim=0, keepdim=True)
         ttnn.deallocate(g)
         return r
@@ -426,7 +428,9 @@ class _TtDecoderLayer:
     # ------------------------------------------------------------------
     def _attention_sharded(self, x, custom_pos_emb, attn_mask=None):
         S = x.shape[1]
-        qkv = ttnn.linear(x, self.qkv_w)  # [1, S, tp_qkv] per device
+        qkv = ttnn.linear(
+            x, self.qkv_w, compute_kernel_config=_mo_e._mm_cfg(), core_grid=_mo_e._mm_grid(self.device)
+        )  # [1, S, tp_qkv] per device
         qkv = ttnn.reshape(qkv, [1, 1, S, qkv.shape[-1]])
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
@@ -444,15 +448,19 @@ class _TtDecoderLayer:
             q = ttnn.rms_norm(q, epsilon=self.eps, weight=self.q_norm_w)
             k = ttnn.rms_norm(k, epsilon=self.eps, weight=self.k_norm_w)
 
-        attn = ttnn.transformer.scaled_dot_product_attention(
-            q, k, v, attn_mask=attn_mask, is_causal=False, scale=self.scale
-        )
+        _sdpa_kw = {"attn_mask": attn_mask, "is_causal": False, "scale": self.scale}
+        _ck = _mo_e._mm_cfg()  # only pass fidelity when set, so the default path is untouched
+        if _ck is not None:
+            _sdpa_kw["compute_kernel_config"] = _ck
+        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, **_sdpa_kw)
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, [1, S, self.tp_num_heads * self.head_dim])
-        out_partial = ttnn.linear(attn, self.o_w)  # [1, S, hidden] partial sum
+        out_partial = ttnn.linear(
+            attn, self.o_w, compute_kernel_config=_mo_e._mm_cfg(), core_grid=_mo_e._mm_grid(self.device)
+        )  # [1, S, hidden] partial sum
         ttnn.deallocate(attn)
         out = self._mesh_reduce(out_partial)  # all-reduce -> full o_proj, replicated
         ttnn.deallocate(out_partial)
