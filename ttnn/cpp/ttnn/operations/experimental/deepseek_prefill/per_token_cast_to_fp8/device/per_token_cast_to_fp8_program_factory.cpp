@@ -19,9 +19,9 @@
 // per_token_cast_to_fp8: LLK implementation. Per tile_h x 128 block, the compute kernel gets the input
 // into tiles (tilize for ROW_MAJOR, copy for TILE), computes a per-128-element amax = max(|x|), forms
 // scale = clamp(amax, 1e-4) / 448 and 1/scale, divides, and untilizes to output_e4m3. The writer extracts
-// column 0 of the scale tiles into the [.., H/128] scale output. Both layouts share the same kernels and
-// CB layout (built by build_kernels_and_cbs); the two factories differ only in work-split and runtime
-// args. Requires H % 128 == 0.
+// column 0 of the scale tiles into the [.., H/128] scale output. A single factory handles both layouts:
+// they share the same kernels and CB layout (built by build_kernels_and_cbs) and differ only in work-split
+// and runtime args. Requires H % 128 == 0.
 
 namespace ttnn::experimental::prim::per_token_cast_to_fp8 {
 
@@ -38,7 +38,7 @@ std::pair<uint32_t, uint32_t> fold_M_H(const ttnn::Shape& shape) {
 }
 
 // split_work_to_cores returns a per-core unit count split across two core-range groups; this maps a core
-// to its group's count. The "unit" is rows for the ROW_MAJOR factory and 128-blocks for the TILE factory.
+// to its group's count. The "unit" is rows on the ROW_MAJOR path and 128-blocks on the TILE path.
 uint32_t units_for_core_from_split(
     const CoreCoord& core,
     const CoreRangeSet& core_range_set_1,
@@ -60,9 +60,9 @@ struct KernelIds {
     tt::tt_metal::KernelHandle compute = 0;
 };
 
-// Shared by both factories: creates every circular buffer and the three kernels on all_cores. The kernels
-// and CB layout are layout-agnostic; the tile path is selected via `defines` (INPUT_TILE_LAYOUT) and only
-// the scale-scratch footprint differs (one row for ROW_MAJOR, tile_h rows for TILE).
+// Shared by both layout paths: creates every circular buffer and the three kernels on all_cores. The
+// kernels and CB layout are layout-agnostic; the tile path is selected via `defines` (INPUT_TILE_LAYOUT)
+// and only the scale-scratch footprint differs (one row for ROW_MAJOR, tile_h rows for TILE).
 KernelIds build_kernels_and_cbs(
     tt::tt_metal::Program& program,
     const Tensor& input,
@@ -150,7 +150,7 @@ KernelIds build_kernels_and_cbs(
     CreateCircularBuffer(program, all_cores, cb_output_e4m3_cfg);
 
     // cb_scale_scratch: writer-private scale staging. Caller sizes it: one page (ROW_MAJOR, one token's
-    // row) or tile_h pages (TILE, one row-tile's rows) — see each factory.
+    // row) or tile_h pages (TILE, one row-tile's rows) — see each layout path in create_program.
     CircularBufferConfig cb_scale_scratch_cfg =
         CircularBufferConfig(scale_scratch_bytes, {{cb_scale_scratch_idx, fp32_df}})
             .set_page_size(cb_scale_scratch_idx, scale_scratch_bytes);
@@ -228,7 +228,7 @@ KernelIds build_kernels_and_cbs(
     return ids;
 }
 
-// Shared create() body for both factories. `tile_layout` picks the input layout, which is the only thing
+// Shared create() body for both layout paths. `tile_layout` picks the input layout, which is the only thing
 // that varies: it changes the work-split unit, the scale-scratch size, the INPUT_TILE_LAYOUT kernel define,
 // and the per-core runtime args. Everything else (kernels, CBs, the split/build/loop skeleton) is identical.
 ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_program(
