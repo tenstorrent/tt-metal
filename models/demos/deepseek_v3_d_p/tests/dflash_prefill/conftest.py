@@ -89,8 +89,10 @@ def _load_hf_drafter(load_weights: bool = True):
             absent = [k for k in required if k in missing]
             if absent:
                 pytest.skip(f"checkpoint missing required drafter tensors, e.g. {absent[:3]}")
-    except Exception as e:  # config/deepseek_yarn parse, model build, or checkpoint-load error
-        pytest.skip(f"could not build DFlashDraftModel (reference/dflash_prefill): {type(e).__name__}: {e}")
+    except Exception as e:
+        raise RuntimeError(
+            f"could not build DFlashDraftModel (reference/dflash_prefill) from {path}: {type(e).__name__}: {e}"
+        ) from e
 
     if not _is_drafter(model):
         pytest.skip("built model is not a DFlashDraftModel (missing fc/hidden_norm/target_layer_ids)")
@@ -178,7 +180,7 @@ def _hf_context_kv(model, cfg: DFlashDrafterConfig, ctx: torch.Tensor, q_len: in
             cache_position=torch.arange(total),
         )
     except Exception as e:
-        pytest.skip(f"HF drafter forward failed (likely a transformers version detail): {type(e).__name__}: {e}")
+        raise RuntimeError(f"HF drafter forward failed (reference/dflash_prefill): {type(e).__name__}: {e}") from e
 
     out = {}
     for i in range(cfg.num_hidden_layers):
