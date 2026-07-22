@@ -22,7 +22,7 @@ int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     return 1;
 }
 
-bool is_rectangle_grid(const std::vector<CoreCoord>& core_coords) {
+bool is_rectangle_grid(const std::vector<tt::tt_metal::CoreCoord>& core_coords) {
     if (core_coords.empty()) {
         return true;
     }
@@ -43,17 +43,17 @@ bool is_rectangle_grid(const std::vector<CoreCoord>& core_coords) {
 }
 
 void split_and_form_rectangle_grids(
-    std::vector<CoreCoord>& group,
-    std::vector<CoreCoord>& mcast_group_first,
-    std::vector<CoreCoord>& mcast_group_mid,
-    std::vector<CoreCoord>& mcast_group_last) {
+    std::vector<tt::tt_metal::CoreCoord>& group,
+    std::vector<tt::tt_metal::CoreCoord>& mcast_group_first,
+    std::vector<tt::tt_metal::CoreCoord>& mcast_group_mid,
+    std::vector<tt::tt_metal::CoreCoord>& mcast_group_last) {
     size_t remove_front = 0;
     size_t remove_back = 0;
     size_t min_total_removal = group.size();
 
     for (size_t front = 0; front <= group.size(); ++front) {
         for (size_t back = 0; front + back <= group.size(); ++back) {
-            if (is_rectangle_grid(std::vector<CoreCoord>(group.begin() + front, group.end() - back))) {
+            if (is_rectangle_grid(std::vector<tt::tt_metal::CoreCoord>(group.begin() + front, group.end() - back))) {
                 size_t total_removal = front + back;
                 if (total_removal < min_total_removal) {
                     min_total_removal = total_removal;

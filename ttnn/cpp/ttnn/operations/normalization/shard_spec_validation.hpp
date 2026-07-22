@@ -30,6 +30,6 @@ namespace ttnn::operations::normalization::detail {
 // known to support shard widths that are not a multiple of the tile width
 // (currently: groupnorm).
 void validate_sharded_input(
-    const ttnn::Tensor& tensor, const CoreCoord& program_grid_size, bool require_shard_width_tile_aligned = true);
+    const ttnn::Tensor& tensor, const tt::tt_metal::CoreCoord& program_grid_size, bool require_shard_width_tile_aligned = true);
 
 }  // namespace ttnn::operations::normalization::detail
