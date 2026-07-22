@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.llk_params import BroadcastType, PERF_RUN_TYPES_QUASAR
+from helpers.llk_params import PERF_RUN_TYPES_QUASAR, BroadcastType
 from helpers.param_config import parametrize, runtime
 from quasar.test_unary_broadcast_quasar import (
     INPUT_DIMENSIONS,
@@ -16,6 +16,7 @@ from quasar.test_unary_broadcast_quasar import (
     unary_broadcast_dest_sync_modes,
     unary_broadcast_implied_math_formats,
 )
+
 
 @pytest.mark.perf
 @pytest.mark.quasar
