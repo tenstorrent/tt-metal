@@ -389,9 +389,23 @@ void ckernel_template::program([[maybe_unused]] volatile std::uint32_t *instrn_b
     mop_cfg->MOP_CONFIG              = 1;
 }
 
+// CSR holding the per-thread MOP timeout count. Raising it lets a MOP wait longer before tripping
+// ERROR_TRISC1 0x19. (Not yet in a shared CSR-defs header on this branch; defined locally.)
+#ifndef CSR_TIMEOUT_COUNT
+#define CSR_TIMEOUT_COUNT 0xBD0
+#endif
+
 void ckernel_template::program_bank0_sw_cntl([[maybe_unused]] volatile std::uint32_t *instrn_buffer)
 {
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
+
+    // [avgpool/maxpool 0x19 = compute-side MOP TIMEOUT, not an instruction fault]
+    // A compute MOP can stall for a long-but-legitimate time waiting on a slow producer (e.g. the wide
+    // C2048 tilize datacopy stalls on SrcA while the padding reader + its flush_l2_cache_range finish;
+    // the wait scales with width, which is why narrow C64/C512 pass and wide C2048 trips 0x19). Raising
+    // the MOP timeout count keeps the engine patient through that wait. Per a known-good maxpool fix.
+    // NOTE: if a 0x19 persists no matter how large this value is, the cause is a REAL hang, not a timeout.
+    asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x100000));
 
     mop_sync(); // wait until previous mops have completed
 
