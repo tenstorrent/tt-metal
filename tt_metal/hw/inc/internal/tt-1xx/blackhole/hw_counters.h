@@ -15,10 +15,11 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;
 
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
+// ids 2, 256-258 (MATH_FIDELITY_STALL, MATH_INSTRN_HF_{4,2,1}_CYCLE) omitted: RTL ties
+// fidelity_phases_ongoing=1'b0, so those bins are dead / HF_1 duplicates MATH_INSTRN_STARTED (id 3).
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
-     {PerfCounterType::MATH_FIDELITY_STALL, 2},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
      {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
      {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
@@ -27,9 +28,6 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
-     {PerfCounterType::MATH_INSTRN_HF_4_CYCLE, 256},
-     {PerfCounterType::MATH_INSTRN_HF_2_CYCLE, 257},
-     {PerfCounterType::MATH_INSTRN_HF_1_CYCLE, 258},
      {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
      {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
      {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},
@@ -38,7 +36,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
-constexpr size_t NUM_UNPACK_COUNTERS = 22;
+constexpr size_t NUM_UNPACK_COUNTERS = 18;
 
 // PACK_COUNT=1 on BH.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters = {
@@ -49,10 +47,10 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 5> pack_counters = {
      {PerfCounterType::AVAILABLE_MATH, 272}}};
 constexpr size_t NUM_PACK_COUNTERS = 5;
 
-// L1 bank 0 (MUX_CTRL[6:4] = 0): unpacker, TDMA bundles, ring0 NOC; port 1 = unified packer.
+// L1 bank 0 (MUX_CTRL[6:4] = 0, ports 0-7): unpacker0, unpacker1+ECC, TDMA bundles, ring0 NOC.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
     {{PerfCounterType::L1_0_UNPACKER_0, 0},
-     {PerfCounterType::L1_0_UNIFIED_PACKER, 1},
+     {PerfCounterType::L1_0_UNPACKER_1_ECC, 1},
      {PerfCounterType::L1_0_TDMA_BUNDLE_0_RISC, 2},
      {PerfCounterType::L1_0_TDMA_BUNDLE_1_TRISC, 3},
      {PerfCounterType::L1_0_NOC_RING0_OUTGOING_0, 4},
@@ -70,9 +68,9 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_1_GRANT, 263}}};
 constexpr size_t NUM_L1_0_COUNTERS = 16;
 
-// L1 bank 1 (MUX_CTRL[6:4] = 1): RISC, ext unpacker, ring1 NOC; port 8 = RISC core.
+// L1 bank 1 (MUX_CTRL[6:4] = 1, ports 8-15): TDMA packer wr-if 0, ext unpacker 1-3, ring1 NOC.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_1_counters = {
-    {{PerfCounterType::L1_1_RISC_CORE, 0},
+    {{PerfCounterType::L1_1_TDMA_PACKER_0, 0},
      {PerfCounterType::L1_1_EXT_UNPACKER_1, 1},
      {PerfCounterType::L1_1_EXT_UNPACKER_2, 2},
      {PerfCounterType::L1_1_EXT_UNPACKER_3, 3},
@@ -91,66 +89,56 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_1_counters = {
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_1_GRANT, 263}}};
 constexpr size_t NUM_L1_1_COUNTERS = 16;
 
-// L1 bank 2 (BH only, MUX_CTRL[6:4] = 2): NOC Ring 2 ports 16-23
+// L1 bank 2 (BH only, MUX_CTRL[6:4] = 2, ports 16-23): ext unpacker 4-7 + NOC ring0 secondary channels
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_2_counters = {
-    {{PerfCounterType::L1_2_NOC_RING2_PORT_0, 0},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_1, 1},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_2, 2},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_3, 3},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_4, 4},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_5, 5},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_6, 6},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_7, 7},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_0_GRANT, 256},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_1_GRANT, 257},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_2_GRANT, 258},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_3_GRANT, 259},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_4_GRANT, 260},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_5_GRANT, 261},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_6_GRANT, 262},
-     {PerfCounterType::L1_2_NOC_RING2_PORT_7_GRANT, 263}}};
+    {{PerfCounterType::L1_2_EXT_UNPACKER_4, 0},
+     {PerfCounterType::L1_2_EXT_UNPACKER_5, 1},
+     {PerfCounterType::L1_2_EXT_UNPACKER_6, 2},
+     {PerfCounterType::L1_2_EXT_UNPACKER_7, 3},
+     {PerfCounterType::L1_2_NOC_RING0_OUTGOING_2, 4},
+     {PerfCounterType::L1_2_NOC_RING0_OUTGOING_3, 5},
+     {PerfCounterType::L1_2_NOC_RING0_INCOMING_2, 6},
+     {PerfCounterType::L1_2_NOC_RING0_INCOMING_3, 7},
+     {PerfCounterType::L1_2_EXT_UNPACKER_4_GRANT, 256},
+     {PerfCounterType::L1_2_EXT_UNPACKER_5_GRANT, 257},
+     {PerfCounterType::L1_2_EXT_UNPACKER_6_GRANT, 258},
+     {PerfCounterType::L1_2_EXT_UNPACKER_7_GRANT, 259},
+     {PerfCounterType::L1_2_NOC_RING0_OUTGOING_2_GRANT, 260},
+     {PerfCounterType::L1_2_NOC_RING0_OUTGOING_3_GRANT, 261},
+     {PerfCounterType::L1_2_NOC_RING0_INCOMING_2_GRANT, 262},
+     {PerfCounterType::L1_2_NOC_RING0_INCOMING_3_GRANT, 263}}};
 constexpr size_t NUM_L1_2_COUNTERS = 16;
 
-// L1 bank 3 (BH only, MUX_CTRL[6:4] = 3): NOC Ring 3 ports 24-31
+// L1 bank 3 (BH only, MUX_CTRL[6:4] = 3, ports 24-31): NOC ring1 secondary channels + ext TDMA packer 0-3
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_3_counters = {
-    {{PerfCounterType::L1_3_NOC_RING3_PORT_0, 0},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_1, 1},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_2, 2},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_3, 3},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_4, 4},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_5, 5},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_6, 6},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_7, 7},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_0_GRANT, 256},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_1_GRANT, 257},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_2_GRANT, 258},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_3_GRANT, 259},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_4_GRANT, 260},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_5_GRANT, 261},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_6_GRANT, 262},
-     {PerfCounterType::L1_3_NOC_RING3_PORT_7_GRANT, 263}}};
+    {{PerfCounterType::L1_3_NOC_RING1_OUTGOING_2, 0},
+     {PerfCounterType::L1_3_NOC_RING1_OUTGOING_3, 1},
+     {PerfCounterType::L1_3_NOC_RING1_INCOMING_2, 2},
+     {PerfCounterType::L1_3_NOC_RING1_INCOMING_3, 3},
+     {PerfCounterType::L1_3_TDMA_PACK_EXT_0, 4},
+     {PerfCounterType::L1_3_TDMA_PACK_EXT_1, 5},
+     {PerfCounterType::L1_3_TDMA_PACK_EXT_2, 6},
+     {PerfCounterType::L1_3_TDMA_PACK_EXT_3, 7},
+     {PerfCounterType::L1_3_NOC_RING1_OUTGOING_2_GRANT, 256},
+     {PerfCounterType::L1_3_NOC_RING1_OUTGOING_3_GRANT, 257},
+     {PerfCounterType::L1_3_NOC_RING1_INCOMING_2_GRANT, 258},
+     {PerfCounterType::L1_3_NOC_RING1_INCOMING_3_GRANT, 259},
+     {PerfCounterType::L1_3_TDMA_PACK_EXT_0_GRANT, 260},
+     {PerfCounterType::L1_3_TDMA_PACK_EXT_1_GRANT, 261},
+     {PerfCounterType::L1_3_TDMA_PACK_EXT_2_GRANT, 262},
+     {PerfCounterType::L1_3_TDMA_PACK_EXT_3_GRANT, 263}}};
 constexpr size_t NUM_L1_3_COUNTERS = 16;
 
-// L1 bank 4 (BH only, MUX_CTRL[6:4] = 4): misc ports 32-39
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_4_counters = {
-    {{PerfCounterType::L1_4_MISC_PORT_0, 0},
-     {PerfCounterType::L1_4_MISC_PORT_1, 1},
-     {PerfCounterType::L1_4_MISC_PORT_2, 2},
-     {PerfCounterType::L1_4_MISC_PORT_3, 3},
-     {PerfCounterType::L1_4_MISC_PORT_4, 4},
-     {PerfCounterType::L1_4_MISC_PORT_5, 5},
-     {PerfCounterType::L1_4_MISC_PORT_6, 6},
-     {PerfCounterType::L1_4_MISC_PORT_7, 7},
+// L1 bank 4 (BH, mux=4): ports 32-34 only; ports 35-39 tied '0 (UNUSED_START_IDX=35), so ids 3-7/259-263 omitted.
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 6> l1_4_counters = {
+    {{PerfCounterType::L1_4_TDMA_PACK_EXT_4, 0},
+     {PerfCounterType::L1_4_TDMA_PACK_EXT_5, 1},
+     {PerfCounterType::L1_4_TAG_SEARCH_PACKER1, 2},
      // Grant counters
-     {PerfCounterType::L1_4_MISC_PORT_0_GRANT, 256},
-     {PerfCounterType::L1_4_MISC_PORT_1_GRANT, 257},
-     {PerfCounterType::L1_4_MISC_PORT_2_GRANT, 258},
-     {PerfCounterType::L1_4_MISC_PORT_3_GRANT, 259},
-     {PerfCounterType::L1_4_MISC_PORT_4_GRANT, 260},
-     {PerfCounterType::L1_4_MISC_PORT_5_GRANT, 261},
-     {PerfCounterType::L1_4_MISC_PORT_6_GRANT, 262},
-     {PerfCounterType::L1_4_MISC_PORT_7_GRANT, 263}}};
-constexpr size_t NUM_L1_4_COUNTERS = 16;
+     {PerfCounterType::L1_4_TDMA_PACK_EXT_4_GRANT, 256},
+     {PerfCounterType::L1_4_TDMA_PACK_EXT_5_GRANT, 257},
+     {PerfCounterType::L1_4_TAG_SEARCH_PACKER1_GRANT, 258}}};
+constexpr size_t NUM_L1_4_COUNTERS = 6;
 
 // BH: 3-bit L1 mux at MUX_CTRL[6:4], values 0-4
 constexpr uint32_t L1_MUX_MASK = 0x7 << 4;
