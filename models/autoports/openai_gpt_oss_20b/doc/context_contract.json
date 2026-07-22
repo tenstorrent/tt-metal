@@ -1,7 +1,7 @@
 {
   "hf_model": "openai/gpt-oss-20b",
   "hf_advertised_context": 131072,
-  "current_supported_context": 17,
+  "current_supported_context": 33,
   "limiting_reason": "device_dram",
   "capacity_evidence": {
     "device": "one Blackhole chip from a P300c endpoint (TT_VISIBLE_DEVICES=0)",
@@ -13,13 +13,24 @@
     "advertised_context_bf16_input_bytes": 754974720,
     "advertised_context_bf16_single_layer_kv_cache_bytes": 268435456,
     "formula": "Mask: 1*1*131072*131072*2 bytes. Input: 1*1*131072*2880*2 bytes. KV: 1*8*131072*64*2(K,V)*2 bytes.",
-    "stage_scope": "The correctness-first translation preloads a dense causal mask. At the advertised length that mask alone exceeds allocator-reported DRAM, before the 1.6 GB BF16 decoder weights, input, KV cache, outputs, and temporaries.",
-    "validated_prefill_context": 17,
+    "functional_decoder_static_weight_bytes": 1646373824,
+    "fused_gate_up_split_copy_bytes": 1062051840,
+    "fused_decoder_static_weight_bytes": 2708425664,
+    "stage_scope": "The fused decoder retains the functional 1.646 GB BF16 weights and adds 1.062 GB of persistent split gate/up weights, for 2.708 GB of static decoder weights. The configured 128-entry BF16 K/V caches still allocate and fused prefill is validated through S=33. At the advertised length, the inherited dense causal mask alone exceeds allocator-reported DRAM before weights, input, KV cache, outputs, and temporaries.",
+    "validated_prefill_context": 33,
     "configured_cache_and_mask_extent": 128,
     "first_proven_infeasible_context_for_this_dense_mask_design": 131072,
-    "unprobed_interval": "18 through 131071; current_supported_context is a validation boundary, not a claimed physical maximum"
+    "unprobed_interval": "34 through 131071; current_supported_context is a validation boundary, not a claimed physical maximum"
   },
-  "notes": "This functional starting point validates prefill through the emitted sequence length 17 and decode at position 17. Its allocated cache/mask extent is 128, but prefill S=128 was not validated and 128 is not claimed as a physical limit. The dense-mask design is proven infeasible at the HF target; intermediate lengths were not capacity-probed. A different long-context memory policy is deferred.",
+  "notes": "The functional starting point validates prefill through the emitted sequence length 17 and decode at position 17. Stage 02 fused-decoder evidence extends prefill validation to non-aligned S=33 and retains decode at position 17, batch support, BF16 cache dtype, and the allocated cache/mask extent of 128. Prefill S=128 was not validated and 128 is not claimed as a physical limit. The fused split-weight copies are included in static DRAM accounting and do not reduce the supported boundary. The dense-mask design is proven infeasible at the HF target; intermediate lengths were not capacity-probed. A different long-context memory policy is deferred.",
+  "fused_decoder_stage": {
+    "validated_prefill_context": 33,
+    "validated_decode_position": 17,
+    "non_aligned_lengths": [3, 17, 33],
+    "cache_dtype": "BF16",
+    "cache_extent": 128,
+    "capacity_change": "No supported-context reduction; current_supported_context advances from 17 to the largest fused prefill validation S=33."
+  },
   "paths": {
     "prefill": {
       "status": "translated",

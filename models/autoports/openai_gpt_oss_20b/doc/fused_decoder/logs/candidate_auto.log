@@ -1,0 +1,68 @@
+Script started on 2026-07-22 17:46:17+00:00 [COMMAND="env TT_VISIBLE_DEVICES=0 TT_MESH_GRAPH_DESC_PATH=tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto timeout 300 python models/autoports/openai_gpt_oss_20b/tests/fused_decoder_candidates.py --policy auto" <not executed on terminal>]
+[32m2026-07-22 17:46:19.972[0m | [34m[1mDEBUG   [0m | [36mttnn[0m:[36m<module>[0m:[36m79[0m - [34m[1mInitial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}[0m
+[90m2026-07-22 17:46:20.008[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:228)[0m
+[90m2026-07-22 17:46:20.008[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster constructor started.[0m [90m(cluster.cpp:348)[0m
+[90m2026-07-22 17:46:20.008[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating TopologyDiscovery for architecture: blackhole[0m [90m(topology_discovery.cpp:91)[0m
+[90m2026-07-22 17:46:20.008[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting topology discovery.[0m [90m(topology_discovery.cpp:110)[0m
+[90m2026-07-22 17:46:20.009[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.8.0[0m [90m(topology_discovery.cpp:569)[0m
+[90m2026-07-22 17:46:20.009[0m | [32minfo    [m | [35m            UMD[0m | [37mFirmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported.[0m [90m(topology_discovery.cpp:601)[0m
+[90m2026-07-22 17:46:20.009[0m | [32minfo    [m | [35m            UMD[0m | [37mCompleted topology discovery.[0m [90m(topology_discovery.cpp:114)[0m
+[90m2026-07-22 17:46:20.009[0m | [33m[1mwarning [m | [35m            UMD[0m | [37mBoard 0x46131931058 has 1 chips, but expected 2 chips for board type p300.[0m [90m(cluster_descriptor.cpp:1238)[0m
+[90m2026-07-22 17:46:20.064[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0}/[0] and remote chip ids {}[0m [90m(cluster.cpp:168)[0m
+[90m2026-07-22 17:46:20.064[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:142)[0m
+[90m2026-07-22 17:46:20.064[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.8.0[0m [90m(cluster.cpp:145)[0m
+[90m2026-07-22 17:46:20.064[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster constructor completed.[0m [90m(cluster.cpp:520)[0m
+[90m2026-07-22 17:46:20.064[0m | [33m[1mwarning [m | [35m         Device[0m | [37mUsing CUSTOM cluster type for P300 board with 1 chips[0m [90m(tt_cluster.cpp:202)[0m
+[90m2026-07-22 17:46:20.064[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:1024)[0m
+[90m2026-07-22 17:46:20.066[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster completed.[0m [90m(cluster.cpp:1032)[0m
+[32m2026-07-22 17:46:20.122[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-22 17:46:20.122[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-22 17:46:20.122[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto[0m [90m(metal_env.cpp:363)[0m
+[90m2026-07-22 17:46:20.123[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-22 17:46:20.123[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-22 17:46:20.123[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-07-22 17:46:20.126[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-22 17:46:20.173[0m | [32minfo    [m | [35m          Metal[0m | [37mShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory'[0m [90m(shm_resource_tracker.cpp:282)[0m
+[90m2026-07-22 17:46:20.752[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=128087042369896 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+auto prefill: 0.9998464332114984
+auto decode: 0.9997701815201303
+CANDIDATE_RESULT prefill_policy=auto decode_policy=auto layer=12 prefill_mean_ms=7.278409321 prefill_min_ms=7.105245255 decode_traced_mean_ms=5.892904019 decode_traced_min_ms=5.885518156 prefill_iterations=5 decode_iterations=100
+nanobind: leaked 2 instances!
+ - leaked instance 0x74c6bea4e9b8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x74c6be94e6e8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "ttnn._ttnn.types.iterator"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - ... skipped remainder
+nanobind: leaked 343 functions!
+ - leaked function ""
+ - leaked function "remove_sub_device_manager"
+ - leaked function "__ne__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "to_numpy"
+ - leaked function ""
+ - leaked function "sfpu_eps"
+ - leaked function "__next__"
+ - leaked function "SetDefaultDevice"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html[90m2026-07-22 17:46:23.797[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mJIT cache stats: 269/269 hits (100.0%) [269 cached, 92 build-once dedup, 0 merged artifacts, 0 merged genfiles][0m [90m(build_cache_telemetry.cpp:207)[0m
+[90m2026-07-22 17:46:23.797[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mJIT telemetry: 3 registered TelemetryTokens[0m [90m(build_cache_telemetry.cpp:230)[0m
+[90m2026-07-22 17:46:23.802[0m | [32minfo    [m | [35m         Device[0m | [37mClosing user mode device drivers[0m [90m(tt_cluster.cpp:512)[0m
+[90m2026-07-22 17:46:23.802[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster[0m [90m(cluster.cpp:1037)[0m
+[90m2026-07-22 17:46:23.938[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster completed.[0m [90m(cluster.cpp:1046)[0m
+[90m2026-07-22 17:46:23.938[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster destructor started.[0m [90m(cluster.cpp:754)[0m
+[90m2026-07-22 17:46:23.938[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster destructor completed.[0m [90m(cluster.cpp:757)[0m
+
+Script done on 2026-07-22 17:46:24+00:00 [COMMAND_EXIT_CODE="0"]
