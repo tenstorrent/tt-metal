@@ -157,6 +157,18 @@ void py_device_module_types(nb::module_& m_device) {
 
     nb::class_<SubDeviceManagerId>(m_device, "SubDeviceManagerId", "ID of a sub-device manager.");
 
+    nb::class_<tt::tt_metal::experimental::ProgramRealtimeClockSync>(
+        m_device, "ProgramRealtimeClockSync", "Device-to-host clock mapping for a record.")
+        .def_ro(
+            "device_cycle_offset",
+            &tt::tt_metal::experimental::ProgramRealtimeClockSync::device_cycle_offset,
+            "Clock offset: a device timestamp maps to time.monotonic_ns() host time as "
+            "host_ns = (timestamp - device_cycle_offset) / frequency")
+        .def_ro(
+            "sync_error_ns",
+            &tt::tt_metal::experimental::ProgramRealtimeClockSync::sync_error_ns,
+            "Estimated sync mapping error; assumes the device clock frequency is stable");
+
     nb::class_<tt::tt_metal::experimental::ProgramRealtimeRecord>(
         m_device, "ProgramRealtimeRecord", "Record containing real-time profiler data from a device.")
         .def_ro("runtime_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::runtime_id, "Runtime ID")
@@ -172,18 +184,10 @@ void py_device_module_types(nb::module_& m_device) {
             "frequency",
             &tt::tt_metal::experimental::ProgramRealtimeRecord::frequency,
             "Device clock frequency (cycles per ns)")
-        .def_prop_ro(
-            "device_cycle_offset",
-            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
-                return record.clock_sync.device_cycle_offset;
-            },
-            "Device-to-host clock offset; host_ns = (timestamp - device_cycle_offset) / frequency")
-        .def_prop_ro(
-            "sync_error_ns",
-            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
-                return record.clock_sync.sync_error_ns;
-            },
-            "Estimated error mapping this record's device time to host time (ns)")
+        .def_ro(
+            "clock_sync",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::clock_sync,
+            "Device-to-host clock mapping for this record")
         .def_ro("chip_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::chip_id, "Device chip ID")
         .def_prop_ro(
             "kernel_sources",

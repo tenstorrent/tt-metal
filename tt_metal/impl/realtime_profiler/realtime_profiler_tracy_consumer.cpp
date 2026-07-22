@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <mutex>
 #include <span>
 #include <string>
@@ -96,83 +97,102 @@ void RealtimeProfilerTracyConsumer::on_records(const tt::ProgramRealtimeRecordBa
 }
 
 void RealtimeProfilerTracyConsumer::CalibrateFromRecord(const tt::ProgramRealtimeRecord& record) {
-    // device_cycle_offset was anchored using our host clock's ns/tick, so recover the raw host tick with the SAME
-    // multiplier — NOT Tracy's TimerMul. They differ by a few ppm, and against a multi-day absolute tick count that ppm
-    // becomes seconds of placement error. The raw host tick is Tracy's CPU-tick domain (same rdtsc counter).
-    const double device_cycles_per_host_tick = record.frequency * realtime_profiler_host_ns_per_tick();
-    if (device_cycles_per_host_tick <= 0.0) {
-        return;
+    if (record.chip_id >= chips_.size()) {
+        chips_.resize(record.chip_id + 1);
     }
-    const int64_t host_anchor = std::llround(
-        (static_cast<double>(record.start_timestamp) - static_cast<double>(record.clock_sync.device_cycle_offset)) /
-        device_cycles_per_host_tick);
+    PerChip& s = chips_[record.chip_id];
 
-    auto it = last_device_cycle_offset_by_chip_.find(record.chip_id);
-    if (it == last_device_cycle_offset_by_chip_.end()) {
-        AddDevice(record.chip_id, host_anchor, static_cast<double>(record.start_timestamp), record.frequency);
-        PublishDeviceProfilerSyncAnchor(record.chip_id, host_anchor, record.start_timestamp, record.frequency);
-        last_device_cycle_offset_by_chip_.emplace(record.chip_id, record.clock_sync.device_cycle_offset);
-        last_calibrate_at_by_chip_[record.chip_id] = std::chrono::steady_clock::now();
+    // Per-record fast path: once a chip is calibrated, only a device_cycle_offset change (a host<->device re-anchor,
+    // ~20/s) can warrant recalibration. An unchanged offset — the vast majority of records — bails here on a vector
+    // index + an int compare: no clock read, no hash, no correlation.
+    const bool first = s.ctx == nullptr;
+    if (!first && s.last_seen_offset == record.clock_sync.device_cycle_offset) {
         return;
     }
-    // The servo re-anchors device_cycle_offset ~1/s; recalibrating the Tracy context that often collapses the device
-    // zones (the GpuCalibration slope is derived from the gap between consecutive calibrations). Throttle to occasional
-    // drift correction — the per-record record calibration is already accurate for consumers; this only steers the
-    // view.
-    const auto now = std::chrono::steady_clock::now();
-    if (it->second != record.clock_sync.device_cycle_offset &&
-        now - last_calibrate_at_by_chip_[record.chip_id] >= kTracyRecalibrateInterval) {
-        CalibrateDevice(record.chip_id, host_anchor, record.start_timestamp, record.frequency);
-        PublishDeviceProfilerSyncAnchor(record.chip_id, host_anchor, record.start_timestamp, record.frequency);
-        it->second = record.clock_sync.device_cycle_offset;
-        last_calibrate_at_by_chip_[record.chip_id] = now;
+
+    if (record.frequency <= 0.0) {
+        return;  // leave the chip uncalibrated so the next valid record retries
     }
+    s.last_seen_offset = record.clock_sync.device_cycle_offset;
+
+    // Re-steer the Tracy context on every offset change (the servo re-anchor, ~20/s) so its view tracks the servo
+    // instead of lagging a throttle window behind it. clock_sync maps device cycles to CLOCK_MONOTONIC ns (frequency is
+    // cycles/ns); recover the host anchor, then convert it into Tracy's rdtsc CPU-tick domain (only here, off the
+    // per-record path — see HostMonoNsToTracyCpuTicks).
+    const int64_t host_anchor_mono_ns = std::llround(
+        (static_cast<double>(record.start_timestamp) - static_cast<double>(record.clock_sync.device_cycle_offset)) /
+        record.frequency);
+    const int64_t host_anchor = HostMonoNsToTracyCpuTicks(host_anchor_mono_ns);
+
+    if (first) {
+        s.ctx = AddDevice(record.chip_id, host_anchor, static_cast<double>(record.start_timestamp), record.frequency);
+    } else {
+        CalibrateDevice(record.chip_id, host_anchor, record.start_timestamp, record.frequency);
+    }
+    PublishDeviceProfilerSyncAnchor(record.chip_id, host_anchor, record.start_timestamp, record.frequency);
 }
 
 RealtimeProfilerTracyConsumer::~RealtimeProfilerTracyConsumer() {
     MaybeEmitSkippedZoneSummary();
 
-    for (auto& entry : tracy_contexts_) {
-        TracyTTDestroy(entry.second);
+    for (auto& c : chips_) {
+        if (c.ctx != nullptr) {
+            TracyTTDestroy(c.ctx);
+        }
     }
-    tracy_contexts_.clear();
+    chips_.clear();
 }
 
-void RealtimeProfilerTracyConsumer::AddDevice(
+TracyTTCtx RealtimeProfilerTracyConsumer::AddDevice(
     uint32_t chip_id, int64_t host_anchor, double device_anchor, double frequency) {
-    if (tracy_contexts_.contains(chip_id)) {
-        log_warning(tt::LogMetal, "RealtimeProfilerTracyConsumer: device {} already added, skipping", chip_id);
-        return;
-    }
-
     TracyTTCtx ctx = TracyTTContext();
     TracyTTContextPopulate(ctx, host_anchor, device_anchor, frequency);
     const std::string name = fmt::format("Device {}:", chip_id);
     TracyTTContextName(ctx, name.c_str(), static_cast<uint16_t>(name.size()));
-    tracy_contexts_[chip_id] = ctx;
+    return ctx;
 }
 
 TracyTTCtx RealtimeProfilerTracyConsumer::GetContext(uint32_t chip_id) {
-    auto it = tracy_contexts_.find(chip_id);
-    return it != tracy_contexts_.end() ? it->second : nullptr;
+    return chip_id < chips_.size() ? chips_[chip_id].ctx : nullptr;
 }
 
 bool RealtimeProfilerTracyConsumer::ValidateHostClockDomain() {
-    constexpr double kMaxClockSampleSeparationNs = 100'000.0;
-    const int64_t host_before = realtime_profiler_host_timestamp();
-    const int64_t tracy_timestamp = TracyGetCpuTime();
-    const int64_t host_after = realtime_profiler_host_timestamp();
-    const int64_t host_midpoint = host_before + (host_after - host_before) / 2;
-    const double difference_ns = std::abs(static_cast<double>(tracy_timestamp - host_midpoint) * TracyGetTimerMul());
-    if (difference_ns > kMaxClockSampleSeparationNs) {
+    // clock_sync is CLOCK_MONOTONIC; HostMonoNsToTracyCpuTicks bridges it into Tracy's rdtsc domain, which needs a
+    // usable Tracy CPU timer. Bail out of calibration if Tracy can't report one.
+    if (!(TracyGetTimerMul() > 0.0)) {
         log_error(
             tt::LogMetal,
-            "[Real-time profiler] Host clock does not match Tracy's CPU timer (difference {:.0f} ns); "
-            "disabling Tracy real-time calibration",
-            difference_ns);
+            "[Real-time profiler] Tracy CPU timer unavailable (TimerMul <= 0); disabling Tracy real-time calibration");
         return false;
     }
     return true;
+}
+
+int64_t RealtimeProfilerTracyConsumer::HostMonoNsToTracyCpuTicks(int64_t host_mono_ns) {
+    const double ns_per_tick = TracyGetTimerMul();
+    if (!(ns_per_tick > 0.0)) {
+        return TracyGetCpuTime();
+    }
+    // A side-by-side read pins the CLOCK_MONOTONIC<->rdtsc offset (both are the same TSC oscillator). A hardware
+    // interrupt landing between the two mono reads stretches the bracket and skews the midpoint, so keep the tightest
+    // of several attempts (the NTP/PTP correlation trick) — this drops the rare ~µs excursion to a ~ns floor. The
+    // anchor is recent, so applying Tracy's ns/tick over the small delta adds no long-baseline ppm error.
+    constexpr int kCorrelationAttempts = 8;
+    int64_t best_gap = std::numeric_limits<int64_t>::max();
+    int64_t mono_now = 0;
+    int64_t tracy_now = 0;
+    for (int i = 0; i < kCorrelationAttempts; ++i) {
+        const int64_t mono_before = realtime_profiler_host_timestamp();
+        const int64_t tracy = TracyGetCpuTime();
+        const int64_t mono_after = realtime_profiler_host_timestamp();
+        const int64_t gap = mono_after - mono_before;
+        if (gap < best_gap) {
+            best_gap = gap;
+            mono_now = mono_before + gap / 2;
+            tracy_now = tracy;
+        }
+    }
+    return tracy_now - std::llround(static_cast<double>(mono_now - host_mono_ns) / ns_per_tick);
 }
 
 void RealtimeProfilerTracyConsumer::PublishDeviceProfilerSyncAnchor(
@@ -299,8 +319,8 @@ void RealtimeProfilerTracyConsumer::HandleRecord(const tt::ProgramRealtimeRecord
 
 void RealtimeProfilerTracyConsumer::CalibrateDevice(
     uint32_t chip_id, int64_t host_anchor, uint64_t device_anchor, double frequency) {
-    if (auto it = tracy_contexts_.find(chip_id); it != tracy_contexts_.end()) {
-        TracyTTContextCalibrate(it->second, host_anchor, static_cast<double>(device_anchor), frequency);
+    if (chip_id < chips_.size() && chips_[chip_id].ctx != nullptr) {
+        TracyTTContextCalibrate(chips_[chip_id].ctx, host_anchor, static_cast<double>(device_anchor), frequency);
     }
 }
 

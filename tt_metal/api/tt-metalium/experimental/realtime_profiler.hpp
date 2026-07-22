@@ -12,9 +12,10 @@
 namespace tt::tt_metal::experimental {
 
 struct ProgramRealtimeClockSync {
-    int64_t device_cycle_offset;  // Clock offset: a device timestamp maps to host time as
+    int64_t device_cycle_offset;  // Clock offset: a device timestamp maps to std::chrono::steady_clock host time as
                                   // host_ns = (timestamp - device_cycle_offset) / frequency
-    uint64_t sync_error_ns;       // Estimated error of the device-to-host mapping, in ns.
+    uint64_t sync_error_ns;       // Estimated sync mapping error; assumes the
+                                  // device clock frequency is stable.
 };
 
 struct ProgramRealtimeRecord {

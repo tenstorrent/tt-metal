@@ -86,7 +86,6 @@ private:
         bool fifo_reached_capacity = false;
         uint64_t first_timestamp = 0;
         int64_t sync_host_start = 0;
-        double device_cycles_per_host_tick = 0.0;
         double sync_frequency = 0.0;
         // Device cycle at host time 0: device_cycle = sync_frequency * host_ns + device_cycle_offset. Set from the fit
         // in run_sync and re-anchored (slope held fixed) by the servo every kServoInterval so its motion tracks drift.
