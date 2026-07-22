@@ -25,6 +25,39 @@ from typing import Any, Callable
 
 from .environment import EnvironmentError_
 
+
+def adaptive_backstop(floor_default: int = 3600, mult: int = 3, env_key: str = "PERF_MCP_MEASURE_BACKSTOP") -> int:
+    override = os.environ.get(env_key)
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            pass
+    floor = floor_default
+    ceil = 10800
+    base = 0.0
+    mp = os.environ.get("PERF_MCP_MANIFEST")
+    if mp:
+        m = Path(mp)
+        try:
+            cfg = json.loads(m.read_text()).get("config", {}) or {}
+            ceil = int(cfg.get("timeout", ceil) or ceil)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            for ln in (m.parent / "events.jsonl").read_text().splitlines():
+                if not ln.strip():
+                    continue
+                e = json.loads(ln)
+                if e.get("stage") == "tracy_baseline" and e.get("event") == "done" and e.get("seconds"):
+                    base = float(e["seconds"])
+        except Exception:  # noqa: BLE001
+            pass
+    if ceil < floor:
+        ceil = floor
+    return min(ceil, max(floor, int(mult * base)))
+
+
 # ---------------------------------------------------------------------------
 # 7.1 environment probe — `tt-smi -s` (TBD(env-script): CLOSED)
 # ---------------------------------------------------------------------------

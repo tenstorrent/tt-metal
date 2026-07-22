@@ -13,7 +13,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from . import gitio
+from . import gitio, probes
 
 _PCC_RE = re.compile(r"(?i)pcc[^\n]*?[:=]\s*(-?\d+\.\d+)")
 
@@ -52,7 +52,7 @@ def run_pcc(ctx) -> dict:
             env=env,
             capture_output=True,
             text=True,
-            timeout=3600,
+            timeout=probes.adaptive_backstop(3600),
         )
     except Exception as exc:  # timeout, OS error, etc.
         return {"status": "crash", "error": str(exc)}

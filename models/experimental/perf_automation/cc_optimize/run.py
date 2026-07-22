@@ -71,14 +71,16 @@ _PROMPT = """You are optimizing the TTNN model {model} ({task} pipeline) for {me
 
 HANDS OFF THE HARDWARE — device and process recovery is NOT your job. NEVER run kill, pkill, tt-smi, fuser, or any command that kills a process or resets the device, and NEVER open or close a mesh device yourself. Device wedges, hangs, and leaked device handles are recovered AUTOMATICALLY by the harness (watchdog + supervisor + device reclaim) between rounds. If a perf-mcp tool returns a device error or a measurement appears stuck, do NOT try to fix the device: if you have a measurement, record the attempt; otherwise just note it and move on — the harness will reclaim, reset, and restart as needed. Killing processes or resetting the device yourself WILL BREAK THE RUN (the agent has killed its own orchestrator this way). Your ONLY job is to choose and apply optimizations via the perf-mcp tools and source edits.
 
-termination_check() is the SOLE authority on whether more optimization is needed. It returns a DETERMINISTIC per-op CHECKLIST and a single next_target = {{op, op_class, grid, bound_by, rung}} you MUST work next. The per-op ladder ORDER is: knob:grid -> knob:dtype -> tt-lang -> cpp. An op is "nothing left" ONLY when every rung is ticked; you may STOP ONLY when can_stop=true.
+termination_check() is the SOLE authority on whether more optimization is needed. It returns a DETERMINISTIC per-op CHECKLIST and a single next_target = {{op, op_class, grid, bound_by, rung}} you MUST work next. The per-op ladder ORDER is: knob:grid -> knob:fidelity -> knob:dtype -> knob:shard -> tt-lang -> cpp. An op is "nothing left" ONLY when every rung is ticked; you may STOP ONLY when can_stop=true.
 
 LOOP:
   git_head -> termination_check -> read next_target.
   REUSE-FIRST: call recall_knobs(next_target.op_class, next_target.grid, next_target.bound_by) and APPLY/ADAPT any matching catalogued knob (heed its negative knowledge) BEFORE improvising one.
   Do EXACTLY next_target.rung on next_target.op:
     knob:grid  -> full-grid program_config. check_pcc; measure_candidate; commit a real win else revert. record_kernel_attempt(op,'grid',measured_ms,beat_baseline).
+    knob:fidelity -> lower math fidelity (HiFi4->HiFi2->LoFi) on this compute-bound op. check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'fidelity',measured_ms,beat_baseline) EVEN IF pcc forced a revert (that marks the knob tried).
     knob:dtype -> lower that op's WEIGHT dtype (bf16->bf8_b->bf4_b). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'dtype',measured_ms,beat_baseline) EVEN IF pcc forced a revert (that marks the knob tried).
+    knob:shard -> shard the op's weights/activations into L1 (height/width shard) to cut DRAM reads. check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'shard',measured_ms,beat_baseline) EVEN IF no gain (that marks the knob tried).
     tt-lang    -> author a tt-lang (ttl) kernel (Read GUIDELINES/11). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'tt-lang',measured_ms,beat_baseline).
     cpp        -> author a C++ Metalium kernel via ttnn.generic_op (Read GUIDELINES/12). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'cpp',measured_ms,beat_baseline).
   COVERAGE — the profiled slice is a REPRESENTATIVE set of layers, not all of them, so after a dtype knob or a kernel swap call check_lever_coverage(op_match, stale_dtype, new_dtype) to CONFIRM the lever reached EVERY layer instance. A repeated block is ONE class instantiated N times, so editing the SHARED block definition/config propagates to all N; editing an instance-specific path (e.g. layers[0], a per-layer override) changes only that one and silently misses the rest. If fully_applied is false, REAPPLY on the shared definition (target the reported missed_blocks) and re-check until fully_applied — a partial application is NOT a real win even if the slice looks faster.
@@ -266,7 +268,7 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
         repo_root / PERF_DIR,
         env,
         devices,
-        int(os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600"),
+        _measure_backstop(repo_root),
         "termination_check",
         stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
     )
@@ -309,7 +311,7 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
         repo_root / PERF_DIR,
         env,
         devices,
-        int(os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600"),
+        _measure_backstop(repo_root),
         f"full-pipeline ({label})",
         stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
     )
@@ -367,7 +369,7 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
         repo_root,
         env,
         devices,
-        int(os.environ.get("PERF_MCP_MEASURE_BACKSTOP", "3600") or "3600"),
+        _measure_backstop(repo_root),
         "coverage probe",
         stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
     )
@@ -900,9 +902,11 @@ _BOARD_MAP_FILE = Path(tempfile.gettempdir()) / "perf_mcp_board_topology.json"
 
 
 def _read_board_topology() -> dict | None:
-    """Live-read chip-index -> board-local-chip from tt-smi -s. Two ASICs of an n300 share a board_id;
-    only the one with a real PCI bus_id is resettable, and resetting it resets its remote partner too.
-    Returns {str(chip): local_chip_index} or None. Static per host (board_ids / BDFs don't change)."""
+    """Live-read chip-index -> its board's PCI-resettable chips from tt-smi -s. Chips sharing a board_id
+    are one board; a WHOLE board is reset by resetting every chip on it that has its own PCI bus_id. An
+    n300's remote chip has no bus_id, so its board is {local}; a p300c's two ASICs are each PCIe
+    endpoints, so its board is BOTH (resetting only one half-resets the board and breaks enumeration).
+    Returns {str(chip): [board's resettable chips]} or None. Static per host (board_ids / BDFs fixed)."""
     try:
         tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
         r = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=120)
@@ -910,16 +914,16 @@ def _read_board_topology() -> dict | None:
     except Exception:  # noqa: BLE001
         return None
     board_of: dict[int, str] = {}
-    local_of_board: dict[str, int] = {}
+    resettable_of_board: dict[str, list] = {}
     for i, dev in enumerate(di):
         bi = dev.get("board_info") or {}
         bid = bi.get("board_id")
         board_of[i] = bid
         bus = bi.get("bus_id")
         if bid is not None and bus and bus != "N/A":
-            local_of_board.setdefault(bid, i)
-    m = {str(i): local_of_board.get(board_of.get(i)) for i in board_of}
-    m = {k: v for k, v in m.items() if v is not None}
+            resettable_of_board.setdefault(bid, []).append(i)
+    m = {str(i): sorted(resettable_of_board.get(board_of.get(i), [])) for i in board_of}
+    m = {k: v for k, v in m.items() if v}
     return m or None
 
 
@@ -949,14 +953,22 @@ def _board_reset_targets(chip_ids: list[int]) -> str | None:
         m = _read_board_topology()
     if not m:
         return None
-    targets = {m[str(c)] for c in chip_ids if str(c) in m and m[str(c)] is not None}
+    targets: set = set()
+    for c in chip_ids:
+        v = m.get(str(c))
+        if isinstance(v, list):
+            targets.update(int(x) for x in v)
+        elif v is not None:
+            targets.add(int(v))
     return ",".join(str(x) for x in sorted(targets)) if targets else None
 
 
 def _reset_chip_list(devices: str) -> str:
-    """BOARD-AWARE reset target derived from --devices. Explicit ids / 'single' are translated to the
-    PCI-resettable LOCAL chip of each board they live on (so a whole n300 board resets, never half of
-    one). 'all'/'' returns '' so the caller uses a bare `tt-smi -r` (resets every board)."""
+    """BOARD-AWARE reset target derived from --devices: explicit ids / 'single' -> the WHOLE board(s)
+    they live on (every PCI-resettable chip of those boards, so both p300c ASICs reset, never half a
+    board, never other boards). '' when a per-board target can't be determined (all/empty devices, or
+    topology unavailable) so the caller falls back to its full-enumerated reset -- never a partial
+    subset (which wedges device-open)."""
     d = (devices or "").strip().lower()
     if d in ("all", ""):
         return ""
@@ -966,10 +978,7 @@ def _reset_chip_list(devices: str) -> str:
         req = [int(x) for x in d.split(",") if x.strip().isdigit()]
     if not req:
         return ""
-    board = _board_reset_targets(req)
-    if board is not None:
-        return board
-    return ",".join(str(x) for x in req)  # fallback: raw ids if topology probe failed
+    return _board_reset_targets(req) or ""
 
 
 def _reset_devices(devices: str) -> str:
@@ -1000,7 +1009,7 @@ def _reset_devices(devices: str) -> str:
     chips = _reset_chip_list(devices) if d not in ("all", "") else ""
     last = "no reset ran"
     for args in arg_sets:
-        cmd = [tt_smi, "-r", chips] if (chips and args == ["-r"]) else [tt_smi, *args]
+        cmd = [tt_smi, "-r", chips] if (chips and args and args[0] == "-r") else [tt_smi, *args]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=420)
             last = "tt-smi %s rc=%d" % (" ".join(cmd[1:]), r.returncode)
@@ -1303,6 +1312,55 @@ def _fold_cumulative(kernel_log: str) -> None:
         pass
 
 
+def _baseline_ceiling(repo_root: Path) -> tuple[float, int]:
+    ceil = 10800
+    base = 0.0
+    mani = _latest_manifest(repo_root / PERF_DIR)
+    if mani is not None:
+        try:
+            cfg = json.loads(mani.read_text()).get("config", {}) or {}
+            ceil = int(cfg.get("timeout", ceil) or ceil)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            for ln in (mani.parent / "events.jsonl").read_text().splitlines():
+                if not ln.strip():
+                    continue
+                e = json.loads(ln)
+                if e.get("stage") == "tracy_baseline" and e.get("event") == "done" and e.get("seconds"):
+                    base = float(e["seconds"])
+        except Exception:  # noqa: BLE001
+            pass
+    return base, ceil
+
+
+def _adaptive_cap(repo_root: Path, floor: int, mult: int = 3) -> int:
+    base, ceil = _baseline_ceiling(repo_root)
+    if ceil < floor:
+        ceil = floor
+    return min(ceil, max(floor, int(mult * base)))
+
+
+def _round_hard_cap(repo_root: Path, stall_sec: int) -> int:
+    override = os.environ.get("PERF_MCP_ROUND_MAX_SEC")
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            pass
+    return _adaptive_cap(repo_root, max(stall_sec * 4, 2400))
+
+
+def _measure_backstop(repo_root: Path) -> int:
+    override = os.environ.get("PERF_MCP_MEASURE_BACKSTOP")
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            pass
+    return _adaptive_cap(repo_root, 3600)
+
+
 def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int) -> bool:
     """Run one `claude -p` round under a forward-progress watchdog. If neither a commit nor a kernel
     attempt is recorded for stall_sec while the round is alive, treat it as a device wedge: SIGKILL the
@@ -1354,7 +1412,7 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
     #   max_no_progress  - HARD CAP: alive but produced NO real progress (commit/kernel attempt) for
     #                      this long -> kill anyway (default 4x stall / >=40min, comfortably above one
     #                      legit slow measure cycle, so a productive round always records well within it).
-    max_no_progress = int(os.environ.get("PERF_MCP_ROUND_MAX_SEC", str(max(stall_sec * 4, 2400))) or 2400)
+    max_no_progress = _round_hard_cap(repo_root, stall_sec)
     last_tok = _progress_token(repo_root, kernel_log)
     last_live = _liveness()
     _now0 = time.monotonic()
@@ -1416,6 +1474,19 @@ def _baseline_ms() -> float | None:
         return float(d["device_ms"]) if d.get("device_ms") is not None else None
     except Exception:  # noqa: BLE001
         return None
+
+
+def _original_baseline_ms(model_name: str, task: str) -> float | None:
+    try:
+        import tempfile
+
+        p = Path(tempfile.gettempdir()) / ("perf_mcp_orig_baseline_%s_%s.json" % (model_name, task))
+        if p.is_file():
+            d = json.loads(p.read_text())
+            return float(d["device_ms"]) if d.get("device_ms") is not None else None
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _prune_legacy_reports(demo_dir: Path) -> None:
@@ -1492,9 +1563,10 @@ def _emit_summary(
         render_kernel = _cum
     except Exception:
         render_kernel = kernel_log
+    _cur_ms = _baseline_ms()
     text = mod.render_summary(
         render_kernel,
-        _baseline_ms(),
+        _cur_ms,
         model=model_name,
         task=task,
         metric=metric,
@@ -1510,6 +1582,9 @@ def _emit_summary(
             if report_csv and Path(report_csv).parent.joinpath("baseline_profile.json").is_file()
             else None
         ),
+        finalized=True,
+        original_baseline_ms=_original_baseline_ms(model_name, task),
+        final_override_ms=_cur_ms,
     )
     print("\n" + text + "\n")
     md = _latest_manifest(repo_root / PERF_DIR)
@@ -1678,20 +1753,13 @@ def optimize_pipeline(
         if wedged:
             wedge_strikes += 1
             if wedge_strikes >= max_wedge:
-                if os.environ.get("PERF_MCP_SUPERVISED") == "1":
-                    print(
-                        "  [optimize/cc] WATCHDOG: %d consecutive wedged rounds — exiting so the supervisor "
-                        "reclaims the device (kills holders + reset) and restarts; ladder state is preserved."
-                        % wedge_strikes,
-                        flush=True,
-                    )
-                    _reclaim_device(devices)
-                    os._exit(75)
                 print(
-                    "  [optimize/cc] WATCHDOG: %d consecutive wedged rounds — aborting this pipeline "
-                    "(all committed wins are safe)." % wedge_strikes
+                    "  [optimize/cc] WATCHDOG: %d consecutive wedged rounds — reset device + continue in-process "
+                    "(no restart; process healthy, chips reset); ladder state is preserved." % wedge_strikes,
+                    flush=True,
                 )
-                break
+                print("  [optimize/cc] " + _reclaim_device(devices), flush=True)
+                wedge_strikes = 0
         else:
             wedge_strikes = 0
         rounds += 1

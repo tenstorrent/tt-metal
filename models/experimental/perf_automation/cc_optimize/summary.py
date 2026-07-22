@@ -7,11 +7,12 @@ overall old->new runtime with the percentage speedup. Pure stdlib; additive (tou
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 from pathlib import Path
 
-_LEVEL_COLS = ("grid", "dtype", "tt-lang", "cpp", "host")
+_LEVEL_COLS = ("grid", "fidelity", "dtype", "shard", "tt-lang", "cpp", "host")
 _HOST_KINDS = {"trace", "2cq", "structural", "fusion", "fuse", "gather", "sparse", "cache", "kv-cache"}
 
 _REPORT_NAME = "RUN_REPORT.md"
@@ -70,11 +71,24 @@ def module_optimize_block(
 
 def _level_of(kind: str) -> str:
     k = (kind or "").lower()
-    if k in ("grid", "dtype", "tt-lang", "cpp"):
+    if k in ("grid", "dtype", "fidelity", "shard", "tt-lang", "cpp"):
         return k
     if k in _HOST_KINDS:
         return "host"
     return "host"
+
+
+def _ttl_absent() -> bool:
+    """True when the tt-lang (ttl) toolchain is not installed in this env. Rendering runs in the same
+    env as the run, so this reflects the real availability the agent had."""
+    return importlib.util.find_spec("ttl") is None
+
+
+def _disp_level(label: str) -> str:
+    """DISPLAY-only relabel: a tt-lang rung with no ttl toolchain is really a ttnn implementation the
+    agent improvised, so show it as 'ttnn'. Internal column keys / kernel_kind stay 'tt-lang' — this
+    changes nothing in the ladder or credit logic."""
+    return "ttnn" if label == "tt-lang" and _ttl_absent() else label
 
 
 def _op_label(sig: str, width: int = 34) -> str:
@@ -153,6 +167,9 @@ def render_summary(
     before_ms: float | None = None,
     after_ms: float | None = None,
     baseline_profile: dict | None = None,
+    finalized: bool = True,
+    original_baseline_ms: float | None = None,
+    final_override_ms: float | None = None,
 ) -> str:
     """Return a markdown summary. Degrades gracefully when data is partial."""
     attempts = _read_json(kernel_log_path) or []
@@ -185,18 +202,23 @@ def render_summary(
         for a in attempts
         if isinstance(a, dict) and a.get("beat_baseline") and a.get("measured_ms") is not None
     ]
-    final_ms = min(win_ms) if win_ms else baseline_ms
+    final_ms = final_override_ms if final_override_ms is not None else (min(win_ms) if win_ms else baseline_ms)
+    hdr_base = original_baseline_ms if original_baseline_ms is not None else baseline_ms
 
     lines = []
     title = f"Optimization summary — {model or 'model'} · {task} ({metric})"
     lines.append(title)
     lines.append("=" * len(title))
-    if baseline_ms and final_ms and baseline_ms > 0:
-        pct = (baseline_ms - final_ms) / baseline_ms * 100.0
-        spd = baseline_ms / final_ms if final_ms > 0 else 1.0
-        lines.append(f"baseline {baseline_ms:.2f} ms  ->  final {final_ms:.2f} ms   ({pct:+.1f}%, {spd:.2f}x)")
-    elif baseline_ms:
-        lines.append(f"baseline {baseline_ms:.2f} ms  ->  (no measured win recorded)")
+    if not finalized:
+        lines.append(
+            "optimizing… — baseline->final speedup is finalized when the module converges (per-attempt detail below is live)"
+        )
+    elif hdr_base and final_ms and hdr_base > 0:
+        pct = (hdr_base - final_ms) / hdr_base * 100.0
+        spd = hdr_base / final_ms if final_ms > 0 else 1.0
+        lines.append(f"baseline {hdr_base:.2f} ms  ->  final {final_ms:.2f} ms   ({pct:+.1f}%, {spd:.2f}x)")
+    elif hdr_base:
+        lines.append(f"baseline {hdr_base:.2f} ms  ->  (no measured win recorded)")
     else:
         lines.append("baseline/final ms unavailable (no baseline profile found)")
     _trace_scope = f"module ({task})" if os.environ.get("TT_PERF_MODULE_LEVEL") == "1" else "full-pipeline e2e"
@@ -221,7 +243,7 @@ def render_summary(
         lines.append("")
 
     if by_op:
-        hdr = f"{'op':<34} " + " ".join(f"{c:>7}" for c in _LEVEL_COLS) + f" {'best ms':>9}"
+        hdr = f"{'op':<34} " + " ".join(f"{_disp_level(c):>7}" for c in _LEVEL_COLS) + f" {'best ms':>9}"
         lines.append(hdr)
         lines.append("-" * len(hdr))
         for sig in sorted(by_op):
@@ -259,7 +281,7 @@ def render_summary(
             if not isinstance(a, dict):
                 continue
             sig = _op_label(a.get("op_signature", "?"))
-            lever = _level_of(a.get("kernel_kind", "")) or (a.get("kernel_kind") or "?")
+            lever = _disp_level(_level_of(a.get("kernel_kind", "")) or (a.get("kernel_kind") or "?"))
             ms = a.get("measured_ms")
             ms_s = f"{ms:.2f}" if isinstance(ms, (int, float)) else "—"
             if baseline_ms and isinstance(ms, (int, float)):
@@ -282,7 +304,7 @@ def render_summary(
             if not d:
                 continue
             sig = _op_label(a.get("op_signature", "?"))
-            lever = _level_of(a.get("kernel_kind", "")) or (a.get("kernel_kind") or "?")
+            lever = _disp_level(_level_of(a.get("kernel_kind", "")) or (a.get("kernel_kind") or "?"))
             res = "win" if a.get("beat_baseline") else ("wedged" if a.get("wedged") else "no gain")
             ms = a.get("measured_ms")
             gain = f"  {baseline_ms - ms:+.2f} ms" if (baseline_ms and isinstance(ms, (int, float))) else ""
@@ -351,6 +373,6 @@ def render_summary(
 
     lines.append("")
     lines.append(
-        "levels: grid -> dtype -> tt-lang -> cpp -> host   |   ✓win = beat baseline, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
+        f"levels: grid -> fidelity -> dtype -> shard -> {_disp_level('tt-lang')} -> cpp -> host   |   ✓win = beat baseline, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
     )
     return "\n".join(lines)
