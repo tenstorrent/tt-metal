@@ -29,15 +29,9 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::grid(Ht, Wt),
         ckl::BinaryFpu<
-            cb_a,
-            cb_b,
+            ckl::input(cb_a, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_b, ckl::InputLifecycle::OuterStream, ckl::DataFormatReconfig::Disabled),
             ckl::BinaryFpuOp::Add,
-            ckl::BroadcastDim::None,
-            ckl::InputLifecycle::Streaming,    // cb_a: one tile per (ht, wt)
-            ckl::InputLifecycle::OuterStream,  // cb_b: one tile per row
-            ckl::BinaryDataFormatReconfig::None,
-            ckl::Dst::D0,
-            ckl::OperandKind::Scalar,     // cb_a reads the front
-            ckl::OperandKind::Scalar>{},  // cb_b reads the front (advances per row)
-        ckl::PackTile<cb_out>{});
+            ckl::BroadcastDim::None>{},
+        ckl::PackTile<ckl::output(cb_out)>{});
 }

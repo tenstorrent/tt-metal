@@ -15,12 +15,11 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(n),
-        CopyTile<cb_in>{},
-        PackTile<
+        CopyTile<input(cb_in)>{},
+        PackTile<output(
             cb_out,
             OutputLifecycle::Streaming,
-            PackTileReconfig::Output,
-            Dst::D0,
-            TileOffset::Unset,
-            PackTileL1Accumulation::Enabled>{});
+            DataFormatReconfig::Enabled,
+            PackRelu::Disabled,
+            L1Accumulation::Enabled)>{});
 }
