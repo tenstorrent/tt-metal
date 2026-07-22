@@ -89,13 +89,13 @@ inline constexpr std::array<std::uint32_t, 64> _llk_math_face_compressed_mm_buil
 inline constexpr std::array<std::uint32_t, 64> _llk_math_face_compressed_mm_build_even_l2_() {
     constexpr auto find = [](const char* s) constexpr { return _llk_math_face_compressed_mm_find_(s); };
     const std::array<std::uint32_t, 8> lut = {{
-        find("n"),  // 000 zero face3, nopB (CONV3S1 @ ADDR_MOD_0)
-        find("i"),  // 001 zero face3, incB (CONV3S1 @ ADDR_MOD_1)
-        find("c"),  // 010 zero face3, clrB (CONV3S1 @ ADDR_MOD_2)
+        find("n"),  // 000 zero face3, nopB
+        find("i"),  // 001 zero face3, incB
+        find("c"),  // 010 zero face3, clrB
         TT_OP_NOP,  // 011 zero face3, invalid hdr
-        find("N"),  // 100 data face3, nopB (MVMUL   @ ADDR_MOD_0)
-        find("I"),  // 101 data face3, incB (MVMUL   @ ADDR_MOD_1)
-        find("C"),  // 110 data face3, clrB (MVMUL   @ ADDR_MOD_2)
+        find("N"),  // 100 data face3, nopB
+        find("I"),  // 101 data face3, incB
+        find("C"),  // 110 data face3, clrB
         TT_OP_NOP,  // 111 data face3, invalid hdr
     }};
     std::array<std::uint32_t, 64> table{};
@@ -298,14 +298,14 @@ inline void _llk_math_face_compressed_mm_mop_config_() {
     constexpr std::uint32_t op1s = _llk_math_face_compressed_mm_find_one_("n");
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
-        ct_dim == 1,                // unpackB    = false
+        ct_dim == 1,                // unpackB    = only for CT==1
         false,                      // unpackHalo = false
         ct_dim == 1 ? op0s : op0m,  // A
         TT_OP_NOP,                  // A1    (unused)
         TT_OP_NOP,                  // A2    (unused)
         TT_OP_NOP,                  // A3    (unused)
-        op1m,                       // skipA
-        op1s,                       // B     (unused)
+        op1m,                       // skipA (only for CT>1)
+        op1s,                       // B     (only for CT==1)
         TT_OP_NOP                   // skipB (unused)
     );
     tmp.program();

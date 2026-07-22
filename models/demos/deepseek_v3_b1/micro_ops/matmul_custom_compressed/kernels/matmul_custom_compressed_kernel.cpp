@@ -21,7 +21,6 @@
 #include "api/compute/compute_kernel_api.h"
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h"
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/pmp.h"
 using namespace ckernel;
 #include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/constexpr_args.h"
 #include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed_constexpr_compact.h"
@@ -37,15 +36,15 @@ using namespace ckernel;
 #endif
 
 void kernel_main() {
-    constexpr std::uint32_t cb_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr std::uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr std::uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
-    constexpr std::uint32_t num_tiles_k = get_named_compile_time_arg_val("num_tiles_k");
-    constexpr std::uint32_t out_w = get_named_compile_time_arg_val("out_w");
+    constexpr uint32_t cb_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("num_tiles_k");
+    constexpr uint32_t out_w = get_named_compile_time_arg_val("out_w");
 
 #if defined(COMPILE_FOR_NCRISC)
-    constexpr std::uint32_t cb_in0_num_pages = get_named_compile_time_arg_val("cb_in0_num_pages");
-    constexpr std::uint32_t cb_in1_num_pages = get_named_compile_time_arg_val("cb_in1_num_pages");
+    constexpr uint32_t cb_in0_num_pages = get_named_compile_time_arg_val("cb_in0_num_pages");
+    constexpr uint32_t cb_in1_num_pages = get_named_compile_time_arg_val("cb_in1_num_pages");
 
     unified_kernels::setup_sharded_buffer(cb_in0, cb_in0_num_pages);
     unified_kernels::setup_sharded_buffer(cb_in1, cb_in1_num_pages);
@@ -65,19 +64,19 @@ void kernel_main() {
     cb_wait_front(cb_in1, 1);
 
     // Get base addresses
-    [[maybe_unused]] std::uint32_t addr_in0 = 0;
-    [[maybe_unused]] std::uint32_t addr_in1 = 0;
-    std::uint32_t in0_face_r_dim = 0;
+    uint32_t addr_in0 = 0;
+    uint32_t addr_in1 = 0;
+    uint32_t in0_face_r_dim = 0;
     UNPACK(({
-        std::uint32_t in0_id = get_operand_id(cb_in0);
-        std::uint32_t in1_id = get_operand_id(cb_in1);
+        uint32_t in0_id = get_operand_id(cb_in0);
+        uint32_t in1_id = get_operand_id(cb_in1);
         addr_in0 = get_local_cb_interface(in0_id).fifo_rd_ptr - 1;
         addr_in1 = get_local_cb_interface(in1_id).fifo_rd_ptr - 1;
         in0_face_r_dim = get_operand_face_r_dim(in0_id);
     }));
     MATH(({
-        std::uint32_t in0_id = get_operand_id(cb_in0);
-        std::uint32_t in1_id = get_operand_id(cb_in1);
+        uint32_t in0_id = get_operand_id(cb_in0);
+        uint32_t in1_id = get_operand_id(cb_in1);
         in0_face_r_dim = get_operand_face_r_dim(in0_id);
     }));
 
@@ -86,7 +85,7 @@ void kernel_main() {
 
     tile_regs_acquire();
 
-    constexpr std::uint32_t total_tiles = num_tiles_k * out_w;
+    constexpr uint32_t total_tiles = num_tiles_k * out_w;
     constexpr bool use_barrier = COMPRESSED_MM_IMPL == 3 || COMPRESSED_MM_IMPL == 4 || COMPRESSED_MM_IMPL == 5;
     constexpr bool transpose = false;
     constexpr bool split_acc = true;
@@ -101,46 +100,32 @@ void kernel_main() {
 #endif
 
 #if COMPRESSED_MM_IMPL == 1 || COMPRESSED_MM_IMPL == 2 || COMPRESSED_MM_IMPL == 4 || COMPRESSED_MM_IMPL == 5
-    constexpr std::uint32_t fmt_cta_base = get_named_compile_time_arg_val("fmt_cta_base");
-    constexpr std::uint32_t num_packed =
-        (total_tiles + compressed::TILES_PER_UINT32 - 1) / compressed::TILES_PER_UINT32;
-    static constexpr auto fmt_packed = compressed::fill_cta_array<std::uint32_t, fmt_cta_base, num_packed>();
+    constexpr uint32_t fmt_cta_base = get_named_compile_time_arg_val("fmt_cta_base");
+    constexpr uint32_t num_packed = (total_tiles + compressed::TILES_PER_UINT32 - 1) / compressed::TILES_PER_UINT32;
+    static constexpr auto fmt_packed = compressed::fill_cta_array<uint32_t, fmt_cta_base, num_packed>();
 #elif COMPRESSED_MM_IMPL == 0 || COMPRESSED_MM_IMPL == 3 || COMPRESSED_MM_IMPL == 6
-    constexpr std::uint32_t fmt_l1_addr = get_named_compile_time_arg_val("fmt_l1_addr");
+    constexpr uint32_t fmt_l1_addr = get_named_compile_time_arg_val("fmt_l1_addr");
 #else
 #error \
     "Invalid COMPRESSED_MM_IMPL: expected 0 (runtime), 1 (constexpr_compact), 2 (constexpr_unroll), 3 (runtime barrier), 4 (constexpr_compact barrier), 5 (constexpr_unroll barrier), 6 (new)"
 #endif
 
-    pmp_run(
-        [&] {
 #if COMPRESSED_MM_IMPL == 0 || COMPRESSED_MM_IMPL == 3
-            compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w>(
-                fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
+    compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w>(
+        fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
 #elif COMPRESSED_MM_IMPL == 1 || COMPRESSED_MM_IMPL == 4
-            compressed::custom_mm_compressed_block_compact<num_tiles_k, out_w, num_packed, fmt_packed>(
-                addr_in0, addr_in1, in0_face_r_dim, 0);
+    compressed::custom_mm_compressed_block_compact<num_tiles_k, out_w, num_packed, fmt_packed>(
+        addr_in0, addr_in1, in0_face_r_dim, 0);
 #elif COMPRESSED_MM_IMPL == 2 || COMPRESSED_MM_IMPL == 5
-            compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed>(
-                addr_in0, addr_in1, in0_face_r_dim, 0);
+    compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed>(
+        addr_in0, addr_in1, in0_face_r_dim, 0);
 #elif COMPRESSED_MM_IMPL == 6
-            compressed_custom_mm_block<split_acc, clear_src>(cb_in0, cb_in1, fmt_l1_addr, 0, num_tiles_k, out_w);
+    compressed_custom_mm_block<split_acc, clear_src>(cb_in0, cb_in1, fmt_l1_addr, 0, num_tiles_k, out_w);
 #endif
-        },
-        [&] {
-#if defined(DEBUG_PRINT_ENABLED)
-            DEVICE_PRINT_UNPACK(
-                "Case: M={} K={} N={} IMPL={}\n",
-                get_operand_face_r_dim(cb_in0),
-                num_tiles_k,
-                out_w,
-                (std::uint32_t)COMPRESSED_MM_IMPL);
-#endif
-        });
 
     tile_regs_commit();
     tile_regs_wait();
-    for (std::uint32_t w = 0; w < out_w; w++) {
+    for (uint32_t w = 0; w < out_w; w++) {
         pack_tile(w, cb_out, w);
     }
     tile_regs_release();

@@ -177,7 +177,9 @@ class TestConfig:
     SKIP_JUST_FOR_COMPILE_MARKER: ClassVar[str] = "SKIPPED_JUST_FOR_COMPILE"
     SKIP_JUST_FOR_STIMULI_MARKER: ClassVar[str] = "SKIPPED_JUST_FOR_STIMULI"
     _BUILD_DIRS_CREATED: ClassVar[bool] = False
-    SPEED_OF_LIGHT: ClassVar[bool] = False  # Should everything be converted to compile-time arguments?
+    SPEED_OF_LIGHT: ClassVar[bool] = (
+        False  # Should everything be converted to compile-time arguments?
+    )
 
     TEST_TARGET: ClassVar[TestTargetConfig] = TestTargetConfig()
 
@@ -222,7 +224,9 @@ class TestConfig:
 
     # Shared config region
     PERF_COUNTERS_CONFIG_ADDR: ClassVar[int] = PERF_COUNTERS_BASE_ADDR
-    PERF_COUNTERS_ZONES_BASE: ClassVar[int] = PERF_COUNTERS_BASE_ADDR + _PERF_COUNTERS_CONFIG_WORDS * 4
+    PERF_COUNTERS_ZONES_BASE: ClassVar[int] = (
+        PERF_COUNTERS_BASE_ADDR + _PERF_COUNTERS_CONFIG_WORDS * 4
+    )
 
     # Per-zone data layout: [bank_cycles (5)][counter_counts (DATA_WORDS)][sync (1) + pad]
     _PERF_COUNTERS_ZONE_DATA_BYTES: ClassVar[int] = (
@@ -234,11 +238,15 @@ class TestConfig:
 
     # Zone-0 flat addresses (kept for legacy callers; prefer zone_*_addr helpers below).
     PERF_COUNTERS_DATA_ADDR: ClassVar[int] = PERF_COUNTERS_ZONES_BASE
-    PERF_COUNTERS_SYNC_CTRL_ADDR: ClassVar[int] = PERF_COUNTERS_ZONES_BASE + _PERF_COUNTERS_ZONE_DATA_BYTES
+    PERF_COUNTERS_SYNC_CTRL_ADDR: ClassVar[int] = (
+        PERF_COUNTERS_ZONES_BASE + _PERF_COUNTERS_ZONE_DATA_BYTES
+    )
 
     # Trailing metadata written by PerfCounterManager (must match counters.h):
     # enabled_flag (4 B) + bank_mask (4 B) + valid_count[MAX_ZONES] (4 B each).
-    _PERF_COUNTERS_TRAILING_METADATA_BYTES: ClassVar[int] = 4 + 4 + PERF_COUNTERS_MAX_ZONES * 4
+    _PERF_COUNTERS_TRAILING_METADATA_BYTES: ClassVar[int] = (
+        4 + 4 + PERF_COUNTERS_MAX_ZONES * 4
+    )
 
     # Total L1 reservation: shared config + per-zone blocks + trailing metadata.
     PERF_COUNTERS_SIZE: ClassVar[int] = (
@@ -349,9 +357,13 @@ class TestConfig:
                     0x16D000,  # Pack
                     0x16E000,  # SFPU
                 ]
-                TestConfig.TRISC_PROFILER_BARRIER_ADDRESS = 0x16AFF0  # BARRIER_START for 4 cores
+                TestConfig.TRISC_PROFILER_BARRIER_ADDRESS = (
+                    0x16AFF0  # BARRIER_START for 4 cores
+                )
             case _:
-                raise ValueError("Must provide CHIP_ARCH environment variable (wormhole / blackhole / quasar)")
+                raise ValueError(
+                    "Must provide CHIP_ARCH environment variable (wormhole / blackhole / quasar)"
+                )
 
     @staticmethod
     def setup_paths(sources_path: Path):
@@ -367,11 +379,19 @@ class TestConfig:
 
         # Toolchain paths
         TestConfig.GXX = str((TestConfig.TOOL_PATH / "riscv-tt-elf-g++").absolute())
-        TestConfig.OBJDUMP = str((TestConfig.TOOL_PATH / "riscv-tt-elf-objdump").absolute())
-        TestConfig.OBJCOPY = str((TestConfig.TOOL_PATH / "riscv-tt-elf-objcopy").absolute())
-        TestConfig.ELF_SIZE = str((TestConfig.TOOL_PATH / "riscv-tt-elf-size").absolute())
+        TestConfig.OBJDUMP = str(
+            (TestConfig.TOOL_PATH / "riscv-tt-elf-objdump").absolute()
+        )
+        TestConfig.OBJCOPY = str(
+            (TestConfig.TOOL_PATH / "riscv-tt-elf-objcopy").absolute()
+        )
+        TestConfig.ELF_SIZE = str(
+            (TestConfig.TOOL_PATH / "riscv-tt-elf-size").absolute()
+        )
         TestConfig.GCOV = str((TestConfig.TOOL_PATH / "riscv-tt-elf-gcov").absolute())
-        TestConfig.GCOV_TOOL = str((TestConfig.TOOL_PATH / "riscv-tt-elf-gcov-tool").absolute())
+        TestConfig.GCOV_TOOL = str(
+            (TestConfig.TOOL_PATH / "riscv-tt-elf-gcov-tool").absolute()
+        )
 
         TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / "shared"
         TestConfig.SHARED_OBJ_DIR = TestConfig.SHARED_DIR / "obj"
@@ -384,7 +404,9 @@ class TestConfig:
         TestConfig.PROFILER_META = TestConfig.ARTEFACTS_DIR / "profiler_meta"
         TestConfig.SYNC_DIR = TestConfig.ARTEFACTS_DIR / "sync_primitives"
         TestConfig.PERF_DATA_DIR = TestConfig.ARTEFACTS_DIR / "temp_perf_data"
-        TestConfig.DEFAULT_STIMULI_CACHE_FOLDER = TestConfig.ARTEFACTS_DIR / "temp_stimuli"
+        TestConfig.DEFAULT_STIMULI_CACHE_FOLDER = (
+            TestConfig.ARTEFACTS_DIR / "temp_stimuli"
+        )
 
     @staticmethod
     def create_build_directories():
@@ -443,16 +465,20 @@ class TestConfig:
             ]
 
         if detailed_artefacts:
-            TestConfig.OPTIONS_ALL += "-save-temps=obj -fdump-tree-all -fdump-rtl-all -v "
+            TestConfig.OPTIONS_ALL += (
+                "-save-temps=obj -fdump-tree-all -fdump-rtl-all -v "
+            )
 
         TestConfig.OPTIONS_LINK = (
-            "-nostdlib -nostartfiles " "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -Wl,--trace "
+            "-nostdlib -nostartfiles "
+            "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -Wl,--trace "
         )
         # LLK_ASSERT uses ebreak under ENV_LLK_INFRA (see common/llk_assert.h). Match Hal tensix cflags
         # (wh_hal.cpp / bh_hal.cpp): -mno-tt-fix-whbhebreak avoids 8 NOPs after ebreak.
         no_wh_ebreak_fixup = (
             "-mno-tt-fix-whbhebreak "
-            if TestConfig.CHIP_ARCH in (ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE)
+            if TestConfig.CHIP_ARCH
+            in (ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE)
             else ""
         )
         TestConfig.INITIAL_OPTIONS_COMPILE = (
@@ -486,7 +512,9 @@ class TestConfig:
     ):
         TestConfig.setup_arch()
         TestConfig.setup_paths(sources_path)
-        TestConfig.setup_compilation_options(with_coverage, detailed_artefacts, no_debug_symbols, speed_of_light)
+        TestConfig.setup_compilation_options(
+            with_coverage, detailed_artefacts, no_debug_symbols, speed_of_light
+        )
         device_module.Mailboxes = (
             (MailboxesCoverageQuasar if with_coverage else MailboxesQuasar)
             if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
@@ -530,7 +558,11 @@ class TestConfig:
             TestConfig.STIMULI_MODE = StimuliMode.GENERATE_ONLY
             GeneratorProxy.MODE = ProxyMode.CACHE_GOLDEN
             StimuliConfig.initialize_cache(
-                (stimuli_only if stimuli_only != "_USE_DEFAULT_PATH" else TestConfig.DEFAULT_STIMULI_CACHE_FOLDER)
+                (
+                    stimuli_only
+                    if stimuli_only != "_USE_DEFAULT_PATH"
+                    else TestConfig.DEFAULT_STIMULI_CACHE_FOLDER
+                )
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
@@ -538,7 +570,11 @@ class TestConfig:
             TestConfig.STIMULI_MODE = StimuliMode.LOAD_CACHED
             GeneratorProxy.MODE = ProxyMode.LOAD_GOLDEN
             StimuliConfig.initialize_cache(
-                (use_stimuli if use_stimuli != "_USE_DEFAULT_PATH" else TestConfig.DEFAULT_STIMULI_CACHE_FOLDER)
+                (
+                    use_stimuli
+                    if use_stimuli != "_USE_DEFAULT_PATH"
+                    else TestConfig.DEFAULT_STIMULI_CACHE_FOLDER
+                )
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
@@ -566,10 +602,14 @@ class TestConfig:
         compile_time_formats: bool = False,
         requires_device_print: bool = False,
     ):
-        self.coverage_build = CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
+        self.coverage_build = (
+            CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
+        )
 
         if test_name is None:
-            raise RuntimeError("test_name argument needs to be passed in order to resolve which C++ file is compiled")
+            raise RuntimeError(
+                "test_name argument needs to be passed in order to resolve which C++ file is compiled"
+            )
 
         self._prepared = False
 
@@ -628,8 +668,12 @@ class TestConfig:
                 register_format_hint=getattr(formats, "register_format_hint", None),
             )
             self.pack_size = TILE_SIZES.get(self.formats_config[0].output_format, 128)
-            self.unpack_size_a = TILE_SIZES.get(self.formats_config[0].input_format, 128)
-            self.unpack_size_b = TILE_SIZES.get(self.formats_config[0].input_format_B, 128)
+            self.unpack_size_a = TILE_SIZES.get(
+                self.formats_config[0].input_format, 128
+            )
+            self.unpack_size_b = TILE_SIZES.get(
+                self.formats_config[0].input_format_B, 128
+            )
         else:
             self.formats_config = None
             self.pack_size, self.unpack_size_a, self.unpack_size_b = 128, 128, 128
@@ -641,15 +685,27 @@ class TestConfig:
 
         if (len(self.runtimes) > 0 or len(self.templates) > 0) and self.variant_stimuli:
             itd_param = next(
-                (param for param in self.runtimes + self.templates if isinstance(param, IN_TILE_DIMS)),
+                (
+                    param
+                    for param in self.runtimes + self.templates
+                    if isinstance(param, IN_TILE_DIMS)
+                ),
                 None,
             )
             faces_param = next(
-                (param for param in self.runtimes + self.templates if isinstance(param, NUM_FACES)),
+                (
+                    param
+                    for param in self.runtimes + self.templates
+                    if isinstance(param, NUM_FACES)
+                ),
                 None,
             )
             if itd_param and faces_param:
-                temp_num_faces_A = faces_param.num_faces_A if faces_param.num_faces_A else faces_param.num_faces
+                temp_num_faces_A = (
+                    faces_param.num_faces_A
+                    if faces_param.num_faces_A
+                    else faces_param.num_faces
+                )
                 if itd_param.in0_r_dim <= 16:
                     self.pack_size = (self.pack_size // faces_param.num_faces) * (
                         itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
@@ -663,7 +719,10 @@ class TestConfig:
         if not TestConfig.SPEED_OF_LIGHT:
             self.generate_runtime_args_struct()
 
-        if self.coverage_build == CoverageBuild.Yes and self.profiler_build == ProfilerBuild.Yes:
+        if (
+            self.coverage_build == CoverageBuild.Yes
+            and self.profiler_build == ProfilerBuild.Yes
+        ):
             raise RuntimeError(
                 "You can't build profiler and coverage build at the same time, profiling tests will fail."
             )
@@ -693,7 +752,9 @@ class TestConfig:
                 self.runtime_format += self.L1_to_L1_iterations * "IIIIIIIIIIII"
 
         if self.variant_stimuli:
-            stimuli_fields, stimuli_pack_format = self.variant_stimuli.generate_runtime_struct_fields()
+            stimuli_fields, stimuli_pack_format = (
+                self.variant_stimuli.generate_runtime_struct_fields()
+            )
             lines.extend(stimuli_fields)
             self.runtime_format += stimuli_pack_format
 
@@ -736,12 +797,18 @@ class TestConfig:
                 )
 
         if self.variant_stimuli:
-            argument_data.extend(self.variant_stimuli.generate_runtime_operands_values())
+            argument_data.extend(
+                self.variant_stimuli.generate_runtime_operands_values()
+            )
 
         for param in self.runtimes:
             argument_data.extend(
                 [
-                    (getattr(param, f.name).value if issubclass(f.type, Enum) else getattr(param, f.name))
+                    (
+                        getattr(param, f.name).value
+                        if issubclass(f.type, Enum)
+                        else getattr(param, f.name)
+                    )
                     for f in fields(param)
                 ]
             )
@@ -798,7 +865,9 @@ class TestConfig:
             ]
 
         temp_str = [
-            str(value) for field_name, value in self.__dict__.items() if field_name not in NON_COMPILATION_ARGUMENTS
+            str(value)
+            for field_name, value in self.__dict__.items()
+            if field_name not in NON_COMPILATION_ARGUMENTS
         ]
 
         self.variant_id = sha256(str(" | ".join(temp_str)).encode()).hexdigest()
@@ -816,19 +885,29 @@ class TestConfig:
                 NON_COVERAGE_OPTIONS_COMPILE,
             )
 
-        MEMORY_LAYOUT_LD_SCRIPT = f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.ld"
-        OPTIONS_COMPILE = f"{' '.join(TestConfig.INCLUDES)} {TestConfig.INITIAL_OPTIONS_COMPILE} "
+        MEMORY_LAYOUT_LD_SCRIPT = (
+            f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.ld"
+        )
+        OPTIONS_COMPILE = (
+            f"{' '.join(TestConfig.INCLUDES)} {TestConfig.INITIAL_OPTIONS_COMPILE} "
+        )
 
         OPTIONS_COMPILE += (
-            "-DLLK_BOOT_MODE_TRISC " if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else "-DLLK_BOOT_MODE_BRISC "
+            "-DLLK_BOOT_MODE_TRISC "
+            if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
+            else "-DLLK_BOOT_MODE_BRISC "
         )
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
 
         if self.coverage_build == CoverageBuild.Yes:
             NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
-            OPTIONS_COMPILE += "-fprofile-arcs -ftest-coverage -fprofile-info-section -DCOVERAGE "
-            MEMORY_LAYOUT_LD_SCRIPT = f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.debug.ld"
+            OPTIONS_COMPILE += (
+                "-fprofile-arcs -ftest-coverage -fprofile-info-section -DCOVERAGE "
+            )
+            MEMORY_LAYOUT_LD_SCRIPT = (
+                f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.debug.ld"
+            )
 
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
@@ -862,7 +941,9 @@ class TestConfig:
                 TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
                 return
 
-            _, local_memory_layout_ld, local_non_coverage = self.resolve_compile_options()
+            _, local_memory_layout_ld, local_non_coverage = (
+                self.resolve_compile_options()
+            )
 
             if TestConfig.WITH_COVERAGE:
                 compile_command = (  # coverage.o : coverage.cpp
@@ -875,7 +956,11 @@ class TestConfig:
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
                 # Only compile BRISC with counter support when counters are enabled,
                 # otherwise BRISC arms counter hardware which adds monitoring overhead.
-                perf_cnt_flag = "-DPERF_COUNTERS_COMPILED " if TestConfig.ENABLE_PERF_COUNTERS else ""
+                perf_cnt_flag = (
+                    "-DPERF_COUNTERS_COMPILED "
+                    if TestConfig.ENABLE_PERF_COUNTERS
+                    else ""
+                )
                 compile_command = (  # brisc.elf : brisc.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
@@ -891,7 +976,9 @@ class TestConfig:
             TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
 
     def generate_compile_time_data_formats(self) -> list[str]:
-        header_content: list[str] = ["// Data formats inferred by Python inference model"]
+        header_content: list[str] = [
+            "// Data formats inferred by Python inference model"
+        ]
 
         # Fused Test L1 to L1 : Input of first run is used as input for the second run ...
         # Not fusing: single L1-to-L1 iteration, so we retrieve one format configuration
@@ -910,36 +997,52 @@ class TestConfig:
 
             # Create array of format configurations for multiple L1-to-L1 iterations
             unpack_a_in_values = [
-                f"ckernel::to_underlying(DataFormat::{fmt.unpack_A_src.name})" for fmt in self.formats_config
+                f"ckernel::to_underlying(DataFormat::{fmt.unpack_A_src.name})"
+                for fmt in self.formats_config
             ]
             unpack_b_in_values = [
-                f"ckernel::to_underlying(DataFormat::{fmt.unpack_B_src.name})" for fmt in self.formats_config
+                f"ckernel::to_underlying(DataFormat::{fmt.unpack_B_src.name})"
+                for fmt in self.formats_config
             ]
             unpack_a_out_values = [
-                f"ckernel::to_underlying(DataFormat::{fmt.unpack_A_dst.name})" for fmt in self.formats_config
+                f"ckernel::to_underlying(DataFormat::{fmt.unpack_A_dst.name})"
+                for fmt in self.formats_config
             ]
             unpack_b_out_values = [
-                f"ckernel::to_underlying(DataFormat::{fmt.unpack_B_dst.name})" for fmt in self.formats_config
+                f"ckernel::to_underlying(DataFormat::{fmt.unpack_B_dst.name})"
+                for fmt in self.formats_config
             ]
             unpack_s_in_values = [
-                f"ckernel::to_underlying(DataFormat::{fmt.unpack_S_src.name})" for fmt in self.formats_config
+                f"ckernel::to_underlying(DataFormat::{fmt.unpack_S_src.name})"
+                for fmt in self.formats_config
             ]
             unpack_s_out_values = [
-                f"ckernel::to_underlying(DataFormat::{fmt.unpack_S_dst.name})" for fmt in self.formats_config
+                f"ckernel::to_underlying(DataFormat::{fmt.unpack_S_dst.name})"
+                for fmt in self.formats_config
             ]
-            math_values = [f"ckernel::to_underlying(DataFormat::{fmt.math.name})" for fmt in self.formats_config]
+            math_values = [
+                f"ckernel::to_underlying(DataFormat::{fmt.math.name})"
+                for fmt in self.formats_config
+            ]
             sfpu_math_values = [
-                f"ckernel::to_underlying(DataFormat::{fmt.sfpu_math.name})" for fmt in self.formats_config
+                f"ckernel::to_underlying(DataFormat::{fmt.sfpu_math.name})"
+                for fmt in self.formats_config
             ]
-            pack_in_values = [f"ckernel::to_underlying(DataFormat::{fmt.pack_src.name})" for fmt in self.formats_config]
+            pack_in_values = [
+                f"ckernel::to_underlying(DataFormat::{fmt.pack_src.name})"
+                for fmt in self.formats_config
+            ]
             pack_out_values = [
-                f"ckernel::to_underlying(DataFormat::{fmt.pack_dst.name})" for fmt in self.formats_config
+                f"ckernel::to_underlying(DataFormat::{fmt.pack_dst.name})"
+                for fmt in self.formats_config
             ]
             pack_s_in_values = [
-                f"ckernel::to_underlying(DataFormat::{fmt.pack_S_src.name})" for fmt in self.formats_config
+                f"ckernel::to_underlying(DataFormat::{fmt.pack_S_src.name})"
+                for fmt in self.formats_config
             ]
             pack_s_out_values = [
-                f"ckernel::to_underlying(DataFormat::{fmt.pack_S_dst.name})" for fmt in self.formats_config
+                f"ckernel::to_underlying(DataFormat::{fmt.pack_S_dst.name})"
+                for fmt in self.formats_config
             ]
 
             header_content.extend(
@@ -1019,12 +1122,20 @@ class TestConfig:
             "#define RUNTIME_PARAMETERS  [[maybe_unused]] const struct RuntimeParams&",
             f"constexpr bool l1_acc_en = {self.l1_acc.value};",
             f"constexpr bool unpack_to_dest = {str(self.unpack_to_dest).lower()};",
-        ] + (FORMATS_CONFIG_STRUCT_COMPILETIME if self.compile_time_formats else FORMATS_CONFIG_STRUCT_RUNTIME)
+        ] + (
+            FORMATS_CONFIG_STRUCT_COMPILETIME
+            if self.compile_time_formats
+            else FORMATS_CONFIG_STRUCT_RUNTIME
+        )
 
         if self.formats_config is None:
-            header_content.append(f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.value};")
+            header_content.append(
+                f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.value};"
+            )
         else:
-            header_content.append(f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.cpp_enum_value};")
+            header_content.append(
+                f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.cpp_enum_value};"
+            )
 
         if TestConfig.SPEED_OF_LIGHT:
             header_content.extend(
@@ -1036,7 +1147,9 @@ class TestConfig:
             )
 
             if self.variant_stimuli:
-                header_content.extend(self.variant_stimuli.generate_stimuli_header_addresses())
+                header_content.extend(
+                    self.variant_stimuli.generate_stimuli_header_addresses()
+                )
 
         for parameter in self.templates:
             header_content.append(parameter.convert_to_cpp())
@@ -1061,13 +1174,17 @@ class TestConfig:
             text=True,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"riscv-tt-elf-size failed on {elf_path}:\n{result.stderr}")
+            raise RuntimeError(
+                f"riscv-tt-elf-size failed on {elf_path}:\n{result.stderr}"
+            )
         # BSD format: header line + data line
         #    text    data     bss     dec     hex filename
         #    4096      32       0    4128    1020 unpack.elf
         lines = result.stdout.strip().splitlines()
         if len(lines) < 2:
-            raise RuntimeError(f"Unexpected riscv-tt-elf-size output for {elf_path}:\n{result.stdout}")
+            raise RuntimeError(
+                f"Unexpected riscv-tt-elf-size output for {elf_path}:\n{result.stdout}"
+            )
         try:
             return int(lines[1].split()[0])
         except (IndexError, ValueError) as e:
@@ -1106,7 +1223,9 @@ class TestConfig:
 
             create_directories([VARIANT_OBJ_DIR, VARIANT_ELF_DIR])
 
-            local_options_compile, local_memory_layout_ld, _ = self.resolve_compile_options()
+            local_options_compile, local_memory_layout_ld, _ = (
+                self.resolve_compile_options()
+            )
 
             if not self.skip_build_header:
                 with open(VARIANT_DIR / "build.h", "w") as f:
@@ -1122,7 +1241,9 @@ class TestConfig:
             def build_kernel_part(name: str):
                 optional_kernel_flags = ""
                 if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                    optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(TestConfig.KERNEL_COMPONENTS.index(name))
+                    optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
+                        TestConfig.KERNEL_COMPONENTS.index(name)
+                    )
 
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
@@ -1134,7 +1255,10 @@ class TestConfig:
                 # Quasar would deadlock the SFPU thread (it would spinwait on a
                 # semaphore that never gets the extra post). A static_assert in
                 # `counters.h` enforces this at compile time as a safety net.
-                if TestConfig.ENABLE_PERF_COUNTERS and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+                if (
+                    TestConfig.ENABLE_PERF_COUNTERS
+                    and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
+                ):
                     optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
 
                 COVERAGES_DEPS = (
@@ -1175,14 +1299,21 @@ class TestConfig:
                     (f"#include  <{self.test_name}>\n" "#include  <trisc.cpp>\n"),
                 )
 
-            with ThreadPoolExecutor(max_workers=len(TestConfig.KERNEL_COMPONENTS)) as executor:
-                futures = [executor.submit(build_kernel_part, name) for name in TestConfig.KERNEL_COMPONENTS]
+            with ThreadPoolExecutor(
+                max_workers=len(TestConfig.KERNEL_COMPONENTS)
+            ) as executor:
+                futures = [
+                    executor.submit(build_kernel_part, name)
+                    for name in TestConfig.KERNEL_COMPONENTS
+                ]
                 for fut in futures:
                     fut.result()
 
             if self.profiler_build == ProfilerBuild.Yes:
                 # Extract profiler metadata
-                PROFILER_VARIANT_META_DIR = Path(TestConfig.PROFILER_META / self.test_name / self.variant_id)
+                PROFILER_VARIANT_META_DIR = Path(
+                    TestConfig.PROFILER_META / self.test_name / self.variant_id
+                )
 
                 PROFILER_VARIANT_META_DIR.mkdir(exist_ok=True, parents=True)
 
@@ -1205,16 +1336,20 @@ class TestConfig:
             temp_elf = parse_elf(VARIANT_DIR / f"elf/{trisc_name}.elf")
             coverage_start = temp_elf.symbols["__coverage_start"].value
             if not coverage_start:
-                raise TTException(f"__coverage_start not found in variant's {trisc_name}.elf")
-            length = read_word_from_device(TestConfig.TENSIX_LOCATION, addr=coverage_start)
-            coverage_stream += read_from_device(TestConfig.TENSIX_LOCATION, coverage_start + 4, num_bytes=length - 4)
+                raise TTException(
+                    f"__coverage_start not found in variant's {trisc_name}.elf"
+                )
+            length = read_word_from_device(
+                TestConfig.TENSIX_LOCATION, addr=coverage_start
+            )
+            coverage_stream += read_from_device(
+                TestConfig.TENSIX_LOCATION, coverage_start + 4, num_bytes=length - 4
+            )
 
         if len(self.runtimes) == 0:
             stream_name = "deafult_stream_name.stream"
         else:
-            stream_name = (
-                f"{sha256(str(' | '.join([str(run_arg) for run_arg in self.runtimes])).encode()).hexdigest()}.stream"
-            )
+            stream_name = f"{sha256(str(' | '.join([str(run_arg) for run_arg in self.runtimes])).encode()).hexdigest()}.stream"
 
         logger.trace(stream_name)
 
@@ -1233,7 +1368,9 @@ class TestConfig:
 
     def run_elf_files(self) -> list:
         boot_mode = (
-            CHIP_DEFAULT_BOOT_MODES[TestConfig.CHIP_ARCH] if self.boot_mode == BootMode.DEFAULT else self.boot_mode
+            CHIP_DEFAULT_BOOT_MODES[TestConfig.CHIP_ARCH]
+            if self.boot_mode == BootMode.DEFAULT
+            else self.boot_mode
         )
 
         # Zero the device print buffer header before each kernel run so the
@@ -1245,10 +1382,15 @@ class TestConfig:
                 [0] * (aux_size_for(TestConfig.PROCESSOR_COUNT) // 4),
             )
 
-        if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR and boot_mode != BootMode.TRISC:
+        if (
+            TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
+            and boot_mode != BootMode.TRISC
+        ):
             raise ValueError("Quasar only supports TRISC boot mode")
 
-        brisc_cmd_timeout = TestConfig.SIMULATOR_TIMEOUT if TestConfig.TEST_TARGET.run_simulator else 1
+        brisc_cmd_timeout = (
+            TestConfig.SIMULATOR_TIMEOUT if TestConfig.TEST_TARGET.run_simulator else 1
+        )
 
         if boot_mode == BootMode.BRISC:
             if not TestConfig.BRISC_ELF_LOADED:
@@ -1279,9 +1421,13 @@ class TestConfig:
                         device_module.Mailboxes.BriscCounter.value,
                         [0],
                     )
-                    commit_tensix_soft_reset(0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION)
+                    commit_tensix_soft_reset(
+                        0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
+                    )
                     try:
-                        wait_brisc_boot_ready(TestConfig.TENSIX_LOCATION, timeout=brisc_cmd_timeout)
+                        wait_brisc_boot_ready(
+                            TestConfig.TENSIX_LOCATION, timeout=brisc_cmd_timeout
+                        )
                     except TimeoutError as err:
                         last_err = err
                         continue
@@ -1289,7 +1435,8 @@ class TestConfig:
                     break
                 else:
                     raise TimeoutError(
-                        f"BRISC bring-up did not become ready after " f"{TestConfig.BRISC_BOOT_MAX_ATTEMPTS} attempts"
+                        f"BRISC bring-up did not become ready after "
+                        f"{TestConfig.BRISC_BOOT_MAX_ATTEMPTS} attempts"
                     ) from last_err
 
             # Reset only TRISCs, BRISC stays alive in its polling loop
@@ -1301,10 +1448,13 @@ class TestConfig:
         else:
             commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
-        VARIANT_ELF_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+        VARIANT_ELF_DIR = (
+            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+        )
 
         self.temp_elfs = [
-            str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute()) for trisc_name in TestConfig.KERNEL_COMPONENTS
+            str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
+            for trisc_name in TestConfig.KERNEL_COMPONENTS
         ]
 
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
@@ -1329,11 +1479,18 @@ class TestConfig:
                         elf_file=elf_file_path,
                         location=TestConfig.TENSIX_LOCATION,
                         risc_name=f"trisc{i}",
-                        neo_id=(0 if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else None),
+                        neo_id=(
+                            0
+                            if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
+                            else None
+                        ),
                         verify_write=False,
                     )
 
-            if boot_mode == BootMode.BRISC and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
+            if (
+                boot_mode == BootMode.BRISC
+                and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
+            ):
                 commit_brisc_command(
                     TestConfig.TENSIX_LOCATION,
                     BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
@@ -1357,9 +1514,7 @@ class TestConfig:
 
         return
 
-    def wait_for_tensix_operations_finished(
-        self, timeout=25, poll_callback=None
-    ):  # Timeout 25 for face_compressed perf tests
+    def wait_for_tensix_operations_finished(self, timeout=2, poll_callback=None):
         """
         Args:
             elfs: List of ELF file paths (used for assert diagnostics).
@@ -1377,13 +1532,20 @@ class TestConfig:
                 device_module.Mailboxes.BriscBread0,
                 device_module.Mailboxes.BriscBread1,
             }
-        timeout = TestConfig.SIMULATOR_TIMEOUT if TestConfig.TEST_TARGET.run_simulator else timeout
+        timeout = (
+            TestConfig.SIMULATOR_TIMEOUT
+            if TestConfig.TEST_TARGET.run_simulator
+            else timeout
+        )
 
         completed = set()
         end_time = time.time() + timeout
         while time.time() < end_time:
             for mailbox in mailboxes - completed:
-                if read_word_from_device(TestConfig.TENSIX_LOCATION, mailbox.value) == KERNEL_COMPLETE:
+                if (
+                    read_word_from_device(TestConfig.TENSIX_LOCATION, mailbox.value)
+                    == KERNEL_COMPLETE
+                ):
                     completed.add(mailbox)
 
             if poll_callback is not None:
@@ -1398,7 +1560,9 @@ class TestConfig:
         )
 
         trisc_hangs = [mailbox.name for mailbox in (mailboxes - completed)]
-        raise TimeoutError(f"Timeout reached: waited {timeout} seconds for {', '.join(trisc_hangs)}")
+        raise TimeoutError(
+            f"Timeout reached: waited {timeout} seconds for {', '.join(trisc_hangs)}"
+        )
 
     def prepare(self):
         """Hash + build_elfs once. Safe to call from run() or earlier."""
@@ -1470,7 +1634,11 @@ class TestConfig:
             self.read_coverage_data_from_device()
 
         return TestOutcome(
-            result=(self.variant_stimuli.collect_results(TestConfig.TENSIX_LOCATION) if self.variant_stimuli else None),
+            result=(
+                self.variant_stimuli.collect_results(TestConfig.TENSIX_LOCATION)
+                if self.variant_stimuli
+                else None
+            ),
             device_print_lines=dprint_lines,
         )
 
@@ -1518,7 +1686,10 @@ def process_coverage_run_artefacts() -> bool:
 
     logger.info("Processing code coverage data")
     with ThreadPoolExecutor(max_workers=worker_num) as executor:
-        futures = [executor.submit(process_variants, work) for work in np.array_split(compiled_variants, worker_num)]
+        futures = [
+            executor.submit(process_variants, work)
+            for work in np.array_split(compiled_variants, worker_num)
+        ]
         for fut in futures:
             fut.result()
 
@@ -1557,11 +1728,14 @@ def process_coverage_run_artefacts() -> bool:
             result = run_shell_command(cmd, TestConfig.ARTEFACTS_DIR)
 
             if result.returncode:
-                logger.warning("Failed to merge {}, skipping: {}", info_file, result.stderr)
+                logger.warning(
+                    "Failed to merge {}, skipping: {}", info_file, result.stderr
+                )
 
     with ThreadPoolExecutor(max_workers=worker_num) as executor:
         futures = [
-            executor.submit(combine_files, i, work) for i, work in enumerate(np.array_split(info_files, worker_num))
+            executor.submit(combine_files, i, work)
+            for i, work in enumerate(np.array_split(info_files, worker_num))
         ]
         for fut in futures:
             fut.result()
@@ -1575,7 +1749,9 @@ def process_coverage_run_artefacts() -> bool:
         result = run_shell_command(cmd, TestConfig.ARTEFACTS_DIR)
 
         if result.returncode:
-            logger.warning("Failed to merge {}, skipping. Error: {}", info_file, result.stderr)
+            logger.warning(
+                "Failed to merge {}, skipping. Error: {}", info_file, result.stderr
+            )
 
     end = time.time()
     logger.info("Combined {} coverage files in {:.2f}s", len(info_files), end - start)

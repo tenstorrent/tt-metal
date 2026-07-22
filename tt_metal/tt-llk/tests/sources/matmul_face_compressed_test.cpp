@@ -9,7 +9,6 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "params.h"
-#include "pmp.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -41,9 +40,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_AB_face_compressed_mm_init_<false>(params.in0_face_r_dim);
 
-    ckernel::pmp_run(
-        [&] { _llk_unpack_AB_face_compressed_mm_<CT_DIM, true, true>(L1_ADDRESS(params.buffer_A[0]), params.buffer_C[0], KT_DIM); },
-        [&] { DEVICE_PRINT("Case: M={} K={} N={} IMPL=9\n", params.in0_face_r_dim, (std::uint32_t)KT_DIM, (std::uint32_t)CT_DIM); });
+    _llk_unpack_AB_face_compressed_mm_<CT_DIM, true, true>(L1_ADDRESS(params.buffer_A[0]), params.buffer_C[0], KT_DIM);
 
     _llk_unpack_AB_face_compressed_mm_uninit_(params.num_faces_A);
 }
@@ -68,7 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-    ckernel::pmp_run([&] { _llk_math_face_compressed_mm_<CT_DIM, true>(params.buffer_C[0], 0, KT_DIM); }, [&] {});
+    _llk_math_face_compressed_mm_<CT_DIM, true>(params.buffer_C[0], 0, KT_DIM);
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
@@ -93,10 +90,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst, params.in0_face_r_dim, TILE_C_DIM, params.num_faces);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2);
-
-    // Pack isn't in the timed zone (matches the metal kernel, which packs after
-    // pmp_run); enter pmp_run with an empty body so the 3-way barrier still closes.
-    ckernel::pmp_run([&] {}, [&] {});
 
     _llk_packer_wait_for_math_done_();
 

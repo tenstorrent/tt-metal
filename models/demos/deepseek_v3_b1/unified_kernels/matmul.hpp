@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
 
@@ -15,7 +14,6 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/pmp.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/experimental/pack_block.h"
 #ifdef TRISC_PACK
@@ -27,7 +25,7 @@
 #endif
 
 // Fused activation types for matmul
-enum class FusedActivation : std::uint32_t {
+enum class FusedActivation : uint32_t {
     NONE = 0,
     SIGMOID = 1,
     SILU = 2,
@@ -62,12 +60,12 @@ struct Matmul {
 
     // Compute CTArgs (TRISC): out_w (output width in tiles), transpose, fused_activation
     template <
-        std::uint32_t out_w_,
+        uint32_t out_w_,
         bool transpose_ = false,
-        std::uint32_t fused_activation_ = 0,
+        uint32_t fused_activation_ = 0,
         bool fused_activation_approx_mode_ = false>
     struct ComputeCTArgs {
-        static constexpr std::uint32_t out_w = out_w_;
+        static constexpr uint32_t out_w = out_w_;
         static constexpr bool transpose = transpose_;
         static constexpr FusedActivation fused_activation = static_cast<FusedActivation>(fused_activation_);
         static constexpr bool fuse_sigmoid = fused_activation == FusedActivation::SIGMOID;
@@ -87,11 +85,11 @@ struct Matmul {
 
     // Compute args (TRISC): [in0, in1, out, num_tiles, in1_address_override]
     struct ComputeArgs {
-        std::uint32_t in0;
-        std::uint32_t in1;
-        std::uint32_t out;
-        std::uint32_t k_num_tiles;
-        std::uint32_t in1_address_override = 0;  // byte address; overrides in1 read ptr if > 0
+        uint32_t in0;
+        uint32_t in1;
+        uint32_t out;
+        uint32_t k_num_tiles;
+        uint32_t in1_address_override = 0;  // byte address; overrides in1 read ptr if > 0
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -119,7 +117,7 @@ struct Matmul {
             // ================================================================
             // TRISC (Compute)
             // ================================================================
-            constexpr std::uint32_t out_w = CTArgs::out_w;
+            constexpr uint32_t out_w = CTArgs::out_w;
             constexpr bool transpose = CTArgs::transpose;
             constexpr bool split_acc = true;
             constexpr bool dense_packing = true;
@@ -157,11 +155,10 @@ struct Matmul {
                 }
 
                 // Per-tile: matmul -> activation on PACK -> pack
-                for (std::uint32_t w = 0; w < out_w; w++) {
+                for (uint32_t w = 0; w < out_w; w++) {
                     tile_regs_acquire();
 
-                    custom_mm_block<finalize, read_transposed>(
-                        args.in0, args.in1, 0, w * args.k_num_tiles, 0, args.k_num_tiles);
+                    custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, w * args.k_num_tiles, 0, args.k_num_tiles);
 
                     tile_regs_commit();
 
@@ -200,15 +197,7 @@ struct Matmul {
                 // Batch processing - all tiles at once
                 tile_regs_acquire();
 
-                ckernel::pmp_run(
-                    [&] {
-                        custom_mm_block<finalize, read_transposed>(
-                            args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
-                    },
-                    [&] {
-                        DEVICE_PRINT_UNPACK(
-                            "Case: M={} K={} N={} IMPL=0\n", get_operand_face_r_dim(args.in0), args.k_num_tiles, out_w);
-                    });
+                custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
 
                 tile_regs_commit();
 

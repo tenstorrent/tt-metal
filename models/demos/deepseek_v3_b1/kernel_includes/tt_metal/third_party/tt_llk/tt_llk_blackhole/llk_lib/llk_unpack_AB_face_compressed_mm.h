@@ -24,12 +24,12 @@ static_assert(
     "Code sequence length must not be greater than 32");
 
 inline constexpr std::uint32_t _llk_unpack_AB_face_compressed_mm_find_(const char* needle) {
-    constexpr std::uint32_t hay_len = sizeof(_llk_unpack_AB_face_compressed_mm_code_sequence_) - 1;
+    constexpr std::uint32_t hlen = sizeof(_llk_unpack_AB_face_compressed_mm_code_sequence_) - 1;
     std::uint32_t len = 0;
     while (needle[len] != '\0') {
         ++len;
     }
-    for (std::uint32_t i = 0; i + len <= hay_len; ++i) {
+    for (std::uint32_t i = 0; i + len <= hlen; ++i) {
         std::uint32_t k = 0;
         for (; k < len; ++k) {
             if (_llk_unpack_AB_face_compressed_mm_code_sequence_[i + k] != needle[k]) {
@@ -153,11 +153,8 @@ inline void _llk_unpack_AB_face_compressed_mm_mop_config_() {
 template <bool transpose = false>
 inline void _llk_unpack_AB_face_compressed_mm_init_(const std::uint32_t unpB_face_r_dim) {
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Ovrd_data_format_RMW>(1);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx2_ADDR32, 0, 0xffffffff>((256 << 16) | 256);
-    // hw_configure only sets the SrcA dest for cntx0/1 (REG5 word 84); mirror it onto
-    // cntx2/3 (word 85) so the double-buffered second pair lands faces in the same SrcA slot.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx2_address_ADDR32, 0, 0xffffffff>(((4 * 16) << 16) | (4 * 16));
+
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Ovrd_data_format_RMW>(1);  // read dataformat from per cntx registers
     cfg_reg_rmw_tensix<THCON_SEC0_REG7_Unpack_data_format_cntx0_RMW>(static_cast<std::uint32_t>(DataFormat::Bfp2_b));
     cfg_reg_rmw_tensix<THCON_SEC0_REG7_Unpack_out_data_format_cntx0_RMW>(
         static_cast<std::uint32_t>(DataFormat::Bfp2_b));
@@ -170,27 +167,36 @@ inline void _llk_unpack_AB_face_compressed_mm_init_(const std::uint32_t unpB_fac
     cfg_reg_rmw_tensix<THCON_SEC0_REG7_Unpack_data_format_cntx3_RMW>(static_cast<std::uint32_t>(DataFormat::Bfp4_b));
     cfg_reg_rmw_tensix<THCON_SEC0_REG7_Unpack_out_data_format_cntx3_RMW>(
         static_cast<std::uint32_t>(DataFormat::Bfp4_b));
+
+    // replicate standard settings hw configure sets for cntx0/1 onto cntx2/3 since cntx 2/3 were never used before
+    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx2_ADDR32, 0, 0xffffffff>((256 << 16) | 256);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx2_address_ADDR32, 0, 0xffffffff>(((4 * 16) << 16) | (4 * 16));
+
+    // override z dim
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xFF0000>(1);
+
+    _llk_unpack_AB_face_compressed_mm_mop_config_();
+
+    // counter override overrides CH0 XY and CH1 X counters, CH0 ZW counters are still shared
+    TTI_SETADCXY(0b011, 0b10'000, 0, 0, 0, 0b1111);  // reset overridden counters for bfp2
+    TTI_SETADCXY(0b011, 0b11'000, 0, 0, 0, 0b1111);  // reset overridden counters for bfp4
+    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1111);         // reset CH0 XY counters for unp1 (and unp0 while at it)
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);         // reset shared counters for both unpackers
 
     constexpr std::uint32_t unpA_x_end = FACE_R_DIM * FACE_C_DIM - 1;
     const std::uint32_t unpB_x_end = 4 * unpB_face_r_dim * FACE_C_DIM - 1;
 
-    _llk_unpack_AB_face_compressed_mm_mop_config_();
-
-    TTI_SETADCXY(0b011, 0b10'000, 0, 0, 0, 0b1111);
-    TTI_SETADCXY(0b011, 0b11'000, 0, 0, 0, 0b1111);
-    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1111);
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    // set CH1 X counters for both unpackers, bfp4 and bfp2 use different counter overrides so we need to set both
     TTI_SETADC(p_setadc::UNP0, p_setadc::CH_1, p_setadc::SET_X, (0b10 << 16) | unpA_x_end);
     TTI_SETADC(p_setadc::UNP0, p_setadc::CH_1, p_setadc::SET_X, (0b11 << 16) | unpA_x_end);
     TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
 }
 
 inline void _llk_unpack_AB_face_compressed_mm_uninit_(const std::uint32_t unpA_num_faces) {
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xFF0000>(unpA_num_faces);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Ovrd_data_format_RMW>(0);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xFF0000>(unpA_num_faces);
 
-    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1111);
+    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1111);  // reset CH0 XY counters for both unpackers to leave them in a clean state
 }
 
 template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true>
@@ -226,241 +232,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(
 
     std::uint32_t c = 0;
 
-    for (std::uint32_t b = 0; b < full_blocks; ++b) {
-        for (std::uint32_t i = 0; i < 4; ++i, ++c) {
-            std::uint32_t meta = meta_ptr[c];
-            std::uint32_t idx0 = (meta >> 0) & 0b111111;
-            std::uint32_t idx1 = (meta >> 5) & 0b111111;
-            std::uint32_t idx2 = (meta >> 10) & 0b111111;
-            std::uint32_t idx3 = (meta >> 15) & 0b111111;
-            std::uint32_t idx4 = (meta >> 20) & 0b111111;
-            std::uint32_t idx5 = (meta >> 25) & 0b111111;
-
-            std::uint32_t data0 = _llk_unpack_AB_face_compressed_mm_header_table_[idx0];
-            std::uint32_t data1 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx0];
-            std::uint32_t data2 = _llk_unpack_AB_face_compressed_mm_header_table_[idx1];
-            std::uint32_t data3 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx1];
-            std::uint32_t data4 = _llk_unpack_AB_face_compressed_mm_header_table_[idx2];
-            std::uint32_t data5 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx2];
-            std::uint32_t data6 = _llk_unpack_AB_face_compressed_mm_header_table_[idx3];
-            std::uint32_t data7 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx3];
-            std::uint32_t data8 = _llk_unpack_AB_face_compressed_mm_header_table_[idx4];
-            std::uint32_t data9 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx4];
-            std::uint32_t data10 = _llk_unpack_AB_face_compressed_mm_header_table_[idx5];
-            std::uint32_t data11 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx5];
-
-            ckernel::instrn_buffer[0] = data0;
-            ckernel::instrn_buffer[0] = data1;
-            ckernel::instrn_buffer[0] = data2;
-            ckernel::instrn_buffer[0] = data3;
-            ckernel::instrn_buffer[0] = data4;
-            ckernel::instrn_buffer[0] = data5;
-            ckernel::instrn_buffer[0] = data6;
-            ckernel::instrn_buffer[0] = data7;
-            ckernel::instrn_buffer[0] = data8;
-            ckernel::instrn_buffer[0] = data9;
-            ckernel::instrn_buffer[0] = data10;
-            ckernel::instrn_buffer[0] = data11;
-        }
-        cfg[THCON_SEC0_REG3_Base_cntx2_address_ADDR32] = pre_meta_ptr[3 + 4 * b] & 0x00FFFFFF;
-        cfg[THCON_SEC0_REG3_Base_cntx3_address_ADDR32] = pre_meta_ptr[4 + 4 * b] & 0x00FFFFFF;
-        for (std::uint32_t i = 0; i < 4; ++i, ++c) {
-            std::uint32_t meta = meta_ptr[c];
-            std::uint32_t idx0 = (meta >> 0) & 0b111111;
-            std::uint32_t idx1 = (meta >> 5) & 0b111111;
-            std::uint32_t idx2 = (meta >> 10) & 0b111111;
-            std::uint32_t idx3 = (meta >> 15) & 0b111111;
-            std::uint32_t idx4 = (meta >> 20) & 0b111111;
-            std::uint32_t idx5 = (meta >> 25) & 0b111111;
-
-            std::uint32_t data0 = _llk_unpack_AB_face_compressed_mm_header_table_[idx0];
-            std::uint32_t data1 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx0];
-            std::uint32_t data2 = _llk_unpack_AB_face_compressed_mm_header_table_[idx1];
-            std::uint32_t data3 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx1];
-            std::uint32_t data4 = _llk_unpack_AB_face_compressed_mm_header_table_[idx2];
-            std::uint32_t data5 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx2];
-            std::uint32_t data6 = _llk_unpack_AB_face_compressed_mm_header_table_[idx3];
-            std::uint32_t data7 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx3];
-            std::uint32_t data8 = _llk_unpack_AB_face_compressed_mm_header_table_[idx4];
-            std::uint32_t data9 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx4];
-            std::uint32_t data10 = _llk_unpack_AB_face_compressed_mm_header_table_[idx5];
-            std::uint32_t data11 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx5];
-
-            ckernel::instrn_buffer[0] = data0;
-            ckernel::instrn_buffer[0] = data1;
-            ckernel::instrn_buffer[0] = data2;
-            ckernel::instrn_buffer[0] = data3;
-            ckernel::instrn_buffer[0] = data4;
-            ckernel::instrn_buffer[0] = data5;
-            ckernel::instrn_buffer[0] = data6;
-            ckernel::instrn_buffer[0] = data7;
-            ckernel::instrn_buffer[0] = data8;
-            ckernel::instrn_buffer[0] = data9;
-            ckernel::instrn_buffer[0] = data10;
-            ckernel::instrn_buffer[0] = data11;
-        }
-        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0002);
-        TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b10 << 16) | (pre_meta_ptr[3 + 4 * b] >> 24));
-        TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b11 << 16) | (pre_meta_ptr[4 + 4 * b] >> 24));
-        for (std::uint32_t i = 0; i < 4; ++i, ++c) {
-            std::uint32_t meta = meta_ptr[c];
-            std::uint32_t idx0 = (meta >> 0) & 0b111111;
-            std::uint32_t idx1 = (meta >> 5) & 0b111111;
-            std::uint32_t idx2 = (meta >> 10) & 0b111111;
-            std::uint32_t idx3 = (meta >> 15) & 0b111111;
-            std::uint32_t idx4 = (meta >> 20) & 0b111111;
-            std::uint32_t idx5 = (meta >> 25) & 0b111111;
-
-            std::uint32_t data0 = _llk_unpack_AB_face_compressed_mm_header_table_[idx0];
-            std::uint32_t data1 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx0];
-            std::uint32_t data2 = _llk_unpack_AB_face_compressed_mm_header_table_[idx1];
-            std::uint32_t data3 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx1];
-            std::uint32_t data4 = _llk_unpack_AB_face_compressed_mm_header_table_[idx2];
-            std::uint32_t data5 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx2];
-            std::uint32_t data6 = _llk_unpack_AB_face_compressed_mm_header_table_[idx3];
-            std::uint32_t data7 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx3];
-            std::uint32_t data8 = _llk_unpack_AB_face_compressed_mm_header_table_[idx4];
-            std::uint32_t data9 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx4];
-            std::uint32_t data10 = _llk_unpack_AB_face_compressed_mm_header_table_[idx5];
-            std::uint32_t data11 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx5];
-
-            ckernel::instrn_buffer[0] = data0;
-            ckernel::instrn_buffer[0] = data1;
-            ckernel::instrn_buffer[0] = data2;
-            ckernel::instrn_buffer[0] = data3;
-            ckernel::instrn_buffer[0] = data4;
-            ckernel::instrn_buffer[0] = data5;
-            ckernel::instrn_buffer[0] = data6;
-            ckernel::instrn_buffer[0] = data7;
-            ckernel::instrn_buffer[0] = data8;
-            ckernel::instrn_buffer[0] = data9;
-            ckernel::instrn_buffer[0] = data10;
-            ckernel::instrn_buffer[0] = data11;
-        }
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = pre_meta_ptr[5 + 4 * b] & 0x00FFFFFF;
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[6 + 4 * b] & 0x00FFFFFF;
-        for (std::uint32_t i = 0; i < 4; ++i, ++c) {
-            std::uint32_t meta = meta_ptr[c];
-            std::uint32_t idx0 = (meta >> 0) & 0b111111;
-            std::uint32_t idx1 = (meta >> 5) & 0b111111;
-            std::uint32_t idx2 = (meta >> 10) & 0b111111;
-            std::uint32_t idx3 = (meta >> 15) & 0b111111;
-            std::uint32_t idx4 = (meta >> 20) & 0b111111;
-            std::uint32_t idx5 = (meta >> 25) & 0b111111;
-
-            std::uint32_t data0 = _llk_unpack_AB_face_compressed_mm_header_table_[idx0];
-            std::uint32_t data1 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx0];
-            std::uint32_t data2 = _llk_unpack_AB_face_compressed_mm_header_table_[idx1];
-            std::uint32_t data3 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx1];
-            std::uint32_t data4 = _llk_unpack_AB_face_compressed_mm_header_table_[idx2];
-            std::uint32_t data5 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx2];
-            std::uint32_t data6 = _llk_unpack_AB_face_compressed_mm_header_table_[idx3];
-            std::uint32_t data7 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx3];
-            std::uint32_t data8 = _llk_unpack_AB_face_compressed_mm_header_table_[idx4];
-            std::uint32_t data9 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx4];
-            std::uint32_t data10 = _llk_unpack_AB_face_compressed_mm_header_table_[idx5];
-            std::uint32_t data11 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx5];
-
-            ckernel::instrn_buffer[0] = data0;
-            ckernel::instrn_buffer[0] = data1;
-            ckernel::instrn_buffer[0] = data2;
-            ckernel::instrn_buffer[0] = data3;
-            ckernel::instrn_buffer[0] = data4;
-            ckernel::instrn_buffer[0] = data5;
-            ckernel::instrn_buffer[0] = data6;
-            ckernel::instrn_buffer[0] = data7;
-            ckernel::instrn_buffer[0] = data8;
-            ckernel::instrn_buffer[0] = data9;
-            ckernel::instrn_buffer[0] = data10;
-            ckernel::instrn_buffer[0] = data11;
-        }
-        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
-        TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b10 << 16) | (pre_meta_ptr[5 + 4 * b] >> 24));
-        TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b11 << 16) | (pre_meta_ptr[6 + 4 * b] >> 24));
-    }
-
-    if (odd_block) {
-        for (std::uint32_t i = 0; i < 4; ++i, ++c) {
-            std::uint32_t meta = meta_ptr[c];
-            std::uint32_t idx0 = (meta >> 0) & 0b111111;
-            std::uint32_t idx1 = (meta >> 5) & 0b111111;
-            std::uint32_t idx2 = (meta >> 10) & 0b111111;
-            std::uint32_t idx3 = (meta >> 15) & 0b111111;
-            std::uint32_t idx4 = (meta >> 20) & 0b111111;
-            std::uint32_t idx5 = (meta >> 25) & 0b111111;
-
-            std::uint32_t data0 = _llk_unpack_AB_face_compressed_mm_header_table_[idx0];
-            std::uint32_t data1 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx0];
-            std::uint32_t data2 = _llk_unpack_AB_face_compressed_mm_header_table_[idx1];
-            std::uint32_t data3 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx1];
-            std::uint32_t data4 = _llk_unpack_AB_face_compressed_mm_header_table_[idx2];
-            std::uint32_t data5 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx2];
-            std::uint32_t data6 = _llk_unpack_AB_face_compressed_mm_header_table_[idx3];
-            std::uint32_t data7 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx3];
-            std::uint32_t data8 = _llk_unpack_AB_face_compressed_mm_header_table_[idx4];
-            std::uint32_t data9 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx4];
-            std::uint32_t data10 = _llk_unpack_AB_face_compressed_mm_header_table_[idx5];
-            std::uint32_t data11 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx5];
-
-            ckernel::instrn_buffer[0] = data0;
-            ckernel::instrn_buffer[0] = data1;
-            ckernel::instrn_buffer[0] = data2;
-            ckernel::instrn_buffer[0] = data3;
-            ckernel::instrn_buffer[0] = data4;
-            ckernel::instrn_buffer[0] = data5;
-            ckernel::instrn_buffer[0] = data6;
-            ckernel::instrn_buffer[0] = data7;
-            ckernel::instrn_buffer[0] = data8;
-            ckernel::instrn_buffer[0] = data9;
-            ckernel::instrn_buffer[0] = data10;
-            ckernel::instrn_buffer[0] = data11;
-        }
-        cfg[THCON_SEC0_REG3_Base_cntx2_address_ADDR32] = pre_meta_ptr[3 + 4 * full_blocks] & 0x00FFFFFF;
-        cfg[THCON_SEC0_REG3_Base_cntx3_address_ADDR32] = pre_meta_ptr[4 + 4 * full_blocks] & 0x00FFFFFF;
-        for (std::uint32_t i = 0; i < 4; ++i, ++c) {
-            std::uint32_t meta = meta_ptr[c];
-            std::uint32_t idx0 = (meta >> 0) & 0b111111;
-            std::uint32_t idx1 = (meta >> 5) & 0b111111;
-            std::uint32_t idx2 = (meta >> 10) & 0b111111;
-            std::uint32_t idx3 = (meta >> 15) & 0b111111;
-            std::uint32_t idx4 = (meta >> 20) & 0b111111;
-            std::uint32_t idx5 = (meta >> 25) & 0b111111;
-
-            std::uint32_t data0 = _llk_unpack_AB_face_compressed_mm_header_table_[idx0];
-            std::uint32_t data1 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx0];
-            std::uint32_t data2 = _llk_unpack_AB_face_compressed_mm_header_table_[idx1];
-            std::uint32_t data3 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx1];
-            std::uint32_t data4 = _llk_unpack_AB_face_compressed_mm_header_table_[idx2];
-            std::uint32_t data5 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx2];
-            std::uint32_t data6 = _llk_unpack_AB_face_compressed_mm_header_table_[idx3];
-            std::uint32_t data7 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx3];
-            std::uint32_t data8 = _llk_unpack_AB_face_compressed_mm_header_table_[idx4];
-            std::uint32_t data9 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx4];
-            std::uint32_t data10 = _llk_unpack_AB_face_compressed_mm_header_table_[idx5];
-            std::uint32_t data11 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx5];
-
-            ckernel::instrn_buffer[0] = data0;
-            ckernel::instrn_buffer[0] = data1;
-            ckernel::instrn_buffer[0] = data2;
-            ckernel::instrn_buffer[0] = data3;
-            ckernel::instrn_buffer[0] = data4;
-            ckernel::instrn_buffer[0] = data5;
-            ckernel::instrn_buffer[0] = data6;
-            ckernel::instrn_buffer[0] = data7;
-            ckernel::instrn_buffer[0] = data8;
-            ckernel::instrn_buffer[0] = data9;
-            ckernel::instrn_buffer[0] = data10;
-            ckernel::instrn_buffer[0] = data11;
-        }
-        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0002);
-        TT_SETADC(
-            p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b10 << 16) | (pre_meta_ptr[3 + 4 * full_blocks] >> 24));
-        TT_SETADC(
-            p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b11 << 16) | (pre_meta_ptr[4 + 4 * full_blocks] >> 24));
-    }
-
-    for (; c < full_iters; ++c) {
-        std::uint32_t meta = meta_ptr[c];
+    auto emit_word = [](std::uint32_t meta) {
         std::uint32_t idx0 = (meta >> 0) & 0b111111;
         std::uint32_t idx1 = (meta >> 5) & 0b111111;
         std::uint32_t idx2 = (meta >> 10) & 0b111111;
@@ -493,6 +265,51 @@ inline void _llk_unpack_AB_face_compressed_mm_(
         ckernel::instrn_buffer[0] = data9;
         ckernel::instrn_buffer[0] = data10;
         ckernel::instrn_buffer[0] = data11;
+    };
+
+    for (std::uint32_t b = 0; b < full_blocks; ++b) {
+        for (std::uint32_t i = 0; i < 4; ++i, ++c) {
+            emit_word(meta_ptr[c]);
+        }
+        cfg[THCON_SEC0_REG3_Base_cntx2_address_ADDR32] = pre_meta_ptr[3 + 4 * b] & 0x00FFFFFF;
+        cfg[THCON_SEC0_REG3_Base_cntx3_address_ADDR32] = pre_meta_ptr[4 + 4 * b] & 0x00FFFFFF;
+        for (std::uint32_t i = 0; i < 4; ++i, ++c) {
+            emit_word(meta_ptr[c]);
+        }
+        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0002);
+        TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b10 << 16) | (pre_meta_ptr[3 + 4 * b] >> 24));
+        TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b11 << 16) | (pre_meta_ptr[4 + 4 * b] >> 24));
+        for (std::uint32_t i = 0; i < 4; ++i, ++c) {
+            emit_word(meta_ptr[c]);
+        }
+        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = pre_meta_ptr[5 + 4 * b] & 0x00FFFFFF;
+        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[6 + 4 * b] & 0x00FFFFFF;
+        for (std::uint32_t i = 0; i < 4; ++i, ++c) {
+            emit_word(meta_ptr[c]);
+        }
+        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
+        TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b10 << 16) | (pre_meta_ptr[5 + 4 * b] >> 24));
+        TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b11 << 16) | (pre_meta_ptr[6 + 4 * b] >> 24));
+    }
+
+    if (odd_block) {
+        for (std::uint32_t i = 0; i < 4; ++i, ++c) {
+            emit_word(meta_ptr[c]);
+        }
+        cfg[THCON_SEC0_REG3_Base_cntx2_address_ADDR32] = pre_meta_ptr[3 + 4 * full_blocks] & 0x00FFFFFF;
+        cfg[THCON_SEC0_REG3_Base_cntx3_address_ADDR32] = pre_meta_ptr[4 + 4 * full_blocks] & 0x00FFFFFF;
+        for (std::uint32_t i = 0; i < 4; ++i, ++c) {
+            emit_word(meta_ptr[c]);
+        }
+        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0002);
+        TT_SETADC(
+            p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b10 << 16) | (pre_meta_ptr[3 + 4 * full_blocks] >> 24));
+        TT_SETADC(
+            p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b11 << 16) | (pre_meta_ptr[4 + 4 * full_blocks] >> 24));
+    }
+
+    for (; c < full_iters; ++c) {
+        emit_word(meta_ptr[c]);
     }
     std::uint32_t meta = meta_ptr[full_iters];
     for (std::uint32_t j = 0; j < rem_iters; ++j) {

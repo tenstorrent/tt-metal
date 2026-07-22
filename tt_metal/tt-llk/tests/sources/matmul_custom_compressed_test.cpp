@@ -9,7 +9,6 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "params.h"
-#include "pmp.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -41,13 +40,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_AB_compressed_custom_mm_init_<false>(params.in0_face_r_dim);
 
-    ckernel::pmp_run(
-        [&]
-        {
-            _llk_unpack_AB_compressed_custom_mm_<true>(
-                L1_ADDRESS(params.buffer_B[0]), L1_ADDRESS(params.buffer_A[0]), params.buffer_C[0], params.KT_DIM, params.CT_DIM);
-        },
-        [&] { DEVICE_PRINT("Case: M={} K={} N={} IMPL=8\n", params.in0_face_r_dim, params.KT_DIM, params.CT_DIM); });
+    _llk_unpack_AB_compressed_custom_mm_<true>(L1_ADDRESS(params.buffer_B[0]), L1_ADDRESS(params.buffer_A[0]), params.buffer_C[0], KT_DIM, CT_DIM);
 }
 
 #endif
@@ -70,7 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-    ckernel::pmp_run([&] { _llk_math_compressed_custom_mm_<false>(params.buffer_C[0], params.in0_face_r_dim, 0, params.KT_DIM, params.CT_DIM); }, [&] {});
+    _llk_math_compressed_custom_mm_<false>(params.buffer_C[0], params.in0_face_r_dim, 0, KT_DIM, CT_DIM);
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
@@ -96,13 +89,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst, params.in0_face_r_dim, TILE_C_DIM, params.num_faces);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2);
 
-    // Pack isn't in the timed zone (matches the metal kernel, which packs after
-    // pmp_run); enter pmp_run with an empty body so the 3-way barrier still closes.
-    ckernel::pmp_run([&] {}, [&] {});
-
     _llk_packer_wait_for_math_done_();
 
-    for (std::uint32_t i = 0; i < params.CT_DIM; i++)
+    for (std::uint32_t i = 0; i < CT_DIM; i++)
     {
         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
     }

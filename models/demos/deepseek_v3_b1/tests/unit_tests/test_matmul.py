@@ -212,47 +212,38 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fu
 
 
 @pytest.mark.parametrize(
-    "in1_dtype",
+    "M, K, N",
     [
-        # ttnn.bfloat8_b,
-        ttnn.bfloat4_b,
+        (1, 64, 32),
+        (1, 64, 64),
+        # (1,  128, 512),
+        (1, 256, 32),
+        (1, 256, 128),
+        (1, 512, 128),
+        (1, 512, 256),
+        (1, 1536, 128),
+        (1, 2048, 32),
+        (1, 3584, 32),
+        (1, 7168, 32),
+        (1, 7168, 64),
+        # (1, 7168, 160),
+        # (1, 7168, 256),
+        (1, 8192, 64),
+        # (8,  256, 512),
+        # (8,  512, 512),
+        (8, 576, 256),
+        # (8,  576, 512),
     ],
 )
 @pytest.mark.parametrize(
-    "M, K, N",
-    # [
-    #     (1, 64, 32),
-    #     (1, 64, 64),
-    #     (1, 256, 32),
-    #     (1, 256, 128),
-    #     (1, 512, 256),
-    #     (1, 7168, 32),
-    #     (1, 7168, 64),
-    #     (1, 256, 64),
-    #     (1, 896, 256),
-    #     # (1,  128, 512),
-    #     (1, 256, 256),
-    #     (1, 512, 128),
-    #     (1, 1536, 128),
-    #     (1, 2048, 32),
-    #     (1, 2048, 64),
-    #     (1, 3584, 32),
-    #     # (1, 7168, 160),
-    #     (1, 8192, 64),
-    #     # (8,  256, 512),
-    #     # (8,  512, 512),
-    #     (8, 576, 256),
-    #     # (8,  576, 512),
-    # ],
+    "in1_dtype",
     [
-        (1, 8 * 32, 2 * 32),
-        (1, 28 * 32, 32),
-        (1, 8 * 32, 7 * 32),
-        (1, 56 * 32, 32),
+        ttnn.bfloat8_b,
+        ttnn.bfloat4_b,
     ],
 )
 # This test does not provide additional functional coverage and is just used for performance benchmarking
-def test_matmul_single_core_benchmark(device, M, K, N, in1_dtype):
+def DISABLED_test_matmul_single_core_benchmark(device, M, K, N, in1_dtype):
     _run_matmul_single_core(device, M, K, N, ttnn.bfloat16, in1_dtype, False, None, False)
 
 

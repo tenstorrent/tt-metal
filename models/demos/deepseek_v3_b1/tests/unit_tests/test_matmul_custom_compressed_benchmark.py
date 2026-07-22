@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import random
-
 import numpy as np
 import pytest
 import torch
@@ -44,24 +42,8 @@ def _get_assignment_for_distribution(distribution, K, N, formats):
         fmt = formats[(num_blocks - 1) % len(formats)]
         assignment.extend([fmt] * (num_tiles - len(assignment)))
         assignment = np.array(assignment, dtype=np.int8).reshape((K // 32, N // 32))
-    elif distribution == "random":
-        # Deterministic, data-independent random assignment matching the LLK test's
-        # assign_random (tt_metal/tt-llk/tests/python_tests/test_matmul_custom_compressed.py):
-        # random.Random(0).choice over the format list, row-major. random.choice picks an
-        # index from RNG state and len(formats) only, so for the same seed and format-list
-        # length the i-th tile gets the same format name as the LLK side — identical workload.
-        rng = random.Random(0)
-        assignment = [rng.choice(formats) for _ in range(num_tiles)]
-        assignment = np.array(assignment, dtype=np.int8).reshape((K // 32, N // 32))
     else:
         raise ValueError(f"Unsupported distribution: {distribution}")
-
-    # Match the LLK test's promote_assignment: an all-bfp0 assignment leaves the packed
-    # B buffer empty (the kernel faults), so promote the first tile to bfp2 so there is
-    # always at least one non-zero tile. LLK applies this in generate_compressed_matmul_golden;
-    # mirror it here so both sides run an identical (promoted) assignment. FORMAT_MAP: bfp0=3, bfp2=2.
-    if (assignment == 3).all():
-        assignment.flat[0] = 2
     return assignment
 
 
@@ -98,7 +80,7 @@ def _run_matmul_custom_compressed_benchmark(
     b_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, b_shard_spec)
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec)
 
-    if distribution == "auto":
+    if distribution == "random":
         bfp0_mae = 1e-3 if "bfp0" in formats else 0.01
         assigner = CompressedTensorAssigner(
             metric="pcc", threshold=threshold, formats=formats, bfp0_mae_threshold=bfp0_mae
@@ -126,12 +108,11 @@ def _run_matmul_custom_compressed_benchmark(
 
     num_tiles = (K // 32) * (N // 32)
     is_interleaved = distribution.startswith("interleaved")
-    is_auto = distribution == "auto"
     is_random = distribution == "random"
     interleave_n = int(distribution.split(" ")[1]) if is_interleaved else None
 
     all_formats_present = num_tiles >= len(formats)
-    if is_auto or is_random:
+    if is_random:
         all_formats_present = num_tiles > 8
     if is_interleaved:
         num_blocks = (num_tiles + interleave_n - 1) // interleave_n
@@ -176,31 +157,21 @@ def _run_matmul_custom_compressed_benchmark(
     assert passing, pcc_message
 
 
-BASE_SHAPES = [
+SHAPES = [
     (1, 64, 32),
     (1, 64, 64),
+    # (1,  128, 512),
     (1, 256, 32),
     (1, 256, 128),
-    (1, 512, 256),
-    (1, 7168, 32),
-    (1, 7168, 64),
-    # (1, 7168, 256), OOM
-]
-
-DS_SHAPES = [
-    (1, 256, 64),
-    (1, 896, 256),
-]
-
-EXT_SHAPES = [
-    # (1,  128, 512),
-    (1, 256, 256),
     (1, 512, 128),
+    (1, 512, 256),
     (1, 1536, 128),
     (1, 2048, 32),
-    (1, 2048, 64),
     (1, 3584, 32),
+    (1, 7168, 32),
+    (1, 7168, 64),
     # (1, 7168, 160),
+    # (1, 7168, 256),
     (1, 8192, 64),
     # (8,  256, 512),
     # (8,  512, 512),
@@ -209,30 +180,16 @@ EXT_SHAPES = [
 ]
 
 SINGLE_FORMATS = [
-    # ("bfp8",),
-    ("bfp4",),
-    ("bfp2",),
+    ["bfp8"],
+    ["bfp4"],
+    ["bfp2"],
+    ["bfp2", "bfp0"],
 ]
 
-BASE_MULTI_FORMATS = [
-    ("bfp4", "bfp2"),
-    ("bfp4", "bfp0"),
-    ("bfp2", "bfp0"),
-    ("bfp4", "bfp2", "bfp0"),
-]
-
-EXT_MULTI_FORMATS = [
-    ("bfp8", "bfp4"),
-    ("bfp8", "bfp2"),
-    ("bfp8", "bfp0"),
-    # ("bfp4", "bfp2"), BASE
-    # ("bfp4", "bfp0"), BASE
-    # ("bfp2", "bfp0"), BASE
-    ("bfp8", "bfp4", "bfp2"),
-    ("bfp8", "bfp4", "bfp0"),
-    ("bfp8", "bfp2", "bfp0"),
-    # ("bfp4", "bfp2", "bfp0"), BASE
-    ("bfp8", "bfp4", "bfp2", "bfp0"),
+MULTI_FORMATS = [
+    ["bfp8", "bfp4"],
+    ["bfp8", "bfp4", "bfp2"],
+    ["bfp8", "bfp4", "bfp2", "bfp0"],
 ]
 
 IMPLEMENTATIONS = [
@@ -245,17 +202,13 @@ IMPLEMENTATIONS = [
 ]
 
 DISTRIBUTIONS = [
-    "auto",
+    "random",
     "clustered",
     "interleaved 2",
     "interleaved 4",
     "interleaved 8",
     "interleaved 16",
-    "interleaved 32",
 ]
-
-SHAPES = BASE_SHAPES + DS_SHAPES + EXT_SHAPES
-MULTI_FORMATS = BASE_MULTI_FORMATS
 
 
 @pytest.mark.parametrize("M, K, N", SHAPES)
@@ -325,33 +278,3 @@ def DISABLED_test_matmul_custom_compressed_benchmark_optimized_single_format_agg
 def DISABLED_test_matmul_custom_compressed_benchmark_optimized_mixed_formats_aggregated(device, M, K, N, formats):
     for distribution in DISTRIBUTIONS:
         _run_matmul_custom_compressed_benchmark(device, M, K, N, formats, "new", distribution, pcc_threshold=-2)
-
-
-@pytest.mark.parametrize("formats", SINGLE_FORMATS)
-@pytest.mark.parametrize("M, K, N", SHAPES)
-def test_matmul_custom_compressed_benchmark_optimized_single_format_matched(device, M, K, N, formats):
-    _run_matmul_custom_compressed_benchmark(device, M, K, N, formats, "new", "clustered", pcc_threshold=-2)
-
-
-@pytest.mark.parametrize("formats", MULTI_FORMATS)
-@pytest.mark.parametrize("M, K, N", SHAPES)
-# This test does not provide additional functional coverage and is just used for performance benchmarking
-def test_matmul_custom_compressed_benchmark_optimized_mixed_formats_random(device, M, K, N, formats):
-    _run_matmul_custom_compressed_benchmark(device, M, K, N, formats, "new", "random", pcc_threshold=-2)
-
-
-@pytest.mark.parametrize("formats", MULTI_FORMATS)
-@pytest.mark.parametrize("M, K, N", SHAPES)
-# This test does not provide additional functional coverage and is just used for performance benchmarking
-def test_matmul_custom_compressed_benchmark_optimized_mixed_formats_clustered(device, M, K, N, formats):
-    _run_matmul_custom_compressed_benchmark(device, M, K, N, formats, "new", "clustered", pcc_threshold=-2)
-
-
-@pytest.mark.parametrize("interleave_n", [1, 2, 4, 8, 16, 32])
-@pytest.mark.parametrize("formats", MULTI_FORMATS)
-@pytest.mark.parametrize("M, K, N", SHAPES)
-# This test does not provide additional functional coverage and is just used for performance benchmarking
-def test_matmul_custom_compressed_benchmark_optimized_mixed_formats_interleaved(device, M, K, N, formats, interleave_n):
-    _run_matmul_custom_compressed_benchmark(
-        device, M, K, N, formats, "new", "interleaved " + str(interleave_n), pcc_threshold=-2
-    )
