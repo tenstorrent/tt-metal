@@ -57,6 +57,20 @@ on this move faster than, writing it as 4 × 512 B faces — bigger coalesced tr
 achieved DRAM bandwidth. Reader on NoC0, writer on NoC1 to overlap.
 **Gist:** on a DRAM-bound move, move whole pages and batch barriers; don't scatter sub-tile faces.
 
+## ⭐⭐ T2 — [`split_reader`](split_reader/README.md)
+**Concept:** when a *single* data-movement RISC-V is the bottleneck — saturated **issuing** NoC read
+transactions — split those independent reads across both data-movement RISC-Vs (NCRISC + BRISC) so
+the issue work runs in parallel.
+**Situation:** you have measured that one reader RISC-V is issue-bound: it is on the critical path
+and its time goes to issuing NoC commands. The reads divide into independent ranges and the other
+data-movement RISC-V has spare capacity.
+**Does NOT solve:** this is *not* a general "make reads faster" trick — it does nothing unless a
+data-movement RISC-V is itself the bottleneck. First confirm you are RISC-V-issue-bound.
+**Gist:** split the disjoint reads across NCRISC and BRISC, preserving the second RISC-V's existing
+role. The example shrinks the NoC transaction size only to *create* that bottleneck and expose the
+effect (up to ~1.7×, Wormhole B0; see [`report.md`](split_reader/report.md)) — transaction size is
+the knob, not the point.
+
 ## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)
 **Concept:** matmul output-subblock shape → SRC-register operand reuse (via the `matmul_block` helper).
 **Situation:** you wrote a tiled matmul that produces **one output tile per block-matmul** (a `1×1` subblock), so every output tile re-loads both its A and B operand into the SRC registers; you wonder whether a bigger output subblock is worth it.
