@@ -50,7 +50,7 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
                          const std::vector<ttnn::Tensor>& tensors, int /*dim*/, unsigned int /*groups*/) -> bool {
             bool inputs_are_device_tensors =
                 std::all_of(tensors.begin(), tensors.end(), [](const ttnn::Tensor& tensor) {
-                    return tt::tt_metal::is_device_tensor(tensor);
+                    return ttnn::is_device_tensor(tensor);
                 });
             bool res = input_rank < 4 && inputs_are_device_tensors;  // pad only rejects rank != 4 for device tensors
             concat_db_print(res, "unsqueeze to 4D required");
@@ -191,7 +191,7 @@ MassagedConcat build_non_aligned_last_dim_concat(
     auto dim_aligned = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
         return std::all_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
             auto storage_type = tensor.storage_type();
-            if (storage_type == tt::tt_metal::StorageType::DEVICE) {
+            if (storage_type == ttnn::StorageType::DEVICE) {
                 return tensor.padded_shape()[dim] * tensor.element_size() % tensor.buffer()->alignment() == 0;
             }
             TT_THROW(
@@ -344,7 +344,7 @@ ttnn::Tensor concat(
     // each chunk independently, then concat the results along dim[-2].
     // This applies to both TILE_LAYOUT (untilize -> RM -> transpose path) and ROW_MAJOR
     // (direct transpose path) when the last dim is not buffer-aligned.
-    if (rank >= 2 && dim == rank - 1 && tt::tt_metal::is_device_tensor(first_tensor)) {
+    if (rank >= 2 && dim == rank - 1 && ttnn::is_device_tensor(first_tensor)) {
         const uint64_t second_last_dim = first_tensor.logical_shape()[rank - 2];
         const uint64_t elem_size = first_tensor.element_size();
         tt::tt_metal::IDevice* device = first_tensor.device();

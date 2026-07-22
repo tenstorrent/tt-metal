@@ -1,14 +1,24 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 
 import pytest
 from loguru import logger
 
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.stable_diffusion_xl_base.lora.config import TEST_LORA_FILENAME, TEST_LORA_REPO_ID
 from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_L1_SMALL_SIZE_BH
+
+
+@pytest.fixture(autouse=True)
+def set_mm_throttle(request):
+    if is_blackhole() or "clip_encoder" in request.node.nodeid:
+        os.environ["TT_MM_THROTTLE_PERF"] = "0"
+    else:
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
+
 
 # =============================================================================
 # SDXL Model Location Fixtures (Session-scoped for CIv2 download efficiency)

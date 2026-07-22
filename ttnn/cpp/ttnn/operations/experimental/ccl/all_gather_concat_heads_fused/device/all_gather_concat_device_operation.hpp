@@ -16,7 +16,7 @@ namespace ttnn::experimental::prim {
 struct AllGatherConcatDeviceOperation {
     using operation_attributes_t = AllGatherConcatParams;
     using tensor_args_t = AllGatherConcatInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<AllGatherConcatMeshWorkloadFactory>;
     using shared_variables_t = AllGatherConcatMeshWorkloadFactory::shared_variables_t;

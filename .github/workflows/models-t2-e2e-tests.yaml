@@ -30,6 +30,7 @@ on:
           - gemma-4-31b
           - mixtral-8x7b
           - gpt-oss-20b
+          - sdxl
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -47,6 +48,7 @@ on:
           - "bh_p300 (P300)"
           - "bh_quietbox_2 (BH QB2)"
           - "bh_galaxy (BH Galaxy)"
+          - "bh_p150b_civ2 (P150b CIv2)"
       platform:
         required: false
         type: choice
@@ -95,7 +97,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy,bh_p150b_civ2"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"

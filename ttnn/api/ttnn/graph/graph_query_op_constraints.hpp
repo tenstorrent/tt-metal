@@ -20,16 +20,17 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/mock_device/mock_allocator.hpp>
 #include <ttnn/distributed/tensor_topology.hpp>
 
 namespace ttnn::graph {
 
-// Pairs a TensorSpec with a TensorTopology, allowing callers to specify
+// Pairs a tt::tt_metal::TensorSpec with a tt::tt_metal::TensorTopology, allowing callers to specify
 // distribution (shard/replicate) when creating tensors in query_op_constraints.
 struct DistributedTensorSpec {
-    TensorSpec tensor_spec;
+    tt::tt_metal::TensorSpec tensor_spec;
     tt::tt_metal::TensorTopology tensor_topology;
 };
 
@@ -91,30 +92,30 @@ inline std::vector<Tensor> extract_output_tensors(const std::variant<Ts...>& res
     return tensors;
 }
 
-// Transform a query argument into the value passed to the op: TensorSpec/DistributedTensorSpec
+// Transform a query argument into the value passed to the op: tt::tt_metal::TensorSpec/DistributedTensorSpec
 // (and their optional/vector forms) become device tensors via create_device_tensor; a MeshDevice
 // is wrapped in a reference_wrapper; everything else is forwarded unchanged.
 template <typename Arg>
 auto materialize_arg(tt::tt_metal::distributed::MeshDevice* device, Arg&& arg) {
     if constexpr (std::is_same_v<std::decay_t<Arg>, DistributedTensorSpec>) {
-        return create_device_tensor(arg.tensor_spec, device, arg.tensor_topology);
+        return ttnn::create_device_tensor(arg.tensor_spec, device, arg.tensor_topology);
     } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::optional<DistributedTensorSpec>>) {
-        return arg ? std::optional<Tensor>(create_device_tensor(arg->tensor_spec, device, arg->tensor_topology))
+        return arg ? std::optional<Tensor>(ttnn::create_device_tensor(arg->tensor_spec, device, arg->tensor_topology))
                    : std::nullopt;
     } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::vector<DistributedTensorSpec>>) {
         std::vector<Tensor> result(arg.size());
         std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
-            return create_device_tensor(item.tensor_spec, device, item.tensor_topology);
+            return ttnn::create_device_tensor(item.tensor_spec, device, item.tensor_topology);
         });
         return result;
-    } else if constexpr (std::is_same_v<std::decay_t<Arg>, TensorSpec>) {
-        return create_device_tensor(arg, device);
-    } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::optional<TensorSpec>>) {
-        return arg ? std::optional<Tensor>(create_device_tensor(*arg, device)) : std::nullopt;
-    } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::vector<TensorSpec>>) {
+    } else if constexpr (std::is_same_v<std::decay_t<Arg>, tt::tt_metal::TensorSpec>) {
+        return ttnn::create_device_tensor(arg, device);
+    } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::optional<tt::tt_metal::TensorSpec>>) {
+        return arg ? std::optional<Tensor>(ttnn::create_device_tensor(*arg, device)) : std::nullopt;
+    } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::vector<tt::tt_metal::TensorSpec>>) {
         std::vector<Tensor> result(arg.size());
         std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
-            return create_device_tensor(item, device);
+            return ttnn::create_device_tensor(item, device);
         });
         return result;
     } else if constexpr (std::is_same_v<std::decay_t<Arg>, tt::tt_metal::distributed::MeshDevice>) {
@@ -138,7 +139,7 @@ struct ResourceUsage {
 struct ConstraintQueryResponse {
     ExecutionStatus status = ExecutionStatus::Error;
     ResourceUsage resource_usage;
-    std::optional<std::vector<TensorSpec>> output_tensor_specs;
+    std::optional<std::vector<tt::tt_metal::TensorSpec>> output_tensor_specs;
     std::optional<std::string> error_message;
 };
 
@@ -172,7 +173,7 @@ inline ConstraintQueryResponse build_success_response(
         }
     }
 
-    std::vector<TensorSpec> output_specs;
+    std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(outputs.size());
     std::transform(outputs.begin(), outputs.end(), std::back_inserter(output_specs), [](const Tensor& t) {
         return t.tensor_spec();

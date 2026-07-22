@@ -46,7 +46,7 @@ void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
         "Grid size for sharding must be less than or equal to total grid available");
 }
 
-TensorSpec InterleavedToShardedPartialDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec InterleavedToShardedPartialDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
     auto shape = input_tensor.padded_shape();
 
@@ -62,7 +62,7 @@ TensorSpec InterleavedToShardedPartialDeviceOperation::compute_output_specs(
         operation_attributes.output_mem_config.buffer_type(),
         operation_attributes.shard_spec);
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             operation_attributes.output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));

@@ -18,7 +18,7 @@ namespace ttnn::experimental::prim {
 struct MinimalMatmulDeviceOperation {
     using operation_attributes_t = MinimalMatmulParams;
     using tensor_args_t = MinimalMatmulInputs;
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<MinimalMatmulProgramFactory>;
