@@ -26,14 +26,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-import torch
-
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
-from models.demos.deepseek_v3_d_p.tt.speculative_decoding.dflash.dflash_drafter_config import (
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import (
     DFlashDrafterConfig,
     build_drafter_rope_hf_config,
 )
+from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 
 
@@ -102,7 +100,8 @@ class TtDFlashDrafter:
         self._rope_cos = self._rope_sin = None
         self._rope_end = 0
         self._ensure_rope(self.cache_seq)
-        self._alloc_caches()
+        # K/V caches are owned by the CALLER (see allocate_dflash_kv_cache) and passed into
+        # write_kv_cache — the drafter does not hold them, mirroring the MLA prefill model's kvpe_cache.
         self._reduced_accum: Optional[ttnn.Tensor] = None  # "sliced": running TP-partial FC sum
         self._taps: list = [None] * len(config.target_layer_ids)  # "concat": stored raw taps
 
@@ -238,35 +237,6 @@ class TtDFlashDrafter:
         )
         self._rope_end = end
 
-    def _alloc_caches(self):
-        """Separate K and V drafter caches: host [num_layers, num_kv_heads, cache_seq, head_dim],
-        TP-sharded on kv-head (dim 1) and SP-sharded on seq (dim 2) so each SP chip owns cache_seq/sp
-        tokens (decode/migration layout, no redundant per-SP copies).
-        """
-        cfg = self.config
-        shape = (cfg.num_hidden_layers, cfg.num_key_value_heads, self.cache_seq, cfg.head_dim)
-        shard = [None, None]
-        shard[self.tp_axis] = 1  # kv-head dim across TP
-        shard[self.sp_axis] = 2  # seq dim across SP → per-chip [.., cache_seq/sp, ..]
-        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard)
-        zeros = torch.zeros(*shape, dtype=torch.bfloat16)
-        self.k_cache = ttnn.from_torch(
-            zeros,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper,
-        )
-        self.v_cache = ttnn.from_torch(
-            zeros.clone(),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper,
-        )
-
     def reset(self):
         """Clear the FC accumulator (sliced) / stored taps (concat) — call at the start of each prefill
         sequence/chunk."""
@@ -332,12 +302,24 @@ class TtDFlashDrafter:
         )
         return heads
 
-    def write_kv_cache(self, positions_start: int = 0) -> None:
-        """Finalize: build the TP-partial FC output (mode-dependent), TP-reduce it, hidden_norm, then per
-        draft layer project/norm/rope K and project V, writing each into its cache slot. ``positions_start``
+    def write_kv_cache(self, k_cache: ttnn.Tensor, v_cache: ttnn.Tensor, positions_start: int = 0) -> None:
+        """Finalize into the caller-owned ``k_cache``/``v_cache`` (allocate via
+        ``allocate_dflash_kv_cache``): build the TP-partial FC output (mode-dependent), TP-reduce it,
+        hidden_norm, then per draft layer project/norm/rope K and project V, writing each into its cache
+        slot. The caches are passed in (not owned by the drafter) so the runner drives their lifecycle +
+        dtype, exactly like the MLA prefill model takes ``kvpe_cache`` in ``forward()``. ``positions_start``
         offsets rope for the last-4k window (Phase 3); Phase 1 uses 0. Caller must have supplied
         seq-contiguous taps."""
         cfg = self.config
+        # Sanity-check the un-sharded cache dims (layer/head_dim are not seq/SP-sharded, so .shape is
+        # unambiguous here); the seq (dim 2) capacity is checked per-chip below against cache_seq.
+        assert k_cache.shape[0] == cfg.num_hidden_layers and v_cache.shape[0] == cfg.num_hidden_layers, (
+            f"kv cache layer dim {k_cache.shape[0]}/{v_cache.shape[0]} != num_hidden_layers "
+            f"{cfg.num_hidden_layers} (allocate with allocate_dflash_kv_cache)"
+        )
+        assert (
+            k_cache.shape[-1] == cfg.head_dim and v_cache.shape[-1] == cfg.head_dim
+        ), f"kv cache head_dim {k_cache.shape[-1]}/{v_cache.shape[-1]} != {cfg.head_dim}"
         if self.fc_mode == "concat":
             missing = [cfg.target_layer_ids[i] for i, t in enumerate(self._taps) if t is None]
             assert not missing, f"write_kv_cache: missing taps for target layers {missing}"
@@ -428,8 +410,8 @@ class TtDFlashDrafter:
             )
             # Write into cache slot `i` (layer as the fill "user" dim). TODO: the migration
             # writer + SP-sharded seq + bf8 cache replace this seq-replicated fill_cache_for_user_.
-            ttnn.kv_cache.fill_cache_for_user_(self.k_cache, k, i)
-            ttnn.kv_cache.fill_cache_for_user_(self.v_cache, v, i)
+            ttnn.kv_cache.fill_cache_for_user_(k_cache, k, i)
+            ttnn.kv_cache.fill_cache_for_user_(v_cache, v, i)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
         ttnn.deallocate(target_hidden)

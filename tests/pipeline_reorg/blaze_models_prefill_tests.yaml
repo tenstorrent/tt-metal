@@ -387,7 +387,7 @@
     export DFLASH_HF_MODEL=/mnt/models/Kimi-K2.6-DFlash
 
     mpirun --pernode --tag-output bash -lc '
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/speculative_decoding/dflash/test_dflash.py::test_dflash_pcc -k "mesh-8x4 and sliced and pretrained" -vvv --tb=short --timeout=600
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "mesh-8x4 and sliced and pretrained" -vvv --tb=short --timeout=600
     '
   test_type: kimi_dflash
   test_group: module
