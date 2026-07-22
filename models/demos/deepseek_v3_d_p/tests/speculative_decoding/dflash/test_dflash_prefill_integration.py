@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration test: full 61-layer Kimi prefill transformer → DFlash drafter context-KV (issue #49586, Phase 1b).
+"""Integration test: full 61-layer Kimi prefill transformer + DFlash drafter
 
 Flow:
   A. Build + run the WHOLE verifier prefill (all 61 Kimi layers) by constructing ``TtPrefillTransformer``
@@ -20,20 +20,12 @@ Flow:
 (real checkpoint vs seeded random, loaded into both the device drafter and the HF ref — via the conftest
 fixtures).
 
-MEMORY NOTE: a random verifier at 61 layers is infeasible — ``create_hf_model`` materializes the whole
-model in host RAM (Kimi's 384 experts × 60 MoE layers ≈ 2 TB → OOM). So the 61-layer run is PRETRAINED
-(``KIMI_K2_6_HF_MODEL`` + ``TT_KIMI_PREFILL_TTNN_CACHE``, memory-bounded layer-by-layer). The random leg
-skips at >MAX_RANDOM_LAYERS with guidance.
-
 Requires: a Blackhole galaxy; ``$DFLASH_HF_MODEL`` (drafter ``config.json`` [+ ``model.safetensors`` for the
 pretrained axis]); for the pretrained axis also ``KIMI_K2_6_HF_MODEL`` + ``TT_KIMI_PREFILL_TTNN_CACHE``.
 
     DFLASH_HF_MODEL=/path/to/Kimi-K2.6-DFlash \
     KIMI_K2_6_HF_MODEL=/path/to/Kimi-K2.6 TT_KIMI_PREFILL_TTNN_CACHE=/path/to/kimi_ttnn_cache MESH_DEVICE=8x4 \
     pytest models/demos/deepseek_v3_d_p/tests/speculative_decoding/dflash/test_dflash_prefill_integration.py -svv -k pretrained
-
-NOTE (bring-up): NOT yet run on hardware. Likely iteration points: the on-device SP-gather in the tap, the
-concat-mode grouped-shard fc, and the direct verifier construction (kept in lockstep with run_model).
 """
 
 import gc
@@ -168,8 +160,8 @@ def test_dflash_prefill_integration(
         tapped.append(global_idx)
         drafter.tap(ttnn.clone(h), global_idx)  # own a private copy of the live SP-sharded residual slice
 
-    # ---- Phase A: build + run the full 61-layer verifier DIRECTLY (weight handling identical to
-    #      test_prefill_transformer.run_model). on_layer_hidden taps ONLY the 6 target layers on device. ----
+    # Build + run the full 61-layer verifier DIRECTLY (weight handling identical to
+    # test_prefill_transformer.run_model). on_layer_hidden taps ONLY the 6 target layers on device.
     config = config_only
     config.max_seq_len = isl_total
     isl_per_chip = isl_total // sp_factor
@@ -178,8 +170,8 @@ def test_dflash_prefill_integration(
     assert not is_balanced, "this test assumes non-balanced (contiguous) SP token sharding"
 
     # Weights — SAME as run_model:
-    #   pretrained → real Kimi via the memory-bounded layer-by-layer loader into a TTNN weight cache;
-    #   random     → create_hf_model + extract_tt_state_dict (materializes the whole model → OOM at 61).
+    #   pretrained → real Kimi via the memory-bounded layer-by-layer loader into a TTNN weight cache
+    #   random     → create_hf_model + extract_tt_state_dict
     if use_pretrained:
         model_path = request.getfixturevalue("model_path")
         wcp = request.getfixturevalue("weight_cache_path")  # None unless real weights ($KIMI_K2_6_HF_MODEL) present
@@ -200,7 +192,7 @@ def test_dflash_prefill_integration(
                 model_path=model_path,
                 config=config,
                 num_layers=num_layers,
-                compute_reference=False,  # our reference is the HF drafter (Phase B), not the verifier
+                compute_reference=False,  # our reference is the HF drafter, not the verifier
                 build_ttnn_cache=True,
                 weight_cache_path=effective_cache_path,
                 mesh_device=mesh_device,
@@ -260,7 +252,7 @@ def test_dflash_prefill_integration(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, None)),
     )
 
-    logger.info(f"Phase A: running {num_layers}-layer Kimi verifier forward (use_pretrained={use_pretrained})")
+    logger.info(f"Running {num_layers}-layer Kimi verifier forward (use_pretrained={use_pretrained})")
     transformer(
         tt_tokens,
         tt_kvpe_cache,
@@ -280,18 +272,14 @@ def test_dflash_prefill_integration(
     assert all(t is not None for t in drafter._taps), "a drafter tap slot is empty after the forward"
     logger.info(f"tap check OK — tapped exactly layers {sorted(tapped)}")
 
-    # ---- Phase B ----
-    # The 6 taps live in the drafter's DRAM (drafter._taps, in target order). Read ONLY those 6 to host
-    # (they're SP-replicated + TP-sharded on hidden) to feed the CPU HF reference — the device path never
-    # left DRAM. This is the sole host touch, and it must happen BEFORE write_kv_cache consumes the taps.
-    def _tap_to_host(t):  # -> host [1, seq, H]; TP concatenated on hidden → full H
+    def _to_host(t):  # -> host [1, seq, H]; TP concatenated on hidden → full H
         # SP-sharded on seq: concat SP along seq(dim2), TP along hidden(dim3) → full [1,1,seq,H]
         host = ttnn.to_torch(
             t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_shape)
         )
         return host.reshape(1, isl_total, H).float()
 
-    target_hiddens = [_tap_to_host(drafter._taps[j]) for j in range(len(dcfg.target_layer_ids))]
+    target_hiddens = [_to_host(drafter._taps[j]) for j in range(len(dcfg.target_layer_ids))]
     ctx = torch.cat(target_hiddens, dim=-1)  # [1, seq, n*H] — the fc input (concat over target layers)
     assert ctx.shape[-1] == dcfg.target_feature_size, f"ctx feature {ctx.shape[-1]} != {dcfg.target_feature_size}"
 
