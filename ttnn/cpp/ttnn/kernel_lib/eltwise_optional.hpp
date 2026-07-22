@@ -5,40 +5,39 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <tuple>
 #include <type_traits>
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 /**
  * @file eltwise_optional.hpp
- * @brief Conditional / optional chain element wrappers.
+ * @brief Compile-time optional and runtime-conditional chain elements.
  *
- * Compile-time conditional: `OptionalChainElement<bool COND, Inner>` is `Inner`
- * when COND is true. When false, it is one shared tag-less inert marker that remains in the chain;
- * the chain describes it with neutral traits and emits no work for it. Its variadic ctor
- * swallows Inner's args, so `OptionalChainElement<COND, FillScalar>{0.5f}` compiles for
- * either COND.
+ * Compile-time optional:
  *
- * Runtime conditional: `runtime_conditional(cond0, cond1, ...)` selects the first true
- * condition, like an ordered if / else-if / else chain. Its `when<I>(element)`,
- * `when_any<Is...>(element)`, and `otherwise(element)` methods wrap individual elements
- * while keeping the chain flat, so common prefix / suffix elements are instantiated once:
+ *     OptionalChainElement<COND, Op>
  *
- *     const auto branch = runtime_conditional(use_a, use_b);
- *     eltwise_chain(EltwiseShape::single(), CopyTile<input(...)>{},
- *         branch.when<0>(OpA{}), branch.when<1>(OpB{}), branch.otherwise(DefaultOp{}),
- *         PackTile<output(...)>{});
+ * Runtime conditionals have two surfaces:
  *
- * A condition is fixed for one `eltwise_chain` invocation, but may change between calls,
- * including calls made once per loop iteration. Runtime-gated elements are deliberately
- * limited to DEST-only operations and caller-managed CB readers. Writers and driver-managed
- * waits/pops are rejected because their lifecycle must not run on a disabled arm.
+ *     when(condition, OpA{}, OpB{})
+ *
+ *     runtime_if(condition_a, OpA{})
+ *         .else_if(condition_b, OpB{}, OpC{})
+ *         .otherwise(DefaultOp{})
+ *
+ * `when` is an if with an empty else. `runtime_if` is an ordered, exclusive
+ * if / else-if / else and selects the first true branch. Every branch is one
+ * chain position, so one runtime decision guards the whole element sequence.
+ *
+ * Runtime-conditional sequences deliberately support only DEST-only operations
+ * and caller-managed CB readers. Writers and driver-managed waits/pops are rejected:
+ * their lifecycle cannot be conservatively planned across a disabled branch.
  */
 
 namespace compute_kernel_lib {
 
-/// Shared inert, tag-less chain position used by every disabled optional. Its variadic
-/// constructor accepts the same runtime arguments the enabled inner element would receive.
+/// Shared inert, tag-less chain position used by every disabled compile-time optional.
 struct DisabledChainElement {
     constexpr DisabledChainElement() noexcept = default;
 
@@ -46,8 +45,7 @@ struct DisabledChainElement {
     constexpr explicit DisabledChainElement(Ignored&&...) noexcept {}
 };
 
-/// Enabled optionals are exactly `Inner`; disabled optionals all share one short marker type.
-/// The inner type therefore does not leak into disabled worker/debug specializations.
+/// Enabled optionals are exactly `Inner`; disabled optionals share one short marker type.
 template <bool COND, class Inner>
 using OptionalChainElement = std::conditional_t<COND, Inner, DisabledChainElement>;
 
@@ -56,50 +54,139 @@ namespace detail {
 template <class Inner>
 constexpr bool runtime_conditional_element_supported();
 
-}  // namespace detail
-
-/// Runtime-gated view of one ordinary chain element. Inheriting from Inner preserves
-/// its compile-time chain traits and resource description; init/exec are the only gated
-/// operations. Consequently, only elements with no driver-owned lifecycle are accepted.
-template <class Inner>
-struct RuntimeConditionalChainElement : Inner, RuntimeConditionalTag {
+template <class... Elements>
+struct RuntimeConditionalBranch {
+    static_assert(sizeof...(Elements) > 0, "A runtime conditional branch requires at least one element");
     static_assert(
-        detail::runtime_conditional_element_supported<Inner>(),
+        (runtime_conditional_element_supported<Elements>() && ...),
         "Runtime conditional elements must be DEST-only or use caller-managed input lifecycles");
 
-    bool enabled;
+    std::tuple<Elements...> elements;
 
-    constexpr RuntimeConditionalChainElement(bool enabled_, Inner inner) noexcept;
-
-    ALWI void init() const;
-
-    template <class... Args>
-    ALWI void exec(Args... args) const;
+    constexpr explicit RuntimeConditionalBranch(Elements... elements_) noexcept : elements(elements_...) {}
 };
 
-/// Result of an ordered runtime condition selection. Arm `I` corresponds to condition `I`;
-/// the implicit default arm has index `ArmCount`.
-template <std::size_t ArmCount>
-struct RuntimeConditional {
-    uint32_t selected_arm;
+template <class Branch>
+struct RuntimeConditionalBranchTraits;
 
-    template <std::size_t Arm, class Inner>
-    ALWI auto when(Inner inner) const;
-
-    template <std::size_t... Arms, class Inner>
-    ALWI auto when_any(Inner inner) const;
-
-    template <class Inner>
-    ALWI auto otherwise(Inner inner) const;
+template <class... Elements>
+struct RuntimeConditionalBranchTraits<RuntimeConditionalBranch<Elements...>> {
+    static constexpr bool any_reader = (is_cb_reader_op_v<Elements> || ...);
+    static constexpr bool touches_srca = ((dfb_for_side<Side::SrcA, Elements>() != NO_PREV_DFB) || ...);
+    static constexpr bool touches_srcb = ((dfb_for_side<Side::SrcB, Elements>() != NO_PREV_DFB) || ...);
+    static constexpr uint32_t lane_width = []() {
+        uint32_t result = 1;
+        ((result = result < elem_lane_width_v<Elements> ? elem_lane_width_v<Elements> : result), ...);
+        return result;
+    }();
 };
 
-/// Select the first true condition. If none is true, select the implicit default arm.
-template <class... Conditions>
-ALWI auto runtime_conditional(Conditions... conditions);
+template <class... Branches>
+struct RuntimeConditionalSequenceTraits {
+    static constexpr bool any_reader = (RuntimeConditionalBranchTraits<Branches>::any_reader || ...);
+    static constexpr bool touches_srca = (RuntimeConditionalBranchTraits<Branches>::touches_srca || ...);
+    static constexpr bool touches_srcb = (RuntimeConditionalBranchTraits<Branches>::touches_srcb || ...);
+    static constexpr uint32_t lane_width = []() {
+        uint32_t result = 1;
+        ((result = result < RuntimeConditionalBranchTraits<Branches>::lane_width
+                       ? RuntimeConditionalBranchTraits<Branches>::lane_width
+                       : result),
+         ...);
+        return result;
+    }();
+};
 
-/// Shorthand for an if-with-empty-else runtime conditional.
-template <class Inner>
-ALWI auto runtime_optional(bool condition, Inner inner);
+template <bool AnyReader>
+struct RuntimeConditionalSequenceBase;
+
+template <>
+struct RuntimeConditionalSequenceBase<false> : DestOnlyTag {};
+
+template <>
+struct RuntimeConditionalSequenceBase<true> : CbReaderTag {
+    static constexpr InputLifecycle Policy = InputLifecycle::CallerManaged;
+    static constexpr uint32_t dfb = INVALID_DFB;
+    static constexpr bool is_upfront = false;
+
+    static constexpr uint32_t dfb_a_id() { return INVALID_DFB; }
+    static constexpr InputLifecycle a_policy() { return Policy; }
+};
+
+}  // namespace detail
+
+/// One runtime-selected chain position. `selected_branch == sizeof...(Branches)`
+/// means no branch is selected, which is how `when(false, ...)` becomes inert.
+template <class... Branches>
+struct RuntimeConditionalSequence
+    : detail::RuntimeConditionalSequenceBase<detail::RuntimeConditionalSequenceTraits<Branches...>::any_reader>,
+      RuntimeConditionalTag,
+      RuntimeConditionalSequenceTag {
+    static_assert(sizeof...(Branches) > 0, "A runtime conditional requires at least one branch");
+
+    using Traits = detail::RuntimeConditionalSequenceTraits<Branches...>;
+
+    // A conditional reader may or may not change each input-side format. Poison the
+    // outer previous-CB fold so a following reader reconfigures conservatively.
+    static constexpr uint32_t reconfig_srca_dfb = Traits::touches_srca ? CONDITIONAL_DFB : NO_PREV_DFB;
+    static constexpr uint32_t reconfig_srcb_dfb = Traits::touches_srcb ? CONDITIONAL_DFB : NO_PREV_DFB;
+    static constexpr uint32_t lane_width = Traits::lane_width;
+
+    uint32_t selected_branch;
+    std::tuple<Branches...> branches;
+
+    constexpr RuntimeConditionalSequence(uint32_t selected_branch_, std::tuple<Branches...> branches_) noexcept;
+
+    template <uint32_t SlotBase, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero>
+    ALWI void apply(
+        uint32_t i_flat,
+        uint32_t ht,
+        uint32_t wt,
+        uint32_t inner_count,
+        uint32_t chain_lane_width,
+        uint32_t Ht,
+        uint32_t Wt) const;
+
+private:
+    template <
+        std::size_t BranchIndex,
+        uint32_t SlotBase,
+        uint32_t PrevA,
+        uint32_t PrevB,
+        uint32_t PrevP,
+        bool PackHetero>
+    ALWI void apply_selected(
+        uint32_t i_flat,
+        uint32_t ht,
+        uint32_t wt,
+        uint32_t inner_count,
+        uint32_t chain_lane_width,
+        uint32_t Ht,
+        uint32_t Wt) const;
+};
+
+/// In-progress ordered conditional. It becomes a chain element when `.otherwise(...)`
+/// supplies the final branch.
+template <class... Branches>
+struct RuntimeIfBuilder : RuntimeIfBuilderTag {
+    uint32_t selected_branch;
+    std::tuple<Branches...> branches;
+
+    constexpr RuntimeIfBuilder(uint32_t selected_branch_, std::tuple<Branches...> branches_) noexcept;
+
+    template <class... Elements>
+    ALWI auto else_if(bool condition, Elements... elements) const;
+
+    template <class... Elements>
+    ALWI auto otherwise(Elements... elements) const;
+};
+
+/// Guard one or more elements with one runtime condition (an if with an empty else).
+template <class... Elements>
+ALWI auto when(bool condition, Elements... elements);
+
+/// Start an ordered, exclusive runtime if / else-if / else chain.
+template <class... Elements>
+ALWI auto runtime_if(bool condition, Elements... elements);
 
 }  // namespace compute_kernel_lib
 

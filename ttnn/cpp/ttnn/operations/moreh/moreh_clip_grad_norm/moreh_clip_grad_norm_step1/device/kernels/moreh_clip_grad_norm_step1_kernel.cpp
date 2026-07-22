@@ -38,14 +38,22 @@ void kernel_main() {
     constexpr uint32_t cb_correct_xpow = 29;
 
     constexpr uint32_t onetile = 1;
+    constexpr uint32_t mask_w_tile_index = 1;
 
-    using CopyMaskH = ckl::CopyTile<ckl::input(cb_mask_h_w, ckl::InputLifecycle::CallerManaged), ckl::Dst::D1>;
+#if defined FP32_DEST_ACC_EN
+    constexpr auto data_format_reconfig = ckl::DataFormatReconfig::Enabled;
+#else
+    constexpr auto data_format_reconfig = ckl::DataFormatReconfig::Disabled;
+#endif
+
+    using CopyMaskH =
+        ckl::CopyTile<ckl::input(cb_mask_h_w, ckl::InputLifecycle::CallerManaged, data_format_reconfig), ckl::Dst::D1>;
     using CopyMaskW = ckl::CopyTile<
         ckl::input(
             cb_mask_h_w,
             ckl::InputLifecycle::CallerManaged,
             ckl::OperandKind::Scalar,
-            ckl::DataFormatReconfig::Enabled,
+            data_format_reconfig,
             ckl::TileOffset::Set),
         ckl::Dst::D1>;
 
@@ -71,50 +79,51 @@ void kernel_main() {
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         const bool mh = do_mask_h && need_to_do_mask_h(tile_idx, ht, wt);
         const bool mw = do_mask_w && ((tile_idx + 1) % wt) == 0;
-        const auto mask_branch = ckl::runtime_conditional(mh && mw, mh, mw);
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
-            ckl::CopyTile<ckl::input(cb_x)>{},
-            mask_branch.when_any<0, 1>(CopyMaskH{}),
-            mask_branch.when_any<0, 1>(ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
-            mask_branch.when_any<0, 2>(CopyMaskW{1u}),  // mask_w lives at index 1 of cb_mask_h_w
-            mask_branch.when_any<0, 2>(ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
+            ckl::CopyTile<ckl::input(cb_x, ckl::InputLifecycle::Streaming, data_format_reconfig)>{},
+            ckl::when(mh, CopyMaskH{}, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
+            ckl::when(mw, CopyMaskW{mask_w_tile_index}, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
             ckl::Abs<ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(cb_xabs, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+            ckl::PackTile<ckl::output(cb_xabs, ckl::OutputLifecycle::Streaming, data_format_reconfig)>{});
 
         // |x + decimal|^p
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
-            ckl::CopyTile<ckl::input(cb_xabs, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
+            ckl::CopyTile<ckl::input(cb_xabs, ckl::InputLifecycle::HeldStream, data_format_reconfig), ckl::Dst::D0>{},
             ckl::PowerIterative<ckl::Dst::D0>{p},
-            ckl::runtime_optional(p_is_negative, ckl::Recip<ckl::Dst::D0>{}),
-            ckl::PackTile<ckl::output(cb_xpow)>{});
+            ckl::when(p_is_negative, ckl::Recip<ckl::Dst::D0>{}),
+            ckl::PackTile<ckl::output(cb_xpow, ckl::OutputLifecycle::Streaming, data_format_reconfig)>{});
         ckl::unary<
             ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>,
-            ckl::input(cb_xabs, ckl::InputLifecycle::NoWaitPop),
-            ckl::output(cb_logx)>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(cb_xabs, ckl::InputLifecycle::NoWaitPop, data_format_reconfig),
+            ckl::output(cb_logx, ckl::OutputLifecycle::Streaming, data_format_reconfig)>(
+            ckl::EltwiseShape::tiles(onetile));
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
-                ckl::input(cb_logx),
-                ckl::input(cb_decimal, ckl::InputLifecycle::CallerManaged),
+                ckl::input(cb_logx, ckl::InputLifecycle::Streaming, data_format_reconfig),
+                ckl::input(cb_decimal, ckl::InputLifecycle::CallerManaged, data_format_reconfig),
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::None>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(cb_exp_lxmd)>{});
-        ckl::mul<ckl::input(cb_xpow), ckl::input(cb_exp_lxmd), ckl::output(cb_correct_xpow)>(
+            ckl::PackTile<ckl::output(cb_exp_lxmd, ckl::OutputLifecycle::Streaming, data_format_reconfig)>{});
+        ckl::mul<
+            ckl::input(cb_xpow, ckl::InputLifecycle::Streaming, data_format_reconfig),
+            ckl::input(cb_exp_lxmd, ckl::InputLifecycle::Streaming, data_format_reconfig),
+            ckl::output(cb_correct_xpow, ckl::OutputLifecycle::Streaming, data_format_reconfig)>(
             ckl::EltwiseShape::tiles(onetile));
 
         if (tile_idx == 0) {
             ckl::copy<
-                ckl::input(cb_correct_xpow),
-                ckl::output(cb_xpowadd, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::input(cb_correct_xpow, ckl::InputLifecycle::Streaming, data_format_reconfig),
+                ckl::output(cb_xpowadd, ckl::OutputLifecycle::Streaming, data_format_reconfig)>(
                 ckl::EltwiseShape::tiles(onetile));
         } else {
             ckl::add<
-                ckl::input(cb_correct_xpow),
-                ckl::input(cb_xpowadd),
-                ckl::output(cb_xpowadd, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::input(cb_correct_xpow, ckl::InputLifecycle::Streaming, data_format_reconfig),
+                ckl::input(cb_xpowadd, ckl::InputLifecycle::Streaming, data_format_reconfig),
+                ckl::output(cb_xpowadd, ckl::OutputLifecycle::Streaming, data_format_reconfig),
                 ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
         }
     }

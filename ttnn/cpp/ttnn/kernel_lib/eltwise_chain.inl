@@ -369,8 +369,11 @@ constexpr uint32_t dest_reuse_binary_config_bits(
 // Internal sentinel + type-list wrapper + chain-shape trait declarations. These are
 // implementation detail of the chain pipeline — no chain caller references them, so they
 // live here rather than on the public eltwise_chain.hpp surface.
-inline constexpr uint32_t INVALID_DFB = 0xFFFFFFFFu;  // "no CB on this slot" (== NO_PREV_DFB); a real
-                                                      // tt::CBIndex is 0..31, so 0xFFFFFFFF never aliases one.
+inline constexpr uint32_t INVALID_DFB = 0xFFFFFFFFu;      // "no CB on this slot" (== NO_PREV_DFB); a real
+                                                          // tt::CBIndex is 0..31, so 0xFFFFFFFF never aliases one.
+inline constexpr uint32_t CONDITIONAL_DFB = 0xFFFFFFFEu;  // a runtime branch may leave either the old or a new
+                                                          // format programmed; force the following element to
+                                                          // re-establish its expected input-side format.
 
 template <class... Es>
 struct EltwiseChain;  // typed list of elements (defined below)
@@ -436,6 +439,16 @@ struct DestOnlyTag {
 /// hierarchy so the wrapped element keeps its ordinary reader / DEST-only classification.
 struct RuntimeConditionalTag {};
 
+/// Marks a runtime-conditional sequence handled as one chain stage. Unlike a
+/// single-element runtime wrapper, the sequence performs its own ordered walk
+/// so one runtime decision guards every element in the selected branch.
+struct RuntimeConditionalSequenceTag {};
+
+/// Marks an unfinished `runtime_if(...).else_if(...)` builder. The chain rejects
+/// it with a focused diagnostic instead of treating the tag-less builder as an
+/// inert custom element when `.otherwise(...)` was accidentally omitted.
+struct RuntimeIfBuilderTag {};
+
 /// Pure CB → DEST move (no compute).
 struct CopyTileTag : CbReaderTag {};
 /// 2 CBs → DEST FPU compute (add/sub/mul + bcast variants).
@@ -487,6 +500,10 @@ template <class T>
 inline constexpr bool is_rand_tile_op_v = std::is_base_of_v<RandTileTag, T>;
 template <class T>
 inline constexpr bool is_runtime_conditional_op_v = std::is_base_of_v<RuntimeConditionalTag, T>;
+template <class T>
+inline constexpr bool is_runtime_conditional_sequence_op_v = std::is_base_of_v<RuntimeConditionalSequenceTag, T>;
+template <class T>
+inline constexpr bool is_runtime_if_builder_v = std::is_base_of_v<RuntimeIfBuilderTag, T>;
 
 /// SFPU (DEST-internal, non-RNG, non-fill) element predicate. SFPU ops inherit
 /// from `DestOnlyTag` via `UnaryOp` / `BinaryOp` / `TernaryOp`;
@@ -2156,6 +2173,7 @@ struct chain_hoist_math_mop : std::false_type {};
 template <class... Es>
 struct chain_hoist_math_mop<EltwiseChain<Es...>>
     : std::bool_constant<
+          ((!is_runtime_conditional_sequence_op_v<Es>) && ...) &&
           chain_per_side_cbs_consistent_v<EltwiseChain<Es...>> && chain_math_mop_uniform_v<EltwiseChain<Es...>>> {};
 
 // SFPU cohort hoist: requires math-MOP hoist AND SFPU init uniformity.
@@ -2215,8 +2233,10 @@ namespace detail {
 // prev_*_cb == curr_*_cb. A chain that shares a CB on a side thus reconfigs it once (at
 // element 0, prev == NO_PREV_DFB) and never again. Zero run-time cost — `if constexpr`.
 //
-// srca+srcb coalesce: both-with-prev → 4-arg _with_dt; both-first-emit → 2-arg combined;
-// mixed → independent per-side. Pack is always independent. The LLK _with_dt overloads
+// srca+srcb coalesce: both-with-known-prev → 4-arg _with_dt; both-without-known-prev →
+// 2-arg combined; mixed → independent per-side. CONDITIONAL_DFB is an unknown previous
+// state, so it takes the unconditional path and is never passed to an LLK as a CB id.
+// Pack is always independent. The LLK _with_dt overloads
 // fast-path-skip on format equality, so an emitted reconfig on matching dtypes is a
 // hardware no-op (a few compares).
 //
@@ -2240,6 +2260,8 @@ ALWI void emit_pre_element_transitions() {
     constexpr bool reconf_a = (curr_a != NO_PREV_DFB) && (curr_a != prev_a);
     constexpr bool reconf_b = (curr_b != NO_PREV_DFB) && (curr_b != prev_b);
     constexpr bool reconf_p = (curr_p != NO_PREV_DFB) && (curr_p != prev_p);
+    constexpr bool known_prev_a = prev_a != NO_PREV_DFB && prev_a != CONDITIONAL_DFB;
+    constexpr bool known_prev_b = prev_b != NO_PREV_DFB && prev_b != CONDITIONAL_DFB;
 
     // Pack-side deferral: in heterogeneous chains, only the first opt-in pack
     // site (prev_p == NO_PREV_DFB) emits at boot. Later sites defer to per-stage
@@ -2250,33 +2272,33 @@ ALWI void emit_pre_element_transitions() {
 
     // ---- srca + srcb: coalesce when both sides share prev-state ----
     if constexpr (reconf_a && reconf_b) {
-        if constexpr (prev_a != NO_PREV_DFB && prev_b != NO_PREV_DFB) {
+        if constexpr (known_prev_a && known_prev_b) {
             // both sides have prev → 4-arg _with_dt
             reconfig_data_format(prev_a, curr_a, prev_b, curr_b);
-        } else if constexpr (prev_a == NO_PREV_DFB && prev_b == NO_PREV_DFB) {
-            // first-emit on both sides → 2-arg combined (unconditional reprogram)
+        } else if constexpr (!known_prev_a && !known_prev_b) {
+            // first/unknown on both sides → 2-arg combined (unconditional reprogram)
             reconfig_data_format(curr_a, curr_b);
         } else {
             // mixed prev-state → independent per-side
-            if constexpr (prev_a != NO_PREV_DFB) {
+            if constexpr (known_prev_a) {
                 reconfig_data_format_srca(prev_a, curr_a);
             } else {
                 reconfig_data_format_srca(curr_a);
             }
-            if constexpr (prev_b != NO_PREV_DFB) {
+            if constexpr (known_prev_b) {
                 reconfig_data_format_srcb(prev_b, curr_b);
             } else {
                 reconfig_data_format_srcb(curr_b);
             }
         }
     } else if constexpr (reconf_a) {
-        if constexpr (prev_a != NO_PREV_DFB) {
+        if constexpr (known_prev_a) {
             reconfig_data_format_srca(prev_a, curr_a);
         } else {
             reconfig_data_format_srca(curr_a);
         }
     } else if constexpr (reconf_b) {
-        if constexpr (prev_b != NO_PREV_DFB) {
+        if constexpr (known_prev_b) {
             reconfig_data_format_srcb(prev_b, curr_b);
         } else {
             reconfig_data_format_srcb(curr_b);
@@ -2415,7 +2437,10 @@ ALWI void elem_apply_compute(
     // Per-block streaming: pass chunk-local index `j` to exec so Block
     // returns the local CB-front offset (the just-waited window).
     [[maybe_unused]] constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
-    if constexpr (is_cb_reader_op_v<ElemT>) {
+    if constexpr (is_runtime_conditional_sequence_op_v<ElemT>) {
+        elem.template apply<SlotBase, PrevA, PrevB, PrevP, PackHetero>(
+            i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
+    } else if constexpr (is_cb_reader_op_v<ElemT>) {
         // Per-block-iteration input waits — mutually exclusive by policy (Streaming forces
         // block_size 1, so per_tile and per_block never both fire). The Bulk upfront wait is NOT
         // here: it's hoisted once to the chain boundary (elem_wait_upfront, pre-loop fold), so it's
@@ -2671,6 +2696,9 @@ ALWI void emit_push_per_row(uint32_t cb, bool push) {
 template <SetupOwner SO = SetupOwner::Chain, std::size_t... Is, class... Es>
 ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices, EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
+    static_assert(
+        ((!is_runtime_if_builder_v<Es>) && ...),
+        "eltwise_chain: runtime_if must end with .otherwise(...) before it can be used as a chain element");
     static_assert(
         detail::ChainTraits<Es...>::any_dest_accumulation ==
             detail::ChainTraits<Es...>::any_dest_accumulation_lifecycle,

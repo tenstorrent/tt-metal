@@ -5,7 +5,7 @@
 
 /**
  * @file eltwise_optional.inl
- * @brief Implementation of conditional / optional eltwise chain elements.
+ * @brief Implementation of compile-time optional and runtime-conditional elements.
  *
  * Included from `eltwise_optional.hpp`. Do NOT include directly.
  */
@@ -15,12 +15,12 @@ namespace detail {
 
 template <class Inner>
 constexpr bool runtime_conditional_element_supported() {
-    if constexpr (is_runtime_conditional_op_v<Inner>) {
+    if constexpr (is_runtime_conditional_op_v<Inner> || is_cb_writer_op_v<Inner>) {
         return false;
     } else if constexpr (is_dest_only_op_v<Inner>) {
         return true;
     } else if constexpr (is_binary_fpu_op_v<Inner>) {
-        return Inner::APolicy == InputLifecycle::CallerManaged &&
+        return !Inner::uses_dest_accumulation && Inner::APolicy == InputLifecycle::CallerManaged &&
                (Inner::same_dfb || Inner::BPolicy == InputLifecycle::CallerManaged);
     } else if constexpr (is_cb_reader_op_v<Inner>) {
         return Inner::Policy == InputLifecycle::CallerManaged;
@@ -29,65 +29,137 @@ constexpr bool runtime_conditional_element_supported() {
     }
 }
 
+template <Side S, std::size_t Index, uint32_t Prev, class First, class... Rest>
+constexpr uint32_t runtime_sequence_prev() {
+    if constexpr (Index == 0) {
+        return Prev;
+    } else {
+        constexpr uint32_t current = dfb_for_side<S, First>();
+        constexpr uint32_t next = current == NO_PREV_DFB ? Prev : current;
+        return runtime_sequence_prev<S, Index - 1, next, Rest...>();
+    }
+}
+
+template <
+    uint32_t SlotBase,
+    uint32_t PrevA,
+    uint32_t PrevB,
+    uint32_t PrevP,
+    bool PackHetero,
+    class... Elements,
+    std::size_t... Is>
+ALWI void apply_runtime_branch(
+    const RuntimeConditionalBranch<Elements...>& branch,
+    std::index_sequence<Is...>,
+    uint32_t i_flat,
+    uint32_t ht,
+    uint32_t wt,
+    uint32_t inner_count,
+    uint32_t chain_lane_width,
+    uint32_t Ht,
+    uint32_t Wt) {
+    // Runtime sequences cannot be boot-hoisted: the selected branch owns each
+    // element's transition + init immediately before that element executes.
+    (elem_apply_compute<
+         true,
+         true,
+         SlotBase,
+         runtime_sequence_prev<Side::SrcA, Is, PrevA, Elements...>(),
+         runtime_sequence_prev<Side::SrcB, Is, PrevB, Elements...>(),
+         runtime_sequence_prev<Side::Pack, Is, PrevP, Elements...>(),
+         PackHetero,
+         Elements>(std::get<Is>(branch.elements), i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt),
+     ...);
+}
+
 }  // namespace detail
 
-template <class Inner>
-constexpr RuntimeConditionalChainElement<Inner>::RuntimeConditionalChainElement(bool enabled_, Inner inner) noexcept :
-    Inner(inner), enabled(enabled_) {}
+template <class... Branches>
+constexpr RuntimeConditionalSequence<Branches...>::RuntimeConditionalSequence(
+    uint32_t selected_branch_, std::tuple<Branches...> branches_) noexcept :
+    selected_branch(selected_branch_), branches(branches_) {}
 
-template <class Inner>
-ALWI void RuntimeConditionalChainElement<Inner>::init() const {
-    if (enabled) {
-        static_cast<const Inner&>(*this).init();
-    }
+template <class... Branches>
+template <uint32_t SlotBase, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero>
+ALWI void RuntimeConditionalSequence<Branches...>::apply(
+    uint32_t i_flat,
+    uint32_t ht,
+    uint32_t wt,
+    uint32_t inner_count,
+    uint32_t chain_lane_width,
+    uint32_t Ht,
+    uint32_t Wt) const {
+    apply_selected<0, SlotBase, PrevA, PrevB, PrevP, PackHetero>(i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
 }
 
-template <class Inner>
-template <class... Args>
-ALWI void RuntimeConditionalChainElement<Inner>::exec(Args... args) const {
-    if (enabled) {
-        static_cast<const Inner&>(*this).exec(args...);
-    }
-}
-
-template <std::size_t ArmCount>
-template <std::size_t Arm, class Inner>
-ALWI auto RuntimeConditional<ArmCount>::when(Inner inner) const {
-    static_assert(Arm < ArmCount, "Runtime conditional arm index is out of range");
-    return RuntimeConditionalChainElement<Inner>{selected_arm == Arm, inner};
-}
-
-template <std::size_t ArmCount>
-template <std::size_t... Arms, class Inner>
-ALWI auto RuntimeConditional<ArmCount>::when_any(Inner inner) const {
-    static_assert(sizeof...(Arms) > 0, "when_any requires at least one arm index");
-    static_assert(((Arms < ArmCount) && ...), "Runtime conditional arm index is out of range");
-    return RuntimeConditionalChainElement<Inner>{((selected_arm == Arms) || ...), inner};
-}
-
-template <std::size_t ArmCount>
-template <class Inner>
-ALWI auto RuntimeConditional<ArmCount>::otherwise(Inner inner) const {
-    return RuntimeConditionalChainElement<Inner>{selected_arm == ArmCount, inner};
-}
-
-template <class... Conditions>
-ALWI auto runtime_conditional(Conditions... conditions) {
-    static_assert(sizeof...(Conditions) > 0, "runtime_conditional requires at least one condition");
-    constexpr uint32_t arm_count = sizeof...(Conditions);
-    const bool matches[arm_count] = {static_cast<bool>(conditions)...};
-    uint32_t selected_arm = arm_count;
-    for (uint32_t arm = 0; arm < arm_count; ++arm) {
-        if (selected_arm == arm_count && matches[arm]) {
-            selected_arm = arm;
+template <class... Branches>
+template <std::size_t BranchIndex, uint32_t SlotBase, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero>
+ALWI void RuntimeConditionalSequence<Branches...>::apply_selected(
+    uint32_t i_flat,
+    uint32_t ht,
+    uint32_t wt,
+    uint32_t inner_count,
+    uint32_t chain_lane_width,
+    uint32_t Ht,
+    uint32_t Wt) const {
+    if constexpr (BranchIndex < sizeof...(Branches)) {
+        if (selected_branch == BranchIndex) {
+            const auto& branch = std::get<BranchIndex>(branches);
+            detail::apply_runtime_branch<SlotBase, PrevA, PrevB, PrevP, PackHetero>(
+                branch,
+                std::make_index_sequence<std::tuple_size_v<decltype(branch.elements)>>{},
+                i_flat,
+                ht,
+                wt,
+                inner_count,
+                chain_lane_width,
+                Ht,
+                Wt);
+        } else {
+            apply_selected<BranchIndex + 1, SlotBase, PrevA, PrevB, PrevP, PackHetero>(
+                i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
         }
     }
-    return RuntimeConditional<arm_count>{selected_arm};
 }
 
-template <class Inner>
-ALWI auto runtime_optional(bool condition, Inner inner) {
-    return RuntimeConditionalChainElement<Inner>{condition, inner};
+template <class... Branches>
+constexpr RuntimeIfBuilder<Branches...>::RuntimeIfBuilder(
+    uint32_t selected_branch_, std::tuple<Branches...> branches_) noexcept :
+    selected_branch(selected_branch_), branches(branches_) {}
+
+template <class... Branches>
+template <class... Elements>
+ALWI auto RuntimeIfBuilder<Branches...>::else_if(bool condition, Elements... elements) const {
+    static_assert(sizeof...(Elements) > 0, "else_if requires at least one chain element");
+    using Branch = detail::RuntimeConditionalBranch<Elements...>;
+    constexpr uint32_t unmatched = sizeof...(Branches);
+    const uint32_t next_selected =
+        selected_branch == unmatched ? (condition ? unmatched : unmatched + 1) : selected_branch;
+    return RuntimeIfBuilder<Branches..., Branch>{
+        next_selected, std::tuple_cat(branches, std::tuple<Branch>{Branch{elements...}})};
+}
+
+template <class... Branches>
+template <class... Elements>
+ALWI auto RuntimeIfBuilder<Branches...>::otherwise(Elements... elements) const {
+    static_assert(sizeof...(Elements) > 0, "otherwise requires at least one chain element");
+    using Branch = detail::RuntimeConditionalBranch<Elements...>;
+    return RuntimeConditionalSequence<Branches..., Branch>{
+        selected_branch, std::tuple_cat(branches, std::tuple<Branch>{Branch{elements...}})};
+}
+
+template <class... Elements>
+ALWI auto when(bool condition, Elements... elements) {
+    static_assert(sizeof...(Elements) > 0, "when requires at least one chain element");
+    using Branch = detail::RuntimeConditionalBranch<Elements...>;
+    return RuntimeConditionalSequence<Branch>{condition ? 0u : 1u, std::tuple<Branch>{Branch{elements...}}};
+}
+
+template <class... Elements>
+ALWI auto runtime_if(bool condition, Elements... elements) {
+    static_assert(sizeof...(Elements) > 0, "runtime_if requires at least one chain element");
+    using Branch = detail::RuntimeConditionalBranch<Elements...>;
+    return RuntimeIfBuilder<Branch>{condition ? 0u : 1u, std::tuple<Branch>{Branch{elements...}}};
 }
 
 }  // namespace compute_kernel_lib
