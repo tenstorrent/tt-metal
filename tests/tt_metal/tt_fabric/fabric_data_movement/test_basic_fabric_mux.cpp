@@ -80,7 +80,7 @@ struct WorkerMemoryMap {
 
 struct WorkerTestConfig {
     WorkerMemoryMap* memory_map = nullptr;
-    CoreCoord worker_logical_core;
+    tt::tt_metal::CoreCoord worker_logical_core;
     uint8_t worker_id = 0;
     tt::tt_fabric::FabricMuxChannelType channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     uint32_t num_buffers = 0;
@@ -88,7 +88,7 @@ struct WorkerTestConfig {
     uint8_t num_hops = 0;
     std::shared_ptr<tt_metal::distributed::MeshDevice> dest_device = nullptr;
     std::string_view kernel_src = sender_kernel_src;
-    CoreCoord termination_master_logical_core;
+    tt::tt_metal::CoreCoord termination_master_logical_core;
 };
 
 WorkerMemoryMap create_worker_memory_map(const uint32_t base_l1_address) {
@@ -234,13 +234,13 @@ std::vector<ChipId> get_physical_chip_sequence(uint32_t num_seq_chips) {
     return chip_seq;
 }
 
-uint32_t get_sender_id(CoreCoord logical_core) { return logical_core.x << 16 || logical_core.y; }
+uint32_t get_sender_id(tt::tt_metal::CoreCoord logical_core) { return logical_core.x << 16 || logical_core.y; }
 
 void create_kernel(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program_handle,
     const std::string& kernel_src,
-    const CoreCoord& logical_core,
+    const tt::tt_metal::CoreCoord& logical_core,
     const std::vector<uint32_t>& ct_args,
     const std::vector<uint32_t>& rt_args,
     const std::vector<std::pair<size_t, size_t>>& addresses_to_clear) {
@@ -263,7 +263,7 @@ void create_kernel(
 
 void create_mux_kernel(
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
-    const CoreCoord& mux_logical_core,
+    const tt::tt_metal::CoreCoord& mux_logical_core,
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& dest_device,
     tt::tt_metal::Program& program_handle) {
@@ -296,16 +296,16 @@ void create_worker_kernel(
     const TestConfig& test_config,
     const WorkerTestConfig& worker_test_config,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
-    const CoreCoord& mux_virtual_core,
+    const tt::tt_metal::CoreCoord& mux_virtual_core,
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     tt::tt_metal::Program& program_handle) {
     auto* worker_memory_map = worker_test_config.memory_map;
-    CoreCoord worker_logical_core = worker_test_config.worker_logical_core;
+    tt::tt_metal::CoreCoord worker_logical_core = worker_test_config.worker_logical_core;
     auto channel_type = worker_test_config.channel_type;
     auto worker_id = worker_test_config.worker_id;
 
-    CoreCoord termination_master_logical_core = worker_test_config.termination_master_logical_core;
-    CoreCoord termination_master_virtual_core = device->worker_core_from_logical_core(termination_master_logical_core);
+    tt::tt_metal::CoreCoord termination_master_logical_core = worker_test_config.termination_master_logical_core;
+    tt::tt_metal::CoreCoord termination_master_virtual_core = device->worker_core_from_logical_core(termination_master_logical_core);
     uint32_t termination_master_noc_xy_encoding = tt_metal::MetalContext::instance().hal().noc_xy_encoding(
         termination_master_virtual_core.x, termination_master_virtual_core.y);
     const bool is_termination_master = termination_master_logical_core == worker_logical_core;
@@ -329,7 +329,7 @@ void create_worker_kernel(
 
     // virtual coordinates will be the same for the receiver device
     // hence, we can use the noc encoding derived using current device
-    CoreCoord worker_virtual_core = device->worker_core_from_logical_core(worker_logical_core);
+    tt::tt_metal::CoreCoord worker_virtual_core = device->worker_core_from_logical_core(worker_logical_core);
     uint32_t receiver_noc_xy_encoding =
         tt_metal::MetalContext::instance().hal().noc_xy_encoding(worker_virtual_core.x, worker_virtual_core.y);
 
@@ -435,9 +435,9 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
 
     // [device] -> {(logical_core, hops)}
     // keeps track of which logical cores will talk to each other and are how many hops away
-    std::unordered_map<std::shared_ptr<tt_metal::distributed::MeshDevice>, std::vector<std::pair<CoreCoord, uint8_t>>>
+    std::unordered_map<std::shared_ptr<tt_metal::distributed::MeshDevice>, std::vector<std::pair<tt::tt_metal::CoreCoord, uint8_t>>>
         device_senders_map;
-    std::unordered_map<std::shared_ptr<tt_metal::distributed::MeshDevice>, std::vector<std::pair<CoreCoord, uint8_t>>>
+    std::unordered_map<std::shared_ptr<tt_metal::distributed::MeshDevice>, std::vector<std::pair<tt::tt_metal::CoreCoord, uint8_t>>>
         device_receivers_map;
 
     // number of senders/receivers starting 2nd device in the sequence if uniformly distributed
@@ -455,11 +455,11 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         offset = 1;
     }
 
-    std::vector<CoreCoord> worker_logical_cores;
+    std::vector<tt::tt_metal::CoreCoord> worker_logical_cores;
     auto grid_size = devices[0]->compute_with_storage_grid_size();
     for (auto i = 0; i < grid_size.x; i++) {
         for (auto j = 0; j < grid_size.y; j++) {
-            worker_logical_cores.push_back(CoreCoord({i, j}));
+            worker_logical_cores.push_back(tt::tt_metal::CoreCoord({i, j}));
         }
     }
 
@@ -531,8 +531,8 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         program_handles[i] = tt_metal::CreateProgram();
 
         // use logical core (0,0) for the mux kernel
-        CoreCoord mux_logical_core = worker_logical_cores[0];
-        CoreCoord mux_virtual_core = devices[i]->worker_core_from_logical_core(mux_logical_core);
+        tt::tt_metal::CoreCoord mux_logical_core = worker_logical_cores[0];
+        tt::tt_metal::CoreCoord mux_virtual_core = devices[i]->worker_core_from_logical_core(mux_logical_core);
 
         auto num_full_size_channels = device_senders_map[devices[i]].size();
         auto num_header_only_channels = device_receivers_map[devices[i]].size();
@@ -602,7 +602,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     }
 
     if (!test_config.terminate_from_kernel) {
-        auto wait_for_worker_completion = [&](tt::tt_metal::IDevice* device, const CoreCoord& core) {
+        auto wait_for_worker_completion = [&](tt::tt_metal::IDevice* device, const tt::tt_metal::CoreCoord& core) {
             std::vector<uint32_t> worker_status(1, 0);
             while ((worker_status[0] & 0xFFFF) == 0) {
                 tt_metal::detail::ReadFromDeviceL1(
@@ -640,7 +640,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         fixture->WaitForSingleProgramDone(devices[i], program_handles[i]);
     }
 
-    auto validate_worker_results = [&](tt::tt_metal::IDevice* device, const CoreCoord& core) {
+    auto validate_worker_results = [&](tt::tt_metal::IDevice* device, const tt::tt_metal::CoreCoord& core) {
         std::vector<uint32_t> worker_status;
         tt_metal::detail::ReadFromDeviceL1(
             device, core, worker_memory_map.test_results_address, test_results_size_bytes, worker_status);

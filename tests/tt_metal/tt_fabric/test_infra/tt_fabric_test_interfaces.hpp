@@ -62,7 +62,7 @@ public:
     // Data reading helpers
     virtual std::unordered_map<tt::tt_metal::CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
         const MeshCoordinate& device_coord,
-        const std::vector<CoreCoord>& cores,
+        const std::vector<tt::tt_metal::CoreCoord>& cores,
         uint32_t address,
         uint32_t size_bytes) const = 0;
     virtual void zero_out_buffer_on_cores(

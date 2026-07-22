@@ -1604,8 +1604,8 @@ void write_to_worker_or_fabric_tensix_cores(
         control_plane.get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
     // Get pre-computed translated fabric mux cores from tensix config
-    std::unordered_set<CoreCoord> fabric_mux_cores_translated;
-    std::unordered_set<CoreCoord> dispatch_mux_cores_translated;
+    std::unordered_set<tt::tt_metal::CoreCoord> fabric_mux_cores_translated;
+    std::unordered_set<tt::tt_metal::CoreCoord> dispatch_mux_cores_translated;
     if (tensix_config_enabled) {
         const auto& fabric_context = control_plane.get_fabric_context();
         const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
@@ -1615,7 +1615,7 @@ void write_to_worker_or_fabric_tensix_cores(
 
     enum class CoreType { Worker, FabricTensixExtension, DispatcherMux };
 
-    auto get_core_type = [&](const CoreCoord& core_coord) -> CoreType {
+    auto get_core_type = [&](const tt::tt_metal::CoreCoord& core_coord) -> CoreType {
         if (fabric_mux_cores_translated.contains(core_coord)) {
             return CoreType::FabricTensixExtension;
         }
@@ -1647,7 +1647,7 @@ void write_to_worker_or_fabric_tensix_cores(
     };
 
     for (const auto& tensix_core : all_tensix_cores) {
-        CoreCoord core_coord(tensix_core.x, tensix_core.y);
+        tt::tt_metal::CoreCoord core_coord(tensix_core.x, tensix_core.y);
         CoreType core_type = get_core_type(core_coord);
         const void* data_to_write = select_data(core_type);
 
@@ -1692,24 +1692,24 @@ static void write_to_all_cores(
                 cluster.write_core(
                     data,
                     size,
-                    tt_cxy_pair(physical_chip_id, CoreCoord(tensix_core.x, tensix_core.y)),
+                    tt_cxy_pair(physical_chip_id, tt::tt_metal::CoreCoord(tensix_core.x, tensix_core.y)),
                     hal.get_dev_addr(core_type, addr_type));
             }
             break;
         }
         case tt::tt_metal::HalProgrammableCoreType::IDLE_ETH:
         case tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH: {
-            std::unordered_set<CoreCoord> logical_eth_cores =
+            std::unordered_set<tt::tt_metal::CoreCoord> logical_eth_cores =
                 (core_type == tt::tt_metal::HalProgrammableCoreType::IDLE_ETH)
                     ? control_plane.get_inactive_ethernet_cores(physical_chip_id)
                     : control_plane.get_active_ethernet_cores(physical_chip_id);
-            for (const CoreCoord& logical_eth_core : logical_eth_cores) {
-                CoreCoord virtual_eth_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+            for (const tt::tt_metal::CoreCoord& logical_eth_core : logical_eth_cores) {
+                tt::tt_metal::CoreCoord virtual_eth_core = cluster.get_virtual_coordinate_from_logical_coordinates(
                     physical_chip_id, logical_eth_core, CoreType::ETH);
                 cluster.write_core(
                     data,
                     size,
-                    tt_cxy_pair(physical_chip_id, CoreCoord(virtual_eth_core.x, virtual_eth_core.y)),
+                    tt_cxy_pair(physical_chip_id, tt::tt_metal::CoreCoord(virtual_eth_core.x, virtual_eth_core.y)),
                     hal.get_dev_addr(core_type, addr_type));
             }
             break;
@@ -2054,7 +2054,7 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
         // auto routing_direction = get_eth_chan_direction(fabric_node_id, chan_id);
         // static_view.direction() = static_cast<std::uint8_t>(routing_direction);
 
-        CoreCoord virtual_eth_core = this->cluster_.get().get_virtual_eth_core_from_channel(physical_chip_id, chan_id);
+        tt::tt_metal::CoreCoord virtual_eth_core = this->cluster_.get().get_virtual_eth_core_from_channel(physical_chip_id, chan_id);
         this->cluster_.get().write_core(
             telemetry.data(),
             telemetry.size(),
@@ -2184,10 +2184,10 @@ bool ControlPlane::is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) con
     return this->physical_system_descriptor_->is_cross_host_eth_link(tt::tt_metal::AsicID{asic_id}, chan_id);
 }
 
-std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores) const {
+std::unordered_set<tt::tt_metal::CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores) const {
     const auto& cluster = this->cluster_.get();
 
-    std::unordered_set<CoreCoord> active_ethernet_cores;
+    std::unordered_set<tt::tt_metal::CoreCoord> active_ethernet_cores;
     const auto& cluster_desc = cluster.get_cluster_desc();
     const auto& soc_desc = cluster.get_soc_desc(chip_id);
 
@@ -2204,7 +2204,7 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chi
         for (auto logical_active_eth_channel : logical_active_eth_channels) {
             tt::umd::CoreCoord logical_active_eth =
                 soc_desc.get_eth_core_for_channel(logical_active_eth_channel, CoordSystem::LOGICAL);
-            active_ethernet_cores.insert(CoreCoord(logical_active_eth.x, logical_active_eth.y));
+            active_ethernet_cores.insert(tt::tt_metal::CoreCoord(logical_active_eth.x, logical_active_eth.y));
         }
     } else {
         std::set<uint32_t> logical_active_eth_channels = cluster_desc->get_active_eth_channels(chip_id);
@@ -2245,10 +2245,10 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chi
     return active_ethernet_cores;
 }
 
-std::unordered_set<CoreCoord> ControlPlane::get_inactive_ethernet_cores(ChipId chip_id) const {
+std::unordered_set<tt::tt_metal::CoreCoord> ControlPlane::get_inactive_ethernet_cores(ChipId chip_id) const {
     const auto& cluster = this->cluster_.get();
-    std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
-    std::unordered_set<CoreCoord> inactive_ethernet_cores;
+    std::unordered_set<tt::tt_metal::CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
+    std::unordered_set<tt::tt_metal::CoreCoord> inactive_ethernet_cores;
 
     for (const auto& [eth_core, chan] : cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
         if (!active_ethernet_cores.contains(eth_core)) {
@@ -2278,7 +2278,7 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
 }
 
 void ControlPlane::assign_direction_to_fabric_eth_core(
-    const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction) {
+    const FabricNodeId& fabric_node_id, const tt::tt_metal::CoreCoord& eth_core, RoutingDirection direction) {
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     auto chan_id = this->cluster_.get().get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(eth_core);
     this->assign_direction_to_fabric_eth_chan(fabric_node_id, chan_id, direction);
@@ -2402,7 +2402,7 @@ ControlPlane::get_global_logical_bindings() const {
 // Helper function to fill connection info with common fields for fabric router configs
 void fill_connection_info_fields(
     tt::tt_fabric::fabric_connection_info_t& connection_info,
-    const CoreCoord& virtual_core,
+    const tt::tt_metal::CoreCoord& virtual_core,
     const FabricEriscDatamoverConfig& config,
     uint32_t sender_channel,
     uint16_t worker_free_slots_stream_id) {
@@ -2426,7 +2426,7 @@ void fill_connection_info_fields(
 // Helper function to fill tensix connection info with tensix-specific configuration
 void fill_tensix_connection_info_fields(
     tt::tt_fabric::fabric_connection_info_t& connection_info,
-    const CoreCoord& mux_core_virtual,
+    const tt::tt_metal::CoreCoord& mux_core_virtual,
     const tt::tt_fabric::FabricTensixDatamoverConfig& tensix_config,
     uint32_t sender_channel,
     tt::tt_fabric::FabricTensixCoreType core_id) {
@@ -2462,7 +2462,7 @@ void ControlPlane::populate_fabric_connection_info(
     // Always populate fabric router config for normal workers
     const auto& edm_config = builder_context.get_fabric_router_config(
         fabric_tensix_config, static_cast<eth_chan_directions>(sender_channel));
-    CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
+    tt::tt_metal::CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
 
     fill_connection_info_fields(
         worker_connection_info, fabric_router_virtual_core, edm_config, sender_channel, WORKER_FREE_SLOTS_STREAM_ID);
@@ -2479,8 +2479,8 @@ void ControlPlane::populate_fabric_connection_info(
             WORKER_FREE_SLOTS_STREAM_ID);
 
         const auto& tensix_config = builder_context.get_tensix_config();
-        CoreCoord mux_core_logical = tensix_config.get_core_for_channel(physical_chip_id, eth_channel_id);
-        CoreCoord mux_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
+        tt::tt_metal::CoreCoord mux_core_logical = tensix_config.get_core_for_channel(physical_chip_id, eth_channel_id);
+        tt::tt_metal::CoreCoord mux_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
             physical_chip_id, mux_core_logical, CoreType::WORKER);
         // Get the RISC ID that handles this ethernet channel
         auto core_id = tensix_config.get_core_id_for_channel(physical_chip_id, eth_channel_id);
@@ -2505,8 +2505,8 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     // Get mux and dispatcher cores
-    std::unordered_set<CoreCoord> fabric_mux_cores_translated = tensix_config.get_translated_fabric_mux_cores();
-    std::unordered_set<CoreCoord> dispatch_mux_cores_translated = tensix_config.get_translated_dispatch_mux_cores();
+    std::unordered_set<tt::tt_metal::CoreCoord> fabric_mux_cores_translated = tensix_config.get_translated_fabric_mux_cores();
+    std::unordered_set<tt::tt_metal::CoreCoord> dispatch_mux_cores_translated = tensix_config.get_translated_dispatch_mux_cores();
 
     const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
     const std::vector<tt::umd::CoreCoord>& all_tensix_cores =
@@ -2514,7 +2514,7 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
 
     // Build per-worker connection info and write to each worker core
     for (const auto& tensix_core : all_tensix_cores) {
-        CoreCoord core_coord(tensix_core.x, tensix_core.y);
+        tt::tt_metal::CoreCoord core_coord(tensix_core.x, tensix_core.y);
 
         // Determine core type
         const void* data_to_write = nullptr;

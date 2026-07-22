@@ -572,7 +572,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     chan_id_t eth_channel =
         tt::tt_metal::MetalContext::instance()
             .get_cluster()
-            .get_logical_ethernet_core_from_virtual(chip_id, CoreCoord(connection.edm_noc_x, connection.edm_noc_y))
+            .get_logical_ethernet_core_from_virtual(chip_id, tt::tt_metal::CoreCoord(connection.edm_noc_x, connection.edm_noc_y))
             .y;
 
     // copy "only" connections[eth_channel] to L1, not the whole tensix_fabric_connections_l1_info_t
@@ -600,9 +600,9 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t connection_offset = offsetof(tt::tt_fabric::tensix_fabric_connections_l1_info_t, read_only) +
                                (eth_channel * sizeof(tt::tt_fabric::fabric_connection_info_t));
     // Write to Tensix cores
-    std::vector<CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
+    std::vector<tt::tt_metal::CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
     for (const auto& logical_core : worker_core_coords) {
-        CoreCoord tensix_core =
+        tt::tt_metal::CoreCoord tensix_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 chip_id, logical_core, CoreType::WORKER);
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -647,7 +647,7 @@ size_t log_worker_to_fabric_edm_sender_rt_args(
 }
 
 FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
-    const CoreCoord& my_eth_core_logical,
+    const tt::tt_metal::CoreCoord& my_eth_core_logical,
     size_t my_noc_x,
     size_t my_noc_y,
     const FabricNodeId& local_fabric_node_id,
@@ -1495,7 +1495,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
-    const CoreCoord& ethernet_core,
+    const tt::tt_metal::CoreCoord& ethernet_core,
     ChipId local_physical_chip_id,
     ChipId peer_physical_chip_id,
     const FabricEriscDatamoverConfig& config,
@@ -1537,7 +1537,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& /*program*/,
-    const CoreCoord& ethernet_core,
+    const tt::tt_metal::CoreCoord& ethernet_core,
     const FabricNodeId& local_fabric_node_id,
     const FabricNodeId& peer_fabric_node_id,
     const FabricEriscDatamoverConfig& config,
@@ -1751,7 +1751,7 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     auto* adapter_ptr = this->receiver_channel_to_downstream_adapter.get();
     TT_FATAL(adapter_ptr != nullptr, "Adapter is not set. Failed to build TT-Fabric router. Internal error.");
     adapter_ptr->add_downstream_connection(
-        adapter_spec, upstream_vc_idx, absolute_channel_id, ds_dir, CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
+        adapter_spec, upstream_vc_idx, absolute_channel_id, ds_dir, tt::tt_metal::CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
 }
 
 size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }
@@ -1773,7 +1773,7 @@ void FabricEriscDatamoverBuilder::teardown_from_host(
     std::vector<uint32_t> val(1, termination_signal);
     tt::tt_metal::detail::WriteToDeviceL1(
         d,
-        d->logical_core_from_ethernet_core(CoreCoord(this->noc_x_, this->noc_y_)),
+        d->logical_core_from_ethernet_core(tt::tt_metal::CoreCoord(this->noc_x_, this->noc_y_)),
         config.termination_signal_address,
         val,
         CoreType::ETH);

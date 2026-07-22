@@ -534,29 +534,29 @@ all_gather_minimal_matmul_async_factory_helper(
         "Scheme-4 single-row mux interleave assumes num_workers_per_link==2 (got {})",
         num_workers_per_link);
     const uint32_t single_mux_row = full_grid_size.y - 1;
-    const auto in0_mux_logical = [&](uint32_t link, uint32_t dir) -> CoreCoord {
+    const auto in0_mux_logical = [&](uint32_t link, uint32_t dir) -> tt::tt_metal::CoreCoord {
         if (single_row_muxes) {
-            return CoreCoord(num_workers_per_link * link + 1, single_mux_row);  // odd col 2g+1 (NOC_0 +x-aligned)
+            return tt::tt_metal::CoreCoord(num_workers_per_link * link + 1, single_mux_row);  // odd col 2g+1 (NOC_0 +x-aligned)
         }
         uint32_t x = (num_workers_per_link * (link + 1)) - (1 - dir);
         if (x >= full_grid_size.x) {
             x -= full_grid_size.x;
         }
-        return CoreCoord(x, full_grid_size.y - 1);
+        return tt::tt_metal::CoreCoord(x, full_grid_size.y - 1);
     };
-    const auto fsdp_mux_logical = [&](uint32_t link, uint32_t dir) -> CoreCoord {
+    const auto fsdp_mux_logical = [&](uint32_t link, uint32_t dir) -> tt::tt_metal::CoreCoord {
         if (single_row_muxes) {
-            return CoreCoord(num_workers_per_link * link, single_mux_row);  // even col 2g
+            return tt::tt_metal::CoreCoord(num_workers_per_link * link, single_mux_row);  // even col 2g
         }
         if (fsdp_mux_in_column) {
-            return CoreCoord(full_grid_size.x - 1, fsdp_mux_col_row(link, dir));
+            return tt::tt_metal::CoreCoord(full_grid_size.x - 1, fsdp_mux_col_row(link, dir));
         }
         uint32_t x = (num_workers_per_link * (link + 1)) - (1 - dir);
         if (x >= full_grid_size.x) {
             x -= full_grid_size.x;
         }
         x = (x == 0) ? (full_grid_size.x - 1) : (x - 1);
-        return CoreCoord(x, full_grid_size.y - 2);
+        return tt::tt_metal::CoreCoord(x, full_grid_size.y - 2);
     };
 
     // Uni-ring (Linear): each device relays through exactly ONE mux direction — rank>0 (has a
@@ -1109,7 +1109,7 @@ all_gather_minimal_matmul_async_factory_helper(
             if (fsdp_mux_connection_valid(dir)) {
                 uint32_t link = mux_id / 2;
                 // Match the create-loop placement via the shared helper.
-                CoreCoord fsdp_mux_logical_core = fsdp_mux_logical(link, dir);
+                tt::tt_metal::CoreCoord fsdp_mux_logical_core = fsdp_mux_logical(link, dir);
 
                 std::vector<uint32_t> fsdp_mux_rt_args;
                 const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
@@ -1191,13 +1191,13 @@ all_gather_minimal_matmul_async_factory_helper(
     }
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
-        CoreCoord core = cores.at(core_id);
-        CoreCoord virtual_core = device->worker_core_from_logical_core(core);
+        tt::tt_metal::CoreCoord core = cores.at(core_id);
+        tt::tt_metal::CoreCoord virtual_core = device->worker_core_from_logical_core(core);
         uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
         uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
 
-        CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
-        CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
+        tt::tt_metal::CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
+        tt::tt_metal::CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
 
         auto [in0_core_order, in0_core_order_index] = build_core_order_for_axis(
             core,
@@ -1286,13 +1286,13 @@ all_gather_minimal_matmul_async_factory_helper(
             const bool is_in0_backward_sender = (in0_core_order_index == (in0_core_order.size() - 2));
             if (is_in0_backward_sender) {
                 auto termination_master_logical_core_backward =
-                    transpose_core_grid ? CoreCoord(in0_idx - worker_idx, last_in0_core.y - 1)
-                                        : CoreCoord(last_in0_core.x - 1, in0_idx - worker_idx);
-                CoreCoord termination_master_virtual_core_backward =
+                    transpose_core_grid ? tt::tt_metal::CoreCoord(in0_idx - worker_idx, last_in0_core.y - 1)
+                                        : tt::tt_metal::CoreCoord(last_in0_core.x - 1, in0_idx - worker_idx);
+                tt::tt_metal::CoreCoord termination_master_virtual_core_backward =
                     device->worker_core_from_logical_core(termination_master_logical_core_backward);
 
                 auto mux_logical_core_backward = in0_mux_logical(in0_idx / num_workers_per_link, /*dir=*/0);
-                CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
+                tt::tt_metal::CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
                 fabric_mux_connection_rt_args(
                     mux_connection_valid(0),
                     !(in0_idx % num_workers_per_link),  // termination master at worker_idx 0
@@ -1309,13 +1309,13 @@ all_gather_minimal_matmul_async_factory_helper(
             } else {
                 // Forward fabric sender (in0_core_order_index == size - 1).
                 auto termination_master_logical_core_forward = transpose_core_grid
-                                                                   ? CoreCoord(in0_idx - worker_idx, last_in0_core.y)
-                                                                   : CoreCoord(last_in0_core.x, in0_idx - worker_idx);
-                CoreCoord termination_master_virtual_core_forward =
+                                                                   ? tt::tt_metal::CoreCoord(in0_idx - worker_idx, last_in0_core.y)
+                                                                   : tt::tt_metal::CoreCoord(last_in0_core.x, in0_idx - worker_idx);
+                tt::tt_metal::CoreCoord termination_master_virtual_core_forward =
                     device->worker_core_from_logical_core(termination_master_logical_core_forward);
 
                 auto mux_logical_core_forward = in0_mux_logical(in0_idx / num_workers_per_link, /*dir=*/1);
-                CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
+                tt::tt_metal::CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
                 fabric_mux_connection_rt_args(
                     mux_connection_valid(1),
                     !(in0_idx % num_workers_per_link),  // termination master at worker_idx 0
@@ -1434,7 +1434,7 @@ all_gather_minimal_matmul_async_factory_helper(
                 // The termination master is the group's worker-0 client — the backward sender of the
                 // group-base row, which sits in the chain-tail column on the in1 axis.
                 auto second_last_in1_core = in1_core_order[in1_core_order.size() - 2];
-                CoreCoord fsdp_mux_logical_backward = fsdp_mux_logical(in1_idx / num_workers_per_link, /*dir=*/0);
+                tt::tt_metal::CoreCoord fsdp_mux_logical_backward = fsdp_mux_logical(in1_idx / num_workers_per_link, /*dir=*/0);
                 // Term master = the group's worker-0 client. The layout follows the GRID orientation,
                 // not the mux placement: a transpose grid (in1 chain along X) indexes the client by its
                 // chain-tail column + group-base row; non-transpose swaps the axes. Gating on
@@ -1443,13 +1443,13 @@ all_gather_minimal_matmul_async_factory_helper(
                 // never terminated. Mirror the in0 term-master, which already gates on transpose.
                 // Scheme 3: clients now sit in the mux's column (not the chain tail), so the
                 // worker-0 term master is the column-matched core at the group-base row.
-                CoreCoord fsdp_term_master_logical_backward =
+                tt::tt_metal::CoreCoord fsdp_term_master_logical_backward =
                     single_row_muxes
-                        ? CoreCoord(num_workers_per_link * (in1_idx / num_workers_per_link), in1_idx - worker_idx)
-                    : transpose_core_grid ? CoreCoord(second_last_in1_core.x, in1_idx - worker_idx)
-                                          : CoreCoord(in1_idx - worker_idx, second_last_in1_core.y);
-                CoreCoord fsdp_mux_virtual_backward = device->worker_core_from_logical_core(fsdp_mux_logical_backward);
-                CoreCoord fsdp_term_master_virtual_backward =
+                        ? tt::tt_metal::CoreCoord(num_workers_per_link * (in1_idx / num_workers_per_link), in1_idx - worker_idx)
+                    : transpose_core_grid ? tt::tt_metal::CoreCoord(second_last_in1_core.x, in1_idx - worker_idx)
+                                          : tt::tt_metal::CoreCoord(in1_idx - worker_idx, second_last_in1_core.y);
+                tt::tt_metal::CoreCoord fsdp_mux_virtual_backward = device->worker_core_from_logical_core(fsdp_mux_logical_backward);
+                tt::tt_metal::CoreCoord fsdp_term_master_virtual_backward =
                     device->worker_core_from_logical_core(fsdp_term_master_logical_backward);
                 fabric_mux_connection_rt_args(
                     fsdp_mux_connection_valid(0),
@@ -1469,14 +1469,14 @@ all_gather_minimal_matmul_async_factory_helper(
                 // Transpose: mux in the last column at the group's forward row ((group)*2 + 1).
                 // Non-transpose: original bottom-row mux with the -1 shift. Term master = the group's
                 // worker-0 forward sender (chain tail) at the group-base row.
-                CoreCoord fsdp_mux_logical_forward = fsdp_mux_logical(in1_idx / num_workers_per_link, /*dir=*/1);
-                CoreCoord fsdp_term_master_logical_forward =
+                tt::tt_metal::CoreCoord fsdp_mux_logical_forward = fsdp_mux_logical(in1_idx / num_workers_per_link, /*dir=*/1);
+                tt::tt_metal::CoreCoord fsdp_term_master_logical_forward =
                     single_row_muxes
-                        ? CoreCoord(num_workers_per_link * (in1_idx / num_workers_per_link), in1_idx - worker_idx)
-                    : transpose_core_grid ? CoreCoord(last_in1_core.x, in1_idx - worker_idx)
-                                          : CoreCoord(in1_idx - worker_idx, last_in1_core.y);
-                CoreCoord fsdp_mux_virtual_forward = device->worker_core_from_logical_core(fsdp_mux_logical_forward);
-                CoreCoord fsdp_term_master_virtual_forward =
+                        ? tt::tt_metal::CoreCoord(num_workers_per_link * (in1_idx / num_workers_per_link), in1_idx - worker_idx)
+                    : transpose_core_grid ? tt::tt_metal::CoreCoord(last_in1_core.x, in1_idx - worker_idx)
+                                          : tt::tt_metal::CoreCoord(in1_idx - worker_idx, last_in1_core.y);
+                tt::tt_metal::CoreCoord fsdp_mux_virtual_forward = device->worker_core_from_logical_core(fsdp_mux_logical_forward);
+                tt::tt_metal::CoreCoord fsdp_term_master_virtual_forward =
                     device->worker_core_from_logical_core(fsdp_term_master_logical_forward);
                 fabric_mux_connection_rt_args(
                     fsdp_mux_connection_valid(1),

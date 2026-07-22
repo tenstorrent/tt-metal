@@ -55,7 +55,7 @@ TEST_F(CoreCoordFixture, TestCoreRangeIterator) {
     for (tt::tt_metal::CoreCoord& core : this->cr18) {
         cores_iterated.push_back(core);
     }
-    cores_in_core_range = {CoreCoord(3, 1), CoreCoord(3, 2), CoreCoord(3, 3)};
+    cores_in_core_range = {tt::tt_metal::CoreCoord(3, 1), tt::tt_metal::CoreCoord(3, 2), tt::tt_metal::CoreCoord(3, 3)};
     EXPECT_EQ(cores_iterated, cores_in_core_range);
 }
 }  // namespace basic_tests::CoreRange

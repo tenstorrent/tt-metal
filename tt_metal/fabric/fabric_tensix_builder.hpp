@@ -64,7 +64,7 @@ public:
     FabricTensixCoreType get_core_id_for_channel(ChipId device_id, uint32_t eth_chan_id) const;
 
     // Get the core for a given ethernet channel on a specific device
-    CoreCoord get_core_for_channel(ChipId device_id, uint32_t eth_chan_id) const;
+    tt::tt_metal::CoreCoord get_core_for_channel(ChipId device_id, uint32_t eth_chan_id) const;
 
     // Get the config for a specific core type (returns base config pointer)
     std::shared_ptr<FabricTensixDatamoverBaseConfig> get_config(FabricTensixCoreType core_id) const;
@@ -73,15 +73,15 @@ public:
     bool is_core_id_active(FabricTensixCoreType core_id) const;
 
     // Get translated fabric mux cores
-    const std::unordered_set<CoreCoord>& get_translated_fabric_or_dispatch_mux_cores() const {
+    const std::unordered_set<tt::tt_metal::CoreCoord>& get_translated_fabric_or_dispatch_mux_cores() const {
         return translated_fabric_or_dispatch_mux_cores_;
     }
 
-    const std::unordered_set<CoreCoord>& get_translated_fabric_mux_cores() const {
+    const std::unordered_set<tt::tt_metal::CoreCoord>& get_translated_fabric_mux_cores() const {
         return translated_fabric_mux_cores_;
     }
 
-    const std::unordered_set<CoreCoord>& get_translated_dispatch_mux_cores() const {
+    const std::unordered_set<tt::tt_metal::CoreCoord>& get_translated_dispatch_mux_cores() const {
         return translated_dispatch_mux_cores_;
     }
 
@@ -124,7 +124,7 @@ public:
         ChipId device_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
 
     // Get core for a (routing_plane_id, direction) pair on a device
-    CoreCoord get_core_for_direction(
+    tt::tt_metal::CoreCoord get_core_for_direction(
         ChipId device_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
 
     // Get NOC coordinates for a (routing_plane_id, direction) pair on a device
@@ -133,19 +133,19 @@ public:
 
     // UDM mode: Worker assignment info
     struct WorkerTensixInfo {
-        CoreCoord tensix_core;     // The tensix mux core assigned to this worker (virtual coordinate)
+        tt::tt_metal::CoreCoord tensix_core;     // The tensix mux core assigned to this worker (virtual coordinate)
         uint32_t channel_index{};  // The channel index on that tensix mux core
     };
 
     // Get worker assignment info (tensix core + channel index) for a specific worker (UDM mode only)
-    WorkerTensixInfo get_worker_tensix_info(ChipId device_id, const CoreCoord& worker_coord) const;
+    WorkerTensixInfo get_worker_tensix_info(ChipId device_id, const tt::tt_metal::CoreCoord& worker_coord) const;
 
 private:
-    std::vector<CoreCoord> logical_fabric_mux_cores_;
-    std::vector<CoreCoord> logical_dispatch_mux_cores_;
-    std::unordered_set<CoreCoord> translated_fabric_mux_cores_;
-    std::unordered_set<CoreCoord> translated_dispatch_mux_cores_;
-    std::unordered_set<CoreCoord> translated_fabric_or_dispatch_mux_cores_;
+    std::vector<tt::tt_metal::CoreCoord> logical_fabric_mux_cores_;
+    std::vector<tt::tt_metal::CoreCoord> logical_dispatch_mux_cores_;
+    std::unordered_set<tt::tt_metal::CoreCoord> translated_fabric_mux_cores_;
+    std::unordered_set<tt::tt_metal::CoreCoord> translated_dispatch_mux_cores_;
+    std::unordered_set<tt::tt_metal::CoreCoord> translated_fabric_or_dispatch_mux_cores_;
 
     // based on the number of channels used, get the number of risc needed per tensix
     size_t num_used_riscs_per_tensix_{};
@@ -216,7 +216,7 @@ private:
 
     // [device_id][worker coord] -> [WorkerTensixInfo] mapping for UDM mode
     // Maps each worker to its assigned tensix mux core and channel index
-    std::unordered_map<ChipId, std::map<CoreCoord, WorkerTensixInfo>> worker_to_tensix_info_map_;
+    std::unordered_map<ChipId, std::map<tt::tt_metal::CoreCoord, WorkerTensixInfo>> worker_to_tensix_info_map_;
 
     // Helper methods for initialization
 
@@ -276,16 +276,16 @@ private:
         const std::vector<tt_metal::IDevice*>& all_active_devices);
 
     // UDM mode helper: builds list of workers sorted by column (y first, then x)
-    std::vector<CoreCoord> build_workers_by_column(tt::tt_metal::IDevice* device) const;
+    std::vector<tt::tt_metal::CoreCoord> build_workers_by_column(tt::tt_metal::IDevice* device) const;
 
     // UDM mode helper: gets unique tensix cores for worker assignment (excludes dispatch routing plane)
-    std::vector<CoreCoord> get_tensix_cores_for_workers(tt::tt_metal::IDevice* device) const;
+    std::vector<tt::tt_metal::CoreCoord> get_tensix_cores_for_workers(tt::tt_metal::IDevice* device) const;
 
     // UDM mode helper: assigns workers to tensix cores in contiguous chunks
     void assign_workers_to_tensix_cores(
         ChipId device_id,
-        const std::vector<CoreCoord>& workers_by_column,
-        const std::vector<CoreCoord>& tensix_cores_for_workers,
+        const std::vector<tt::tt_metal::CoreCoord>& workers_by_column,
+        const std::vector<tt::tt_metal::CoreCoord>& tensix_cores_for_workers,
         uint32_t num_worker_channels);
 };
 
@@ -343,7 +343,7 @@ private:
     FabricTensixDatamoverBuilder(
         std::unique_ptr<FabricTensixDatamoverMuxBuilder> mux_builder,
         std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder,
-        const CoreCoord& logical_core,
+        const tt::tt_metal::CoreCoord& logical_core,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
         uint32_t noc_x,
@@ -355,7 +355,7 @@ private:
     static std::unique_ptr<BuilderType> create_builder(
         FabricTensixCoreType core_type,
         const FabricTensixDatamoverConfig& tensix_config,
-        const CoreCoord& my_core_logical,
+        const tt::tt_metal::CoreCoord& my_core_logical,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
         uint32_t ethernet_channel_id,
@@ -370,7 +370,7 @@ private:
     std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder_;  // Only in UDM mode
 
     // Common properties shared by both mux and relay builders
-    CoreCoord logical_core_;
+    tt::tt_metal::CoreCoord logical_core_;
     tt::tt_fabric::FabricNodeId local_fabric_node_id_;
     tt::tt_fabric::FabricNodeId remote_fabric_node_id_;
 };

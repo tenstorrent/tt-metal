@@ -299,7 +299,7 @@ std::vector<uint32_t> FabricTensixDatamoverBaseConfig::get_run_time_args(
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
     tt::tt_metal::Program& program,
-    const CoreCoord& logical_core) const {
+    const tt::tt_metal::CoreCoord& logical_core) const {
     std::vector<uint32_t> args;
 
     auto regions_to_clear = get_memory_regions_to_clear();
@@ -854,7 +854,7 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
 // ==================================================================================================
 
 FabricTensixDatamoverMuxBuilder::FabricTensixDatamoverMuxBuilder(
-    const CoreCoord& my_core_logical,
+    const tt::tt_metal::CoreCoord& my_core_logical,
     tt::tt_fabric::FabricNodeId local_fabric_node_id,
     tt::tt_fabric::FabricNodeId remote_fabric_node_id,
     uint32_t ethernet_channel_id,
@@ -1140,7 +1140,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_runtime_args(tt::tt_m
 // ==================================================================================================
 
 FabricTensixDatamoverRelayBuilder::FabricTensixDatamoverRelayBuilder(
-    const CoreCoord& my_core_logical,
+    const tt::tt_metal::CoreCoord& my_core_logical,
     tt::tt_fabric::FabricNodeId local_fabric_node_id,
     tt::tt_fabric::FabricNodeId remote_fabric_node_id,
     uint32_t ethernet_channel_id,

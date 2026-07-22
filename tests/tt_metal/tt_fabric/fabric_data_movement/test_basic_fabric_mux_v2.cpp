@@ -103,8 +103,8 @@ struct RemoteReceiverDevice {
     tt::tt_fabric::FabricNodeId fabric_node_id;
     tt::tt_fabric::FabricNodeId anchor_dst_fabric_node_id;
     MeshDevicePtr device;
-    CoreCoord receiver_mux_logical_core;
-    std::vector<CoreCoord> receiver_logical_cores;
+    tt::tt_metal::CoreCoord receiver_mux_logical_core;
+    std::vector<tt::tt_metal::CoreCoord> receiver_logical_cores;
     uint32_t linear_num_hops = 0;
 };
 
@@ -112,21 +112,21 @@ struct RoutingSelection {
     tt::tt_fabric::FabricNodeId src_fabric_node_id;
     MeshDevicePtr sender_device;
     tt::tt_fabric::FabricNodeId sender_anchor_dst_fabric_node_id;
-    CoreCoord sender_mux_logical_core;
-    std::vector<CoreCoord> sender_logical_cores;
+    tt::tt_metal::CoreCoord sender_mux_logical_core;
+    std::vector<tt::tt_metal::CoreCoord> sender_logical_cores;
     std::vector<RemoteReceiverDevice> remote_devices;
 };
 
 struct ReceiverEndpoint {
     tt::tt_fabric::FabricNodeId fabric_node_id;
     MeshDevicePtr device;
-    CoreCoord logical_core;
+    tt::tt_metal::CoreCoord logical_core;
     uint32_t linear_num_hops = 0;
 };
 
 struct SenderReceiverAssignment {
     uint8_t sender_logical_channel_id = 0;
-    CoreCoord sender_logical_core;
+    tt::tt_metal::CoreCoord sender_logical_core;
     ReceiverEndpoint receiver;
     uint32_t seed = 0;
 };
@@ -146,7 +146,7 @@ struct TestRuntimeConfig {
 struct MuxDeployment {
     MeshDevicePtr device;
     std::shared_ptr<tt::tt_metal::Program> program;
-    CoreCoord mux_virtual_core;
+    tt::tt_metal::CoreCoord mux_virtual_core;
     std::unique_ptr<tt::tt_fabric::FabricMuxV2Config> mux_config;
     uint8_t next_logical_channel_id = 0;
 };
@@ -210,13 +210,13 @@ TestRuntimeConfig build_test_runtime_config(const TestCaseConfig& test_case) {
     };
 }
 
-std::vector<CoreCoord> enumerate_worker_cores(const MeshDevicePtr& device) {
+std::vector<tt::tt_metal::CoreCoord> enumerate_worker_cores(const MeshDevicePtr& device) {
     const auto grid_size = device->compute_with_storage_grid_size();
-    std::vector<CoreCoord> worker_cores;
+    std::vector<tt::tt_metal::CoreCoord> worker_cores;
     worker_cores.reserve(static_cast<size_t>(grid_size.x) * static_cast<size_t>(grid_size.y));
     for (std::size_t y = 0; y < grid_size.y; ++y) {
         for (std::size_t x = 0; x < grid_size.x; ++x) {
-            worker_cores.push_back(CoreCoord{static_cast<std::size_t>(x), static_cast<std::size_t>(y)});
+            worker_cores.push_back(tt::tt_metal::CoreCoord{static_cast<std::size_t>(x), static_cast<std::size_t>(y)});
         }
     }
     return worker_cores;
@@ -473,7 +473,7 @@ std::unordered_map<ChipId, uint8_t> get_sender_count_by_receiver_device(
 tt::tt_metal::KernelHandle create_worker_kernel(
     tt::tt_metal::Program& program,
     const char* kernel_src,
-    const CoreCoord& logical_core,
+    const tt::tt_metal::CoreCoord& logical_core,
     std::vector<uint32_t> compile_args) {
     std::map<std::string, std::string> defines = {};
     if (is_2d_fabric()) {
@@ -496,7 +496,7 @@ std::optional<MuxDeployment> create_mux_deployment(
     const MeshDevicePtr& device,
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const tt::tt_fabric::FabricNodeId& anchor_dst_fabric_node_id,
-    const CoreCoord& mux_logical_core,
+    const tt::tt_metal::CoreCoord& mux_logical_core,
     uint8_t num_channels,
     uint8_t num_buffers_per_channel,
     uint32_t channel_buffer_size_bytes,
@@ -598,7 +598,7 @@ std::vector<uint32_t> make_common_compile_args(
 
 void bind_worker_to_mux_channel(
     MuxDeployment& mux_deployment,
-    const CoreCoord& worker_logical_core,
+    const tt::tt_metal::CoreCoord& worker_logical_core,
     tt::tt_metal::KernelHandle kernel,
     std::vector<uint32_t>& runtime_args) {
     const auto flow_control_sem_id = tt::tt_metal::CreateSemaphore(*mux_deployment.program, worker_logical_core, 0);
@@ -620,7 +620,7 @@ std::vector<uint32_t> make_receiver_runtime_args(
     const SenderReceiverAssignment& assignment,
     const RoutingSelection& routing_selection,
     const ReceiverMemoryLayout& receiver_memory,
-    const CoreCoord& sender_virtual_core) {
+    const tt::tt_metal::CoreCoord& sender_virtual_core) {
     return {
         receiver_memory.packet_header_buffer_address,
         test_runtime_config.packet_payload_size_bytes,
@@ -641,7 +641,7 @@ std::vector<uint32_t> make_sender_runtime_args(
     const TestRuntimeConfig& test_runtime_config,
     const SenderReceiverAssignment& assignment,
     const SenderMemoryLayout& sender_memory,
-    const CoreCoord& receiver_virtual_core) {
+    const tt::tt_metal::CoreCoord& receiver_virtual_core) {
     const uint32_t effective_stage_count = std::min(
         {test_case.stage_count, test_case.num_packets, static_cast<uint32_t>(test_case.num_buffers_per_channel)});
 
@@ -668,7 +668,7 @@ uint64_t read_word_count(const std::vector<uint32_t>& worker_status) {
 }
 
 std::vector<uint32_t> read_worker_status(
-    const MeshDevicePtr& device, const CoreCoord& logical_core, uint32_t test_results_address) {
+    const MeshDevicePtr& device, const tt::tt_metal::CoreCoord& logical_core, uint32_t test_results_address) {
     std::vector<uint32_t> worker_status;
     tt::tt_metal::detail::ReadFromDeviceL1(
         device->get_devices()[0],
