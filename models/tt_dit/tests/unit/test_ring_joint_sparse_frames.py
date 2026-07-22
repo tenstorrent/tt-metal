@@ -514,7 +514,7 @@ class TestSparseFramesRing:
             num_frames_padded=nf_padded,
             frame_seqlen=3840,
             b=1,
-            nh=40 // tp_factor,
+            nh=40,  # total heads; runner shards on tp_axis (nh must divide tp_factor: 40/4=10, 40/2=20)
             d=128,
             window=5,
             add_last_frame=True,
