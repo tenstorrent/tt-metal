@@ -1,0 +1,213 @@
+# Fused o_norm (Kimi-K3 / KDA "o_norm" node):
+#
+#     o_norm = RMSNorm(o) * gamma2 * sigmoid(g_out)
+#     RMSNorm(o) = o / sqrt(mean(o^2) + eps)   (mean over the last / W dim)
+#
+# Instead of a bespoke fused SFPU kernel, o_norm is expressed as a chain of
+# already-validated LLK primitives (self-multiply, row-reduce AVG, add, rsqrt,
+# sigmoid, and broadcast multiplies). The fuser derives the golden from the same
+# op references, so the reduction uses the validated reduce path (with its
+# SFPTRANSP-based tile handling) rather than a hand-rolled per-lane reduction.
+#
+# Reduce mechanics (reduce_to_tile + scaler) mirror layernorm_sharded.yaml.
+# Refs: tenstorrent/tt-llk#1674, tenstorrent/tt-blaze#2432
+
+supported_archs: ["wormhole", "blackhole"]
+
+operands:
+  # o: attention readout (the tensor being normalized)
+  - name: "o"
+    dims: [64, 128]
+    format: "Float16_b"
+
+  # g_out: gate input; sigmoid(g_out) modulates the output
+  - name: "g_out"
+    dims: [64, 128]
+    format: "Float16_b"
+
+  # scaler for the partial reduce (matches layernorm_sharded)
+  - name: "scaler"
+    dims: [64, 128]
+    format: "Float16_b"
+    const_value: 0.03125
+
+  # eps — numerical stability for the RMS denominator
+  - name: "eps"
+    dims: [64, 128]
+    format: "Float16_b"
+    const_value: 0.001
+
+  # gamma2 — per-column (head-dim) scale
+  - name: "gamma2"
+    dims: [64, 128]
+    format: "Float16_b"
+    const_value: 1.0
+
+  # constant 1.0 for the sigmoid denominator (1 + exp(-g_out))
+  - name: "one"
+    dims: [64, 128]
+    format: "Float16_b"
+    const_value: 1.0
+
+  # intermediates
+  - name: "o_sq"
+    dims: [64, 128]
+    format: "Float16_b"
+
+  - name: "ms_partial"
+    dims: [64, 128]
+    format: "Float16_b"
+
+  - name: "inv_rms"
+    dims: [64, 128]
+    format: "Float16_b"
+
+  - name: "normalized"
+    dims: [64, 128]
+    format: "Float16_b"
+
+  - name: "gamma_scaled"
+    dims: [64, 128]
+    format: "Float16_b"
+
+  - name: "exp_neg_gout"
+    dims: [64, 128]
+    format: "Float16_b"
+
+  - name: "sig_gout"
+    dims: [64, 128]
+    format: "Float16_b"
+
+  - name: "output"
+    dims: [64, 128]
+    format: "Float16_b"
+
+operations:
+  # Step 1: o^2 — self-multiply
+  - math:
+      - type: "Fpu"
+        src_a: "o"
+        src_b: "o"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+    block_size: [64, 128]
+    pack:
+      - output: "o_sq"
+        packer: "Packer"
+
+  # Step 2: mean(o^2) — row-reduce(AVG) across the W dim
+  - math:
+      - type: "Fpu"
+        src_a: "o_sq"
+        src_b: "scaler"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_ROW"
+        reduce_pool: "AVG"
+        reduce_to_tile: true
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi4"
+    block_size: [64, 128]
+    pack:
+      - output: "ms_partial"
+        packer: "Packer"
+
+  # Step 3: 1/sqrt(mean(o^2) + eps) — add eps then rsqrt
+  - math:
+      - type: "Fpu"
+        src_a: "ms_partial"
+        src_b: "eps"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+      - type: "UnarySfpu"
+        operation: "Rsqrt"
+        iterations: 8
+    block_size: [64, 128]
+    pack:
+      - output: "inv_rms"
+        packer: "Packer"
+
+  # Step 4: o * inv_rms — RMS normalize (broadcast col; inv_rms is per-row)
+  - math:
+      - type: "Fpu"
+        src_a: "o"
+        src_b: "inv_rms"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "COL"
+        math_fidelity: "LoFi"
+    block_size: [64, 128]
+    pack:
+      - output: "normalized"
+        packer: "Packer"
+
+  # Step 5: normalized * gamma2 — per-column scale (broadcast row)
+  - math:
+      - type: "Fpu"
+        src_a: "normalized"
+        src_b: "gamma2"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        math_fidelity: "LoFi"
+    block_size: [64, 128]
+    pack:
+      - output: "gamma_scaled"
+        packer: "Packer"
+
+  # Step 6a: exp(-g_out) — datacopy g_out, negate, exp.
+  # (Blackhole's fuser has no standalone Sigmoid unary op, so sigmoid is built
+  # from supported primitives: sigmoid(x) = 1 / (1 + exp(-x)).)
+  - math:
+      - type: "Fpu"
+        src_a: "g_out"
+        src_b: "g_out"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+      - type: "UnarySfpu"
+        operation: "Neg"
+        approximation_mode: false
+        iterations: 32
+        dst_dest_tile_index: 0
+      - type: "UnarySfpu"
+        operation: "Exp"
+        approximation_mode: false
+        iterations: 32
+        dst_dest_tile_index: 0
+    block_size: [64, 128]
+    pack:
+      - output: "exp_neg_gout"
+        packer: "Packer"
+
+  # Step 6b: sigmoid(g_out) = 1 / (1 + exp(-g_out)) — add 1 then reciprocal
+  - math:
+      - type: "Fpu"
+        src_a: "exp_neg_gout"
+        src_b: "one"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+      - type: "UnarySfpu"
+        operation: "Reciprocal"
+        approximation_mode: false
+        iterations: 32
+        dst_dest_tile_index: 0
+    block_size: [64, 128]
+    pack:
+      - output: "sig_gout"
+        packer: "Packer"
+
+  # Step 7: gamma_scaled * sigmoid(g_out) — final gate
+  - math:
+      - type: "Fpu"
+        src_a: "gamma_scaled"
+        src_b: "sig_gout"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+    block_size: [64, 128]
+    pack:
+      - output: "output"
+        packer: "Packer"
