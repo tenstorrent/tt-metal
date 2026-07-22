@@ -1,0 +1,327 @@
+{
+  "status": "passed",
+  "label": "gpqa_diamond",
+  "tt_metal_head": "2c7a9395a8ee239c53ac7c8e4a1b62e2a7f9a095",
+  "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+  "hardware": {
+    "mesh": "P150x4",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "architecture": "Blackhole",
+    "tensor_parallel": 4
+  },
+  "contract": {
+    "num_layers": 30,
+    "max_seq_len": 4096,
+    "canvas_length": 256,
+    "num_blocks": 2,
+    "max_denoise_steps_cap": 48,
+    "early_halt": "eager data-dependent (default); entropy_stop_threshold=0.005, stable_steps_to_halt=1",
+    "gumbel_mode": "argmax",
+    "path": "eager (no DG_DENOISE_* flag)",
+    "dataset": "GPQA-Diamond",
+    "num_prompts": 8,
+    "timing": "synchronized device wall time",
+    "seed": 0
+  },
+  "resolved_defaults": {
+    "denoise_block_fn": "denoise_block",
+    "batched_commit": true
+  },
+  "model_build": {
+    "elapsed_s": 16.02339422699879,
+    "num_layers": 30
+  },
+  "rows": [
+    {
+      "idx": 0,
+      "source": "gpqa_diamond",
+      "answer_letter_expected": "B",
+      "prompt_len": 152,
+      "cache_len": 160,
+      "prefill_s": 1.0112467790022492,
+      "prefill_tokens_per_s": 150.3095022462978,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "denoise_steps": 12,
+          "halted": true,
+          "denoise_latency_s": 6.405634777001978,
+          "commit_latency_s": 1.0401571539987344,
+          "denoise_ms_per_step": 533.8028980834982,
+          "block_wall_s": 7.452387967001414,
+          "output_tokens_per_s": 34.351405366111884
+        },
+        {
+          "block_idx": 1,
+          "denoise_steps": 12,
+          "halted": true,
+          "denoise_latency_s": 5.5366093539996655,
+          "commit_latency_s": 0.9562744670038228,
+          "denoise_ms_per_step": 461.38411283330544,
+          "block_wall_s": 6.499114742000529,
+          "output_tokens_per_s": 39.389980045374486
+        }
+      ],
+      "block0_text": " determine the correct energy difference to resolve the two states, we must apply the **Heisenberg Uncertainty Principle** relating energy and time.\n\n### 1. Understanding the Physical Principle\nIn qua",
+      "status": "ok"
+    },
+    {
+      "idx": 1,
+      "source": "gpqa_diamond",
+      "answer_letter_expected": "A",
+      "prompt_len": 157,
+      "cache_len": 160,
+      "prefill_s": 0.9594172299985075,
+      "prefill_tokens_per_s": 163.6410052800951,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "denoise_steps": 10,
+          "halted": true,
+          "denoise_latency_s": 4.677615767999669,
+          "commit_latency_s": 0.9550192530005006,
+          "denoise_ms_per_step": 467.76157679996686,
+          "block_wall_s": 5.638844611006789,
+          "output_tokens_per_s": 45.39937126486846
+        },
+        {
+          "block_idx": 1,
+          "denoise_steps": 16,
+          "halted": true,
+          "denoise_latency_s": 7.38453547199606,
+          "commit_latency_s": 0.912553192996711,
+          "denoise_ms_per_step": 461.5334669997537,
+          "block_wall_s": 8.303438011003891,
+          "output_tokens_per_s": 30.83060289734727
+        }
+      ],
+      "block0_text": " the number of carbon atoms in product 3, we must follow the chemical transformations step by step:\n\n**Step 1: Reaction of trans-cinnamaldehyde with methylmagnesium bromide**\nTrans-cinnamaldehyde is $",
+      "status": "ok"
+    },
+    {
+      "idx": 2,
+      "source": "gpqa_diamond",
+      "answer_letter_expected": "A",
+      "prompt_len": 182,
+      "cache_len": 192,
+      "prefill_s": 1.0091267280004104,
+      "prefill_tokens_per_s": 180.35395847718146,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "denoise_steps": 7,
+          "halted": true,
+          "denoise_latency_s": 3.3261204969967366,
+          "commit_latency_s": 0.9618509390056715,
+          "denoise_ms_per_step": 475.1600709995338,
+          "block_wall_s": 4.294408180998289,
+          "output_tokens_per_s": 59.612405064972094
+        },
+        {
+          "block_idx": 1,
+          "denoise_steps": 5,
+          "halted": true,
+          "denoise_latency_s": 2.3206459270004416,
+          "commit_latency_s": 0.9740294670045841,
+          "denoise_ms_per_step": 464.1291854000883,
+          "block_wall_s": 3.3008865189985954,
+          "output_tokens_per_s": 77.55492305675018
+        }
+      ],
+      "block0_text": "To find the expectation value of the operator $A = 10\\sigma_z + 5\\sigma_x$, we follow these steps:\n\n**1. Define the state vector:**\nThe state is given as:\n$|\\psi\\rangle = 0.5|\\uparrow\\rangle + \\frac{\\",
+      "status": "ok"
+    },
+    {
+      "idx": 3,
+      "source": "gpqa_diamond",
+      "answer_letter_expected": "B",
+      "prompt_len": 163,
+      "cache_len": 192,
+      "prefill_s": 0.937708819998079,
+      "prefill_tokens_per_s": 173.82794799811515,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "denoise_steps": 48,
+          "halted": false,
+          "denoise_latency_s": 22.338587075995747,
+          "commit_latency_s": 0.991754320995824,
+          "denoise_ms_per_step": 465.3872307499114,
+          "block_wall_s": 23.336708208000346,
+          "output_tokens_per_s": 10.969841921074261
+        },
+        {
+          "block_idx": 1,
+          "denoise_steps": 16,
+          "halted": true,
+          "denoise_latency_s": 7.391371980003896,
+          "commit_latency_s": 0.9279318799963221,
+          "denoise_ms_per_step": 461.9607487502435,
+          "block_wall_s": 8.325595037997118,
+          "output_tokens_per_s": 30.748552966081537
+        }
+      ],
+      "block0_text": " determine which of Maxwell's equations would change, let's look at the standard four equations (in differential form):\n\n1.  **Gauss's Law for Electricity**: $\\nabla \\cdot \\mathbf{E} = \\frac{\\rho}{\\ep",
+      "status": "ok"
+    },
+    {
+      "idx": 4,
+      "source": "gpqa_diamond",
+      "answer_letter_expected": "B",
+      "prompt_len": 377,
+      "cache_len": 384,
+      "prefill_s": 2.758527558995411,
+      "prefill_tokens_per_s": 136.66711386319966,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "denoise_steps": 10,
+          "halted": true,
+          "denoise_latency_s": 5.894502529001329,
+          "commit_latency_s": 2.201537055996596,
+          "denoise_ms_per_step": 589.4502529001329,
+          "block_wall_s": 8.102428979000251,
+          "output_tokens_per_s": 31.595463615108113
+        },
+        {
+          "block_idx": 1,
+          "denoise_steps": 11,
+          "halted": true,
+          "denoise_latency_s": 6.309772427004646,
+          "commit_latency_s": 2.221501588996034,
+          "denoise_ms_per_step": 573.6156751822405,
+          "block_wall_s": 8.537484549997316,
+          "output_tokens_per_s": 29.985412975075953
+        }
+      ],
+      "block0_text": " find the normalized eigenvector of the operator $\\vec{P}$ along a direction $\\vec{n}$ in the $x-z$ plane, we follow these steps:\n\n**1. Identify the operators:**\nThe problem provides the matrices for ",
+      "status": "ok"
+    },
+    {
+      "idx": 5,
+      "source": "gpqa_diamond",
+      "answer_letter_expected": "D",
+      "prompt_len": 229,
+      "cache_len": 256,
+      "prefill_s": 0.9930966570027522,
+      "prefill_tokens_per_s": 230.59185466512488,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "denoise_steps": 48,
+          "halted": false,
+          "denoise_latency_s": 22.677798207005253,
+          "commit_latency_s": 0.944515021998086,
+          "denoise_ms_per_step": 472.45412931260944,
+          "block_wall_s": 23.628633751999587,
+          "output_tokens_per_s": 10.834312414628537
+        },
+        {
+          "block_idx": 1,
+          "denoise_steps": 48,
+          "halted": false,
+          "denoise_latency_s": 22.23345487000188,
+          "commit_latency_s": 0.9927884119970258,
+          "denoise_ms_per_step": 463.1969764583725,
+          "block_wall_s": 23.232540782999422,
+          "output_tokens_per_s": 11.019027251092995
+        }
+      ],
+      "block0_text": " the the the the the the the the, the, the,,,,,,,,,,,,,, \\ \\ \\ \\, \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ = \\ \\ \\ \\ \\2 \\222222 \\222222222222222222222222222222222222222222222222222222222222222222222222222222222222",
+      "status": "ok"
+    },
+    {
+      "idx": 6,
+      "source": "gpqa_diamond",
+      "answer_letter_expected": "B",
+      "prompt_len": 189,
+      "cache_len": 192,
+      "prefill_s": 1.780757510001422,
+      "prefill_tokens_per_s": 106.1346078500318,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "denoise_steps": 15,
+          "halted": true,
+          "denoise_latency_s": 6.9398611200012965,
+          "commit_latency_s": 0.9996097159964847,
+          "denoise_ms_per_step": 462.65740800008643,
+          "block_wall_s": 7.945876833000511,
+          "output_tokens_per_s": 32.21796730309116
+        },
+        {
+          "block_idx": 1,
+          "denoise_steps": 13,
+          "halted": true,
+          "denoise_latency_s": 5.9773882500012405,
+          "commit_latency_s": 0.9831207879979047,
+          "denoise_ms_per_step": 459.7990961539416,
+          "block_wall_s": 6.966881640000793,
+          "output_tokens_per_s": 36.74527761892204
+        }
+      ],
+      "block0_text": "To find the threshold energy at which $\\gamma$-ray lifetimes are significantly limited by annihilation with Cosmic Microwave Background (CMB) photons, we follow these steps:\n\n### 1. Identify the Thres",
+      "status": "ok"
+    },
+    {
+      "idx": 7,
+      "source": "gpqa_diamond",
+      "answer_letter_expected": "D",
+      "prompt_len": 476,
+      "cache_len": 480,
+      "prefill_s": 1.163957720003964,
+      "prefill_tokens_per_s": 408.94956218717203,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "denoise_steps": 13,
+          "halted": true,
+          "denoise_latency_s": 6.042889666998235,
+          "commit_latency_s": 0.948098945998936,
+          "denoise_ms_per_step": 464.8376666921719,
+          "block_wall_s": 6.997394019002968,
+          "output_tokens_per_s": 36.58504856304726
+        },
+        {
+          "block_idx": 1,
+          "denoise_steps": 23,
+          "halted": true,
+          "denoise_latency_s": 10.82381892400008,
+          "commit_latency_s": 1.0028838369980804,
+          "denoise_ms_per_step": 470.60082278261217,
+          "block_wall_s": 11.832235114998184,
+          "output_tokens_per_s": 21.635810775556862
+        }
+      ],
+      "block0_text": " determine the correct conclusion, we must analyze the phenotypic relationships between the single mutants and the double mutants.\n\n**1. Analyze the Single Mutants:**\n*   **Wild-type (Control):** 100%",
+      "status": "ok"
+    }
+  ],
+  "aggregate": {
+    "block0": {
+      "K_min": 7,
+      "K_median": 12.5,
+      "K_max": 48,
+      "K_mean": 20.4,
+      "pct_halted": 75.0,
+      "tok_s_median": 33.28,
+      "tok_s_min": 10.83,
+      "tok_s_max": 59.61,
+      "n": 8
+    },
+    "block1": {
+      "K_min": 5,
+      "K_median": 14.5,
+      "K_max": 48,
+      "K_mean": 18,
+      "pct_halted": 87.5,
+      "tok_s_median": 30.79,
+      "tok_s_min": 11.02,
+      "tok_s_max": 77.55,
+      "n": 8
+    }
+  }
+}

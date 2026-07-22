@@ -1,0 +1,541 @@
+{
+  "status": "passed",
+  "label": "medium_ladder",
+  "tt_metal_head": "2c7a9395a8ee239c53ac7c8e4a1b62e2a7f9a095",
+  "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+  "hardware": {
+    "mesh": "P150x4",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "architecture": "Blackhole",
+    "tensor_parallel": 4
+  },
+  "contract": {
+    "num_layers": 30,
+    "max_seq_len": 65536,
+    "prompt_lengths": [
+      256,
+      1024,
+      4096,
+      16384,
+      32768
+    ],
+    "canvas_length": 256,
+    "num_blocks": 2,
+    "steady_block": 1,
+    "configs": {
+      "earlyhalt": 48,
+      "fixed4": 4
+    },
+    "gumbel_mode": "argmax",
+    "path": "eager (no DG_DENOISE_* trace flag)",
+    "timing": "synchronized device wall time",
+    "seed": 0
+  },
+  "environment": {
+    "DG_SPARSE_MOE": "1",
+    "DG_SPARSE_MOE_TUNED": "1",
+    "DG_DEDUP_ARGMAX": "1",
+    "DG_PREFILL_RAGGED_LONG": "<unset>",
+    "DG_COMMIT_BATCHED": "<unset>",
+    "DG_DENOISE_TRACED": "<unset>",
+    "DG_DENOISE_EARLY_HALT": "<unset>"
+  },
+  "resolved_defaults": {
+    "denoise_block_fn": "denoise_block",
+    "batched_commit": true,
+    "prefill_moe_tuned": true,
+    "sparse_moe_tuned": true
+  },
+  "model_build": {
+    "dram_before": {
+      "used": 0.0,
+      "free": 31.867186546325684
+    },
+    "elapsed_s": 18.77783042399824,
+    "dram_after": {
+      "used": 17.328871726989746,
+      "free": 14.538314819335938
+    },
+    "num_layers": 30
+  },
+  "rows": [
+    {
+      "prompt_len": 256,
+      "prompt_token_sha256": "9ddb5dbdd4b981a1e82c2d6ed73d88213d6f25e3ec900e946a3eed99f54f1797",
+      "configs": {
+        "earlyhalt": {
+          "k_cap": 48,
+          "cache_len": 256,
+          "prefill_s": 1.336935817002086,
+          "prefill_tokens_per_s": 191.48264018690776,
+          "blocks": [
+            {
+              "block_idx": 0,
+              "start_pos": 256,
+              "next_pos": 512,
+              "latency_s": 24.237742037003045,
+              "denoise_latency_s": 23.122262821998447,
+              "commit_latency_s": 1.1152209419960855,
+              "denoise_steps": 48,
+              "denoise_ms_per_step": 481.71380879163434,
+              "halted": false,
+              "token_sha256": "af0d03f2e3749831ae798c7be2586aac72b5cb4661fa802f966ff067482bd419",
+              "synchronized_wall_s": 24.243901641006232
+            },
+            {
+              "block_idx": 1,
+              "start_pos": 512,
+              "next_pos": 768,
+              "latency_s": 23.38140006699541,
+              "denoise_latency_s": 22.388962436998554,
+              "commit_latency_s": 0.992223852997995,
+              "denoise_steps": 48,
+              "denoise_ms_per_step": 466.4367174374699,
+              "halted": false,
+              "token_sha256": "0e21844e22f39814650512ed7afecce4f6e4b9a0e19363115807bb00a4392de8",
+              "synchronized_wall_s": 23.387387743001455
+            }
+          ],
+          "steady_block_idx": 1,
+          "steady_block_s": 23.387387743001455,
+          "steady_output_tokens_per_s": 10.946070711835125,
+          "steady_denoise_steps": 48,
+          "steady_denoise_ms_per_step": 466.4367174374699,
+          "steady_halted": false,
+          "dram_after_prefill": {
+            "used": 18.78534984588623,
+            "free": 13.081836700439453
+          }
+        },
+        "fixed4": {
+          "k_cap": 4,
+          "cache_len": 256,
+          "prefill_s": 0.895359941998322,
+          "prefill_tokens_per_s": 285.91853174561584,
+          "blocks": [
+            {
+              "block_idx": 0,
+              "start_pos": 256,
+              "next_pos": 512,
+              "latency_s": 2.842529517998628,
+              "denoise_latency_s": 1.8711225439983536,
+              "commit_latency_s": 0.9711707550013671,
+              "denoise_steps": 4,
+              "denoise_ms_per_step": 467.7806359995884,
+              "halted": false,
+              "token_sha256": "3038992cb349df86381f9af440e6f9a9cfae258d0d1631aa5f90d2c93e88ac63",
+              "synchronized_wall_s": 2.848648265004158
+            },
+            {
+              "block_idx": 1,
+              "start_pos": 512,
+              "next_pos": 768,
+              "latency_s": 3.0081471880039317,
+              "denoise_latency_s": 2.017233563004993,
+              "commit_latency_s": 0.9907124119999935,
+              "denoise_steps": 4,
+              "denoise_ms_per_step": 504.3083907512482,
+              "halted": false,
+              "token_sha256": "0597576e8ccb03db1fbdbab0d9aa227588f90e25490fde86a3da34561e237f9c",
+              "synchronized_wall_s": 3.0142646519962
+            }
+          ],
+          "steady_block_idx": 1,
+          "steady_block_s": 3.0142646519962,
+          "steady_output_tokens_per_s": 84.92950339661242,
+          "steady_denoise_steps": 4,
+          "steady_denoise_ms_per_step": 504.3083907512482,
+          "steady_halted": false,
+          "dram_after_prefill": {
+            "used": 18.78534984588623,
+            "free": 13.081836700439453
+          }
+        }
+      },
+      "status": "ok"
+    },
+    {
+      "prompt_len": 1024,
+      "prompt_token_sha256": "ae538b066e7ea6bf7c539865d2fc5548b927407dfc26b32ba3c80f8a86ba130f",
+      "configs": {
+        "earlyhalt": {
+          "k_cap": 48,
+          "cache_len": 1024,
+          "prefill_s": 3.8680646669963608,
+          "prefill_tokens_per_s": 264.7318719195972,
+          "blocks": [
+            {
+              "block_idx": 0,
+              "start_pos": 1024,
+              "next_pos": 1280,
+              "latency_s": 23.696720829997503,
+              "denoise_latency_s": 22.698316779002198,
+              "commit_latency_s": 0.9981745950062759,
+              "denoise_steps": 48,
+              "denoise_ms_per_step": 472.8815995625458,
+              "halted": false,
+              "token_sha256": "e2719a50496d2b908343a21893bc79070d24829c1c20ef7210212d55dff54cd9",
+              "synchronized_wall_s": 23.702843955994467
+            },
+            {
+              "block_idx": 1,
+              "start_pos": 1280,
+              "next_pos": 1536,
+              "latency_s": 23.97481923399755,
+              "denoise_latency_s": 22.96474806900369,
+              "commit_latency_s": 1.0098669459985103,
+              "denoise_steps": 48,
+              "denoise_ms_per_step": 478.4322514375769,
+              "halted": false,
+              "token_sha256": "e878d0d3aeab6101e37b41f707d8ccc4bcbf8835d1c9eeb46be407918ebe08ce",
+              "synchronized_wall_s": 23.980883126001572
+            }
+          ],
+          "steady_block_idx": 1,
+          "steady_block_s": 23.980883126001572,
+          "steady_output_tokens_per_s": 10.67516982818822,
+          "steady_denoise_steps": 48,
+          "steady_denoise_ms_per_step": 478.4322514375769,
+          "steady_halted": false,
+          "dram_after_prefill": {
+            "used": 18.792292594909668,
+            "free": 13.074893951416016
+          }
+        },
+        "fixed4": {
+          "k_cap": 4,
+          "cache_len": 1024,
+          "prefill_s": 1.1148077539983205,
+          "prefill_tokens_per_s": 918.5440236914092,
+          "blocks": [
+            {
+              "block_idx": 0,
+              "start_pos": 1024,
+              "next_pos": 1280,
+              "latency_s": 2.86908063699957,
+              "denoise_latency_s": 1.8680322010040982,
+              "commit_latency_s": 1.0008171249937732,
+              "denoise_steps": 4,
+              "denoise_ms_per_step": 467.00805025102454,
+              "halted": false,
+              "token_sha256": "b1bf225416bcca34c31191056fc09fac36ec34e4c4204c86bbbcd9eb3a6fa36c",
+              "synchronized_wall_s": 2.8753137109961244
+            },
+            {
+              "block_idx": 1,
+              "start_pos": 1280,
+              "next_pos": 1536,
+              "latency_s": 3.0009988179954235,
+              "denoise_latency_s": 1.857771013994352,
+              "commit_latency_s": 1.1430334440010483,
+              "denoise_steps": 4,
+              "denoise_ms_per_step": 464.442753498588,
+              "halted": false,
+              "token_sha256": "908d6e73947d1dfc5f8932c5d4bad1edd615a0104ad61469ee4b033eaab12168",
+              "synchronized_wall_s": 3.006872938996821
+            }
+          ],
+          "steady_block_idx": 1,
+          "steady_block_s": 3.006872938996821,
+          "steady_output_tokens_per_s": 85.13828325762542,
+          "steady_denoise_steps": 4,
+          "steady_denoise_ms_per_step": 464.442753498588,
+          "steady_halted": false,
+          "dram_after_prefill": {
+            "used": 18.792292594909668,
+            "free": 13.074893951416016
+          }
+        }
+      },
+      "status": "ok"
+    },
+    {
+      "prompt_len": 4096,
+      "prompt_token_sha256": "2caccb1735e6e37cfb83eb4b227195e7823d596485c1c7ee7165c63b37359aa1",
+      "configs": {
+        "earlyhalt": {
+          "k_cap": 48,
+          "cache_len": 4096,
+          "prefill_s": 3.6568628899985924,
+          "prefill_tokens_per_s": 1120.0857465021272,
+          "blocks": [
+            {
+              "block_idx": 0,
+              "start_pos": 4096,
+              "next_pos": 4352,
+              "latency_s": 26.219898673996795,
+              "denoise_latency_s": 23.88628437800071,
+              "commit_latency_s": 2.333364881000307,
+              "denoise_steps": 48,
+              "denoise_ms_per_step": 497.63092454168145,
+              "halted": false,
+              "token_sha256": "a76e035779aebed3ab93e9fc6a224e9b8ddc1f3e9964e9b1e2382c1080e71b9e",
+              "synchronized_wall_s": 26.225984749995405
+            },
+            {
+              "block_idx": 1,
+              "start_pos": 4352,
+              "next_pos": 4608,
+              "latency_s": 26.662769965005282,
+              "denoise_latency_s": 24.323422050001682,
+              "commit_latency_s": 2.3391499790013768,
+              "denoise_steps": 48,
+              "denoise_ms_per_step": 506.737959375035,
+              "halted": false,
+              "token_sha256": "d06b640ac663f770efec8e437747823bd8e3c25efbd23564303a320c60187a76",
+              "synchronized_wall_s": 26.668777981998574
+            }
+          ],
+          "steady_block_idx": 1,
+          "steady_block_s": 26.668777981998574,
+          "steady_output_tokens_per_s": 9.599239986654057,
+          "steady_denoise_steps": 48,
+          "steady_denoise_ms_per_step": 506.737959375035,
+          "steady_halted": false,
+          "dram_after_prefill": {
+            "used": 18.798762321472168,
+            "free": 13.068424224853516
+          }
+        },
+        "fixed4": {
+          "k_cap": 4,
+          "cache_len": 4096,
+          "prefill_s": 1.7926236619969131,
+          "prefill_tokens_per_s": 2284.919075226986,
+          "blocks": [
+            {
+              "block_idx": 0,
+              "start_pos": 4096,
+              "next_pos": 4352,
+              "latency_s": 3.0139716070043505,
+              "denoise_latency_s": 2.0137579350048327,
+              "commit_latency_s": 0.9999709309995524,
+              "denoise_steps": 4,
+              "denoise_ms_per_step": 503.4394837512082,
+              "halted": false,
+              "token_sha256": "5096561f939ee640ddfd1070cb9116817798dc1e40b75259ab5f95f68b1a9fb9",
+              "synchronized_wall_s": 3.0201680840036715
+            },
+            {
+              "block_idx": 1,
+              "start_pos": 4352,
+              "next_pos": 4608,
+              "latency_s": 2.9111249780034996,
+              "denoise_latency_s": 1.8745601620030357,
+              "commit_latency_s": 1.0363556599986623,
+              "denoise_steps": 4,
+              "denoise_ms_per_step": 468.6400405007589,
+              "halted": false,
+              "token_sha256": "226539c3ab80da4aa9ae53caf8a7de91afb8579de3f58c3267b4709793dd9d1b",
+              "synchronized_wall_s": 2.9171662899971125
+            }
+          ],
+          "steady_block_idx": 1,
+          "steady_block_s": 2.9171662899971125,
+          "steady_output_tokens_per_s": 87.75639595103556,
+          "steady_denoise_steps": 4,
+          "steady_denoise_ms_per_step": 468.6400405007589,
+          "steady_halted": false,
+          "dram_after_prefill": {
+            "used": 18.798762321472168,
+            "free": 13.068424224853516
+          }
+        }
+      },
+      "status": "ok"
+    },
+    {
+      "prompt_len": 16384,
+      "prompt_token_sha256": "9d3e382906b5c9544b2e5989c1bc5442a391a783b8282fcb69ee6f0615958de8",
+      "configs": {
+        "earlyhalt": {
+          "k_cap": 48,
+          "cache_len": 16384,
+          "prefill_s": 7.626419574997271,
+          "prefill_tokens_per_s": 2148.3213503901484,
+          "blocks": [
+            {
+              "block_idx": 0,
+              "start_pos": 16384,
+              "next_pos": 16640,
+              "latency_s": 34.35017778100155,
+              "denoise_latency_s": 31.804800530997454,
+              "commit_latency_s": 2.5451365720000467,
+              "denoise_steps": 48,
+              "denoise_ms_per_step": 662.6000110624469,
+              "halted": false,
+              "token_sha256": "b083f952e4b8fe2e92e1d4c9629a7bcc8c122f119a033ec0e40a878716e68387",
+              "synchronized_wall_s": 34.35904557600588
+            },
+            {
+              "block_idx": 1,
+              "start_pos": 16640,
+              "next_pos": 16896,
+              "latency_s": 34.58027806899918,
+              "denoise_latency_s": 31.984824851002486,
+              "commit_latency_s": 2.5952521250001155,
+              "denoise_steps": 48,
+              "denoise_ms_per_step": 666.3505177292185,
+              "halted": false,
+              "token_sha256": "ef0a3653b06463c0d2f4b40875e3376b25966cf787802749cad719ccfd6ea063",
+              "synchronized_wall_s": 34.58883744000195
+            }
+          ],
+          "steady_block_idx": 1,
+          "steady_block_s": 34.58883744000195,
+          "steady_output_tokens_per_s": 7.401231696325714,
+          "steady_denoise_steps": 48,
+          "steady_denoise_ms_per_step": 666.3505177292185,
+          "steady_halted": false,
+          "dram_after_prefill": {
+            "used": 18.805903434753418,
+            "free": 13.061283111572266
+          }
+        },
+        "fixed4": {
+          "k_cap": 4,
+          "cache_len": 16384,
+          "prefill_s": 5.293550379996304,
+          "prefill_tokens_per_s": 3095.087195526311,
+          "blocks": [
+            {
+              "block_idx": 0,
+              "start_pos": 16384,
+              "next_pos": 16640,
+              "latency_s": 3.83284684499813,
+              "denoise_latency_s": 2.5337844509995193,
+              "commit_latency_s": 1.298821616001078,
+              "denoise_steps": 4,
+              "denoise_ms_per_step": 633.4461127498798,
+              "halted": false,
+              "token_sha256": "214c6c4b9e6f2ab4a14f7857ffdc7647c5464c77d75b1310daf8325651c3eeb0",
+              "synchronized_wall_s": 3.8407504499991774
+            },
+            {
+              "block_idx": 1,
+              "start_pos": 16640,
+              "next_pos": 16896,
+              "latency_s": 3.840399663000426,
+              "denoise_latency_s": 2.547450210993702,
+              "commit_latency_s": 1.292730606997793,
+              "denoise_steps": 4,
+              "denoise_ms_per_step": 636.8625527484255,
+              "halted": false,
+              "token_sha256": "a9763680f6c00159a360a691ad8826519d446561ccebbca66e361e14c7bef16a",
+              "synchronized_wall_s": 3.8474113029951695
+            }
+          ],
+          "steady_block_idx": 1,
+          "steady_block_s": 3.8474113029951695,
+          "steady_output_tokens_per_s": 66.53824606709105,
+          "steady_denoise_steps": 4,
+          "steady_denoise_ms_per_step": 636.8625527484255,
+          "steady_halted": false,
+          "dram_after_prefill": {
+            "used": 18.805903434753418,
+            "free": 13.061283111572266
+          }
+        }
+      },
+      "status": "ok"
+    },
+    {
+      "prompt_len": 32768,
+      "prompt_token_sha256": "910f64be4fb64afc08e44bc25b27aff27f811583f6e7d4067a9ef7742f21d97c",
+      "configs": {
+        "earlyhalt": {
+          "k_cap": 48,
+          "cache_len": 32768,
+          "prefill_s": 12.484512793002068,
+          "prefill_tokens_per_s": 2624.6919317802626,
+          "blocks": [
+            {
+              "block_idx": 0,
+              "start_pos": 32768,
+              "next_pos": 33024,
+              "latency_s": 46.2236284899991,
+              "denoise_latency_s": 43.26421014600055,
+              "commit_latency_s": 2.9591782970019267,
+              "denoise_steps": 48,
+              "denoise_ms_per_step": 901.3377113750115,
+              "halted": false,
+              "token_sha256": "27b824a476a04b9e2add774059b739ac577f849500f57e64f2a94769d2f2a2aa",
+              "synchronized_wall_s": 46.24110519000533
+            },
+            {
+              "block_idx": 1,
+              "start_pos": 33024,
+              "next_pos": 33280,
+              "latency_s": 46.425677432001976,
+              "denoise_latency_s": 43.47937338599877,
+              "commit_latency_s": 2.946099968998169,
+              "denoise_steps": 48,
+              "denoise_ms_per_step": 905.8202788749744,
+              "halted": false,
+              "token_sha256": "55437fe4d577046134635aa8f5c65fcaa349b7ff9c1045ded2cc9bb32ba22b15",
+              "synchronized_wall_s": 46.44438369599811
+            }
+          ],
+          "steady_block_idx": 1,
+          "steady_block_s": 46.44438369599811,
+          "steady_output_tokens_per_s": 5.511968932038133,
+          "steady_denoise_steps": 48,
+          "steady_denoise_ms_per_step": 905.8202788749744,
+          "steady_halted": false,
+          "dram_after_prefill": {
+            "used": 18.812159538269043,
+            "free": 13.05502700805664
+          }
+        },
+        "fixed4": {
+          "k_cap": 4,
+          "cache_len": 32768,
+          "prefill_s": 10.982246059000317,
+          "prefill_tokens_per_s": 2983.724806743474,
+          "blocks": [
+            {
+              "block_idx": 0,
+              "start_pos": 32768,
+              "next_pos": 33024,
+              "latency_s": 5.193815619000816,
+              "denoise_latency_s": 3.4894584549983847,
+              "commit_latency_s": 1.704117146997305,
+              "denoise_steps": 4,
+              "denoise_ms_per_step": 872.3646137495962,
+              "halted": false,
+              "token_sha256": "bee7df4c4a5a085de37d0b5f2a92721f5073063a0976735ef42c8dffcff62740",
+              "synchronized_wall_s": 5.212008896996849
+            },
+            {
+              "block_idx": 1,
+              "start_pos": 33024,
+              "next_pos": 33280,
+              "latency_s": 5.109953692001,
+              "denoise_latency_s": 3.507118896995962,
+              "commit_latency_s": 1.6026248870039126,
+              "denoise_steps": 4,
+              "denoise_ms_per_step": 876.7797242489905,
+              "halted": false,
+              "token_sha256": "5082edf65e3d1eeafa63b4676b9574c861159ff7528e0561f4fadc92507f3716",
+              "synchronized_wall_s": 5.127561899003922
+            }
+          ],
+          "steady_block_idx": 1,
+          "steady_block_s": 5.127561899003922,
+          "steady_output_tokens_per_s": 49.92626223580655,
+          "steady_denoise_steps": 4,
+          "steady_denoise_ms_per_step": 876.7797242489905,
+          "steady_halted": false,
+          "dram_after_prefill": {
+            "used": 18.812159538269043,
+            "free": 13.05502700805664
+          }
+        }
+      },
+      "status": "ok"
+    }
+  ]
+}
