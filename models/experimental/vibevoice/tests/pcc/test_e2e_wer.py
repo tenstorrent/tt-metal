@@ -45,8 +45,6 @@ NUM_DIFFUSION_STEPS = 10
 SR = 24000  # VibeVoice sample rate
 WHISPER_SR = 16000  # Whisper feature-extractor sample rate
 WHISPER_MODEL = "openai/whisper-medium"
-# Cumulative transcript-word prefixes at which WER is reported.
-WER_PREFIX_LENGTHS = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
 _OUT_DIR = _VIBEVOICE_ROOT / "output" / "e2e_wer"
 
 # 4-speaker climate script + voice cloning.
@@ -239,9 +237,8 @@ def test_e2e_wer_teacher_forced(mesh_device):
     tt_words = _normalize(_transcribe(asr, tt_speech))
     assert ref_words and tt_words, "empty transcript"
 
-    lengths = [n for n in WER_PREFIX_LENGTHS if n < max(len(ref_words), len(tt_words))]
-    lengths.append(max(len(ref_words), len(tt_words)))
-    table = [{"n": n, "tt_vs_ref": round(_wer(ref_words[:n], tt_words[:n]), 4)} for n in lengths]
+    # Teacher-forcing feeds the reference embedding every frame, so there is no feedback drift to
+    # track over length — the single full-transcript WER is the meaningful number.
     overall = round(_wer(ref_words, tt_words), 4)
 
     metrics = {
@@ -254,18 +251,13 @@ def test_e2e_wer_teacher_forced(mesh_device):
         "ref_word_count": len(ref_words),
         "tt_word_count": len(tt_words),
         "overall_tt_vs_ref": overall,
-        "tt_vs_ref_by_length": table,
         "ref_transcript": " ".join(ref_words),
         "tt_transcript": " ".join(tt_words),
     }
     (_OUT_DIR / f"{TF_DEMO_ID}_tf_wer.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
 
-    lines = [f"{'N':>7} | {'tt_vs_ref':>9}", "-" * 20]
-    for r in table:
-        lines.append(f"{r['n']:>7} | {r['tt_vs_ref']:>9.4f}")
     print(
         f"\n[tf] TEACHER-FORCED WER (bf16 ref embedding -> TT LM), demo={TF_DEMO_ID} cap={TF_MAX_NEW_TOKENS}\n"
         f"[tf] ref {ref_speech.numel() / SR:.1f}s ({len(ref_words)}w) | tt {tt_speech.numel() / SR:.1f}s ({len(tt_words)}w)\n"
-        + "\n".join(lines)
-        + f"\n[tf] overall tt_vs_ref={overall:.4f}  artifacts -> {_OUT_DIR}"
+        f"[tf] overall tt_vs_ref={overall:.4f}  artifacts -> {_OUT_DIR}"
     )
