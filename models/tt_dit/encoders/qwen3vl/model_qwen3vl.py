@@ -499,8 +499,16 @@ class Qwen3VlRmsNorm(RMSNorm):
 
 
 def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-    # interleaved format leads to lower PCC
-    # return x * cos + ttnn.alt_complex_rotate90(x) * sin
+    # Half-split RoPE (rotate_half), matching the HF reference layout directly. Holds PCC >=0.99
+    # (real weights) and 0.9899-0.9953 per tapped layer (random init, bf16 error over 36 layers).
+    #
+    # The denoiser instead permutes Q/K + cos/sin to the interleaved (adjacent-pair) layout to use
+    # the fused ttnn.experimental.rotary_embedding_llama (rope_halfsplit_to_interleaved*); that
+    # conversion is numerically neutral there. Not adopted here: it needs a head_dim channel
+    # permutation baked into the qkv weights, and the encoder RoPE is a negligible slice of latency
+    # (the encoder is ~1.5% of end-to-end), so the fused op buys ~nothing. (An earlier interleaved
+    # attempt regressed PCC only because cos/sin were left half-split while the rotate switched to
+    # adjacent-pair -- a bug in that attempt, not the layout.)
     return x * cos + _rotate_half(x) * sin
 
 
