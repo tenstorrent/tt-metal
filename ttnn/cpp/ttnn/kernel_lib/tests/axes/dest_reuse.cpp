@@ -22,22 +22,7 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(n),
-        BinaryFpu<
-            cb_a,
-            cb_b,
-            BinaryFpuOp::Add,
-            BroadcastDim::None,
-            InputLifecycle::Streaming,
-            InputLifecycle::Streaming,
-            BinaryDataFormatReconfig::Input,
-            Dst::D0>{},
-        DestReuseBinary<
-            cb_c,
-            BinaryFpuOp::Mul,
-            DestReuseType::DEST_TO_SRCA,
-            InputLifecycle::Streaming,
-            DestReuseReconfig::Input,
-            Dst::D0,
-            Dst::D0>{},
-        PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{});
+        BinaryFpu<input(cb_a), input(cb_b)>{},
+        DestReuseBinary<input(cb_c), BinaryFpuOp::Mul, DestReuseType::DEST_TO_SRCA>{},
+        PackTile<output(cb_out)>{});
 }

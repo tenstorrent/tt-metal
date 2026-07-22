@@ -34,22 +34,26 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     using Accumulate = BinaryFpu<
-        cb_local,
-        cb_remote,
+        input(cb_local, InputLifecycle::Bulk, OperandKind::Block),
+        input(cb_remote, InputLifecycle::Bulk, OperandKind::Block),
         BinaryFpuOp::Add,
         BroadcastDim::None,
-        InputLifecycle::Bulk,
-        InputLifecycle::Bulk,
-        BinaryDataFormatReconfig::Input,
         Dst::D0,
-        OperandKind::Block,
-        OperandKind::Block,
-        TileOffset::Unset,
-        TileOffset::Unset,
         DestAccumulation::Enabled>;
-    using ManagedPack = PackTile<cb_out, OutputLifecycle::DestAccumulation, PackTileReconfig::Output, Dst::D0>;
-    using CallerManagedPack =
-        PackTile<cb_out, OutputLifecycle::DestAccumulationCallerManaged, PackTileReconfig::Output, Dst::D0>;
+    using ManagedPack = PackTile<output(
+        cb_out,
+        OutputLifecycle::DestAccumulation,
+        DataFormatReconfig::Enabled,
+        PackRelu::Disabled,
+        L1Accumulation::Disabled,
+        DestAccumulation::Enabled)>;
+    using CallerManagedPack = PackTile<output(
+        cb_out,
+        OutputLifecycle::CallerManaged,
+        DataFormatReconfig::Enabled,
+        PackRelu::Disabled,
+        L1Accumulation::Disabled,
+        DestAccumulation::Enabled)>;
 
     CircularBuffer output(cb_out);
     if constexpr (caller_managed) {
