@@ -370,3 +370,44 @@ overhead-bound by split-K + ring + M-split delivery on tiny per-core work (low A
 internal node fan-in 2 (wait num_children partials, add, forward to parent); build_plan assigns tree parent/
 children by redpos; ceiling grows with Pk (Pk4:~5%, Pk12:~15% on EXPOSED shapes only — deep-K stays
 DRAM-bound/overlapped so no benefit there). Speedup kept: 0%.
+
+## ============ CORPUS-WIDE CAUSAL DECOMPOSITION (deep methodology, all 9 shapes) ============
+config=None auto cfg; DIAG_ZONES compute-side split (matmul residual / in0-wait / in1-wait, TRISC per-core
+median); NO_REDUCE realizable reduction ceiling. Data: tools/mm_sweep/ltxflux_corpus_decomp.json.
+| shape | cfg | Pk | wall us | w/ideal | GB/s | matmul | in0-wait | in1-wait | red-ceil | bound |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 32x256x6144 | (3,1,1,1,8) | 1 | 8.67 | 1.25 | 410 | 2.0 | 0.5 | 4.8 | 0.3% | in1-deliv (Kt8 geom) |
+| 32x2048x512 | (2,4,1,2,1) | 4 | 7.45 | 1.69 | 303 | 1.4 | 1.4 | 2.6 | 13% | overhead (tiny low-AI) |
+| 32x2048x1536 | (2,2,1,4,3) | 2 | 14.98 | 1.18 | 435 | 2.4 | 2.5 | 8.7 | 2.2% | in1-deliv |
+| 32x2048x2048 | (2,2,1,4,4) | 2 | 19.37 | 1.15 | 447 | 2.8 | 3.2 | 11.7 | 1.0% | in1-deliv |
+| 32x6144x1536 | (1,6,1,4,2) | 6 | 40.71 | 1.08 | 476 | 10.1 | 2.6 | 26.8 | 4.6% | DRAM-read floor |
+| 32x6144x2304 | (1,3,1,4,5) | 3 | 58.83 | 1.04 | 490 | 19.6 | 2.8 | 35.9 | 0.8% | DRAM-read floor |
+| 32x6144x4608 | (1,12,1,2,1) | 12 | 116.83 | 1.04 | 491 | 65.0 | 1.9 | 46.2 | 2.3% | DRAM-read floor |
+| 32x6144x6144 | (1,6,1,4,2) | 6 | 153.11 | 1.03 | 498 | 41.9 | 2.7 | 106.0 | 0.7% | DRAM-read floor |
+| 256x2048x1024 | (1,4,2,2,4) | 4 | 22.38 | 1.99 | 258 | 9.3 | 4.9 | 1.25 | 16% | in0-ring+reduction (overhead) |
+
+### Per-shape closures (all CLOSED with causal evidence; deep-K DRAM-bound, shallow overhead-bound)
+- **Deep-K (32x6144x1536/2304/4608/6144):** in1-wait dominates TRISC and delivered BW is 476-498 GB/s (at the
+  ~500-511 SP1 read ceiling). DRAM-read-bound; reduction ceilings (0.7-4.6%) OVERLAP the read (NO_REDUCE
+  A/B). No lossless lever. Practical floor. (32x6144x2304 was already picker-improved to Pk3 earlier.)
+- **32x256x6144 (Pk1, Kt8):** in1-wait 4.8us dominates; ultra-shallow K => short in1 reads => 410 GB/s is a
+  GEOMETRIC read-efficiency limit (coalescing already adopted; sweep picker-optimal). No reduction (Pk1).
+  Practical floor.
+- **32x2048x1536 / 2048 (Pk2):** in1-wait dominates; Pk2 reduction is minimal-depth (ceiling 1-2%); below
+  ceiling is tiny-shape geometry. Practical floor.
+- **32x2048x512 (Pk4, tiny):** overhead-bound (mm/in0w/in1w all ~1-3us on a 7.45us wall); reduction ceiling
+  13% but ABSOLUTE 0.9us (tree ~0.3us — negligible per ranking rule). Practical floor.
+- **256x2048x1024 (Pk4):** in0-ring-exposed (4.9us) + reduction-exposed (16%/3.5us); in0 foreclosed
+  (scatter/exchange/repl/chunk/direct-read all rejected here), reduction-tree deferred (negligible absolute
+  1.2us + negative config signal + rejected direction + high rewrite risk), matmul floor. CLOSED.
+
+## CAMPAIGN OUTCOME (deep-kernel phase)
+The LTX/FLUX Mt<=8 corpus is at its PRACTICAL LIMIT under the current (heavily-optimized) kernel
+architecture. Every shape is either (a) DRAM-read-bound with in1-wait dominant at/near the ~500 GB/s read
+ceiling (deep-K + wide-N), or (b) overhead-bound on tiny per-core work after the low-AI split (shallow-K).
+No lossless lever with favorable risk/reward was found: in0-delivery variants + tiny-shape-path all
+previously rejected on these shapes; the reduction tree is the sole non-foreclosed lever (~5% on 256x2048x1024,
+~4% on 32x2048x512, negligible absolute, negative config-level realizability signal) and is documented+
+deferred. Prior picker phase had already banked 4 wins (-2.1..-3.7%) on the M-scaling LTX/FLUX shapes.
+Reusable deep-diagnostic assets committed: DIAG_ZONES instrumentation (compute in0/in1-wait + writer ring/
+reduction sub-zones), zone_parse.py, ltxflux_corpus_decomp.py + .json, ltxflux_opt.py sweeps.
