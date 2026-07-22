@@ -93,7 +93,12 @@ tt::ARCH get_mock_arch_from_env() {
 // remote-server harness. Set to 0 to compile against the real attached device
 // (CI runtime-perf runs on device SKUs, where mock's real->mock transition would
 // throw because MeshDispatchFixture::SetUpTestSuite already opened the device).
-bool use_mock_mode() { return tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_MOCK", 1) != 0; }
+bool use_mock_mode() {
+    // Parse the env var once; the value is fixed for the process lifetime and is
+    // queried from SetUp/TearDown/the test body.
+    static const bool mock = tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_MOCK", 1) != 0;
+    return mock;
+}
 
 constexpr std::string_view target_device_type_to_string(tt::TargetDevice t) noexcept {
     const std::string_view name = enchantum::to_string(t);
