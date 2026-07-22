@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <string_view>
 #include <unordered_set>
 
 #include "host_tensor_impl.hpp"
@@ -19,6 +20,7 @@
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"
 #include <tt_stl/concepts.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt_stl/small_vector.hpp>
 
 namespace tt::tt_metal {
@@ -546,6 +548,22 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+void assert_host_shards_match_packed_size(
+    const DistributedHostBuffer& buffer, const TensorSpec& spec, std::string_view op_name) {
+    const size_t expected_shard_size = spec.compute_packed_buffer_size_bytes();
+    for (const auto& coord : buffer.shard_coords()) {
+        auto shard = buffer.get_shard(coord);
+        if (shard) {
+            TT_FATAL(
+                shard->view_bytes().size() == expected_shard_size,
+                "{} shard size mismatch after conversion: actual {} != expected {}",
+                op_name,
+                shard->view_bytes().size(),
+                expected_shard_size);
+        }
+    }
+}
+
 template <typename T>
 HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
     if (tensor.layout() == Layout::ROW_MAJOR) {
@@ -553,15 +571,23 @@ HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
     }
 
     TT_FATAL(tensor.layout() == Layout::TILE, "Converting from {} to Row Major is unsupported.", tensor.layout());
-    // Construct the new tensor spec first to verify that this is a supported Tensor configuration
-    TensorSpec new_tensor_spec(
+
+    // Do not pass a non-default tile into ROW_MAJOR PageConfig (deprecation #18536).
+    auto output_spec = TensorSpec(
         tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        TensorLayout(
             tensor.dtype(),
             PageConfig(Layout::ROW_MAJOR),
-            MemoryConfig{},
-            tensor.logical_shape(),
-            tensor.padded_shape()));
+            tensor.memory_config(),
+            tensor.tensor_spec().tensor_layout().get_alignment()));
+
+    TT_FATAL(
+        output_spec.physical_shape() == tensor.tensor_spec().physical_shape(),
+        "to_layout: Converting layout to {} implicitly changed physical shape from {} to {} due to alignment "
+        "constraints. This is currently unsupported. Please pad the tensor explicitly before conversion.",
+        Layout::ROW_MAJOR,
+        tensor.tensor_spec().physical_shape(),
+        output_spec.physical_shape());
 
     auto tile = tensor.tensor_spec().tile();
     auto physical_shape = tensor.tensor_spec().physical_shape();
@@ -574,7 +600,9 @@ HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
         },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    return HostTensor::from_buffer(std::move(transformed_buffer), new_tensor_spec, tensor.tensor_topology());
+    assert_host_shards_match_packed_size(transformed_buffer, output_spec, "to_row_major_layout");
+
+    return HostTensor::from_buffer(std::move(transformed_buffer), output_spec, tensor.tensor_topology());
 }
 
 template <typename T>
@@ -589,15 +617,21 @@ HostTensor to_tile_layout_impl(const HostTensor& tensor, Tile tile) {
     } else {
         TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Converting from {} to Tile is unsupported.", tensor.layout());
 
-        // Construct the new tensor spec first to verify that this is a supported Tensor configuration
-        TensorSpec new_tensor_spec(
+        auto output_spec = TensorSpec(
             tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            TensorLayout(
                 tensor.dtype(),
                 PageConfig(Layout::TILE, tile),
-                MemoryConfig{},
-                tensor.logical_shape(),
-                tensor.padded_shape()));
+                tensor.memory_config(),
+                tensor.tensor_spec().tensor_layout().get_alignment()));
+
+        TT_FATAL(
+            output_spec.physical_shape() == tensor.tensor_spec().physical_shape(),
+            "to_layout: Converting layout to {} implicitly changed physical shape from {} to {} due to alignment "
+            "constraints. This is currently unsupported. Please pad the tensor explicitly before conversion.",
+            Layout::TILE,
+            tensor.tensor_spec().physical_shape(),
+            output_spec.physical_shape());
 
         auto physical_shape = tensor.tensor_spec().physical_shape();
 
@@ -609,7 +643,9 @@ HostTensor to_tile_layout_impl(const HostTensor& tensor, Tile tile) {
             },
             DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-        return HostTensor::from_buffer(std::move(transformed_buffer), new_tensor_spec, tensor.tensor_topology());
+        assert_host_shards_match_packed_size(transformed_buffer, output_spec, "to_tile_layout");
+
+        return HostTensor::from_buffer(std::move(transformed_buffer), output_spec, tensor.tensor_topology());
     }
 }
 
@@ -637,6 +673,14 @@ HostTensor to_row_major_layout(const HostTensor& tensor) {
 }
 
 HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile) {
+    // Reject mismatched retile before dtype dispatch so BFP cannot silently identity-return.
+    if (tensor.layout() == Layout::TILE) {
+        TT_FATAL(
+            tile == tensor.tensor_spec().tile(),
+            "to_tile_layout: requested tile {} does not match input tile {}. Retile is not supported.",
+            tile,
+            tensor.tensor_spec().tile());
+    }
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         if constexpr (std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b>) {
             // Block-float formats are natively TILE — no conversion needed.
@@ -920,17 +964,28 @@ HostTensor pad_impl(
         tile = tensor.tensor_spec().tile();
     }
 
-    return HostTensor::from_buffer(
-        std::move(transformed_buffer),
-        TensorSpec(
+    auto output_spec = TensorSpec(
+        tensor.logical_shape(),
+        TensorLayout::fromPaddedShape(
+            tensor.dtype(),
+            PageConfig(tensor.layout(), tile),
+            tensor.memory_config(),
             tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
-                tensor.dtype(),
-                PageConfig(tensor.layout(), tile),
-                MemoryConfig{},
-                tensor.logical_shape(),
-                output_padded_shape)),
-        tensor.tensor_topology());
+            output_padded_shape));
+
+    const size_t expected_shard_size = output_spec.compute_packed_buffer_size_bytes();
+    for (const auto& coord : transformed_buffer.shard_coords()) {
+        auto shard = transformed_buffer.get_shard(coord);
+        if (shard) {
+            TT_FATAL(
+                shard->view_bytes().size() == expected_shard_size,
+                "pad shard size mismatch after conversion: actual {} != expected {}",
+                shard->view_bytes().size(),
+                expected_shard_size);
+        }
+    }
+
+    return HostTensor::from_buffer(std::move(transformed_buffer), output_spec, tensor.tensor_topology());
 }
 
 template <>
@@ -1006,15 +1061,35 @@ HostTensor unpad_impl(
     auto transformed_buffer = tensor.buffer().transform(
         [&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return HostTensor::from_buffer(
-        std::move(transformed_buffer),
-        TensorSpec(
-            tt::tt_metal::Shape(output_shape),
-            tt::tt_metal::TensorLayout(
-                tensor.dtype(),
-                tt::tt_metal::PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
-                tt::tt_metal::MemoryConfig{})),
-        tensor.tensor_topology());
+
+    // Exact authorship: padded == logical == cropped buffer. Do not re-apply source alignment.
+    const auto output_tensor_shape = tt::tt_metal::Shape(output_shape);
+    auto tile = tt::tt_metal::Tile();
+    if (tensor.layout() == Layout::TILE) {
+        tile = tensor.tensor_spec().tile();
+    }
+    auto output_spec = TensorSpec(
+        output_tensor_shape,
+        TensorLayout::fromPaddedShape(
+            tensor.dtype(),
+            PageConfig(tensor.layout(), tile),
+            tensor.memory_config(),
+            output_tensor_shape,
+            output_tensor_shape));
+
+    const size_t expected_shard_size = output_spec.compute_packed_buffer_size_bytes();
+    for (const auto& coord : transformed_buffer.shard_coords()) {
+        auto shard = transformed_buffer.get_shard(coord);
+        if (shard) {
+            TT_FATAL(
+                shard->view_bytes().size() == expected_shard_size,
+                "unpad shard size mismatch after conversion: actual {} != expected {}",
+                shard->view_bytes().size(),
+                expected_shard_size);
+        }
+    }
+
+    return HostTensor::from_buffer(std::move(transformed_buffer), output_spec, tensor.tensor_topology());
 }
 
 template <>
@@ -1048,6 +1123,11 @@ HostTensor pad(
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
     TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for padding");
+    TT_FATAL(
+        !tensor.memory_config().is_sharded(),
+        "pad: sharded host tensors are not supported (legacy and ND). "
+        "legacyShapeToAlignment short-circuits on shard_spec and ignores output_padded_shape for convertible ND; "
+        "rederiving shard geometry under pad is out of scope.");
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::pad_impl<T>(tensor, output_padded_shape, input_tensor_start, pad_value);
     });
@@ -1084,6 +1164,11 @@ HostTensor unpad(
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for unpadding");
+    TT_FATAL(
+        !tensor.memory_config().is_sharded(),
+        "unpad: sharded host tensors are not supported (legacy and ND). "
+        "legacyShapeToAlignment short-circuits on shard_spec and ignores cropped geometry for convertible ND; "
+        "rederiving shard geometry under unpad is out of scope.");
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::unpad_impl<T>(tensor, output_tensor_start, output_tensor_end);
     });
@@ -1123,21 +1208,23 @@ struct bfloat8_tag {};
 
 // Preprocess the storage to unpack the bfloat8/4 tiles into float32.
 tt::tt_metal::DistributedHostBuffer preprocess_buffers(
-    const tt::tt_metal::DistributedHostBuffer& input_storage, const DataType input_dtype) {
+    const tt::tt_metal::DistributedHostBuffer& input_storage,
+    const DataType input_dtype,
+    const tt::tt_metal::Tile& tile) {
     constexpr bool row_major_output = false;
     constexpr bool is_exp_a = false;
 
     if (input_dtype == DataType::BFLOAT8_B) {
         return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
-            auto float_unpacked_data = unpack_bfp8_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a);
+            auto float_unpacked_data = unpack_bfp8_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a, tile);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
     }
     if (input_dtype == DataType::BFLOAT4_B) {
         return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
-            auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a);
+            auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a, tile);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
     }
@@ -1146,7 +1233,9 @@ tt::tt_metal::DistributedHostBuffer preprocess_buffers(
 
 template <typename SrcType, typename DstType>
 tt::tt_metal::DistributedHostBuffer transform_buffers(
-    const tt::tt_metal::TensorSpec& input_tensor_spec, const tt::tt_metal::DistributedHostBuffer& input_buffer) {
+    const tt::tt_metal::TensorSpec& input_tensor_spec,
+    const tt::tt_metal::TensorSpec& output_spec,
+    const tt::tt_metal::DistributedHostBuffer& input_buffer) {
     if constexpr (std::is_same_v<SrcType, DstType>) {
         return input_buffer;
     } else if constexpr (std::is_same_v<SrcType, float8_e4m3> || std::is_same_v<DstType, float8_e4m3>) {
@@ -1175,8 +1264,8 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
             std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
             if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
-                tilized_data = tensor_impl::to_tile_major_layout(
-                    input_tensor_spec.physical_shape(), input_tensor_spec.tile(), data);
+                tilized_data =
+                    tensor_impl::to_tile_major_layout(output_spec.physical_shape(), output_spec.tile(), data);
                 data = ttsl::make_const_span(tilized_data);
             }
 
@@ -1184,9 +1273,9 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
                 constexpr bool row_major_input = false;
                 constexpr bool is_exp_a = false;
                 if constexpr (std::is_same_v<DstType, bfloat8_tag>) {
-                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, output_spec.tile());
                 } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
-                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, output_spec.tile());
                 } else {
                     static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
                 }
@@ -1218,12 +1307,46 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         return input_tensor;
     }
 
-    auto input_buffer = CMAKE_UNIQUE_NAMESPACE::preprocess_buffers(input_tensor.buffer(), src_type);
+    const size_t expected_input_shard_size = input_tensor.tensor_spec().compute_packed_buffer_size_bytes();
+    for (const auto& coord : input_tensor.buffer().shard_coords()) {
+        auto shard = input_tensor.buffer().get_shard(coord);
+        if (shard) {
+            TT_FATAL(
+                shard->view_bytes().size() == expected_input_shard_size,
+                "to_dtype input shard size mismatch before conversion: actual {} != expected {}",
+                shard->view_bytes().size(),
+                expected_input_shard_size);
+        }
+    }
 
-    auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_buffer]() {
+    auto input_buffer =
+        CMAKE_UNIQUE_NAMESPACE::preprocess_buffers(input_tensor.buffer(), src_type, input_tensor.tensor_spec().tile());
+
+    const auto layout =
+        (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
+
+    tt::tt_metal::PageConfig page_config(layout, input_tensor.tensor_spec().tile());
+
+    auto output_spec = TensorSpec(
+        input_tensor.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            dtype,
+            page_config,
+            input_tensor.tensor_spec().memory_config(),
+            input_tensor.tensor_spec().tensor_layout().get_alignment()));
+
+    TT_FATAL(
+        input_tensor.tensor_spec().physical_shape() == output_spec.physical_shape(),
+        "to_dtype: Converting layout to {} implicitly changed physical shape from {} to {} due to alignment "
+        "constraints. This is currently unsupported. Please pad the tensor explicitly before conversion.",
+        layout,
+        input_tensor.tensor_spec().physical_shape(),
+        output_spec.physical_shape());
+
+    auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_buffer, &output_spec]() {
         auto with_src_and_dst = [&]<typename SrcType, typename DstType>() {
             return CMAKE_UNIQUE_NAMESPACE::transform_buffers<SrcType, DstType>(
-                input_tensor.tensor_spec(), input_buffer);
+                input_tensor.tensor_spec(), output_spec, input_buffer);
         };
 
         auto with_src = [dst_type, &with_src_and_dst]<typename SrcType>() {
@@ -1259,24 +1382,20 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         TT_THROW("Unreachable");
     }();
 
-    const auto layout =
-        (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
-
-    tt::tt_metal::PageConfig page_config(layout);
-    if (input_tensor.layout() == Layout::TILE) {
-        page_config = tt::tt_metal::PageConfig(layout, input_tensor.tensor_spec().tile());
+    auto result_buffer = std::move(output_storage);
+    const size_t expected_shard_size = output_spec.compute_packed_buffer_size_bytes();
+    for (const auto& coord : result_buffer.shard_coords()) {
+        auto shard = result_buffer.get_shard(coord);
+        if (shard) {
+            TT_FATAL(
+                shard->view_bytes().size() == expected_shard_size,
+                "to_dtype shard size mismatch after conversion: actual {} != expected {}",
+                shard->view_bytes().size(),
+                expected_shard_size);
+        }
     }
 
-    auto output_spec = TensorSpec(
-        input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
-            dtype,
-            page_config,
-            input_tensor.tensor_spec().memory_config(),
-            input_tensor.logical_shape(),
-            input_tensor.padded_shape()));
-
-    return HostTensor::from_buffer(std::move(output_storage), output_spec, input_tensor.tensor_topology());
+    return HostTensor::from_buffer(std::move(result_buffer), output_spec, input_tensor.tensor_topology());
 }
 
 // ======================================================================================

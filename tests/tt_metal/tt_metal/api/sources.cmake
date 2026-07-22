@@ -94,6 +94,8 @@ set(UNIT_TESTS_API_TENSOR_SOURCES
     tensor/test_tensor_sharding.cpp
     tensor/test_host_tensor.cpp
     tensor/test_host_tensor_to_layout.cpp
+    tensor/test_host_tensor_to_dtype.cpp
+    tensor/test_host_tensor_spec_preservation.cpp
     tensor/test_mesh_tensor.cpp
     tensor/test_tensor_types.cpp
     tensor/test_tensor_layout.cpp
