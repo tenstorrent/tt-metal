@@ -6,6 +6,7 @@
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 
+#include "layout/page_config_impl.hpp"
 #include "layout/tensor_layout_impl.hpp"
 
 namespace tt::tt_metal {
@@ -237,7 +238,7 @@ TensorSpec TensorSpec::block_sharded(CoreRange grid, ShardOrientation orientatio
 TensorSpec TensorSpec::sharded(NdShardSpec nd_shard_spec, ShardShapeAlignment shard_alignment) const {
     if (shard_alignment != ShardShapeAlignment::NONE) {
         auto alignment = shard_alignment == ShardShapeAlignment::REQUIRED
-                             ? page_config().get_required_shard_shape_alignment()
+                             ? get_required_shard_shape_alignment(page_config())
                              : page_config().get_recommended_shard_shape_alignment(data_type());
         auto& shard_shape = nd_shard_spec.shard_shape;
         for (int dim = 1; dim <= alignment.size(); dim++) {

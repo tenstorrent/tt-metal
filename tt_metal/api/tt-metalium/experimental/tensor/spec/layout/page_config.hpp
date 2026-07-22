@@ -4,117 +4,54 @@
 
 #pragma once
 
-#include <memory>
 #include <optional>
 #include <tuple>
+#include <utility>
+#include <variant>
 
-#include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/tile.hpp>
 
 #include <tt-metalium/experimental/tensor/spec/layout/alignment.hpp>
-#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/layout.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
 namespace tt::tt_metal {
 
+// Empty page-config alternative for row-major tensors.
+// User-declared ctor keeps this non-aggregate so reflection uses attribute_names/values only
+// (avoids colliding with ttsl::concepts::Reflectable).
 class RowMajorPageConfig {
 public:
-    RowMajorPageConfig(const Tile& tile = Tile());
-
-    Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
-    void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
-
-    Shape2D get_page_shape(
-        const Shape2D& physical_size,
-        DataType dtype,
-        const MemoryConfig& memory_config,
-        const std::optional<Shape2D>& physical_shard_size) const;
-    size_t get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const;
-
-    const Tile& get_tile() const;
-
-    Alignment get_required_shard_shape_alignment() const;
-    Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
+    RowMajorPageConfig() = default;
 
     bool operator==(const RowMajorPageConfig&) const = default;
     bool operator!=(const RowMajorPageConfig&) const = default;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("tile");
-    auto attribute_values() const { return std::forward_as_tuple(tile_); }
-
-private:
-    // This is currently needed for compatibility reasons.
-    // Each time tile is specified, a warning will be issued. This should be removed soon.
-    Tile tile_;
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    auto attribute_values() const { return std::forward_as_tuple(); }
 };
 
 class TilePageConfig {
 public:
-    TilePageConfig(const Tile& tile = Tile());
+    TilePageConfig() = default;
+    explicit TilePageConfig(Tile tile) : tile(std::move(tile)) {}
 
-    Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
-    void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
-
-    Shape2D get_page_shape(
-        const Shape2D& physical_size,
-        DataType dtype,
-        const MemoryConfig& memory_config,
-        const std::optional<Shape2D>& physical_shard_size) const;
-    size_t get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const;
-
-    const Tile& get_tile() const;
-
-    Alignment get_required_shard_shape_alignment() const;
-    Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
+    Tile tile = Tile{};
 
     bool operator==(const TilePageConfig&) const = default;
     bool operator!=(const TilePageConfig&) const = default;
 
     static constexpr auto attribute_names = std::forward_as_tuple("tile");
-    auto attribute_values() const { return std::forward_as_tuple(tile_); }
-
-private:
-    Tile tile_;
+    auto attribute_values() const { return std::forward_as_tuple(tile); }
 };
-
-class PageConfigImpl;
 
 class PageConfig {
 public:
     using Config = std::variant<RowMajorPageConfig, TilePageConfig>;
 
-    PageConfig(const Config& config);
+    PageConfig(Config config);
     PageConfig(Layout layout);
     PageConfig(Layout layout, const std::optional<Tile>& tile);
-
-    ~PageConfig();
-    PageConfig(const PageConfig& other);
-    PageConfig& operator=(const PageConfig& other);
-    PageConfig(PageConfig&& other) noexcept;
-    PageConfig& operator=(PageConfig&& other) noexcept;
-
-    // Alignment is applied to the tensor shape, to guarantee that it is divisible by page size.
-    // For tile layout, the page size is the tile size, so alignment is also equal to the tile size.
-    // For row major layout, the page size is the width of the tensor, or the width of the shard (for sharded tensors).
-    // So for row major tensors, alignment is either [1] for interleaved tensors or shard width for sharded tensors.
-    // Note: alignment rules are different for logical sharding.
-    Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
-    void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
-
-    Shape2D get_page_shape(
-        const Shape2D& physical_size,
-        DataType dtype,
-        const MemoryConfig& memory_config,
-        const std::optional<Shape2D>& physical_shard_size) const;
-    size_t get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const;
-
-    Tile get_tile() const;
-
-    Layout get_layout() const;
-
-    /// Returns the minimum required alignment for the shard shape.
-    Alignment get_required_shard_shape_alignment() const;
 
     /// Returns the recommended alignment for the shard shape.
     /// This takes into account device memory alignment requirements trying to optimize memory usage and read/write
@@ -122,22 +59,18 @@ public:
     /// maximum possible alignment is used.
     Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
 
-    bool operator==(const PageConfig& other) const;
-    bool operator!=(const PageConfig& other) const;
+    Layout get_layout() const;
+    Tile get_tile() const;  // Tile{} for ROW_MAJOR
+    const Config& get_config() const { return config_; }
+
+    bool operator==(const PageConfig&) const = default;
+    bool operator!=(const PageConfig&) const = default;
 
     static constexpr auto attribute_names = std::forward_as_tuple("config");
-    std::tuple<const Config&> attribute_values() const;
+    auto attribute_values() const { return std::forward_as_tuple(config_); }
 
 private:
-    // Access to the implementation.
-    //
-    // pre-condition: the PageConfig must not be in a moved-from state.
-    PageConfigImpl& impl();
-    const PageConfigImpl& impl() const;
-
-    // impl_ may be nullptr if the PageConfig is in a moved-from state.
-    // Avoid using impl_ directly; use the impl() accessor instead.
-    std::unique_ptr<PageConfigImpl> impl_;
+    Config config_;
 };
 
 }  // namespace tt::tt_metal
