@@ -4,35 +4,50 @@
     {
       "id": "matmul-legacy-mm-inits",
       "description": "Legacy matmul init API in tt_metal/hw/inc/api/compute/matmul.h: mm_init, mm_block_init, mm_init_short, mm_block_init_short, mm_init_short_with_dt, mm_block_init_short_with_dt, mm_block_init_short_with_both_dt, and matmul_tiles_math. Replaced by compute_kernel_hw_startup<SrcOrder::Reverse>() + the matmul_*_init API.",
-      "files": ["tt_metal/hw/inc/api/compute/matmul.h"],
+      "files": [
+        "tt_metal/hw/inc/api/compute/matmul.h"
+      ],
       "introduced_by_pr": 46346,
       "grace": "30d",
-      "owners": ["ncvetkovicTT"]
+      "owners": [
+        "ncvetkovicTT"
+      ]
     },
     {
       "id": "transpose-wh-legacy-api",
       "description": "Legacy transpose compute API (transpose_wh_init / transpose_wh_init_short / transpose_wh_tile) deprecated in favor of compute_kernel_hw_startup() + transpose_init() / transpose_tile() in api/compute/transpose.h. Delete the whole api/compute/transpose_wh.h shim once all call sites are migrated.",
-      "files": ["tt_metal/hw/inc/api/compute/transpose_wh.h"],
+      "files": [
+        "tt_metal/hw/inc/api/compute/transpose_wh.h"
+      ],
       "introduced_by_pr": 23835,
       "grace": "30d",
-      "owners": ["ncvetkovicTT"]
+      "owners": [
+        "ncvetkovicTT"
+      ]
     },
     {
       "id": "transpose-wh-dest-legacy-api",
       "description": "Legacy in-DST transpose compute API (transpose_wh_dest_init_short / transpose_wh_dest) deprecated in favor of transpose_dest_init() / transpose_dest() in api/compute/transpose_dest.h. Delete the whole api/compute/transpose_wh_dest.h shim once all call sites are migrated.",
-      "files": ["tt_metal/hw/inc/api/compute/transpose_wh_dest.h"],
+      "files": [
+        "tt_metal/hw/inc/api/compute/transpose_wh_dest.h"
+      ],
       "introduced_by_pr": 23835,
       "grace": "30d",
-      "owners": ["ncvetkovicTT"]
+      "owners": [
+        "ncvetkovicTT"
+      ]
     },
     {
       "id": "eltwise-binary-legacy-inits",
-      "_comment": "PLACEHOLDER: set introduced_by_pr to the real PR number when this change is opened as a PR, and only then merge to main. The reaper hard-fails (gh pr view) on a non-existent PR like 0; a real but unmerged PR is handled gracefully (mergedAt:null -> clock not started). Do NOT merge this entry to main with introduced_by_pr=0.",
       "description": "Legacy eltwise binary init API in tt_metal/hw/inc/api/compute/eltwise_binary.h: binary_op_init_common, add_tiles_init, sub_tiles_init, mul_tiles_init (both overloads), and binary_dest_reuse_tiles_init. Replaced by compute_kernel_hw_startup() once at kernel start + the per-op add_init/sub_init/mul_init API, with the dest-reuse path folded into those inits via the binary_reuse_dest template param. Remove the deprecated shims once all call sites are migrated.",
-      "files": ["tt_metal/hw/inc/api/compute/eltwise_binary.h"],
-      "introduced_by_pr": 0,
+      "files": [
+        "tt_metal/hw/inc/api/compute/eltwise_binary.h"
+      ],
+      "introduced_by_pr": 50745,
       "grace": "30d",
-      "owners": ["ncvetkovicTT"]
+      "owners": [
+        "ncvetkovicTT"
+      ]
     }
   ]
 }
