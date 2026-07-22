@@ -31,37 +31,28 @@ void kernel_main() {
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                cb_a,
-                cb_b,
+                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(cb_b, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
-                BroadcastDim::Row,
-                InputLifecycle::Streaming,
-                InputLifecycle::Streaming,
-                BinaryDataFormatReconfig::None>{},
-            PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
+                BroadcastDim::Row>{},
+            PackTile<output(cb_out, OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
     } else if constexpr (dim == 1) {
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                cb_a,
-                cb_b,
+                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(cb_b, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
-                BroadcastDim::Col,
-                InputLifecycle::Streaming,
-                InputLifecycle::Streaming,
-                BinaryDataFormatReconfig::None>{},
-            PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
+                BroadcastDim::Col>{},
+            PackTile<output(cb_out, OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
     } else {  // dim == 3 -> Scalar
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
-                cb_a,
-                cb_b,
+                input(cb_a, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(cb_b, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
                 BinaryFpuOp::Add,
-                BroadcastDim::Scalar,
-                InputLifecycle::Streaming,
-                InputLifecycle::Streaming,
-                BinaryDataFormatReconfig::None>{},
-            PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
+                BroadcastDim::Scalar>{},
+            PackTile<output(cb_out, OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
     }
 }
