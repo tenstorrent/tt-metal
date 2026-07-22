@@ -74,12 +74,8 @@ class TtGptOssMoE(LightweightModule):
         # the hookup is a one-line change once #49619 lands; do NOT enable use_expert_bias until then.
         self.routed_expert_biases = routed_expert_biases
         self.use_expert_bias = use_expert_bias
-        if use_expert_bias:
-            raise NotImplementedError(
-                "use_expert_bias=True requires #49619 (bias in unified_routed_expert_moe), which is "
-                "NOT merged on this branch. Leave use_expert_bias=False until it lands; see the "
-                "TODO(#49619) at the TtRoutedExpert construction below."
-            )
+        # #49619 (bias in unified_routed_expert_moe / TtRoutedExpert) is now MERGED, so
+        # use_expert_bias=True is supported: biases are passed to TtRoutedExpert below.
 
         expert_dispatch_table = ExpertMapping.create_dispatch_table(
             num_routed_experts, dispatch_group_size, num_dispatch_groups
@@ -137,13 +133,11 @@ class TtGptOssMoE(LightweightModule):
 
         # Routed expert: the fused unified_routed_expert_moe kernel with the clamped swigluoai
         # activation (RoutedExpertActivation.SwiGluOai bakes GPT-OSS's alpha=1.702 / limit=7.0).
-        #
-        # TODO(#49619): once expert bias lands in unified_routed_expert_moe, pass the prepared
-        # per-expert biases to TtRoutedExpert here, e.g. add:
-        #     torch_biases=self.routed_expert_biases,   # [{gate_bias, up_bias, down_bias}, ...]
-        # (guarded by self.use_expert_bias). The exact kwarg name follows #49619's TtRoutedExpert
-        # signature. DO NOT pass any bias kwarg on this branch — TtRoutedExpert.__init__ does not
-        # accept one and the current kernel is bias-free (verified 2026-07-17).
+        # #49619 (merged) added expert-bias support to TtRoutedExpert (torch_biases kwarg; the kernel
+        # adds gate/up bias before the clamp and down bias after the down matmul, SwiGluOai only).
+        # Passing the biases is required for correctness — without them the MoE output is
+        # systematically off every layer and the error accumulates through the residual (V PCC
+        # collapses with depth). Gated by use_expert_bias so the bias-free path stays available.
         self.routed_expert = TtRoutedExpert(
             mesh_device=mesh_device,
             experts_per_chip=experts_per_chip,
@@ -152,6 +146,7 @@ class TtGptOssMoE(LightweightModule):
             hidden_dim=hidden_dim,
             max_tokens=max_dispatched_tokens_per_expert,
             torch_weights=routed_expert_weights,
+            torch_biases=self.routed_expert_biases if self.use_expert_bias else None,
             activations_dtype=routed_expert_activations_dtype,
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,

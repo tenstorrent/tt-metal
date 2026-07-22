@@ -103,13 +103,13 @@ class MLP:
             emb_dim=H,
             hidden_dim=I,
             routed_expert_weights=routed_w,
-            routed_expert_biases=routed_b,  # threaded for #49619; NOT passed to TtRoutedExpert yet
+            routed_expert_biases=routed_b,  # #49619 merged: now passed to TtRoutedExpert
             num_links=ccl_manager.num_links,
             routed_expert_activations_dtype=expert_activation_dtype,
             routed_expert_weights_dtype=expert_weight_dtype,
             weight_cache_path=_ep_cache_dir(tensor_cache_path),
             layer_idx=layer_idx,
-            use_expert_bias=False,  # TODO(#49619): flip to True once the biased kernel lands
+            use_expert_bias=True,  # #49619 merged: biased unified_routed_expert_moe kernel is live
         )
         self.ep_num_links = ccl_manager.num_links
 

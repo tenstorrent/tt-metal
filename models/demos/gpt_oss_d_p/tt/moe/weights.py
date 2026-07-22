@@ -74,9 +74,10 @@ def prepare_routed_expert_weights(state_dict, num_experts, hidden_size, intermed
         )
         routed_expert_biases.append(
             {
-                "gate_bias": gate_bias[e].contiguous(),
-                "up_bias": up_bias[e].contiguous(),
-                "down_bias": down_bias[e].contiguous(),
+                # keys match TtRoutedExpert._convert_expert_biases (gate/up/down_proj_bias)
+                "gate_proj_bias": gate_bias[e].contiguous(),
+                "up_proj_bias": up_bias[e].contiguous(),
+                "down_proj_bias": down_bias[e].contiguous(),
             }
         )
 
