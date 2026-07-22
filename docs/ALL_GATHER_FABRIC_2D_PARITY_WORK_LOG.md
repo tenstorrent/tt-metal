@@ -408,3 +408,82 @@ The final matched 8x1 performance controls are:
 Fabric2D remains above the 90 GB/s stretch goal, within 4.4% (BF16) and 2.7%
 (scaled FP8) of Fabric1D, while the production ND-sharded fix removes the last
 observed sparse-MLA long regression.
+
+## 2026-07-22: topology qualification is automatic and hardware-safe
+
+The sparse-MLA CCL benchmark still carried experimental environment variables
+for packet size, cache-row coalescing, link bandwidth, and opting the LoudBox
+proxy into a ring. Its default SP path therefore measured Fabric1D even though
+the production target and this project use a direct physical ring embedded in
+Fabric2D.
+
+Those experiment knobs are now removed. The benchmark automatically selects:
+
+- Fabric2D on the local 8x1 SP ring;
+- Fabric2D on Galaxy 8x4, where one mesh all-gather dispatch represents four
+  concurrent SP=8 rings;
+- the 200 Gbps/link/direction Galaxy roofline exposed by both Galaxy and the
+  Galaxy-compatible Ethernet firmware installed on this LoudBox;
+- the native neighbor-unicast backend, verified from realtime-profiler kernel
+  sources. The benchmark fails if `unicast_writer.cpp` is absent or the
+  multicast receiver is present.
+
+The production-shaped BF16 KVPE benchmark passed through
+`scripts/run_safe_pytest.sh` without an environment selector:
+
+| Scenario | Local rows | Device-program time | Effective receive BW | 100 GB/s roofline utilization |
+| --- | ---: | ---: | ---: | ---: |
+| warm, 50K cache | 7,040 | 0.709 ms | 80.043 GB/s | 80.0% |
+| long, 500K cache | 64,640 | 5.729 ms | 90.990 GB/s | 91.0% |
+
+Both records contain only `tt_fabric_mux.cpp`, `unicast_reader.cpp`, and
+`unicast_writer.cpp`. The long case moves 521.257 MB of critical-path receive
+traffic and the full gathered tensor is 517,120 rows.
+
+An exact physical QuietBox test was added for SP=2/TP=2. It covers two
+concurrent SP lines, BF16/scaled FP8, fresh/persistent outputs, exact payloads,
+and native-kernel selection. It requires exactly four physical devices. This
+is necessary because opening a 2x2 submesh on the current eight-device box
+left live Fabric2D routers without their physical peers and failed during
+router initialization, before all-gather dispatch. On this box the corrected
+test collects and skips all four cases cleanly; it must be run on a real
+QuietBox for pass evidence. The existing full-mesh two-rank matrix remains the
+local proxy and passed `8/8` across Fabric1D/Fabric2D, BF16/scaled FP8, and
+fresh/persistent outputs.
+
+```bash
+TT_METAL_DISABLE_PRECOMPILED_FW=1 \
+scripts/run_safe_pytest.sh \
+  tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py \
+  -k 'quietbox_sized_concurrent_sp_lines' -x -s -v
+```
+
+The same sparse-MLA CCL test automatically expands to `(8, 4)` on a 32-device
+Galaxy. Its SP-axis all-gather launches all four concurrent SP=8 rings with the
+production long shape and persistent output. The command requiring Galaxy is:
+
+```bash
+TT_METAL_DISABLE_PRECOMPILED_FW=1 \
+scripts/run_safe_pytest.sh \
+  models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_ccl_perf.py \
+  -k 'kvpe_all_gather_perf and long' -x -s -v
+```
+
+### G0-G8 completion audit
+
+| Goal | Current evidence | Status |
+| --- | --- | --- |
+| G0 | Release build passed; prerequisite and handoff commits and matched commands are recorded | proven |
+| G1 | Seven host route-plan cases cover direct line/ring edges, wrap, rejection, and plan hashing | proven |
+| G2 | Exact BF16/FP8 fresh/persistent correctness passes at two, four, and eight ranks; profiler asserts native unicast | proven on this box |
+| G3 | Ten cached full-size Fabric2D executions per format pass; p90 is below 1% over median | proven on this box |
+| G4 | 90.791 GB/s BF16 and 91.583 GB/s scaled FP8 exceed 70 GB/s | proven |
+| G5 | Both exceed 85 GB/s and are within 10% of matched Fabric1D | proven |
+| G6 | Both Fabric modes exceed 90 GB/s for both formats | proven |
+| G7 | Sparse-MLA correctness passes 39/39; perf passes 27/27; every DSA/GLM warm/cold/long result improves | proven on this box |
+| G8 | No implementation selector or model/shape gate; automatic 8x1 and 8x4 test selection exists; QuietBox and four-ring Galaxy tests are hardware-safe | implementation/coverage ready; actual QuietBox and Galaxy runs still missing |
+
+The project cannot yet be called product-ready under the plan's literal G8
+exit condition: this host has eight devices, so it cannot supply real
+four-device QuietBox or 32-device four-ring Galaxy pass evidence. No software
+workaround or smaller submesh is treated as equivalent to that hardware proof.

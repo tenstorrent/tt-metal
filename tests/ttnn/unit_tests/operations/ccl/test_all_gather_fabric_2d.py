@@ -823,17 +823,18 @@ def test_all_gather_fabric_2d_matched_large_cached_stability(mesh_device, dtype,
         assert torch.equal(actual, expected)
 
 
-def _make_matched_two_rank_line_tensors(mesh_device, dtype, width):
-    rows_per_device = 65536
+def _make_matched_two_rank_line_tensors(mesh_device, dtype, width, cluster_axis=1, rows_per_device=65536):
+    assert mesh_device.shape[cluster_axis] == 2
     global_shape = (1, 1, 2 * rows_per_device, width)
     torch.manual_seed(0)
     host_dtype = torch.float32 if dtype == ttnn.fp8_e4m3 else torch.bfloat16
     torch_input = torch.rand(global_shape, dtype=host_dtype)
+    shard_dims = (2, None) if cluster_axis == 0 else (None, 2)
     tt_input = _make_row_major_mesh_tensor(
         mesh_device,
         torch_input,
         dtype,
-        ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=tuple(mesh_device.shape)),
+        ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
     )
     persistent_output = _make_row_major_mesh_tensor(
         mesh_device,
@@ -894,6 +895,70 @@ def test_all_gather_matched_two_rank_line_correctness(mesh_device, dtype, width,
         for device_tensor in ttnn.get_device_tensors(check_output):
             actual = ttnn.to_torch(device_tensor)
             assert torch.equal(actual, expected)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": _fabric_router_config(),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": 512,
+            # Fabric2D router initialization requires the peer at every live
+            # physical link. Run this topology qualification only on a real
+            # four-device QuietBox rather than opening half of a larger box.
+            "require_exact_physical_num_devices": True,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
+@pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2")
+@pytest.mark.parametrize("use_persistent_output", [False, True], ids=["fresh_output", "persistent_output"])
+@pytest.mark.parametrize(
+    "dtype,width",
+    [
+        pytest.param(ttnn.bfloat16, 576, id="bf16_1152b_rows"),
+        pytest.param(ttnn.fp8_e4m3, 656, id="scaled_fp8_704b_rows"),
+    ],
+)
+def test_all_gather_fabric_2d_quietbox_sized_concurrent_sp_lines(mesh_device, dtype, width, use_persistent_output):
+    """Qualify a physical QuietBox SP=2 x TP=2 as two concurrent native SP lines."""
+    cluster_axis = 0
+    _, torch_input, tt_input, persistent_output = _make_matched_two_rank_line_tensors(
+        mesh_device, dtype, width, cluster_axis=cluster_axis, rows_per_device=128
+    )
+
+    def run_ag():
+        return ttnn.all_gather(
+            tt_input,
+            dim=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=cluster_axis,
+            output_tensor=persistent_output if use_persistent_output else None,
+        )
+
+    if ttnn.device.IsProgramRealtimeProfilerActive():
+        tt_output, records = profile_realtime_program(mesh_device, run_ag, collect_all=True, record_timeout_seconds=5.0)
+        sources = [source.replace("\\", "/") for record in records for source in record["kernel_sources"]]
+        assert any(source.endswith("/unicast_writer.cpp") for source in sources)
+        assert not any(source.endswith("/multicast_receiver_writer.cpp") for source in sources)
+    else:
+        tt_output = run_ag()
+        ttnn.synchronize_device(mesh_device)
+
+    if dtype == ttnn.fp8_e4m3:
+        input_shards = _fp8_device_payloads(tt_input, mesh_device)
+        output_shards = _fp8_device_payloads(tt_output, mesh_device)
+        mesh_rows, mesh_cols = tuple(mesh_device.shape)
+        for device_index, actual in enumerate(output_shards):
+            column = device_index % mesh_cols
+            expected = torch.cat([input_shards[row * mesh_cols + column] for row in range(mesh_rows)], dim=2)
+            assert torch.equal(actual, expected)
+    else:
+        for device_tensor in ttnn.get_device_tensors(tt_output):
+            assert torch.equal(ttnn.to_torch(device_tensor), torch_input)
 
 
 @pytest.mark.parametrize(

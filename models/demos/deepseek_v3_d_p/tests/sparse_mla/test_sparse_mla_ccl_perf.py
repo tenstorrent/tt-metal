@@ -36,10 +36,10 @@ TP_AXIS = 1
 NUM_LINKS = 2
 L1_SMALL_SIZE = 16 * 1024
 
-# Per-direction fabric link bandwidth, Gbps. Blackhole-only; sourced from external hardware docs (not
-# in-repo). Override with MLA_CCL_LINK_GBPS_PER_DIRECTION for what-if analysis.
+# Per-direction fabric link bandwidth, Gbps. Blackhole Galaxy hardware and the
+# Galaxy-compatible Ethernet firmware used by the LoudBox qualification system
+# both expose 200 Gbps per link in each direction.
 _GALAXY_LINK_GBPS_PER_DIRECTION = 200.0
-_LOUDBOX_LINK_GBPS_PER_DIRECTION = 400.0
 
 
 # --------------------------------------------------------------------------------------------------
@@ -54,7 +54,6 @@ class Workload:
     num_attention_heads: int
     kv_lora_rank: int
     qk_rope_head_dim: int
-    cache_rows_per_page: int = 1
 
     @property
     def kvpe_dim(self) -> int:
@@ -171,15 +170,13 @@ def _kvpe_logical_shape(w: Workload, mesh_shape) -> list:
     # KVPE runs only on SP=GALAXY_SP meshes, so the global prefix (cache + the just-written chunk) needs
     # no proxy scaling — sharding it over SP already yields the Galaxy per-chip depth.
     total_tokens = w.cache_tokens + w.chunk_tokens
-    assert total_tokens % w.cache_rows_per_page == 0
-    return [1, 1, total_tokens // w.cache_rows_per_page, w.kvpe_dim * w.cache_rows_per_page]
+    return [1, 1, total_tokens, w.kvpe_dim]
 
 
 def _kvpe_local_input_shape(w: Workload, mesh_shape) -> list:
     sp, _ = mesh_shape
     total_tokens = w.cache_tokens + w.chunk_tokens
-    assert total_tokens % (sp * w.cache_rows_per_page) == 0
-    return [1, 1, total_tokens // (sp * w.cache_rows_per_page), w.kvpe_dim * w.cache_rows_per_page]
+    return [1, 1, total_tokens // sp, w.kvpe_dim]
 
 
 def _head_to_sequence_logical_shape(w: Workload, mesh_shape) -> list:
@@ -262,15 +259,11 @@ GLM_SEQUENCE_TO_HEAD = CollectivePath(
 def ccl_mesh_param(collective_axis: int):
     """`pytest.param(mesh_shape, device_params, marks, id)` for the box + collective axis (collection time).
 
-    Galaxy (32): the production 8x4. LoudBox (8): an SP=8 line proxy (one line of 8 mirrors a Galaxy SP
-    row) for SP collectives, or a 2x4 mesh preserving TP=4 for TP collectives.
+    Galaxy (32): the production 8x4, where an SP collective launches four
+    concurrent eight-rank rings. LoudBox (8): one Fabric2D SP=8 ring, or a 2x4
+    mesh preserving TP=4 for TP collectives.
     """
     num_devices = detect_num_devices()
-    packet_size_override = os.environ.get("MLA_CCL_PACKET_SIZE")
-    use_ring_proxy = os.environ.get("MLA_CCL_RING_PROXY") == "1"
-    if packet_size_override is not None:
-        packet_size = int(packet_size_override)
-        assert packet_size > 0 and packet_size % 32 == 0, "MLA_CCL_PACKET_SIZE must be a positive 32-byte multiple"
     canonical_fabric = {  # matches the deepseek conftest FABRIC_2D params (fabric router + reliability mode)
         "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
@@ -283,18 +276,9 @@ def ccl_mesh_param(collective_axis: int):
     elif num_devices == 8:
         system = "loudbox_proxy"
         if collective_axis == SP_AXIS:
-            # SP=8 line proxy for a Galaxy SP row. Production runs the SP all-gather on Topology.Linear
-            # (mla.py:259), so the proxy mirrors that with a FABRIC_1D line — not a ring, which would model a
-            # transport Galaxy does not use today. FABRIC_1D isolates the single axis, so it omits the 2D
-            # fabric-router config.
-            mesh_shape, mesh_topology = (8, 1), "line"
-            device_params = {
-                "trace_region_size": 100000,
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if use_ring_proxy else ttnn.FabricConfig.FABRIC_1D,
-                "l1_small_size": L1_SMALL_SIZE,
-            }
-            if packet_size_override is not None:
-                device_params["fabric_router_config"] = create_fabric_router_config(max_payload_size=packet_size)
+            # The operation recognizes the direct physical cycle and selects
+            # its native one-hop ring automatically under Fabric2D.
+            mesh_shape, mesh_topology, device_params = (8, 1), "line", fabric_2d
         else:
             mesh_shape, mesh_topology, device_params = (2, 4), "mesh-2x4", fabric_2d
     else:
@@ -312,13 +296,10 @@ def ccl_mesh_param(collective_axis: int):
 def resolve_runtime_system(mesh_device, path: CollectivePath) -> RuntimeSystem:
     """Fabric roofline inputs for the live mesh: topology, link count, per-direction bandwidth."""
     mesh_shape = tuple(mesh_device.shape)
-    # Every path — Galaxy 8x4 and both LoudBox proxies — runs the all-gather on a line, matching
-    # production (mla.py:259). The roofline models this topology; a ring path would double the sustained
-    # bandwidth (see CCLTraffic.sustained_directions).
-    topology = ttnn.Topology.Ring if os.environ.get("MLA_CCL_RING_PROXY") == "1" else ttnn.Topology.Linear
-    default_gbps = _GALAXY_LINK_GBPS_PER_DIRECTION if math.prod(mesh_shape) == 32 else _LOUDBOX_LINK_GBPS_PER_DIRECTION
-    link_gbps = float(os.environ.get("MLA_CCL_LINK_GBPS_PER_DIRECTION", default_gbps))
-    return RuntimeSystem(mesh_shape, topology, NUM_LINKS, link_gbps)
+    # These qualification meshes expose direct physical cycles on their
+    # collective axes. all_gather detects that structure and selects Ring;
+    # the deprecated public topology argument is intentionally not used.
+    return RuntimeSystem(mesh_shape, ttnn.Topology.Ring, NUM_LINKS, _GALAXY_LINK_GBPS_PER_DIRECTION)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -422,6 +403,9 @@ def _run_all_gather(mesh_device, path, workload) -> Measurement:
     )
     assert list(tt_output.shape) == global_shape
     assert tt_output.tensor_topology().placements() == list(path.output_placements)
+    kernel_sources = {os.path.basename(source) for record in records for source in record["kernel_sources"]}
+    assert "unicast_writer.cpp" in kernel_sources, "production KVPE gather did not select native neighbor unicast"
+    assert "multicast_receiver_writer.cpp" not in kernel_sources
     measurement = Measurement(
         records, program_durations_ns, _tensor_description(tt_input), _tensor_description(tt_output)
     )
@@ -629,15 +613,12 @@ def _scenario_id(scenario):
 
 def _workload(scenario):
     config = glm_hf_config()
-    cache_rows_per_page = int(os.environ.get("MLA_CCL_CACHE_ROWS_PER_PAGE", "1"))
-    assert cache_rows_per_page > 0, "MLA_CCL_CACHE_ROWS_PER_PAGE must be positive"
     return Workload(
         chunk_tokens=CHUNK_TOKENS,
         cache_tokens=SCENARIOS[scenario]["cache"],
         num_attention_heads=config.num_attention_heads,
         kv_lora_rank=config.kv_lora_rank,
         qk_rope_head_dim=config.qk_rope_head_dim,
-        cache_rows_per_page=cache_rows_per_page,
     )
 
 
@@ -657,7 +638,7 @@ def _run(mesh_device, path, scenario):
     indirect=["mesh_device", "device_params"],
 )
 def test_kvpe_all_gather_perf(mesh_device, scenario):
-    """Profile the SP all-gather used for the GLM KVPE prefix."""
+    """Profile one SP ring locally or all four concurrent SP rings on Galaxy."""
     _run(mesh_device, KVPE_ALL_GATHER, scenario)
 
 
