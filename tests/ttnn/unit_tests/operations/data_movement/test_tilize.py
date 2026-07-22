@@ -954,7 +954,7 @@ def test_tilize_program_cache_addr_change(device, config):
         ([1, 1, 256, 512], (4, 4)),
     ],
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.uint8])
 def test_tilize_block_sharded_shapes(device, tensor_shape, grid_shape, dtype):
     torch.manual_seed(42)
     n_y, n_x = grid_shape
@@ -965,8 +965,12 @@ def test_tilize_block_sharded_shapes(device, tensor_shape, grid_shape, dtype):
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_x - 1, n_y - 1))})
     shard_spec = ttnn.ShardSpec(grid, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
     mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
-    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
-    torch_input = torch.rand(tensor_shape, dtype=torch_dtype)
+    if dtype == ttnn.uint8:
+        torch_input = torch.randint(0, 256, tensor_shape, dtype=torch.uint8)
+    elif dtype == ttnn.float32:
+        torch_input = torch.rand(tensor_shape, dtype=torch.float32)
+    else:
+        torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(
         torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
     )
@@ -1100,4 +1104,26 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
     assert tt_output.layout == ttnn.TILE_LAYOUT
     if shard_layout is not None:
         assert tt_output.memory_config().memory_layout == shard_layout
+    assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+#   Blackhole LLK (_llk_unpack_tilize_init_): uint8 datums produced a
+#   strided (every-other-row zero) pattern because the BH-specific
+#   Tile_x_dim (face_r_dim * num_faces * FACE_C_DIM, spanning the full
+#   tile) is incompatible with 8-bit data; the fix skips the BH workaround
+#   for IS_8BIT_FORMAT and uses FACE_DIM_1x16 (standard per-face dim).
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 1, 32, 32],
+        [1, 1, 128, 32],
+        [1, 1, 32, 1056],
+        [1, 1, 2048, 32],
+        [1, 1, 128, 1056],
+    ],
+)
+def test_tilize_uint8(device, shape):
+    torch_input = torch.randint(0, 256, shape, dtype=torch.uint8)
+    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_output = ttnn.tilize(tt_input)
     assert_equal(torch_input, ttnn.to_torch(tt_output))
