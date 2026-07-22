@@ -973,6 +973,9 @@ def _dram_width_sharded(shard_height, shard_width, num_cores):
         ([1, 1, 256, 64], 2, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
         # split, padded output (m=1,s=2,k=1): DRAM shard content 16B pads to 32B, so split uses content.
         ([8, 1, 32, 16], 0, _dram_width_sharded(32, 16, 1), _dram_width_sharded(256, 8, 2)),
+        # matched, padded, sharded -> interleaved, non-last-dim (m=1,s=1,k=1): a full-row DRAM shard
+        # (content 136*2=272B, padded to the 32B DRAM page) gathered on the height dim into interleaved output.
+        ([1, 1, 256, 136], 2, _dram_width_sharded(32, 136, 1), ttnn.DRAM_MEMORY_CONFIG),
     ],
     ids=[
         "matched",
@@ -987,6 +990,7 @@ def _dram_width_sharded(shard_height, shard_width, num_cores):
         "rm_interleaved_last_dim",
         "non_last_dim_interleaved",
         "split_padded_output",
+        "matched_sharded_to_interleaved_padded",
     ],
 )
 @pytest.mark.parametrize(
