@@ -451,7 +451,22 @@ public:
         // full re-derivation, correct by construction.  This is the target mechanism; resolve_bindings
         // and get_dynamic are the legacy paths being migrated out (and, eventually, deleted with
         // Metal 2.0 native bindings).
-        static consteval bool has_override_runtime_arguments() {
+        //
+        // The hook lives on the program factory (its natural home — alongside create_descriptor):
+        // factory_has_override_runtime_arguments() below. For DirectDescriptorFactory the factory has
+        // no override, so we also accept it on the DeviceOperation itself, preserving direct ops that
+        // predate the factory-struct shape.
+        static consteval bool factory_has_override_runtime_arguments() {
+            return requires(
+                tt::tt_metal::Program& program,
+                const operation_attributes_t& attrs,
+                const tensor_args_t& tensor_args,
+                tensor_return_value_t& tensor_return_value,
+                const std::optional<ttnn::MeshCoordinate>& coord) {
+                DescriptorFactory::override_runtime_arguments(program, attrs, tensor_args, tensor_return_value, coord);
+            };
+        }
+        static consteval bool device_op_has_override_runtime_arguments() {
             return requires(
                 tt::tt_metal::Program& program,
                 const operation_attributes_t& attrs,
@@ -460,6 +475,9 @@ public:
                 const std::optional<ttnn::MeshCoordinate>& coord) {
                 DeviceOperation::override_runtime_arguments(program, attrs, tensor_args, tensor_return_value, coord);
             };
+        }
+        static consteval bool has_override_runtime_arguments() {
+            return factory_has_override_runtime_arguments() || device_op_has_override_runtime_arguments();
         }
 
         static consteval bool has_get_dynamic_runtime_args() {
@@ -640,13 +658,23 @@ public:
                     // override_runtime_arguments()): re-apply ALL per-dispatch state — every runtime arg
                     // AND every tensor-backed CB address — for the current tensors.  No resolve_bindings
                     // (address inference) and no get_dynamic; correct by construction for in-place,
-                    // mixed-aliasing, and work-set shifts.
-                    DeviceOperation::override_runtime_arguments(
-                        program,
-                        attrs,
-                        tensor_args,
-                        tensor_return_value,
-                        std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                    // mixed-aliasing, and work-set shifts. Prefer the factory's hook; fall back to the
+                    // DeviceOperation for direct ops that predate the factory-struct shape.
+                    if constexpr (factory_has_override_runtime_arguments()) {
+                        DescriptorFactory::override_runtime_arguments(
+                            program,
+                            attrs,
+                            tensor_args,
+                            tensor_return_value,
+                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                    } else {
+                        DeviceOperation::override_runtime_arguments(
+                            program,
+                            attrs,
+                            tensor_args,
+                            tensor_return_value,
+                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                    }
 #ifdef TT_DESCRIPTOR_PATCHING_PARITY_CHECK
                     // Same regression net as the legacy fast path: assert the op's override reproduced a
                     // full rebuild exactly (rt-args AND CB addresses).
