@@ -403,16 +403,13 @@ ALWI void tilize_block(
 
             MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
             PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, c0 + t + output_tile_index)));
-            // PER-TILE FPU dest-dvalid clear (the fix for ERROR_TRISC1 0x19 at t~4). The MOVA2D datacopy sets
-            // the FPU dest-dvalid but its terminal CLEARDVALID clears SrcA only, and llk_math_dest_section_done
-            // only SEMPOSTs MATH_PACK + advances the bank — NEITHER clears the FPU dest client. So the ~4-deep
-            // FPU dest-dvalid ring laps after ~4 tiles -> IB interrupt. The reduce/pool path avoids this by
-            // folding the clear inline per op; here we do it explicitly per tile. _llk_math_set_dvalid_ is the
-            // ONLY place that pulses the FPU-dest CLEARDVALID. Safe wrt PACK: the dvalid is a sync bit, the DEST
-            // data persists, and PACK reads via the MATH_PACK semaphore (posted by dest_section_done below),
-            // not the dvalid; the sem also bounds the next MOVA2D so it can't overwrite before PACK reads.
-            MATH((llk_math_set_dvalid<p_cleardvalid::FPU, DST_SYNC_MODE>()));
-            // Release dest
+            // Release dest. Intentionally NO llk_math_set_dvalid here: set_dvalid belongs to the dest-dvalid
+            // sync scheme and is compile-blocked on tt-metal's semaphore-sync path (llk_math_common_api.h
+            // static_assert: "should not be mixed with semaphores"). It is also unnecessary — the datacopy MOP
+            // (_llk_math_eltwise_unary_datacopy_) + llk_math_dest_section_done handle the FPU dest-dvalid exactly
+            // as the WH/BH #else branch below does (which runs a full wide block with no set_dvalid and no 0x19).
+            // The C2048 ERROR_TRISC1 0x19 is a DEST-section WRAP, prevented by the per-chunk re-init above
+            // (chunk_cap keeps each chunk within one non-wrapping section), not by an explicit per-tile clear.
             MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
             PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
         }
