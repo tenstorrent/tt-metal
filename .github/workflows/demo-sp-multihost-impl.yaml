@@ -180,16 +180,47 @@ jobs:
           BUILD_ARCHIVE="${build_archives[0]}"
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
+          echo "=== DEBUG: pre-unpack env/paths (runner) ==="
+          echo "hostname=$(hostname)"
+          echo "pwd=$(pwd)"
+          echo "GITHUB_WORKSPACE=${GITHUB_WORKSPACE}"
+          echo "HOME=${HOME}"
+          echo "TT_METAL_HOME=${TT_METAL_HOME-<unset>}"
+          echo "TT_METAL_RUNTIME_ROOT=${TT_METAL_RUNTIME_ROOT-<unset>}"
+          echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH-<unset>}"
+          echo "PATH=${PATH}"
+          ls -la /ci /ci/tt-metal /home/user 2>&1 || true
+          ls -la /ci/tt-metal/ttnn/ttnn/distributed/ttrun.py 2>&1 || true
+
           sudo rm -rf /home/user/tt-metal
           sudo mkdir -p /home/user/tt-metal
           sudo chown "$(id -u):$(id -g)" /home/user/tt-metal
           tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+
+          echo "=== DEBUG: after local tar extract (runner) ==="
+          ls -la /home/user/tt-metal 2>&1 || true
+          ls -la /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py 2>&1 || true
+          ls -la /home/user/tt-metal/ttnn/ttnn/ 2>&1 | head -50 || true
+          ls -la /home/user/tt-metal/build/tools/scaleout/run_cluster_validation 2>&1 || true
 
           mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
 
           # Unpack artifacts
           mpirun --pernode tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+
+          echo "=== DEBUG: after mpirun copy+tar (runner) ==="
+          echo "TT_METAL_HOME=${TT_METAL_HOME-<unset>}"
+          ls -la /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py 2>&1 || true
+          ls -la /home/user/tt-metal/build/tools/scaleout/run_cluster_validation 2>&1 || true
+
+          echo "=== DEBUG: after mpirun copy+tar (workers) ==="
+          mpirun --pernode --tag-output bash -lc '
+            echo "hostname=$(hostname) TT_METAL_HOME=${TT_METAL_HOME-<unset>} HOME=${HOME}"
+            ls -la /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py 2>&1 || true
+            ls -la /home/user/tt-metal/build/tools/scaleout/run_cluster_validation 2>&1 || true
+          '
+
           ttnn_wheels=(/ci/artifacts/**/ttnn-*.whl)
           echo "Found ${#ttnn_wheels[@]} ttnn wheel candidate(s) under /ci/artifacts"
           printf ' - %s\n' "${ttnn_wheels[@]}"
@@ -294,6 +325,19 @@ jobs:
         # Avoid mixing /ci/tt-metal and /home/user/tt-metal include paths in one run.
         working-directory: /home/user/tt-metal
         run: |
+          echo "=== DEBUG: pre-test env/paths (runner) ==="
+          echo "hostname=$(hostname)"
+          echo "pwd=$(pwd)"
+          echo "HOME=${HOME}"
+          echo "TT_METAL_HOME=${TT_METAL_HOME-<unset>}"
+          echo "TT_METAL_RUNTIME_ROOT=${TT_METAL_RUNTIME_ROOT-<unset>}"
+          echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH-<unset>}"
+          echo "PATH=${PATH}"
+          command -v tt-run || true
+          command -v python3
+          ls -la /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py 2>&1 || true
+          ls -la "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" 2>&1 || true
+
           # Store command safely using heredoc
           CMD=$(cat << 'EOF'
           ${{ matrix.test-group.cmd }}
