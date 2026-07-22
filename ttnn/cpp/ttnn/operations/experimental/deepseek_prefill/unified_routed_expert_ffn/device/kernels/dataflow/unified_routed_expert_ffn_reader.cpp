@@ -472,11 +472,21 @@ void kernel_main() {
                     for (uint32_t m = 0; m < per_core_M; ++m) {
                         const uint32_t tile_row = this_core_first_row + m;
                         if (tile_row < count_tiles) {
-                            for (uint32_t r = 0; r < TILE_HEIGHT; ++r) {
+                            // Only sticks < count_value are real tokens; the rest of a valid
+                            // tile-row is dispatch padding. Read just the real sticks (the
+                            // last tile-row is usually partial) and leave the padding sticks
+                            // stale — they are free-dim (token) rows, dropped downstream (the
+                            // writer emits full tile-rows but combine consumes only the real
+                            // count), so no cross-row contamination. This is stick-granular,
+                            // unlike the TILE path where a 32-row tile can't be partially read.
+                            const uint32_t row_base = tile_row * TILE_HEIGHT;
+                            const uint32_t real_r =
+                                (row_base + TILE_HEIGHT <= count_value) ? TILE_HEIGHT : (count_value - row_base);
+                            for (uint32_t r = 0; r < real_r; ++r) {
                                 // x_start_stick offsets into this expert's region
                                 // of the shared row-major buffer (0 when x is a
                                 // standalone per-expert buffer).
-                                const uint32_t stick = x_start_stick + tile_row * TILE_HEIGHT + r;
+                                const uint32_t stick = x_start_stick + row_base + r;
                                 noc_read.async_read(
                                     x_acc_rm,
                                     CoreLocalMem<uint32_t>(l1_x),
@@ -485,6 +495,8 @@ void kernel_main() {
                                     {});
                                 l1_x += rm_kblock_bytes;
                             }
+                            // Skip the padding sticks in this tile-row (stale L1, dropped).
+                            l1_x += (TILE_HEIGHT - real_r) * rm_kblock_bytes;
                         } else {
                             // Invalid row (>= count_tiles): skip the read, advance the
                             // write ptr. Stale L1 here is dropped by the writer (see above).
@@ -514,7 +526,32 @@ void kernel_main() {
                 }
                 noc_read.async_read_barrier();
 
-                const uint32_t block_bytes = g_in0_block_num_tiles * x_stage_tile_bytes;
+                // Multicast only the real rows of the block. Valid tile-rows form a
+                // contiguous prefix from block_start; padding rows past the token
+                // count stay stale at receivers and are dropped downstream (same
+                // free-dim-M safety as the skipped reads above). RM trims to the real
+                // token-row sticks; TILE to whole valid tile-rows (a 32-row tile can't
+                // be split). A fully-padding M-row (this_core_first_row >= count_tiles)
+                // sends no data — only the valid sem, so receivers still advance.
+                const uint32_t valid_tile_rows =
+                    (this_core_first_row < count_tiles)
+                        ? ((count_tiles - this_core_first_row < per_core_M) ? (count_tiles - this_core_first_row)
+                                                                            : per_core_M)
+                        : 0;
+                uint32_t mcast_bytes;
+                if constexpr (x_is_row_major != 0) {
+                    constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
+                    uint32_t real_sticks = 0;
+                    if (valid_tile_rows > 0) {
+                        const uint32_t last_valid = this_core_first_row + valid_tile_rows - 1;
+                        const uint32_t real_r_last =
+                            (last_valid == count_tiles - 1) ? (count_value - last_valid * TILE_HEIGHT) : TILE_HEIGHT;
+                        real_sticks = (valid_tile_rows - 1) * TILE_HEIGHT + real_r_last;
+                    }
+                    mcast_bytes = real_sticks * rm_kblock_bytes;
+                } else {
+                    mcast_bytes = valid_tile_rows * in0_block_w_gu * x_tile_bytes;
+                }
                 // linked=true keeps the multicast path RESERVED so the in0_valid
                 // sem multicast below travels the SAME path and is delivered
                 // AFTER the data at every receiver. With linked=false the path is
@@ -525,18 +562,20 @@ void kernel_main() {
                 // matmul output for that core (rare, timing-dependent). A write
                 // barrier does NOT fix this on Blackhole (multicast writes are
                 // posted; no completion ack). Mirrors the phase-4 activated mcast.
-                noc.async_write_multicast(
-                    CoreLocalMem<uint32_t>(block_start),
-                    MulticastEndpoint{},
-                    block_bytes,
-                    in0_num_receivers,
-                    {.offset_bytes = 0},
-                    {.noc_x_start = in0_mcast_nx_start,
-                     .noc_y_start = in0_mcast_ny_start,
-                     .noc_x_end = in0_mcast_nx_end,
-                     .noc_y_end = in0_mcast_ny_end,
-                     .addr = block_start},
-                    /*linked=*/true);
+                if (mcast_bytes > 0) {
+                    noc.async_write_multicast(
+                        CoreLocalMem<uint32_t>(block_start),
+                        MulticastEndpoint{},
+                        mcast_bytes,
+                        in0_num_receivers,
+                        {.offset_bytes = 0},
+                        {.noc_x_start = in0_mcast_nx_start,
+                         .noc_y_start = in0_mcast_ny_start,
+                         .noc_x_end = in0_mcast_nx_end,
+                         .noc_y_end = in0_mcast_ny_end,
+                         .addr = block_start},
+                        /*linked=*/true);
+                }
                 x_stage_obj.push_back(g_in0_block_num_tiles);
 
                 noc.async_writes_flushed();

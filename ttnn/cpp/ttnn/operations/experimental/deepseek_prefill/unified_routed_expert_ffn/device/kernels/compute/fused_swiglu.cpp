@@ -698,8 +698,7 @@ void kernel_main() {
     // the padding isn't confined to a single tail block, keeping correctness
     // for any dims (the reader still zero-fills those tiles).
     constexpr uint32_t d_K_down_tiles = get_compile_time_arg_val(34);
-    constexpr uint32_t d_last_block_w = (d_K_down_tiles > (d_num_blocks - 1) * d_in0_block_w &&
-                                         d_K_down_tiles - (d_num_blocks - 1) * d_in0_block_w <= d_in0_block_w)
+    constexpr uint32_t d_last_block_w = (d_K_down_tiles > (d_num_blocks - 1) * d_in0_block_w)
                                             ? d_K_down_tiles - (d_num_blocks - 1) * d_in0_block_w
                                             : d_in0_block_w;
 
