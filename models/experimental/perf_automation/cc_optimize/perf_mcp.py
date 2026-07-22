@@ -232,7 +232,24 @@ _KERNEL_LOG_PATH = Path(
     os.environ.get("PERF_MCP_KERNEL_LOG") or (Path(tempfile.gettempdir()) / "perf_mcp_kernel_attempts.json")
 )
 _MATERIAL_GAP_MS = float(os.environ.get("PERF_MCP_MATERIAL_GAP_MS", "0.25"))
+_MATERIAL_GAP_ENV_SET = "PERF_MCP_MATERIAL_GAP_MS" in os.environ
+_MATERIAL_GAP_FRAC = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FRAC", "0.03"))
+_MATERIAL_GAP_FLOOR = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FLOOR", "0.05"))
 _MAX_KNOB_RETRIES = int(os.environ.get("PERF_MCP_MAX_KNOB_RETRIES", "2"))
+
+
+def _material_gap_ms(device_ms: float) -> float:
+    """Smallest op gap worth optimizing, scale-relative to the workload's total device_ms.
+
+    A fixed 0.25ms threshold is right for a whole-model run (tens of ms, where 0.25ms is
+    noise) but wrong for per-module optimize (device_ms of a few ms), where real matmul
+    gaps of ~0.1-0.2ms — reachable by grid/dtype levers — fall under it and get discarded
+    as noise, so the op is never optimized. Scale to a fraction of total device_ms, clamped
+    to a small absolute floor and never exceeding the 0.25ms whole-model default (so large
+    runs are unchanged). An explicit PERF_MCP_MATERIAL_GAP_MS override is honored verbatim."""
+    if _MATERIAL_GAP_ENV_SET:
+        return _MATERIAL_GAP_MS
+    return min(_MATERIAL_GAP_MS, max(_MATERIAL_GAP_FLOOR, _MATERIAL_GAP_FRAC * float(device_ms or 0.0)))
 _TRACE_SAFE_HINT = (
     "custom generic_op/ttl kernels ARE trace-capturable on this build — verified on device: a "
     "cached-descriptor + persistent-buffer generic_op traces clean at PCC 1.0. A wedge or wrong-PCC-on-"
@@ -2019,7 +2036,7 @@ def _host_gate(prof: dict, blocking: list, attempts: list) -> dict | None:
             continue
         hms = round(float(b.get("device_ms") or 0.0), 4)
         src = (b.get("tags") or {}).get("source")
-        if hms < _MATERIAL_GAP_MS or src != "op_gap":
+        if hms < _material_gap_ms(prof.get("device_ms") or 0.0) or src != "op_gap":
             return None
         host_op = {
             "op_code": "host_overhead",
@@ -2122,9 +2139,10 @@ def termination_check() -> dict:
     at_floor = bool(rep.get("at_floor"))
     attempts = [a for a in _load_attempts() if a.get("kernel_detected_in_source")]
     blocking, cleared = [], []
+    material = _material_gap_ms(dev)
     for o in rep.get("open_ops") or []:
         gap = o.get("gap_ms") or 0.0
-        if gap < _MATERIAL_GAP_MS:
+        if gap < material:
             continue
         op_code = o.get("op_code") or o.get("bucket") or ""
         entry = {
@@ -2173,7 +2191,7 @@ def termination_check() -> dict:
         "device_ms": dev,
         "at_floor": at_floor,
         "residual_gap_ms": rep.get("residual_gap_ms"),
-        "material_gap_threshold_ms": _MATERIAL_GAP_MS,
+        "material_gap_threshold_ms": round(material, 4),
         "next_target": next_target,
         "blocking_ops": blocking,
         "cleared_ops": cleared,
