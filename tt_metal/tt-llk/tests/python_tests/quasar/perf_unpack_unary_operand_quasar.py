@@ -11,6 +11,7 @@ from quasar.test_unpack_unary_operand_quasar import (
     test_unpack_unary_operand_quasar as run_unpack_unary_operand,
 )
 
+
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
