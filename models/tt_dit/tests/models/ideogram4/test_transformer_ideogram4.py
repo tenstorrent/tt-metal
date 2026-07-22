@@ -434,9 +434,11 @@ def test_transformer_model(
     if weights == "real":
         state_dict = _real_transformer_sd(num_layers)
         _load = torch_model.load_state_dict(state_dict, strict=False)
-        # strict=False tolerates missing non-persistent buffers (e.g. rotary_emb), but UNEXPECTED
-        # keys mean a broken checkpoint key map — fail loudly rather than silently dropping weights.
+        # strict=False only to tolerate non-persistent buffers (e.g. rotary_emb) — those are NOT in
+        # state_dict, so a correct real load has BOTH missing and unexpected empty. Enforce both, so a
+        # broken checkpoint key map fails loudly rather than silently dropping weights to random init.
         assert not _load.unexpected_keys, f"unexpected checkpoint keys: {_load.unexpected_keys[:5]}"
+        assert not _load.missing_keys, f"missing checkpoint keys: {_load.missing_keys[:5]}"
     else:
         state_dict = torch_model.state_dict()  # random init
     torch_model.eval()

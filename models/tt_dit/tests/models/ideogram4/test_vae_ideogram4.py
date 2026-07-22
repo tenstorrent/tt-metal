@@ -50,7 +50,14 @@ def _make_akl(weights: str, torch_dtype) -> AutoencoderKL:
     )
     if weights == "real":
         vae_sd = load_file(f"{FP8}/vae/diffusion_pytorch_model.safetensors")  # diffusers layout, not fp8
-        akl.load_state_dict({k: v for k, v in vae_sd.items() if not k.startswith("bn.")}, strict=False)
+        # bn.* are checkpoint-only batchnorm running stats absent from diffusers AutoencoderKL.
+        incompat = akl.load_state_dict({k: v for k, v in vae_sd.items() if not k.startswith("bn.")}, strict=False)
+        # Prove the shipped weights actually landed; otherwise random init passes PCC without
+        # testing the real checkpoint. (Verified empty on the real load.)
+        assert not incompat.missing_keys and not incompat.unexpected_keys, (
+            f"real VAE load key mismatch: missing={incompat.missing_keys[:5]} "
+            f"unexpected={incompat.unexpected_keys[:5]}"
+        )
     return akl.to(torch_dtype).eval()
 
 

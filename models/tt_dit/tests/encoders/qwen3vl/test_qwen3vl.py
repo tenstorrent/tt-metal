@@ -51,7 +51,13 @@ def _reference_lm(weights: str):
     if weights == "real":
         sd = dequant_fp8_state_dict(load_file(f"{FP8}/text_encoder/model.safetensors"))
         sd = {k[len("language_model.") :]: v for k, v in sd.items() if k.startswith("language_model.")}
-        lm.load_state_dict(sd, strict=False)  # load the Ideogram-shipped (dequantized) weights
+        incompat = lm.load_state_dict(sd, strict=False)  # load the Ideogram-shipped (dequantized) weights
+        # Prove the shipped weights actually landed; otherwise both sides keep the same random init
+        # and PCC passes without testing the real checkpoint. (Verified empty on the real load.)
+        assert not incompat.missing_keys and not incompat.unexpected_keys, (
+            f"real Qwen3-VL load key mismatch: missing={incompat.missing_keys[:5]} "
+            f"unexpected={incompat.unexpected_keys[:5]}"
+        )
     return lm.eval()
 
 
