@@ -121,7 +121,7 @@ void kernel_main() {
                 /*num_blocks=*/Skt, /*total_input_pages=*/Skt * tt::constants::TILE_HEIGHT);
             // QK reads K (transposed -> srcA) and Q (srcB). Reconfigure both formats and the tiled descriptor
             // geometry/strides; mm_no_mop_init_short only programs the matmul MOP.
-            reconfig_data_format<false /* to_from_int8 */, true /* is_tile_dim_reconfig_en */>(cb_k_in, cb_q_in);
+            reconfig_data_format<SrcOrder::Regular, /*is_tile_dim_reconfig_en=*/true>(cb_k_in, cb_q_in);
             // K tilize also leaves the packer in cb_k_in's format+strides (bfp8 for fp8). Restore bf16 once per
             // chunk for the downstream packs (cb_qk_im/max/sum/out share its geometry); configure_pack_width in
             // the qg loop refreshes only the MOP. No-op for bf16.
