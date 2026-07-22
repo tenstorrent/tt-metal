@@ -14,7 +14,7 @@ This is COHERENCE+GROUND-TRUTH; no PCC (would need our logit vectors dumped from
 
 Standalone (no `test_` prefix → pytest skips it). CPU only, no ttnn. Run in the throwaway uv env:
   export HF_MODEL=/data/vmelnykov/MiniMax-M3-ref
-  uv run --no-project --with "transformers>=5.12" --with "torch" --python 3.10 \
+  uv run --no-project --with "transformers==5.14.1" --with "torch" --python 3.10 \
       python models/demos/minimax_m3/tests/golden_hf_first_token.py
 """
 

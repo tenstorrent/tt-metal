@@ -12,7 +12,7 @@ Because the code is so simple, it is very easy to hack to your needs, train new 
 ## install
 
 ```
-pip install torch numpy transformers datasets tiktoken wandb tqdm
+pip install torch numpy transformers==5.14.1 datasets tiktoken wandb tqdm
 ```
 
 Dependencies:

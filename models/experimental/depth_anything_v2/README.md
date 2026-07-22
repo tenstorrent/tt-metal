@@ -16,7 +16,7 @@ Depth Anything V2 is a state-of-the-art monocular depth estimation model built o
 - `tt-metal` environment installed
 - Python dependencies:
   ```bash
-  pip install torch transformers pillow
+  pip install torch transformers==5.14.1 pillow
   ```
 
 ## File Layout
