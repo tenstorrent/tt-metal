@@ -687,3 +687,16 @@ Pk=2 (chain already 1 hop) and narrow-N=512, and neutral-to-NEGATIVE on deep-K r
 per-sub-block RS overhead can regress +2.5-2.7%). => production must PICKER-GATE reduce-scatter to the
 exposed-reduction regime and keep it OFF deep-K. Raw per-relaunch samples committed in
 ab_rscatter_corpus_results.json.
+
+### [Internal production reduction strategy — reduce-scatter picker-gate] (commit 1eee35d311a)
+Reduce-scatter is now the INTERNAL (non-public) production reduction for the exposed-reduction win regime,
+selected on the mask-0/config=None path by a factory gate:
+  Pk>=4 && Kt<=64 (shallow-K) && Nt>=32 && N_sub>=2 && (M_block*N_sub)%Pk==0 && >=Pk && unfused && 1 chunk.
+This captures ALL 5 shallow-K corpus wins (64/128/256 x 2048 x 1024/2048; -5.4..-9.25%) with ZERO measured
+regressions; chain kept everywhere else (Pk<4, deep-K read-bound, narrow-N / N_sub<2). Output is PCC-
+preserving (>=0.999) but NOT bit-identical (reassociated K-sum) -> the corpus/PCC regressions still pass.
+DIAG_FORCE_CHAIN (1<<8) restores the pure chain for A/B tooling + the bit-identity diagnostics (which were
+updated to pin reduction=chain; fixed a PipelinedDrain baseline-sentinel segfault). All 7 RegimeADiag gtests
+pass. The gate is conservative: it leaves the fuzzy-boundary marginal wins (64x2048x1024 T=4 was a -5.4% win
+but shares geometry with the +1.9% 128x2048x512 loss; the widest deep-K 256x15360x1536 -3.45%) on the chain
+to guarantee no regression -- future work could refine the boundary or add a measured lookup.
