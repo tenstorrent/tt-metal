@@ -2001,6 +2001,13 @@ bool topology_sat_search(
             static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_CONFLICT_BUDGET", 1'000'000));
         const int kGroupDescentConflictBudget =
             static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_DESCENT_BUDGET", 20'000));
+        // Hard-cap full-packing LOCK budget. Default 0 == UNBOUNDED: when a strict hard cap is set we run the lock
+        // (all-or-nothing, warm from the descent) until it either proves the exact k_min packing SAT or proves it
+        // UNSAT -- never returning an over-cap best-effort result within a budget. The descent stays small
+        // (TT_TOPO_SAT_DESCENT_BUDGET) so we still hand the lock a warm solver quickly; only the final strict lock
+        // is unbounded. Overridable via TT_TOPO_SAT_LOCK_BUDGET (>0 to re-bound for A/B or CI safety).
+        const int kGroupLockConflictBudget =
+            static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_LOCK_BUDGET", 0));
         const bool profile = topology_sat_profile_enabled();
         if (profile) {
             const auto info = topology_sat_detect_ring_or_snake(graph_data);
@@ -2162,7 +2169,7 @@ bool topology_sat_search(
                     best_mapping,
                     best_k,
                     hard_cap_k,
-                    kGroupObjectiveConflictBudget,
+                    kGroupLockConflictBudget,  // strict: unbounded by default (run lock until k_min proven / UNSAT)
                     &hard_cap_met);
                 if (profile) {
                     log_info(
