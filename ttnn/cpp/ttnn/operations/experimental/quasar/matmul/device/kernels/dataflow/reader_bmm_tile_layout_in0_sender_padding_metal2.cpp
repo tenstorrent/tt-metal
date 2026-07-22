@@ -388,6 +388,39 @@ void kernel_main() {
                             in0_mcast_num_cores);
 #endif  // SKIP_MCAST
 
+#if defined(ARCH_QUASAR) && defined(IN0_SHARDED) && defined(SKIP_MCAST) && !defined(EXTRACT_SHARD_SUB_BLOCKS)
+                        // TEN-4746 / #48552: on this exact config the per-block body degenerates to a
+                        // BARE cb_in0.reserve_back(...) -> cb_in0.push_back(...) pair with NOTHING in
+                        // between, and Quasar HW traps on a bare CB pointer-update pair (it expects TDMA
+                        // activity between the two updates; symptom = "DM2 tripped an assert", waypoint
+                        // stalls right after RBD). All the usual intervening work is gated out here:
+                        //   - IN0_SHARDED: the borrowed shard is already resident, so there is no
+                        //     interleaved NOC read (#ifndef IN0_SHARDED block skipped), and
+                        //     EXTRACT_SHARD_SUB_BLOCKS is off on this path (shard_w == in0_block_w), so
+                        //     the sub-block self-read is skipped too;
+                        //   - SKIP_MCAST (mcast_in1): the in0 mcast/sem block is elided;
+                        //   - in0_last_ktile_w == 0 (K % 32 == 0): pad_last_ktile is skipped.
+                        // Break the bare pair with a real-but-harmless TDMA: a tiny (16B) NOC loopback
+                        // read FROM the resident shard block base INTO an off-shard scratch. This mirrors
+                        // the EXTRACT_SHARD_SUB_BLOCKS read idiom above. It reads (does not write) the
+                        // shard, and lands the bytes in a private scratch (dst addr != src addr, so it is
+                        // NOT the src==dst self-copy that the craq-sim can_post gate/HW would drop), so
+                        // the borrowed shard contents compute consumes are untouched. The kernel already
+                        // sets disable_dfb_implicit_sync_for_all, so the loopback read does not stall on
+                        // the DFB producer credit. Runs once per in0 block (each bare pair needs it).
+                        {
+                            static uint32_t ten4746_tdma_scratch[8] __attribute__((aligned(16)));
+                            UnicastEndpoint ten4746_ep;
+                            noc.async_read(
+                                ten4746_ep,
+                                CoreLocalMem<uint32_t>((uint32_t)ten4746_tdma_scratch),
+                                16,
+                                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = cb_in0.get_write_ptr()},
+                                {});
+                            noc.async_read_barrier();
+                        }
+#endif  // ARCH_QUASAR && IN0_SHARDED && SKIP_MCAST && !EXTRACT_SHARD_SUB_BLOCKS
+
                         // Common for sharded and interleaved paths
                         cb_in0.push_back(in0_block_num_tiles);
                     }

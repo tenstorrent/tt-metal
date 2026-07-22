@@ -6279,50 +6279,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         std::swap(start_core_noc, end_core_noc);
     }
 
-    // DEBUG (#48552): sliced-stem mcast_in0 in0-sender assert localization. Dumps the full mcast
-    // geometry for the 1D mcast_in0 path so the next e2e run confirms which value goes degenerate
-    // (num_cores / receiver_num_cores / num_dests / mcast rectangle) on the small sliced-stem matmul.
-    // Remove once the sliced-stem stem conv is confirmed healthy.
-    log_warning(
-        tt::LogOp,
-        "[QSR-MM-IN0 #48552] mcast_in0 geom: arch={} in0_is_sharded={} | tiles M={} N={} K={} | "
-        "per_core_M={} per_core_N={} in0_block_w={} in0_block_num_tiles={} in0_block_size_bytes={} | "
-        "grid=({}x{}) start_core=({},{}) | num_blocks_x={} num_blocks_y={} num_cores={} "
-        "num_cores_with_work={} | in0_mcast_receiver_num_cores={} in0_mcast_receiver_num_dests={} | "
-        "CTA in0_mcast_num_dests(=num_cores-1)={} CTA in0_mcast_num_cores(=recv_cores-1)={} | "
-        "bbox_logical=[({},{})..({},{})] mcast_rect_phys=[({},{})..({},{})] SKIP_MCAST={}",
-        (int)device->arch(),
-        in0_is_sharded,
-        M,
-        N,
-        K,
-        per_core_M,
-        per_core_N,
-        in0_block_w,
-        in0_block_num_tiles,
-        (uint32_t)(in0_block_num_tiles * in0_single_tile_size),
-        compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y,
-        start_core.x,
-        start_core.y,
-        num_blocks_x,
-        num_blocks_y,
-        num_cores,
-        num_cores_with_work,
-        in0_mcast_receiver_num_cores,
-        in0_mcast_receiver_num_dests,
-        (num_cores >= 1 ? num_cores - 1 : 0),
-        (in0_mcast_receiver_num_cores >= 1 ? in0_mcast_receiver_num_cores - 1 : 0),
-        top_left_core.x,
-        top_left_core.y,
-        bottom_right_core.x,
-        bottom_right_core.y,
-        start_core_noc.x,
-        start_core_noc.y,
-        end_core_noc.x,
-        end_core_noc.y,
-        (in0_mcast_receiver_num_cores == 1));
-
     m2::ProgramRunArgs run_args;
     m2::KernelRunArgs in0_sender_run_args{.kernel = RO_IN0_SENDER_KERNEL};
     m2::KernelRunArgs in0_no_work_in_recv_run_args{.kernel = RO_IN0_NO_WORK_IN_RECV_KERNEL};
@@ -7304,6 +7260,55 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     } else if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
     }
+
+    // DEBUG (#48552): sliced-stem Program-B assert localization on the 1D mcast_in1 path (mcast_in0=0).
+    // The in0 READER (reader_bmm_tile_layout_in0_sender_padding_metal2.cpp, SKIP_MCAST) is DM2 at fault.
+    // Dumps its full geometry so the next e2e run confirms the degenerate value. Suspect: per_core_M=14
+    // forces a single 14-M-tile in0 block (out_block_h==per_core_M to dodge the multi-M-block output-
+    // transpose bug; num_blocks==1 to dodge the K-spill accumulate) -> trailing-unpacker-pop / large
+    // single-block Quasar trap. Remove once the sliced stem conv is healthy.
+    log_warning(
+        tt::LogOp,
+        "[QSR-MM-IN1 #48552] mcast_in1 in0-reader geom: arch={} in0_is_sharded={} extract_shard_sub_blocks={} | "
+        "tiles M={} N={} K={} | per_core_M={} per_core_N={} | in0_block_w={} in0_block_h={} "
+        "in0_block_num_tiles(reader=w*h)={} in0_block_num_tiles(compute)={} in0_CB_tiles={} | "
+        "num_blocks_inner(K)={} num_blocks_h(M)={} num_blocks_w(N)={} | "
+        "in0_shard_h_tiles={} in0_shard_w_tiles={} in0_last_ktile_w={} in0_last_ktile_h={} | "
+        "grid=({}x{}) num_cores={} in1_mcast_receiver_num_cores={} in1_SKIP_MCAST={} | "
+        "bbox_logical=[({},{})..({},{})] in1_mcast_rect_phys=[({},{})..({},{})]",
+        (int)device->arch(),
+        in0_is_sharded,
+        extract_shard_sub_blocks,
+        M,
+        N,
+        K,
+        per_core_M,
+        per_core_N,
+        in0_block_w,
+        in0_block_h,
+        (uint32_t)(in0_block_w * in0_block_h),
+        in0_block_num_tiles,
+        in0_CB_tiles,
+        num_blocks,
+        out_num_blocks_y,
+        out_num_blocks_x,
+        in0_shard_height_in_tiles,
+        in0_shard_width_in_tiles,
+        (uint32_t)in0_last_ktile_w,
+        (uint32_t)in0_last_ktile_h,
+        compute_with_storage_grid_size.x,
+        compute_with_storage_grid_size.y,
+        num_cores,
+        in1_mcast_receiver_num_cores,
+        (in1_mcast_receiver_num_cores == 1),
+        top_left_core.x,
+        top_left_core.y,
+        bottom_right_core.x,
+        bottom_right_core.y,
+        start_core_noc.x,
+        start_core_noc.y,
+        end_core_noc.x,
+        end_core_noc.y);
 
     m2::ProgramRunArgs run_args;
     m2::KernelRunArgs in0_sender_run_args{.kernel = RO_IN0_SENDER_KERNEL};
