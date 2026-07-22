@@ -18,9 +18,9 @@ void kernel_main() {
     uint32_t remote_q_head_start_idx = get_arg_val<uint32_t>(3);
     uint32_t start_q_x = get_arg_val<uint32_t>(4);
     uint32_t start_q_y = get_arg_val<uint32_t>(5);
-    uint32_t q_base_addr = get_arg_val<uint32_t>(6);
-    uint32_t q_start_addr = get_arg_val<uint32_t>(7);
-    uint32_t q_offset = get_arg_val<uint32_t>(8);
+    uint32_t q_base_addr = get_arg_val<uint32_t>(6);      // clean buffer base (framework-patched binding)
+    uint32_t q_region_offset = get_arg_val<uint32_t>(7);  // byte offset of Q within the input shard (0)
+    uint32_t q_offset = get_arg_val<uint32_t>(8);         // L1 write offset (destination CB)
     constexpr uint32_t cb_id_q_out = get_compile_time_arg_val(0);
 
     bool read_kv_heads = get_arg_val<uint32_t>(9);
@@ -37,7 +37,10 @@ void kernel_main() {
     uint32_t remote_q_head_idx = remote_q_head_start_idx;
     uint32_t q_src_noc_x = in0_mcast_noc_x[q_x];
     uint32_t q_src_noc_y = in0_mcast_noc_y[q_y];
-    uint32_t q_src_addr = q_start_addr;
+    // Rebuild the source address from the clean buffer base + separately-passed offsets, rather than
+    // receiving a host-folded `base + offset` (which Metal 2.0 cannot deliver through a binding).
+    uint32_t q_region_base = q_base_addr + q_region_offset;
+    uint32_t q_src_addr = q_region_base + remote_q_head_start_idx * head_size;
     uint32_t q_write_addr = cb_q_out.get_write_ptr() + q_offset;
 
     for (uint32_t q = 0; q < num_q_heads; ++q) {
@@ -59,7 +62,7 @@ void kernel_main() {
                 q_y++;
                 q_src_noc_x = in0_mcast_noc_x[q_x];
                 q_src_noc_y = in0_mcast_noc_y[q_y];
-                q_src_addr = q_base_addr;
+                q_src_addr = q_region_base;
             }
         }
         noc.async_read_barrier();
@@ -71,8 +74,8 @@ void kernel_main() {
         uint32_t remote_kv_head_start_idx = get_arg_val<uint32_t>(12);
         uint32_t start_kv_x = get_arg_val<uint32_t>(13);
         uint32_t start_kv_y = get_arg_val<uint32_t>(14);
-        uint32_t kv_base_addr = get_arg_val<uint32_t>(15);
-        uint32_t kv_start_addr = get_arg_val<uint32_t>(16);
+        uint32_t kv_base_addr = get_arg_val<uint32_t>(15);      // clean buffer base (framework-patched binding)
+        uint32_t kv_region_offset = get_arg_val<uint32_t>(16);  // byte offset of K/V within the input shard
         uint32_t num_kv_tiles = get_arg_val<uint32_t>(17);
         constexpr uint32_t cb_id_kv_out = get_compile_time_arg_val(1);
 
@@ -83,7 +86,8 @@ void kernel_main() {
         uint32_t remote_kv_head_idx = remote_kv_head_start_idx;
         uint32_t kv_src_noc_x = in0_mcast_noc_x[kv_x];
         uint32_t kv_src_noc_y = in0_mcast_noc_y[kv_y];
-        uint32_t kv_src_addr = kv_start_addr;
+        uint32_t kv_region_base = kv_base_addr + kv_region_offset;
+        uint32_t kv_src_addr = kv_region_base + remote_kv_head_start_idx * head_size;
         cb_kv_out.reserve_back(num_kv_tiles);
         uint32_t kv_write_addr = cb_kv_out.get_write_ptr();
 
@@ -107,7 +111,7 @@ void kernel_main() {
                 }
                 kv_src_noc_x = in0_mcast_noc_x[kv_x];
                 kv_src_noc_y = in0_mcast_noc_y[kv_y];
-                kv_src_addr = kv_base_addr;
+                kv_src_addr = kv_region_base;
             }
             noc.async_read_barrier();
         }
