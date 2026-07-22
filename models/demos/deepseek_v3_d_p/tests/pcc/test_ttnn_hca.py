@@ -7,11 +7,12 @@ PCC tests for the DeepSeek-V4 Heavily Compressed Attention (HCA) components (pre
 
 Each component of the HCA layer (reference modeling_deepseek_v4.py, paper §2.3.2) is
 brought up and PCC-tested against its TTNN counterpart in stateless single-shot mode:
-  - compressor  (DeepseekV4HCACompressor -> TtHCACompressor): compressed KV + block bias
-  - query path  (DeepseekV4Attention L817-820 -> TtHCA._q_stem): q after norm + RoPE
-  - KV path     (DeepseekV4Attention L822-823 -> TtHCA._kv_stem): sliding_kv after norm + RoPE
+  - compressor     (DeepseekV4HCACompressor -> TtHCACompressor): compressed KV + block bias
+  - query path     (DeepseekV4Attention L817-820 -> TtHCA._q_stem): q after norm + RoPE
+  - KV path        (DeepseekV4Attention L822-823 -> TtHCA._kv_stem): sliding_kv after norm + RoPE
+  - attention core (DeepseekV4Attention L833/843/718-746/869 -> TtHCA._attention): SDPA + undo-RoPE
 
-The stem tests exercise TtHCA methods in isolation (development scaffolding, not the
+The stem/attention tests exercise TtHCA methods in isolation (development scaffolding, not the
 folder's class+forward idiom); remove them once the full TtHCA block forward is PCC-tested.
 """
 
@@ -26,6 +27,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
     DeepseekV4Attention,
     DeepseekV4HCACompressor,
     apply_rotary_pos_emb,
+    eager_attention_forward,
 )
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA, TtHCACompressor
@@ -41,6 +43,11 @@ _SHAPES = [
     (1, 300),
     (1, 4095),
     (2, 512),
+    # non-tile-aligned Sk cases (probe the SDPA Sk-padding path): 130/260 small, 4097 large
+    # (S+T=4129 -> 31 pad columns) — proves it's pad COUNT vs the ~128 window, not dim size.
+    (1, 130),
+    (1, 260),
+    (1, 4097),
 ]
 _SHAPE_IDS = [
     "b1-seq128",
@@ -52,6 +59,9 @@ _SHAPE_IDS = [
     "b1-seq300-unaligned",
     "b1-seq4095-unaligned",
     "b2-seq512",
+    "b1-seq130-unaligned",
+    "b1-seq260-unaligned",
+    "b1-seq4097-unaligned",
 ]
 
 
@@ -67,31 +77,7 @@ def _flash_config(num_hidden_layers=4):
     )
 
 
-@pytest.mark.parametrize(
-    "batch, seq_len",
-    [
-        (1, 128),
-        (1, 256),
-        (1, 512),
-        (1, 1024),
-        (1, 2048),
-        (1, 4096),
-        (1, 300),
-        (1, 4095),
-        (2, 512),
-    ],
-    ids=[
-        "b1-seq128",
-        "b1-seq256",
-        "b1-seq512",
-        "b1-seq1k",
-        "b1-seq2k",
-        "b1-seq4k",
-        "b1-seq300-unaligned",
-        "b1-seq4095-unaligned",
-        "b2-seq512",
-    ],
-)
+@pytest.mark.parametrize("batch, seq_len", _SHAPES, ids=_SHAPE_IDS)
 def test_hca_compressor(device, batch, seq_len):
     """
     Test TtHCACompressor PCC against DeepseekV4HCACompressor reference.
@@ -278,5 +264,79 @@ def test_hca_kv_path(device, batch, seq_len):
     pcc_passed, pcc_message = assert_with_pcc(kv_ref.to(torch.float32), kv_out.to(torch.float32), pcc=0.99)
     logger.debug(f"KV path PCC: {pcc_message}")
     assert pcc_passed, f"HCA KV path PCC test failed: {pcc_message}"
+
+    logger.debug("PCC test passed!")
+
+
+@pytest.mark.parametrize("batch, seq_len", _SHAPES, ids=_SHAPE_IDS)
+def test_hca_attention(device, batch, seq_len):
+    """
+    Test TtHCA._attention PCC against the DeepseekV4Attention core (L833/843/718-746/869):
+    cat(sliding_kv, compressed_kv) -> SDPA(sliding-window + block_bias mask, per-head sink)
+    -> undo-RoPE. Output q [B, num_heads, S, head_dim].
+
+    Inputs (q / sliding_kv / compressed_kv / block_bias) are produced by the torch
+    reference stems + compressor and fed identically to both sides, isolating the core.
+
+    NOTE: development scaffolding — exercises a TtHCA method in isolation (not the
+    folder's class+forward idiom). Remove once the full TtHCA block forward is PCC-tested.
+    """
+    torch.manual_seed(42)
+    config = _flash_config()
+    nh, hd = config.num_attention_heads, config.head_dim
+    logger.debug(f"batch={batch}, seq_len={seq_len}, heads={nh}, head_dim={hd}, sw={config.sliding_window}")
+
+    ref = DeepseekV4Attention(config, layer_idx=0).eval()
+    assert ref.compressor is not None, "layer_idx=0 must be a heavily_compressed_attention layer"
+    with torch.no_grad():
+        ref.q_a_norm.weight.uniform_(0.5, 1.5)
+        ref.kv_norm.weight.uniform_(0.5, 1.5)
+        ref.sinks.normal_(0.0, 1.0)
+        ref.compressor.position_bias.normal_(0.0, 0.02)
+        ref.compressor.kv_norm.weight.uniform_(0.5, 1.5)
+
+    hidden = torch.randn(batch, seq_len, config.hidden_size)
+    position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1)
+
+    logger.debug("Running torch reference attention core")
+    with torch.no_grad():
+        cos, sin = ref.compressor.rotary_emb(hidden, position_ids=position_ids, layer_type="compress")
+        q_res = ref.q_a_norm(ref.q_a_proj(hidden))
+        q = ref.q_b_norm(ref.q_b_proj(q_res).view(batch, seq_len, nh, hd).transpose(1, 2))
+        q = apply_rotary_pos_emb(q, cos, sin)
+        sliding_kv = apply_rotary_pos_emb(
+            ref.kv_norm(ref.kv_proj(hidden)).view(batch, seq_len, -1, hd).transpose(1, 2), cos, sin
+        )
+        compressed_kv, block_bias = ref.compressor(hidden, q_res, position_ids, None, 0)
+        kv_cat = torch.cat([sliding_kv, compressed_kv], dim=2)
+
+        i = torch.arange(seq_len).view(seq_len, 1)
+        j = torch.arange(seq_len).view(1, seq_len)
+        allowed = (j <= i) & (i - j < config.sliding_window)
+        main = torch.zeros(seq_len, seq_len).masked_fill(~allowed, float("-inf"))
+        mask = torch.cat([main.view(1, 1, seq_len, seq_len).expand(batch, 1, seq_len, seq_len), block_bias], dim=-1)
+
+        attn_out, _ = eager_attention_forward(ref, q, kv_cat, kv_cat, mask, ref.scaling)
+        attn_out = apply_rotary_pos_emb(attn_out.transpose(1, 2), cos, -sin).transpose(1, 2)
+        attn_ref = attn_out.transpose(1, 2)  # [B, num_heads, S, head_dim]
+    logger.debug(f"Reference attn output shape: {tuple(attn_ref.shape)}")
+
+    tt_model = TtHCA.from_reference(device, ref, config)
+
+    def _to_tt(x):
+        return ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    logger.debug("Running ttnn attention core")
+    signpost("HCA_START")
+    out_tt = tt_model._attention(_to_tt(q), _to_tt(sliding_kv), _to_tt(compressed_kv), block_bias, position_ids)
+    signpost("HCA_END")
+    out = ttnn.to_torch(out_tt)
+    logger.debug(f"TTNN attn output shape: {tuple(out.shape)}")
+
+    assert out.shape == attn_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(attn_ref.shape)}"
+
+    pcc_passed, pcc_message = assert_with_pcc(attn_ref.to(torch.float32), out.to(torch.float32), pcc=0.99)
+    logger.debug(f"attention core PCC: {pcc_message}")
+    assert pcc_passed, f"HCA attention core PCC test failed: {pcc_message}"
 
     logger.debug("PCC test passed!")
