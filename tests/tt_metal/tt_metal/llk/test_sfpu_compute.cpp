@@ -73,6 +73,12 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"mul_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); mul_unary_tile(0, 0x40000000u);"}}},  // 2.0f
     {"square", {{"SFPU_OP_CHAIN_0", "square_tile_init(); square_tile(0);"}}},
     {"negative", {{"SFPU_OP_CHAIN_0", "negative_tile_init(); negative_tile(0);"}}},
+    // The beta / threshold literals baked into this chain must stay in sync with the golden in
+    // sfpu_function().
+    //   softplus: beta = 1.0, 1/beta = 1.0, threshold = 20.0 as fp32 bit patterns (decoded via
+    //             Converter::as_float on every arch).
+    {"softplus",
+     {{"SFPU_OP_CHAIN_0", "softplus_tile_init(); softplus_tile(0, 0x3F800000u, 0x3F800000u, 0x41A00000u);"}}},
     // Comparison-to-zero family (unary): result = 1.0f if predicate(x, 0) else 0.0f.
     {"eqz", {{"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile(0);"}}},
     {"nez", {{"SFPU_OP_CHAIN_0", "nez_tile_init(); nez_tile(0);"}}},
@@ -172,6 +178,11 @@ float sfpu_function(const std::string& op_name, float input) {
     }
     if (op_name == "negative") {
         return -input;
+    }
+    if (op_name == "softplus") {
+        // beta = 1, threshold = 20 (matches the "softplus" SFPU_OP_CHAIN_0 above). Numerically stable:
+        // above the threshold softplus collapses to the identity, elsewhere use log1p(exp(x)).
+        return (input > 20.0f) ? input : std::log1p(std::exp(input));
     }
     if (op_name == "eqz") {
         return bfloat16(static_cast<float>(input) == 0.0f ? 1.0f : 0.0f);
@@ -286,6 +297,10 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         auto possible_values = vector<bfloat16>({-1.0f, -0.5f, 0.0f, 0.5f, 1.0f});
         return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
     }
+    if (op_name == "softplus") {
+        // Wide range: exercises the near-linear region, the polynomial region, and the a > 5 tail.
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-8.0f, 8.0f, numel, seed);
+    }
     return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
 }
 
@@ -358,6 +373,11 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name) {
     }
     if (op_name == "log") {
         return {0.03f, 0.02f};
+    }
+    if (op_name == "softplus") {
+        // Polynomial approximation; the bf16-Dest path also clamps the residual to 0 past a=5, so the
+        // absolute error can reach ~exp(-5) = 0.0067 for large-magnitude inputs. atol covers that.
+        return {0.06f, 0.02f};
     }
     return {0.06f, 0.006f};
 }
@@ -878,6 +898,7 @@ bool run_sfpu_all_same_buffer(
     sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_SOFTPLUS_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
@@ -1559,6 +1580,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "square"),
         std::make_tuple(1, "negative"),
         std::make_tuple(4, "negative"),
+        std::make_tuple(1, "softplus"),
+        std::make_tuple(4, "softplus"),
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
@@ -1684,6 +1707,8 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         std::make_tuple(1, "negative"),
         std::make_tuple(4, "negative"),
+        std::make_tuple(1, "softplus"),
+        std::make_tuple(4, "softplus"),
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),

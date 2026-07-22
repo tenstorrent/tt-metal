@@ -344,6 +344,14 @@ def prepare_inputs_for_operation(
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Softplus:
+        # Span both signs and past the linear threshold (20) so the kernel's polynomial region, the
+        # negative saturation region, and the linear passthrough (t > threshold -> softplus ~= x) are
+        # all covered (mirrors sfpu_domains' Softplus spec).
+        min_val = -5.0
+        max_val = 30.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
     # else: keep src_A as-is
 
     return src_A
@@ -590,6 +598,7 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Sigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
 ] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_OPS]
 
