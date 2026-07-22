@@ -1,5 +1,19 @@
 # LTX/FLUX Mt≤8 cumulative optimization campaign
 
+## ⭐ CURRENT STATUS (2026-07-22) — SUPERSEDES earlier "practical limit" / "diagnostic-only" / stale-number claims
+This log is CUMULATIVE and append-only; several EARLY sections are now HISTORICAL and explicitly superseded:
+- "corpus at its PRACTICAL LIMIT / optimization EXHAUSTED" (deep-phase outcome) — SUPERSEDED. Ring
+  **reduce-scatter** split-K reduction was subsequently found + shipped as an internal production reduction.
+- "reduce-scatter is diagnostic-only" — SUPERSEDED. It is now the PRODUCTION reduction (mask 0) for the
+  gate-selected shapes (see the "Internal production reduction strategy" section near the end).
+- "in0-ring compute-wait 4.9us" and per-instance "Z_C_IN0WAIT 0.01us" — SUPERSEDED by the corrected
+  per-ITERATION zone aggregation (Z_C_IN0WAIT ~0.11us median; in0 ring is NOT compute-exposed; the exposed
+  tail is the reduction root Z_P2_RECVWAIT ~6us). The reduce-scatter win distributes that root tail.
+CURRENT bottom line: reduce-scatter is a shape-SELECTIVE production win (5 shallow-K shapes, -5.4..-9.25%,
+zero regression), gated by an internal reduction-topology selector; chain elsewhere; PCC-preserving (not
+bit-identical). Details in the "Internal production reduction strategy" section. Everything below this banner
+is chronological history.
+
 Branch: `cglagovich/regime-a-ltxflux-opt` (based on single-chip head `323ae42b161`; AGMM excluded).
 Production path only: `config=None`, mask 0, BF16 in/out, FP32 acc, HiFi2. Random-operand PCC≥0.999 +
 fresh/cached correctness required for every adopted change. Skip-work ablations are causal evidence only.
@@ -591,11 +605,14 @@ per-core medians (tools/mm_sweep/rscatter_ring_zones.py):
 | Z_P2_OUTWAIT | 0.76 | | wait compute to produce reduced block |
 | Z_P2_OUTWRITE | 0.99 | (16 root cores) | root output DRAM write |
 
-**Findings (evidence, corrects the earlier claim):**
-1. At this config the **in0 ring is NOT exposed to compute — Z_C_IN0WAIT ~= 0.01us**, not the "4.9us in0-ring
-   compute-wait" the earlier deep-phase reported (that was whole-phase Z_RING ~11.5us duration, which OVERLAPS
-   compute/in1, not exposed wall). The ring INJECT (own DRAM read, 3.92us) dominates the ring internally but
-   is hidden. If the ring ever becomes exposed, the lever is the own-shard read, NOT forwarding (0.06us).
+**Findings (evidence, corrects the earlier claim).** NOTE: the per-INSTANCE Z_C_IN0WAIT 0.01us below was
+re-derived with the corrected per-ITERATION aggregation (zone-fix section above) to ~0.11us median — still
+~0, so the conclusion (in0 ring NOT compute-exposed) is UNCHANGED; only the tiny number moved.
+1. At this config the **in0 ring is NOT exposed to compute — Z_C_IN0WAIT ~0.01us per-instance / ~0.11us
+   per-iteration**, not the "4.9us in0-ring compute-wait" the earlier deep-phase reported (that was whole-phase
+   Z_RING ~11.5us duration, which OVERLAPS compute/in1, not exposed wall). The ring INJECT (own DRAM read,
+   3.92us) dominates the ring internally but is hidden. If the ring ever becomes exposed, the lever is the
+   own-shard read, NOT forwarding.
 2. The dominant EXPOSED tail is the split-K root reduction receive-wait **Z_P2_RECVWAIT ~6us** (up to 10us on
    the slowest root) — precisely what ring reduce-scatter distributes across the Pk cores. This is measured
    corroboration (not just plausibility) for the -9% reduce-scatter win: the chain's single-root tail was the
@@ -688,15 +705,32 @@ per-sub-block RS overhead can regress +2.5-2.7%). => production must PICKER-GATE
 exposed-reduction regime and keep it OFF deep-K. Raw per-relaunch samples committed in
 ab_rscatter_corpus_results.json.
 
-### [Internal production reduction strategy — reduce-scatter picker-gate] (commit 1eee35d311a)
-Reduce-scatter is now the INTERNAL (non-public) production reduction for the exposed-reduction win regime,
-selected on the mask-0/config=None path by a factory gate:
+### [Internal production reduction strategy — reduce-scatter picker-gate] (commits 1eee35d311a, 916fc975af6)
+Reduce-scatter is now the INTERNAL production split-K reduction (NOT diagnostic-only) for the exposed-reduction
+win regime. The reduction TOPOLOGY is an internal algorithm choice, NOT part of the config contract: the gate
+is evaluated on the resolved (Mt,Kt,Nt,cfg) and fires for **ANY** config satisfying the predicate — auto
+(config=None) OR manually supplied (the factory cannot distinguish them). Gate:
   Pk>=4 && Kt<=64 (shallow-K) && Nt>=32 && N_sub>=2 && (M_block*N_sub)%Pk==0 && >=Pk && unfused && 1 chunk.
-This captures ALL 5 shallow-K corpus wins (64/128/256 x 2048 x 1024/2048; -5.4..-9.25%) with ZERO measured
-regressions; chain kept everywhere else (Pk<4, deep-K read-bound, narrow-N / N_sub<2). Output is PCC-
-preserving (>=0.999) but NOT bit-identical (reassociated K-sum) -> the corpus/PCC regressions still pass.
-DIAG_FORCE_CHAIN (1<<8) restores the pure chain for A/B tooling + the bit-identity diagnostics (which were
-updated to pin reduction=chain; fixed a PipelinedDrain baseline-sentinel segfault). All 7 RegimeADiag gtests
-pass. The gate is conservative: it leaves the fuzzy-boundary marginal wins (64x2048x1024 T=4 was a -5.4% win
-but shares geometry with the +1.9% 128x2048x512 loss; the widest deep-K 256x15360x1536 -3.45%) on the chain
-to guarantee no regression -- future work could refine the boundary or add a measured lookup.
+It captures **all 5 shallow-K corpus wins, INCLUDING 64x2048x1024** (cfg (2,4,1,2,2): Pk4,Kt64,Nt32,N_sub2,
+T=4 -> gate FIRES): 64/128/256 x 2048 x {1024,2048}, -5.4..-9.25%, ZERO measured regressions. Chain kept
+everywhere else. The two shallow-K NON-wins are excluded by the WIDTH terms (not by T): 128x2048x512 by
+Nt>=32 (Nt=16), 128x2048x1536 by N_sub>=2 (N_sub=1). The only measured WIN left on the chain is the deep-K
+256x15360x1536 (-3.45%), excluded by Kt<=64 to keep the whole deep-K band (which has +2.5/+2.7% regressions)
+off reduce-scatter. Output is PCC-preserving (>=0.999) but NOT bit-identical (reassociated K-sum) -> the
+corpus/PCC regressions still pass. DIAG_FORCE_CHAIN (1<<8) restores the pure chain for A/B tooling + the
+bit-identity diagnostics (updated to pin reduction=chain; fixed a PipelinedDrain baseline-sentinel segfault).
+**Validation:** all 7 RegimeADiag gtests pass; final mask-0 regression 111/111 + 60/60; production path (mask
+0) confirmed on all 5 winners vs FORCE_CHAIN (see rs_prod_confirm_results.json). Future work: refine the T=4
+boundary (64x2048x1024 wins at T=4 but 128x2048x512 loses -> the discriminator is width, already encoded) or
+add a measured lookup for the deep-K -3.45% shape.
+
+**Production-path confirmation (mask 0 vs DIAG_FORCE_CHAIN, all 5 gate winners, 8 relaunches each,
+rs_prod_confirm.py -> rs_prod_confirm_results.json):** the gate selects reduce-scatter on EXACTLY the intended
+5 shapes, and the deployed default (mask 0) is faster than the forced chain on every one:
+| shape | cfg (Ns,Pk,Sm,kb,nsb) | chain(FORCE_CHAIN) us | prod(mask 0) us | prod vs chain |
+|---|---|---|---|---|
+| 64x2048x1024 | (2,4,1,2,2) | 12.86 | 12.20 | -5.16% |
+| 128x2048x1024 | (1,4,2,2,4) | 16.12 | 15.09 | -6.38% |
+| 128x2048x2048 | (3,4,1,2,3) | 27.16 | 24.64 | -9.26% |
+| 256x2048x1024 | (1,4,2,2,4) | 22.42 | 20.47 | -8.67% |
+| 256x2048x2048 | (1,4,3,2,4) | 37.64 | 34.61 | -8.05% |

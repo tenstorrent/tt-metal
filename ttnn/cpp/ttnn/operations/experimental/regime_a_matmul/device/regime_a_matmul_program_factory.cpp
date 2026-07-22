@@ -107,12 +107,34 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const uint32_t n_chunks = static_cast<uint32_t>(chunks);
     const uint32_t out_ntc = Nt_r / n_chunks;  // per-chunk N tiles (validated divisible + tile-aligned)
 
-    // Test-only diagnostic ablations: mask 0 (public path) => all three define maps are EMPTY, so the
-    // compile is byte-identical to production. Each DIAG_* define is scoped to the kernel(s) that #ifdef it.
+    // Test-only diagnostic ablations. mask 0 adds NO *DIAG_* define; each DIAG_* define is scoped to the
+    // kernel(s) that #ifdef it. NOTE: mask 0 is no longer unconditionally byte-identical to a chain build —
+    // the internal production reduction strategy below sets the RSCATTER define (reduce-scatter) for the
+    // gate-selected shapes even at mask 0. Non-gated shapes at mask 0 remain the byte-identical chain compile.
     const uint32_t diag = operation_attributes.diag_mask;
     std::map<std::string, std::string> rdefs;  // in1 reader
     std::map<std::string, std::string> wdefs;  // in0 ring/reduce writer
     std::map<std::string, std::string> ddefs;  // compute (added to cdefs below)
+
+    // ---- Internal production reduction strategy (non-public; NOT a diag mask). ----
+    // The split-K reduction TOPOLOGY (chain vs reduce-scatter) is an INTERNAL ALGORITHM CHOICE, not part of the
+    // config contract: this gate is evaluated on the RESOLVED (Mt,Kt,Nt,cfg) and therefore fires for ANY config
+    // satisfying the predicate below, whether auto-selected (config=None) OR manually supplied — the factory
+    // cannot (and need not) distinguish them. Select ring REDUCE-SCATTER (vs the linear chain) on the exposed-
+    // reduction WIN regime measured across the corpus: shallow-K (Kt<=64), Pk>=4, adequate per-core output width
+    // (Nt>=32 and N_sub>=2), and each output sub-block tile-partitionable into Pk chunks (T=M_block*N_sub,
+    // T%Pk==0, T>=Pk). There it is a measured 5-9% win with ZERO regressions; the chain is kept everywhere else
+    // (Pk<4 = chain already ~1 hop; deep-K = read-bound, reduction hidden, RS can regress; narrow-N / N_sub<2 =
+    // no exposed tail). Unfused + single output chunk only (reduce-scatter v1). DIAG_FORCE_CHAIN forces the
+    // chain (A/B + bit-identity baselines). Output is PCC-preserving (>=0.999) but NOT bit-identical (reassoc).
+    const uint32_t rs_T = geo.M_block_capacity * geo.N_sub;
+    const bool rs_gate = (Pk >= 4u) && (Kt_r <= 64u) && (Nt_r >= 32u) && (geo.N_sub >= 2u) && (rs_T % Pk == 0u) &&
+                         (rs_T >= Pk) && !has_bias && !has_ternary && !has_activation && (n_chunks == 1u);
+    // The production gate yields to any explicit reduction diagnostic (force-chain / tree / no-reduce) so those
+    // A/B baselines are the pure chain and never set conflicting kernel defines. DIAG_RSCATTER always wins.
+    const bool reduction_diag =
+        (diag & (RegimeADiag::DIAG_FORCE_CHAIN | RegimeADiag::DIAG_REDTREE | RegimeADiag::DIAG_NO_REDUCE)) != 0u;
+    const bool rscatter = ((diag & RegimeADiag::DIAG_RSCATTER) != 0u) || (rs_gate && !reduction_diag);
     if (diag & RegimeADiag::DIAG_FWD_FLUSH_FIRST) {
         rdefs["DIAG_FWD_FLUSH_FIRST"] = "1";  // A/B baseline: OLD per-block flush-before-signal in1 forward
     }
@@ -136,11 +158,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         wdefs["REDTREE"] = "1";
         ddefs["REDTREE"] = "1";
     }
-    if (diag & RegimeADiag::DIAG_RSCATTER) {  // test-only: ring reduce-scatter over the Pk cores (tile-partition)
-        const uint32_t rs_T = geo.M_block_capacity * geo.N_sub;  // tiles in one output SUB-block
+    if (rscatter) {  // ring reduce-scatter (production gate OR explicit DIAG_RSCATTER); tile-partition over Pk
+        // Feasibility (guaranteed by rs_gate on the production path; asserted for an explicit DIAG_RSCATTER).
         TT_FATAL(
             Pk > 1u && rs_T % Pk == 0u && rs_T >= Pk,
-            "DIAG_RSCATTER requires Pk>1 and each output sub-block (M_block*N_sub={}) divisible by Pk={} and "
+            "reduce-scatter requires Pk>1 and each output sub-block (M_block*N_sub={}) divisible by Pk={} and "
             ">= Pk (tile-partitionable into Pk chunks); got M_block={} N_sub={} N_bpc={} (each of the N_bpc "
             "sub-blocks runs its own reduce-scatter)",
             rs_T,
@@ -524,29 +546,34 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     }
 
     // ---- DIAG_RSCATTER: assign the ring reduce-scatter cyclic order over each group's Pk cores. ----
-    // For each (bank b, within-bank sub) group, order the Pk k-slice cores into a Hamiltonian CYCLE with small
-    // NoC hops (a poor wraparound edge would serialize the whole ring). Pk==4 keeps the exact min-(maxedge,tot)
-    // 3!-search; Pk>4 uses a greedy nearest-neighbour cycle over physical worker-coord Manhattan distance
-    // (P! is infeasible). rs_pos = cycle position; rs_next/prev_idx = cyclic neighbours; rs_own_chunk =
-    // (rs_pos+1)%Pk (the tile-chunk this core finally owns + writes). Mutates only rs_* fields.
-    if (diag & RegimeADiag::DIAG_RSCATTER) {
+    // For each (bank b, within-bank sub) group, order the Pk k-slice cores into a Hamiltonian CYCLE minimizing
+    // the worst DIRECTED NoC hop (a poor wraparound edge would serialize the whole ring). The edge cost a->b
+    // is the SENDER a's send on ITS writer NoC (noc==0 -> writer NOC1; noc==1 -> writer NOC0), measured with
+    // get_worker_noc_hop_distance (logical->physical + directed torus routing) — asymmetric, unlike a coord
+    // proxy, and correct because each core forwards on its own writer NoC. Pk==4 keeps the exact
+    // min-(maxedge,total) 3!-search; Pk>4 uses greedy nearest-neighbour (P! infeasible). rs_pos = cycle
+    // position; rs_next/prev_idx = cyclic neighbours; rs_own_chunk = (rs_pos+1)%Pk. Mutates only rs_* fields.
+    if (rscatter) {
+        namespace expdev = tt::tt_metal::experimental::Device;
         const uint32_t mfac = geo.mfac;
         const uint32_t preaders = geo.preaders;
-        auto phys_xy = [&](uint32_t idx) {
-            const auto& c = P.cores[idx].coord;
-            auto w = device->worker_core_from_logical_core(CoreCoord{c.x, c.y});
-            return std::pair<int, int>{static_cast<int>(w.x), static_cast<int>(w.y)};
-        };
         for (uint32_t b = 0; b < 8u; ++b) {
             for (uint32_t sub = 0; sub < mfac; ++sub) {
                 std::vector<uint32_t> idx(Pk);
-                std::vector<std::pair<int, int>> xy(Pk);
                 for (uint32_t kk = 0; kk < Pk; ++kk) {
                     idx[kk] = b * preaders + kk * mfac + sub;
-                    xy[kk] = phys_xy(idx[kk]);
                 }
-                auto dist = [&](uint32_t a, uint32_t c) {
-                    return std::abs(xy[a].first - xy[c].first) + std::abs(xy[a].second - xy[c].second);
+                auto lc = [&](uint32_t li) {
+                    const auto& c = P.cores[idx[li]].coord;
+                    return CoreCoord{c.x, c.y};
+                };
+                // directed edge a->b cost = hops on the SENDER a's writer NoC (opposite the reader's).
+                auto dist = [&](uint32_t a, uint32_t c) -> uint32_t {
+                    if (a == c) {
+                        return 0u;
+                    }
+                    const NOC wnoc = (P.cores[idx[a]].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
+                    return expdev::get_worker_noc_hop_distance(device, lc(a), lc(c), wnoc);
                 };
                 std::vector<uint32_t> ord(Pk);
                 if (Pk == 4u) {
@@ -662,7 +689,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // bf16, EXACTLY double-buffered (2 x chunk_tiles, chunk_tiles = M_block*N_sub / Pk) so the FIFO period is
     // 2 and matches the writer's fixed recv-slot offset (t%2) for the remote chunk writes. Reuse c_4/c_5
     // (bias/residual CBs in fused builds; unused on the unfused reduce-scatter compile). c_7 unused here.
-    if (diag & RegimeADiag::DIAG_RSCATTER) {
+    if (rscatter) {
         const uint32_t rs_chunk = (geo.M_block_capacity * geo.N_sub) / Pk;
         mkcb(program, all_cores, 4, 2u * rs_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
         mkcb(program, all_cores, 5, 2u * rs_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
@@ -890,7 +917,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         }
         // DIAG_RSCATTER ring reduce-scatter args (index 17+; unfused only). next/prev = my cyclic neighbours
         // in the optimized Pk ring; owned_row = the block M-row this core finally writes to DRAM.
-        if (diag & RegimeADiag::DIAG_RSCATTER) {
+        if (rscatter) {
             auto rn = phys(cp.rs_next_idx);
             auto rp = phys(cp.rs_prev_idx);
             wa.push_back(rn.x);                                     // 17 next core x
@@ -915,7 +942,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         }
         // DIAG_RSCATTER (never combined with fusion): compute reads ring position + P + chunk_tiles after
         // is_reduce_bottom.
-        if (diag & RegimeADiag::DIAG_RSCATTER) {
+        if (rscatter) {
             ca.push_back(cp.rs_pos);
             ca.push_back(Pk);
             ca.push_back((geo.M_block_capacity * geo.N_sub) / Pk);
