@@ -107,6 +107,53 @@ def _logical_ring_route_diagnostics(mesh_device, fabric_config, neighbor_unicast
     return f"explicit_path={str(explicit_path).lower()} route_variants=[{variants}]"
 
 
+def _direct_ring_connection_plan(mesh_device, num_links=2):
+    """Resolve every logical ring edge to its physical direction and ERISC channels."""
+    direction_names = ("E", "W", "N", "S", "Z")
+    ring_size = mesh_device.shape[0]
+    assert tuple(mesh_device.shape) == (ring_size, 1)
+    plan = []
+    for source in range(ring_size):
+        src_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(source, 0))
+        for step, logical_direction in ((1, "forward"), (-1, "backward")):
+            neighbor = (source + step) % ring_size
+            dst_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(neighbor, 0))
+            direction = ttnn.get_eth_forwarding_direction(src_node, dst_node)
+            assert direction is not None
+            channels = []
+            for link in range(num_links):
+                # A fresh descriptor keeps the diagnostic independent of the
+                # per-core semaphore limit. The first worker RT arg is the
+                # resolved physical Ethernet channel.
+                descriptor = ttnn.ProgramDescriptor()
+                connection_args = ttnn.setup_fabric_connection(
+                    src_node, dst_node, link, descriptor, ttnn.CoreCoord(0, 0)
+                )
+                channels.append(connection_args[0])
+            plan.append((source, logical_direction, neighbor, direction_names[direction], tuple(channels)))
+    return plan
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": _fabric_router_config(),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": 512,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(8, 1)], indirect=True)
+def test_all_gather_fabric_2d_direct_ring_connection_plan(mesh_device):
+    plan = _direct_ring_connection_plan(mesh_device)
+    assert len(plan) == 2 * mesh_device.shape[0]
+    assert all(len(set(channels)) == 2 for _, _, _, _, channels in plan)
+    print("AG_DIRECT_RING_CONNECTIONS " + " ".join(str(edge) for edge in plan))
+
+
 def _all_worker_cores(mesh_device):
     grid = mesh_device.compute_with_storage_grid_size()
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
@@ -683,6 +730,124 @@ def test_all_gather_matched_large_single_axis_correctness(mesh_device, dtype, wi
                 f"mismatched_elements={mismatch.sum().item()} first={first_mismatch} "
                 f"actual={first_actual} expected={first_expected} candidate_rows={candidate_rows} rows={mismatch_rows}"
             )
+
+
+def _make_matched_two_rank_line_tensors(mesh_device, dtype, width):
+    rows_per_device = 65536
+    global_shape = (1, 1, 2 * rows_per_device, width)
+    torch.manual_seed(0)
+    host_dtype = torch.float32 if dtype == ttnn.fp8_e4m3 else torch.bfloat16
+    torch_input = torch.rand(global_shape, dtype=host_dtype)
+    tt_input = _make_row_major_mesh_tensor(
+        mesh_device,
+        torch_input,
+        dtype,
+        ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=tuple(mesh_device.shape)),
+    )
+    persistent_output = _make_row_major_mesh_tensor(
+        mesh_device,
+        torch.zeros(global_shape, dtype=host_dtype),
+        dtype,
+        ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    return rows_per_device, torch_input, tt_input, persistent_output
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    _MATCHED_RING_DEVICE_PARAMS,
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize(
+    "dtype,width",
+    [
+        pytest.param(ttnn.bfloat16, 576, id="bf16_1152b_rows"),
+        pytest.param(ttnn.fp8_e4m3, 656, id="scaled_fp8_704b_rows"),
+    ],
+)
+def test_all_gather_matched_two_rank_line_correctness(mesh_device, dtype, width):
+    """Exercise terminal one-hop traffic without a store-and-forward relay iteration."""
+    _, torch_input, tt_input, persistent_output = _make_matched_two_rank_line_tensors(mesh_device, dtype, width)
+    tt_output = ttnn.all_gather(
+        tt_input,
+        dim=2,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=1,
+        output_tensor=persistent_output,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    if dtype == ttnn.fp8_e4m3:
+        carried_input = ttnn.typecast(tt_input, ttnn.bfloat16)
+        input_shards = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(carried_input)]
+        expected = torch.cat(input_shards[:2], dim=2)
+        for group_start in range(2, len(input_shards), 2):
+            assert torch.equal(torch.cat(input_shards[group_start : group_start + 2], dim=2), expected)
+        check_output = ttnn.typecast(tt_output, ttnn.bfloat16)
+    else:
+        expected = torch_input
+        check_output = tt_output
+
+    for device_tensor in ttnn.get_device_tensors(check_output):
+        actual = ttnn.to_torch(device_tensor)
+        if dtype == ttnn.fp8_e4m3:
+            assert_with_pcc(actual, expected, pcc=0.9999)
+        else:
+            assert torch.equal(actual, expected)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    _MATCHED_RING_DEVICE_PARAMS,
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize(
+    "dtype,width,expected_page_size",
+    [
+        pytest.param(ttnn.bfloat16, 576, 1152, id="bf16_1152b_rows"),
+        pytest.param(ttnn.fp8_e4m3, 656, 704, id="scaled_fp8_704b_rows"),
+    ],
+)
+def test_all_gather_matched_two_rank_line_perf(mesh_device, dtype, width, expected_page_size):
+    """Measure the terminal one-hop ceiling separately from relay iterations."""
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.skip("native all-gather perf benchmark requires an active realtime device profiler")
+
+    rows_per_device, _, tt_input, persistent_output = _make_matched_two_rank_line_tensors(mesh_device, dtype, width)
+    page_size = ttnn.get_device_tensors(tt_input)[0].buffer_aligned_page_size()
+    assert page_size == expected_page_size
+
+    def run_ag():
+        return ttnn.all_gather(
+            tt_input,
+            dim=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=1,
+            output_tensor=persistent_output,
+        )
+
+    run_ag()
+    ttnn.synchronize_device(mesh_device)
+    run_ag()
+    ttnn.synchronize_device(mesh_device)
+    _all_gather_profile_ns(mesh_device, run_ag, expected_receiver_l1=False, expected_unicast=True)
+    durations_ns = [
+        _all_gather_profile_ns(mesh_device, run_ag, expected_receiver_l1=False, expected_unicast=True)[0]
+        for _ in range(7)
+    ]
+    median_ns = statistics.median(durations_ns)
+    min_ns = min(durations_ns)
+    p90_ns = sorted(durations_ns)[6]
+    bandwidth_gbps = rows_per_device * page_size / median_ns
+    print(
+        f"ISOLATED_AG_TERMINAL fabric={_fabric_name(ttnn.get_fabric_config())} "
+        f"dtype={dtype} ranks=2 links=2 rows_per_device={rows_per_device} page_size={page_size}B "
+        f"median={median_ns / 1e6:.3f}ms min={min_ns / 1e6:.3f}ms p90={p90_ns / 1e6:.3f}ms "
+        f"effective_receive_bw={bandwidth_gbps:.3f}GB/s "
+        f"samples_ms={[round(value / 1e6, 3) for value in durations_ns]}"
+    )
 
 
 @pytest.mark.parametrize(
