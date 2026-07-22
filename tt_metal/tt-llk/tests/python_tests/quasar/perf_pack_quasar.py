@@ -7,6 +7,7 @@ from helpers.param_config import parametrize
 from quasar.test_pack_quasar import PERF_PACK_COMBINATIONS
 from quasar.test_pack_quasar import test_pack_quasar as run_pack
 
+
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
