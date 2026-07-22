@@ -102,7 +102,6 @@ using ::tt::tt_metal::distributed::MeshMapperConfig;
 using ::tt::tt_metal::distributed::MeshShape;
 using ::tt::tt_metal::distributed::MeshWorkload;
 using ::tt::tt_metal::distributed::SocketMemoryConfig;
-using ttnn::create_device_tensor;
 using ttnn::D2DStreamConfig;
 using ttnn::D2DStreamService;
 using ttnn::D2DStreamServiceReceiver;
