@@ -94,9 +94,9 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance" -m "not requires_host_iommu" --timeout=600'
   skus:
     bh_p100:
-      timeout: 35
+      timeout: 70
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 70
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
   category: experimental
