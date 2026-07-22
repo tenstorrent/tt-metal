@@ -17,6 +17,24 @@ on. They are illustrative of the *effect*, not CI bounds.
 
 ---
 
+## ⭐ T1 — [`constant_synthesis`](constant_synthesis/README.md)
+**Concept:** a constant-valued output needs no source bytes — synthesize one page in L1 and replicate it
+(zero DRAM reads), instead of streaming a DRAM-resident constant tensor through the reader.
+**Situation:** you must materialize a large output region that is entirely one constant value, and you write
+the obvious kernel: read a DRAM constant tensor and write it back out — paying the full read half of the
+roofline for bytes that carry no information.
+**Measured win:** inventing the constant on-core and replicating it is **~1.31–1.45× faster** at the full
+grid (WH B0, 64 cores; **grows with output size** 1.31× @ 4 MB → 1.45× @ 16 MB), and **~1.05× at 1 core**.
+The gap is **~1.45×, not 2×**: the baseline is DRAM-**combined**-bandwidth-bound (reads NoC0 + writes NoC1
+saturate the controller at ~195 GB/s), while the candidate's **pure-write** stream tops out at ~142 GB/s —
+so removing half the bytes gives `2×(142/195)≈1.46×`, not 2×. At 1 core DRAM isn't the wall, so the
+baseline's reads overlap its writes on the other NoC for free and removing them saves ~nothing.
+**Gist:** for a constant-valued output, don't read a DRAM constant — build one page (word-replicated L1
+stores) and `noc_async_write` it to every output page; keep reads on NoC0 / writes on NoC1, batch writes
+(`block` in flight per barrier). Only pays off when the move is DRAM-bandwidth-bound (many cores); no-op at
+1 core where read/write overlap already hides the read. Ceiling is set by pure-write vs combined DRAM
+bandwidth, so expect ~1.4–1.5× at grid scale, not 2×.
+
 ## ⭐⭐ T2 — [`noc_placement`](noc_placement/README.md)
 **Concept:** two knobs for interleaved-DRAM NoC contention — core **placement** (column/row/diagonal)
 and **NoC selection** (which NoC a read/write stream uses) — as a switchable placement × NoC × op matrix.
