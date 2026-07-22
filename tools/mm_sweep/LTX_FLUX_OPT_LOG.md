@@ -345,3 +345,28 @@ corpus shapes, and reopens a previously-rejected direction — worth a gated pro
 **256x2048x1024 exposed-lever summary (wall 22.3us, ideal 11.3us):** matmul 9us (compute floor, lossless-
 irreducible) + in0-ring 4.9us exposed (foreclosed: scatter/exchange/repl/chunk all rejected on this shape) +
 reduction 3.5us exposed (tree ~1-1.5us realizable) + in1-wait 1.4us. Realizable headroom ~= tree only (~5%).
+
+### [DEEP-1 FINAL] 256x2048x1024 — CLOSED: no high-value lossless lever (tree deferred with evidence)
+Config-level realizability test of the reduction-depth hypothesis: shorter-chain configs at the SAME core
+count are much SLOWER, not faster:
+| cfg | Pk/Sm | cores | chain depth | wall | vs auto |
+|---|---|---|---|---|---|
+| (1,4,2,2,4) AUTO | 4/2 | 64 | 3 | 22.08 | — |
+| (1,2,4,4,4) | 2/4 | 64 | 1 | 28.40 | **+29%** |
+| (1,2,2,4,4) | 2/2 | 32 | 1 | 25.84 | +17% |
+All low-Pk (<=2) configs are +17..+30%. So config-level chain-shortening is net-negative (deeper per-core K
++ more M-split forwarding outweigh the shorter chain). A topology-only tree (keep Pk4/Sm2, reduce reduction
+DEPTH 3->2) MIGHT realize ~1.2us (~5%) per A1+NO_REDUCE, but: (a) absolute is negligible (1.2us on the worst
+shape; ranking guidance de-prioritizes negligible absolutes), (b) reopens a previously-REJECTED mechanism,
+(c) requires a high-risk multi-child-receive reduction rewrite (CorePlan + runtime args + writer protocol +
+semaphore counting; deadlock-prone), (d) the only config-level realizability signal is NEGATIVE (+29%).
+=> **DECISION: defer the tree (documented design + ceiling below); CLOSE 256x2048x1024.**
+
+**Accounted wall (22.3us, ideal 11.3us):** matmul 9us (compute floor) + in0-ring exposed 4.9us (FORECLOSED:
+scatter/exchange/repl/chunk/direct-read all rejected on this shape) + reduction exposed 3.5us (tree ~1.2us
+realizable, deferred) + in1-wait 1.4us. No lossless lever with a favorable risk/reward. The shape is
+overhead-bound by split-K + ring + M-split delivery on tiny per-core work (low AI after 64-way split).
+**Deferred tree design (for future, if a higher-Pk shape makes it worthwhile):** balanced binary reduction,
+internal node fan-in 2 (wait num_children partials, add, forward to parent); build_plan assigns tree parent/
+children by redpos; ceiling grows with Pk (Pk4:~5%, Pk12:~15% on EXPOSED shapes only — deep-K stays
+DRAM-bound/overlapped so no benefit there). Speedup kept: 0%.
