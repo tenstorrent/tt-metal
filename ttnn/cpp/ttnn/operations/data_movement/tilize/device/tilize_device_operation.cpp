@@ -190,8 +190,9 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32 or
             input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
-            input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::FP8_E4M3,
-        "data type must be bfloat16, float32, uint32, int32, uint16, or fp8_e4m3");
+            input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::UINT8 or
+            input_tensor_a.dtype() == DataType::FP8_E4M3,
+        "data type must be bfloat16, float32, uint32, int32, uint16, uint8, or fp8_e4m3");
     // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
     // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
     {
@@ -282,6 +283,17 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
             return ttnn::prim::TilizeMultiCoreShardedRetileProgramFactory{};
         }
         return ttnn::prim::TilizeMultiCoreRetileProgramFactory{};
+    }
+
+    // On Blackhole, the DRAM read alignment is 64 bytes. UInt8 rows narrower than 64 bytes
+    // (e.g. width=32 → 32-byte page) can produce a misalignment between the L1 write pointer
+    // offset and the DRAM source offset within a 64-byte block, causing the NOC to corrupt
+    // adjacent L1 data. The block factory reader handles this via a staging buffer (c_1) and
+    // an explicit alignment check. Route all non-sharded UInt8 inputs on Blackhole through
+    // the block factory to guarantee correct DRAM alignment handling.
+    if (!operation_attributes.use_low_perf && input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE &&
+        input_tensor_a.dtype() == DataType::UINT8 && !input_tensor_a.memory_config().is_sharded()) {
+        return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
     }
 
     bool use_single_core = (operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
