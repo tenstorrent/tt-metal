@@ -1271,7 +1271,7 @@ class LTXDistilledPipeline(LTXPipeline):
             # gathered read-back (synchronize_device times out; chips drop off the PCIe bus). A
             # long-lived worker replays traces on its first gen, so an un-cached re-encode kills its
             # second reference job. The encode is deterministic in (path, R, resolution).
-            key = (ref_path, ref_pixel_frames, height, width)
+            key = (self._sheet_digest(ref_path), ref_pixel_frames, height, width)
             cached = self._ref_latent_cache.get(key)
             if cached is not None:
                 ref_latent_s1, ref_latent_full = cached

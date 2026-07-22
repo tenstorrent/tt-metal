@@ -34,6 +34,7 @@ Run: PYTHONPATH=<worktree> python -m pytest <file> -v -p no:cacheprovider
 from __future__ import annotations
 
 import ast
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -301,6 +302,23 @@ def test_prealloc_ref_sp_padding():
 # ==========================================================================================
 # generate
 # ==========================================================================================
+def _real_sheet_digest(path):
+    """The production content digest. Kept identical to LTXPipeline._sheet_digest so the memoize is
+    exercised the way it runs, not through a stand-in that could key differently."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _sheet(tmp_path):
+    """A real file on disk: the reference memoize keys on sheet CONTENT, so it reads the bytes."""
+    p = tmp_path / "ref.png"
+    p.write_bytes(b"SHEET-BYTES")
+    return str(p)
+
+
 def _make_generate_pipe():
     """A shim instance with every generate collaborator mocked. Returns (obj, ns)."""
     Pipe, ns = _build_shim()
@@ -314,6 +332,7 @@ def _make_generate_pipe():
     obj.upsampler = mock.MagicMock(name="upsampler")
     obj._i2v_cond_cache = {}
     obj._ref_latent_cache = {}
+    obj._sheet_digest = staticmethod(_real_sheet_digest)
 
     obj._device_embed_cache_path = mock.MagicMock(return_value="/nonexistent/embed/cache")
     obj.gemma_encoder_pair = SimpleNamespace(ensure_loaded=mock.MagicMock())
@@ -366,12 +385,12 @@ def _stage_calls(obj):
     return obj._denoise_no_guidance.call_args_list
 
 
-def test_generate_routes_trace_key_to_ref_family(monkeypatch):
+def test_generate_routes_trace_key_to_ref_family(monkeypatch, tmp_path):
     monkeypatch.delenv("LTX_KF_APPEND_TOKEN", raising=False)
     monkeypatch.delenv("LTX_GEN_EAGER_STAGES", raising=False)
     monkeypatch.delenv("LTX_ITER_FAST", raising=False)
     obj, _ns = _make_generate_pipe()
-    obj.generate("a prompt", num_frames=17, height=64, width=64, reference_video=("/tmp/ref.png", 0.9))
+    obj.generate("a prompt", num_frames=17, height=64, width=64, reference_video=(_sheet(tmp_path), 0.9))
 
     calls = _stage_calls(obj)
     assert len(calls) == 2
@@ -386,12 +405,12 @@ def test_generate_routes_trace_key_to_ref_family(monkeypatch):
     assert obj.encode_image.call_count == 2
 
 
-def test_generate_keeps_grid_upsampled_latent(monkeypatch):
+def test_generate_keeps_grid_upsampled_latent(monkeypatch, tmp_path):
     monkeypatch.delenv("LTX_KF_APPEND_TOKEN", raising=False)
     monkeypatch.delenv("LTX_GEN_EAGER_STAGES", raising=False)
     monkeypatch.delenv("LTX_ITER_FAST", raising=False)
     obj, _ns = _make_generate_pipe()
-    obj.generate("a prompt", num_frames=17, height=64, width=64, reference_video=("/tmp/ref.png", 1.0))
+    obj.generate("a prompt", num_frames=17, height=64, width=64, reference_video=(_sheet(tmp_path), 1.0))
 
     # latent_frames=3, hw_full=4 => stage-2 init stays GRID-sized (target only) = 3*4 = 12; NOT +R padded.
     # _denoise allocates base_v combined-sized and the ref pin fills [T,T+R) — matching the s2/keyframe path.
@@ -418,7 +437,7 @@ def test_generate_no_ref_keeps_base_trace_keys(monkeypatch):
     obj.encode_image.assert_not_called()
 
 
-def test_generate_ref_plus_append_token_asserts(monkeypatch, expect_error):
+def test_generate_ref_plus_append_token_asserts(monkeypatch, expect_error, tmp_path):
     """Reference + append-token keyframe must assert (they contradict on the KV-logical/decode
     roles), never silently pick one."""
     monkeypatch.setenv("LTX_KF_APPEND_TOKEN", "1")
@@ -428,20 +447,30 @@ def test_generate_ref_plus_append_token_asserts(monkeypatch, expect_error):
         AssertionError,
         r"reference conditioning .*reference_video.* is mutually exclusive with append-token keyframe conditioning",
     ):
-        obj.generate("a prompt", num_frames=17, height=64, width=64, reference_video=("/tmp/ref.png", 1.0))
+        obj.generate("a prompt", num_frames=17, height=64, width=64, reference_video=(_sheet(tmp_path), 1.0))
 
 
-def test_second_reference_gen_reuses_the_cached_latents(monkeypatch):
+def test_second_reference_gen_reuses_the_cached_latents(monkeypatch, tmp_path):
     """A repeat sheet must NOT re-encode: the eager VAE encode deadlocks the device when it follows a
-    denoise trace replay, which is exactly what the second gen of a long-lived worker does."""
+    denoise trace replay, which is exactly what the second gen of a long-lived worker does.
+
+    The server decrypts each upload to a FRESH temp path per job, so the same sheet arrives under a
+    new filename every time — the memoize has to key on content or it never hits in production.
+    """
     monkeypatch.delenv("LTX_KF_APPEND_TOKEN", raising=False)
     monkeypatch.delenv("LTX_GEN_EAGER_STAGES", raising=False)
     monkeypatch.delenv("LTX_ITER_FAST", raising=False)
     obj, _ns = _make_generate_pipe()
-    for _ in range(3):
-        obj.generate("a prompt", num_frames=17, height=64, width=64, reference_video=("/tmp/ref.png", 1.0))
+    sheets = []
+    for i in range(3):
+        p = tmp_path / f"job{i}.ref.png"  # same bytes, different path, as the worker writes them
+        p.write_bytes(b"SHEET-BYTES")
+        sheets.append(str(p))
+    for p in sheets:
+        obj.generate("a prompt", num_frames=17, height=64, width=64, reference_video=(p, 1.0))
     assert obj.encode_image.call_count == 2, "one encode per stage, once — not once per generation"
 
-    # A different sheet (or resolution) is a genuine miss and must still encode.
-    obj.generate("a prompt", num_frames=17, height=64, width=64, reference_video=("/tmp/other.png", 1.0))
+    other = tmp_path / "other.ref.png"
+    other.write_bytes(b"DIFFERENT-SHEET")  # different content is a genuine miss
+    obj.generate("a prompt", num_frames=17, height=64, width=64, reference_video=(str(other), 1.0))
     assert obj.encode_image.call_count == 4

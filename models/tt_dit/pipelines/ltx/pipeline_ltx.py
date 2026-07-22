@@ -360,8 +360,9 @@ class LTXPipeline:
         # wasteful and — under a traced replay pass — has hung the device; the encode is
         # deterministic in (path, resolution), so cache the host result and reuse it.
         self._i2v_cond_cache: dict[tuple[str, int, int], torch.Tensor] = {}
-        # Same memoization for IC-LoRA reference sheets, keyed by (path, looped frames, H, W) since
-        # the reference is encoded at both stage resolutions: (s1_latent, full_latent).
+        # Same memoization for IC-LoRA reference sheets: (s1_latent, full_latent) per stage res.
+        # Keyed by the sheet's CONTENT, not its path — a server decrypts each upload to a fresh temp
+        # file per job, so a path key would miss on exactly the repeat-sheet case this exists for.
         self._ref_latent_cache: dict[tuple[str, int, int, int], tuple[torch.Tensor, torch.Tensor]] = {}
         self.upsampler: LTXLatentUpsampler | None = None
         # Audio decode stack lives behind the adopted LTXAudioDecoderAdapter (ltx-perf refactor).
@@ -756,6 +757,16 @@ class LTXPipeline:
         )
         self.vae_ref_encoder_full = self._new_vae_encoder(num_frames=ref_pixel_frames, height=height, width=width)
         self._register_coresident_exclusions()
+
+    @staticmethod
+    def _sheet_digest(path: str) -> str:
+        """Content digest of a reference sheet, for keying the encode memoize. A sheet is a few MB,
+        so hashing it costs nothing next to the encode it saves."""
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
 
     @staticmethod
     def _load_reference_video(
