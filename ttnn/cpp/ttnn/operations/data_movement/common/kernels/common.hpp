@@ -88,6 +88,16 @@ FORCE_INLINE noc_traits_t<UnicastEndpoint>::dst_args_type self_l1_dst_args(Noc n
 template <bool guaranteed_16B_aligned, bool copy_async, bool use_read_datamover, uint32_t max_transfer_size>
 FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
     constexpr uint32_t page_size = max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size;
+    // A NoC self-copy is a plain source->dest transfer with no overlap (memmove) semantics: when
+    // [src,src+bytes) and [dst,dst+bytes) overlap, an in-flight write can be read back as a later
+    // source, so the copy is only correct while reads happen to outrun the overlapping writes. Fall
+    // to the CPU memmove, which copies in the safe direction. Non-overlapping copies (the common
+    // cross-buffer case) are unaffected.
+    if ((dst_l1_addr < src_l1_addr + bytes) && (src_l1_addr < dst_l1_addr + bytes)) {
+        invalidate_l1_cache();
+        memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+        return;
+    }
     if constexpr (use_read_datamover) {
         if constexpr (guaranteed_16B_aligned) {
             noc.async_read<NocOptions::DEFAULT, page_size>(
