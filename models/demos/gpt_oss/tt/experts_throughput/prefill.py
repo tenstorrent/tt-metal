@@ -124,11 +124,11 @@ class DeepSeekPrefillConfig:
             num_links=num_links,
             topology=topology,
             # Galaxy (4x8) worker row has only 8 cores. The dispatch program factory lays
-            # num_cores(=min(num_links,4)=4) senders x cores_per_sender(=1+num_untilizers) in a
-            # single row; the default num_untilizers_per_sender=2 needs 4*3=12 > 8 and asserts
+            # num_cores(=min(num_links,4)=4) senders x cores_per_sender(=1+num_workers_per_sender)
+            # in a single row; the default num_workers_per_sender=2 needs 4*3=12 > 8 and asserts
             # (dispatch_program_factory.cpp: total_row_cores >= cores_per_sender*num_cores). Use 1
             # -> 4*2=8, fits exactly. See GPT-OSS 120B galaxy prefill core-grid mismatch.
-            num_untilizers_per_sender=1,
+            num_workers_per_sender=1,
         )
 
         self.combine_module = TtCombineModule(
