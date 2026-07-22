@@ -137,11 +137,12 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         ddefs["REDTREE"] = "1";
     }
     if (diag & RegimeADiag::DIAG_RSCATTER) {  // test-only: ring reduce-scatter over the Pk cores (tile-partition)
-        const uint32_t rs_T = geo.M_block_capacity * geo.N_sub;  // tiles in one output block
+        const uint32_t rs_T = geo.M_block_capacity * geo.N_sub;  // tiles in one output SUB-block
         TT_FATAL(
-            Pk > 1u && geo.N_bpc == 1u && rs_T % Pk == 0u && rs_T >= Pk,
-            "DIAG_RSCATTER requires Pk>1, N_bpc==1, and the output block (M_block*N_sub={}) divisible by Pk={} "
-            "and >= Pk (row/tile-partitionable into Pk chunks); got M_block={} N_sub={} N_bpc={}",
+            Pk > 1u && rs_T % Pk == 0u && rs_T >= Pk,
+            "DIAG_RSCATTER requires Pk>1 and each output sub-block (M_block*N_sub={}) divisible by Pk={} and "
+            ">= Pk (tile-partitionable into Pk chunks); got M_block={} N_sub={} N_bpc={} (each of the N_bpc "
+            "sub-blocks runs its own reduce-scatter)",
             rs_T,
             Pk,
             geo.M_block_capacity,

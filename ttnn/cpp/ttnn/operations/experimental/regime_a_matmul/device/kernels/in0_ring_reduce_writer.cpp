@@ -425,13 +425,15 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 #elif defined(RSCATTER)
-    // ---- Ring REDUCE-SCATTER (test-only; N_bpc==1, block M_block x N_block tile-partitioned into Pk chunks). ----
-    // P = Pk cores in an optimized cyclic order. Chunk = chunk_tiles = M_block*N_block / Pk contiguous tiles
-    // (row-major; chunk c = tiles [c*chunk_tiles, (c+1)*chunk_tiles)). Every round each core sends one chunk to
+    // ---- Ring REDUCE-SCATTER (test-only; ONE independent reduce-scatter per output SUB-block). ----
+    // P = Pk cores in an optimized cyclic order. Each of the N_bpc output sub-blocks (M_block x N_block tiles)
+    // is tile-partitioned into Pk chunks of chunk_tiles = M_block*N_block/Pk contiguous tiles (row-major; chunk
+    // c = tiles [c*chunk_tiles, (c+1)*chunk_tiles)). Per sub-block nb, every round each core sends one chunk to
     // `next` and receives one from `prev` into cb_recv; compute adds its own resident partial tiles and forwards
     // the running sum, so after P-1 rounds each core holds ONE fully-reduced chunk (rs_owned_chunk) and writes
-    // its tiles to DRAM. Reuses the in0-ring payload->credit protocol (red_sem="prev delivered", redfree_sem=
-    // "next freed my send slot"). cb_send/cb_recv are EXACTLY 2 chunk-slots so the FIFO period matches slot=t%2.
+    // its tiles to DRAM. Semaphore EPOCHS are monotonically increasing across (nb, round): global g =
+    // nb*(P-1)+t, so waits target g+1 and never alias across sub-blocks. Reuses the in0-ring payload->credit
+    // protocol (red_sem/redfree_sem); cb_send/cb_recv are EXACTLY 2 chunk-slots so the FIFO period matches g%2.
     const uint32_t P = rs_P;  // Pk
     constexpr uint32_t cb_send = 4;
     constexpr uint32_t cb_recv = 5;
@@ -445,46 +447,49 @@ void kernel_main() {
     const uint64_t prev_rs_free = get_noc_addr(rs_prev_x, rs_prev_y, rs_free_addr);  // I credit prev
     const uint64_t next_rs_recv = get_noc_addr(rs_next_x, rs_next_y, rs_recv_addr);  // I signal next
 
-    for (uint32_t t = 0; t + 1u < P; ++t) {
-        // Post my recv-slot credit to prev FIRST (so all cores credit before any blocks on its own send credit
-        // -> no ring deadlock). cb_reserve_back waits until compute consumed my previous incoming chunk.
-        cb_reserve_back(cb_recv, chunk_tiles);
-        noc_semaphore_inc(prev_rs_free, 1);  // tell prev: my cb_recv slot free for round t
-        // Send my staged chunk to next (round 0 = my own chunk `ring_pos`; rounds >0 = the sum compute produced).
-        cb_wait_front(cb_send, chunk_tiles);
-        {
-            RA_ZONE("Z_RS_SENDWAIT");
-            noc_semaphore_wait_min(rs_free_ptr, t + 1);  // next freed my send slot
-        }
-        const uint32_t slot = t & 1u;  // double-buffered (2 slots)
-        uint64_t dst = get_noc_addr(rs_next_x, rs_next_y, recv_base + slot * chunk_bytes);
-        noc_async_write(get_read_ptr(cb_send), dst, chunk_bytes);
-        noc_semaphore_inc(next_rs_recv, 1);  // ordered after payload (same peer+NoC, like the in0 ring)
-        noc_async_writes_flushed();          // payload departed L1 -> cb_send slot reusable
-        cb_pop_front(cb_send, chunk_tiles);
-        // Complete my receive for round t.
-        {
-            RA_ZONE("Z_RS_RECVWAIT");
-            noc_semaphore_wait_min(rs_recv_ptr, t + 1);  // prev delivered chunk t into my cb_recv slot t%2
-        }
-        cb_push_back(cb_recv, chunk_tiles);  // compute adds its own tiles + (forwards | writes owned)
-    }
-    // Final round produced my fully-reduced owned chunk into out_cb -> write its tiles to DRAM. Chunk c owns
-    // block tiles [c*chunk_tiles ..); tile i maps to (m=i/N_block, n=i%N_block) at global (m_start+m, n_start+n).
-    {
-        RA_ZONE("Z_RS_OUTWRITE");
-        cb_wait_front(out_cb, chunk_tiles);
-        const uint32_t r = get_read_ptr(out_cb);
-        for (uint32_t j = 0; j < chunk_tiles; ++j) {
-            const uint32_t i = rs_owned_chunk * chunk_tiles + j;
-            const uint32_t m = i / N_block;
-            const uint32_t n = i - m * N_block;
-            if (m < valid_m && n < valid_n) {
-                noc_async_write_page((m_start + m) * Nt + (n_start + n), out, r + j * tile_bytes);
+    uint32_t g = 0;  // monotonically increasing (nb, round) epoch, shared by rs_recv and rs_free
+    for (uint32_t nb = 0; nb < N_bpc; ++nb) {
+        const uint32_t n_base = nb * N_block;  // this sub-block's N-column base within the core's ownership
+        for (uint32_t t = 0; t + 1u < P; ++t, ++g) {
+            // Post my recv-slot credit to prev FIRST (all cores credit before any blocks on its own send credit
+            // -> no ring deadlock). cb_reserve_back waits until compute consumed my previous incoming chunk.
+            cb_reserve_back(cb_recv, chunk_tiles);
+            noc_semaphore_inc(prev_rs_free, 1);   // tell prev: my cb_recv slot free for epoch g
+            cb_wait_front(cb_send, chunk_tiles);  // compute staged this epoch's send chunk
+            {
+                RA_ZONE("Z_RS_SENDWAIT");
+                noc_semaphore_wait_min(rs_free_ptr, g + 1);  // next freed my send slot for epoch g
             }
+            const uint32_t slot = g & 1u;  // double-buffered (2 slots), period matches the global epoch
+            uint64_t dst = get_noc_addr(rs_next_x, rs_next_y, recv_base + slot * chunk_bytes);
+            noc_async_write(get_read_ptr(cb_send), dst, chunk_bytes);
+            noc_semaphore_inc(next_rs_recv, 1);  // ordered after payload (same peer+NoC, like the in0 ring)
+            noc_async_writes_flushed();          // payload departed L1 -> cb_send slot reusable
+            cb_pop_front(cb_send, chunk_tiles);
+            {
+                RA_ZONE("Z_RS_RECVWAIT");
+                noc_semaphore_wait_min(rs_recv_ptr, g + 1);  // prev delivered epoch g into my cb_recv slot g%2
+            }
+            cb_push_back(cb_recv, chunk_tiles);  // compute adds its own tiles + (forwards | writes owned)
         }
-        noc_async_writes_flushed();
-        cb_pop_front(out_cb, chunk_tiles);
+        // Final round of this sub-block produced my fully-reduced owned chunk into out_cb -> write its tiles.
+        // Chunk c owns sub-block tiles [c*chunk_tiles ..); tile i -> (m=i/N_block, n=i%N_block) at global
+        // (m_start+m, n_start + n_base + n); valid iff m<valid_m and (n_base+n)<valid_n.
+        {
+            RA_ZONE("Z_RS_OUTWRITE");
+            cb_wait_front(out_cb, chunk_tiles);
+            const uint32_t r = get_read_ptr(out_cb);
+            for (uint32_t j = 0; j < chunk_tiles; ++j) {
+                const uint32_t i = rs_owned_chunk * chunk_tiles + j;
+                const uint32_t m = i / N_block;
+                const uint32_t n = i - m * N_block;
+                if (m < valid_m && (n_base + n) < valid_n) {
+                    noc_async_write_page((m_start + m) * Nt + (n_start + n_base + n), out, r + j * tile_bytes);
+                }
+            }
+            noc_async_writes_flushed();
+            cb_pop_front(out_cb, chunk_tiles);
+        }
     }
     // Single deferred completion: drain forwarded chunks / DRAM writes AND the non-posted deliver/credit atomics.
     noc_async_write_barrier();
