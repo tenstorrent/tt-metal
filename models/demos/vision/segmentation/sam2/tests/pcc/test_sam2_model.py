@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI U.S. Corp.
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -26,7 +28,8 @@ def _processed_pixels(processor, seed=0):
 
 
 def _sample_pixels(processor):
-    with Image.open("models/sample_data/huggingface_cat_image.jpg") as image:
+    models_dir = next(parent for parent in Path(__file__).resolve().parents if parent.name == "models")
+    with Image.open(models_dir / "sample_data" / "huggingface_cat_image.jpg") as image:
         return processor(images=image.convert("RGB"), return_tensors="pt").pixel_values
 
 
@@ -110,9 +113,11 @@ def test_sam2_image_pcc(prompt_type, mesh_device, reset_seeds, model_location_ge
     model = build_tt_sam2_model(hf_model, mesh_device)
     actual = None
     try:
-        assert set(model.encoder_device.get_device_ids()) == set(
-            ttnn.get_pcie_device_ids()
-        ), "image inference must stay on the PCIe-attached ASIC"
+        selected_device_ids = set(mesh_device.get_device_ids())
+        selected_pcie_device_ids = selected_device_ids.intersection(ttnn.get_pcie_device_ids())
+        assert (
+            set(model.encoder_device.get_device_ids()) == selected_pcie_device_ids
+        ), "image inference must stay on the selected PCIe-attached device"
         model.set_image(pixels)
         actual = model.predict(**inputs, multimask_output=True)
         mask_pcc = _assert_pcc(golden_masks.squeeze(1), ttnn.to_torch(actual["low_res_masks"]), 0.98)
@@ -138,22 +143,25 @@ def test_sam2_image_pcc(prompt_type, mesh_device, reset_seeds, model_location_ge
 @run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [N300_VIDEO_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-def test_sam2_three_frame_video(mesh_device, reset_seeds, model_location_generator):
+@pytest.mark.parametrize("prompt_type", ["point", "box"])
+def test_sam2_three_frame_video(prompt_type, mesh_device, reset_seeds, model_location_generator):
     hf_model, processor = load_sam2_model_and_processor(model_location_generator)
     frames = [_processed_pixels(processor, seed) for seed in range(3)]
-    prompts = {
-        "input_points": torch.tensor([[[[512.0, 512.0]]]]),
-        "input_labels": torch.tensor([[[1]]], dtype=torch.int32),
-    }
+    if prompt_type == "point":
+        prompts = {
+            "input_points": torch.tensor([[[[512.0, 512.0]]]]),
+            "input_labels": torch.tensor([[[1]]], dtype=torch.int32),
+        }
+    else:
+        prompts = {"input_boxes": torch.tensor([[[256.0, 256.0, 768.0, 768.0]]])}
 
     hf_session = processor.init_video_session(inference_device="cpu", dtype=torch.float32)
     processor.add_inputs_to_inference_session(
         hf_session,
         frame_idx=0,
         obj_ids=0,
-        input_points=prompts["input_points"],
-        input_labels=prompts["input_labels"],
         original_size=(1024, 1024),
+        **prompts,
     )
     with torch.no_grad():
         golden_frames = [
@@ -167,8 +175,10 @@ def test_sam2_three_frame_video(mesh_device, reset_seeds, model_location_generat
     try:
         encoder_ids = set(model.encoder_device.get_device_ids())
         tracker_ids = set(model.tracker_device.get_device_ids())
-        assert encoder_ids == set(ttnn.get_pcie_device_ids()), "encoder must use the PCIe-attached ASIC"
-        assert tracker_ids == set(mesh_device.get_device_ids()) - encoder_ids, "tracker must use the remote ASIC"
+        selected_device_ids = set(mesh_device.get_device_ids())
+        selected_pcie_device_ids = selected_device_ids.intersection(ttnn.get_pcie_device_ids())
+        assert encoder_ids == selected_pcie_device_ids, "encoder must use the selected PCIe-attached device"
+        assert tracker_ids == set(mesh_device.get_device_ids()) - encoder_ids, "tracker must use the remote device"
         assert encoder_ids.isdisjoint(tracker_ids), "encoder and tracker submeshes must not overlap"
 
         model.set_image(frames[0])

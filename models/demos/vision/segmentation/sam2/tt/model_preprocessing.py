@@ -329,17 +329,13 @@ def _mlp_ns(module, device):
     return _ns(layers={str(index): _linear_ns(layer, device) for index, layer in enumerate(layers)})
 
 
-def _batched_mlp_ns(modules, device, *, pad_final_output=False):
+def _batched_mlp_ns(modules, device):
     module_layers = [(module.proj_in, *module.layers, module.proj_out) for module in modules]
     layers = {}
     for index in range(len(module_layers[0])):
         current_layers = [layers_for_module[index] for layers_for_module in module_layers]
         weights = [layer.weight.data.T.contiguous() for layer in current_layers]
         biases = [layer.bias.data.reshape(1, -1) for layer in current_layers]
-        if pad_final_output and index == len(module_layers[0]) - 1:
-            output_features = max(weight.shape[-1] for weight in weights)
-            weights = [torch.nn.functional.pad(weight, (0, output_features - weight.shape[-1])) for weight in weights]
-            biases = [torch.nn.functional.pad(bias, (0, output_features - bias.shape[-1])) for bias in biases]
         weight = torch.stack(weights, dim=0)
         bias = torch.stack(biases, dim=0)
         layers[str(index)] = _ns(
@@ -392,11 +388,10 @@ def preprocess_mask_decoder(mask_decoder, prompt_encoder, device):
             _conv_ns(mask_decoder.upscale_conv2),
         ),
         multimask_output_hypernetwork_mlp=_batched_mlp_ns(mask_decoder.output_hypernetworks_mlps[1:], device),
-        single_mask_heads_mlp=_batched_mlp_ns(
-            [mask_decoder.output_hypernetworks_mlps[0], mask_decoder.pred_obj_score_head],
-            device,
-            pad_final_output=True,
-        ),
+        single_mask_output_hypernetwork_mlp=_mlp_ns(mask_decoder.output_hypernetworks_mlps[0], device),
+        dynamic_multimask_via_stability=mask_decoder.dynamic_multimask_via_stability,
+        dynamic_multimask_stability_delta=mask_decoder.dynamic_multimask_stability_delta,
+        dynamic_multimask_stability_thresh=mask_decoder.dynamic_multimask_stability_thresh,
         iou_prediction_head=_mlp_ns(mask_decoder.iou_prediction_head, device),
         pred_obj_score_head=_mlp_ns(mask_decoder.pred_obj_score_head, device),
         transformer=_ns(

@@ -368,6 +368,7 @@ class TtMaskDecoder:
         self.output_tokens = parameters.output_tokens
         self.transformer = TtTwoWayTransformer(parameters.transformer, device)
         self._conv_cache = {}
+        self._mask_indices = None
         self.cached_point_embeddings = parameters.no_prompt_decoder_tokens
 
     def _linear(self, x, w, b, act=None):
@@ -390,6 +391,78 @@ class TtMaskDecoder:
         x = self._linear(x, mlp_spec.layers["1"].weight, mlp_spec.layers["1"].bias, act="relu")
         x = self._linear(x, mlp_spec.layers["2"].weight, mlp_spec.layers["2"].bias, act=final_act)
         return x
+
+    def _mask_index_row(self):
+        if self._mask_indices is None:
+            indices = ttnn.arange(
+                0,
+                self.num_mask_tokens - 1,
+                1,
+                dtype=ttnn.uint32,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            self._mask_indices = ttnn.reshape(indices, (1, self.num_mask_tokens - 1))
+        return self._mask_indices
+
+    def _dynamic_multimask_via_stability(self, masks, iou_pred):
+        batch, _, height, width = masks.shape
+        single_mask = ttnn.slice(masks, [0, 0, 0, 0], [batch, 1, height, width])
+        single_iou = ttnn.slice(iou_pred, [0, 0], [batch, 1])
+        multimasks = ttnn.slice(masks, [0, 1, 0, 0], [batch, self.num_mask_tokens, height, width])
+        multi_ious = ttnn.slice(iou_pred, [0, 1], [batch, self.num_mask_tokens])
+
+        best_idx = ttnn.argmax(multi_ious, dim=-1, keepdim=True)
+        onehot = ttnn.typecast(ttnn.eq(self._mask_index_row(), best_idx), ttnn.bfloat16)
+        onehot = _tile(onehot)
+        onehot = ttnn.reshape(onehot, (batch, 1, self.num_mask_tokens - 1))
+        tiled_multimasks = _tile(multimasks)
+        best_multimask = ttnn.matmul(
+            onehot,
+            ttnn.reshape(tiled_multimasks, (batch, self.num_mask_tokens - 1, height * width)),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        best_multimask = ttnn.reshape(best_multimask, (batch, 1, height, width))
+        best_iou = ttnn.matmul(
+            onehot,
+            ttnn.reshape(multi_ious, (batch, self.num_mask_tokens - 1, 1)),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        best_iou = ttnn.reshape(best_iou, (batch, 1))
+
+        delta = self.p.dynamic_multimask_stability_delta
+        tiled_single_mask = _tile(single_mask)
+        inner = ttnn.typecast(ttnn.gt(tiled_single_mask, delta), ttnn.float32)
+        union = ttnn.typecast(ttnn.gt(tiled_single_mask, -delta), ttnn.float32)
+        inner_area = ttnn.sum(inner, [2, 3], True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        union_area = ttnn.sum(union, [2, 3], True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        stable = ttnn.ge(
+            inner_area,
+            union_area * self.p.dynamic_multimask_stability_thresh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        stable_weight = ttnn.typecast(ttnn.reshape(stable, (batch, 1)), ttnn.bfloat16)
+        selection_weights = ttnn.concat([stable_weight, ttnn.rsub(stable_weight, 1.0)], dim=1)
+        selection_weights = ttnn.reshape(_tile(selection_weights), (batch, 1, 2))
+        best_multimask_rm = ttnn.to_layout(
+            best_multimask,
+            ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        mask_candidates = ttnn.concat([single_mask, best_multimask_rm], dim=1)
+        mask_candidates = ttnn.reshape(_tile(mask_candidates), (batch, 2, height * width))
+        selected_mask = ttnn.matmul(
+            selection_weights,
+            mask_candidates,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        selected_mask = ttnn.reshape(selected_mask, (batch, 1, height, width))
+        iou_candidates = ttnn.concat([single_iou, best_iou], dim=1)
+        iou_candidates = ttnn.reshape(_tile(iou_candidates), (batch, 2, 1))
+        selected_iou = ttnn.matmul(selection_weights, iou_candidates, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        selected_iou = ttnn.reshape(selected_iou, (batch, 1))
+        return selected_mask, selected_iou
 
     def _conv_transpose(self, x, w, b, in_c, out_c):
         B, H, W, _ = x.shape
@@ -512,23 +585,32 @@ class TtMaskDecoder:
         upscaled = self._conv_transpose(upscaled, dc2.weight, dc2.bias, c // 4, c // 8)
         added = ttnn.add(upscaled, _tile(feat_s0), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         upscaled = ttnn.gelu(added, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        dynamic_fallback = not multimask_output and self.p.dynamic_multimask_via_stability
         if not multimask_output:
             mask_tok = ttnn.slice(mask_tokens_out, [0, 0, 0], [B, 1, c])
-            obj_tok = ttnn.slice(hs, [0, 0, 0], [B, 1, c])
-            head_tokens = ttnn.concat([mask_tok, obj_tok], dim=0)
-            head_values = self._mlp_forward(self.p.single_mask_heads_mlp, head_tokens)
-            ttnn.deallocate(head_tokens)
-            hyper_in = ttnn.slice(head_values, [0, 0, 0], [B, 1, c // 8])
-            object_score_logits = ttnn.slice(head_values, [1, 0, 0], [2, 1, 1])
-            object_score_logits = ttnn.reshape(object_score_logits, (B, 1))
-            ttnn.deallocate(head_values)
-            hyper_token_count = 1
-        else:
-            hyper_token_count = self.num_mask_tokens - 1
+            mask_tok = ttnn.reshape(mask_tok, (B, c))
+            single_hyper = self._mlp_forward(self.p.single_mask_output_hypernetwork_mlp, mask_tok)
+            single_hyper = ttnn.reshape(single_hyper, (B, 1, c // 8))
+            ttnn.deallocate(mask_tok)
+        if multimask_output or dynamic_fallback:
             multimask_tokens = ttnn.slice(mask_tokens_out, [0, 1, 0], [B, self.num_mask_tokens, c])
-            multimask_tokens = ttnn.reshape(multimask_tokens, (hyper_token_count, 1, c))
-            hyper_in = self._mlp_forward(self.p.multimask_output_hypernetwork_mlp, multimask_tokens)
-            hyper_in = ttnn.reshape(hyper_in, (B, hyper_token_count, c // 8))
+            multimask_tokens = ttnn.reshape(multimask_tokens, (self.num_mask_tokens - 1, 1, c))
+            multi_hyper = self._mlp_forward(self.p.multimask_output_hypernetwork_mlp, multimask_tokens)
+            multi_hyper = ttnn.reshape(multi_hyper, (B, self.num_mask_tokens - 1, c // 8))
+        if dynamic_fallback:
+            hyper_in = ttnn.concat([single_hyper, multi_hyper], dim=1)
+            hyper_token_count = self.num_mask_tokens
+        elif multimask_output:
+            hyper_in = multi_hyper
+            hyper_token_count = self.num_mask_tokens - 1
+        else:
+            hyper_in = single_hyper
+            hyper_token_count = 1
+
+        obj_tok = ttnn.slice(hs, [0, 0, 0], [B, 1, c])
+        obj_tok = ttnn.reshape(obj_tok, (B, c))
+        object_score_logits = self._mlp_forward(self.p.pred_obj_score_head, obj_tok)
+        ttnn.deallocate(obj_tok)
         ub, uh, uw, uc = upscaled.shape
         ups_flat = ttnn.reshape(upscaled, (ub, uh * uw, uc))
         ups_flat = ttnn.transpose(ups_flat, -2, -1)
@@ -547,9 +629,6 @@ class TtMaskDecoder:
             final_act="sigmoid",
         )
         if multimask_output:
-            obj_tok = ttnn.slice(hs, [0, 0, 0], [B, 1, c])
-            obj_tok = ttnn.reshape(obj_tok, (B, c))
-            object_score_logits = self._mlp_forward(self.p.pred_obj_score_head, obj_tok)
             iou_pred = ttnn.slice(iou_pred, [0, 1], [B, self.num_mask_tokens])
             sam_tokens_out = ttnn.slice(
                 mask_tokens_out,
@@ -557,6 +636,11 @@ class TtMaskDecoder:
                 [B, self.num_mask_tokens, mask_tokens_out.shape[2]],
             )
         else:
-            iou_pred = ttnn.slice(iou_pred, [0, 0], [B, 1])
             sam_tokens_out = ttnn.slice(mask_tokens_out, [0, 0, 0], [B, 1, mask_tokens_out.shape[2]])
+            if dynamic_fallback:
+                masks, iou_pred = self._dynamic_multimask_via_stability(masks, iou_pred)
+            else:
+                iou_pred = ttnn.slice(iou_pred, [0, 0], [B, 1])
+        if masks.layout != ttnn.ROW_MAJOR_LAYOUT:
+            masks = ttnn.to_layout(masks, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return masks, iou_pred, sam_tokens_out, object_score_logits

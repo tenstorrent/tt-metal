@@ -14,7 +14,7 @@ TTNN implementation of [`facebook/sam2-hiera-tiny`](https://huggingface.co/faceb
 - The tt-metal Python environment activated:
 
 ```bash
-source "${PYTHON_ENV_DIR:-python_env}/bin/activate"
+source python_env/bin/activate
 ```
 
 ## Browser demo

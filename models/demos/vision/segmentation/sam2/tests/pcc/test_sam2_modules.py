@@ -178,22 +178,34 @@ def test_sam2_prompt_encoder(prompt_type, mesh_device, reset_seeds, model_locati
 @run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [N300_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-def test_sam2_mask_decoder(mesh_device, reset_seeds, model_location_generator):
+@pytest.mark.parametrize("multimask_output", [True, False])
+def test_sam2_mask_decoder(multimask_output, mesh_device, reset_seeds, model_location_generator):
     hf_model, processor = load_sam2_model_and_processor(model_location_generator)
     pixels = _processed_pixels(processor)
-    points = torch.tensor([[[[420.0, 500.0]]]])
-    labels = torch.tensor([[[1]]], dtype=torch.int32)
-    inputs = {"input_points": points, "input_labels": labels}
+    if multimask_output:
+        points = torch.tensor([[[[420.0, 500.0]]]])
+        labels = torch.tensor([[[1]]], dtype=torch.int32)
+        boxes = None
+        inputs = {"input_points": points, "input_labels": labels}
+    else:
+        points = labels = None
+        boxes = torch.tensor([[[100.0, 120.0, 800.0, 900.0]]])
+        inputs = {"input_boxes": boxes}
     with torch.no_grad():
         vision = hf_model.vision_encoder(pixels, return_dict=True)
-        golden_masks, golden_iou, golden_tokens, golden_object = _golden_prediction(hf_model, vision, inputs)
+        golden_masks, golden_iou, golden_tokens, golden_object = _golden_prediction(
+            hf_model,
+            vision,
+            inputs,
+            multimask_output=multimask_output,
+        )
 
     model = build_tt_sam2_model(hf_model, mesh_device)
     sparse = image_features = actual_masks = actual_iou = actual_tokens = actual_object = None
     try:
         model.set_image(pixels)
         image_head = model.image_head
-        sparse = image_head.prompt_encoder.embed_sparse(points, labels)
+        sparse = image_head.prompt_encoder.embed_sparse(points, labels, boxes)
         top = model._image_cache.top_nhwc
         image_features = ttnn.add(
             ttnn.reshape(top, (int(top.shape[0]), int(top.shape[1]) * int(top.shape[2]), image_head.hidden_dim)),
@@ -205,12 +217,12 @@ def test_sam2_mask_decoder(mesh_device, reset_seeds, model_location_generator):
             image_pe=image_head.dense_pe_seq,
             sparse_prompt_embeddings=sparse,
             dense_prompt_embeddings=image_head.no_mask_dense_seq,
-            multimask_output=True,
+            multimask_output=multimask_output,
             high_res_features=model._image_cache.high_res,
         )
-        mask_pcc = _assert_pcc(golden_masks.squeeze(1), ttnn.to_torch(actual_masks))
-        iou_pcc = _assert_pcc(golden_iou.squeeze(1), ttnn.to_torch(actual_iou))
         token_pcc = _assert_pcc(golden_tokens.squeeze(1), ttnn.to_torch(actual_tokens), threshold=0.95)
+        iou_pcc = _assert_pcc(golden_iou.squeeze(1), ttnn.to_torch(actual_iou))
+        mask_pcc = _assert_pcc(golden_masks.squeeze(1), ttnn.to_torch(actual_masks))
         torch.testing.assert_close(
             ttnn.to_torch(actual_object).float(), golden_object.squeeze(1).float(), rtol=0.1, atol=0.5
         )

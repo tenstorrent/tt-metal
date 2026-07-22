@@ -1,6 +1,5 @@
 # SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI U.S. Corp., for the TTNN port. Reference code © Meta Platforms, Inc. (Apache-2.0).
 # SPDX-License-Identifier: Apache-2.0
-"""Remote-ASIC SAM2 memory conditioning and mask tracking."""
 
 import torch
 
@@ -73,6 +72,7 @@ class TtSam2Tracker:
         self,
         parameters,
         device,
+        config,
         *,
         num_maskmem,
         max_obj_ptrs_in_encoder,
@@ -82,6 +82,10 @@ class TtSam2Tracker:
         self.p = parameters
         self.num_maskmem = num_maskmem
         self.max_obj_ptrs_in_encoder = max_obj_ptrs_in_encoder
+        self.multimask_output_in_sam = config.multimask_output_in_sam
+        self.multimask_min_pt_num = config.multimask_min_pt_num
+        self.multimask_max_pt_num = config.multimask_max_pt_num
+        self.multimask_output_for_tracking = config.multimask_output_for_tracking
         self.hidden_dim = 256
         self.mem_dim = 64
         self.feat_tokens = 4096
@@ -308,7 +312,23 @@ class TtSam2Tracker:
             ttnn.deallocate(projected_v)
         return out_seq
 
-    def _select_best_mask(self, masks, ious_dev, sam_tokens):
+    def _use_multimask(self, is_init_cond_frame, prompt_inputs):
+        num_points = 0
+        if prompt_inputs is not None:
+            point_labels = prompt_inputs["point_labels"]
+            if point_labels is not None:
+                num_points += int(point_labels.shape[-1])
+            if prompt_inputs["boxes"] is not None:
+                num_points += 2
+        return (
+            self.multimask_output_in_sam
+            and (is_init_cond_frame or self.multimask_output_for_tracking)
+            and self.multimask_min_pt_num <= num_points <= self.multimask_max_pt_num
+        )
+
+    def _select_best_mask(self, masks, ious_dev, sam_tokens, *, multimask_output):
+        if not multimask_output:
+            return masks, ttnn.reshape(sam_tokens, (1, self.hidden_dim)), [ious_dev]
         best_idx_dev = ttnn.argmax(ious_dev, dim=-1, keepdim=True)
         onehot_bool = ttnn.eq(self._mask_index_row(), best_idx_dev)
         onehot_row = ttnn.typecast(onehot_bool, ttnn.bfloat16)
@@ -341,7 +361,7 @@ class TtSam2Tracker:
         ]
         return best_low, best_token, selection_to_free
 
-    def _forward_sam_heads(self, pix_feat_seq, enc, prompt_inputs):
+    def _forward_sam_heads(self, pix_feat_seq, enc, prompt_inputs, *, is_init_cond_frame):
         sparse = None
         if prompt_inputs is not None:
             sparse = self.prompt_encoder.embed_sparse(
@@ -349,15 +369,21 @@ class TtSam2Tracker:
                 prompt_inputs["point_labels"],
                 prompt_inputs["boxes"],
             )
+        multimask_output = self._use_multimask(is_init_cond_frame, prompt_inputs)
         masks, ious_dev, sam_tokens, obj_score = self.sam_mask_decoder(
             image_embeddings=pix_feat_seq,
             image_pe=self.dense_pe_seq,
             sparse_prompt_embeddings=sparse,
             dense_prompt_embeddings=self.no_mask_dense_seq,
-            multimask_output=True,
+            multimask_output=multimask_output,
             high_res_features=enc.high_res,
         )
-        best_low, best_token, selection_to_free = self._select_best_mask(masks, ious_dev, sam_tokens)
+        best_low, best_token, selection_to_free = self._select_best_mask(
+            masks,
+            ious_dev,
+            sam_tokens,
+            multimask_output=multimask_output,
+        )
         tiled_obj_score = (
             obj_score if obj_score.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(obj_score, ttnn.TILE_LAYOUT)
         )
@@ -500,8 +526,13 @@ class TtSam2Tracker:
         )
         return host_mask, ttnn.record_event(self.device, self._output_cq_id)
 
-    def _finish_track_step(self, enc, pix_feat, prompt_inputs):
-        heads = self._forward_sam_heads(pix_feat, enc, prompt_inputs)
+    def _finish_track_step(self, frame_idx, enc, pix_feat, prompt_inputs):
+        heads = self._forward_sam_heads(
+            pix_feat,
+            enc,
+            prompt_inputs,
+            is_init_cond_frame=frame_idx == 0,
+        )
         high_res_host, high_res_read_event = self._begin_mask_readback(heads["high_res"])
         ttnn.deallocate(pix_feat)
         maskmem_features = self._encode_new_memory(
@@ -529,7 +560,7 @@ class TtSam2Tracker:
         if self._closed:
             raise RuntimeError("SAM2 tracker is closed")
         pix_feat = self._prepare_memory_conditioned_features(frame_idx, enc, bank)
-        return self._finish_track_step(enc, pix_feat, prompt_inputs)
+        return self._finish_track_step(frame_idx, enc, pix_feat, prompt_inputs)
 
     def close(self):
         if self._closed:
