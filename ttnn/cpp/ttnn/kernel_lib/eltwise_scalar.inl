@@ -10,8 +10,6 @@
 #include "api/compute/eltwise_unary/clamp.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rdiv.h"
-#include "api/compute/eltwise_unary/rsub.h"
-#include "api/compute/eltwise_unary/remainder.h"
 #include "api/compute/eltwise_unary/dropout.h"  // Dropout
 
 namespace compute_kernel_lib {

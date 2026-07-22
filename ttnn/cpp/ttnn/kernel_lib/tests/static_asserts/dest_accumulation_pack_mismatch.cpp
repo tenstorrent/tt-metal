@@ -16,18 +16,19 @@ void kernel_main() {
     eltwise_chain(
         EltwiseShape::tiles(n),
         BinaryFpu<
-            cb_in,
-            cb_in,
+            input(cb_in, InputLifecycle::Bulk, OperandKind::Block),
+            input(cb_in, InputLifecycle::Bulk, OperandKind::Block),
             BinaryFpuOp::Add,
             BroadcastDim::None,
-            InputLifecycle::Bulk,
-            InputLifecycle::Bulk,
-            BinaryDataFormatReconfig::Input,
             Dst::D0,
-            OperandKind::Block,
-            OperandKind::Block,
-            TileOffset::Unset,
-            TileOffset::Unset,
             DestAccumulation::Enabled>{},
-        PackTile<cb_out, OutputLifecycle::DestAccumulation, PackTileReconfig::Output, Dst::D1>{});
+        PackTile<
+            output(
+                cb_out,
+                OutputLifecycle::DestAccumulation,
+                DataFormatReconfig::Enabled,
+                PackRelu::Disabled,
+                L1Accumulation::Disabled,
+                DestAccumulation::Enabled),
+            Dst::D1>{});
 }
