@@ -1,0 +1,25 @@
+# Heavy artifacts kept on disk for reproducibility but NOT committed to tt-metal.
+# Regen via scripts/download_model.py and scripts/gen_golden.py.
+
+# Reference CosyVoice repo (tracked upstream; cloned by Phase 0 setup).
+# Its source is read-only reference for op-inventory / golden fixtures.
+model_data/CosyVoice_src/
+
+# Downloaded CosyVoice2-0.5B checkpoint + HF cache (model_data/cosyvoice2-0.5B/).
+model_data/cosyvoice2-0.5B/
+
+# Golden reference fixtures + generated WAVs (large, reproducible).
+model_data/golden/
+demo/output/
+
+# Python caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Logs
+*.log
+
+# Un-ignore demo text data (root .gitignore has blanket "data/" rule)
+!demo/data/
+!demo/data/**

@@ -1,0 +1,70 @@
+# Curated Python deps for CosyVoice2-0.5B reference bring-up (Stage 1) inside the
+# tt-metal env. This file is the source of truth for `pip install -r`; deliberately
+# kept inside the demo dir so the next engineer can reproduce 1:1.
+#
+# Constraints we MUST NOT break (tt-metal env already has these and ttnn binds to
+# this exact torch ABI):
+#   torch           == 2.11.0+cpu   (DO NOT CHANGE — ttnn 0.1.dev29059 is built against it)
+#   transformers    == 5.10.2       (CV2 needs Qwen2ForCausalLM; verified present in 5.10.2)
+#   numpy           == 1.26.4       (keep; transformers/torchaudio pin compatible)
+#   huggingface-hub == 1.16.1       (snapshot_download; verified works)
+#   librosa         == 0.10.0       (keep)
+#
+# Deliberately EXCLUDED vs upstream CosyVoice requirements.txt:
+#   - torch==2.3.1, torchaudio==2.3.1        : would downgrade torch and break ttnn; we keep torch 2.11
+#                                              and install torchaudio built for torch 2.11 (CPU).
+#   - onnxruntime-gpu==1.18.0                 : no CUDA in this env; install CPU onnxruntime instead.
+#   - deepspeed, lightning, tensorboard       : training-only; reference inference does not import them.
+#   - tensorrt-cu12*                          : TRT runtime path; legacy inference uses plain torch flow.
+#   - grpcio, grpcio-tools, fastapi, fastapi-cli, gradio, uvicorn : webui/server; not the demo path.
+#   - diffusers==0.29.0                       : NEEDED after all — imported at top of
+#                                              matcha/models/components/decoder.py
+#                                              (vendored Matcha submodule) as
+#                                              `from diffusers.models.activations import get_activation`;
+#                                              the import is unconditional even though CV2's estimator
+#                                              only uses the ResnetBlock1D / BasicTransformerBlock path,
+#                                              so the package must be importable. Pin to upstream ref ver.
+#   - conformer==0.3.2                         : NEEDED after all — Matcha's matcha/models/components/
+#                                              decoder.py imports `from conformer import ConformerBlock`
+#                                              unconditionally at module top. CV2's flow estimator does
+#                                              NOT actually instantiate a ConformerBlock (it uses
+#                                              ResnetBlock1D), but the import surface requires the pkg.
+#                                              The "transformer encoder conformer" used by CV2's
+#                                              UpsampleConformerEncoder is vendored in cosyvoice/transformer/
+#                                              and is unrelated to this pip package.#   - pyworld                                 : only in cosyvoice/dataset/processor.py (training).
+#   - modelscope                              : only used as a fallback for snapshot_download when
+#                                              HF/ModelScope paths are needed; kept since cli/cosyvoice.py
+#                                              imports it at module top.
+#   - x-transformers                          : imported by class_utils.py via flow/DiT/dit.py (DiT branch
+#                                              is pulled in transitively at import time even though CV2
+#                                              uses the UNet1D estimator); keep to avoid ImportError.
+#   - ttsfrd                                  : closed-source Chinese text frontend (cosyvoice-ttsfrd);
+#                                              optional — frontend falls back to wetext or empty normalizer.
+
+# --- Already-satisfied (listed for documentation only; installed by tt-metal env) ---
+# torch==2.11.0+cpu
+# numpy==1.26.4
+# transformers==5.10.2
+# huggingface-hub==1.16.1
+# librosa==0.10.0
+
+# --- Need to install (CPU-only, pinned loosely to stay compatible with torch 2.11) ---
+torchaudio                 # build matches torch 2.11 (CPU); let pip pick the matched wheel
+onnxruntime                # CPU ExecutionProvider only; ref providers include CPUExecutionProvider
+onnx                       # ONNX model inspection (flow estimator op table, §4.2.1); pure protobuf, no ABI risk
+omegaconf                  # used by cosyvoice/flow/flow.py (DictConfig default)
+hyperpyyaml                # used by cli/cosyvoice.py to load cosyvoice2.yaml
+tqdm                       # cli/cosyvoice.py progress bars
+einops                     # flow/decoder.py + flow/DiT/* (pack/rearrange/repeat)
+x-transformers             # imported under class_utils.py -> flow/DiT/dit.py
+openai-whisper             # whisper.log_mel_spectrogram (frontend mel feat for speech tokenizer)
+inflect                    # cli/frontend.py English number normalization
+wetext                     # Chinese text normalization fallback (preferred over empty frontend)
+modelscope                 # imported at top of cli/cosyvoice.py (snapshot_download fallback)
+soundfile                  # load_wav / wav write helpers (librosa dep but explicit)
+diffusers==0.29.0          # matcha/models/components/decoder.py imports get_activation at module top
+conformer==0.3.2           # matcha/models/components/decoder.py imports ConformerBlock at module top
+hydra-core                 # matcha/models/components/flow_matching.py imports hydra at module top
+lightning==2.2.4           # matcha/utils/pylogger.py: `from lightning.pytorch.utilities import rank_zero_only`
+gdown                      # matcha/utils/utils.py imports gdown at module top (pulled by matcha.utils.__init__)
+wget                       # matcha/utils/utils.py imports wget at module top (same chain)
