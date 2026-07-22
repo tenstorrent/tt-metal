@@ -47,6 +47,11 @@ class EncoderSDPAConfig:
     # BF8 halves the score-CB L1 footprint (~492KB at q256), which is what lets
     # q256/k2048 fit. Experiment: validate PCC/perf before enabling.
     score_cb_bf8: bool = False
+    # Optional exact QK/PV matmul subblock overrides. None retains the factory's
+    # first largest valid shape. These are explicit sweep knobs; both dimensions
+    # are in tiles and must divide their parent blocks and fit DEST.
+    qk_subblock: tuple[int, int] | None = None
+    out_subblock: tuple[int, int] | None = None
     # Emit SDPA output directly in concat-heads layout [B,1,S,H*D]. This is
     # exact for the BGE head-fold contract and removes a DRAM reorder pass.
     direct_concat_heads: bool = False
@@ -199,14 +204,37 @@ class EncoderSDPAPlan:
             g -= 1
         return g
 
+    def _validate_subblock(
+        self,
+        subblock: tuple[int, int],
+        block_h: int,
+        block_w: int,
+        *,
+        max_h: int = 1 << 30,
+    ) -> tuple[int, int]:
+        sh, sw = subblock
+        if sh <= 0 or sw <= 0 or sh > max_h:
+            raise ValueError(f"invalid SDPA subblock {subblock}")
+        if sh * sw > self.DST_SIZE:
+            raise ValueError(f"SDPA subblock {subblock} exceeds DEST capacity {self.DST_SIZE}")
+        if block_h % sh or block_w % sw:
+            raise ValueError(f"SDPA subblock {subblock} does not divide block {(block_h, block_w)}")
+        return subblock
+
     @property
     def qk_out_subblock(self) -> tuple[int, int]:
+        if self.config.qk_subblock is not None:
+            return self._validate_subblock(self.config.qk_subblock, self.q_chunk_tiles, self.k_chunk_tiles)
         return self._largest_subblock(self.q_chunk_tiles, self.k_chunk_tiles, self.DST_SIZE)
 
     @property
     def out_out_subblock(self) -> tuple[int, int]:
         # Streaming caps subblock height at 2 (matches factory's max_h arg).
         max_h = 2 if self.config.use_streaming else (1 << 30)
+        if self.config.out_subblock is not None:
+            return self._validate_subblock(
+                self.config.out_subblock, self.q_chunk_tiles, self.head_dim_tiles, max_h=max_h
+            )
         return self._largest_subblock(self.q_chunk_tiles, self.head_dim_tiles, self.DST_SIZE, max_h)
 
     @staticmethod
