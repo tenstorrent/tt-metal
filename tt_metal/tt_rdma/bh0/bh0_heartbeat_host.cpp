@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
     };
     const KernelHandle k =
         CreateKernel(program, "tt_metal/tt_rdma/bh0/kernels/bh_rdma_heartbeat.cpp", eth_logical, cfg);
-    SetRuntimeArgs(program, k, eth_logical, {TT_RDMA_RCB_ADDR, spin});
+    SetRuntimeArgs(program, k, eth_logical, {TT_RDMA_RCB_ADDR, spin, /*num_beats=*/0u});  // 0 = persistent
 
     // Dispatch NON-BLOCKING (kernel is persistent -> do NOT Finish()).
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();

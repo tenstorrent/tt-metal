@@ -11,4 +11,5 @@ set(UNIT_TESTS_DEPLOYMENT_SRC
     eth/test_eth_data_integrity_dram_bidir.cpp
     eth/test_eth_data_integrity_dram.cpp
     eth/test_eth_stress_test.cpp
+    eth/test_bh0_coexistence.cpp
 )

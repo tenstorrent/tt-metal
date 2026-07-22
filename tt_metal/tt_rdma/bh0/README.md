@@ -27,16 +27,22 @@ from `programming_examples/hello_world_datamovement_kernel`).
 is NOT in the public installed TT-Metalium (verified: an out-of-tree `find_package(TT-Metalium)`
 build compiles everything *except* `EthernetConfig`). So:
 
-1. Wire the target into the internal build — in `tests/tt_metal/tt_metal/CMakeLists.txt`, next to
-   `add_subdirectory(.../deployment)`, add:
-   ```cmake
-   add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal/tt_rdma/bh0 tt_rdma_bh0)
-   ```
-2. Build the repo normally (`./build_metal.sh`) — `build_Release/` already exists on this box.
-3. Run (TT_METAL_HOME = repo root so the kernel path + contract headers resolve):
-   ```bash
-   TT_METAL_HOME=<repo-root> ./build_Release/.../bh0_heartbeat  [device_id] [eth_idx] [spin] [hold_s]
-   ```
+Two in-tree build products (both already wired):
+- **Standalone tool `bh0_heartbeat`** (#1) — `add_subdirectory(... tt_metal/tt_rdma/bh0 ...)` is in
+  `tests/tt_metal/tt_metal/CMakeLists.txt` (next to `deployment`); persistent kernel (num_beats=0),
+  run + observe + reset. Full 10-min gate.
+- **gtest `TtRdmaBH0CoexistenceHeartbeat`** (#4) — `tests/tt_metal/tt_metal/deployment/eth/test_bh0_coexistence.cpp`
+  in `unit_tests_deployment` (added to `deployment/sources.cmake`); bounded kernel, CI-friendly
+  ~seconds smoke, asserts `ensure_links()` before AND after. Guaranteed-compile (reuses the
+  deployment fixture + helpers).
+
+```bash
+./build_metal.sh                                   # build_Release/ already exists on this box
+# standalone tool (persistent):
+TT_METAL_HOME=<repo-root> ./build_Release/.../bh0_heartbeat  [device_id] [eth_idx] [spin] [hold_s]
+# gtest (bounded smoke):
+./build_Release/test/tt_metal/unit_tests_deployment --gtest_filter='*TtRdmaBH0Coexistence*'
+```
 - **`eth_idx`** picks which active eth core (argv[2], default 0) — the "pin the core" knob. On start
   the tool **prints the chosen core's logical AND physical/NOC coords**, so you know exactly which
   `X-Y` to watch with `erisc_ports.sh` / `tt-exalens` (the logical eth coord ≠ the NOC coord).

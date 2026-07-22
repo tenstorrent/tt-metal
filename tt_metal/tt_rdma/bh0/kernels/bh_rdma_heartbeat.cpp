@@ -25,17 +25,17 @@ void kernel_main() {
     //        tt-exalens brxy can watch the counter advance).
     const uint32_t hb_addr = get_arg_val<uint32_t>(0);
     const uint32_t spin = get_arg_val<uint32_t>(1);
+    // arg2 = num_beats. 0 = PERSISTENT (standalone tool: run + observe + reset). >0 = BOUNDED
+    // (gtest: writes beat counts up to num_beats then returns, so the deployment
+    // wait_to_finish_eth_timeout_cores() helper can poll hb -> num_beats and complete cleanly).
+    const uint32_t num_beats = get_arg_val<uint32_t>(2);
 
     volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hb_addr);
 
-    uint32_t beat = 0;
-    for (;;) {         // persistent — mirrors the eventual drain loop
-        *hb = ++beat;  // the heartbeat the gate watches advance
+    for (uint32_t beat = 1; num_beats == 0 || beat <= num_beats; ++beat) {
+        *hb = beat;  // heartbeat the gate watches advance (final value == num_beats when bounded)
         for (volatile uint32_t i = 0; i < spin; ++i) {
             // pace only — deliberately NO NoC ops, NO service_eth_msg, NO base-FW calls
         }
     }
-    // For a first *bounded* smoke (clean program completion, no reset needed),
-    // replace the `for (;;)` above with `for (uint32_t b = 0; b < num_beats; ++b)`
-    // and take num_beats as arg2.
 }
