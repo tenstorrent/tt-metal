@@ -73,7 +73,7 @@ Tensor create_device_tensor(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     std::optional<TensorTopology> tensor_topology) {
     GraphTracker::instance().track_function_start(
-        "ttnn::create_device_tensor",
+        "tt::tt_metal::create_device_tensor",
         tensor_spec.logical_shape(),
         tensor_spec.tensor_layout().get_data_type(),
         tensor_spec.tensor_layout().get_layout(),
@@ -160,7 +160,7 @@ Tensor to_layout(const Tensor& input_tensor, Layout target_layout) {
 namespace ttnn {
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
-    GraphTracker::instance().track_function_start("ttnn::copy_to_device", host_tensor, device_tensor, cq_id);
+    GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
     if (is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {
         enqueue_write_tensor(cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
@@ -178,7 +178,7 @@ void copy_to_device(
     const std::byte* src,
     Tensor& device_tensor,
     const std::optional<BufferRegion>& region) {
-    GraphTracker::instance().track_function_start("ttnn::copy_to_device", queue, src, device_tensor, region);
+    GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", queue, src, device_tensor, region);
     enqueue_write_tensor(queue, src, device_tensor.device_storage().get_mesh_tensor(), region);
     GraphTracker::instance().track_function_end(device_tensor);
 }
@@ -189,13 +189,15 @@ void copy_to_host(
     std::byte* dst,
     const std::optional<BufferRegion>& region,
     bool blocking) {
-    GraphTracker::instance().track_function_start("ttnn::copy_to_host", queue, device_tensor, dst, region, blocking);
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::copy_to_host", queue, device_tensor, dst, region, blocking);
     enqueue_read_tensor(queue, device_tensor.mesh_tensor(), dst, region, blocking);
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
 void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<QueueId> cq_id) {
-    GraphTracker::instance().track_function_start("ttnn::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
     if (device_tensor.device_storage().is_uniform_storage()) {
         enqueue_read_tensor(cq, device_tensor.mesh_tensor(), host_tensor.host_storage().host_tensor(), blocking);
@@ -529,7 +531,7 @@ Tensor reshape(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape)
 namespace ttnn {
 
 Tensor to_dtype(const Tensor& input_tensor, const DataType& dtype) {
-    GraphTracker::instance().track_function_start("ttnn::to_dtype", input_tensor, dtype);
+    GraphTracker::instance().track_function_start("tt::tt_metal::to_dtype", input_tensor, dtype);
     auto output_tensor = Tensor(::tt::tt_metal::to_dtype(input_tensor.host_tensor(), dtype));
     GraphTracker::instance().track_function_end(output_tensor);
     return output_tensor;

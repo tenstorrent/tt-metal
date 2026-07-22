@@ -157,7 +157,7 @@ bool should_use_scientific_notation(ttsl::Span<const T> buffer) {
 
 constexpr int constexpr_strlen(const char* str) { return *str ? 1 + constexpr_strlen(str + 1) : 0; }
 
-constexpr auto TENSOR_TYPE_STRING = "ttnn.ttnn::Tensor";
+constexpr auto TENSOR_TYPE_STRING = "ttnn.Tensor";
 constexpr auto TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH = constexpr_strlen(TENSOR_TYPE_STRING) + 1;
 
 template <typename T>
