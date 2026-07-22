@@ -774,7 +774,13 @@ class Ideogram4Pipeline(PipelineAPIMixin):
             )
             if traced:
                 if self._step_tracer is None:
-                    self._step_tracer = Tracer(step_fn, device=dev, clone_prep_inputs=False)
+                    # step_fn writes its result back into z_dev in place (ttnn.copy(z_next, z_dev)),
+                    # so the prep pass MUST run on a clone; otherwise it applies step 0's Euler
+                    # update to the real z_dev and the executed trace applies it a second time,
+                    # double-counting the first step. Cloning only affects the one prep input; the
+                    # per-step buffer reuse keys on z_dev's address at _execute time, not on the
+                    # prep clone, so it is unaffected.
+                    self._step_tracer = Tracer(step_fn, device=dev, clone_prep_inputs=True)
                 z_out = self._step_tracer(*args)
             else:
                 # Untraced: move the host inputs onto device and run the step eagerly (no
