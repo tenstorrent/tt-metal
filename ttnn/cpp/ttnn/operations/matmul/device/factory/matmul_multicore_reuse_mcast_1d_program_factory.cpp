@@ -2932,6 +2932,7 @@ inline void override_mcast_in1_program_parameters(
 static void override_mcast_in0_program_parameters(
     tt_metal::Program& program,
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& override_variables,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const ttnn::prim::MatmulInputs& tensor_args,
     const std::vector<ttnn::Tensor>& output_tensors) {
     const auto& input_tensors = tensor_args.input_tensors;
@@ -2972,7 +2973,13 @@ static void override_mcast_in0_program_parameters(
     }
 
     if (src1_sharded) {
-        UpdateDynamicCircularBufferAddress(program, override_variables.cbs.at(0), src_b_tensor);
+        // cbs[0] is cb_src1. For the receiver-contiguous GCB path it is a GlobalCircularBuffer whose
+        // address is owned by the GCB (not tensor-backed), so the tensor overload of
+        // UpdateDynamicCircularBufferAddress would TT_FATAL on a program-cache hit. Skip it there,
+        // mirroring the gather_in0 override.
+        if (!global_cb.has_value()) {
+            UpdateDynamicCircularBufferAddress(program, override_variables.cbs.at(0), src_b_tensor);
+        }
     }
 
     if (bias_tensor.has_value() && bias_tensor.value().is_sharded()) {
@@ -3053,7 +3060,8 @@ void override_program_parameters(
     const std::vector<ttnn::Tensor>& tensor_return_value) {
     switch (override_variables.type) {
         case ttnn::prim::Matmul1DType::MCAST_IN0:
-            override_mcast_in0_program_parameters(program, override_variables, tensor_args, tensor_return_value);
+            override_mcast_in0_program_parameters(
+                program, override_variables, global_cb, tensor_args, tensor_return_value);
             break;
         case ttnn::prim::Matmul1DType::GATHER_IN0: {
             override_gather_in0_program_parameters(
