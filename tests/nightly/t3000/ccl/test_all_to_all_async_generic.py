@@ -343,86 +343,93 @@ def test_all_to_all(
     [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-def test_all_to_all_fabric_2d_glm_head_to_sequence(mesh_device):
-    """Exercise the GLM sparse-MLA head-to-sequence redistribution on a LoudBox fabric."""
-    run_all_to_all_impl(
-        mesh_device,
-        mesh_device.get_num_devices(),
-        logical_shape=[1, 64, 1280, 576],
-        in_dim=1,
-        out_dim=2,
-        num_links=2,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        topology=ttnn.Topology.Linear,
-        num_iters=2,
-        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
-        output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
-        do_check=True,
-        trace_mode=False,
-        reuse_inputs=True,
-        cluster_axis=1,
-    )
-
-
-# These global tensors produce the exact per-device inputs observed in the GLM sparse-MLA profiler
-# on a 2x4 SPxTP mesh. Run this node through run_safe_pytest.sh --profile; its device-kernel rows are
-# directly comparable to GLM's 0.667669 ms head->sequence and 0.604350 ms sequence->head calls.
-GLM_A2A_PERF_CASES = [
-    pytest.param(
-        [1, 64, 1280, 576],
-        1,
-        2,
-        [1, 16, 640, 576],
-        id="head_to_sequence",
-    ),
-    pytest.param(
-        [1, 128, 640, 512],
-        2,
-        1,
-        [1, 64, 160, 512],
-        id="sequence_to_head",
-    ),
-]
-
-
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
-    "device_params",
-    [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
-    indirect=True,
+    (
+        "cluster_axis,logical_shape,in_dim,out_dim,topology,input_mem_config,"
+        "output_mem_config,trace_mode,reuse_inputs"
+    ),
+    [
+        pytest.param(
+            1,
+            [1, 32, 128, 576],
+            2,
+            1,
+            None,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            False,
+            False,
+            id="axis1-auto-2to1-dram",
+        ),
+        pytest.param(
+            1,
+            [1, 128, 128, 512],
+            1,
+            2,
+            ttnn.Topology.Linear,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            True,
+            True,
+            id="axis1-linear-1to2-dram-trace",
+        ),
+        pytest.param(
+            0,
+            [1, 2, 256, 768],
+            3,
+            2,
+            ttnn.Topology.Linear,
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 4))}),
+                    (128, 32),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 4))}),
+                    (64, 64),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            False,
+            False,
+            id="axis0-linear-3to2-l1-width-sharded",
+        ),
+    ],
 )
-@pytest.mark.parametrize(
-    "logical_shape,in_dim,out_dim,per_device_input_shape",
-    GLM_A2A_PERF_CASES,
-)
-def test_all_to_all_fabric_2d_glm_perf(
+def test_all_to_all_fabric_2d(
     mesh_device,
+    cluster_axis,
     logical_shape,
     in_dim,
     out_dim,
-    per_device_input_shape,
+    topology,
+    input_mem_config,
+    output_mem_config,
+    trace_mode,
+    reuse_inputs,
 ):
-    """Profile and exactly check the two A2As used around GLM SparseSDPA."""
-    num_links = 2  # GLM uses both trained Blackhole fabric routing planes; FABRIC_2D one-link hangs.
-    logger.info(
-        "GLM A2A perf shape: per-device input={}, in_dim={}, out_dim={}", per_device_input_shape, in_dim, out_dim
-    )
     run_all_to_all_impl(
         mesh_device,
         mesh_device.get_num_devices(),
         logical_shape=logical_shape,
         in_dim=in_dim,
         out_dim=out_dim,
-        num_links=num_links,
+        num_links=2,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
         num_iters=2,
-        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
-        output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        input_mem_config=input_mem_config,
+        output_mem_config=output_mem_config,
         do_check=True,
-        trace_mode=False,
-        reuse_inputs=True,
-        cluster_axis=1,
+        trace_mode=trace_mode,
+        reuse_inputs=reuse_inputs,
+        cluster_axis=cluster_axis,
     )
