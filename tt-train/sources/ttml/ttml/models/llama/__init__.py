@@ -20,7 +20,7 @@ from ttml.modules import (
     VocabParallelEmbedding,
 )
 
-from .. import EmbeddingParallelType, RunnerType, WeightTyingType, memory_efficient_runner
+from .. import EmbeddingPlacement, RunnerType, WeightTyingType, memory_efficient_runner
 from .autograd_ops import SliceLastDim
 from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
 
@@ -46,8 +46,9 @@ class LlamaConfig:
     weights are padded internally to ``lcm(32, tp_size)``, exposed as
     ``Llama.padded_vocab_size``.
 
-    ``embedding_parallel`` selects how the token-embedding table is sharded under
-    TP (see :class:`EmbeddingParallelType`); it is ignored when ``use_tp=False``.
+    ``embedding_placement`` selects how the token-embedding table is placed across the
+    TP axis (see :class:`EmbeddingPlacement`); it defaults to ``Replicated`` (no
+    sharding) and is ignored when ``use_tp=False``.
     """
 
     hidden_size: int = 384
@@ -65,7 +66,7 @@ class LlamaConfig:
     weight_tying: WeightTyingType = WeightTyingType.Disabled
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
     use_tp: bool = False
-    embedding_parallel: EmbeddingParallelType = EmbeddingParallelType.FeatureParallel
+    embedding_placement: EmbeddingPlacement = EmbeddingPlacement.Replicated
 
     def __post_init__(self):
         if self.max_position_embeddings % 32 != 0:
@@ -100,14 +101,14 @@ class LlamaConfig:
             )
         if self.use_tp:
             if (
-                self.embedding_parallel == EmbeddingParallelType.FeatureParallel
-                and self.weight_tying == WeightTyingType.Enabled
+                self.weight_tying == WeightTyingType.Enabled
+                and self.embedding_placement != EmbeddingPlacement.VocabParallel
             ):
                 raise ValueError(
-                    "embedding_parallel=FeatureParallel shards the token embedding on the "
-                    "feature (hidden) dimension, whose layout is incompatible with the "
-                    "vocab-parallel LM head; weight tying cannot be used. Set "
-                    "weight_tying=Disabled or embedding_parallel=VocabParallel."
+                    "weight tying ties the token embedding to the vocab-parallel LM head, so "
+                    "the embedding must share that layout: embedding_placement must be "
+                    f"VocabParallel, got {self.embedding_placement.name}. Set "
+                    "embedding_placement=VocabParallel or weight_tying=Disabled."
                 )
             tp_size = ttml.mesh().axis_size("tp")
             if self.num_attention_heads % tp_size != 0:
@@ -159,7 +160,17 @@ class Llama(AbstractModuleBase):
                 gather_output=False,
                 axis_name="tp",
             )
-            if config.embedding_parallel == EmbeddingParallelType.FeatureParallel:
+            if config.embedding_placement == EmbeddingPlacement.VocabParallel:
+                # Shard the embedding table on the vocab dim to mirror the LM head:
+                # each device keeps only its vocab slice instead of a full replicated
+                # table, and the matching layout allows a tied weight (below).
+                self.tok_emb = VocabParallelEmbedding(
+                    self.padded_vocab_size,
+                    config.hidden_size,
+                    weight_init=ttml.init.normal(0.0, 0.02),
+                    axis_name="tp",
+                )
+            elif config.embedding_placement == EmbeddingPlacement.FeatureParallel:
                 # Shard the embedding table on the feature (hidden) dim: a fully
                 # local lookup plus an all-gather, no id masking. Its layout does
                 # not match the vocab-parallel LM head, so weight tying is
@@ -171,14 +182,14 @@ class Llama(AbstractModuleBase):
                     axis_name="tp",
                 )
             else:
-                # Shard the embedding table on the vocab dim to mirror the LM head:
-                # each device keeps only its vocab slice instead of a full replicated
-                # table, and the matching layout allows a tied weight (below).
-                self.tok_emb = VocabParallelEmbedding(
+                # Replicated (default): every device holds the full table. The
+                # lookup is fully local with no collective, and the replicated
+                # gradients already match across TP ranks (synchronize_gradients
+                # reduces only the DDP axis).
+                self.tok_emb = Embedding(
                     self.padded_vocab_size,
                     config.hidden_size,
                     weight_init=ttml.init.normal(0.0, 0.02),
-                    axis_name="tp",
                 )
         else:
             self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32

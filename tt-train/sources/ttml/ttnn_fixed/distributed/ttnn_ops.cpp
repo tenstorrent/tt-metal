@@ -186,8 +186,7 @@ ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std
         /* cluster_axis */ cluster_axis);
 }
 
-tt::tt_metal::Tensor mesh_partition(
-    const tt::tt_metal::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
     // Purely local slice keyed on each device's mesh coordinate — no CCL/fabric.
     // ttnn::mesh_partition already returns the input unchanged when the axis size is 1,
     // so no single-device guard is needed here.

@@ -18,8 +18,8 @@ ttnn::Tensor reduce_scatter(
 // coordinate — the inverse of all_gather with NO collective. Only correct/meaningful
 // when the input is replicated across `cluster_axis`; requires `dim` divisible by the
 // axis size and tile-aligned in TILE layout.
-tt::tt_metal::Tensor mesh_partition(
-    const tt::tt_metal::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
+ttnn::Tensor mesh_partition(
+    const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
 
 /**
  * Direction for ring shift operation.

@@ -51,7 +51,14 @@ from ttml.datasets import InMemoryDataloader, causal_lm_collate_fn
 from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
 
 from formatting import HEADER_WIDTH, print_footer, print_header, shorten_home
-from model_builders import FLOPS_REGISTRY, Model, ModelConfig, instantiate_model_from_config, parse_model_config
+from model_builders import (
+    FLOPS_REGISTRY,
+    Model,
+    ModelConfig,
+    _LlamaSpec,
+    instantiate_model_from_config,
+    parse_model_config,
+)
 from callbacks import (
     AverageLossCallback,
     MemoryTrackerCallback,
@@ -785,6 +792,15 @@ def main() -> None:
         training_cfg.clip_grad_norm_max_norm = args.max_grad_norm
     if args.sequence_length is not None:
         model_cfg.max_sequence_length = args.sequence_length
+    if args.embedding_placement is not None:
+        # Model-specific override: only the llama spec carries embedding_placement.
+        # isinstance narrows model_cfg.spec to _LlamaSpec (and rules out None).
+        if not isinstance(model_cfg.spec, _LlamaSpec):
+            raise SystemExit("error: --embedding-placement is only supported for model_type=llama")
+        try:
+            model_cfg.spec.embedding_placement = ttml.models.EmbeddingPlacement.from_string(args.embedding_placement)
+        except ValueError as e:
+            raise SystemExit(f"error: {e}")
 
     if args.checkpoint_dir:
         os.makedirs(args.checkpoint_dir, exist_ok=True)

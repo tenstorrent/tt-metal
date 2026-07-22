@@ -101,13 +101,14 @@ class VocabParallelEmbedding(AbstractModuleBase):
         weight_mapper = mesh.axis_mapper(axis_name, tdim=2)
         self.weight = Parameter(weight_init(weight_shape, mapper=weight_mapper))
 
-        # Per-device vocab-start offsets (fp32), one scalar shard per TP rank.
-        starts_np = (np.arange(self.tp_size, dtype=np.float32) * self.num_embeddings_per_partition).reshape(
+        # Per-device vocab-start offset (one shard per TP rank); int32 + row-major to
+        # match the ids so the subtract in forward stays off the tile path.
+        starts_np = (np.arange(self.tp_size, dtype=np.int32) * self.num_embeddings_per_partition).reshape(
             1, 1, self.tp_size, 1
         )
         self._vocab_start = ttml.autograd.Tensor.from_numpy(
-            starts_np, ttnn.Layout.TILE, ttnn.DataType.FLOAT32, weight_mapper
-        ).get_value(ttml.autograd.PreferredPrecision.FULL)
+            starts_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.INT32, weight_mapper
+        ).get_value(ttml.autograd.PreferredPrecision.NATIVE)
 
     def _check_tp_replicated(self, x: ttml.autograd.Tensor) -> None:
         """Reject ids that are sharded along the TP axis.
@@ -139,36 +140,34 @@ class VocabParallelEmbedding(AbstractModuleBase):
         """
         self._check_tp_replicated(x)
 
+        # Ids stay row-major (arrive RM, gather needs RM), so the index math skips the
+        # tile round-trip. int32 is signed, so out-of-range-below ids go negative for the
+        # ge(., 0) check.
         ids = x.get_value(ttml.autograd.PreferredPrecision.FULL)
-        ids_f = ttnn.typecast(ttnn.to_layout(ids, ttnn.Layout.TILE), ttnn.DataType.FLOAT32)
+        ids_signed = ttnn.typecast(ids, ttnn.DataType.INT32)
 
-        local = ttnn.subtract(ids_f, self._vocab_start)
+        local = ttnn.subtract(ids_signed, self._vocab_start)
         in_range = ttnn.multiply(
-            ttnn.ge(local, 0.0),
-            ttnn.lt(local, float(self.num_embeddings_per_partition)),
+            ttnn.ge(local, 0),
+            ttnn.lt(local, self.num_embeddings_per_partition),
         )
 
-        # Out-of-range ids still need an in-bounds row for the gather: the output
-        # mask nulls their value but can't undo an out-of-bounds lookup. where()
-        # selects, so in-range ids pass through unperturbed.
-        local = ttnn.where(in_range, local, 0.0)
-        # +0.5 makes the truncating uint32 cast round to nearest, so any sub-0.5
-        # fp drift in `local` snaps back to the intended row.
-        local_ids = ttnn.to_layout(ttnn.typecast(ttnn.add(local, 0.5), ttnn.DataType.UINT32), ttnn.Layout.ROW_MAJOR)
+        # Multiply by the 0/1 mask so out-of-range ids gather row 0 (in-bounds); the
+        # output mask below nulls their looked-up value.
+        local_ids = ttnn.typecast(ttnn.multiply(local, in_range), ttnn.DataType.UINT32)
 
         emb = ttml.ops.embedding.embedding(
             ttml.autograd.create_tensor(local_ids, requires_grad=False), self.weight.tensor
         )
 
-        # Zero the rows this device doesn't own before the sum; this also zeroes
-        # their backward grad, so nothing accumulates onto row 0. Mask stays fp32 —
-        # ttnn.multiply mixes it with the bf16 embedding and outputs bf16.
-        mask = ttnn.transpose(in_range, 2, 3)
+        # Zero out-of-range tokens before the sum (they gathered the bogus row 0); this
+        # also zeroes their grad, so nothing accumulates onto row 0. Mask -> TILE to match
+        # emb's layout for the multiply; fp32 mixes cleanly with the bf16 emb.
+        mask = ttnn.transpose(ttnn.to_layout(ttnn.typecast(in_range, ttnn.DataType.FLOAT32), ttnn.Layout.TILE), 2, 3)
         emb = ttml.ops.binary.mul(emb, ttml.autograd.create_tensor(mask, requires_grad=False))
 
-        # Each token is nonzero on exactly one device; sum reconstructs the full
-        # embedding, replicated across TP. Input ids carry no grad, so backward
-        # simply passes the (already replicated) output grad through unchanged.
+        # Each token is nonzero on exactly one device, so the sum reconstructs the full
+        # embedding, replicated across TP.
         return ttml.ops.distributed.all_reduce(emb, noop_backward=True, cluster_axis=self.cluster_axis)
 
 
