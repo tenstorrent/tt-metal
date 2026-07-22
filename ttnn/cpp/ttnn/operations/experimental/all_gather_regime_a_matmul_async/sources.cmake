@@ -4,10 +4,14 @@ set(TTNN_OP_EXPERIMENTAL_ALL_GATHER_REGIME_A_MATMUL_ASYNC_API_HEADERS
     all_gather_regime_a_matmul_async.hpp
     device/all_gather_regime_a_matmul_async_plan.hpp
     device/all_gather_regime_a_matmul_async_device_operation_types.hpp
+    device/all_gather_regime_a_matmul_async_device_operation.hpp
+    device/all_gather_regime_a_matmul_async_program_factory.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_ALL_GATHER_REGIME_A_MATMUL_ASYNC_SRCS
     all_gather_regime_a_matmul_async.cpp
+    device/all_gather_regime_a_matmul_async_device_operation.cpp
+    device/all_gather_regime_a_matmul_async_program_factory.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from this op's CMakeLists.txt (see the

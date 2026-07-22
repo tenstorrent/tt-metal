@@ -7,6 +7,7 @@
 #include <string>
 
 #include "device/all_gather_regime_a_matmul_async_plan.hpp"
+#include "device/all_gather_regime_a_matmul_async_device_operation.hpp"
 #include "ttnn/operations/experimental/regime_a_matmul/regime_a_matmul.hpp"
 
 using namespace tt::tt_metal;
@@ -18,14 +19,14 @@ ttnn::Tensor all_gather_regime_a_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<const ttnn::experimental::prim::RegimeAMatmulConfig>& config,
-    [[maybe_unused]] std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     ttnn::ccl::Topology topology,
     uint32_t num_links,
     uint32_t num_workers_per_link,
-    [[maybe_unused]] uint32_t num_buffers_per_channel,
-    [[maybe_unused]] const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    [[maybe_unused]] const std::optional<GlobalSemaphore>& barrier_semaphore,
-    [[maybe_unused]] const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    uint32_t num_buffers_per_channel,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
@@ -94,14 +95,25 @@ ttnn::Tensor all_gather_regime_a_matmul_async(
         }
         TT_THROW("{}", msg);
     }
-    TT_THROW(
-        "all_gather_regime_a_matmul_async: D={} streaming path is implemented in Task 3 "
-        "(host plan validated: {} global K-blocks, {} regime_a cores + {} reserved fabric cores).",
+    // Route the D>1 fused path through the device-operation prim (Phase A streaming; program factory
+    // implemented in Task 3). Host plan already validated the geometry/core/L1 constraints above.
+    auto outs = ttnn::prim::all_gather_regime_a_matmul_async(
+        input_tensor,
+        weight_tensor,
+        config,
         D,
-        p.global_k_blocks,
-        p.regime_a_cores,
-        p.reserved_fabric_cores);
-    return input_tensor;  // unreachable
+        cluster_axis,
+        topology,
+        num_links,
+        num_workers_per_link,
+        num_buffers_per_channel,
+        multi_device_global_semaphore,
+        barrier_semaphore,
+        persistent_output_buffer,
+        memory_config,
+        dtype,
+        compute_kernel_config);
+    return outs.at(0);
 }
 
 }  // namespace ttnn::experimental
