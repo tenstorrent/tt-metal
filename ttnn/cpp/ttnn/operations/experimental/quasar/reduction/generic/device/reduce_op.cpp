@@ -50,8 +50,7 @@ Tensor reduce_min(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt) {
     Tensor input = input_tensor;
-    if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
-        input.storage_type() == tt::tt_metal::StorageType::DEVICE) {
+    if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR && input.storage_type() == ttnn::StorageType::DEVICE) {
         // Changing layout to TILE with +inf padding
         auto pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input.padded_shape());
         input = ttnn::operations::experimental::quasar::tilize_with_val_padding(
@@ -94,7 +93,7 @@ Tensor reduce(
     auto is_multicore_hw = parallelization_strategy == tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == tt::tt_metal::ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
-    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Expected input tensor to be on device");
+    TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Expected input tensor to be on device");
     TT_FATAL(
         input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");

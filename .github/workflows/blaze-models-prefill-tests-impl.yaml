@@ -120,25 +120,27 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
           echo "Filtered tests for ${{ inputs.sp-config }}:"
           echo "$FILTERED" | jq .
+      - name: Write test matrix to file
+        env:
+          MATRIX: ${{ steps.filter-tests.outputs.matrix }}
+        run: |
+          echo "$MATRIX" > test_matrix_${{ inputs.resource-prefix }}.json
+      # Named per resource-prefix so the two impl invocations (module, sdpa-perf)
+      # don't collide on one artifact name; the parent merges them for expected-jobs.
+      - name: Upload test matrix
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test_matrix_${{ inputs.resource-prefix }}
+          path: test_matrix_${{ inputs.resource-prefix }}.json
+          retention-days: 1
 
   multihost-tests:
     name: ${{ matrix.test-group.name }}
     needs: load-test-matrix
     env:
-      OMPI_MCA_btl_tcp_if_include: ens5f0np0
-      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-      PRTE_MCA_prte_default_hostfile: /etc/ttop/hostfile
-      PRTE_MCA_prte_fwd_environment: "true"
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
-      PIP_CACHE_DIR: /home/user/.cache/pip
-      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
-      TT_METAL_HOME: /home/user/tt-metal
-      TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
-      TT_METAL_CACHE: /home/user/.cache
     strategy:
       fail-fast: false
       matrix:
@@ -335,16 +337,35 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        working-directory: /home/user/tt-metal
-        run: |
-          CMD=$(cat << 'EOF'
-          ${{ matrix.test-group.cmd }}
-          EOF
-          )
+        uses: ./.github/actions/run-with-log
+        with:
+          working-directory: /home/user/tt-metal
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            CMD=$(cat << 'EOF'
+            ${{ matrix.test-group.cmd }}
+            EOF
+            )
 
-          echo "Running: ${{ matrix.test-group.name }}"
-          echo "$CMD"
-          eval "$CMD"
+            echo "Running: ${{ matrix.test-group.name }}"
+            echo "$CMD"
+            eval "$CMD"
+
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "/home/user/tt-metal",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
 
       - name: Delete test environment
         if: always()

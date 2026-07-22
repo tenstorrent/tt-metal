@@ -342,12 +342,13 @@ DitFusedDistributedRmsnormSizing compute_sizing(
     return s;
 }
 
-TensorSpec make_stats_tensor_spec(const DitFusedDistributedRmsnormSizing& sizing) {
+tt::tt_metal::TensorSpec make_stats_tensor_spec(const DitFusedDistributedRmsnormSizing& sizing) {
     // Row-major fp32 DRAM-interleaved scratch: one accessor page per packed stats page.
     // Kept in one place so the pre-alloc helper, compute_output_specs, and validate agree.
     ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
     MemoryConfig stats_mem{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    return TensorSpec(stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
+    return tt::tt_metal::TensorSpec(
+        stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
 }
 
 DitFusedDistributedRmsnormMeshWorkloadFactory::cached_program_t

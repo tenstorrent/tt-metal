@@ -514,25 +514,16 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> UnaryDeviceOperation::get_dynamic_runtime_args(
+void UnaryDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Recompute the descriptor for the current tensors and re-apply every per-core runtime arg
-    // (kernels pushed in create_descriptor order: reader=0, writer=1, compute=2). Buffer slots hold
-    // the current address here too, matching the bindings, so re-applying them is a no-op; the point
-    // is the volume-dependent work-split args, which the fast path would otherwise leave frozen.
+    // Re-derive the descriptor from the single source of truth (create_descriptor) and re-apply its per-core
+    // args + tensor-backed CB addresses to the cached program. No rebuild; supersedes get_dynamic/resolve_bindings.
     auto desc = ProgramFactory::create_descriptor(operation_attributes, tensor_args, output);
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    for (uint32_t kernel_idx = 0; kernel_idx < desc.kernels.size(); ++kernel_idx) {
-        for (const auto& [core, args] : desc.kernels[kernel_idx].runtime_args) {
-            for (uint32_t arg_idx = 0; arg_idx < args.size(); ++arg_idx) {
-                dynamic_args.push_back({kernel_idx, core, arg_idx, args[arg_idx]});
-            }
-        }
-    }
-    return dynamic_args;
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::operations::unary

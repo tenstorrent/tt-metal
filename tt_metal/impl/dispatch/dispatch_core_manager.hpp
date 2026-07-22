@@ -14,8 +14,6 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include "context/context_types.hpp"
-#include "context/metal_env_impl.hpp"
 #include "llrt/core_descriptor.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -145,7 +143,7 @@ public:
 
     bool is_fabric_mux_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id, int tunnel);
 
-    CoreType get_dispatch_core_type();
+    CoreType get_dispatch_core_type() const;
 
     DispatchCoreConfig get_dispatch_core_config();
 

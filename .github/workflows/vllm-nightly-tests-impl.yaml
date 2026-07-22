@@ -199,7 +199,7 @@ jobs:
               "owner_id": "U08TJ70UFRT"
             },
             {
-              "name": "[BH-QB-2] Qwen3.6-27B",
+              "name": "[BH-QB-2] Qwen3.6-27B (multimodal B=1)",
               "model": "Qwen/Qwen3.6-27B",
               "coherence-test": true,
               "server-timeout": 30,
@@ -211,6 +211,21 @@ jobs:
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "default-chat-template-kwargs": "{\"enable_thinking\": false}",
               "multimodal": true,
+              "owner_id": "U08HL8X1ECD"
+            },
+            {
+              "name": "[BH-QB-2] Qwen3.6-27B (batch=8)",
+              "model": "Qwen/Qwen3.6-27B",
+              "coherence-test": true,
+              "server-timeout": 35,
+              "benchmark-timeout": 10,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 1073741824, \"l1_small_size\": 24576}",
+              "additional-server-args": "--max_num_seqs 8 --max_model_len 65536 --async-scheduling",
+              "default-chat-template-kwargs": "{\"enable_thinking\": false}",
+              "multimodal": false,
               "owner_id": "U08HL8X1ECD"
             },
             {
@@ -390,7 +405,7 @@ jobs:
               "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
               "structured-output": true,
               "multimodal": true,
-              "additional-server-args": "--async-scheduling",
+              "additional-server-args": "--max_model_len 131072 --async-scheduling",
               "co-owner-1-id": "U08H31YMN4Q"
             },
             {

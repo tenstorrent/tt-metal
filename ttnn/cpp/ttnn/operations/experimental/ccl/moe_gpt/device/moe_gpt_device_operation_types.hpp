@@ -29,6 +29,6 @@ struct tensor_args_t {
 
 using tensor_return_value_t = std::vector<Tensor>;
 
-using spec_return_value_t = std::vector<TensorSpec>;
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::operations::experimental::moe_gpt

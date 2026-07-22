@@ -8,6 +8,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "rand_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -28,7 +29,7 @@ constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/uniform/dev
 constexpr const char* COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/uniform/device/kernels/compute_uniform.cpp";
 
 // Work split + per-device seed offset, shared by create_descriptor (cache miss) and
-// get_dynamic_runtime_args (cache hit) so both derive the identical core list and seed offset.
+// override_runtime_arguments (cache hit) so both derive the identical core list and seed offset.
 struct RandWorkSplit {
     uint32_t num_cores = 0;
     CoreRangeSet all_cores;
@@ -83,23 +84,43 @@ uint32_t rand_seed_for_core(
     return attrs.seed != 0 ? attrs.seed + i + device_seed_offset : get_random_seed();
 }
 
+// Per-core work assignment. Single-sourced so the cache-miss build (create_descriptor) and the
+// cache-hit patch (override_runtime_arguments) can never drift on core-group selection or tile_offset
+// accumulation — each derives its runtime args from the same layout.
+struct RandCoreWork {
+    CoreCoord core;
+    uint32_t units_per_core;
+    uint32_t tile_offset;
+};
+std::vector<RandCoreWork> rand_core_layout(const RandWorkSplit& ws) {
+    std::vector<RandCoreWork> layout;
+    layout.reserve(ws.cores.size());
+    uint32_t tile_offset = 0;
+    for (const auto& core : ws.cores) {
+        uint32_t units_per_core;
+        if (ws.core_group_1.contains(core)) {
+            units_per_core = ws.units_per_core_group_1;
+        } else if (ws.core_group_2.contains(core)) {
+            units_per_core = ws.units_per_core_group_2;
+        } else {
+            TT_THROW("Core not in specified core ranges");
+        }
+        layout.push_back({core, units_per_core, tile_offset});
+        tile_offset += units_per_core;
+    }
+    return layout;
+}
+
 }  // namespace
 
-ProgramDescriptor RandDeviceOperation::create_descriptor(
+ProgramDescriptor RandDeviceOperation::RandProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    auto
-        [num_cores,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         units_per_core_group_1,
-         units_per_core_group_2,
-         cores,
-         device_seed_offset] = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
-    const auto num_cores_total = cores.size();
+    const auto ws = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
+    const auto& all_cores = ws.all_cores;
+    const auto num_cores_total = ws.cores.size();
 
     DataType output_dtype = output.dtype();
     auto out_data_format = datatype_to_dataformat_converter(output_dtype);
@@ -174,30 +195,19 @@ ProgramDescriptor RandDeviceOperation::create_descriptor(
     const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
     const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
-    uint32_t tile_offset = 0;
-    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
-        const auto& core = cores[i];
-        uint32_t units_per_core;
-        if (core_group_1.contains(core)) {
-            units_per_core = units_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            units_per_core = units_per_core_group_2;
-        } else {
-            TT_THROW("Core not in specified core ranges");
-        }
+    const auto layout = rand_core_layout(ws);
+    for (int i = 0; i < static_cast<int>(layout.size()); ++i) {
+        const auto& [core, units_per_core, tile_offset] = layout[i];
+        const uint32_t seed = rand_seed_for_core(operation_attributes, i, ws.device_seed_offset);
 
-        uint32_t seed = rand_seed_for_core(operation_attributes, i, device_seed_offset);
-
-        // seed/from/to are DYNAMIC (excluded from compute_program_hash): baked here for the
-        // cache-miss build, and re-applied on every cache hit via get_dynamic_runtime_args().
+        // seed/from/to are DYNAMIC (omitted from the cache key / attribute_names): baked here for the
+        // cache-miss build, and re-applied on every cache hit via override_runtime_arguments().
         compute_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{seed, from_bits, to_bits, tile_offset, units_per_core});
 
         // Register the output address as a Buffer* binding so rand takes the fast cache-hit path
         // (real program caching) with the address correctly re-patched each dispatch.
         writer_desc.emplace_runtime_args(core, {output.buffer(), tile_offset, units_per_core});
-
-        tile_offset += units_per_core;
     }
 
     desc.kernels.push_back(std::move(writer_desc));
@@ -206,29 +216,41 @@ ProgramDescriptor RandDeviceOperation::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> RandDeviceOperation::get_dynamic_runtime_args(
+void RandDeviceOperation::RandProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    // compute is kernel 1; its runtime args are {seed, from_bits, to_bits, tile_offset, units_per_core}.
-    // seed/from/to are excluded from the hash and re-applied here; the rest are static.
-    constexpr uint32_t kComputeKernelIdx = 1;
-    auto ws = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
+    // Re-derive every per-dispatch arg on each cache hit from the same builder create_descriptor uses:
+    // compute's seed/from/to and the writer's output address. override replaces resolve_bindings, so
+    // the address is ours to re-apply too. Push order in create_descriptor: writer 0, compute 1.
+    constexpr uint32_t writer_kernel_idx = 0;
+    constexpr uint32_t compute_kernel_idx = 1;
 
+    const auto ws = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
     const float eps = 1e-6f;
     const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
     const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
+    const uint32_t out_addr = output.buffer()->address();
 
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(ws.cores.size() * 3);
-    for (int i = 0; i < static_cast<int>(ws.cores.size()); ++i) {
+    const auto layout = rand_core_layout(ws);
+    for (int i = 0; i < static_cast<int>(layout.size()); ++i) {
+        const auto& [core, units_per_core, tile_offset] = layout[i];
         const uint32_t seed = rand_seed_for_core(operation_attributes, i, ws.device_seed_offset);
-        dynamic_args.push_back({kComputeKernelIdx, ws.cores[i], 0, seed});
-        dynamic_args.push_back({kComputeKernelIdx, ws.cores[i], 1, from_bits});
-        dynamic_args.push_back({kComputeKernelIdx, ws.cores[i], 2, to_bits});
+
+        auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, compute_kernel_idx, core);
+        compute_args[0] = seed;
+        compute_args[1] = from_bits;
+        compute_args[2] = to_bits;
+        compute_args[3] = tile_offset;
+        compute_args[4] = units_per_core;
+
+        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_idx, core);
+        writer_args[0] = out_addr;
+        writer_args[1] = tile_offset;
+        writer_args[2] = units_per_core;
     }
-    return dynamic_args;
 }
 
 }  // namespace ttnn::operations::rand

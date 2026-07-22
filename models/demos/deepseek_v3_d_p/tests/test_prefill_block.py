@@ -880,13 +880,15 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
         pytest.param(
             (8, 4),
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
             },
             2,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="fabric2d-mesh-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],

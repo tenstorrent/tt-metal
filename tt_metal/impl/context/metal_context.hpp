@@ -96,8 +96,10 @@ public:
     dispatch_core_manager& get_dispatch_core_manager();
     internal::ServiceCoreManager& get_service_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
+
     const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
     const DispatchMemMap& dispatch_mem_map(const CoreType& core_type) const;  // DispatchMemMap for specific core type.
+
     inspector::Data* get_inspector_data() const {
         return inspector_data_.get();
     }

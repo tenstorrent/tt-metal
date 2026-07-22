@@ -1,0 +1,171 @@
+name: "(triage) Runner Failure Scan"
+
+on:
+  schedule:
+    # Every four hours, offset from :00 which GitHub sheds first under load.
+    - cron: "15 */4 * * *"
+  push:
+    branches:
+      - tcheda/runner-failure-scan-prototype
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "Number of hours to look back"
+        required: false
+        default: "24"
+      force-fresh:
+        description: "Ignore previous checked-job state and rescan matching failed jobs"
+        required: false
+        type: boolean
+        default: false
+      post-to-slack:
+        description: "Post Slack notifications for manual runs"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: runner-failure-scan
+  cancel-in-progress: false
+
+env:
+  RUNNER_FAILURE_SCAN_WORKFLOWS: |
+    # Jobs are included unless include_exact or include_prefixes is set.
+    # Exclusions are applied after inclusions.
+    repository: tenstorrent/tt-metal
+
+    workflows:
+      - name: vllm-nightly-tests
+        workflow_id: vllm-nightly-tests.yaml
+        include_prefixes:
+          - "vllm-tests /"
+
+      - name: all-model-tests
+        workflow_id: all-model-tests.yaml
+        exclude_exact:
+          - preflight
+          - build-artifact
+          - check-farbot
+          - check-harbor
+        exclude_prefixes:
+          - "build-artifact /"
+          - "check-farbot /"
+          - "check-harbor /"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      runner_matrix: ${{ steps.runner_matrix.outputs.runner_matrix }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: true
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .github/scripts/runner_failure_scan_requirements.txt
+
+      - name: Install scanner dependencies
+        run: python3 -m pip install -r .github/scripts/runner_failure_scan_requirements.txt
+
+      - name: Restore previous checked-job state
+        if: github.event_name != 'push' && github.event.inputs.force-fresh != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .runner-failure-state
+          latest_run_id="$(gh run list \
+            --workflow runner-failure-scan.yaml \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // ""' || true)"
+          if [[ -n "$latest_run_id" ]]; then
+            echo "Restoring checked-job state from workflow run $latest_run_id"
+            gh run download "$latest_run_id" \
+              --name runner-failure-state \
+              --dir .runner-failure-state || true
+          else
+            echo "No previous successful runner-failure-scan run found."
+          fi
+
+      - name: Scan recent workflow failures
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FORCE_FRESH: ${{ github.event_name == 'push' || github.event.inputs.force-fresh == 'true' }}
+          HOURS: ${{ github.event.inputs.hours || '24' }}
+        run: |
+          mkdir -p out
+          printf '%s\n' "$RUNNER_FAILURE_SCAN_WORKFLOWS" > out/runner_failure_scan_workflows.yaml
+          args=(
+            --config out/runner_failure_scan_workflows.yaml
+            --hours "$HOURS"
+            --state-in .runner-failure-state/runner_failure_state.json
+            --state-out out/runner_failure_state.json
+            --report-json out/runner_failure_report.json
+            --report-md out/runner_failure_report.md
+          )
+          if [[ "$FORCE_FRESH" == "true" ]]; then
+            args+=(--force-fresh)
+          fi
+          python3 .github/scripts/runner_failure_scan.py "${args[@]}"
+
+      - name: Build runner report matrix
+        id: runner_matrix
+        if: always() && hashFiles('out/runner_failure_report.json') != ''
+        run: |
+          runner_matrix="$(jq -c '(.runner_failures // {}) | to_entries | map({runner_name: .key, triggering_failures: .value})' out/runner_failure_report.json)"
+          echo "runner_matrix=$runner_matrix" >> "$GITHUB_OUTPUT"
+          echo "Runner report matrix: $runner_matrix"
+
+      - name: Add report to step summary
+        if: always() && hashFiles('out/runner_failure_report.md') != ''
+        run: cat out/runner_failure_report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload runner failure report
+        if: always() && hashFiles('out/runner_failure_report.*') != ''
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: runner-failure-scan-report-${{ github.run_id }}
+          path: |
+            out/runner_failure_report.json
+            out/runner_failure_report.md
+          retention-days: 14
+
+      - name: Upload checked-job state
+        if: always() && hashFiles('out/runner_failure_state.json') != ''
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: runner-failure-state
+          path: out/runner_failure_state.json
+          retention-days: 30
+
+  runner-report:
+    needs: scan
+    if: ${{ needs.scan.outputs.runner_matrix != '' && needs.scan.outputs.runner_matrix != '[]' }}
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJson(needs.scan.outputs.runner_matrix) }}
+    uses: ./.github/workflows/runner-failure-report.yaml
+    with:
+      runner_name: ${{ matrix.runner.runner_name }}
+      triggering_failures_json: ${{ toJson(matrix.runner.triggering_failures) }}
+      hours: ${{ github.event.inputs.hours || '24' }}
+      post_to_slack: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event.inputs.post-to-slack == 'true' }}
+    secrets: inherit
