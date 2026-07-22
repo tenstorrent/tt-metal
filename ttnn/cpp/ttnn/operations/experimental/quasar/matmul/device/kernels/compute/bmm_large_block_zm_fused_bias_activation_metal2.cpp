@@ -651,5 +651,14 @@ void kernel_main() {
         bias_cb.pop_front(bias_ntiles);
     }
 #endif
+    // [#48552] Quasar MATH_PACK program-boundary race fix. The multi-core mcast_in1 matmul deadlocks on the
+    // RECEIVER core after a few sequential slice-programs: its final tile_regs_release SEMGET (MATH_PACK -1)
+    // can still be in flight when kernel_main returns, so the NEXT slice's compute_kernel_hw_startup re-seed
+    // (_llk_math_pack_sync_init_) passes its CACHED semaphore_read guard (sees 0), does SEMINIT(0), and then
+    // the straggling SEMGET lands -> 0-1 wraps to max -> the next slice's MATH wedges forever in
+    // tile_regs_acquire (STALL_ON_MAX) while PACK runs ahead (the observed sb0-MATH / sb3-PACK split).
+    // Quiesce the packer at kernel EXIT (once, not per-block) so the SEMGET retires before the program ends
+    // and cannot race the next slice's SEMINIT. Mirrors the in-kernel PACK(TTI_STALLWAIT(...)) drains above.
+    PACK(TTI_STALLWAIT(p_stall::STALL_SYNC, 0, 0, p_stall::PACK0));
     DPRINT("MMC end\n");  // DEBUG: stem conv1 Program-B hang
 }
