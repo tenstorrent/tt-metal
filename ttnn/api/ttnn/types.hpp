@@ -38,6 +38,7 @@ using tt::tt_metal::Layout;
 static constexpr auto ROW_MAJOR_LAYOUT = Layout::ROW_MAJOR;
 static constexpr auto TILE_LAYOUT = Layout::TILE;
 
+using ttnn::StorageType;
 static constexpr auto DEVICE_STORAGE_TYPE = StorageType::DEVICE;
 static constexpr auto HOST_STORAGE_TYPE = StorageType::HOST;
 
