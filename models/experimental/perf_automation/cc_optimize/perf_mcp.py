@@ -1714,6 +1714,36 @@ def git_head() -> dict:
 
 
 @mcp.tool()
+def _record_committed_win(message: str) -> None:
+    """Log the just-committed lever as a win against the current target.
+
+    git_commit IS the bank-a-verified-win action, but the ✓win marks in RUN_REPORT.md come
+    only from record_kernel_attempt(beat_baseline=true). The agent often records the FOLLOW-UP
+    re-measurements (which no longer beat the already-lowered floor, so beat_baseline=false) and
+    never marks the winning moment, leaving committed wins shown as ·try. Deriving the win mark
+    from the commit itself makes the report reflect what was actually banked. Fail-open: never
+    raises, so it can never break the commit."""
+    try:
+        t = _load_target()
+        op = t.get("op")
+        if not op:
+            return
+        rung = str(t.get("rung") or t.get("next_rung") or "knob").split(":")[-1] or "knob"
+        _append_attempt(
+            {
+                "op_signature": op,
+                "kernel_kind": rung,
+                "measured_ms": t.get("measured_ms"),
+                "beat_baseline": True,
+                "wedged": False,
+                "kernel_detected_in_source": True,
+                "note": "committed: " + " ".join((message or "").split())[:140],
+            }
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def git_commit(message: str) -> dict:
     """Commit the current model-dir changes (scoped to the model dir only — unrelated repo changes
     are left untouched). Use this to BANK a verified win: valid measure + ok pcc (check_pcc) + faster
@@ -1725,6 +1755,8 @@ def git_commit(message: str) -> dict:
     except ValueError:
         pathspec = None
     sha = gitio.commit(repo, message, pathspec)
+    if sha:
+        _record_committed_win(message)
     return {"committed": bool(sha), "sha": sha}
 
 
