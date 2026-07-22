@@ -758,6 +758,14 @@ int main(int argc, char** argv) {
                     }
                     continue;  // spin
                 }
+                // Guard: never request more than the FIFO holds. read() TT_FATALs if num_bytes > fifo_curr_size,
+                // and pages_available() can transiently spike above the FIFO (a bytes_acked-vs-bytes_sent race
+                // during concurrent draining). Bound each read to (fifo pages - 1); the loop takes the rest next
+                // iteration. Without this a single spike walks the circular FIFO repeatedly -> runaway garbage.
+                uint32_t fifo_pages = socks[h]->get_fifo_curr_size() / socks[h]->get_page_size();
+                if (np >= fifo_pages) {
+                    np = fifo_pages - 1u;
+                }
                 uint32_t dw = np * 16u;  // 64 B page = 16 words
                 buf.resize(resid.size() + dw);
                 if (!resid.empty()) {

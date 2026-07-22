@@ -640,6 +640,37 @@ static void relay_run_socket(
             }
         }
     }
+    /* Tail-pad to the D2HSocket page (64 B): the host reads whole 64 B pages, so it drops the final
+     * bytes_sent % 64 bytes (up to 15 words ~ 7 markers). Pad each socket's FIFO tail up to the page boundary
+     * with 1-word PP_STICKY_TIMER packets (type 9 << 27) -- the host decoder consumes those as a harmless
+     * timer-hi update (no marker emitted), and they sit AFTER all real markers so the cur_hi they set is never
+     * used. Then republish the now-page-aligned bytes_sent so the host reads the full final page (lossless). */
+    for (uint64_t h = rlo; h < rhi; h++) {
+        uint32_t rem = bytes_sent[h] & 63u; /* bytes past the last 64 B page boundary */
+        if (rem) {
+            uint32_t pad_w = (64u - rem) / 4u; /* 1..15 skippable words to reach the boundary */
+            uint32_t pad[16];
+            for (uint32_t k = 0; k < pad_w; k++) {
+                pad[k] = (9u << 27); /* PP_STICKY_TIMER, low27=0 */
+            }
+            uint32_t fifo_w = fifo_bytes[h] / 4u;
+            uint32_t dbyte = bytes_sent[h] % fifo_bytes[h], left = pad_w, si = 0;
+            while (left) {
+                uint32_t dwslot = (dbyte / 4u) % fifo_w;
+                uint32_t chunk = left;
+                if (chunk > fifo_w - dwslot) {
+                    chunk = fifo_w - dwslot;
+                }
+                copy_words(fbase[h] + (uint64_t)dwslot * 4, (uint64_t)(uintptr_t)&pad[si], chunk);
+                si += chunk;
+                dbyte = (dbyte + chunk * 4u) % fifo_bytes[h];
+                left -= chunk;
+            }
+            bytes_sent[h] += pad_w * 4u;
+            fence_();
+            w32(bsbase[h], bytes_sent[h]);
+        }
+    }
     uint64_t t_total = rdcycle() - t0;
     w64(RES_SLOT(hartid) + RES_TOTAL, total * 4ULL);
     w64(RES_SLOT(hartid) + 0x08, t_copy);
