@@ -14,19 +14,19 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in, cb_out0);
     using namespace compute_kernel_lib;
-    using L1Pack0 = PackTile<
+    using L1Pack0 = PackTile<output(
         cb_out0,
-        OutputLifecycle::L1AccumulationCallerManaged,
-        PackTileReconfig::Output,
-        Dst::D0,
-        TileOffset::Unset,
-        PackTileL1Accumulation::Enabled>;
+        OutputLifecycle::CallerManaged,
+        DataFormatReconfig::Enabled,
+        PackRelu::Disabled,
+        L1Accumulation::Enabled)>;
     using L1Pack1 = PackTile<
-        cb_out1,
-        OutputLifecycle::L1AccumulationCallerManaged,
-        PackTileReconfig::Output,
-        Dst::D1,
-        TileOffset::Unset,
-        PackTileL1Accumulation::Enabled>;
-    eltwise_chain(EltwiseShape::tiles(n), CopyTile<cb_in>{}, L1Pack0{}, L1Pack1{});
+        output(
+            cb_out1,
+            OutputLifecycle::CallerManaged,
+            DataFormatReconfig::Enabled,
+            PackRelu::Disabled,
+            L1Accumulation::Enabled),
+        Dst::D1>;
+    eltwise_chain(EltwiseShape::tiles(n), CopyTile<input(cb_in)>{}, L1Pack0{}, L1Pack1{});
 }

@@ -4,10 +4,10 @@
 
 // Negative compile test: SetupOwner::Caller with a chain that still requests reconfig.
 //
-// The chain is fully boot-hoistable so that guard passes, but CopyTile/PackTile default to
-// reconfig Input/Output. Under Caller the chain emits no reconfig, so a non-None reconfig knob is
-// inert and misleading — the helper rejects it and forces the caller to declare None.
-// MUST fail to compile with "non-None reconfig knob".
+// The chain is fully boot-hoistable so that guard passes, but input/output specs enable reconfig
+// by default. Under Caller the chain emits no reconfig, so an enabled operand spec is inert and
+// misleading — the helper rejects it and forces the caller to disable reconfig.
+// MUST fail to compile with "enabled operand reconfig".
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -22,8 +22,5 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     eltwise_chain<SetupOwner::Caller>(
-        EltwiseShape::tiles(n),
-        CopyTile<cb_in, Dst::D0>{},  // default CopyTileReconfig::Input -> requests reconfig
-        Exp<>{},
-        PackTile<cb_out>{});  // default PackTileReconfig::Output
+        EltwiseShape::tiles(n), CopyTile<input(cb_in)>{}, Exp<>{}, PackTile<output(cb_out)>{});
 }
