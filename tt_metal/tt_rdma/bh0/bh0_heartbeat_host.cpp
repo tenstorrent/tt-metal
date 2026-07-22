@@ -20,6 +20,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "impl/kernels/kernel.hpp"  // EthernetConfig + Eth (internal API; not in public host_api.hpp)
 
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_l1_layout.h"  // TT_RDMA_RCB_ADDR (heartbeat slot)
 
