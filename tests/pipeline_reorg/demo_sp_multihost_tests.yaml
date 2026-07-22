@@ -102,15 +102,12 @@
   cmd: |
     TTRUN_DIR=/etc/ttop
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_superpod.yaml" .
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
-      --rank-binding rev_c_rank_binding_superpod.yaml \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
@@ -130,15 +127,12 @@
   cmd: |
     TTRUN_DIR=/etc/ttop
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_superpod.yaml" .
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
-      --rank-binding rev_c_rank_binding_superpod.yaml \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -157,15 +151,12 @@
   cmd: |
     TTRUN_DIR=/etc/ttop
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_superpod.yaml" .
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
-      --rank-binding rev_c_rank_binding_superpod.yaml \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --repeat-generations 2 \
