@@ -35,5 +35,5 @@ void kernel_main() {
     // Skip-compute is a build macro, not a call-site arg: CKL_ELTWISE_CHAIN_SKIP_COMPUTE (=1 above)
     // makes this chain emit only the CB lifecycle + tile_regs window and elide init + compute. The
     // call site is byte-identical to the Run twin (hoist_single_call.cpp).
-    eltwise_chain(EltwiseShape::tiles(n), CopyTile<cb_in, Dst::D0>{}, Exp<>{}, PackTile<cb_out>{});
+    eltwise_chain(EltwiseShape::tiles(n), CopyTile<input(cb_in), Dst::D0>{}, Exp<>{}, PackTile<output(cb_out)>{});
 }

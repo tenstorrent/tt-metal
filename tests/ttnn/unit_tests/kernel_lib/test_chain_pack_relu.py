@@ -11,7 +11,7 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
-KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/relu/pack_relu.cpp"
+KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/pack_relu/pack_relu.cpp"
 
 MODE_BASIC = 0
 MODE_ESCAPE = 1

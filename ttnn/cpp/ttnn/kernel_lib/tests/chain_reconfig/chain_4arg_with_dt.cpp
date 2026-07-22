@@ -25,7 +25,7 @@ void kernel_main() {
 
     compute_kernel_lib::eltwise_chain(
         compute_kernel_lib::EltwiseShape::tiles(total_tiles),
-        compute_kernel_lib::BinaryFpu<cb_a, cb_b>{},
-        compute_kernel_lib::BinaryFpu<cb_c, cb_d>{},
-        compute_kernel_lib::PackTile<cb_out>{});
+        compute_kernel_lib::BinaryFpu<compute_kernel_lib::input(cb_a), compute_kernel_lib::input(cb_b)>{},
+        compute_kernel_lib::BinaryFpu<compute_kernel_lib::input(cb_c), compute_kernel_lib::input(cb_d)>{},
+        compute_kernel_lib::PackTile<compute_kernel_lib::output(cb_out)>{});
 }
