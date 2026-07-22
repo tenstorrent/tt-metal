@@ -393,6 +393,37 @@ def test_quasar_gap_large_m_reader_gather(mesh_device):
     )
 
 
+# STEM conv1 repro — the resnet50 first conv EXACTLY as the full e2e runs it (post-fold), isolated so the
+# DRAM-height-slicing -> Program B matmul path can be iterated on WITHOUT a 6-hour model run.
+#
+# The stem 7x7/s2 conv on 3x224x224 is FOLDED on Quasar (channels aligned to 8, stride absorbed) into a
+# 4x4/s1/p0 conv on 32x115x115 -> 112x112, out=64 (see ttnn_functional_resnet50.py: conv1_input_channels=32,
+# conv1_kernel_size=(4,4), conv1_stride=(1,1), conv1_padding=(0,0), conv1_input_height/width=115). Same
+# in_channels(32)/kernel(4x4)/out(64) as _run's gap default, but with the REAL spatial size: M = 112*112 =
+# 12544 (the gap tests use M=512-1024). On the emulator's small grid the per-core tilized activation
+# ([per_core_M, K=16] tiles) exceeds the uint16_t DFB ring limit (1 MB), so conv2d reroutes through DRAM
+# height-slicing (conv2d_DRAM); each slice's Program B matmul (small M, N=64=2 tiles) is what trips the
+# in0-sender assert observed in the e2e. NONE of the gap tests slice (tiny M stays on the in-L1 split), so
+# this is the only standalone case that exercises the sliced Program B. NOTE: this reproduces the SLICING +
+# Program B path on grids where per-core M is large enough to overflow the ring (the emulator); on a large
+# grid (>=25 cores) per-core M may fit and skip slicing.
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_quasar_stem_conv1_sliced(mesh_device):
+    _run(
+        mesh_device,
+        with_bias_relu=True,  # model conv1 folds BN into bias + RELU
+        in_channels=32,  # folded: nearest8(3)=8, * fold_stride^2(=4) = 32
+        out_channels=64,
+        kernel_size=(4, 4),
+        stride=(1, 1),
+        padding=(0, 0),
+        out_h=112,
+        out_w=112,  # M = 112*112 = 12544 -> per-core tilized act overflows the 1 MB DFB ring -> DRAM slicing
+        act_block_h_override=128,  # bound the no-spill gather to <=4 M-tiles (unrelated reader-gather cap)
+    )
+
+
 # 1x1 convs (bottleneck reduce / expand / downsample) take the PLAIN mm_conv/matmul path, NOT the split
 # (use_split=False -> no split env, full_inner_dim off), exactly as the ResNet model invokes them. Every
 # bottleneck has three 1x1s, so if this path doesn't work on Quasar the model stalls regardless of the 3x3
