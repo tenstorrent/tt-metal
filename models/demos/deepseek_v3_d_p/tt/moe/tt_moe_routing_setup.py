@@ -161,7 +161,6 @@ class TtMoERoutingSetup(LightweightModule):
         self,
         ttnn_top_k_experts_indices: ttnn.Tensor | torch.Tensor,
         num_routed_experts: int,
-        seq_len_per_chip: int,
         num_experts_per_tok: int,
     ):
         """
@@ -174,8 +173,6 @@ class TtMoERoutingSetup(LightweightModule):
                 direct output; no untilize/reshard). A torch.Tensor is also accepted and converted to
                 the same TILE, interleaved layout.
             num_routed_experts: Total number of routed experts across all chips (e.g. 64 or 256)
-            seq_len_per_chip: Number of tokens per chip. Must be divisible by 64 (the 8x8 core grid
-                masked_bincount splits the token rows across).
             num_experts_per_tok: Number of experts each token is routed to (e.g. 2 for top-2 routing)
 
         Returns:
@@ -212,42 +209,20 @@ class TtMoERoutingSetup(LightweightModule):
                 mesh_mapper=mesh_mapper,
             )
 
-        # masked_bincount consumes the gate's expert-index output directly (UINT16, TILE,
-        # L1 interleaved) and untiles in-kernel.
-        assert ttnn_top_k_experts_indices.dtype == ttnn.uint16, "Expected uint16 dtype for expert indices"
-
-        num_cores = 64  # masked_bincount uses a fixed 8x8 core grid
-        assert (
-            seq_len_per_chip % num_cores == 0
-        ), f"seq_len_per_chip ({seq_len_per_chip}) must be divisible by num_cores ({num_cores})"
+        # The device gate (DEVICE / DEVICE_FP32 / HASH_DEVICE) emits TILE indices, so this is a no-op
+        # on the perf-critical path. The host-fallback gates (HOST_ALL / HOST_MATMUL / HOST_GROUPED_GATE
+        # / HASH_HOST) emit ROW_MAJOR indices; The tilize only ever runs on the (non-perf) host path.
+        if ttnn_top_k_experts_indices.layout != ttnn.TILE_LAYOUT:
+            ttnn_top_k_experts_indices = ttnn.to_layout(ttnn_top_k_experts_indices, ttnn.TILE_LAYOUT)
 
         if len(ttnn_top_k_experts_indices.shape) == 3:
             ttnn_top_k_experts_indices = ttnn.squeeze(ttnn_top_k_experts_indices, 0)
         logger.debug(f"{ttnn_top_k_experts_indices.shape=}")
 
-        # Constraint imposed by masked_bincount
-        if len(self.experts_in_dispatch_group.shape) != 1:
-            assert (
-                self.experts_in_dispatch_group.shape[0] == 1
-            ), "Expected first dimension to be 1 after sharding expert dispatch table"
-        logger.debug(f"{self.experts_in_dispatch_group.shape=}")
-
         expert_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(
             ttnn_top_k_experts_indices, self.experts_in_dispatch_group, num_routed_experts, num_experts_per_tok
         )
 
-        # offset_cumsum outputs are tiny UINT32 vectors placed in DRAM
-        # (downstream ops — ttnn::extract / ttnn::insert in the routed-expert
-        # moe composite, plus ttnn::combine — read them device-side, no perf
-        # impact). DRAM placement was originally needed to keep L1 clear of
-        # the unified routed-expert FFN's static CB region on the
-        # 256-expert / 32-per-chip configuration; the FFN no longer reads
-        # region_offsets directly, but DRAM placement is kept defensively.
-        #
-        # Contract: expert_region_offsets entries are TOKEN rows, tile-aligned
-        # (multiples of TILE_HEIGHT=32). ttnn::extract / ttnn::insert rely
-        # on this alignment when slicing dispatched_buffer into per-expert
-        # token tensors.
         (
             global_dispatch_offsets,
             total_counts_per_expert,
@@ -263,6 +238,5 @@ class TtMoERoutingSetup(LightweightModule):
             # device is opened with l1_small_size > 0 (e.g. the Kimi chunked test).
             use_l1_small_for_semaphores=self.use_l1_small_for_semaphores,
         )
-        signpost(header="moe_gate_calculate_global_dispatch_offsets")
 
         return global_dispatch_offsets, total_counts_per_expert, expert_region_offsets, expert_histograms
