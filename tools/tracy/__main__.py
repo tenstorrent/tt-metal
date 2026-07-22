@@ -10,6 +10,95 @@ from tracy import *
 from tracy.serve_wasm import launch_server_subprocess, point_embed_at_trace
 
 
+# Bit positions match PROFILE_PERF_COUNTERS_* in tt_metal/tools/profiler/perf_counters.hpp.
+# l1_2/3/4 are Blackhole-only (its 2-NOC L1 has more client ports).
+PERF_COUNTER_GROUP_BITS = {
+    "fpu": 0,
+    "pack": 1,
+    "unpack": 2,
+    "l1_0": 3,
+    "l1_1": 4,
+    "instrn": 5,
+    "l1_2": 6,
+    "l1_3": 7,
+    "l1_4": 8,
+}
+PERF_COUNTER_L1_GROUPS = {"l1_0", "l1_1", "l1_2", "l1_3", "l1_4"}
+# Max counter groups whose readout code fits in one BRISC firmware image. Measured on Blackhole:
+# 3 groups fit, 4 overflow .text by 4B, 5 by 16B (each group's readout is ~12B of code). Conservative
+# default that is safe on every arch; the L1 mux separately allows at most one L1 bank per pass anyway.
+PERF_COUNTER_MAX_GROUPS_PER_PASS = 3
+# marker id the firmware tags perf-counter rows with (PERF_COUNTER_PROFILER_ID in perf_counters.hpp).
+PERF_COUNTER_MARKER_ID = "9090"
+# device-side profiler log filename (PROFILER_DEVICE_SIDE_LOG in tt_metal.tools.profiler.common).
+PERF_COUNTER_DEVICE_LOG_NAME = "profile_log_device.csv"
+
+
+def schedule_perf_counter_passes(requested_groups, max_groups_per_pass=PERF_COUNTER_MAX_GROUPS_PER_PASS):
+    """Partition requested counter groups into capture passes (replays of the workload).
+
+    Two hardware/firmware constraints per pass:
+      - at most ONE L1 bank (l1_0..l1_4 share a single count-time mux)
+      - at most max_groups_per_pass groups (BRISC firmware .text fit)
+    Returns a list of passes, each an ordered list of group names.
+    """
+    import math
+
+    seen = list(dict.fromkeys(g.lower() for g in requested_groups))  # dedup, preserve order
+    l1 = [g for g in seen if g in PERF_COUNTER_L1_GROUPS]
+    non_l1 = [g for g in seen if g not in PERF_COUNTER_L1_GROUPS]
+    total = len(l1) + len(non_l1)
+    if total == 0:
+        return []
+    # Enough passes to give every L1 bank its own pass AND keep each pass within the group cap.
+    num_passes = max(len(l1), math.ceil(total / max_groups_per_pass))
+    passes = [[] for _ in range(num_passes)]
+    for i, g in enumerate(l1):  # one L1 bank per pass
+        passes[i].append(g)
+    for g in non_l1:  # fill remaining slots, least-full pass first
+        target = min((p for p in passes if len(p) < max_groups_per_pass), key=len)
+        target.append(g)
+    return [p for p in passes if p]
+
+
+def perf_counter_groups_to_bitfield(groups):
+    """OR the PROFILE_PERF_COUNTERS_* bits for a list of group names."""
+    bits = 0
+    for g in groups:
+        bits |= 1 << PERF_COUNTER_GROUP_BITS[g.lower()]
+    return bits
+
+
+def merge_perf_counter_device_logs(pass_csvs, out_csv, base_dir):
+    """Merge per-pass device profiler CSVs into one.
+
+    Each pass replayed the same workload, so zone-timing rows are equivalent and ops align by
+    (run host ID, trace id, core) via the deterministic global_call_count. Take pass 0 as the base
+    (zones + its counter rows) and append ONLY the perf-counter rows (marker id 9090) from later
+    passes, so the merged log carries every group's counters against one set of zones.
+
+    All reads/writes are confined to ``base_dir`` (the profiler logs folder): every path is resolved
+    to an absolute path and rejected if it escapes ``base_dir``, so a crafted path can never read or
+    write outside the profiler output tree.
+    """
+    base = Path(base_dir).resolve()
+
+    def _confined(p):
+        resolved = Path(p).resolve()
+        if resolved != base and base not in resolved.parents:
+            raise ValueError(f"perf-counter log path escapes {base}: {resolved}")
+        return resolved
+
+    merged = list(_confined(pass_csvs[0]).read_text().splitlines(keepends=True))
+    for extra in pass_csvs[1:]:
+        for line in _confined(extra).read_text().splitlines(keepends=True):
+            # column 4 (0-indexed) is timer_id; perf-counter rows use PERF_COUNTER_MARKER_ID.
+            fields = line.split(",")
+            if len(fields) > 4 and fields[4].strip() == PERF_COUNTER_MARKER_ID:
+                merged.append(line)
+    _confined(out_csv).write_text("".join(merged))
+
+
 def main():
     from optparse import OptionParser
 
@@ -172,10 +261,19 @@ def main():
     parser.add_option(
         "--profiler-capture-perf-counters",
         type="string",
-        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1, instrn, all",
+        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1_0..l1_4, instrn, all",
         action="callback",
         callback=split_comma_list,
         dest="perf_counter_groups",
+    )
+    parser.add_option(
+        "--perf-counter-multipass",
+        dest="perf_counter_multipass",
+        action="store_true",
+        default=False,
+        help="When the requested counter groups don't fit one pass (>1 L1 bank, or too many groups for "
+        "BRISC firmware), replay the workload once per scheduled pass and merge results. Without this, "
+        "such a request errors with the required pass plan.",
     )
     parser.add_option(
         "--no-capture-tool", dest="noCapture", action="store_true", help="Do not run Tracy capture tool", default=False
@@ -267,70 +365,73 @@ def main():
             generate_logs_folder(os.path.abspath(outputFolder))
         )
 
-    if options.perf_counter_groups:
-        # Bit positions match PROFILE_PERF_COUNTERS_* in perf_counters.hpp. l1_2/3/4 are BH-only.
-        counter_group_bits = {
-            "fpu": 0,
-            "pack": 1,
-            "unpack": 2,
-            "l1_0": 3,
-            "l1_1": 4,
-            "instrn": 5,
-            "l1_2": 6,
-            "l1_3": 7,
-            "l1_4": 8,
-        }
+    # Only the outer (capture) process schedules/validates. The inner "--no-capture-tool" run that
+    # executes the workload just honors the TT_METAL_PROFILE_PERF_COUNTERS mask inherited via env
+    # (set per-pass by the multi-pass loop below), so it must not re-run this block.
+    if options.perf_counter_groups and not options.noCapture:
+        # Detect device arch: Blackhole has L1 banks 2-4 (2-NOC), WH/GS only 0-1.
+        declared_arch = next(
+            (os.environ.get(v) for v in ("TT_METAL_DEVICE_ARCH", "TT_ARCH_NAME", "ARCH_NAME") if os.environ.get(v)),
+            None,
+        )
+        if declared_arch is None:
+            try:
+                import ttnn
 
-        bitfield = 0
+                device = ttnn.open_device(device_id=0)
+                declared_arch = str(device.arch()).split(".")[-1]
+                ttnn.close_device(device)
+            except Exception:
+                logger.debug("Failed to detect device arch via ttnn")
+        is_blackhole = declared_arch is not None and declared_arch.strip().lower() == "blackhole"
+
+        # Resolve requested group names; "all" expands to the arch's full set.
+        arch_l1 = ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4"] if is_blackhole else ["l1_0", "l1_1"]
+        resolved = []
         for group in options.perf_counter_groups:
-            group_lower = group.lower()
-            if group_lower == "all":
-                # fpu | pack | unpack | l1_0 | instrn (L1 bank 1 requires a separate run).
-                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5)
+            g = group.lower()
+            if g == "all":
+                resolved = ["fpu", "pack", "unpack", "instrn"] + arch_l1
                 break
-            elif group_lower in counter_group_bits:
-                bitfield |= 1 << counter_group_bits[group_lower]
+            elif g in PERF_COUNTER_GROUP_BITS:
+                resolved.append(g)
             else:
                 logger.warning(
-                    f"Unknown counter group '{group}'. "
-                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
+                    f"Unknown counter group '{group}'. " f"Valid groups: {', '.join(PERF_COUNTER_GROUP_BITS)}, all"
                 )
-
-        # L1 bank mutual exclusion (one mux, one active bank) is enforced in rtoptions.cpp.
+        resolved = list(dict.fromkeys(resolved))
 
         # Reject BH-only groups on non-BH architectures.
-        bh_only_groups = {"l1_2", "l1_3", "l1_4"}
-        requested_groups = {group.lower() for group in options.perf_counter_groups}
-        requested_bh_only = sorted(requested_groups & bh_only_groups)
-        if requested_bh_only:
-            declared_arch = next(
-                (
-                    os.environ.get(env_var)
-                    for env_var in ("TT_METAL_DEVICE_ARCH", "TT_ARCH_NAME", "ARCH_NAME")
-                    if os.environ.get(env_var)
-                ),
-                None,
+        bh_only = sorted(set(resolved) & {"l1_2", "l1_3", "l1_4"})
+        if bh_only and not is_blackhole:
+            raise ValueError(
+                f"Performance counter groups {', '.join(bh_only)} are supported only on Blackhole, "
+                f"but device arch is {declared_arch or 'undeclared'}."
             )
-            if declared_arch is None:
-                try:
-                    import ttnn
 
-                    device = ttnn.open_device(device_id=0)
-                    declared_arch = str(device.arch()).split(".")[-1]
-                    ttnn.close_device(device)
-                except Exception:
-                    logger.debug("Failed to detect device arch via ttnn")
-            is_blackhole = declared_arch is not None and declared_arch.strip().lower() in ("blackhole",)
-            if not is_blackhole:
-                arch_desc = declared_arch if declared_arch is not None else "undeclared"
+        # Schedule into passes: L1 banks share one mux (<=1 L1/pass), BRISC firmware fits a limited
+        # number of groups/pass. A single pass sets the mask directly; multiple passes need opt-in.
+        passes = schedule_perf_counter_passes(resolved)
+        if len(passes) <= 1:
+            bitfield = perf_counter_groups_to_bitfield(resolved)
+            if bitfield > 0:
+                os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
+                logger.info(f"Setting performance counter groups: {resolved} (bitfield: {bitfield})")
+        else:
+            plan = "\n".join(
+                f"  pass {i + 1}: {', '.join(p)}  (bitfield {perf_counter_groups_to_bitfield(p)})"
+                for i, p in enumerate(passes)
+            )
+            if not options.perf_counter_multipass:
                 raise ValueError(
-                    f"Performance counter groups {', '.join(requested_bh_only)} are supported only on Blackhole, "
-                    f"but device arch is {arch_desc}."
+                    f"Requested counter groups {resolved} need {len(passes)} capture passes "
+                    f"(L1 banks share one mux; BRISC firmware fits <= {PERF_COUNTER_MAX_GROUPS_PER_PASS} "
+                    f"groups/pass):\n{plan}\n"
+                    "Re-run with --perf-counter-multipass to replay the workload once per pass and merge "
+                    "the results, or request fewer groups."
                 )
-
-        if bitfield > 0:
-            os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
-            logger.info(f"Setting performance counter groups: {options.perf_counter_groups} (bitfield: {bitfield})")
+            options.perf_counter_pass_bitfields = [perf_counter_groups_to_bitfield(p) for p in passes]
+            logger.info(f"Multi-pass perf-counter capture ({len(passes)} passes):\n{plan}")
 
     if not (
         options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or options.perf_counter_groups
@@ -426,11 +527,14 @@ def main():
             if port:
                 envVars["TRACY_PORT"] = port
 
-            testProcess = subprocess.Popen([testCommand], shell=True, env=envVars, preexec_fn=os.setsid)
-            logger.info(f"Test process started")
+            # Multi-pass perf-counter capture replays the workload once per scheduled pass (each with
+            # its own group mask) and merges the per-pass device logs. Single pass runs once as before.
+            pass_bitfields = getattr(options, "perf_counter_pass_bitfields", None)
+            proc_holder = {"p": None}
 
             def signal_handler(sig, frame):
-                os.killpg(os.getpgid(testProcess.pid), signal.SIGTERM)
+                if proc_holder["p"] is not None:
+                    os.killpg(os.getpgid(proc_holder["p"].pid), signal.SIGTERM)
                 captureProcess.terminate()
                 captureProcess.communicate()
                 sys.exit(3)
@@ -438,10 +542,38 @@ def main():
             signal.signal(signal.SIGINT, signal_handler)
             signal.signal(signal.SIGTERM, signal_handler)
 
-            testProcess.communicate()
-            if options.check_exit_code and testProcess.returncode != 0:
-                logger.error(f"{testCommand} exited with a non-zero return code")
-                sys.exit(4)
+            def run_workload(env):
+                proc = subprocess.Popen([testCommand], shell=True, env=env, preexec_fn=os.setsid)
+                proc_holder["p"] = proc
+                logger.info("Test process started")
+                proc.communicate()
+                if options.check_exit_code and proc.returncode != 0:
+                    logger.error(f"{testCommand} exited with a non-zero return code")
+                    sys.exit(4)
+
+            if pass_bitfields and len(pass_bitfields) > 1:
+                device_log = generate_logs_folder(outputFolder) / PERF_COUNTER_DEVICE_LOG_NAME
+                pass_dir = generate_logs_folder(outputFolder) / "perf_counter_passes"
+                pass_dir.mkdir(parents=True, exist_ok=True)
+                pass_logs = []
+                for i, bitfield in enumerate(pass_bitfields):
+                    logger.info(f"Perf-counter pass {i + 1}/{len(pass_bitfields)} (bitfield {bitfield})")
+                    if device_log.is_file():
+                        device_log.unlink()  # fresh per pass so each snapshot holds only that pass
+                    pass_env = dict(envVars)
+                    pass_env["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
+                    run_workload(pass_env)
+                    if device_log.is_file():
+                        snap = pass_dir / f"pass_{i}.csv"
+                        copyfile(device_log, snap)
+                        pass_logs.append(snap)
+                    else:
+                        logger.warning(f"Device log missing after perf-counter pass {i + 1}: {device_log}")
+                if pass_logs:
+                    merge_perf_counter_device_logs(pass_logs, device_log, generate_logs_folder(outputFolder))
+                    logger.info(f"Merged {len(pass_logs)} perf-counter pass logs into {device_log}")
+            else:
+                run_workload(envVars)
 
             try:
                 captureProcess.communicate(timeout=15)

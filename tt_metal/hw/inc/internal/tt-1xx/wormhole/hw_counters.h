@@ -15,10 +15,11 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;
 
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
+// ids 2, 256-258 (MATH_FIDELITY_STALL, MATH_INSTRN_HF_{4,2,1}_CYCLE) omitted: RTL ties
+// fidelity_phases_ongoing=1'b0, so those bins are dead / HF_1 duplicates MATH_INSTRN_STARTED (id 3).
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
-     {PerfCounterType::MATH_FIDELITY_STALL, 2},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
      {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
      {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
@@ -27,9 +28,6 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
-     {PerfCounterType::MATH_INSTRN_HF_4_CYCLE, 256},
-     {PerfCounterType::MATH_INSTRN_HF_2_CYCLE, 257},
-     {PerfCounterType::MATH_INSTRN_HF_1_CYCLE, 258},
      {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
      {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
      {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},
@@ -38,7 +36,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
-constexpr size_t NUM_UNPACK_COUNTERS = 22;
+constexpr size_t NUM_UNPACK_COUNTERS = 18;
 
 // PACK_COUNT=4 on WH.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
