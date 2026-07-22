@@ -14,12 +14,11 @@ own audio.
 
 Whisper (``WHISPER_MODEL``) transcribes both waveforms and WER (TT vs reference) is reported by
 cumulative transcript-word prefix (32, 64, 128, …). Report-only: asserts audio is finite and
-transcripts non-empty. ``TF_MAX_NEW_TOKENS`` (env ``VV_WER_MAX_NEW_TOKENS``) caps AR steps; the
-fp32 CPU reference is slow, so keep it modest (e.g. 32 for a quick smoke test).
+transcripts non-empty. ``TF_MAX_NEW_TOKENS`` (hardcoded, 512) caps AR steps.
 """
 
+import contextlib
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -49,11 +48,30 @@ WHISPER_MODEL = "openai/whisper-medium"
 WER_PREFIX_LENGTHS = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
 _OUT_DIR = _VIBEVOICE_ROOT / "output" / "e2e_wer"
 
-# 4-speaker climate script + voice cloning (override the script with VV_WER_DEMO_ID).
-TF_DEMO_ID = os.environ.get("VV_WER_DEMO_ID", "4p_climate_45min")
-# AR-step cap. The fp32 CPU reference free-runs the same input, so keep this modest by default
-# (override with VV_WER_MAX_NEW_TOKENS; e.g. 32 for a quick smoke test).
-TF_MAX_NEW_TOKENS = int(os.environ.get("VV_WER_MAX_NEW_TOKENS", "512"))
+# 4-speaker climate script + voice cloning.
+TF_DEMO_ID = "4p_climate_45min"
+# AR-step cap (the fp32 CPU reference free-runs the same input, so this is kept modest).
+TF_MAX_NEW_TOKENS = 512
+
+
+@contextlib.contextmanager
+def _quiet_load_report():
+    """Silence transformers 5.x's cosmetic model LOAD REPORT during a from_pretrained call.
+
+    The vendored reference ties lm_head to embed_tokens in tie_weights() (post_init), so
+    lm_head.weight is intentionally absent from the checkpoint. transformers 5.x cannot see the tie
+    at load time (list-form _tied_weights_keys + config.tie_word_embeddings unset), so it logs a
+    spurious "lm_head.weight | MISSING" report before the tie is applied. The weight is correct
+    after load; only the report is wrong. Raise transformers' verbosity to ERROR for the load only.
+    """
+    from transformers.utils import logging as hf_logging
+
+    prev = hf_logging.get_verbosity()
+    hf_logging.set_verbosity_error()
+    try:
+        yield
+    finally:
+        hf_logging.set_verbosity(prev)
 
 
 def _normalize(text: str) -> list[str]:
@@ -106,7 +124,7 @@ def _transcribe(asr, audio_24k: torch.Tensor) -> str:
 def test_e2e_wer_teacher_forced(mesh_device):
     """Teacher-forced parity: bf16 reference re-encoded embedding fed into TT's LM each frame.
 
-    Both backends bf16, 45-min script, cap TF_MAX_NEW_TOKENS frames (default 512). The reference
+    Both backends bf16, 45-min script, cap 512 frames. The reference
     free-runs and we capture its per-frame re-encoded embedding (``acoustic_connector +
     semantic_connector`` = ``diffusion_embeds``). TT then replays the reference token stream
     (``forced_token_ids``) with its ``_post_diffusion_embeds`` hooked so TT's LM is fed the
@@ -136,9 +154,10 @@ def test_e2e_wer_teacher_forced(mesh_device):
     # ── bf16 reference ──
     # fp32 reference on CPU: bf16 matmul has no CPU hardware acceleration (~5-20x slower); fp32 is far
     # faster and the injected embeds are cast to bf16 anyway, so tt_vs_ref (word-level WER) is unaffected.
-    ref = VibeVoiceForConditionalGenerationInference.from_pretrained(
-        MODEL_PATH, torch_dtype=torch.float32, device_map="cpu", attn_implementation="sdpa"
-    )
+    with _quiet_load_report():
+        ref = VibeVoiceForConditionalGenerationInference.from_pretrained(
+            MODEL_PATH, torch_dtype=torch.float32, device_map="cpu", attn_implementation="sdpa"
+        )
     ref.eval()
     ref.set_ddpm_inference_steps(num_steps=NUM_DIFFUSION_STEPS)
     ref.model.acoustic_tokenizer.std_dist_type = "none"
