@@ -67,8 +67,11 @@ def prefetch_and_linear(
         # Gather consumes one K-block per ring position.
         block_count = global_cb.receiver_cores().num_cores()
 
-    # Streaming gather needs identity ring rotation. Mcast consumes natural FIFO
-    # order and therefore uses the rotation-free request.
+    # Streaming gather needs identity ring rotation (``rotation[r] = r``). That table is
+    # layout-agnostic -- identical for ROUND_ROBIN_1D and CONTIGUOUS_1D receiver-contiguous
+    # weights -- because the kernel slices it by each weight's own global receiver position,
+    # so no distribution-strategy argument is needed here. Mcast consumes natural FIFO order
+    # and therefore uses the rotation-free request.
     if program_config.stream_in1:
         request = (weight, block_count, list(range(block_count)))
     else:

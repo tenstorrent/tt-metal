@@ -345,7 +345,10 @@ uint32_t validate_recv_contig_weight_for_matmul_1d(
     const uint32_t weight_K_tiles = shard_K / tile_h;
     uint32_t block_count = 0;
     if (program_config.gather_in0) {
-        // Gather consumes one rotated K-block per ring position.
+        // Gather consumes one rotated K-block per ring position. Silent-hang / over-read guard: K must
+        // divide evenly into receiver_count blocks. Otherwise the K-block width the prefetcher lays out
+        // rounds up, the kernel reads past the receiver's slab, and the matmul (which pads K to a
+        // multiple of receiver_count) waits on pages that never come.
         TT_FATAL(
             weight_K_tiles % receiver_count == 0,
             "weight K ({} tiles) must be divisible by receiver_count ({}) for gather_in0; remainder {}",
@@ -354,7 +357,9 @@ uint32_t validate_recv_contig_weight_for_matmul_1d(
             weight_K_tiles % receiver_count);
         block_count = receiver_count;
     } else {
-        // Mcast consumes the same natural K-block sequence on every output worker.
+        // Mcast consumes the same natural K-block sequence on every output worker. Same silent-hang /
+        // over-read guard, keyed on in0_block_w: an indivisible K rounds the block width up and the
+        // kernel over-reads while the matmul waits forever.
         TT_FATAL(program_config.in0_block_w > 0, "mcast_in0 requires in0_block_w > 0");
         TT_FATAL(
             weight_K_tiles % program_config.in0_block_w == 0,
