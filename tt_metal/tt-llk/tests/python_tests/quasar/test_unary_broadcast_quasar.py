@@ -208,7 +208,6 @@ def test_unary_broadcast_quasar(
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
-        "boot_mode": boot_mode,
         "disable_format_inference": (implied_math_format == ImpliedMathFormat.Yes),
     }
 
@@ -218,6 +217,7 @@ def test_unary_broadcast_quasar(
         return
 
     configuration = TestConfig(
+        boot_mode=boot_mode,
         **{
             **test_config_kwargs,
             "templates": test_config_kwargs["templates"]
