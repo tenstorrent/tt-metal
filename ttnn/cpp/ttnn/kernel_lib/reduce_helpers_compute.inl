@@ -104,6 +104,20 @@ ALWI bool sfpu_is_first_tile(uint32_t axis_index, const AccumulateT& accumulate)
     return axis_index == 0;
 }
 
+// Fold init for the SFPU multi-tile reduce axis. Skips when Accumulate reload already
+// called sfpu_reduce_fold_init (see reload_accumulator_if_needed) so the two sites do not
+// double-init. Still runs on the first/no-accumulate path when axis_tiles > 1.
+template <PoolType reduce_type, DataFormat reduce_format, typename AccumulateT>
+ALWI void sfpu_reduce_fold_init_if_needed(uint32_t axis_tiles, const AccumulateT& accumulate) {
+    bool fold_already_inited = false;
+    if constexpr (is_accumulate_v<AccumulateT>) {
+        fold_already_inited = !accumulate.is_first();
+    }
+    if (axis_tiles > 1 && !fold_already_inited) {
+        sfpu_reduce_fold_init<reduce_type, reduce_format>();
+    }
+}
+
 // Post-reduce scalar multiply. mul_unary_tile is fp32-only, so Int32 is bracketed with typecasts
 // (truncates toward zero on the way back); all other formats use plain mul_unary_tile.
 template <DataFormat reduce_format>
@@ -222,6 +236,8 @@ ALWI void reload_accumulator_if_needed(
             if constexpr (is_sfpu) {
                 // SFPU+Accumulate (RM cross-chunk path): reload left copy_tile on the accumulator
                 // CB; point it back at the input before the next sfpu_copy_and_fold.
+                // Also re-init the fold here — callers must skip their own fold_init when
+                // !accumulate.is_first() so this is not doubled (see REDUCE_ROW / REDUCE_COL).
                 reconfig_data_format_srca(accumulate.config.cb_accumulator, input_dfb_id);
                 copy_tile_to_dst_init_short(input_dfb_id);
                 detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
@@ -493,9 +509,7 @@ ALWI void reduce(
                 reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
-                    if (Wt > 1) {
-                        detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
-                    }
+                    detail::sfpu_reduce_fold_init_if_needed<reduce_type, reduce_format>(Wt, accumulate);
                 }
 
                 const uint32_t dst_idx = get_dst_index(accumulate);
@@ -614,9 +628,7 @@ ALWI void reduce(
                 reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
-                    if (Ht > 1) {
-                        detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
-                    }
+                    detail::sfpu_reduce_fold_init_if_needed<reduce_type, reduce_format>(Ht, accumulate);
                 }
 
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
