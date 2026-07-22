@@ -78,7 +78,7 @@ KSplitGramMatmulDeviceOperation::tensor_return_value_t KSplitGramMatmulDeviceOpe
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
     }
-    return create_device_tensor(
+    return ttnn::create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 

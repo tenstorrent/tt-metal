@@ -125,7 +125,7 @@ tensor_return_value_t LayerNormForwardDeviceOperation::create_output_tensors(
     if (tensor_args.preallocated_output.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_output);
     } else {
-        output_tensors.push_back(create_device_tensor(output_specs[0], tensor_args.input.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(output_specs[0], tensor_args.input.device()));
     }
 
     // mean (optional)
@@ -133,14 +133,14 @@ tensor_return_value_t LayerNormForwardDeviceOperation::create_output_tensors(
         if (tensor_args.preallocated_mean.has_value()) {
             output_tensors.push_back(tensor_args.preallocated_mean);
         } else {
-            output_tensors.push_back(create_device_tensor(output_specs[1], tensor_args.input.device()));
+            output_tensors.push_back(ttnn::create_device_tensor(output_specs[1], tensor_args.input.device()));
         }
 
         // rstd (optional)
         if (tensor_args.preallocated_rstd.has_value()) {
             output_tensors.push_back(tensor_args.preallocated_rstd);
         } else {
-            output_tensors.push_back(create_device_tensor(output_specs[2], tensor_args.input.device()));
+            output_tensors.push_back(ttnn::create_device_tensor(output_specs[2], tensor_args.input.device()));
         }
     } else {
         output_tensors.push_back(std::nullopt);

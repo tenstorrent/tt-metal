@@ -81,7 +81,7 @@ CrossEntropyBackwardDeviceOperation::tensor_return_value_t CrossEntropyBackwardD
     if (tensor_args.preallocated_output.has_value()) {
         output_tensor = tensor_args.preallocated_output.value();
     } else {
-        output_tensor = create_device_tensor(output_specs, tensor_args.input.device());
+        output_tensor = ttnn::create_device_tensor(output_specs, tensor_args.input.device());
     }
 
     return output_tensor;

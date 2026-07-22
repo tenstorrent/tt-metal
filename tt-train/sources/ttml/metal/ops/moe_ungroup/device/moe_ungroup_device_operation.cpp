@@ -97,7 +97,7 @@ tensor_return_value_t MoeUngroupDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     auto spec = compute_output_specs(attrs, args);
     auto* device = args.expert_out.device();
-    return create_device_tensor(spec, device);
+    return ttnn::create_device_tensor(spec, device);
 }
 
 ttsl::hash::hash_t MoeUngroupDeviceOperation::compute_program_hash(

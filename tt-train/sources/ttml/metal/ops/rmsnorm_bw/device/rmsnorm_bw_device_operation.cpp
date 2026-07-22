@@ -102,13 +102,13 @@ tensor_return_value_t RMSNormBackwardDeviceOperation::create_output_tensors(
     if (tensor_args.preallocated_da.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_da.value());
     } else {
-        output_tensors.push_back(create_device_tensor(output_specs[0], tensor_args.input.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(output_specs[0], tensor_args.input.device()));
     }
 
     if (tensor_args.preallocated_dgamma_components.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_dgamma_components.value());
     } else {
-        output_tensors.push_back(create_device_tensor(output_specs[1], tensor_args.gamma.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(output_specs[1], tensor_args.gamma.device()));
     }
 
     return output_tensors;

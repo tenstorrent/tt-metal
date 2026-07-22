@@ -80,7 +80,7 @@ tensor_return_value_t SiLUBackwardDeviceOperation::create_output_tensors(
     if (tensor_args.preallocated_da.has_value()) {
         return tensor_args.preallocated_da.value();
     } else {
-        return create_device_tensor(output_specs[0], tensor_args.input.device());
+        return ttnn::create_device_tensor(output_specs[0], tensor_args.input.device());
     }
 }
 

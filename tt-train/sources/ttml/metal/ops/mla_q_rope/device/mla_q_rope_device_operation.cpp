@@ -121,7 +121,7 @@ MlaQRopeDeviceOperation::spec_return_value_t MlaQRopeDeviceOperation::compute_ou
 MlaQRopeDeviceOperation::tensor_return_value_t MlaQRopeDeviceOperation::create_output_tensors(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     auto spec = compute_output_specs({}, tensor_args);
-    return create_device_tensor(spec, tensor_args.q_in.device());
+    return ttnn::create_device_tensor(spec, tensor_args.q_in.device());
 }
 
 ttsl::hash::hash_t MlaQRopeDeviceOperation::compute_program_hash(

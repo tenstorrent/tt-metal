@@ -122,21 +122,21 @@ tensor_return_value_t LayerNormBackwardDeviceOperation::create_output_tensors(
     if (tensor_args.preallocated_dx.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_dx.value());
     } else {
-        output_tensors.push_back(create_device_tensor(output_specs[0], tensor_args.input.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(output_specs[0], tensor_args.input.device()));
     }
 
     // dgamma_components
     if (tensor_args.preallocated_dgamma_components.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_dgamma_components.value());
     } else {
-        output_tensors.push_back(create_device_tensor(output_specs[1], tensor_args.gamma.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(output_specs[1], tensor_args.gamma.device()));
     }
 
     // dbeta_components
     if (tensor_args.preallocated_dbeta_components.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_dbeta_components.value());
     } else {
-        output_tensors.push_back(create_device_tensor(output_specs[2], tensor_args.gamma.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(output_specs[2], tensor_args.gamma.device()));
     }
 
     return output_tensors;

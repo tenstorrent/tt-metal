@@ -103,7 +103,7 @@ SelectTargetLogitDeviceOperation::tensor_return_value_t SelectTargetLogitDeviceO
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
     }
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.logit.device());
+    return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.logit.device());
 }
 
 ttsl::hash::hash_t SelectTargetLogitDeviceOperation::compute_program_hash(

@@ -116,9 +116,9 @@ tensor_return_value_t SwigluElemwiseBwDeviceOperation::create_output_tensors(
 
     return {
         tensor_args.preallocated_dL_dlinear1.has_value() ? tensor_args.preallocated_dL_dlinear1.value()
-                                                         : create_device_tensor(specs[0], device),
+                                                         : ttnn::create_device_tensor(specs[0], device),
         tensor_args.preallocated_dL_dgate.has_value() ? tensor_args.preallocated_dL_dgate.value()
-                                                      : create_device_tensor(specs[1], device),
+                                                      : ttnn::create_device_tensor(specs[1], device),
     };
 }
 

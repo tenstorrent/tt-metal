@@ -70,7 +70,7 @@ FrobeniusNormalizeTensorReturn FrobeniusNormalizeDeviceOperation::create_output_
     }
 
     auto output_specs = compute_output_specs(args, tensor_args);
-    return {create_device_tensor(output_specs[0], tensor_args.input.device())};
+    return {ttnn::create_device_tensor(output_specs[0], tensor_args.input.device())};
 }
 
 ttsl::hash::hash_t FrobeniusNormalizeDeviceOperation::compute_program_hash(

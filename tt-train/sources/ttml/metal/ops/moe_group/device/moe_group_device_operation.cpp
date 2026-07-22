@@ -123,12 +123,12 @@ tensor_return_value_t MoeGroupDeviceOperation::create_output_tensors(
     auto specs = compute_output_specs(attrs, args);
     auto* device = args.dispatched.device();
     return {
-        create_device_tensor(specs[0], device),
-        create_device_tensor(specs[1], device),
-        create_device_tensor(specs[2], device),
-        create_device_tensor(specs[3], device),
-        create_device_tensor(specs[4], device),
-        create_device_tensor(specs[5], device),
+        ttnn::create_device_tensor(specs[0], device),
+        ttnn::create_device_tensor(specs[1], device),
+        ttnn::create_device_tensor(specs[2], device),
+        ttnn::create_device_tensor(specs[3], device),
+        ttnn::create_device_tensor(specs[4], device),
+        ttnn::create_device_tensor(specs[5], device),
     };
 }
 

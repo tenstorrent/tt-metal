@@ -53,12 +53,12 @@ RingSDPAFwDeviceOperation::tensor_return_value_t RingSDPAFwDeviceOperation::crea
     // Handle output
     ttnn::Tensor output = tensor_args.preallocated_output.has_value()
                               ? tensor_args.preallocated_output.value()
-                              : create_device_tensor(output_spec, tensor_args.query.device());
+                              : ttnn::create_device_tensor(output_spec, tensor_args.query.device());
 
     // Handle intermediates
     ttnn::Tensor intermediates = tensor_args.preallocated_intermediates.has_value()
                                      ? tensor_args.preallocated_intermediates.value()
-                                     : create_device_tensor(intermediates_spec, tensor_args.query.device());
+                                     : ttnn::create_device_tensor(intermediates_spec, tensor_args.query.device());
 
     return {output, intermediates};
 }

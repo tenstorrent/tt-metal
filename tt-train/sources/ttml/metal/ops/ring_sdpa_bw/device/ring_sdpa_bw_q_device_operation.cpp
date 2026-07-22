@@ -50,11 +50,11 @@ RingSDPABwQDeviceOperation::tensor_return_value_t RingSDPABwQDeviceOperation::cr
 
     ttnn::Tensor grad_query = tensor_args.preallocated_grad_query.has_value()
                                   ? tensor_args.preallocated_grad_query.value()
-                                  : create_device_tensor(grad_query_spec, tensor_args.query.device());
+                                  : ttnn::create_device_tensor(grad_query_spec, tensor_args.query.device());
 
     // TODO: accept preallocated_u_scaler to avoid per-step allocation in the ring loop.
     // The tensor is small (one FP32 tile per Q row), so the overhead is negligible for now.
-    ttnn::Tensor u_scaler = create_device_tensor(u_scaler_spec, tensor_args.query.device());
+    ttnn::Tensor u_scaler = ttnn::create_device_tensor(u_scaler_spec, tensor_args.query.device());
 
     return {grad_query, u_scaler};
 }

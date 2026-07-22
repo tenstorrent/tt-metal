@@ -85,7 +85,7 @@ SubtractAtTargetDeviceOperation::tensor_return_value_t SubtractAtTargetDeviceOpe
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
     }
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+    return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 ttsl::hash::hash_t SubtractAtTargetDeviceOperation::compute_program_hash(

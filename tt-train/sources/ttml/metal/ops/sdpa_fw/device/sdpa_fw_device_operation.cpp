@@ -234,14 +234,14 @@ tensor_return_value_t SDPAForwardDeviceOperation::create_output_tensors(
     if (tensor_args.preallocated_output.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_output.value());
     } else {
-        output_tensors.push_back(create_device_tensor(output_specs[0], tensor_args.query.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(output_specs[0], tensor_args.query.device()));
     }
 
     if (args.return_intermediates) {
         if (tensor_args.preallocated_intermediate.has_value()) {
             output_tensors.push_back(tensor_args.preallocated_intermediate.value());
         } else {
-            output_tensors.push_back(create_device_tensor(output_specs[1], tensor_args.query.device()));
+            output_tensors.push_back(ttnn::create_device_tensor(output_specs[1], tensor_args.query.device()));
         }
     }
 

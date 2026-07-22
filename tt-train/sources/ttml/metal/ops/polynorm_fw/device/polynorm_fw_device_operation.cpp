@@ -65,7 +65,7 @@ PolyNorm3FWTensorReturn PolyNorm3ForwardDeviceOperation::create_output_tensors(
         return tensor_args.preallocated_output.value();
     }
     auto specs = compute_output_specs(op_attrs, tensor_args);
-    return create_device_tensor(specs[0], tensor_args.input.device());
+    return ttnn::create_device_tensor(specs[0], tensor_args.input.device());
 }
 
 }  // namespace ttml::metal::ops::polynorm3_fw::device

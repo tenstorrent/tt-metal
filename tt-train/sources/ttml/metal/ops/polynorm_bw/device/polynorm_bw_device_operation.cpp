@@ -131,13 +131,13 @@ PolyNorm3BWTensorReturn PolyNorm3BackwardDeviceOperation::create_output_tensors(
     if (tensor_args.preallocated_dL_dx.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_dL_dx.value());
     } else {
-        output_tensors.push_back(create_device_tensor(specs[0], tensor_args.input.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(specs[0], tensor_args.input.device()));
     }
 
     if (tensor_args.preallocated_packed_partials.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_packed_partials.value());
     } else {
-        output_tensors.push_back(create_device_tensor(specs[1], tensor_args.input.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(specs[1], tensor_args.input.device()));
     }
     return output_tensors;
 }

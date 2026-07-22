@@ -52,12 +52,12 @@ RingSDPABwKVDeviceOperation::tensor_return_value_t RingSDPABwKVDeviceOperation::
     // Handle grad_key
     ttnn::Tensor grad_key = tensor_args.preallocated_grad_key.has_value()
                                 ? tensor_args.preallocated_grad_key.value()
-                                : create_device_tensor(grad_key_spec, tensor_args.key.device());
+                                : ttnn::create_device_tensor(grad_key_spec, tensor_args.key.device());
 
     // Handle grad_value
     ttnn::Tensor grad_value = tensor_args.preallocated_grad_value.has_value()
                                   ? tensor_args.preallocated_grad_value.value()
-                                  : create_device_tensor(grad_value_spec, tensor_args.value.device());
+                                  : ttnn::create_device_tensor(grad_value_spec, tensor_args.value.device());
 
     return {grad_key, grad_value};
 }

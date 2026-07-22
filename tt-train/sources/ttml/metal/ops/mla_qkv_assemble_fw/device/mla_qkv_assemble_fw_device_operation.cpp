@@ -151,9 +151,9 @@ MLAQKVAssembleFwDeviceOperation::tensor_return_value_t MLAQKVAssembleFwDeviceOpe
     auto specs = compute_output_specs(args, tensor_args);
     auto* device = tensor_args.kv_up.device();
     return {
-        create_device_tensor(specs[0], device),
-        create_device_tensor(specs[1], device),
-        create_device_tensor(specs[2], device)};
+        ttnn::create_device_tensor(specs[0], device),
+        ttnn::create_device_tensor(specs[1], device),
+        ttnn::create_device_tensor(specs[2], device)};
 }
 
 ttsl::hash::hash_t MLAQKVAssembleFwDeviceOperation::compute_program_hash(

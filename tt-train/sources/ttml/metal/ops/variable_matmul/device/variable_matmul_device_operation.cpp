@@ -219,7 +219,7 @@ VariableMatmulDeviceOperation::tensor_return_value_t VariableMatmulDeviceOperati
     }
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     auto* device = tensor_args.input_tensor.device();
-    return create_device_tensor(output_spec, device);
+    return ttnn::create_device_tensor(output_spec, device);
 }
 
 ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(

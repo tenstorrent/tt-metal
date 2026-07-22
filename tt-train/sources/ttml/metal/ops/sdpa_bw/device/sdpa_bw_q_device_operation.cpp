@@ -169,11 +169,11 @@ SDPABackwardQDeviceOperation::tensor_return_value_t SDPABackwardQDeviceOperation
 
     ttnn::Tensor grad_query = tensor_args.preallocated_grad_query.has_value()
                                   ? tensor_args.preallocated_grad_query.value()
-                                  : create_device_tensor(grad_query_spec, tensor_args.query.device());
+                                  : ttnn::create_device_tensor(grad_query_spec, tensor_args.query.device());
 
     ttnn::Tensor u_scaler = tensor_args.preallocated_u_scaler.has_value()
                                 ? tensor_args.preallocated_u_scaler.value()
-                                : create_device_tensor(u_scaler_spec, tensor_args.query.device());
+                                : ttnn::create_device_tensor(u_scaler_spec, tensor_args.query.device());
 
     return {grad_query, u_scaler};
 }
