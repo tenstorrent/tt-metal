@@ -9,6 +9,10 @@ inputs:
     description: 'Target namespace for the allocation'
     required: false
     default: 'ttop-ci'
+  timeoutSeconds:
+    description: 'Max seconds to keep retrying the delete before failing.'
+    required: false
+    default: '300'
 
 runs:
   using: 'composite'
@@ -18,14 +22,18 @@ runs:
       env:
         NAMESPACE: ${{ inputs.namespace }}
         ALLOCATION_NAME: ${{ inputs.allocationName }}
+        OVERALL_TIMEOUT: ${{ inputs.timeoutSeconds }}
       run: |
         POLL_INTERVAL=5
-        OVERALL_TIMEOUT=300 #5 minutes: long enough to ride out a token expiry/transient blip. Prevent long waits.
         MAX_AUTH_FAILURES=3
+        # Default 5 min: long enough to ride out a token expiry / transient blip,
+        # short enough not to pin a runner. Override via the timeoutSeconds input.
+        OVERALL_TIMEOUT="${OVERALL_TIMEOUT:-300}"
 
-        # Retry token minting in-place so a brief token-endpoint blip (e.g. a
-        # DNS "could not resolve host", exit 6 — the failure that left
-        # allocations dangling) doesn't leave us tokenless.
+        # Mints a fresh OIDC token into IDTOKEN and masks it, so every caller gets
+        # a masked token without having to remember to mask it. Retries in-place so
+        # a brief token-endpoint blip (e.g. a DNS "could not resolve host", exit 6 —
+        # the failure that left allocations dangling) is absorbed.
         mint_token() {
           local t
           for _ in 1 2 3; do
@@ -35,16 +43,17 @@ runs:
               -H "Accept: application/json; api-version=2.0" \
               -H "Content-Type: application/json" -d "{}" | jq -r '.value') || t=""
             if [[ -n "$t" && "$t" != "null" ]]; then
-              echo "$t"
+              IDTOKEN="$t"
+              echo "::add-mask::${IDTOKEN}"
               return 0
             fi
             sleep 2
           done
+          IDTOKEN=""
           return 1
         }
 
-        IDTOKEN=$(mint_token) || true
-        echo "::add-mask::${IDTOKEN}"
+        mint_token || true
 
         auth_failures=0
         start=$SECONDS
@@ -60,8 +69,7 @@ runs:
           # ever calling kubectl with an empty token.
           if [[ -z "$IDTOKEN" ]]; then
             echo "::warning::No valid token yet; (re)minting before delete."
-            IDTOKEN=$(mint_token) || true
-            echo "::add-mask::${IDTOKEN}"
+            mint_token || true
             if [[ -z "$IDTOKEN" ]]; then
               sleep "$POLL_INTERVAL"
               continue
@@ -79,8 +87,7 @@ runs:
               echo "::error::Repeated auth failures despite token reissue; failing."
               exit 1
             fi
-            IDTOKEN=$(mint_token) || true
-            echo "::add-mask::${IDTOKEN}"
+            mint_token || true
           else
             echo "::warning::Transient error deleting (rc=${rc}): ${output}"
           fi
