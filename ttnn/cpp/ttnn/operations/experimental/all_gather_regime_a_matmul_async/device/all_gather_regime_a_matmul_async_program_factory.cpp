@@ -104,7 +104,12 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         in0_shard, mesh_coordinate, op.cluster_axis);
     const std::optional<ttnn::MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
         in0_shard, mesh_coordinate, 1, op.topology, op.cluster_axis);
-    TT_FATAL(forward_coord.has_value(), "D=2 requires a forward neighbour along the cluster axis");
+    const std::optional<ttnn::MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        in0_shard, mesh_coordinate, -1, op.topology, op.cluster_axis);
+    // D=2: the single "other" device is whichever neighbour exists (forward for device 0, backward for the
+    // wrap/end device under linear topology). Both directions reach the other device in one hop.
+    const std::optional<ttnn::MeshCoordinate>& other_coord = forward_coord.has_value() ? forward_coord : backward_coord;
+    TT_FATAL(other_coord.has_value(), "D=2 requires a neighbour along the cluster axis");
 
     // ============================ regime_a compute engine (replicated default path) =========================
     // Build the regime_a plan for the FULL matmul [M, K_global] x [K_global, N] using the GATHER buffer's shape
@@ -264,7 +269,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
 
     // mux v2 toward the forward neighbour.
     const auto src_node = mesh_device->get_fabric_node_id(mesh_coordinate);
-    const auto dst_node = mesh_device->get_fabric_node_id(forward_coord.value());
+    const auto dst_node = mesh_device->get_fabric_node_id(other_coord.value());
     const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(src_node, dst_node);
     TT_FATAL(!link_indices.empty(), "no fabric forwarding link from src to forward neighbour");
     const uint32_t channel_buf_bytes = align_up(aligned_hdr + kTileBytesBf16, (uint32_t)hal::get_l1_alignment());
