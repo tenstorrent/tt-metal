@@ -48,6 +48,23 @@ and size each CB to `2 * block` tiles (double-buffered). Small sweet spot (~4–
 Use the smallest dtype your accuracy allows. Skip all of it if you're already bandwidth-bound (enough
 cores) or compute-bound.
 
+## ⭐⭐ T2 — [`index_staging`](index_staging/README.md)
+**Concept:** index-driven access (`out[w] = src[idx[w]]`) — one bulk read of the indexable dimension
+into L1 + SRAM-local indexing, vs. one remote NoC transaction per index.
+**Situation:** you need `out[w] = src[idx[w]]` for an arbitrary index list and write the obvious kernel:
+a separate remote DRAM read per index. Each read pulls a whole aligned line (32 B) to extract the one
+element you want (2 B for bf16), and each read command carries a fixed NCRISC issue cost.
+**Measured win:** bulk-reading the whole source row once and extracting every element in L1 is
+**~2.1–2.2× faster** than a per-index remote read (WH B0, 1 core), holding across W=128→8192 and in
+steady state. The win is **bounded** (not the 16× byte-waste ratio) because both variants share the
+same W-element local-extract loop — that common floor caps the ratio, so it barely grows with W.
+**Index distribution (sorted vs. shuffled) had no effect:** the whole indexable dimension is one
+interleaved DRAM page, so the pipelined per-index reads hit one open DRAM row and the loop is bound on
+**transaction *count* (NCRISC issue)**, not DRAM locality — and count is order-independent.
+**Gist:** for an indexed select over a dimension that fits in L1, **read it once in bulk and index locally**;
+don't issue one remote read per index. The win is collapsing the transaction count, not improving
+locality — so it applies whenever the index list touches most of a row, regardless of index order.
+
 ## ⭐⭐ T2 — [`tile_reorder`](tile_reorder/README.md)
 **Concept:** transfer coalescing on a DRAM-bandwidth-bound move.
 **Situation:** a whole-tile relocation (permute / transpose-of-tiles) written the generic way —
