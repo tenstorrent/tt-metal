@@ -279,9 +279,6 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
         this->ethernet_cores_.insert({core.x, core.y});
     }
 
-    // Set device pointer for SHM tracking
-    config.device = this;
-
     // L1 Banking Allocator creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
     // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
     if (MetalEnvAccessor(*env_).impl().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
