@@ -19,7 +19,7 @@
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
-#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_factory.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_fabric_bound_program_factory.hpp"
 
 using namespace tt::constants;
 
@@ -55,12 +55,13 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
             StridedAllGatherAsyncInputs(tensor_args.input_tensor),
             output_tensor.at(0));
 
-        auto cached_program_proxy = ttnn::experimental::prim::MinimalMatmulProgramFactory::cached_program_t::proxy(
-            program, shared_variables.mm_shared_variables);
+        auto cached_program_proxy =
+            ttnn::experimental::prim::MinimalMatmulFabricBoundProgramFactory::cached_program_t::proxy(
+                program, shared_variables.mm_shared_variables);
 
         // Create a vector for the single output tensor
         std::vector<Tensor> matmul_output_vec = {output_tensor.at(1)};
-        ttnn::experimental::prim::MinimalMatmulProgramFactory::override_runtime_arguments(
+        ttnn::experimental::prim::MinimalMatmulFabricBoundProgramFactory::override_runtime_arguments(
             cached_program_proxy,
             attributes.matmul_struct,
             {output_tensor.at(0), tensor_args.weight_tensor, tensor_args.bias, tensor_args.input_tensor},
@@ -118,7 +119,7 @@ strided_all_gather_minimal_matmul_async_program(
     // Matmul - wrap single output tensor in vector for unified interface
     std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> empty_srs_fused_op_signaler;
     std::vector<Tensor> matmul_output_tensors = {matmul_output_tensor};
-    auto mm_shared_variables = ttnn::experimental::prim::minimal_matmul_factory_helper_common(
+    auto mm_shared_variables = ttnn::experimental::prim::minimal_matmul_fabric_bound_factory_helper_common(
         program,
         all_gather_output_tensor,
         weight_tensor,

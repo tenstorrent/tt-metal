@@ -302,8 +302,8 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     // reader's pace. Multi-worker safe: each of the N = num_links * num_workers_per_direction workers
     // signals its own per-worker matmul semaphore, and the matmul waits for all N per k-block (see
     // MinimalMatmulOpReceiver). The matmul-side semaphore count must agree (see the fused program's
-    // MinimalMatmulFusedOpSignaler::num_ag_workers), so both read the same env var.
-    const bool writer_signals_mm = fuse_op && (std::getenv("TT_METAL_AGMM_WRITER_SIGNALS_MM") != nullptr);
+    // MinimalMatmulFusedOpSignaler::num_ag_workers). Always enabled when fusing a matmul.
+    const bool writer_signals_mm = fuse_op;
     const uint32_t num_ag_workers = num_links * num_workers_per_direction;
 
     // Need a separate signaler for the sender workers, to handle the first tensor slice that is locally available
@@ -391,11 +391,10 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
 
-    // scatter-write packs this many tiles (distinct dest noc addresses) per fabric packet. The writer
-    // handles any count up to the hardware max of 4; 4 only pays off when the fabric payload can hold
-    // 4 tiles, so it is gated and must be paired with a large enough max_packet_payload_size_bytes.
-    const bool scatter4 = std::getenv("TT_METAL_AGMM_SCATTER4") != nullptr;
-    uint32_t max_target_noc_addresses_per_packet = scatter4 ? 4 : 2;
+    // scatter-write packs this many tiles (distinct dest noc addresses) per fabric packet, up to the
+    // hardware max of 4. Capped below by the actual per-packet page capacity, so 4 degrades gracefully
+    // when the fabric payload cannot hold 4 tiles.
+    uint32_t max_target_noc_addresses_per_packet = 4;
 
     // for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
@@ -446,12 +445,10 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     writer_compute_defines["IN0_SUB_CHUNKS"] = in0_sub_chunks_str;
     agg_defines["IN0_SUB_CHUNKS"] = in0_sub_chunks_str;
 
-    // Opt-in A/B knob: route the worker->fabric path through Mux V2 (dual-RISC forwarder+manager)
-    // instead of Mux V1. Off by default so both this op and the fused AGMM keep V1 behavior unless set.
-    const bool use_mux_v2 = std::getenv("TT_STRIDED_AG_MUX_V2") != nullptr;
-    if (use_mux_v2) {
-        writer_compute_defines["USE_MUX_V2"] = "1";
-    }
+    // Route the worker->fabric path through Mux V2 (dual-RISC forwarder+manager) instead of Mux V1.
+    // Always enabled for strided all-gather (and the fused AGMM).
+    const bool use_mux_v2 = true;
+    writer_compute_defines["USE_MUX_V2"] = "1";
 
     // KERNEL CREATION
     /* All gather fusion */

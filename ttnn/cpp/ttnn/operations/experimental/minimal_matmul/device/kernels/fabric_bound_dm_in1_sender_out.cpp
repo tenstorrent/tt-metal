@@ -9,8 +9,20 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "matmul_dataflow_common.hpp"
+#include "fabric_bound_matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+
+// Set by the host only when fusing AG; default to 1 (single whole band per k-block) otherwise.
+#ifndef IN0_SUB_CHUNKS
+#define IN0_SUB_CHUNKS 1
+#endif
+
+// Two-NoC output-write split: this writer (NOC_1) handles the block's low M-rows [0, split_rows) from c_2;
+// dm_in0 writes [split_rows, M) from c_8 on NOC_0. split_rows = M_block_tiles*AG_SPLIT_NOC1_PCT/100, and
+// must match compute/dm_in0. Default 50% (no effect unless SPLIT_OUTPUT_WRITE is set).
+#ifndef AG_SPLIT_NOC1_PCT
+#define AG_SPLIT_NOC1_PCT 50
+#endif
 
 void kernel_main() {
     Noc noc;
@@ -54,6 +66,10 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    // Leading (self/local) k-block positions this device owns; used by receivers to derive the same
+    // per-position band count the injector gets from streamed_dir (see dm_in0_sender.cpp).
+    // (Read unconditionally to keep the arg layout fixed; only consumed by receivers / IN0_SUB_CHUNKS > 1.)
+    [[maybe_unused]] const uint32_t num_local_k_blocks = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
@@ -123,6 +139,10 @@ void kernel_main() {
 
     constexpr uint32_t cb_in1_id = tt::CBIndex::c_1;
     constexpr uint32_t cb_out_id = tt::CBIndex::c_2;
+    // Scratch that holds the whole K_block x N_block once per k-block position so the injector can
+    // re-present it to compute once per M-row band (read once from DRAM, pushed nb times) without
+    // re-reading DRAM. Only used on the sub-chunked injector path.
+    constexpr uint32_t cb_in1_scratch_id = tt::CBIndex::c_7;
 #ifdef FUSE_BIAS
     constexpr uint32_t cb_in2_id = tt::CBIndex::c_4;
 #endif
@@ -139,11 +159,14 @@ void kernel_main() {
     uint32_t fused_op_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
     uint32_t num_devices = get_arg_val<uint32_t>(fused_op_rt_args_idx);
     uint32_t num_k_blocks = get_arg_val<uint32_t>(fused_op_rt_args_idx + 1);
+    uint32_t num_ag_workers = get_arg_val<uint32_t>(fused_op_rt_args_idx + 9);  // after the 9 scalar args
     uint8_t k_block_device_expected[num_k_blocks]{};
     uint8_t k_block_device_received[num_k_blocks]{};
     uint32_t device_k_block_counts[num_devices]{};
     uint32_t device_k_block_start_ids[num_devices]{};
     uint32_t forward_k_block_schedule[num_k_blocks]{};
+    uint32_t backward_sem_addrs[num_ag_workers]{};
+    uint32_t forward_sem_addrs[num_ag_workers]{};
     if constexpr (is_injector_core) {
         fused_op_receiver = MinimalMatmulOpReceiver(
             false,
@@ -152,7 +175,9 @@ void kernel_main() {
             k_block_device_received,
             device_k_block_counts,
             device_k_block_start_ids,
-            forward_k_block_schedule);
+            forward_k_block_schedule,
+            backward_sem_addrs,
+            forward_sem_addrs);
     }
 #endif
 
@@ -160,7 +185,8 @@ void kernel_main() {
     // OpSignaler runtime args start after output addresses and optional FUSE_AG args
     uint32_t srs_fuse_signaler_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
 #ifdef FUSE_AG
-    srs_fuse_signaler_rt_args_idx += 12;  // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args (12 args)
+    // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args: 9 scalars + num_ag_workers + (2N+1) sems
+    srs_fuse_signaler_rt_args_idx += (11 + 2 * get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 9));
 #endif
     OpSignaler srs_fuse_signaler;
     if constexpr (is_output_writer) {
@@ -207,8 +233,81 @@ void kernel_main() {
             bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
             bool not_first_block = (n_block_iter > 0 || m_block_iter > 0);
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                // DeviceZoneScopedN("AVAILABLE");
+#if defined(FUSE_AG) && (IN0_SUB_CHUNKS > 1) && defined(AG_INTERLEAVE_BANDS)
+                if constexpr (is_injector_core) {
+                    // Re-present a forward remote k-block and the following backward one interleaved per band
+                    // (A.b0, B.b0, ...), matching dm_in0/compute. Both blocks are read once into the two-slot
+                    // scratch; in1 has no M dimension so each band re-presents the whole block. Injectors
+                    // never defer_write, so the deferred output flush below never applies on this path.
+                    if (n_block_iter == 0 && k_block_iter >= num_local_k_blocks && (k_block_iter + 1) < K_num_blocks &&
+                        ((k_block_iter - num_local_k_blocks) & 1u) == 0) {
+                        const uint32_t kb_pair[2] = {
+                            fused_op_receiver.compute_actual_k_block_iter(true, k_block_iter, k_forward),
+                            fused_op_receiver.compute_actual_k_block_iter(true, k_block_iter + 1, k_forward)};
+                        const uint32_t in1_block_bytes = in1_block_num_tiles * in1_tile_size;
+                        const uint32_t scratch_addr = get_write_ptr(cb_in1_scratch_id);
+                        const uint32_t scratch_pair[2] = {scratch_addr, scratch_addr + in1_block_bytes};
+                        {
+                            // DeviceZoneScopedN("DRAM-Latency");
+                            for (uint32_t member = 0; member < 2; member++) {
+                                read_in1_block_sync<K_block_tiles, N_block_tiles>(
+                                    in1_reader,
+                                    in1_shape,
+                                    cb_in1_scratch_id,
+                                    in1_tile_size,
+                                    kb_pair[member] * K_block_tiles,
+                                    (kb_pair[member] + 1) * K_block_tiles,
+                                    n_tile,
+                                    n_tile_end,
+                                    /*write_ptr_offset=*/member * in1_block_bytes);
+                            }
+                        }
+                        const uint64_t scratch_noc[2] = {get_noc_addr(scratch_pair[0]), get_noc_addr(scratch_pair[1])};
+                        for (uint32_t band = 0; band < (uint32_t)IN0_SUB_CHUNKS; band++) {
+                            for (uint32_t member = 0; member < 2; member++) {
+                                cb_in1.reserve_back(in1_block_num_tiles);
+                                uint32_t in1_start_address = get_write_ptr(cb_in1_id);
+                                noc_async_read(scratch_noc[member], in1_start_address, in1_block_bytes);
+                                noc.async_read_barrier();
+                                cb_in1.push_back(in1_block_num_tiles);
+                                if (!is_sink_core) {
+                                    // DeviceZoneScopedN("MCAST-SEND");
+                                    in1_sender_sem.wait(1);
+                                    in1_sender_sem.set(0);
+                                    uint32_t fwd_addr = in1_start_address;
+                                    for (uint32_t i = 0; i < K_block_tiles; i++) {
+                                        uint64_t in1_unicast_data_addr = in1_unicast_data_base_addr | fwd_addr;
+                                        noc_async_write(fwd_addr, in1_unicast_data_addr, current_N_tiles_bytes);
+                                        fwd_addr += full_N_tiles_bytes;
+                                    }
+#ifdef ARCH_BLACKHOLE
+                                    noc.async_writes_flushed();
+#endif
+                                    noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
+                                }
+                            }
+                        }
+#ifdef SRS_FUSE_OP_SIGNALER
+                        if constexpr (is_output_writer) {
+                            if (not_first_block && k_block_iter == max_defer_write_k_block) {
+                                noc.async_write_barrier();
+                                srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                            }
+                            if (not_first_block && (k_block_iter + 1) == max_defer_write_k_block) {
+                                noc.async_write_barrier();
+                                srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                            }
+                        }
+#endif
+                        k_block_iter++;  // the backward member of the pair is consumed here too
+                        continue;
+                    }
+                }
+#endif
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
+                        // DeviceZoneScopedN("DEFER-WRITE");
 #ifdef FUSE_SWIGLU
                         cb_out.wait_front(out_block_num_tiles_swiglu);
                         uint32_t out_read_ptr = get_read_ptr(cb_out_id);
@@ -266,62 +365,94 @@ void kernel_main() {
                     }
                 }
 
-                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
-                cb_in1.reserve_back(in1_block_num_tiles);
-
-                uint32_t in1_start_address = get_write_ptr(cb_in1_id);
+                // ---- Read-once, re-present-per-band ----
+                // in1 has no M dimension, so an M-row band consumes the whole K_block x N_block. To stay
+                // in lockstep with the banded in0 (so the matmul fires per band), the injector reads the
+                // block once from DRAM into scratch and re-presents it to compute once per band (pushed nb
+                // times, no DRAM re-read); receivers receive/push/forward once per band. nb is computed
+                // exactly as in dm_in0_sender so per-band CB and semaphore counts never desync.
+                [[maybe_unused]] uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
+                uint32_t nb;
                 if constexpr (is_injector_core) {
 #ifdef FUSE_AG
-                    if (is_injector_core) {
-                        k_block =
-                            fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
-                    }
+                    k_block = fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
+                    const uint8_t k_dir = fused_op_receiver.streamed_dir;
+                    nb = (n_block_iter == 0 && k_dir != 2) ? (uint32_t)IN0_SUB_CHUNKS : 1u;
+#else
+                    nb = 1u;
 #endif
-                    read_in1_block_sync<K_block_tiles, N_block_tiles>(
-                        in1_reader,
-                        in1_shape,
-                        cb_in1_id,
-                        in1_tile_size,
-                        k_block * K_block_tiles,
-                        (k_block + 1) * K_block_tiles,
-                        n_tile,
-                        n_tile_end);
-                } else {
-                    in1_receiver_sem.set(INVALID);
-                    noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
-                    in1_receiver_sem.wait(VALID);
-                }
-
-                // Critical to performance for sender to push data to compute before mcasting
-                // This frees sender to start next read earlier
-                cb_in1.push_back(in1_block_num_tiles);
-
-                if (!is_sink_core) {
-                    in1_sender_sem.wait(1);
-                    in1_sender_sem.set(0);
-
-                    /**
-                     * in1 is K_block_tiles x N_block_tiles. When N block is partial, we don't need to write the
-                     * padded tiles. For each tile in the K block, write only the non-padded N tiles. Use
-                     * `current_N_tiles_bytes`.
-                     */
-                    for (uint32_t i = 0; i < K_block_tiles; i++) {
-                        uint64_t in1_unicast_data_addr = in1_unicast_data_base_addr | in1_start_address;
-                        noc_async_write(in1_start_address, in1_unicast_data_addr, current_N_tiles_bytes);
-                        in1_start_address += full_N_tiles_bytes;
+                    // Read the whole K_block x N_block once into scratch. The scratch CB is used as a
+                    // plain fixed L1 region (single slot, single-core produce+consume in this kernel), so
+                    // we take its write pointer directly without reserve/push/pop.
+                    uint32_t scratch_addr = get_write_ptr(cb_in1_scratch_id);
+                    {
+                        // DeviceZoneScopedN("DRAM-Latency");
+                        read_in1_block_sync<K_block_tiles, N_block_tiles>(
+                            in1_reader,
+                            in1_shape,
+                            cb_in1_scratch_id,
+                            in1_tile_size,
+                            k_block * K_block_tiles,
+                            (k_block + 1) * K_block_tiles,
+                            n_tile,
+                            n_tile_end);
                     }
-
+                    const uint64_t scratch_noc_addr = get_noc_addr(scratch_addr);
+                    const uint32_t in1_block_bytes = in1_block_num_tiles * in1_tile_size;
+                    for (uint32_t band = 0; band < nb; band++) {
+                        cb_in1.reserve_back(in1_block_num_tiles);
+                        uint32_t in1_start_address = get_write_ptr(cb_in1_id);
+                        // Re-present from scratch (local L1 copy, no DRAM re-read).
+                        noc_async_read(scratch_noc_addr, in1_start_address, in1_block_bytes);
+                        noc.async_read_barrier();
+                        cb_in1.push_back(in1_block_num_tiles);
+                        if (!is_sink_core) {
+                            // DeviceZoneScopedN("MCAST-SEND");
+                            in1_sender_sem.wait(1);
+                            in1_sender_sem.set(0);
+                            uint32_t fwd_addr = in1_start_address;
+                            for (uint32_t i = 0; i < K_block_tiles; i++) {
+                                uint64_t in1_unicast_data_addr = in1_unicast_data_base_addr | fwd_addr;
+                                noc_async_write(fwd_addr, in1_unicast_data_addr, current_N_tiles_bytes);
+                                fwd_addr += full_N_tiles_bytes;
+                            }
 #ifdef ARCH_BLACKHOLE
-                    noc.async_writes_flushed();
+                            noc.async_writes_flushed();
 #endif
-
-                    noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
+                            noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
+                        }
+                    }
+                } else {
+                    nb = (n_block_iter == 0 && k_block_iter >= num_local_k_blocks) ? (uint32_t)IN0_SUB_CHUNKS : 1u;
+                    for (uint32_t band = 0; band < nb; band++) {
+                        cb_in1.reserve_back(in1_block_num_tiles);
+                        uint32_t in1_start_address = get_write_ptr(cb_in1_id);
+                        {
+                            // DeviceZoneScopedN("RECV-WAIT");
+                            in1_receiver_sem.set(INVALID);
+                            noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
+                            in1_receiver_sem.wait(VALID);
+                        }
+                        cb_in1.push_back(in1_block_num_tiles);
+                        if (!is_sink_core) {
+                            // DeviceZoneScopedN("MCAST-SEND");
+                            in1_sender_sem.wait(1);
+                            in1_sender_sem.set(0);
+                            uint32_t fwd_addr = in1_start_address;
+                            for (uint32_t i = 0; i < K_block_tiles; i++) {
+                                uint64_t in1_unicast_data_addr = in1_unicast_data_base_addr | fwd_addr;
+                                noc_async_write(fwd_addr, in1_unicast_data_addr, current_N_tiles_bytes);
+                                fwd_addr += full_N_tiles_bytes;
+                            }
+#ifdef ARCH_BLACKHOLE
+                            noc.async_writes_flushed();
+#endif
+                            noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
+                        }
+                    }
                 }
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
-                    // Synchronize and signal strided reduce scatter readers after
-                    // previous block has been produced and any data from this core has been written to NOC afterwards,
-                    // at the moment all cores are expected to be done writing their corresponding blocks.
                     if (not_first_block && k_block_iter == max_defer_write_k_block) {
                         noc.async_write_barrier();
                         srs_fuse_signaler.synchronize_workers_and_signal_op(0);
@@ -383,6 +514,7 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
+                    // DeviceZoneScopedN("OUT-WRITE");
 #ifdef FUSE_SWIGLU
                     if constexpr (N_chunks == 1) {
                         write_block_sync_granular<M_block_tiles, out_N_block_tiles>(
@@ -413,6 +545,21 @@ void kernel_main() {
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
                     // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {
+#ifdef SPLIT_OUTPUT_WRITE
+                        // NOC_1 writer: low rows [0, split_rows) from c_2.
+                        constexpr uint32_t split_rows = (M_block_tiles * AG_SPLIT_NOC1_PCT) / 100;
+                        write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                            std::get<0>(outputs_tuple),
+                            out_shape,
+                            cb_out_id,
+                            out_tile_size,
+                            m_tile,
+                            m_tile_end,
+                            n_tile,
+                            n_tile_end,
+                            0,
+                            split_rows);
+#else
                         write_block_sync_granular<M_block_tiles, N_block_tiles>(
                             std::get<0>(outputs_tuple),
                             out_shape,
@@ -422,6 +569,7 @@ void kernel_main() {
                             m_tile_end,
                             n_tile,
                             n_tile_end);
+#endif
                     } else {
                         write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
                             outputs_tuple,
