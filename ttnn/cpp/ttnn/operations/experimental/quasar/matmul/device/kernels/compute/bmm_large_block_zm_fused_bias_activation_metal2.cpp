@@ -363,6 +363,7 @@ void kernel_main() {
                             const uint32_t effective_subblock_w =
                                 is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
 
+                            DPRINT("MMC sb{} preacq\n", in0_subblock);  // DEBUG #48552 subblock stall localize
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_cb_to_dst(
@@ -404,10 +405,12 @@ void kernel_main() {
                             }
 
 #endif  // SKIP_COMPUTE
+                            DPRINT("MMC sb{} mmdone\n", in0_subblock);  // DEBUG #48552 matmul_block loop done
 
                             if (last_out) {
                                 tile_regs_commit();
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
+                                DPRINT("MMC sb{} resv_ok\n", in0_subblock);  // DEBUG #48552 out reserve returned
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
                                 apply_activation_from_pack<
