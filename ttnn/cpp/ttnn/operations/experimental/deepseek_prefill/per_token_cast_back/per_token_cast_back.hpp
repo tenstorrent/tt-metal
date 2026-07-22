@@ -16,7 +16,7 @@ ttnn::Tensor per_token_cast_back(
     const ttnn::Tensor& input_scale,
     const std::optional<tt::tt_metal::DataType>& output_dtype = std::nullopt,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    bool compute_is_bf16 = false);
+    bool narrow_scales_to_bf16 = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_back
 

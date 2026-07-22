@@ -13,7 +13,7 @@ struct PerTokenCastBackParams {
     tt::tt_metal::MemoryConfig output_memory_config;
     // When true, the compute kernel narrows the fp32 scale to bf16 on-device and runs the broadcast
     // multiply in bf16 (HiFi2); when false (default), the scale stays fp32 (HiFi4).
-    bool compute_is_bf16 = false;
+    bool narrow_scales_to_bf16 = false;
 };
 
 struct PerTokenCastBackInputs {

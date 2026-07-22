@@ -73,18 +73,16 @@ void kernel_main() {
     CircularBuffer cb_scale_tiles(cb_scale_tiles_id);
     constexpr uint32_t cb_inv_scale_tiles_id = get_compile_time_arg_val(5);
     CircularBuffer cb_inv_scale_tiles(cb_inv_scale_tiles_id);
-    constexpr uint32_t cb_out_tile_id = get_compile_time_arg_val(6);
-    CircularBuffer cb_out_tile(cb_out_tile_id);
-    constexpr uint32_t cb_output_e4m3_id = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_output_e4m3_id = get_compile_time_arg_val(6);
     CircularBuffer cb_output_e4m3(cb_output_e4m3_id);
-    constexpr uint32_t clamp_min_bits = get_compile_time_arg_val(8);
-    constexpr uint32_t clamp_max_bits = get_compile_time_arg_val(9);
-    constexpr uint32_t inv_448_bits = get_compile_time_arg_val(10);
+    constexpr uint32_t clamp_min_bits = get_compile_time_arg_val(7);
+    constexpr uint32_t clamp_max_bits = get_compile_time_arg_val(8);
+    constexpr uint32_t inv_448_bits = get_compile_time_arg_val(9);
 
     // Tile width from the tensor's tile spec.
     constexpr uint32_t block_w = 128;  // BlockW
-    constexpr uint32_t tile_w = get_compile_time_arg_val(11);
-    constexpr bool round_scale_to_power_of_two = get_compile_time_arg_val(12) != 0;
+    constexpr uint32_t tile_w = get_compile_time_arg_val(10);
+    constexpr bool round_scale_to_power_of_two = get_compile_time_arg_val(11) != 0;
     constexpr uint32_t block_wt = block_w / tile_w;  // BlockWt
     constexpr uint32_t block_ht = 1;                 // BlockHt
     constexpr uint32_t tiles_per_block = block_ht * block_wt;

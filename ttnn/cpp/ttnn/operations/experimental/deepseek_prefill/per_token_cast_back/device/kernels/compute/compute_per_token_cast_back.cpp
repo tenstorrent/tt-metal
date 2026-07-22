@@ -54,12 +54,12 @@ void kernel_main() {
     constexpr uint32_t tile_w = get_compile_time_arg_val(6);
     // 1 => run the datapath in bf16 (HiFi2): tilize decodes e4m3 straight into bf16 tiles and the fp32
     // scale is narrowed to bf16 (packer -> cb_scale_bcast_bf16) so the multiply's SrcB matches SrcA.
-    constexpr uint32_t compute_is_bf16 = get_compile_time_arg_val(7);
+    constexpr uint32_t narrow_scales_to_bf16 = get_compile_time_arg_val(7);
     // bf16: scale narrowed from fp32 to bf16 on-device (used by the bf16 datapath only).
     constexpr uint32_t cb_scale_bcast_bf16_id = get_compile_time_arg_val(8);
     CircularBuffer cb_scale_bcast_bf16(cb_scale_bcast_bf16_id);
     // reused selector: the multiply reads whichever scale matches the datapath format.
-    constexpr uint32_t cb_scale_mul_id = compute_is_bf16 ? cb_scale_bcast_bf16_id : cb_scale_bcast_fp32_id;
+    constexpr uint32_t cb_scale_mul_id = narrow_scales_to_bf16 ? cb_scale_bcast_bf16_id : cb_scale_bcast_fp32_id;
     constexpr uint32_t block_w = 128;                // BlockW
     constexpr uint32_t block_wt = block_w / tile_w;  // BlockWt
     constexpr uint32_t block_ht = 1;                 // BlockHt
@@ -73,7 +73,7 @@ void kernel_main() {
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         {
-            if constexpr (compute_is_bf16) {
+            if constexpr (narrow_scales_to_bf16) {
                 // ----- Phase 1 (bf16): tilize casts e4m3 straight into bf16 tiles -----
                 compute_kernel_lib::tilize<tiles_per_block, cb_input_e4m3_id, cb_in_tile_id>(block_ht);
 
@@ -125,7 +125,7 @@ void kernel_main() {
             mul_bcast_cols_init_short(cb_in_tile_id, cb_scale_mul_id);
             pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_out_id);
             cb_in_tile.wait_front(tiles_per_block);
-            if constexpr (compute_is_bf16) {
+            if constexpr (narrow_scales_to_bf16) {
                 cb_scale_bcast_bf16.wait_front(block_ht);
             } else {
                 cb_scale_bcast_fp32.wait_front(block_ht);
@@ -141,7 +141,7 @@ void kernel_main() {
             tile_regs_release();
             cb_out.push_back(tiles_per_block);
             cb_in_tile.pop_front(tiles_per_block);
-            if constexpr (compute_is_bf16) {
+            if constexpr (narrow_scales_to_bf16) {
                 cb_scale_bcast_bf16.pop_front(block_ht);
             } else {
                 cb_scale_bcast_fp32.pop_front(block_ht);

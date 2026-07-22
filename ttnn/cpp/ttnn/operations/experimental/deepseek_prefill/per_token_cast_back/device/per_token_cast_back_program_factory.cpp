@@ -105,10 +105,10 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const DataFormat fp32_df = DataFormat::Float32;
     const DataFormat output_df = datatype_to_dataformat_converter(operation_attributes.output_dtype);
 
-    // compute_is_bf16: perform the multiply in bf16/HiFi2 (vs fp32/HiFi4)
-    const bool compute_is_bf16 = operation_attributes.compute_is_bf16;
-    const DataFormat compute_df = compute_is_bf16 ? DataFormat::Float16_b : fp32_df;
-    const uint32_t compute_tile_bytes = tile_h * tile_w * (compute_is_bf16 ? 2u : 4u);
+    // narrow_scales_to_bf16: perform the multiply in bf16/HiFi2 (vs fp32/HiFi4)
+    const bool narrow_scales_to_bf16 = operation_attributes.narrow_scales_to_bf16;
+    const DataFormat compute_df = narrow_scales_to_bf16 ? DataFormat::Float16_b : fp32_df;
+    const uint32_t compute_tile_bytes = tile_h * tile_w * (narrow_scales_to_bf16 ? 2u : 4u);
 
     constexpr uint32_t cb_input_e4m3_idx = CBIndex::c_0;
     constexpr uint32_t cb_in_rm_fp32_idx = CBIndex::c_1;  // fp32 rm buffer (fp32 datapath only)
@@ -125,7 +125,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         CreateCircularBuffer(program, all_cores, cfg);
     };
 
-    // Compute tiles carry the datapath format (bf16 or fp32) selected by compute_is_bf16.
+    // Compute tiles carry the datapath format (bf16 or fp32) selected by narrow_scales_to_bf16.
     auto make_compute_tile_cb = [&](uint32_t cb_idx, uint32_t num_tiles) {
         CircularBufferConfig cfg = CircularBufferConfig(num_tiles * compute_tile_bytes, {{cb_idx, compute_df}})
                                        .set_page_size(cb_idx, compute_tile_bytes);
@@ -142,7 +142,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     // Double-buffered so there is not stalling between the reader/compute/writer.
     make_compute_tile_cb(cb_in_tile_idx, 2 * tiles_per_block);  // reused: tilized input
     make_fp32_tile_cb(cb_scale_bcast_fp32_idx, 2 * block_ht);   // col0 = scale
-    if (compute_is_bf16) {
+    if (narrow_scales_to_bf16) {
         // bf16 datapath: scale narrowed to bf16 by the packer.
         make_compute_tile_cb(cb_scale_bcast_bf16_idx, 2 * block_ht);
     } else {
@@ -206,17 +206,17 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         cb_out_idx,
         tile_h,
         tile_w,
-        static_cast<uint32_t>(compute_is_bf16),
+        static_cast<uint32_t>(narrow_scales_to_bf16),
         cb_scale_bcast_bf16_idx};
 
     // HiFi2: bf16 datapath; HiFi4: fp32 datapath.
-    const MathFidelity math_fidelity = compute_is_bf16 ? MathFidelity::HiFi2 : MathFidelity::HiFi4;
+    const MathFidelity math_fidelity = narrow_scales_to_bf16 ? MathFidelity::HiFi2 : MathFidelity::HiFi4;
     // Skip trip through srcA register. fp8 goes straight to the DEST.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     unpack_to_dest_mode[cb_input_e4m3_idx] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     // On the bf16 path the fp32 scale must unpack losslessly to DEST before the packer rounds it to bf16.
-    if (compute_is_bf16) {
+    if (narrow_scales_to_bf16) {
         unpack_to_dest_mode[cb_scale_bcast_fp32_idx] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     KernelHandle compute_kernel_id = CreateKernel(

@@ -116,7 +116,6 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     constexpr uint32_t cb_scale_tiles_idx = CBIndex::c_5;
     constexpr uint32_t cb_scale_scratch_idx = CBIndex::c_6;
     constexpr uint32_t cb_inv_scale_tiles_idx = CBIndex::c_7;
-    constexpr uint32_t cb_out_tile_idx = CBIndex::c_8;
     constexpr uint32_t cb_output_e4m3_idx = CBIndex::c_16;
 
     auto make_fp32_tile_cb = [&](uint32_t cb_idx, uint32_t num_tiles) {
@@ -136,7 +135,6 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);              // abs tiles for one block row
     make_fp32_tile_cb(cb_scale_tiles_idx, 2 * block_ht);      // col0 = scale
     make_fp32_tile_cb(cb_inv_scale_tiles_idx, 2 * block_ht);  // col0 = 1/scale
-    make_fp32_tile_cb(cb_out_tile_idx, tiles_per_block);      // divided tiles -> untilize
 
     // cb_output_e4m3: output_e4m3 row-major output, one tile per page; tiles_per_block pages = one
     // block, double-buffered.
@@ -198,7 +196,6 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         cb_abs_idx,
         cb_scale_tiles_idx,
         cb_inv_scale_tiles_idx,
-        cb_out_tile_idx,
         cb_output_e4m3_idx,
         clamp_min_bits,
         clamp_max_bits,
