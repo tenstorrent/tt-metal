@@ -659,3 +659,31 @@ tail is the reduction root Z_P2_RECVWAIT ~6us**, which reduce-scatter distribute
 NOT bit-identical (fracdiff 18-55% of BF16 elems differ from reassociation) but numerically equivalent
 (mean-abs 0.03-0.31 on outputs O(10-120), p99-abs <=2.0). (maxrel large = near-zero-denominator artifact;
 PCC + mean-abs are the trustworthy metrics.)
+
+### [Reduce-scatter N_bpc>1 + full 60-corpus rerun @ picker config]
+After the N_bpc>1 generalization + writer-NoC ring order, reran ALL feasible corpus shapes (shallow-K first).
+Feasible at picker cfg now **21/60** (was 10): coverage = Pk==1:1, not-tile-partitionable:38 (per-sub-block
+T=M_block*N_sub not divisible by the large deep-K Pk, mostly Pk=12), feasible:21.
+
+**6 wins (<=-2%), best -9.25%; 2 regressions (>=+2%), both deep-K:**
+| shape | Pk | Nbpc | T | delta |
+|---|---|---|---|---|
+| 128x2048x2048 | 4 | 1 | 12 | **-9.25%** |
+| 256x2048x2048 | 4 | 2 | 12 | **-8.49%**  (NEW — N_bpc>1 unlocked) |
+| 256x2048x1024 | 4 | 1 | 16 | **-8.24%** |
+| 128x2048x1024 | 4 | 1 | 8 | **-7.13%** |
+| 64x2048x1024 | 4 | 1 | 4 | **-5.39%** |
+| 256x15360x1536 | 6 | 1 | 24 | **-3.45%** |
+| ... (near-neutral middle: K2304/4608/6144 wide-N, K15360, Pk2, narrow-N; -1.4..+1.9%) ... | | | | |
+| 64x15360x1536 | 6 | 2 | 6 | +2.48% (deep-K regress) |
+| 128x15360x1536 | 12 | 2 | 12 | +2.70% (deep-K regress) |
+
+feasible mean -1.66%, median -0.50%. **N_bpc>1 contribution: unlocked 256x2048x2048 (-8.49%, a real Mt8
+win) + ~10 deep-K/wide-N shapes that are all small/neutral, and exposed 2 deep-K REGRESSIONS.**
+
+**Pattern (production picker-gate signal):** reduce-scatter WINS on **shallow-K (K<=2048, exposed reduction) +
+Pk>=4 + adequate per-core output width** (all 5 K2048 Pk4 wins have N_sub>=2 and Nt>=32); it is neutral on
+Pk=2 (chain already 1 hop) and narrow-N=512, and neutral-to-NEGATIVE on deep-K read-bound (reduction hidden ->
+per-sub-block RS overhead can regress +2.5-2.7%). => production must PICKER-GATE reduce-scatter to the
+exposed-reduction regime and keep it OFF deep-K. Raw per-relaunch samples committed in
+ab_rscatter_corpus_results.json.
