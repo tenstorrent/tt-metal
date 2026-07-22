@@ -490,7 +490,6 @@ def test_prefill_block_loop(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
     )
-    block_kwargs["is_balanced"] = True  # MLA/RoPE layout — must match RotarySetup(is_balanced=True) below
     if not is_dense:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
         if not skip_reference:
@@ -506,7 +505,7 @@ def test_prefill_block_loop(
     block = TtPrefillBlock(**block_kwargs)
     ttnn.synchronize_device(mesh_device)
 
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=True)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
     position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank

@@ -6,11 +6,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
-from models.demos.deepseek_v3_d_p.tt.mla.utils import (
-    block_cyclic_reorder,
-    create_balanced_chunk_order,
-    reorder_tensor_chunks,
-)
+from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder
 
 
 def get_rot_transformation_mat():
@@ -120,26 +116,21 @@ def interleaved_perm_matrix(rope_dim: int = 64) -> torch.Tensor:
 
 
 class RotarySetup:
-    """Rotary positional embedding setup for MLA prefill with SP sharding and balanced reordering."""
+    """Rotary positional embedding setup for MLA prefill with SP sharding."""
 
     def __init__(
         self,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         sp_axis: int = 0,
-        is_balanced: bool = False,
     ):
         self.hf_config = hf_config
         self.mesh_device = mesh_device
         self.sp_axis = sp_axis
-        self.is_balanced = is_balanced
         self.sp_factor = mesh_device.shape[sp_axis]
 
     def get_rope_tensors(self, seq_len: int) -> dict[str, ttnn.Tensor]:
         """Get cos, sin, and transformation matrices sharded over SP axis.
-
-        If is_balanced, cos/sin are reordered according to balanced chunk order
-        before sharding so each SP device gets rope values matching its chunk positions.
 
         Always Meta-style interleaved cos/sin + a trans_matrix (rotary_embedding_llama) — the
         MLA's own RoPE layout.
@@ -151,11 +142,6 @@ class RotarySetup:
         ), f"seq_len {seq_len} must be less than or equal to max_seq_len {self.hf_config.max_seq_len}"
         cos_matrix_torch = cos_matrix_torch[..., :seq_len, :]
         sin_matrix_torch = sin_matrix_torch[..., :seq_len, :]
-
-        if self.is_balanced:
-            chunk_order = create_balanced_chunk_order(self.sp_factor)
-            cos_matrix_torch = reorder_tensor_chunks(cos_matrix_torch, chunk_order, seq_dim=2)
-            sin_matrix_torch = reorder_tensor_chunks(sin_matrix_torch, chunk_order, seq_dim=2)
 
         shard_dims = [None, None]
         shard_dims[self.sp_axis] = 2
@@ -208,7 +194,6 @@ class RotarySetup:
             * ``chunk_size_global % (TILE_SIZE * sp_factor) == 0``
             * ``cache_seq_len_global % chunk_size_global == 0``
         """
-        assert not self.is_balanced, "indexed rotated rope is incompatible with is_balanced"
         sp = self.sp_factor
         assert (
             cache_seq_len_global <= self.hf_config.max_seq_len

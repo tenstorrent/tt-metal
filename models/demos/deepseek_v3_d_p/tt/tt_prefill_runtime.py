@@ -144,7 +144,6 @@ class TtPrefillRuntime:
             topology=self.config.topology,
             sp_axis=self.config.sp_axis,
             tp_axis=self.config.tp_axis,
-            is_balanced=False,  # chunked prefill is block-cyclic (non-balanced)
             dispatch_buffer_capacity_factor=self.config.capacity_factor,
             gate_fallback_mode=self.config.gate_fallback_mode,
             routed_expert_activations_dtype=self.config.routed_expert_activations_dtype,
@@ -192,7 +191,6 @@ class TtPrefillRuntime:
                 token_ids,
                 self.mesh_device,
                 self.config.sp_factor,
-                False,  # chunked prefill is block-cyclic (non-balanced)
                 self.config.mesh_shape,
                 self.config.sp_axis,
             )

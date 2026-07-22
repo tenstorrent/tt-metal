@@ -255,7 +255,6 @@ class ttMLA:
         seq_len: int = 1024,
         sp_axis: int = 0,
         tp_axis: int = 1,
-        is_balanced: bool = False,
         topology=ttnn.Topology.Linear,
         weight_cache_path: Optional[Path] = None,
         slot_num: int = 1,
@@ -273,7 +272,6 @@ class ttMLA:
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
         self.kv_only = kv_only
-        self.is_balanced = is_balanced
         self.weight_cache_path = weight_cache_path
         self.slot_num = slot_num
         self.layer_num = layer_num
@@ -411,10 +409,6 @@ class ttMLA:
         # "full" -> current behavior, unchanged.
         self._indexer_reuse = indexer_layer_is_reused(config, layer_idx)
         if self._has_indexer:
-            # The indexer assumes natural-order SP sharding (contiguous per-chip query blocks: its
-            # device RoPE and the indexer_score per-device causal offset both index positions as
-            # start_pos + sp_rank*S_local). The balanced chunk reorder breaks that, so guard it.
-            assert not self.is_balanced, "DSA indexer requires is_balanced=False (natural-order SP sharding)"
             # kv_only (last-layer KV-only fast path) skips Q/SDPA AND the indexer K-cache write, so a
             # sparse decode would read an unpopulated indexer cache. Not implemented — fail at construction.
             assert not self.kv_only, "DSA sparse path does not support kv_only (skips the indexer K-cache write)"
@@ -656,8 +650,6 @@ class ttMLA:
         the first kv_lora_rank columns of KV and materializes it in-op, so wkv_b2 is applied to the
         compact (kv_lora_rank-wide) attention output afterwards. Returns attn_out in v_head_dim space.
         """
-        assert not self.is_balanced, "chunked prefill currently requires is_balanced=False"
-
         tile_size = ttnn.TILE_SIZE
         chunk_size_global = seq_len_local * self.sp_factor
         assert chunk_size_global % (tile_size * self.sp_factor) == 0, (
@@ -698,7 +690,7 @@ class ttMLA:
             topology=self.ccl_topology,
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             use_column_major_ccl=True,
-            is_balanced=self.is_balanced,
+            is_balanced=False,
             kv_cache_batch_idx=cache_batch_idx,
             kv_actual_isl=kv_actual_isl,
         )

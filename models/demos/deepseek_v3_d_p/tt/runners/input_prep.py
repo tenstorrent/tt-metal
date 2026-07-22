@@ -17,14 +17,12 @@ diagnostics used only by tests live in ``tests/test_runner_utils.py``.
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reorder_tensor_chunks
 
 
 def prepare_prefill_input_tensor(
     token_ids: list[int],
     mesh_device: ttnn.MeshDevice,
     sp_factor: int,
-    is_balanced: bool,
     mesh_shape: tuple,
     sp_axis: int,
 ) -> ttnn.Tensor:
@@ -35,13 +33,7 @@ def prepare_prefill_input_tensor(
     TtPrefillTransformer.forward.
     """
     isl_per_chip = len(token_ids) // sp_factor
-    if is_balanced:
-        chunk_order = create_balanced_chunk_order(sp_factor)
-        t = torch.tensor(token_ids, dtype=torch.int64).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
-        t = reorder_tensor_chunks(t, chunk_order, seq_dim=2)
-        token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
-    else:
-        token_ids_sharded = torch.tensor(token_ids, dtype=torch.int64).reshape(sp_factor, 1, isl_per_chip)
+    token_ids_sharded = torch.tensor(token_ids, dtype=torch.int64).reshape(sp_factor, 1, isl_per_chip)
     return ttnn.from_torch(
         token_ids_sharded,
         device=mesh_device,

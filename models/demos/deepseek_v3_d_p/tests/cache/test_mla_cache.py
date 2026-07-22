@@ -107,7 +107,7 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
     )
 
     # Create RoPE tensors
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis)
     rope_tensors = rope_setup.get_rope_tensors(seq_len)
 
     # Initialize KVPE cache (required by MLA forward)

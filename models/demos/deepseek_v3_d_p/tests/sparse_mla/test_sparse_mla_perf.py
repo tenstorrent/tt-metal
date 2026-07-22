@@ -640,7 +640,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, config_only
         has_indexer=has_indexer,  # sparse: DSA indexer + sparse_sdpa; dense: NullIndexer + ring MLA
     )
 
-    rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(total, chunk)
+    rope = RotarySetup(config, mesh_device, sp_axis=sp_axis).get_rope_tensors_indexed(total, chunk)
     # KVPE cache format is mode-specific. sparse: sparse_sdpa reads it natively and requires an
     # uncompressed bf16/fp8_e4m3 ROW_MAJOR cache (mla.py asserts) — NOT the init_kvpe_cache bfloat8_b/TILE
     # default. dense: ring_joint_sdpa wants the default (bfloat8_b TILE) and derives its output dtype from

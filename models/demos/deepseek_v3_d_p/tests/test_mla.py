@@ -19,8 +19,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_cache_host,
     blockcyclic_positions,
-    create_balanced_chunk_order,
-    reorder_tensor_chunks,
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
@@ -43,7 +41,6 @@ def run_mla_inference(
     mesh_shape,
     sp_axis,
     tp_axis,
-    is_balanced,
     topology,
     tt_kvpe_cache,
     return_indices=False,
@@ -60,12 +57,11 @@ def run_mla_inference(
         mesh_shape: Shape of mesh device
         sp_axis: Sequence parallel axis
         tp_axis: Tensor parallel axis
-        is_balanced: Whether to use balanced chunk ordering
         topology: Topology (Linear or Ring)
         tt_kvpe_cache: Initialized KVPE cache on device
 
     Returns:
-        Tuple of (tt_output, hidden_states, chunk_order, shard_dims)
+        Tuple of (tt_output, hidden_states, shard_dims)
     """
     # Create TT MLA
     logger.info("Creating TT MLA...")
@@ -78,13 +74,12 @@ def run_mla_inference(
         seq_len=seq_len,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        is_balanced=is_balanced,
         topology=topology,
         # Match the single-layer test cache (num_kvpe_cache_layers=1): the single-shot write goes through
         # update_padded_kv_cache, which asserts cache_batch % layer_num == 0.
         layer_num=1,
     )
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis)
     # Sparse (DSA) single-shot is folded onto the block-cyclic chunked path (one full-seq chunk at offset
     # 0): it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked
     # path. This helper drives only sparse variants (deepseek_v32 / glm_5_1 / glm_5_2), so the indexer is
@@ -119,12 +114,7 @@ def run_mla_inference(
     torch.manual_seed(42)
     hidden_states = torch.randn(batch_size, seq_len, hidden_size).to(torch.bfloat16)
 
-    # Reorder hidden_states for balanced ring attention
-    sp_factor = mesh_shape[sp_axis]
-    chunk_order = create_balanced_chunk_order(sp_factor) if is_balanced else None
     tt_input = hidden_states.unsqueeze(0)  # [1, batch, seq, hidden]
-    if is_balanced:
-        tt_input = reorder_tensor_chunks(tt_input, chunk_order, seq_dim=2)
 
     shard_dims = [None, None]
     shard_dims[tp_axis] = -1
@@ -157,8 +147,8 @@ def run_mla_inference(
     ttnn.distributed_context_barrier()
 
     if return_indices:
-        return tt_output, hidden_states, chunk_order, shard_dims, indices
-    return tt_output, hidden_states, chunk_order, shard_dims
+        return tt_output, hidden_states, shard_dims, indices
+    return tt_output, hidden_states, shard_dims
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -311,12 +301,11 @@ def _run_chunked_prefill(
         seq_len=seq_len_cache,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        is_balanced=False,
         topology=topology,
         slot_num=num_users,
         layer_num=1,
     )
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis)
     indexed_rope = rope_setup.get_rope_tensors_indexed(
         cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
     )

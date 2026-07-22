@@ -270,7 +270,7 @@ def test_glm_prefill_block(
     # GLM attention is always sparse, so this is unconditional here. The cache is strided by the compacted
     # full-indexer count (num_full_indexer_layers) — >1 for glm_5_2 cross-layer reuse — matching the
     # indexer's cache_batch stride; falls back to 1 when there is no indexer_types map (glm_5_1).
-    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis).get_rope_tensors_indexed(
         cache_seq_len_global=seq_len, chunk_size_global=seq_len
     )
     index_kv_cache = init_kvpe_cache(

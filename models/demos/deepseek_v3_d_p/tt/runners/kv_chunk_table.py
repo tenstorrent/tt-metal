@@ -22,8 +22,8 @@ from models.demos.common.prefill.runners.migration import serialize_kv_chunk_tab
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_OUTPUT_TOKENS,
-    create_kv_chunk_address_table_kimi,
-    populate_kv_chunk_address_table_kimi,
+    create_kv_chunk_address_table,
+    populate_kv_chunk_address_table,
 )
 
 # A KV chunk is one DRAM bank's worth of tokens (NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK=32) x head_dim.
@@ -86,14 +86,14 @@ def build_and_serialize_kv_chunk_table(
     the WHOLE cache, but any sub-cache migration (a [0, N) prefix, or a prompt shorter than
     max_seq_len) lists the wrong, block-cyclically-scattered chunks and fails its PCC check.
 
-    ``chunk_size_global`` is the block-cyclic period; the kimi builder hardcodes it as
+    ``chunk_size_global`` is the block-cyclic period; the builder hardcodes it as
     PREFILL_CHUNK_OUTPUT_TOKENS, so a non-default period is rejected here rather than mismapped.
 
     ``index_kv_cache`` (sparse/DSA models only): when given, a single MERGED table describes BOTH
     caches — config 0 = the KVPE cache, config 1 = the index-key cache — sharing one device-group
     side table. None (dense models) → the usual single-config table over the KVPE cache alone."""
     assert chunk_size_global == PREFILL_CHUNK_OUTPUT_TOKENS, (
-        f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
+        f"create_kv_chunk_address_table assumes a block-cyclic period of "
         f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but chunk_size_global={chunk_size_global}. "
         f"A different period would mismap every position; re-introduce a parametrized builder if needed."
     )
@@ -112,7 +112,7 @@ def build_and_serialize_kv_chunk_table(
         )
 
     def _builder(*, config, chunk_size_bytes, num_users):
-        return create_kv_chunk_address_table_kimi(
+        return create_kv_chunk_address_table(
             config=config,
             mesh_device=mesh_device,
             mesh_shape=mesh_shape,
@@ -146,7 +146,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     def _table_config(cache):
         cfg = disagg.KvChunkAddressTableConfig()
         # KVPE = all layers; the GLM-5.2 index cache = full-layers-only, so config 1 holds only num_full
-        # entries and populate_kv_chunk_address_table_kimi (which iterates config.num_layers) skips the
+        # entries and populate_kv_chunk_address_table (which iterates config.num_layers) skips the
         # shared-layer slots. GLM-5.1 / dense: index cache is all-layers, so this equals num_layers.
         cfg.num_layers = _num_layers_from_cache(cache, num_users)
         cfg.max_sequence_length = seq_len
@@ -161,7 +161,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     table = disagg.KvChunkAddressTable(configs)
 
     for config_id, (cache, cfg) in enumerate(zip(caches, configs)):
-        populate_kv_chunk_address_table_kimi(
+        populate_kv_chunk_address_table(
             lookup_table=table,
             config=cfg,
             mesh_device=mesh_device,

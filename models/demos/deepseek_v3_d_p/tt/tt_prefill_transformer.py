@@ -23,7 +23,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
-from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
@@ -119,7 +118,6 @@ class TtPrefillTransformer(LightweightModule):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
-        is_balanced: bool = False,
         padding_side: str = "right",
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
@@ -203,7 +201,6 @@ class TtPrefillTransformer(LightweightModule):
                 topology=topology,
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
-                is_balanced=is_balanced,
                 gate_fallback_mode=gate_fallback_mode,
                 routed_expert_activations_dtype=routed_expert_activations_dtype,
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
@@ -239,7 +236,7 @@ class TtPrefillTransformer(LightweightModule):
         )
 
         # --- RoPE (computed once, reused across all layers) ---
-        self.rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
+        self.rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis)
 
         # Prefill is chunked-only: the KV-pad-aware indexed rotated path uses whole-cache cos/sin/trans
         # built once here and reused for every chunk (only the runtime kv_actual offset varies). seq_len
@@ -260,16 +257,12 @@ class TtPrefillTransformer(LightweightModule):
                 torch_weight=state_dict.get("lm_head_weight"),  # None if cache exists
                 num_links=num_links,
                 topology=topology,
-                is_balanced=is_balanced,
                 weight_cache_path=weight_cache_path,
                 is_column_parallel=lm_head_is_column_parallel,
             )
             if build_tail
             else None
         )
-
-        self.is_balanced = is_balanced
-        self.chunk_order = create_balanced_chunk_order(mesh_device.shape[sp_axis]) if is_balanced else None
 
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
 
@@ -431,19 +424,6 @@ class TtPrefillTransformer(LightweightModule):
         if return_intermediates:
             intermediates["lm_head"] = logits_host
             intermediates["logits"] = first_token_logits
-
-        # Reorder intermediates if balanced. Skip reordering for logits and lm_head in zigzag mode.
-        no_reorder_keys = {"logits", "lm_head"}
-        if return_intermediates and self.is_balanced:
-            for key, tensor in intermediates.items():
-                if key in no_reorder_keys:
-                    logger.debug(f"Skipping reordering for non-sequence intermediate {key}")
-                    continue
-                if isinstance(tensor, torch.Tensor):
-                    logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
-                    intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
-                else:
-                    logger.debug(f"Skipping reordering for intermediate {key} of type {type(tensor)}")
 
         # Sample token(s) from logits
         first_token_id, first_token_prob, sweep_results = self._sample(first_token_logits, actual_isl, temperature)

@@ -370,7 +370,7 @@ def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, m
         num_users=1,
         dtype=ttnn.bfloat8_b,
     )
-    idx_rope = RotarySetup(cfg, mesh_device, sp_axis=0, is_balanced=False).get_rope_tensors_indexed(
+    idx_rope = RotarySetup(cfg, mesh_device, sp_axis=0).get_rope_tensors_indexed(
         cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
     )
     idx = mla._indexer.forward(xs, qr, sl, rope_tensors=idx_rope, index_kv_cache=idx_kv_cache)
@@ -424,7 +424,7 @@ def _run_device_forward(model, config, layer, mesh_device):
         num_users=1,
         dtype=ttnn.bfloat8_b,
     )
-    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis).get_rope_tensors_indexed(
         cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
     )
 

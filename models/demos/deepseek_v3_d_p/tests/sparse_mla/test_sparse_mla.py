@@ -228,7 +228,7 @@ def run_sparse_mla_accuracy_case(
     )
 
     logger.info(f"[{variant.name}] sparse MLA accuracy: running TT inference")
-    tt_output, hidden_states, _, shard_dims = run_mla_inference(
+    tt_output, hidden_states, shard_dims = run_mla_inference(
         config=config,
         weights=weights,
         mesh_device=mesh_device,
@@ -236,7 +236,6 @@ def run_sparse_mla_accuracy_case(
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        is_balanced=False,
         topology=topology,
         tt_kvpe_cache=tt_kvpe_cache,
     )
@@ -303,7 +302,7 @@ def run_sparse_mla_determinism_case(
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        tt_output, _, _, shard_dims = run_mla_inference(
+        tt_output, _, shard_dims = run_mla_inference(
             config=config,
             weights=dict(weights),
             mesh_device=mesh_device,
@@ -311,7 +310,6 @@ def run_sparse_mla_determinism_case(
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
-            is_balanced=False,
             topology=topology,
             tt_kvpe_cache=tt_kvpe_cache,
         )
@@ -384,7 +382,7 @@ def run_sparse_mla_chunked_case(
         tp_axis=tp_axis,
         layer_num=1,
     )
-    rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope = RotarySetup(config, mesh_device, sp_axis=sp_axis)
     rope_tensors = rope.get_rope_tensors_indexed(seq_len, chunk)
 
     hidden = make_hidden(seq_len, config.hidden_size, seed, ds_input)
@@ -497,7 +495,7 @@ def run_sparse_mla_rotated_case(
         slot_num=1,
         layer_num=1,
     )
-    rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope = RotarySetup(config, mesh_device, sp_axis=sp_axis)
     rope_tensors = rope.get_rope_tensors_indexed(
         cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
     )
@@ -644,13 +642,12 @@ def test_sparse_mla_indexer_reuse(
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        is_balanced=False,
         topology=topology,
     )
     # A: compute the indexer, capture its top-k selection + output.
-    out_a, _, _, shard_dims, idx = run_mla_inference(tt_kvpe_cache=_kvpe(), return_indices=True, **common)
+    out_a, _, shard_dims, idx = run_mla_inference(tt_kvpe_cache=_kvpe(), return_indices=True, **common)
     # B: a fresh MLA (same weights + input) fed A's indices -> skips its own indexer.
-    out_b, _, _, _ = run_mla_inference(tt_kvpe_cache=_kvpe(), inject_indices=idx, **common)
+    out_b, _, _ = run_mla_inference(tt_kvpe_cache=_kvpe(), inject_indices=idx, **common)
 
     def _to_torch(t):
         return ttnn.to_torch(

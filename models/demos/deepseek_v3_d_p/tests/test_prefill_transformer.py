@@ -34,11 +34,6 @@ from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
-from models.demos.deepseek_v3_d_p.tt.mla.utils import (
-    create_balanced_chunk_order,
-    reorder_tensor_chunks,
-    reverse_reorder_tensor_chunks,
-)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -131,7 +126,6 @@ def run_model(
     config,
     mesh_device,
     device_params,
-    is_balanced,
     isl_total,
     dispatch_buffer_capacity_factor,
     num_layers,
@@ -410,7 +404,6 @@ def run_model(
         state_dict=state_dict,
         num_layers=num_layers,
         seq_len=isl_total,
-        is_balanced=is_balanced,
         padding_side=padding_side,
         dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
         num_links=num_links,
@@ -474,12 +467,6 @@ def run_model(
 
     # --- Shard token_ids to device ---
     # Reshape [1, isl_total] -> [sp_factor, 1, isl_per_chip] for SP sharding
-    if is_balanced == True:
-        chunk_order = create_balanced_chunk_order(sp_factor) if is_balanced else None
-        token_ids = (
-            reorder_tensor_chunks(token_ids.unsqueeze(1).unsqueeze(-1), chunk_order, seq_dim=2).squeeze(1).squeeze(-1)
-        )
-
     token_ids_reshaped = token_ids.reshape(sp_factor, 1, isl_per_chip)
 
     tt_tokens = ttnn.from_torch(
@@ -620,7 +607,7 @@ def run_model(
         )
 
     logger.info(
-        f"Params: pcc_validation={pcc_validation}, return_kv_cache={return_kv_cache}, do_return_kv={do_return_kv} is_balanced={is_balanced} ref_kvpe_list={ref_kvpe_list is not None}"
+        f"Params: pcc_validation={pcc_validation}, return_kv_cache={return_kv_cache}, do_return_kv={do_return_kv} ref_kvpe_list={ref_kvpe_list is not None}"
     )
 
     # --- PCC check ---
@@ -676,8 +663,6 @@ def run_model(
             ).to(torch.bfloat16)
             # Shape: [num_layers, tp_factor, seq_total, head_dim] — take first TP replica
             tt_kvpe_all_layers = tt_kvpe_all[:, :1, :, :]
-            if is_balanced:
-                tt_kvpe_all_layers = reverse_reorder_tensor_chunks(tt_kvpe_all_layers, chunk_order, seq_dim=2)
             kv_lora_rank = config.kv_lora_rank
             for i, ref_kvpe in enumerate(ref_kvpe_list):
                 tt_kvpe_layer = tt_kvpe_all_layers[i : i + 1, :, :, :]
@@ -860,7 +845,6 @@ def run_model(
 @pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"])
 @pytest.mark.parametrize("input_source", ["json_prompts"])
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
-@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
     [(SEQ_LEN_5K, 8)],
@@ -906,7 +890,6 @@ def test_glm_prefill_transformer(
     config_only,
     mesh_device,
     device_params,
-    is_balanced,
     isl_total,
     dispatch_buffer_capacity_factor,
     num_layers,
@@ -934,7 +917,6 @@ def test_glm_prefill_transformer(
         config_only,
         mesh_device,
         device_params,
-        is_balanced,
         isl_total,
         dispatch_buffer_capacity_factor,
         num_layers,

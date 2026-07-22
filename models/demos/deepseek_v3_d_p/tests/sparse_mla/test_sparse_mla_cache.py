@@ -209,7 +209,7 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant,
 
     # Sparse single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0): indexed rope
     # tables + a caller-owned indexer key cache, exactly like the chunked path.
-    rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False).get_rope_tensors_indexed(
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS).get_rope_tensors_indexed(
         cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
     )
     torch.manual_seed(42)
