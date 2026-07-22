@@ -144,7 +144,7 @@ class TtXtts(LightweightModule):
         def _setup():  # cond mel (on device) -> cond_latents ; speaker -> g ; prefill -> seed caches
             cl = ttnn.permute(self._style_from_mel(self.cond_mel_fe(wav_dev)), (0, 2, 1))  # [1, 32, 1024]
             g = self.decoder.speaker_embedding(ref_wav_spk)  # [1, 1, 512]
-            return g, gpt.prefill_dev(text_dev, cl)
+            return g, gpt.prefill_on_device(text_dev, cl)
 
         # Warmup (compile kernels + populate the mel-frontend index cache) so the captured region
         # has no host->device writes, then capture the SETUP trace and execute it once.

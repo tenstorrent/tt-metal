@@ -46,23 +46,25 @@ class TtXttsGptStack(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
         )
 
-    def forward_decode(self, x, kv, pos):
+    def forward_decode(self, x, kv, pos, write_idx=None):
         """DECODE — one-token decode over FIXED-size caches (the stack's decode forward).
 
         ``kv`` is the per-layer ``[(k_cache, v_cache), ...]`` list of ``[1, heads, max_seq,
         head_dim]`` caches; ``pos`` is a ``[1, 1, 1, max_seq]`` tensor filled with the current
-        absolute cache position. Builds the one-hot cache-write mask and the additive
-        attention mask ONCE (shared across layers) from ``pos`` + the persistent arange, then
-        runs every block. Returns the ``ln_f`` hidden (caches updated in place); all shapes static."""
-        onehot_row = ttnn.typecast(ttnn.eq(self.arange, pos), ttnn.bfloat16)  # [1,1,1,MAX] 1 at col=pos
-        onehot = ttnn.reshape(onehot_row, (1, 1, self.max_seq, 1))  # [1,1,MAX,1] cache-write selector
-        keep = ttnn.add(ttnn.multiply(onehot, -1.0), 1.0)  # 1 - onehot
+        absolute cache position. Builds the additive attention mask ONCE (shared across layers) from
+        ``pos`` + the persistent arange. ``write_idx`` (eager int) routes the cache write through the
+        O(1) ``ttnn.update_cache``; when None (traced) it builds the one-hot select the blocks use.
+        Returns the ``ln_f`` hidden (caches updated in place); all shapes static."""
         le = ttnn.typecast(ttnn.le(self.arange, pos), ttnn.bfloat16)  # [1,1,1,MAX] 1 for cached positions
         add_mask = ttnn.multiply(
             ttnn.add(ttnn.multiply(le, -1.0), 1.0), NEG_INF
         )  # (1-le)*(-1e30): 0 cached, -inf ahead
+        onehot = None
+        if write_idx is None:  # traced path needs the data-driven one-hot write selector
+            onehot_row = ttnn.typecast(ttnn.eq(self.arange, pos), ttnn.bfloat16)  # [1,1,1,MAX] 1 at col=pos
+            onehot = ttnn.reshape(onehot_row, (1, 1, self.max_seq, 1))  # [1,1,MAX,1]
         for block, (k, v) in zip(self.blocks, kv):
-            x = block.forward_decode(x, k, v, onehot, keep, add_mask)  # k, v updated in place
+            x = block.forward_decode(x, k, v, onehot, add_mask, write_idx)  # k, v updated in place
         y = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
         ttnn.deallocate(x)
         return y
