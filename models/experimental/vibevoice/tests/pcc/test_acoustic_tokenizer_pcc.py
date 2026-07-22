@@ -16,8 +16,8 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
 from models.experimental.vibevoice.common.config import MODEL_PATH
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.experimental.vibevoice.tt.load_weights import (
     load_vibevoice_state_dict,
     split_submodule_weights,
@@ -135,8 +135,15 @@ def test_acoustic_tokenizer_encode_pcc(mesh_device, ac_tok_state, vv_config, ac_
     ref_compare = ref_enc.to(torch.float32).permute(0, 2, 1)  # [1, T_enc, vae_dim]
     T_min = min(ref_compare.shape[1], tt_enc_torch.shape[1])
 
-    passed, pcc_val = comp_pcc(ref_compare[:, :T_min], tt_enc_torch[:, :T_min], pcc=0.99)
-    assert passed, f"Acoustic tokenizer encode PCC {pcc_val:.6f} < 0.99"
+    # Measured on BH: PCC≈0.9996, rel-Frob≈0.053, max|Δ|≈7.24.
+    assert_numeric_metrics(
+        ref_compare[:, :T_min],
+        tt_enc_torch[:, :T_min],
+        pcc_threshold=0.9994,
+        rtol=0.09,
+        atol=7.3,
+        frobenius_threshold=0.055,
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -172,8 +179,15 @@ def test_acoustic_tokenizer_decode_pcc(mesh_device, ac_tok_state, vv_config, ac_
     ref_compare = ref_dec.to(torch.float32).squeeze()  # [T_audio]
     T_min = min(ref_compare.shape[-1], tt_dec_torch.shape[-1])
 
-    passed, pcc_val = comp_pcc(ref_compare[:T_min], tt_dec_torch[:T_min], pcc=0.99)
-    assert passed, f"Acoustic tokenizer decode PCC {pcc_val:.6f} < 0.99"
+    # Measured on BH: PCC≈0.9995, rel-Frob≈0.072, max|Δ|≈0.608.
+    assert_numeric_metrics(
+        ref_compare[:T_min],
+        tt_dec_torch[:T_min],
+        pcc_threshold=0.9994,
+        rtol=0.09,
+        atol=0.65,
+        frobenius_threshold=0.075,
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -212,6 +226,13 @@ def test_acoustic_tokenizer_decode_real_latents_pcc(mesh_device, ac_tok_state, v
     ref_compare = ref_dec.to(torch.float32).squeeze()  # [T_audio]
     T_min = min(ref_compare.shape[-1], tt_dec_torch.shape[-1])
 
-    passed, pcc_val = comp_pcc(ref_compare[:T_min], tt_dec_torch[:T_min], pcc=0.99)
-    print(f"[decode real-latents] PCC = {pcc_val:.6f}")
-    assert passed, f"Acoustic tokenizer decode (real latents) PCC {pcc_val:.6f} < 0.99"
+    print(f"[decode real-latents] shapes ref={tuple(ref_compare[:T_min].shape)} tt={tuple(tt_dec_torch[:T_min].shape)}")
+    # Measured on BH: PCC≈0.9996, rel-Frob≈0.062, max|Δ|≈0.781.
+    assert_numeric_metrics(
+        ref_compare[:T_min],
+        tt_dec_torch[:T_min],
+        pcc_threshold=0.9994,
+        rtol=0.09,
+        atol=0.80,
+        frobenius_threshold=0.065,
+    )
