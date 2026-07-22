@@ -286,10 +286,8 @@ struct ByteSizeAddressType<Size, typename std::enable_if<Size == 4>::type> {
 // buffers, HEIGHT-sharded RM (whole row stays on one core), and shards whose width covers
 // the full row.
 //
-// dest_id is a logical row index; pages_per_row converts it to the starting page index in
-// the destination buffer. pages_per_row is the last (W) axis of dspec.tensor_shape() after
-// squeeze — equivalent to (and now generalized from) the prior tensor_shape()[1] indexing,
-// which assumed a fully-squeezed 2D dspec and so misread the C dim for 4D NCHW inputs.
+// pages_per_row = ceil(tensor_W_pages / shard_W_pages); HEIGHT-sh collapses to 1 for any W·E.
+// Split-branch stride is exact iff shard_W_pages == 1 (RM B/W-sh: one shard-row = one page).
 template <typename AddrGenType>
 FORCE_INLINE void noc_async_write_sharded(
     Noc noc, uint32_t l1_addr, AddrGenType tensor, uint32_t dest_id, uint32_t offset, uint32_t size) {
@@ -299,7 +297,8 @@ FORCE_INLINE void noc_async_write_sharded(
     } else {
         const auto& dspec = tensor.dspec();
         const uint32_t r = dspec.rank();
-        const uint32_t pages_per_row = (r > 1) ? dspec.tensor_shape()[r - 1] : 1u;
+        const uint32_t shard_W = (r >= 1) ? dspec.shard_shape()[r - 1] : 1u;
+        const uint32_t pages_per_row = (r > 1 && shard_W > 0) ? div_up(dspec.tensor_shape()[r - 1], shard_W) : 1u;
         if (pages_per_row <= 1) {
             noc.async_write(
                 CoreLocalMem<uint32_t>(l1_addr), tensor, size, {}, {.page_id = dest_id, .offset_bytes = offset});
@@ -344,7 +343,8 @@ FORCE_INLINE void noc_async_read_sharded(
     } else {
         const auto& dspec = tensor.dspec();
         const uint32_t r = dspec.rank();
-        const uint32_t pages_per_row = (r > 1) ? dspec.tensor_shape()[r - 1] : 1u;
+        const uint32_t shard_W = (r >= 1) ? dspec.shard_shape()[r - 1] : 1u;
+        const uint32_t pages_per_row = (r > 1 && shard_W > 0) ? div_up(dspec.tensor_shape()[r - 1], shard_W) : 1u;
         if (pages_per_row <= 1) {
             noc.async_read(
                 tensor, CoreLocalMem<uint32_t>(l1_addr), size, {.page_id = src_id, .offset_bytes = offset}, {});

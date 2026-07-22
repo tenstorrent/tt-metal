@@ -709,4 +709,17 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor) {
     return tt::div_up(tensor.padded_shape().volume(), tile_shape[0] * tile_shape[1]);
 }
 
+uint32_t per_shard_page_size_bytes(const ttnn::Tensor& t, uint32_t row_bytes) {
+    const auto& mc = t.memory_config();
+    if (mc.is_sharded() && (mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
+                            mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED)) {
+        const auto& spec = mc.shard_spec().value();
+        return spec.shape[1] * t.element_size();
+    }
+    if (mc.is_sharded()) {
+        return static_cast<uint32_t>(t.buffer()->aligned_page_size());
+    }
+    return row_bytes;
+}
+
 }  // namespace ttnn::operations::data_movement

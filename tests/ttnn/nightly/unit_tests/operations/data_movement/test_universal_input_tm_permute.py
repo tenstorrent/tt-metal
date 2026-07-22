@@ -584,6 +584,8 @@ _IRREGULAR_SHAPES = [
     ((2, 3, 71, 79), (0, 1, 3, 2)),
     ((1, 13, 47, 64), (0, 2, 1, 3)),
     ((3, 5, 32, 64), (1, 0, 2, 3)),
+    # Sub-NoC-aligned stick (W·E % 16 != 0) — guards HEIGHT-sh RM native path (#47299).
+    ((1, 1, 32, 97), (0, 1, 3, 2)),
 ]
 
 
@@ -601,6 +603,8 @@ def test_permute_irregular_shapes_interleaved(shape, dims, input_layout, device)
         pytest.param((2, 3, 71, 79), (0, 1, 3, 2), _height_shard_config, id="71x79_height"),
         pytest.param((1, 13, 47, 64), (0, 2, 1, 3), _width_shard_config, id="47x64_width"),
         pytest.param((3, 5, 32, 64), (1, 0, 2, 3), _block_shard_config, id="32x64_block"),
+        # HEIGHT-sh route for the sub-NoC-aligned stick (native RM after #47299).
+        pytest.param((1, 1, 32, 97), (0, 1, 3, 2), _height_shard_config, id="32x97_height"),
     ],
 )
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -611,6 +615,19 @@ def test_permute_irregular_shapes_sharded(shape, dims, shard_factory, input_layo
         device,
         input_layout=input_layout,
         input_mem_config=shard_factory(shape, device, layout=input_layout),
+    )
+
+
+# f32 sibling for the newly-native RM HEIGHT-sh sub-NoC-aligned stick (#47299).
+def test_permute_rm_height_sharded_sub_noc_aligned_stick_float32(device):
+    shape = (1, 1, 32, 49)  # W·E = 49·4 = 196 bytes → 196 % 16 = 4
+    run_permute_test(
+        shape,
+        (0, 1, 3, 2),
+        device,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_mem_config=_height_shard_config(shape, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        dtype=ttnn.float32,
     )
 
 
