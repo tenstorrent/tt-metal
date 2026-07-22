@@ -461,7 +461,7 @@ void kernel_main() {
                 // row, and the writer drops every row >= count_tiles (its
                 // `row < count_tiles` guard), so it never reaches the output.
                 {  // TEMP profiling: time the x DRAM read (row-major strided vs tiled)
-                    DeviceZoneScopedN("IN0-READ");
+                    // DeviceZoneScopedN("IN0-READ");
                     if constexpr (x_is_row_major != 0) {
                         // Row-major: read this K-block's column window (in0_block_w_gu
                         // tiles wide) from each of the TILE_HEIGHT token-row sticks of
@@ -529,7 +529,7 @@ void kernel_main() {
                 // barrier does NOT fix this on Blackhole (multicast writes are
                 // posted; no completion ack). Mirrors the phase-4 activated mcast.
                 {
-                    DeviceZoneScopedN("IN0-MCAST");
+                    // DeviceZoneScopedN("IN0-MCAST");
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(block_start),
                         MulticastEndpoint{},
@@ -564,7 +564,7 @@ void kernel_main() {
                 uint32_t l1_w_gate = cb_in1_gate_obj.get_write_ptr();
                 const uint32_t gate_block_start = l1_w_gate;
                 {
-                    DeviceZoneScopedN("GATE-READ");
+                    // DeviceZoneScopedN("GATE-READ");
                     for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                         for (uint32_t n = 0; n < per_core_N_gu; ++n) {
                             const uint32_t row = kb * in0_block_w_gu + k;
@@ -632,12 +632,12 @@ void kernel_main() {
 
                 // UP_SPLIT: wait for the writer's NoC-1 `up` read before mcast.
                 if constexpr (up_split) {
-                    DeviceZoneScopedN("UP-WAITING-READ");
+                    // DeviceZoneScopedN("UP-WAITING-READ");
                     up_done_sem.wait_min(up_seq);
                 }
 
                 {
-                    DeviceZoneScopedN("IN1-MCAST");
+                    // DeviceZoneScopedN("IN1-MCAST");
 
                     // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the
                     // locally-read weights go straight to compute via cb_push_back.
@@ -773,7 +773,7 @@ void kernel_main() {
                 uint32_t l1_w = cb_in1_down_obj.get_write_ptr();
                 in1_block_start = l1_w;
                 {
-                    DeviceZoneScopedN("IN1-DOWN-READ");
+                    // DeviceZoneScopedN("IN1-DOWN-READ");
                     for (uint32_t k = 0; k < in0_block_w_d; ++k) {
                         for (uint32_t n = 0; n < per_core_N_d; ++n) {
                             const uint32_t row = kb * in0_block_w_d + k;
@@ -815,7 +815,7 @@ void kernel_main() {
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
                 // core consumes the locally-read down weight directly.
                 if (in1_num_receivers > 0) {
-                    DeviceZoneScopedN("IN1-DOWN-MCAST");
+                    // DeviceZoneScopedN("IN1-DOWN-MCAST");
                     const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
                     // linked=true so the in1_valid-sem multicast is ordered behind
                     // the weight data on the same reserved path (see the activated
@@ -868,7 +868,7 @@ void kernel_main() {
                 // wait on) — only path-linking orders the sem behind the data.
                 // Mirrors the canonical matmul in0 sender
                 // (reader_bmm_tile_layout_in0_sender_padding.cpp).
-                DeviceZoneScopedN("ACTIVATED-MCAST");
+                // DeviceZoneScopedN("ACTIVATED-MCAST");
                 noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                     CoreLocalMem<uint32_t>(src_l1),
                     MulticastEndpoint{},

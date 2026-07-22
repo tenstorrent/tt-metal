@@ -152,7 +152,7 @@ FORCE_INLINE void matmul_phase(
 
         int in0_index_subblock_offset = 0;
         {
-            DeviceZoneScopedN("DOWN-MATMUL");
+            // DeviceZoneScopedN("DOWN-MATMUL");
             for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
                 int in1_index_subblock_offset = 0;
                 for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
@@ -263,7 +263,7 @@ FORCE_INLINE void matmul_phase(
 
         final_cb.reserve_back(out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-            DeviceZoneScopedN("PACK-TILE");
+            // DeviceZoneScopedN("PACK-TILE");
             pack_tile(i, final_cb_id);
         }
         final_cb.push_back(out_subblock_num_tiles);
@@ -331,18 +331,18 @@ FORCE_INLINE void matmul_phase_fused_gu(
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         if constexpr (tilize_x) {
-            DeviceZoneScopedN("TILIZE");  // TEMP profiling: in-kernel row-major tilize cost
-                                          // Row-major x: tilize this K-block's cb_x_rm strips (bf16) -> x_cb
-                                          // (cb_in0_x, bf8_b) before the matmul consumes it. L1_ACC is turned
-                                          // off so the tilize packs OVERWRITE x_cb rather than accumulate; the
-                                          // shared tilize helper (same one conv_bmm_tilize.cpp uses) then
-                                          // reconfigures unpack SrcA + pack format, drives the per-strip
-                                          // wait/reserve/tilize/push/pop over the in0_block_num_tiles /
-                                          // in0_block_w tile-rows, and restores init on exit. The helper left
-                                          // SrcA pointing at the bf16 row-major input, so restore it to the
-                                          // gate/up weight format before resuming the matmul (SrcB still holds
-                                          // x_cb_id — the BH tilize path never touches it); then restore the
-                                          // partials packer + L1_ACC state for this block.
+            // DeviceZoneScopedN("TILIZE");  // TEMP profiling: in-kernel row-major tilize cost
+            //  Row-major x: tilize this K-block's cb_x_rm strips (bf16) -> x_cb
+            //  (cb_in0_x, bf8_b) before the matmul consumes it. L1_ACC is turned
+            //  off so the tilize packs OVERWRITE x_cb rather than accumulate; the
+            //  shared tilize helper (same one conv_bmm_tilize.cpp uses) then
+            //  reconfigures unpack SrcA + pack format, drives the per-strip
+            //  wait/reserve/tilize/push/pop over the in0_block_num_tiles /
+            //  in0_block_w tile-rows, and restores init on exit. The helper left
+            //  SrcA pointing at the bf16 row-major input, so restore it to the
+            //  gate/up weight format before resuming the matmul (SrcB still holds
+            //  x_cb_id — the BH tilize path never touches it); then restore the
+            //  partials packer + L1_ACC state for this block.
 #ifdef PACKER_L1_ACC
             PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
@@ -368,7 +368,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
         int in0_index_subblock_offset = 0;
         uint32_t partials_slot_idx = 0;
         {
-            DeviceZoneScopedN("GATE-UP-MATMUL");
+            // DeviceZoneScopedN("GATE-UP-MATMUL");
             for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
                 int in1_index_subblock_offset = 0;
                 for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
@@ -472,7 +472,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
     //     pack pipeline as apply_activation_from_pack would.
     //   * pack dst → gate_intermed without per-tile SFPU.
     {
-        DeviceZoneScopedN("SILU");
+        // DeviceZoneScopedN("SILU");
         pack_reconfig_data_format(gate_intermed_cb_id);
         // SrcA was last configured for the up matmul's in1 (up_cb_id). Switch
         // to partials_gu so copy_tile reads the accumulator.
@@ -623,7 +623,7 @@ FORCE_INLINE void multiply_phase(uint32_t gate_cb_id, uint32_t up_cb_id, uint32_
     gate_cb.wait_front(out_block_num_tiles);
     up_cb.wait_front(out_block_num_tiles);
 
-    DeviceZoneScopedN("MULTIPLY");
+    // DeviceZoneScopedN("MULTIPLY");
 
     // Reconfigure packer for activated format and unpacker for both
     // gate_cb (SrcA) and up_cb (SrcB). After phase 2's second pass the
