@@ -1472,6 +1472,171 @@ void CablingGenerator::merge(
     merge_other(other, new_file_path, existing_sources);
 }
 
+// Graph that directly owns the node with `host_id`, or nullptr.
+static ResolvedGraphInstance* find_graph_containing_host_id(ResolvedGraphInstance& graph, HostId host_id) {
+    for (const auto& [node_name, node] : graph.nodes) {
+        if (node.host_id == host_id) {
+            return &graph;
+        }
+    }
+    for (auto& [sub_name, subgraph] : graph.subgraphs) {
+        if (auto* found = find_graph_containing_host_id(*subgraph, host_id)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+// True if `host_id` is referenced by a connection in any graph other than `owner` (i.e. at an
+// ancestor level), which removal can't scrub and renumber would leave dangling.
+static bool host_id_referenced_outside_graph(
+    ResolvedGraphInstance& graph, const ResolvedGraphInstance* owner, HostId host_id) {
+    if (&graph != owner) {
+        for (const auto& [port_type, conns] : graph.internal_connections) {
+            for (const auto& conn : conns) {
+                if (std::get<0>(conn.first) == host_id || std::get<0>(conn.second) == host_id) {
+                    return true;
+                }
+            }
+        }
+    }
+    for (auto& [sub_name, subgraph] : graph.subgraphs) {
+        if (host_id_referenced_outside_graph(*subgraph, owner, host_id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool CablingGenerator::remove_host_id_from_resolved_graph(ResolvedGraphInstance& graph, HostId host_id) {
+    // Leaf case: the node with this host_id lives directly in this graph.
+    for (auto it = graph.nodes.begin(); it != graph.nodes.end(); ++it) {
+        if (it->second.host_id != host_id) {
+            continue;
+        }
+        const std::string node_name = it->first;
+        graph.nodes.erase(it);
+        std::erase_if(graph.children_order, [&](const std::pair<std::string, bool>& entry) {
+            return entry.second && entry.first == node_name;
+        });
+
+        // Drop connections touching the removed host_id and rebuild lookups.
+        for (auto& [port_type, conns] : graph.internal_connections) {
+            std::erase_if(conns, [&](const PortConnection& conn) {
+                return std::get<0>(conn.first) == host_id || std::get<0>(conn.second) == host_id;
+            });
+        }
+        std::erase_if(graph.internal_connections, [](const auto& kv) { return kv.second.empty(); });
+        graph.endpoint_to_dest.clear();
+        graph.connection_pairs.clear();
+        for (const auto& [port_type, conns] : graph.internal_connections) {
+            for (const auto& conn : conns) {
+                graph.endpoint_to_dest[conn.first] = conn.second;
+                graph.endpoint_to_dest[conn.second] = conn.first;
+                graph.connection_pairs.insert(normalize_graph_connection(conn));
+            }
+        }
+        return true;
+    }
+
+    // Recursive case: find in a subgraph, then collapse the subgraph if it went empty.
+    for (auto& [sub_name, subgraph] : graph.subgraphs) {
+        if (!remove_host_id_from_resolved_graph(*subgraph, host_id)) {
+            continue;
+        }
+        if (subgraph->nodes.empty() && subgraph->subgraphs.empty()) {
+            const std::string collapsed_name = sub_name;
+            graph.subgraphs.erase(collapsed_name);
+            std::erase_if(graph.children_order, [&](const std::pair<std::string, bool>& entry) {
+                return !entry.second && entry.first == collapsed_name;
+            });
+        }
+        return true;
+    }
+    return false;
+}
+
+void CablingGenerator::finalize_after_removal() {
+    // Renumber host_ids to 0..N-1 and remap connections.
+    reassign_host_ids_dfs();
+
+    // Reorder deployment_hosts_ to match the DFS host_id order (rebuild handles the
+    // name-mismatch fallback itself).
+    std::unordered_map<std::string, Host> all_hosts;
+    for (const auto& h : deployment_hosts_) {
+        all_hosts[h.hostname] = h;
+    }
+    rebuild_deployment_hosts_in_dfs_order(all_hosts);
+
+    // Reset port availability before re-deriving chip connections so surviving internal
+    // connections don't conflict with ports marked during the original load.
+    recreate_nodes_from_templates(*root_instance_);
+    generate_logical_chip_connections();
+}
+
+void CablingGenerator::remove_host(const std::string& hostname) { remove_hosts({hostname}); }
+
+void CablingGenerator::remove_hosts(const std::vector<std::string>& hostnames) {
+    if (!root_instance_) {
+        for (const auto& hostname : hostnames) {
+            log_warning(tt::LogDistributed, "remove_host: hostname '{}' not found; no-op", hostname);
+        }
+        return;
+    }
+
+    // A user names a deployment host, but the cabling's child/node names are independent labels.
+    // deployment_hosts_ is indexed by host_id, so resolve every hostname -> host_id against the
+    // current (pre-mutation) state up front. Resolving after a removal would be wrong: removals
+    // don't renumber until finalize, so deployment_hosts_ indices would drift from graph host_ids.
+    struct Pending {
+        std::string hostname;
+        HostId host_id;
+    };
+    std::vector<Pending> pending;
+    for (const auto& hostname : hostnames) {
+        HostId host_id{0};
+        bool found = false;
+        for (size_t i = 0; i < deployment_hosts_.size(); ++i) {
+            if (deployment_hosts_[i].hostname == hostname) {
+                host_id = HostId(static_cast<uint32_t>(i));
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            log_warning(tt::LogDistributed, "remove_host: hostname '{}' not found; no-op", hostname);
+            continue;
+        }
+
+        ResolvedGraphInstance* owner = find_graph_containing_host_id(*root_instance_, host_id);
+        if (owner == nullptr) {
+            log_warning(
+                tt::LogDistributed, "remove_host: no node for host '{}' (host_id {}); no-op", hostname, *host_id);
+            continue;
+        }
+
+        // Cross-level (hierarchical) removal isn't supported: an ancestor-level connection can't be
+        // scrubbed here and would be left dangling after renumber. Check every requested host before
+        // mutating so the batch is all-or-nothing on this error.
+        if (host_id_referenced_outside_graph(*root_instance_, owner, host_id)) {
+            throw std::runtime_error(fmt::format(
+                "remove_host: host '{}' participates in connections declared outside its containing graph; "
+                "cross-level (hierarchical) host removal is not supported",
+                hostname));
+        }
+        pending.push_back({hostname, host_id});
+    }
+
+    if (pending.empty()) {
+        return;
+    }
+    for (const auto& p : pending) {
+        remove_host_id_from_resolved_graph(*root_instance_, p.host_id);
+        std::erase_if(deployment_hosts_, [&](const Host& h) { return h.hostname == p.hostname; });
+    }
+    finalize_after_removal();
+}
+
 // Getters for all data
 const std::vector<Host>& CablingGenerator::get_deployment_hosts() const { return deployment_hosts_; }
 
