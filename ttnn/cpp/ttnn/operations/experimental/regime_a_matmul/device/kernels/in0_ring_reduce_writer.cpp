@@ -254,7 +254,13 @@ void kernel_main() {
         }
         cb_push_back(in0_cb, W * in0_blk);  // compute consumes this shard (W blocks)
     }
+#ifdef DIAG_RINGDRAIN
+        // Test-only: source-lifetime flush only; remote completion deferred to the kernel-exit barrier
+        // (Pk>1 path drains write+atomics at 392-393). Remote landing is sem-synchronized (payload->sem).
+        noc_async_writes_flushed();
+#else
         noc_async_write_barrier();  // all ring forwards landed
+#endif
     }  // end Z_RING
 
     // ---- PHASE 2: output / split-K reduction over the N_bpc output blocks ----

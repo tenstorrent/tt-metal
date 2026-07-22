@@ -29,6 +29,11 @@ enum RegimeADiag : uint32_t {
     // compute / split-K reduce / output. Compile-gated so mask 0 has NO zone overhead (clean baseline); only
     // this bit activates the DeviceZoneScopedN markers. Perturbation = (DIAG_ZONES run - mask-0 run).
     DIAG_ZONES = 1u << 4,
+    // Ring deferred-drain (test-only): replace the phase-1 completion write-barrier with the weakest safe
+    // source-lifetime op (noc_async_writes_flushed) and defer remote-completion to the existing kernel-exit
+    // write+atomic barrier. Hypothesis: the phase-1 barrier's remote-completion is redundant with the
+    // fwd-semaphore protocol (payload->sem ordered, same NoC). Must stay PCC-exact + watcher-clean.
+    DIAG_RINGDRAIN = 1u << 5,
     // A/B baseline for the progressive-cumulative-wait schedule. The default (this bit CLEAR) resident-in0
     // compute path begins matmul as each ring shard arrives (cumulative cb_wait_front during the first N
     // sub-block); this bit restores the OLD single full-slice startup barrier before any matmul. Compute-only

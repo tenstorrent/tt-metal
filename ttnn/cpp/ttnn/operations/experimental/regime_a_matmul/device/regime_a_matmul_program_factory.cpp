@@ -128,6 +128,9 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         wdefs["DIAG_ZONES"] = "1";
         ddefs["DIAG_ZONES"] = "1";
     }
+    if (diag & RegimeADiag::DIAG_RINGDRAIN) {  // test-only: phase-1 deferred-drain (writer only)
+        wdefs["DIAG_RINGDRAIN"] = "1";
+    }
     if (diag & RegimeADiag::DIAG_BARRIER_DRAIN) {
         wdefs["DIAG_BARRIER_DRAIN"] = "1";  // A/B baseline: OLD per-block phase-2 completion barrier
     }

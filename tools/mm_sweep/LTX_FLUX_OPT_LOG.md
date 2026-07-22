@@ -429,3 +429,15 @@ floor; sole lever (reduction tree, ~5%/1.2us on the worst shape) documented+defe
 negligible absolute + negative config-level realizability signal + rejected direction + high rewrite risk).
 Production byte-identical (60-shape corpus PCC 1.0000, 0 drift; instrumentation compile-gated). Standalone
 report: LTX_FLUX_DEEP_REPORT.md.
+
+## ============ EXPERIMENT CONTRACT (orchestrator mandate) — 256x2048x1024 ============
+### Task 3a — ring deferred-drain (DIAG_RINGDRAIN=1<<5): REFUTED by fixed-config A/B
+Replaced phase-1 completion write-barrier with noc_async_writes_flushed() (source-lifetime) + deferred
+remote-completion to the existing kernel-exit write+atomic barrier (Pk>1 path). Fixed config (1,4,2,2,4).
+Correctness: chain AND drain both output==K (correctness-preserving confirmed; mask 32 added to gtest check).
+2 batches, execution order reversed:
+- chain (mask0):  med 22.30us [22.20..22.66], n=10
+- drain (mask32): med 22.39us [22.09..22.76], n=10  => **DELTA +0.4% (within noise, overlapping)**
+CONCLUSION: the phase-1 completion barrier is NOT on the critical path; deferring it recovers nothing. The
+4.9us compute in0-wait is TRISC stalling on progressive ring DELIVERY, not the writer's phase-1 barrier.
+Deferred-drain closed by A/B. Kept diagnostic DIAG_RINGDRAIN (compile-gated); production default = barrier.

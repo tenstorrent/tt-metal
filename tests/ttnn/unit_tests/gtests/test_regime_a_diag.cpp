@@ -112,7 +112,8 @@ TEST_F(RegimeADiagFixture, Run) {
     // test below.) A fwd-order/source-lifetime bug would deliver stale in1 -> output != K, caught here.
     constexpr uint32_t kIn1Preserve = (1u << 22) | (1u << 25);
     if (mask == 0 || mask == 1024 || mask == 2048 || mask == 4096 || mask == 16384 || mask == 65536 || mask == 262144 ||
-        mask == 524288 || mask == 2097152 || (mask != 0u && (mask & ~kIn1Preserve) == 0u)) {
+        mask == 524288 || mask == 2097152 || mask == 32 /*DIAG_RINGDRAIN: source-lifetime/ordering-preserving*/ ||
+        (mask != 0u && (mask & ~kIn1Preserve) == 0u)) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
         for (float v : host) {
