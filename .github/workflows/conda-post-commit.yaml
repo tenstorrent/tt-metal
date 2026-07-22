@@ -137,6 +137,7 @@ jobs:
           conda activate metalium_env
           wget -O /tmp/sfpi-info.sh https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-info.sh
           wget -O /tmp/sfpi-version https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-version
+          chmod +x /tmp/sfpi-info.sh
           eval $(/tmp/sfpi-info.sh SHELL rpm)
           wget $sfpi_url/$sfpi_filename
           dnf -y install ./$sfpi_filename
