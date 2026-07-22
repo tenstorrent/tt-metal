@@ -136,34 +136,123 @@ tt::tt_fabric::Topology get_axis_topology(
 }
 
 bool logical_axis_has_only_direct_fabric_neighbors(
-    const Tensor& tensor, uint32_t axis, tt::tt_fabric::Topology topology) {
+    const Tensor& tensor, uint32_t axis, tt::tt_fabric::Topology topology, uint32_t num_links) {
+    return resolve_logical_axis_fabric_neighbor_route_plan(tensor, axis, topology, num_links).eligible;
+}
+
+uint64_t FabricNeighborRoutePlan::to_hash() const {
+    auto hash = ttsl::hash::hash_objects_with_default_seed(axis, topology, num_links, eligible, edges.size());
+    for (const auto& edge : edges) {
+        hash = ttsl::hash::hash_objects(
+            hash,
+            edge.source.mesh_id,
+            edge.source.chip_id,
+            edge.destination.mesh_id,
+            edge.destination.chip_id,
+            edge.group,
+            edge.source_rank,
+            edge.destination_rank,
+            edge.logical_offset,
+            edge.direct,
+            edge.packet_hops,
+            edge.link_indices,
+            edge.physical_direction);
+    }
+    return hash;
+}
+
+FabricNeighborRoutePlan build_fabric_neighbor_route_plan(
+    uint32_t axis,
+    tt::tt_fabric::Topology topology,
+    uint32_t num_links,
+    const std::vector<std::vector<tt::tt_fabric::FabricNodeId>>& logical_groups,
+    const FabricNeighborResolver& resolve_neighbor) {
     TT_FATAL(axis < 2, "Mesh axis must be 0 or 1, got {}", axis);
     TT_FATAL(
         topology == tt::tt_fabric::Topology::Linear || topology == tt::tt_fabric::Topology::Ring,
         "Direct-neighbor axis validation requires Linear or Ring topology, got {}",
         topology);
-    auto* mesh_device = tensor.device();
-    TT_FATAL(mesh_device != nullptr, "Tensor must have a MeshDevice");
-    const auto shape = mesh_device->shape();
+
+    FabricNeighborRoutePlan plan{.axis = axis, .topology = topology, .num_links = num_links, .eligible = num_links > 0};
     const bool is_ring = topology == tt::tt_fabric::Topology::Ring;
-    if (shape[axis] <= 1 || (is_ring && shape[axis] <= 2)) {
-        return false;
+    if (logical_groups.empty()) {
+        plan.eligible = false;
+        return plan;
     }
 
-    const uint32_t group_count = shape[1 - axis];
-    const uint32_t edge_count = is_ring ? shape[axis] : shape[axis] - 1;
-    for (uint32_t group = 0; group < group_count; ++group) {
-        for (uint32_t rank = 0; rank < edge_count; ++rank) {
-            const uint32_t next = (rank + 1) % shape[axis];
-            const MeshCoordinate src = axis == 0 ? MeshCoordinate(rank, group) : MeshCoordinate(group, rank);
-            const MeshCoordinate dst = axis == 0 ? MeshCoordinate(next, group) : MeshCoordinate(group, next);
-            if (!tt::tt_fabric::are_direct_fabric_neighbors(
-                    mesh_device->get_fabric_node_id(src), mesh_device->get_fabric_node_id(dst))) {
-                return false;
+    for (uint32_t group = 0; group < logical_groups.size(); ++group) {
+        const auto& nodes = logical_groups[group];
+        if (nodes.size() <= 1 || (is_ring && nodes.size() <= 2)) {
+            plan.eligible = false;
+            continue;
+        }
+        for (uint32_t source_rank = 0; source_rank < nodes.size(); ++source_rank) {
+            for (const int32_t logical_offset : {1, -1}) {
+                const int64_t unwrapped_destination = static_cast<int64_t>(source_rank) + logical_offset;
+                if (!is_ring &&
+                    (unwrapped_destination < 0 || unwrapped_destination >= static_cast<int64_t>(nodes.size()))) {
+                    continue;
+                }
+                const uint32_t destination_rank = static_cast<uint32_t>(
+                    (unwrapped_destination + static_cast<int64_t>(nodes.size())) % static_cast<int64_t>(nodes.size()));
+                const auto resolution = resolve_neighbor(nodes[source_rank], nodes[destination_rank]);
+                bool required_links_exist = resolution.direct;
+                for (uint32_t link = 0; link < num_links; ++link) {
+                    required_links_exist &=
+                        std::find(resolution.link_indices.begin(), resolution.link_indices.end(), link) !=
+                        resolution.link_indices.end();
+                }
+                plan.eligible &= required_links_exist;
+                plan.edges.push_back(FabricNeighborRouteEdge{
+                    .source = nodes[source_rank],
+                    .destination = nodes[destination_rank],
+                    .group = group,
+                    .source_rank = source_rank,
+                    .destination_rank = destination_rank,
+                    .logical_offset = logical_offset,
+                    .direct = resolution.direct,
+                    .packet_hops = resolution.direct ? 1u : 0u,
+                    .link_indices = resolution.link_indices,
+                    .physical_direction = resolution.physical_direction});
             }
         }
     }
-    return true;
+    return plan;
+}
+
+FabricNeighborRoutePlan resolve_logical_axis_fabric_neighbor_route_plan(
+    const Tensor& tensor, uint32_t axis, tt::tt_fabric::Topology topology, uint32_t num_links) {
+    TT_FATAL(axis < 2, "Mesh axis must be 0 or 1, got {}", axis);
+    auto* mesh_device = tensor.device();
+    TT_FATAL(mesh_device != nullptr, "Tensor must have a MeshDevice");
+    const auto shape = mesh_device->shape();
+
+    std::vector<std::vector<tt::tt_fabric::FabricNodeId>> logical_groups(shape[1 - axis]);
+    for (uint32_t group = 0; group < shape[1 - axis]; ++group) {
+        auto& nodes = logical_groups[group];
+        nodes.reserve(shape[axis]);
+        for (uint32_t rank = 0; rank < shape[axis]; ++rank) {
+            const MeshCoordinate coord = axis == 0 ? MeshCoordinate(rank, group) : MeshCoordinate(group, rank);
+            nodes.push_back(mesh_device->get_fabric_node_id(coord));
+        }
+    }
+
+    return build_fabric_neighbor_route_plan(
+        axis,
+        topology,
+        num_links,
+        logical_groups,
+        [](const tt::tt_fabric::FabricNodeId& source, const tt::tt_fabric::FabricNodeId& destination) {
+            const bool direct = tt::tt_fabric::are_direct_fabric_neighbors(source, destination);
+            const auto physical_direction = tt::tt_fabric::get_eth_forwarding_direction(source, destination);
+            return FabricNeighborRouteResolution{
+                .direct = direct,
+                .link_indices =
+                    direct ? tt::tt_fabric::get_forwarding_link_indices(source, destination) : std::vector<uint32_t>{},
+                .physical_direction = physical_direction.has_value()
+                                          ? std::optional<uint32_t>(static_cast<uint32_t>(*physical_direction))
+                                          : std::nullopt};
+        });
 }
 
 bool logical_axis_is_direct_fabric_ring(const Tensor& tensor, uint32_t axis) {

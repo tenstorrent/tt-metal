@@ -253,3 +253,57 @@ outputs pass for the four-rank case (`8/8`). The two-rank matrix also passes
 `8/8`, and the full 8x1 matrix passes `8/8` across Fabric1D and Fabric2D. The
 diagnostic scatter bypass and CB write-barrier experiments were removed because
 neither addressed a collective defect.
+
+## 2026-07-22: explicit route plan and cache-key qualification
+
+The automatic Fabric2D selection now materializes the complete directed
+neighbor route plan on the host. Every forward and backward edge records its
+source/destination Fabric node, logical direction, physical Ethernet direction,
+available link indices, and terminal packet hop count. Selection requires every
+edge to be direct and every requested link index (`0..num_links-1`) to exist.
+The complete eligible plan is hashed into the all-gather program-cache key;
+the previous eligibility boolean alone could not distinguish two different
+physical route plans that both happened to be eligible.
+
+Seven pure host tests pass without opening a device. They cover two-rank line
+endpoints, four- and eight-rank lines, an eight-rank direct cycle including the
+wrap edge, non-direct-wrap fallback, missing-link fallback, a cycle whose
+successive edges turn in the physical topology, and cache-key inequality for
+Fabric configuration, topology, axis, link count, and neighbor-plan changes:
+
+```bash
+build_Release/test/ttnn/unit_tests_ttnn_ccl \
+  --gtest_filter='AllGatherNeighborRoutePlan.*'
+```
+
+Result: `7/7` passed. The generic Fabric allocator invariants also remain
+green (`2/2` passed), and `./build_metal.sh --release` passes with no `--dev`.
+
+Post-change device qualification used only `scripts/run_safe_pytest.sh`:
+
+- full 8x1 BF16/scaled-FP8, Fabric1D/Fabric2D, fresh/persistent exact matrix:
+  `8/8` passed;
+- two-rank and four-rank line matrices, both formats and output lifetimes:
+  `16/16` passed;
+- cached full-size Fabric2D stability: `2/2` passed with exact payloads and no
+  program-cache growth.
+
+Fresh matched performance after route-plan hardening is:
+
+| Format | Fabric | Median | Minimum | p90 | Effective receive BW | Samples (ms) |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| BF16 | Fabric1D | 5.565 ms | 5.563 ms | 5.577 ms | 94.971 GB/s | 5.563, 5.577, 5.564, 5.565, 5.565, 5.573, 5.564 |
+| BF16 | Fabric2D | 5.812 ms | 5.809 ms | 5.828 ms | 90.932 GB/s | 5.828, 5.809, 5.811, 5.811, 5.826, 5.812, 5.820 |
+| scaled FP8 | Fabric1D | 3.426 ms | 3.424 ms | 3.430 ms | 94.270 GB/s | 3.429, 3.426, 3.430, 3.426, 3.425, 3.424, 3.426 |
+| scaled FP8 | Fabric2D | 3.535 ms | 3.525 ms | 3.565 ms | 91.370 GB/s | 3.543, 3.535, 3.548, 3.565, 3.527, 3.534, 3.525 |
+
+The fresh ten-run Fabric2D stability measurements are:
+
+| Format | Median | p90 | Effective receive BW | Ten samples (ms) |
+| --- | ---: | ---: | ---: | --- |
+| BF16 | 5.820 ms | 5.834 ms | 90.802 GB/s | 5.834, 5.819, 5.837, 5.827, 5.819, 5.823, 5.815, 5.820, 5.820, 5.812 |
+| scaled FP8 | 3.533 ms | 3.539 ms | 91.405 GB/s | 3.526, 3.534, 3.540, 3.535, 3.530, 3.539, 3.539, 3.526, 3.532, 3.532 |
+
+Fabric2D remains above the 90 GB/s stretch goal for both formats, stays within
+4.3% (BF16) and 3.1% (scaled FP8) of its matched Fabric1D control, and keeps
+p90 less than 1% above median.

@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <tuple>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/sub_device_types.hpp>
@@ -73,6 +74,10 @@ struct AllGatherParams {
     // transport. Under Fabric2D every logical edge, including ring wrap, must
     // be one direct physical neighbor hop.
     bool neighbor_unicast_eligible = false;
+    // Hash of the complete directed physical neighbor plan. Fabric routing
+    // arguments are baked into cached programs, so eligibility alone is not a
+    // sufficient cache discriminator when the physical plan changes.
+    uint64_t neighbor_route_plan_hash = 0;
 
     // Worker-core selection.
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
@@ -84,6 +89,17 @@ struct AllGatherParams {
     // valid_gather_extent limits the leading per-device extent along dim.
     std::optional<uint32_t> batch_slice_idx;
     std::optional<uint32_t> valid_gather_extent;
+
+    auto routing_cache_key() const {
+        return std::tuple{
+            fabric_config,
+            axis_topology,
+            axis_num_devices,
+            axis_num_links,
+            num_devices,
+            neighbor_unicast_eligible,
+            neighbor_route_plan_hash};
+    }
 };
 
 struct AllGatherInputs {

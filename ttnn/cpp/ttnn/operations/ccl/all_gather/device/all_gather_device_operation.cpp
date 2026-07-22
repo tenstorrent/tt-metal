@@ -238,12 +238,8 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
         attrs.dim,
         attrs.output_mem_config,
         attrs.cluster_axis,
-        attrs.axis_topology,
-        attrs.axis_num_devices,
-        attrs.axis_num_links,
-        attrs.num_devices,
+        attrs.routing_cache_key(),
         attrs.packet_size,
-        attrs.neighbor_unicast_eligible,
         attrs.subdevice_id,
         attrs.sub_core_grid,
         attrs.receiver_policy,
@@ -489,11 +485,20 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     const bool one_active_axis = (axis_num_devices[0] > 1) != (axis_num_devices[1] > 1);
     const uint32_t active_axis = axis_num_devices[0] > 1 ? 0 : 1;
     const auto active_topology = axis_topology[active_axis];
-    const bool neighbor_unicast_eligible =
-        one_active_axis && axis_num_links[active_axis] > 0 &&
-        (active_topology == tt::tt_fabric::Topology::Linear || active_topology == tt::tt_fabric::Topology::Ring) &&
-        (!::tt::tt_fabric::is_2d_fabric_config(fabric_config) ||
-         ::ttnn::ccl::logical_axis_has_only_direct_fabric_neighbors(input_tensor, active_axis, active_topology));
+    const bool topology_supports_neighbor_unicast =
+        active_topology == tt::tt_fabric::Topology::Linear || active_topology == tt::tt_fabric::Topology::Ring;
+    std::optional<::ttnn::ccl::FabricNeighborRoutePlan> neighbor_route_plan;
+    if (one_active_axis && axis_num_links[active_axis] > 0 && topology_supports_neighbor_unicast &&
+        ::tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+        neighbor_route_plan = ::ttnn::ccl::resolve_logical_axis_fabric_neighbor_route_plan(
+            input_tensor, active_axis, active_topology, axis_num_links[active_axis]);
+    }
+    const bool neighbor_unicast_eligible = one_active_axis && axis_num_links[active_axis] > 0 &&
+                                           topology_supports_neighbor_unicast &&
+                                           (!::tt::tt_fabric::is_2d_fabric_config(fabric_config) ||
+                                            (neighbor_route_plan.has_value() && neighbor_route_plan->eligible));
+    const uint64_t neighbor_route_plan_hash =
+        neighbor_unicast_eligible && neighbor_route_plan.has_value() ? neighbor_route_plan->to_hash() : 0;
 
     log_debug(
         tt::LogOp,
@@ -532,6 +537,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             num_devices,
             packet_size,
             neighbor_unicast_eligible,
+            neighbor_route_plan_hash,
             subdevice_id,
             sub_core_grid,
             receiver_policy,

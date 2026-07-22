@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <numeric>
 
 #include "ttnn/distributed/types.hpp"
@@ -38,6 +39,54 @@ tt::tt_fabric::Topology get_usable_topology(
 tt::tt_fabric::Topology get_axis_topology(
     const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis);
 
+struct FabricNeighborRouteResolution {
+    bool direct = false;
+    std::vector<uint32_t> link_indices;
+    std::optional<uint32_t> physical_direction;
+};
+
+struct FabricNeighborRouteEdge {
+    tt::tt_fabric::FabricNodeId source;
+    tt::tt_fabric::FabricNodeId destination;
+    uint32_t group = 0;
+    uint32_t source_rank = 0;
+    uint32_t destination_rank = 0;
+    int32_t logical_offset = 0;
+    bool direct = false;
+    uint32_t packet_hops = 0;
+    std::vector<uint32_t> link_indices;
+    std::optional<uint32_t> physical_direction;
+};
+
+// Complete directed route plan for a one-dimensional collective. A selected
+// plan contains both directions for every live logical edge. packet_hops is
+// exactly one only for a physically direct terminal packet.
+struct FabricNeighborRoutePlan {
+    uint32_t axis = 0;
+    tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear;
+    uint32_t num_links = 0;
+    bool eligible = false;
+    std::vector<FabricNeighborRouteEdge> edges;
+
+    uint64_t to_hash() const;
+};
+
+using FabricNeighborResolver = std::function<FabricNeighborRouteResolution(
+    const tt::tt_fabric::FabricNodeId&, const tt::tt_fabric::FabricNodeId&)>;
+
+// Pure host builder. Tests provide synthetic logical groups and a synthetic
+// physical-link resolver; production supplies the MeshDevice/control-plane
+// resolver through resolve_logical_axis_fabric_neighbor_route_plan().
+FabricNeighborRoutePlan build_fabric_neighbor_route_plan(
+    uint32_t axis,
+    tt::tt_fabric::Topology topology,
+    uint32_t num_links,
+    const std::vector<std::vector<tt::tt_fabric::FabricNodeId>>& logical_groups,
+    const FabricNeighborResolver& resolve_neighbor);
+
+FabricNeighborRoutePlan resolve_logical_axis_fabric_neighbor_route_plan(
+    const Tensor& tensor, uint32_t axis, tt::tt_fabric::Topology topology, uint32_t num_links);
+
 // True when every consecutive pair on an axis, including the last-to-first pair,
 // is connected by one physical Fabric hop for every group on the other axis.
 bool logical_axis_is_direct_fabric_ring(const Tensor& tensor, uint32_t axis);
@@ -46,7 +95,7 @@ bool logical_axis_is_direct_fabric_ring(const Tensor& tensor, uint32_t axis);
 // direct physical Fabric neighbor edge. Ring validates the wrap edge; Linear
 // intentionally does not.
 bool logical_axis_has_only_direct_fabric_neighbors(
-    const Tensor& tensor, uint32_t axis, tt::tt_fabric::Topology topology);
+    const Tensor& tensor, uint32_t axis, tt::tt_fabric::Topology topology, uint32_t num_links = 1);
 
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
 
