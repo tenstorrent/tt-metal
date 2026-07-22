@@ -403,6 +403,10 @@ def test_deepseek_v3_mla_tilize_trace_mode(
       - INTERLEAVED: no sharding
       - WIDTH_SHARDED: width-wise sharding configuration as defined by the test's shard_spec
     """
+    # TT_FATAL: trace buffers needed (4112384B) exceed allocated trace_region_size (1671168B).
+    # Tracked in: https://github.com/tenstorrent/tt-metal/issues/50679
+    if memory_config_type == "interleaved":
+        pytest.skip("Skipping interleaved variant: trace region too small (needs 4112384B, got 1671168B) — #50679")
     torch.manual_seed(2003)
 
     # Create random tensor for input
