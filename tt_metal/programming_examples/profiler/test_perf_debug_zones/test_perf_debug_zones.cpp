@@ -43,6 +43,15 @@ int main(int argc, char** argv) {
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     Program program = CreateProgram();
 
+    // Clamp the requested grid to the device's compute grid; --gx 0 / --gy 0 (or an over-large value)
+    // means "use the full grid". Passing a CoreRange past the grid would throw.
+    CoreCoord grid = mesh_device->compute_with_storage_grid_size();
+    if (gx == 0 || gx > grid.x) {
+        gx = grid.x;
+    }
+    if (gy == 0 || gy > grid.y) {
+        gy = grid.y;
+    }
     CoreRange cores(CoreCoord{0, 0}, CoreCoord{gx - 1, gy - 1});
     std::map<std::string, std::string> defs{{"N_ITERS", std::to_string(n_iters) + "u"}};
     const std::string kdir = "tt_metal/programming_examples/profiler/test_perf_debug_zones/kernels/";
