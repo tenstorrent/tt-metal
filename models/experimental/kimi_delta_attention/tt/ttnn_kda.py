@@ -196,10 +196,13 @@ class TtKimiDeltaAttention:
             v = ttnn.reshape(v, [B, T, self.Hloc, self.V])
             o, _ = recurrent_kda_ttnn(q, k, v, g, beta, device=self.md)
 
-        gate = ttnn.reshape(ttnn.add(self._lin(self._lin(x, self.w_g0), self.w_g1), self.b_g1), [B, T, self.Hloc, self.V])
-        o_norm = ttnn.rms_norm(o, epsilon=self.norm_eps, weight=self.o_norm_w)
-        o = ttnn.multiply(o_norm, ttnn.sigmoid(gate))
-        o = ttnn.reshape(o, [B, T, self.Hloc * self.V])
+        # o is head-major [B,T,Hloc,V] from the recurrence; RMSNorm needs that (per-head over V). But the
+        # gate is naturally flat and o_proj wants flat, so flatten o_norm ONCE and do gate-multiply +
+        # o_proj in flat layout — collapses the two s6 reshapes (gate->head, o->flat) into one (#2b).
+        gate = ttnn.add(self._lin(self._lin(x, self.w_g0), self.w_g1), self.b_g1)  # flat [B,T,Hloc*V]
+        o_norm = ttnn.rms_norm(o, epsilon=self.norm_eps, weight=self.o_norm_w)     # head-major
+        o_norm = ttnn.reshape(o_norm, [B, T, self.Hloc * self.V])                  # flatten once
+        o = ttnn.multiply(o_norm, ttnn.sigmoid(gate))                             # flat
         o = self._lin(o, self.w_o)        # row-parallel partial [B,T,hidden]
         o = self._tp_all_reduce(o)        # sum partials across TP
         return ttnn.to_torch(o, mesh_composer=ttnn.ConcatMeshToTensor(self.md, dim=0))[:B]
