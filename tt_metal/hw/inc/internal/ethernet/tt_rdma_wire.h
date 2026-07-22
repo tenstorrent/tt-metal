@@ -1,0 +1,100 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// TT-RDMA-v1 on-wire contract — the SINGLE cross-side spec.
+// Frozen from docs/tt-rdma-v1/tt-rdma-wire-protocol-v1.md (§1 frame, §2 opcodes,
+// §3 MR table, §7 hex examples). Little-endian; 32-byte header is 16-B aligned so
+// the appended payload stays 16-B aligned (required for ncrisc_noc_fast_write).
+//
+// Included (or vendored) by BOTH sides so they build against identical bytes:
+//   - the Blackhole active-eth RDMA kernel (RISC1)  [tt-metal-external-eth]
+//   - the BlueField-3 DOCA gateway codec (tt_v1_codec.{c,h})  [tt_rdma_gw, vendors a copy]
+// The M-3 loopback contract test asserts the golden vectors below on both sides.
+#pragma once
+
+#include <stdint.h>
+
+#define TT_RDMA_ETHERTYPE 0x1AF6u  // v1. 0x1AF4/5 = legacy soak; 0x1AF7 = qpn variant (mesh-spec §7.3)
+#define TT_RDMA_HDR_BYTES 32u
+#define TT_RDMA_VERSION 1u
+#define TT_RDMA_MAX_PAYLOAD 4080u  // jumbo ceiling: 4096 works, 9216 hangs (README open-Q #1)
+#define TT_RDMA_PAYLOAD_ALIGN 16u
+
+// version_flags (byte +1): bits[3:0] = version, bit4+ = flags
+#define TT_VF_VER_MASK 0x0Fu
+#define TT_VF_IMM_PRESENT (1u << 4)
+#define TT_VF_REQ_ACK (1u << 5)
+#define TT_VF_SOLICITED (1u << 6)
+
+// opcode enum (byte +0) — FAMILY-RANGED, not sequential (0x0X SEND, 0x1X WRITE,
+// 0x2X READ, 0x3X ATOMIC, 0x4X control). FW branches in one load+compare.
+enum tt_rdma_opcode {
+    TT_OP_RESERVED = 0x00,
+    TT_OP_SEND = 0x01,         // unsolicited -> next pre-posted recv slot (host RxWqeRing)
+    TT_OP_SEND_IMM = 0x02,     // SEND + imm_data to recv CQE
+    TT_OP_WRITE = 0x10,        // place at MR base[remote_offset] (rkey checked)
+    TT_OP_WRITE_IMM = 0x11,    // WRITE + imm_data raises a receiver completion
+    TT_OP_READ_REQ = 0x20,     // initiator -> target; payload empty, length = request_len
+    TT_OP_READ_RESP = 0x21,    // target -> initiator; payload = fetched bytes
+    TT_OP_ATOMIC_CAS = 0x30,   // deferred (v1.2)
+    TT_OP_ATOMIC_FAA = 0x31,   // deferred
+    TT_OP_ATOMIC_RESP = 0x32,  // deferred
+    TT_OP_ACK = 0x40,          // cumulative ACK; payload empty; ack_seq reuses the seq field
+    TT_OP_CONTROL = 0xF0,      // sub-opcode in imm_data (MR register/dereg, ...)
+    TT_OP_PROBE = 0xFE,        // link-layer keepalive; loopback contents in payload
+};
+
+// MR access_flags (mr entry +20)
+#define TT_MR_LOCAL_WRITE (1u << 0)
+#define TT_MR_REMOTE_WRITE (1u << 1)
+#define TT_MR_REMOTE_READ (1u << 2)
+#define TT_MR_REMOTE_ATOMIC (1u << 3)
+
+// The 32-byte wire header (after CMAC/MAC L2 strip). Little-endian.
+typedef struct __attribute__((packed)) tt_rdma_hdr_t {
+    uint8_t opcode;          // +0
+    uint8_t version_flags;   // +1
+    uint16_t tag;            // +2  request/response correlation (READ/ATOMIC); opaque cookie otherwise
+    uint32_t length;         // +4  payload bytes, NOT including this header
+    uint32_t seq;            // +8  reliability seq (cumulative-ACK)
+    uint32_t rkey;           // +12 0 = unused / SEND
+    uint64_t remote_offset;  // +16 byte offset within the rkey'd region (WRITE/READ); ignored if rkey=0
+    uint32_t imm_data;       // +24 valid iff (version_flags & TT_VF_IMM_PRESENT)
+    uint32_t header_cksum;   // +28 CRC-32C over bytes [0..27]; reclaimed as qpn in the 0x1AF7 variant
+} tt_rdma_hdr_t;
+
+// MR table entry (chip L1, 16 or 64 entries x 32 B).
+// rkey = (slot_idx << 24) | (rand16 << 8) | generation ; lookup = O(1) direct index on (rkey>>24).
+typedef struct __attribute__((packed)) tt_rdma_mr_entry_t {
+    uint64_t base_noc_addr;  // +0  target NoC-encoded address (host hugepage | on-chip L1/DRAM | remote chip)
+    uint64_t length;         // +8
+    uint32_t rkey;           // +16 0 = entry-not-valid
+    uint32_t access_flags;   // +20 TT_MR_*
+    uint32_t pd;             // +24 protection domain (0 = default; defer)
+    uint32_t reserved;       // +28
+} tt_rdma_mr_entry_t;
+
+#ifdef __cplusplus
+static_assert(sizeof(tt_rdma_hdr_t) == TT_RDMA_HDR_BYTES, "TT-RDMA header must be 32 B");
+static_assert(sizeof(tt_rdma_mr_entry_t) == 32, "TT-RDMA MR entry must be 32 B");
+#else
+_Static_assert(sizeof(tt_rdma_hdr_t) == TT_RDMA_HDR_BYTES, "TT-RDMA header must be 32 B");
+_Static_assert(sizeof(tt_rdma_mr_entry_t) == 32, "TT-RDMA MR entry must be 32 B");
+#endif
+
+// --- Golden interop test vectors (post L2-strip), verbatim from wire-protocol §7. ---
+// The M-3 loopback contract test asserts these byte-for-byte on both the chip and the gateway.
+
+// §7.1 SEND, 64 B payload, seq=0x1234, tag=0xCAFE (header only):
+static const uint8_t TT_GOLDEN_SEND_HDR[32] = {0x01, 0x01, 0xFE, 0xCA, 0x40, 0x00, 0x00, 0x00, 0x34, 0x12, 0x00,
+                                               0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                               0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3, 0xA1, 0x9B, 0x7E};
+
+// §7.2 WRITE_IMM, 1408 B payload, rkey=0xDEADBEEF, remote_offset=0x10000, imm=0xAB (header only):
+static const uint8_t TT_GOLDEN_WRITE_IMM_HDR[32] = {0x11, 0x11, 0x01, 0x00, 0x80, 0x05, 0x00, 0x00, 0x78, 0x56, 0x34,
+                                                    0x12, 0xEF, 0xBE, 0xAD, 0xDE, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+                                                    0x00, 0x00, 0xAB, 0x00, 0x00, 0x00, 0x4F, 0x22, 0xD1, 0x06};
+
+// §7.5 ACK, cumulative ack=0x12345677 (header only, length=0):
+static const uint8_t TT_GOLDEN_ACK_HDR[32] = {0x40, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x77, 0x56, 0x34,
+                                              0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                              0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x88, 0x11, 0xEE, 0xFF};
