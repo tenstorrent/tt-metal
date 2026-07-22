@@ -64,9 +64,12 @@ def generate_qsr_pack_combinations(
 
     Args:
         formats_list: List of input/output format pairs
+        is_perf: Restrict combinations to SyncHalf, NoRelu, a 16x16 tile,
+            and a 32x32 input for performance measurements.
 
     Returns:
-        List of (format, dest_acc, input_dimensions, relu_type) tuples
+        List of (format, dest_acc, dest_sync, input_dimensions, relu_type,
+        tile_dimensions) tuples.
     """
 
     def is_supported_format_conversion(in_fmt, out_fmt):
@@ -136,11 +139,10 @@ def generate_qsr_pack_combinations(
         for dest_acc in get_dest_acc_modes(in_fmt):
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
                 if is_perf:
-                    tile_dims = (16, 16)
+                    tile_dims = MX_SUPPORTED_TILE_SIZES[0]
                     if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
                         continue
-                    tile_shape = construct_tile_shape(tile_dims)
-                    dimensions = [32, 32]
+                    input_dimensions = [32, 32]  # [rows, columns]
                     for dest_sync in dest_sync_modes:
                         for relu_type in relu_types:
                             combinations.append(
@@ -148,7 +150,7 @@ def generate_qsr_pack_combinations(
                                     fmt,
                                     dest_acc,
                                     dest_sync,
-                                    runtime(dimensions),
+                                    runtime(input_dimensions),
                                     runtime(relu_type),
                                     runtime(tile_dims),
                                 )
