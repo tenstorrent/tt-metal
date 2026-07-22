@@ -1345,6 +1345,19 @@ def _mode_rank(mode: str) -> int:
     return _FULLPIPE_MODE_RANK.get(mode, 1)
 
 
+def _track_mode(mode: str, cq: int) -> str:
+    """Collapse a trace+2cq reading down to trace+1cq inside the 1-CQ track (cq<2).
+
+    In the 1-CQ track a 2-CQ replay is not extra fidelity, so recording it as
+    trace+2cq would pin the baseline one rank above the level the track can ever
+    re-reach — a one-off 2-CQ reading would then lock the gate into a permanent
+    'degraded' veto that skips the baseline-rewrite branch and never clears. A real
+    eager fallback (rank 0) is left untouched so genuine trace loss still degrades."""
+    if cq < 2 and mode == "trace+2cq":
+        return "trace+1cq"
+    return mode
+
+
 _SIGNPOST_PREFIX = "PERF_BLOCK_SIGNPOST:"
 
 
@@ -1533,7 +1546,7 @@ def check_full_pipeline_latency() -> dict:
     if ms is None:
         return _emit_fullpipe({"status": "crash", "error": err, "cq": cq})
     metric = "trace_per_token_ms" if method == "trace" else "eager_full_pipeline_ms"
-    mode = _fullpipe_mode(method, path)
+    mode = _track_mode(_fullpipe_mode(method, path), cq)
     base_path = _FULLPIPE_BASELINE_PATH if cq >= 2 else _FULLPIPE_BASELINE_1CQ_PATH
     cq_note = (
         "trace+1cq (robust per-iteration signal): validate/bank compute-op wins here — it always engages "
@@ -1557,7 +1570,7 @@ def check_full_pipeline_latency() -> dict:
         except Exception:  # noqa: BLE001
             base = {}
     best = float(base.get("full_pipeline_ms", 0.0) or 0.0)
-    base_mode = base.get("mode") or _fullpipe_mode(base.get("method", "eager"), None)
+    base_mode = _track_mode(base.get("mode") or _fullpipe_mode(base.get("method", "eager"), None), cq)
     if best > 0 and _mode_rank(mode) < _mode_rank(base_mode):
         return _emit_fullpipe(
             {

@@ -85,6 +85,49 @@ def test_fidelity_upgrade_rebaselines(tmp_path, monkeypatch):
     assert r["status"] == "ok" and r["mode"] == "trace+2cq"
 
 
+def test_track_mode_collapses_2cq_in_1cq_track():
+    # In the 1-CQ track a 2cq reading is not extra fidelity -> collapse to 1cq.
+    assert perf_mcp._track_mode("trace+2cq", 1) == "trace+1cq"
+    assert perf_mcp._track_mode("trace+1cq", 1) == "trace+1cq"
+    assert perf_mcp._track_mode("trace", 1) == "trace"
+    assert perf_mcp._track_mode("eager", 1) == "eager"
+    # The 2-CQ bookend track keeps 2cq as the top rank.
+    assert perf_mcp._track_mode("trace+2cq", 2) == "trace+2cq"
+
+
+def test_stale_2cq_entry_in_1cq_file_does_not_veto(tmp_path, monkeypatch):
+    # THE BUG: a leftover 1cq baseline pinned at trace+2cq (rank 2) used to veto every
+    # live trace reading (rank 1) forever, because the degraded branch returns before the
+    # rewrite. _track_mode collapses the stale 2cq entry to 1cq so the live reading banks.
+    monkeypatch.setattr(perf_mcp, "_FULLPIPE_BASELINE_PATH", tmp_path / "base.json")
+    monkeypatch.setattr(perf_mcp, "_FULLPIPE_BASELINE_1CQ_PATH", tmp_path / "base_1cq.json")
+    monkeypatch.setattr(perf_mcp, "_FULLPIPE_TARGET_MS", 0.0)
+    (tmp_path / "base_1cq.json").write_text(
+        json.dumps({"full_pipeline_ms": 80.0, "method": "trace", "mode": "trace+2cq"})
+    )
+    monkeypatch.setenv("PERF_MCP_FULLPIPE_CQ", "1")
+    r1 = _drive(monkeypatch, 3.5392, "trace", "trace")
+    assert r1["status"] == "ok"
+    r2 = _drive(monkeypatch, 3.3784, "trace", "trace")
+    assert r2["status"] == "ok" and r2["delta_pct"] is not None and r2["delta_pct"] < 0
+
+
+def test_reset_clears_both_baseline_files(tmp_path, monkeypatch):
+    import importlib.util as _u
+
+    spec = _u.spec_from_file_location(
+        "cc_run_reset", str(Path(__file__).resolve().parents[1] / "cc_optimize" / "run.py")
+    )
+    run = _u.module_from_spec(spec)
+    spec.loader.exec_module(run)
+    monkeypatch.setattr(run.tempfile, "gettempdir", lambda: str(tmp_path))
+    for name in ("perf_mcp_full_pipeline_baseline.json", "perf_mcp_full_pipeline_baseline_1cq.json"):
+        (tmp_path / name).write_text("{}")
+    run._reset_fullpipe_baselines()
+    assert not (tmp_path / "perf_mcp_full_pipeline_baseline.json").exists()
+    assert not (tmp_path / "perf_mcp_full_pipeline_baseline_1cq.json").exists()
+
+
 def test_budget_guidance_present_only_when_2cq(monkeypatch):
     monkeypatch.setenv("TT_PERF_TRACE", "1")
     monkeypatch.setenv("TT_PERF_NUM_CQ", "2")

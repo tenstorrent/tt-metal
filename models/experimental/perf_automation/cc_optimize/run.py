@@ -282,6 +282,24 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
     return {"can_stop": "CANSTOP=True" in out, "halt": "HALT=True" in out, "reason": reason}
 
 
+def _reset_fullpipe_baselines() -> None:
+    """Delete BOTH full-pipeline baseline files at task start so a fresh optimize
+    never inherits a stale best-so-far from a previous model, module, or run.
+
+    The 1-CQ file (`..._1cq.json`) is the one compute wins are actually banked
+    against; clearing only the 2-CQ twin (the old behaviour) left the 1-CQ file to
+    persist across runs, where an old higher-rank entry would veto every candidate
+    for the whole run without ever being overwritten."""
+    for _name in (
+        "perf_mcp_full_pipeline_baseline.json",
+        "perf_mcp_full_pipeline_baseline_1cq.json",
+    ):
+        try:
+            (Path(tempfile.gettempdir()) / _name).unlink()
+        except Exception:
+            pass
+
+
 def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> float | None:
     """Measure the FULL-model end-to-end (ALL 52 layers, no tracy, prefill + 1 decode) ONCE and print it
     with `label` (BEFORE / AFTER). Returns end_to_end_ms or None. This is the whole-model SCOREBOARD, run
@@ -1712,10 +1730,7 @@ def optimize_pipeline(
     prompt = (_HITL_PROMPT if hitl else _PROMPT).format(model=model_name, task=task, metric=metric)
     start_sha = _git(repo_root, "rev-parse", "HEAD")
     mcp_env = cfg["mcpServers"]["perf-mcp"]["env"]
-    try:
-        (Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline.json").unlink()
-    except Exception:
-        pass
+    _reset_fullpipe_baselines()
     before_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "BEFORE")
     rounds, can_stop, halted = 0, False, False
     stall_sec = int(os.environ.get("PERF_MCP_ROUND_STALL_SEC", "600") or "600")
