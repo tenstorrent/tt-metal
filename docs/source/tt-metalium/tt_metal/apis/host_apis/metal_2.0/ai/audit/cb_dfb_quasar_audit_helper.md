@@ -1,5 +1,7 @@
 # CB / DFB Kernel Audit (Quasar uplift)
 
+> ⚠ **Doing a Gen1 Metal 2.0 CB→DFB port?** This is **not** your file — use the [Metal 2.0 port recipe](../port/metal2_port.md) (and its [host/spec audit](metal2_audit.md)). This doc audits kernel buffers for the **later, separate Quasar-uplift** step; its verdicts are **Gen2 (Quasar)** and can be the *opposite* of the correct Gen1 action — e.g. a DM self-loop is the sanctioned Gen1 port shape, but is rejected here on Gen2.
+
 > **Status:** Living document (2026-07-20). **Standalone device-side audit** — classifies **kernel** `CircularBuffer` **or** `DataflowBuffer` usage (same Classes 1–6) per op or ProgramFactory for Quasar-uplift readiness. On WH/BH, an unported op still has CBs; a Metal 2.0–ported op already has DFBs (often with `evil_`* mechanical parity). **Type name does not change the class** — classify by usage pattern. Mechanical CB→DFB on WH/BH does not block; redesign debt is deferred to the **Quasar uplift** step. Does **not** audit host `ProgramSpec`, binding multiplicity, or factory refactors (`[audit/metal2_audit.md](metal2_audit.md)` covers host/spec). **Scope is machine-discovered** from program factories and PR diffs — see [Automated scope discovery](#automated-scope-discovery).
 >
 > **Companion docs:** [CB→DFB API whitelist](../shared/cb_dfb_api_whitelist.md) (CB API → DFB / evil_get|set mapping), [CB→DFB flowchart](../../human/CB-to-DFB-flowchart.svg).
@@ -53,7 +55,7 @@
 
 **Why this exists.** Legacy gave kernel authors essentially **one** primitive for “a chunk of L1 the kernel touches”: the CircularBuffer. So they used it for everything — genuine producer→consumer FIFOs, private scratch, base-pointer windows onto resident tensors, and output staging nothing ever drains. On Gen1 (WH/BH), kernels could also treat `LocalCBInterface` as a mutable struct (`fifo_page_size`, rewrite `fifo_rd_ptr`, skip credits). That interface is meant to be private; touching `get_local_cb_interface(...).<field>` may compile on Gen1 but is **un-portable** or **silent-wrong** on Quasar (different fields). Metal 2.0 splits the CB kitchen-sink apart (`DataflowBuffer`, scratchpad, local `TensorAccessor`), so the auditor must decide **what each legacy “CB” actually is**.
 
-**Audience:** Humans and AI agents auditing **device kernels** (`*/kernels/`*, `kernel_util/`) for Metal 2.0 / Quasar readiness — whether buffers are still `CircularBuffer` or already `DataflowBuffer` on WH/BH. Run **standalone** — no host audit prerequisite.
+**Audience:** Humans and AI agents auditing **device kernels** (`*/kernels/`*, `kernel_util/`) for **Quasar-uplift** readiness — whether buffers are still `CircularBuffer` or already `DataflowBuffer` on WH/BH. Run **standalone** — no host audit prerequisite.
 
 **Operating principle:** Classify each CB/DFB usage along axes that **must not be fused**:
 
