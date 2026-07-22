@@ -806,13 +806,13 @@ The semaphore-ID RTA is gone.
 ```cpp
 // Host side:
 KernelSpec compute{
-    .compile_time_args = { /* ... */ },
     .compiler_options = {.defines = do_scale
         ? Table<std::string, std::string>{{"DO_SCALE", "1"}}
         : Table<std::string, std::string>{}},
     .dfb_bindings = do_scale
         ? Group<DFBBinding>{INPUT, OUTPUT, SCALED}
         : Group<DFBBinding>{INPUT, OUTPUT},
+    .compile_time_args = { /* ... */ },
 };
 
 // Kernel side:
@@ -1014,8 +1014,6 @@ const NodeCoord node{0, 0};
 KernelSpec reader{
     .unique_id = READER,
     .source = "kernels/reader.cpp",
-    .compile_time_args = {{"page_size", page_size}},
-    .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
     .dfb_bindings = {{
         .dfb_spec_name = DFB,
         .accessor_name = "out_dfb",
@@ -1025,14 +1023,14 @@ KernelSpec reader{
         .tensor_parameter_name = INPUT,
         .accessor_name = "input",   // kernel accesses as `tensor::input`
     }},
+    .compile_time_args = {{"page_size", page_size}},
+    .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
     .hw_config = CreateReader1xxDataMovementConfig(),
 };
 
 KernelSpec writer{
     .unique_id = WRITER,
     .source = "kernels/writer.cpp",
-    .compile_time_args = {{"page_size", page_size}},
-    .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
     .dfb_bindings = {{
         .dfb_spec_name = DFB,
         .accessor_name = "in_dfb",
@@ -1042,6 +1040,8 @@ KernelSpec writer{
         .tensor_parameter_name = OUTPUT,
         .accessor_name = "output",  // kernel accesses as `tensor::output`
     }},
+    .compile_time_args = {{"page_size", page_size}},
+    .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
     .hw_config = CreateWriter1xxDataMovementConfig(),
 };
 
