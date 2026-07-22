@@ -107,21 +107,26 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const uint32_t n_chunks = static_cast<uint32_t>(chunks);
     const uint32_t out_ntc = Nt_r / n_chunks;  // per-chunk N tiles (validated divisible + tile-aligned)
 
-    // Test-only diagnostic ablations: mask 0 (public path) => all three define maps are EMPTY, so the
-    // compile is byte-identical to production. Each DIAG_* define is scoped to the kernel(s) that #ifdef it.
+    // Test-only diagnostic ablations. mask 0 adds NO *DIAG_* define; each DIAG_* define is scoped to the
+    // kernel(s) that #ifdef it. NOTE: mask 0 is no longer unconditionally byte-identical to a chain build —
+    // the internal production reduction strategy below sets the RSCATTER define (reduce-scatter) for the
+    // gate-selected shapes even at mask 0. Non-gated shapes at mask 0 remain the byte-identical chain compile.
     const uint32_t diag = operation_attributes.diag_mask;
     std::map<std::string, std::string> rdefs;  // in1 reader
     std::map<std::string, std::string> wdefs;  // in0 ring/reduce writer
     std::map<std::string, std::string> ddefs;  // compute (added to cdefs below)
 
     // ---- Internal production reduction strategy (non-public; NOT a diag mask). ----
-    // Select ring REDUCE-SCATTER (vs the linear chain) on the exposed-reduction WIN regime measured across the
-    // corpus: shallow-K (Kt<=64), Pk>=4, adequate per-core output width (Nt>=32 and N_sub>=2), and each output
-    // sub-block tile-partitionable into Pk chunks (T=M_block*N_sub, T%Pk==0, T>=Pk). There it is a measured
-    // 5-9% win with ZERO regressions; the chain is kept everywhere else (Pk<4 = chain already ~1 hop; deep-K =
-    // read-bound, reduction hidden, RS can regress; narrow-N / N_sub<2 = no exposed tail). Unfused + single
-    // output chunk only (reduce-scatter v1). DIAG_FORCE_CHAIN forces the chain (A/B + bit-identity baselines).
-    // Output is PCC-preserving (>=0.999) but NOT bit-identical to the chain (reassociated K-sum).
+    // The split-K reduction TOPOLOGY (chain vs reduce-scatter) is an INTERNAL ALGORITHM CHOICE, not part of the
+    // config contract: this gate is evaluated on the RESOLVED (Mt,Kt,Nt,cfg) and therefore fires for ANY config
+    // satisfying the predicate below, whether auto-selected (config=None) OR manually supplied — the factory
+    // cannot (and need not) distinguish them. Select ring REDUCE-SCATTER (vs the linear chain) on the exposed-
+    // reduction WIN regime measured across the corpus: shallow-K (Kt<=64), Pk>=4, adequate per-core output width
+    // (Nt>=32 and N_sub>=2), and each output sub-block tile-partitionable into Pk chunks (T=M_block*N_sub,
+    // T%Pk==0, T>=Pk). There it is a measured 5-9% win with ZERO regressions; the chain is kept everywhere else
+    // (Pk<4 = chain already ~1 hop; deep-K = read-bound, reduction hidden, RS can regress; narrow-N / N_sub<2 =
+    // no exposed tail). Unfused + single output chunk only (reduce-scatter v1). DIAG_FORCE_CHAIN forces the
+    // chain (A/B + bit-identity baselines). Output is PCC-preserving (>=0.999) but NOT bit-identical (reassoc).
     const uint32_t rs_T = geo.M_block_capacity * geo.N_sub;
     const bool rs_gate = (Pk >= 4u) && (Kt_r <= 64u) && (Nt_r >= 32u) && (geo.N_sub >= 2u) && (rs_T % Pk == 0u) &&
                          (rs_T >= Pk) && !has_bias && !has_ternary && !has_activation && (n_chunks == 1u);
