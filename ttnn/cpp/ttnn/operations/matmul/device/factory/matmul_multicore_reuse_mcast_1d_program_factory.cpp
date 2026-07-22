@@ -101,6 +101,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     std::optional<UnaryWithParam> fused_activation,
     const MeshTensor& in0_tensor,
     const MeshTensor& in1_tensor,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     ttsl::optional_reference<const MeshTensor> bias_tensor,
     const MeshTensor& out_tensor,
     const tt::tt_metal::Tile& in0_tile,
@@ -120,6 +121,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0}) {
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
+
+    const bool use_global_cb = global_cb.has_value();
+    const bool in1_is_locally_sharded = in1_is_sharded && !use_global_cb;
 
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -166,8 +170,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     uint32_t in0_aligned_tile_size =
         in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size =
-        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+    uint32_t in1_aligned_tile_size = (in1_is_locally_sharded || use_global_cb)
+                                         ? in1_single_tile_size
+                                         : tt::align(in1_single_tile_size, dram_alignment);
     // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
     // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
     // Mirrors in0/in1 above. Sharded bias is backed by the L1 tensor buffer and keeps its
@@ -192,7 +197,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     if (B * num_blocks > 1) {
         in1_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    if (in1_is_sharded) {
+    if (in1_is_locally_sharded) {
         uint32_t in1_shard_height_in_tiles = in1_tensor.shard_spec()->shape[0] / in1_tile.get_height();
         in1_CB_tiles = per_core_N * in1_shard_height_in_tiles;
     }
@@ -256,6 +261,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     CoreRangeSet all_cores_with_work =
         num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, matmul_core_rect, row_major);
+    if (use_global_cb) {
+        TT_FATAL(
+            global_cb->receiver_cores() == all_cores_with_work,
+            "mcast_in0 global_cb receivers {} must exactly match output worker cores {}",
+            global_cb->receiver_cores(),
+            all_cores_with_work);
+    }
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
     uint32_t in0_mcast_receiver_num_dests = std::min(
@@ -531,8 +543,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
-    if (in1_is_sharded) {
+    if (in1_is_locally_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
+    }
+    if (use_global_cb) {
+        mm_kernel_in1_sender_writer_defines["ENABLE_GLOBAL_CB"] = "1";
     }
 
     if (bias_is_sharded) {
@@ -799,23 +814,42 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         in0_CB_size);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
-    tt_metal::CircularBufferConfig src1_cb_config =
-        tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_aligned_tile_size)
-            .set_tile_dims(src1_cb_index, in1_tile);
-
-    if (in1_is_sharded) {
-        src1_cb_config = src1_cb_config.set_globally_allocated_address(in1_tensor);
+    tt::tt_metal::CBHandle cb_src1 = 0;
+    if (use_global_cb) {
+        const uint32_t remote_cb_index = tt::CBIndex::c_31;
+        const uint32_t in1_block_size_bytes = in1_block_tiles * in1_single_tile_size;
+        TT_FATAL(
+            global_cb->size() % in1_block_size_bytes == 0,
+            "mcast_in0 global_cb size {} must be a multiple of in1 K-block size {}",
+            global_cb->size(),
+            in1_block_size_bytes);
+        tt_metal::CircularBufferConfig remote_cb_config(global_cb->size());
+        remote_cb_config.remote_index(remote_cb_index)
+            .set_page_size(in1_block_size_bytes)
+            .set_data_format(in1_data_format);
+        remote_cb_config.index(src1_cb_index)
+            .set_page_size(in1_single_tile_size)
+            .set_data_format(in1_data_format)
+            .set_tile_dims(in1_tile);
+        cb_src1 =
+            tt_metal::experimental::CreateCircularBuffer(program, all_cores_with_work, remote_cb_config, *global_cb);
+    } else {
+        tt_metal::CircularBufferConfig src1_cb_config =
+            tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
+                .set_page_size(src1_cb_index, in1_aligned_tile_size)
+                .set_tile_dims(src1_cb_index, in1_tile);
+        if (in1_is_locally_sharded) {
+            src1_cb_config = src1_cb_config.set_globally_allocated_address(in1_tensor);
+        }
+        cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     }
-
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
         src1_cb_index,
         in1_single_tile_size,
-        in1_CB_size / in1_single_tile_size,
-        in1_CB_size);
+        use_global_cb ? global_cb->size() / in1_single_tile_size : in1_CB_size / in1_single_tile_size,
+        use_global_cb ? global_cb->size() : in1_CB_size);
 
     uint32_t src2_cb_index = tt::CBIndex::c_2;
     tt::tt_metal::CBHandle cb_src2 = 0;
@@ -5257,6 +5291,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             fused_activation,
             in0_tensor,
             in1_tensor,
+            global_cb,
             bias_mesh_tensor,
             output,
             in0_tile,
