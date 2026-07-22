@@ -106,10 +106,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
         std::uint32_t y_stride_external             = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
-        // Quasar fused tilize emits 1 SrcA dvalid per `_llk_unpack_tilize_` call (BLOCK_RT_DIM
-        // calls per outer loop). With is_fp32_dest_acc_en it also pulses SrcB via UNPACR_NOP
-        // because FP32 datacopy uses ELWADD on SrcA+SrcB.
-        const std::uint32_t total_tilize_dvalids = LOOP_FACTOR * BLOCK_RT_DIM;
+        // Quasar fused tilize emits one SrcA dvalid per tile: BLOCK_CT_DIM dvalids per
+        // `_llk_unpack_tilize_` call and BLOCK_RT_DIM calls per outer loop. With
+        // is_fp32_dest_acc_en it also pulses SrcB because FP32 datacopy uses ELWADD.
+        const std::uint32_t total_tilize_dvalids = LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM;
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -279,7 +279,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
+            volatile std::uint32_t* cfg                 = (volatile std::uint32_t*)TENSIX_CFG_BASE;
             cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
         else
