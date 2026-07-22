@@ -383,6 +383,10 @@ ALWI void tilize_block(
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
     for (uint32_t t = 0; t < block; t++) {
+        // DEBUG (leave in until debugged): MATH-thread per-tile marker (SINGLE parens — DPRINT's commas are
+        // inside its own parens, so MATH() gets one arg). The LAST TZT printed before the 0x19 is the tile MATH
+        // died on: a clean cutoff (e.g. t=16) points at a Quasar SrcA-capacity limit on the single wide unpack.
+        MATH(DPRINT("TZT t={} block={}\n", (uint32_t)t, (uint32_t)block));
         // Acquire dst
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
