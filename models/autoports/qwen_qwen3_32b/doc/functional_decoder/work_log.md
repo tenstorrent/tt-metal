@@ -160,4 +160,5 @@ context evidence, syntax, JSON, and stage scope. No required work remained.
 ### Checkpoints
 
 - Starting checkpoint: `42a961bdbf7`
-- Functional-decoder stage checkpoint: appended after commit creation.
+- Functional-decoder stage checkpoint:
+  `606ab816a33692f0b1f0c22105dadc235b37ba12`
