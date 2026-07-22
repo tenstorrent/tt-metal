@@ -274,6 +274,9 @@ extern "C" void __emule_fiber_unlock(void) { efib::FiberScheduler::instance().un
 extern "C" void __emule_fiber_park_locked(const void* key) {
     efib::FiberScheduler::instance().park_locked(key);
 }
+extern "C" void __emule_fiber_park_locked_socket(const void* key) {
+    efib::FiberScheduler::instance().park_locked_socket(key);
+}
 extern "C" void __emule_fiber_wake(const void* key) { efib::FiberScheduler::instance().wake(key); }
 extern "C" void __emule_fiber_yield(void) { efib::FiberScheduler::instance().yield(); }
 extern "C" void __emule_fiber_defer_to_quiescence(void) { efib::FiberScheduler::instance().quiescence_park(); }
@@ -3170,6 +3173,12 @@ static bool g_emule_mesh_defer = false;
 static std::vector<std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>>>>
     g_mesh_dfb_keep;
 
+// [HOST-INTERLEAVED SOCKET] Set when run_mesh_dispatch's run_persistent() returned HostWait: the mesh
+// run is parked awaiting host socket I/O, with g_mesh_dfb_keep + the scheduler's fibers kept alive.
+// pump_device() drives it forward per host socket call; the pump that completes clears this + the mesh
+// keepalives (the cleanup run_mesh_dispatch deferred). See tt-emule docs/socket-emulation.md §7.
+static bool g_emule_host_wait = false;
+
 // Resolved-program cache — emule's analogue of silicon's is_compiled(): collect + JIT compile + resolve
 // run ONCE per program (keyed by ProgramId); every device dispatches against the shared read-only result.
 // LRU-bounded as a safety net. See tt-emule docs/fiber-engine.md.
@@ -3474,17 +3483,45 @@ void run_mesh_dispatch() {
 #if defined(__x86_64__) && defined(__linux__)
     EmuleSigfpeGuard sigfpe_guard;  // the actual kernel run happens here, across all chips
 #endif
-    // Reset defer + free the kept per-device state even if the run throws.
-    struct Cleanup {
-        ~Cleanup() {
-            g_emule_mesh_defer = false;
-            g_mesh_dfb_keep.clear();
-        }
-    } cleanup;
-    // All devices' fibers were registered (spawned) during the per-device register phase;
-    // run them concurrently on the worker pool in one pass. Each fiber's ctx carries its
-    // device's core_map/bridge_dram, so cross-chip NOC resolution stays correct.
-    tt::tt_metal::emule_fiber::FiberScheduler::instance().run_until_idle();
+    // All devices' fibers were registered (spawned) during the per-device register phase; run them
+    // concurrently on the worker pool in one pass. Each fiber's ctx carries its device's
+    // core_map/bridge_dram, so cross-chip NOC resolution stays correct. run_persistent (vs
+    // run_until_idle) lets a host-interleaved socket program quiesce back to the host mid-run.
+    tt::tt_metal::emule_fiber::RunOutcome oc = tt::tt_metal::emule_fiber::RunOutcome::Completed;
+    try {
+        oc = tt::tt_metal::emule_fiber::FiberScheduler::instance().run_persistent();
+    } catch (...) {
+        // Completed-with-exception (kernel throw / quiescent deadlock): free the kept state, rethrow.
+        g_emule_mesh_defer = false;
+        g_mesh_dfb_keep.clear();
+        throw;
+    }
+    if (oc == tt::tt_metal::emule_fiber::RunOutcome::HostWait) {
+        // A kernel is parked on a host-fed socket wait. Keep g_mesh_dfb_keep + the scheduler's fibers
+        // ALIVE and return to the host; it streams socket tokens and pump_device() drives the run to
+        // completion, which runs the deferred cleanup below (see pump_device()).
+        g_emule_host_wait = true;
+        return;
+    }
+    // Completed synchronously (no host-fed socket wait): the original register-drain cleanup.
+    g_emule_mesh_defer = false;
+    g_mesh_dfb_keep.clear();
+}
+
+void pump_device() {
+    // Drive a parked (run_persistent) mesh run forward one scheduler quantum. No-op unless a run is
+    // parked in HostWait (set by run_mesh_dispatch). The host advanced a socket credit word by a raw
+    // L1 store, so pump() blanket-re-polls the parked fibers to re-check predicates. When every fiber
+    // reaches Done the pump returns Completed — run the mesh cleanup run_mesh_dispatch deferred.
+    if (!g_emule_host_wait) {
+        return;
+    }
+    auto oc = tt::tt_metal::emule_fiber::FiberScheduler::instance().pump();
+    if (oc == tt::tt_metal::emule_fiber::RunOutcome::Completed) {
+        g_emule_host_wait = false;
+        g_emule_mesh_defer = false;
+        g_mesh_dfb_keep.clear();
+    }
 }
 
 }  // namespace tt::tt_metal::emule
