@@ -26,6 +26,16 @@ using namespace nb::literals;
 namespace ttnn::experimental::detail {
 
 void bind_yuv_conversion(nb::module_& mod) {
+    // Standard conversion selectors.
+    nb::enum_<YUVColorSpace>(mod, "YUVColorSpace")
+        .value("BT601", YUVColorSpace::BT601)
+        .value("BT709", YUVColorSpace::BT709)
+        .value("BT2020", YUVColorSpace::BT2020);
+    nb::enum_<RGBRange>(mod, "RGBRange")
+        .value("MinusOneToOne", RGBRange::MinusOneToOne)
+        .value("ZeroToOne", RGBRange::ZeroToOne);
+    nb::enum_<YUVRange>(mod, "YUVRange").value("Full", YUVRange::Full).value("Limited", YUVRange::Limited);
+
     // Expose the YUVCoefficients struct to Python so callers can construct it.
     nb::class_<prim::YUVCoefficients>(mod, "YUVCoefficients")
         .def(nb::init<>())
@@ -55,25 +65,38 @@ void bind_yuv_conversion(nb::module_& mod) {
     mod.def(
         "yuv_conversion",
         [](const Tensor& input,
-           const prim::YUVCoefficients& coefficients,
+           YUVColorSpace color_space,
+           RGBRange input_range,
+           YUVRange output_range,
+           const std::optional<prim::YUVCoefficients>& coefficients,
            const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
-            return ttnn::experimental::yuv_conversion(input, coefficients, memory_config);
+            return ttnn::experimental::yuv_conversion(
+                input, color_space, input_range, output_range, coefficients, memory_config);
         },
         "input"_a,
-        "coefficients"_a,
         nb::kw_only(),
+        "color_space"_a = YUVColorSpace::BT601,
+        "input_range"_a = RGBRange::MinusOneToOne,
+        "output_range"_a = YUVRange::Limited,
+        "coefficients"_a = nb::none(),
         "memory_config"_a = nb::none(),
         R"doc(
-Convert a CHWT bfloat16 tensor (C=3, values in [-1, 1]) to YUV 4:2:0 uint8.
+Convert a CHWT bfloat16 tensor (C=3, RGB) to YUV 4:2:0 uint8.
 
 Returns a tuple of three row-major uint8 tensors:
   (Y, U, V)  with shapes (1,H,W,T), (1,H/2,W/2,T), (1,H/2,W/2,T).
 
 Args:
     input: CHWT bfloat16 tensor on device, C=3.  Must be interleaved.
-    coefficients: YUVCoefficients with per-channel [wR, wG, wB, offset] rows.
 
 Keyword Args:
+    color_space: YUVColorSpace (BT601/BT709/BT2020). Default BT601.
+    input_range: RGBRange of the input samples (MinusOneToOne or ZeroToOne).
+        Default MinusOneToOne.
+    output_range: YUVRange of the output (Full or Limited). Default Limited.
+    coefficients: Optional explicit YUVCoefficients (3x4 [wR, wG, wB, offset]
+        rows). If given, overrides color_space/input_range/output_range — for
+        power users needing a custom matrix.
     memory_config: Output memory configuration.  Defaults to the input memory
         config.  Must be interleaved -- sharded output is not supported.
 )doc");

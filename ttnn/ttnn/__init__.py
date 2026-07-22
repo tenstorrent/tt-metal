@@ -560,11 +560,17 @@ experimental.disaggregation = disaggregation
 
 # YUV conversion op
 from ttnn._ttnn.operations.experimental import YUVCoefficients
+from ttnn._ttnn.operations.experimental import YUVColorSpace
+from ttnn._ttnn.operations.experimental import RGBRange
+from ttnn._ttnn.operations.experimental import YUVRange
 from ttnn._ttnn.operations.experimental import yuv_conversion
 from ttnn._ttnn.operations.experimental import yuv_bt601_coefficients
 from ttnn._ttnn.operations.experimental import yuv_bt709_coefficients
 
 experimental.YUVCoefficients = YUVCoefficients
+experimental.YUVColorSpace = YUVColorSpace
+experimental.RGBRange = RGBRange
+experimental.YUVRange = YUVRange
 experimental.yuv_conversion = yuv_conversion
 experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
 experimental.yuv_bt709_coefficients = yuv_bt709_coefficients

@@ -82,7 +82,7 @@ class TestYUVConversion:
             cb=list(_CB_COEFF),
             cr=list(_CR_COEFF),
         )
-        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients)
+        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients)
         ttnn.synchronize_device(device)
 
         dev_Y = ttnn.to_torch(tt_Y)
@@ -134,7 +134,7 @@ class TestYUVConversion:
             gen = torch.Generator().manual_seed(seed)
             cpu = torch.rand(3, H, W, T, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
             tt_in = ttnn.from_torch(cpu, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients)
+            tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients)
             ttnn.synchronize_device(device)
             outs = (ttnn.to_torch(tt_Y), ttnn.to_torch(tt_Cb), ttnn.to_torch(tt_Cr))
             return cpu, tt_in, outs
@@ -168,7 +168,7 @@ class TestYUVConversion:
             cpu = torch.full((3, H, W, T), fill, dtype=torch.bfloat16)
             tt_in = ttnn.from_torch(cpu, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
             coefficients = ttnn.experimental.YUVCoefficients(y=list(_Y_COEFF), cb=list(_CB_COEFF), cr=list(_CR_COEFF))
-            tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients)
+            tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients)
             ttnn.synchronize_device(device)
 
             for name, t in [("Y", tt_Y), ("Cb", tt_Cb), ("Cr", tt_Cr)]:
@@ -196,7 +196,54 @@ class TestYUVValidation:
         sharded_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
         with expect_error(RuntimeError, "Sharded output is not supported"):
-            ttnn.experimental.yuv_conversion(tt_in, coefficients, memory_config=sharded_cfg)
+            ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients, memory_config=sharded_cfg)
+
+
+class TestYUVColorSpaceAPI:
+    """The colorspace/range front-end derives the coefficients internally."""
+
+    def test_bt601_limited_matches_reference(self, device):
+        # Default selectors (BT601, [-1,1], Limited) must reproduce the BT601
+        # limited-range coefficients the host reference uses.
+        H, W, T = 64, 64, 64
+        gen = torch.Generator().manual_seed(7)
+        cpu = torch.rand(3, H, W, T, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
+        ref_Y, ref_Cb, ref_Cr = _host_yuv_reference(cpu)
+
+        tt_in = ttnn.from_torch(cpu, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        y, cb, cr = ttnn.experimental.yuv_conversion(
+            tt_in,
+            color_space=ttnn.experimental.YUVColorSpace.BT601,
+            input_range=ttnn.experimental.RGBRange.MinusOneToOne,
+            output_range=ttnn.experimental.YUVRange.Limited,
+        )
+        ttnn.synchronize_device(device)
+        assert (ttnn.to_torch(y).squeeze(0).int() - ref_Y.int()).abs().max().item() <= 1, "Y != BT601 reference"
+        assert (ttnn.to_torch(cb).squeeze(0).int() - ref_Cb.int()).abs().max().item() <= 2, "Cb != BT601 reference"
+        assert (ttnn.to_torch(cr).squeeze(0).int() - ref_Cr.int()).abs().max().item() <= 2, "Cr != BT601 reference"
+
+    def test_colorspaces_run_and_differ(self, device):
+        # Each colorspace produces valid uint8; BT601 and BT709 luma differ.
+        H, W, T = 64, 64, 64
+        gen = torch.Generator().manual_seed(11)
+        cpu = torch.rand(3, H, W, T, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
+        tt_in = ttnn.from_torch(cpu, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        luma = {}
+        for cs in (
+            ttnn.experimental.YUVColorSpace.BT601,
+            ttnn.experimental.YUVColorSpace.BT709,
+            ttnn.experimental.YUVColorSpace.BT2020,
+        ):
+            y, _, _ = ttnn.experimental.yuv_conversion(tt_in, color_space=cs)
+            ttnn.synchronize_device(device)
+            hy = ttnn.to_torch(y)
+            assert hy.dtype == torch.uint8 and hy.min().item() >= 0 and hy.max().item() <= 255
+            luma[cs] = hy
+
+        assert not torch.equal(
+            luma[ttnn.experimental.YUVColorSpace.BT601], luma[ttnn.experimental.YUVColorSpace.BT709]
+        ), "BT601 and BT709 luma should differ"
 
 
 _SWEEP_H = [2, 4, 6, 10, 32, 64, 180]
@@ -223,7 +270,7 @@ class TestYUVSweep:
 
         tt_in = ttnn.from_torch(cpu_bf16, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         coefficients = ttnn.experimental.YUVCoefficients(y=list(_Y_COEFF), cb=list(_CB_COEFF), cr=list(_CR_COEFF))
-        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients)
+        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients)
         ttnn.synchronize_device(device)
 
         dev_Y = ttnn.to_torch(tt_Y).squeeze(0)
@@ -266,12 +313,12 @@ class TestYUVPerformance:
 
         # Warmup
         for _ in range(3):
-            ttnn.experimental.yuv_conversion(tt_in, coefficients)
+            ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients)
         ttnn.synchronize_device(device)
 
         start = time.perf_counter()
         for _ in range(n_iters):
-            ttnn.experimental.yuv_conversion(tt_in, coefficients)
+            ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients)
             ttnn.synchronize_device(device)
         elapsed = time.perf_counter() - start
 
