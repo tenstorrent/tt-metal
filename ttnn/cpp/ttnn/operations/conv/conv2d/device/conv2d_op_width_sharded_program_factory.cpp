@@ -517,8 +517,16 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         0,
         0,
         0,
-        0,                              // activation reuse related arguments
-        static_cast<uint32_t>(false)};  // split_reader_cb_shared (not used in width sharded)
+        0,                             // activation reuse related arguments
+        static_cast<uint32_t>(false),  // 38: split_reader_cb_shared (not used in width sharded)
+        // 39: tile_pack_row_major. Width-sharded convs never use the TileRowMajor pack layout:
+        // auto_select_tile_pack_row_major and the caller-owns/pin INTERM-target class (the only two
+        // TRM triggers in the sharded factory) are HEIGHT_SHARDED-only, so width-sharded always packs
+        // SubblockMajor, exactly as on main. The migrated conv_bmm_tilize.cpp reads this arg
+        // unconditionally (kernel line 403), so it must be emitted here even though it is always false
+        // on this path. Omitting it made get_compile_time_arg_val(39) overflow the 39-element arg list
+        // and fail to JIT-compile every width-sharded conv (e.g. Segformer depthwise).
+        static_cast<uint32_t>(false)};  // 39: tile_pack_row_major (always SubblockMajor for width sharded)
 
     std::vector<uint32_t> activation_kernel_compile_args = {
         (uint32_t)stride_w,
@@ -568,7 +576,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
 
     if (config_tensors_in_dram) {
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
-        activation_kernel_compile_args.push_back(conv_reader_indices_buffer->address());
+        activation_kernel_compile_args.push_back(conv_reader_indices_buffer->address());  // smuggled-rta-ok
         activation_kernel_compile_args.push_back(conv_reader_indices_buffer->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(activation_kernel_compile_args);
     }
