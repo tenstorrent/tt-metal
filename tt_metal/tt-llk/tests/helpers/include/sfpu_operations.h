@@ -108,7 +108,7 @@
 #include "sfpu/ckernel_sfpu_hardtanh.h"
 #include "sfpu/ckernel_sfpu_isinf_isnan.h"
 #include "sfpu/ckernel_sfpu_log.h"
-#include "sfpu/ckernel_sfpu_negative.h"
+#include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
 #include "sfpu/ckernel_sfpu_silu.h"

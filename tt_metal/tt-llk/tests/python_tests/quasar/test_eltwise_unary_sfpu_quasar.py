@@ -338,6 +338,12 @@ def prepare_inputs_for_operation(
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Neg:
+        # Negation is exact for any representable value; span both signs (mirrors sfpu_domains' Neg spec).
+        min_val = -10.0
+        max_val = 10.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
     # else: keep src_A as-is
 
     return src_A
@@ -583,6 +589,7 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Sigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
 ] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_OPS]
 

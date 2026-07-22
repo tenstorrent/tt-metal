@@ -18,6 +18,7 @@
 #include "experimental/ckernel_sfpu_abs.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
+#include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
@@ -205,6 +206,10 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     else if constexpr (OPERATION == SfpuType::square)
     {
         _llk_math_eltwise_unary_sfpu_params_(calculate_square<ITERATIONS>, dst_index);
+    }
+    else if constexpr (OPERATION == SfpuType::negative)
+    {
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_negative_<false, ITERATIONS>, dst_index);
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
