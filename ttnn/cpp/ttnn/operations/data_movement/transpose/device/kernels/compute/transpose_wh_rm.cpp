@@ -135,7 +135,8 @@ void kernel_main() {
     CircularBuffer cb_tilize_buf(cb_tilize);
     CircularBuffer cb_out(cb_out_idx);
 
-    unary_op_init_common(cb_in, cb_out_idx);
+    compute_kernel_hw_startup(cb_in, cb_out_idx);
+    copy_init(cb_in);
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         // Tilize input (Ht rows × Wt tiles). Fp32Mode::Lossless keeps the full

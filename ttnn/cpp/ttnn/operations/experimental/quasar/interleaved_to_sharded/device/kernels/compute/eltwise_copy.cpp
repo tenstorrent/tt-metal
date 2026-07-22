@@ -15,8 +15,9 @@ void kernel_main() {
     // per-core via runtime args; in the typed model it is a named runtime argument.)
     uint32_t per_core_tile_cnt = get_arg(args::num_units);
 
-    unary_op_init_common(dfb::in0, dfb::out);
-    copy_tile_init(dfb::in0);
+    compute_kernel_hw_startup(dfb::in0, dfb::out);
+    copy_init(dfb::in0);
+    copy_init(dfb::in0);
 
     DataflowBuffer cb_in0(dfb::in0);
     DataflowBuffer cb_out(dfb::out);

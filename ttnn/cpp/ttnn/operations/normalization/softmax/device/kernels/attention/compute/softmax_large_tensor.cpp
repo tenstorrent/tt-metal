@@ -165,7 +165,7 @@ void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t b
     CircularBuffer cb_mask_padded_obj(cb_mask_padded);
     reconfig_data_format(cb_in, cb_mask_padded);
     pack_reconfig_data_format(cb_out);
-    copy_tile_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
+    copy_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
         tile_regs_acquire();
         cb_in_obj.wait_front(blk);
@@ -209,7 +209,7 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
     reconfig_data_format_srcb(cb_max);
     sub_bcast_cols_init_short(cb_in, cb_max);
 #else
-    copy_tile_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
+    copy_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
 #endif
     exp_tile_init<EXP_APPROX>();
     uint32_t loop = 0;
@@ -257,7 +257,7 @@ void reduce_cb(bool use_prev_reduce, uint32_t cb_length_t) {
                 // Load previous result into DST[1] and accumulate
                 CircularBuffer(cb_prev_out_id).wait_front(1);
                 reconfig_data_format_srca(cb_prev_out_id);
-                copy_tile_init(cb_prev_out_id);
+                copy_init(cb_prev_out_id);
                 copy_tile(cb_prev_out_id, 0, 1);
 
                 // Accumulate based on reduce type
@@ -348,7 +348,8 @@ void kernel_main() {
     CircularBuffer cb_recip_obj(cb_recip);
     CircularBuffer cb_mask_padded_obj(cb_mask_padded);
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
-    init_sfpu(cb_mask_padded, cb_mask_padded);
+    compute_kernel_hw_startup(cb_mask_padded, cb_mask_padded);
+    copy_init(cb_mask_padded);
 
     cb_max_scaler_obj.wait_front(1);  // comes from the reader
     cb_sum_scaler_obj.wait_front(1);  // comes from the reader
@@ -452,7 +453,7 @@ void kernel_main() {
         reconfig_data_format_srca(cb_sum_final);
         pack_reconfig_data_format(cb_sum_final, cb_recip);
         tile_regs_acquire();
-        copy_tile_init(cb_sum_final);
+        copy_init(cb_sum_final);
         copy_tile(cb_sum_final, 0, dst0);
 
         CircularBuffer(cb_sum_final).pop_front(1);

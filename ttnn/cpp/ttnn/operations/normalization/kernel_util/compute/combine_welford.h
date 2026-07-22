@@ -84,7 +84,7 @@ inline void combine_welford_partials(
         const float n_b_norm = static_cast<float>(n_b) / (n_a + n_b);
 
         // Copy x_b to dst1
-        copy_tile_to_dst_init_short(cb_partials.get_cb_id());
+        copy_init(cb_partials.get_cb_id());
         copy_tile(cb_partials.get_cb_id(), mean_cb_idx, tmp_dst1);
 
         // Compute delta = x_b - x_a, store in dst0
@@ -116,7 +116,7 @@ inline void combine_welford_partials(
         add_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
 
         // Copy var_b into dst0
-        copy_tile_to_dst_init_short(cb_partials.get_cb_id());
+        copy_init(cb_partials.get_cb_id());
         copy_tile(cb_partials.get_cb_id(), var_cb_idx, tmp_dst0);
 
         // Multiply var_b by n_b to get M2_b, store in dst0

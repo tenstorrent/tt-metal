@@ -33,7 +33,8 @@ void kernel_main() {
     CircularBuffer cb_tilize_exp(cb_tilize);
     CircularBuffer cb_out_exp(cb_out);
 
-    unary_op_init_common(cb_in, cb_out);
+    compute_kernel_hw_startup(cb_in, cb_out);
+    copy_init(cb_in);
 
     for (uint32_t block = start_block; block < end_block; block++) {
         // Tilize input via unpack and then pack (standard symmetric: 1 tile in → 1 tile out)

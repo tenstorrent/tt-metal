@@ -25,8 +25,9 @@ void kernel_main() {
     constexpr uint32_t dst_reg_idx = 0;
 
     // Initialize for tile copy operation, which is a two-step init:
-    unary_op_init_common(cb_in0, cb_out0);
-    copy_tile_init(cb_in0);
+    compute_kernel_hw_startup(cb_in0, cb_out0);
+    copy_init(cb_in0);
+    copy_init(cb_in0);
 
     for (uint32_t tile_idx = 0; tile_idx < n_tiles; tile_idx++) {
         // Wait for a tile to be available in the input CB (from mcast_receiver kernel)

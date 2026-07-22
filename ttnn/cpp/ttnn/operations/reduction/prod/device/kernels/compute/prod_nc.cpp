@@ -31,7 +31,7 @@ void kernel_main() {
 
         // Seed DEST with the first input tile of this reduction.
         cb_in0_obj.wait_front(onetile);
-        copy_tile_to_dst_init_short(cb_in0);
+        copy_init(cb_in0);
         copy_tile(cb_in0, 0, dst0);
         cb_in0_obj.pop_front(onetile);
 

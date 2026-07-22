@@ -104,13 +104,13 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        copy_tile_init(dfb_eff_a.get_id());
+        copy_init(dfb_eff_a.get_id());
         copy_tile(dfb_eff_a.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_tile_init(dfb_eff_b.get_id());
+        copy_init(dfb_eff_b.get_id());
         copy_tile(dfb_eff_b.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_tile_init(dfb_eff_c.get_id());
+        copy_init(dfb_eff_c.get_id());
         copy_tile(dfb_eff_c.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
         TERNARY_SFPU_OP_INIT();

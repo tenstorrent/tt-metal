@@ -977,7 +977,7 @@ struct MatmulExpertCompressedDRAM {
 
                         reconfig_data_format_srca<false, true>(CTArgs::cb_out_silu);
                         pack_reconfig_data_format<true>(CTArgs::cb_out_silu);
-                        copy_tile_to_dst_init_short(CTArgs::cb_out_silu);
+                        copy_init(CTArgs::cb_out_silu);
                         silu_tile_init();
 
                         cb_reserve_back(CTArgs::cb_out_silu, 1);

@@ -478,7 +478,8 @@ void kernel_main() {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
                         if (enable_reload) {
-                            copy_tile_to_dst_init_short_with_dt(in1_cb_id, matmul_partials_cb);
+                            reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
+                            copy_init(matmul_partials_cb);
                             cb_matmul_partials.wait_front(out_subblock_num_tiles);
                             tile_regs_acquire();
 
@@ -684,7 +685,7 @@ void kernel_main() {
 
                 if constexpr (packer_untilize) {
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
-                    copy_tile_to_dst_init_short(matmul_partials_cb);
+                    copy_init(matmul_partials_cb);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
                             cb_matmul_partials, cb_out, in1_num_subblocks, out_subblock_num_tiles, out_subblock_h);

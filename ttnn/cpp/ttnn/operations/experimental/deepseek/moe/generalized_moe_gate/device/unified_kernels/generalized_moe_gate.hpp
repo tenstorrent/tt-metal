@@ -130,7 +130,7 @@ struct GeneralizedMoeGate {
             bias_cb.wait_front(1);
             input_cb.wait_front(1);
             reconfig_data_format_srca(CTArgs::input_indices_cb);
-            copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
+            copy_init(CTArgs::input_indices_cb);
             tile_regs_acquire();
             // Per-block GLOBAL indices: block b uses indices tile b (uploaded as arange + b*256). The
             // in-kernel idx_offset add was a no-op (sfpi/TTI both failed), so global ids come from the
@@ -220,7 +220,7 @@ struct GeneralizedMoeGate {
                 CircularBuffer output_indices_cb(CTArgs::output_indices_cb);
                 // ============ single ≤256-block path: the proven fused single-op gate (128/256 top-8) ============
                 bias_cb.wait_front(1);
-                copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
+                copy_init(CTArgs::input_indices_cb);
                 tile_regs_acquire();
                 copy_tile(CTArgs::input_indices_cb, 0, 1);  // indices (arange 0-255) -> idx region
                 reconfig_data_format_srca(CTArgs::input_cb);

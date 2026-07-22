@@ -53,7 +53,7 @@ void kernel_main() {
         reduce_block_max_row_uninit(qk_im_cb);
 
         if (do_eltwise) {
-            copy_tile_to_dst_init_short(prev_max_cb);
+            copy_init(prev_max_cb);
             copy_tile(prev_max_cb, i, prev_max_dst_idx);
             binary_max_tile_init();
             binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx);

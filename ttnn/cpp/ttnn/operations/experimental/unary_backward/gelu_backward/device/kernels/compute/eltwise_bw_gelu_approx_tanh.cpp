@@ -34,7 +34,8 @@ void kernel_main() {
     constexpr float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5;
     constexpr float kKappa = 0.044715;
 
-    unary_op_init_common(cb_grad_out, cb_grad_in);
+    compute_kernel_hw_startup(cb_grad_out, cb_grad_in);
+    copy_init(cb_grad_out);
     add_binary_tile_init();
     mul_binary_tile_init();
     square_tile_init();

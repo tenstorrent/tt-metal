@@ -119,11 +119,12 @@ void kernel_main() {
             cb_inp.reserve_back(block.size());
             if constexpr (welford_unpack_fp32_active) {
                 // SFPU path: copy_tile bypasses SrcA via UnpackToDestEn, preserving full FP32
-                copy_tile_to_dst_init_short(cb_in0_idx);
+                copy_init(cb_in0_idx);
                 for (auto i : block.local()) {
                     tile_regs_acquire();
                     copy_tile(cb_in0_idx, i, 0);
-                    copy_tile_to_dst_init_short_with_dt(cb_in0_idx, cb_res_idx);
+                    reconfig_data_format_srca(cb_in0_idx, cb_res_idx);
+                    copy_init(cb_res_idx);
                     copy_tile(cb_res_idx, i, 1);
                     add_binary_tile_init();
                     add_binary_tile(0, 1, 0);
@@ -131,7 +132,8 @@ void kernel_main() {
                     tile_regs_wait();
                     pack_tile(0, cb_inp_idx);
                     tile_regs_release();
-                    copy_tile_to_dst_init_short_with_dt(cb_res_idx, cb_in0_idx);
+                    reconfig_data_format_srca(cb_res_idx, cb_in0_idx);
+                    copy_init(cb_in0_idx);
                 }
             } else {
                 add_tiles_init(cb_in0_idx, cb_res_idx);
@@ -156,9 +158,10 @@ void kernel_main() {
             cb_inp.wait_front(block.size());
             tile_regs_acquire();
             reconfig_data_format_srca(cb_in0_idx, cb_mean_spill_idx);
-            copy_tile_init(cb_mean_spill_idx);
+            copy_init(cb_mean_spill_idx);
             copy_tile(cb_mean_spill_idx, 0, dst1);
-            copy_tile_to_dst_init_short_with_dt(cb_mean_spill_idx, cb_m2_spill_idx);
+            reconfig_data_format_srca(cb_mean_spill_idx, cb_m2_spill_idx);
+            copy_init(cb_m2_spill_idx);
             copy_tile(cb_m2_spill_idx, 0, dst2);
             welford_restore_state(dst1);
 
@@ -202,9 +205,10 @@ void kernel_main() {
         cb_m2_spill.wait_front(1);
         tile_regs_acquire();
         reconfig_data_format_srca(cb_inp_idx, cb_mean_spill_idx);
-        copy_tile_init(cb_mean_spill_idx);
+        copy_init(cb_mean_spill_idx);
         copy_tile(cb_mean_spill_idx, 0, dst1);
-        copy_tile_to_dst_init_short_with_dt(cb_mean_spill_idx, cb_m2_spill_idx);
+        reconfig_data_format_srca(cb_mean_spill_idx, cb_m2_spill_idx);
+        copy_init(cb_m2_spill_idx);
         copy_tile(cb_m2_spill_idx, 0, dst2);
         welford_restore_state(dst1);
         welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);

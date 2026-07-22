@@ -140,7 +140,7 @@ void kernel_main() {
             tile_regs_acquire();
 #ifdef RMSNORM
             reconfig_data_format_srca(cb_in_id);
-            copy_tile_init(cb_in_id);
+            copy_init(cb_in_id);
             for (auto i : block.local()) {
                 copy_tile(cb_in_id, i, i);
             }
@@ -183,7 +183,7 @@ void kernel_main() {
             if (!block.is_first()) {
                 cb_accumulate.wait_front(onetile);
                 reconfig_data_format_srca(cb_accumulate_id);
-                copy_tile_init(cb_accumulate_id);
+                copy_init(cb_accumulate_id);
                 copy_tile(cb_accumulate_id, 0, dst0);
                 cb_accumulate.pop_front(onetile);
             }
@@ -289,7 +289,7 @@ void kernel_main() {
             cb_in.wait_front(block.full_block_size());
 #ifdef RMSNORM
             reconfig_data_format_srca(cb_in_id);
-            copy_tile_init(cb_in_id);
+            copy_init(cb_in_id);
             for (auto i : block.local()) {
                 copy_tile(cb_in_id, i, i);
             }

@@ -15,8 +15,9 @@ void kernel_main() {
     CircularBuffer cb_in(tt::CBIndex::c_0);
     CircularBuffer cb_out(tt::CBIndex::c_16);
 
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    copy_tile_init(tt::CBIndex::c_0);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    copy_init(tt::CBIndex::c_0);
+    copy_init(tt::CBIndex::c_0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         // Pop tile after tile, copy to DST and pack
         cb_in.wait_front(1);

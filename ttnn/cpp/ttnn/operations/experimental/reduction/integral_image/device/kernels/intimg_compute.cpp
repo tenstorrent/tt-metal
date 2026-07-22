@@ -116,7 +116,7 @@ FORCE_INLINE void cumsum_cube_axis_2(
         tile_regs_acquire();
 
         acc_cb.wait_front(ONE_TILE);
-        copy_tile_init(cb_acc);
+        copy_init(cb_acc);
         copy_tile(cb_acc, FIRST_TILE, WORKING_REG);
 
         tile_regs_commit();
@@ -144,7 +144,7 @@ FORCE_INLINE void cumsum_cube_axis_3(uint32_t cb_cumsum_stage_wip, uint32_t cb_c
         ReadCBGuard read_cumsum_guard{cb_cumsum_stage_wip, ONE_TILE};
         WriteCBGuard cumsum_output_write_guard{cb_cumsum_output, ONE_TILE};
         tile_regs_acquire();
-        copy_tile_init(cb_cumsum_stage_wip);
+        copy_init(cb_cumsum_stage_wip);
         copy_tile(cb_cumsum_stage_wip, FIRST_TILE, WORKING_REG);
 
         cumsum_tile_init();

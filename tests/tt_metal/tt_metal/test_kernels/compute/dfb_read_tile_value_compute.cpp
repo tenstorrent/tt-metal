@@ -16,7 +16,8 @@ void kernel_main() {
     const uint32_t result_l1_addr = get_arg(args::result_l1_addr);
 
     DataflowBuffer dfb(dfb::in);
-    unary_op_init_common(dfb.get_id(), dfb.get_id());
+    compute_kernel_hw_startup(dfb.get_id(), dfb.get_id());
+    copy_init(dfb.get_id());
 
     // Keep both entries at the front so tile_index 1 exercises fifo_page_size stride.
     // Each TRISC thread writes the same mailbox-broadcast results to its own L1 slot so

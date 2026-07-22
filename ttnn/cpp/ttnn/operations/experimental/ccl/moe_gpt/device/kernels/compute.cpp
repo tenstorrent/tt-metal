@@ -133,7 +133,8 @@ void kernel_main() {
     // Compute
     //-------------------------------------------------------------------------
     // Create a ones-tile for bias addition (matmul with ones × bias_row = bias)
-    unary_op_init_common(cb_c2c_ones_tile_id, cb_c2c_ones_tile_id);
+    compute_kernel_hw_startup(cb_c2c_ones_tile_id, cb_c2c_ones_tile_id);
+    copy_init(cb_c2c_ones_tile_id);
     tile_regs_acquire();
     fill_tile_init();
     constexpr uint32_t dst0 = 0;

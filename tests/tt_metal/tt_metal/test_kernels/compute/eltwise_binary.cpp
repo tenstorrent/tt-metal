@@ -42,7 +42,7 @@ void kernel_main() {
 
 #if defined(DST_ACCUM_MODE) || defined(ACC_TO_DEST) || defined(ELTWISE_DEST_REUSE_TYPE)
         cb_wait_front(cb_in2, per_core_block_size);
-        copy_tile_to_dst_init_short(cb_in2);
+        copy_init(cb_in2);
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             copy_tile(cb_in2, i, i);  // copy from c_in[0] to DST[0]
         }

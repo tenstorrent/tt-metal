@@ -70,7 +70,7 @@ struct ResidualAdd {
                 reconfig_data_format<false, true>(args.in0_cb, args.in0_cb);
                 pack_reconfig_data_format<true>(args.out_cb);
                 pack_block_contiguous_init(args.out_cb);
-                copy_tile_to_dst_init_short(args.in0_cb);
+                copy_init(args.in0_cb);
                 cb_wait_front(args.in0_cb, out_w);
                 cb_wait_front(args.in1_cb, args.total_in1_tiles);
                 cb_reserve_back(args.out_cb, out_w);

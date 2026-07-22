@@ -195,7 +195,8 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
     PACK((pack_reconfig_data_format(final_cb_id)));
     // matmul puts in1 → SrcA, in0 → SrcB. Reconfigure SrcA from in1 to
     // partials so copy_tile reads partials.
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, partials_cb_id);
+    reconfig_data_format_srca(in1_cb_id, partials_cb_id);
+    copy_init(partials_cb_id);
 
     for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
@@ -387,7 +388,8 @@ FORCE_INLINE void matmul_phase_fused_gu(
     PACK((pack_reconfig_data_format(gate_intermed_cb_id)));
     // SrcA was last configured for the up matmul's in1 (up_cb_id). Switch
     // to partials_gu so copy_tile reads the accumulator.
-    copy_tile_to_dst_init_short_with_dt(up_cb_id, partials_gu_cb_id);
+    reconfig_data_format_srca(up_cb_id, partials_gu_cb_id);
+    copy_init(partials_gu_cb_id);
     for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
         partials_gu_cb.wait_front(out_subblock_num_tiles);
@@ -460,7 +462,8 @@ FORCE_INLINE void swiglu_oai_activation_phase(
     // accumulator with the right format. Both partials CBs are Float16_b, so this
     // single init covers reads from gate AND up partials. (Passing a Float16_b CB
     // as the "old" operand would no-op the reconfig and leave SrcA on bf4.)
-    copy_tile_to_dst_init_short_with_dt(prev_srcA_cb_id, gate_partials_cb_id);
+    reconfig_data_format_srca(prev_srcA_cb_id, gate_partials_cb_id);
+    copy_init(gate_partials_cb_id);
 
     for (uint32_t base = 0; base < out_block_num_tiles; base += kActChunk) {
         const uint32_t remaining = out_block_num_tiles - base;

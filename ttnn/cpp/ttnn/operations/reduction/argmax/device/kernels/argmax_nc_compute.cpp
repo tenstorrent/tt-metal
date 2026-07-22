@@ -64,7 +64,8 @@ void kernel_main() {
     constexpr uint32_t dst_scratch_a = 2;
     constexpr uint32_t dst_scratch_b = 3;
 
-    init_sfpu(cb_val, cb_out);
+    compute_kernel_hw_startup(cb_val, cb_out);
+    copy_init(cb_val);
     // SFPU op inits. `where_tile_init` and `binary_max_min_init` BOTH install
     // SFPCONFIG macros 0 and 1 with different semantics, so they cannot be
     // active simultaneously. We sidestep the collision by using `where_tile`

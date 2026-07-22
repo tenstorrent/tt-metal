@@ -118,7 +118,7 @@ void kernel_main() {
                 //   writes final mean/variance tiles into DST.
                 // - start_N advances by one tile height each iteration so Welford sees the correct
                 //   element count / divisor progression across the whole H reduction.
-                copy_tile_to_dst_init_short(cb_in);
+                copy_init(cb_in);
                 tile_regs_acquire();
 
                 // Welford SFPU state (running mean in LREG4, M2 in LREG5)
@@ -172,7 +172,7 @@ void kernel_main() {
         // cb_combined uses Float32, so the unpacker must be reconfigured.
         reconfig_data_format_srca(cb_combined);
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_combined);
+        copy_init(cb_combined);
         copy_tile(cb_combined, 0, input_dst);
         if constexpr (is_std) {
             sqrt_tile_init();

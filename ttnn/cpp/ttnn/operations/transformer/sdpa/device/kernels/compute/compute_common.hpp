@@ -51,8 +51,8 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
     CircularBuffer cb_in0(in0);
     CircularBuffer cb_in1(in1);
     // inputs come in full, outputs go out full
-    copy_tile_to_dst_init_short(in0);
-    copy_tile_to_dst_init_short(in1);
+    copy_init(in0);
+    copy_init(in1);
     binary_max_tile_init();
     constexpr uint32_t dst_reg_0 = 0;
     constexpr uint32_t dst_reg_1 = 1;
@@ -82,7 +82,7 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
     CircularBuffer cb_in1(in1);
     CircularBuffer cb_out(out_cb);
     // inputs come in full, outputs go out full
-    copy_tile_to_dst_init_short(in0);
+    copy_init(in0);
     binary_max_tile_init();
 
     constexpr uint32_t dst_reg_0 = 0;
@@ -227,7 +227,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         }
         reduce_uninit();
         if (do_eltwise_max) {
-            copy_tile_to_dst_init_short(prev_cb);
+            copy_init(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
             binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, vector_mode);
         }
@@ -255,7 +255,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     CircularBuffer cb_in(in_cb);
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     recip_tile_init();
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(in_cb);
@@ -720,7 +720,7 @@ void correction_block(
 
     for (uint32_t i = 0; i < num_head_tiles; i++) {
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_worker_max);
+        copy_init(cb_worker_max);
         exp_tile_init<EXP_APPROX_MODE>();
         copy_tile(cb_prev_max, i, dst_reg_0);
         copy_tile(cb_worker_max, i, dst_reg_1);
@@ -755,7 +755,7 @@ void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Postcondition: in_cb has num_tiles consumed
     // Postcondition: out_cb has num_tiles produced
 
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
 
     cb_in.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
@@ -782,7 +782,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: out_cb has num_tiles free
     // Postcondition: in_cb has num_tiles consumed
     // Postcondition: out_cb has num_tiles produced
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     cb_in.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
 #pragma GCC unroll 0
@@ -801,7 +801,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
 void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     CircularBuffer cb_in(in_cb);
     CircularBuffer cb_out(out_cb);
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     log_tile_init();
     cb_in.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
@@ -1097,7 +1097,7 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
 
 /**
  * Batch-stamp a single tile onto a range of positions in out_cb using L1 accumulate.
- * Caller must have already called copy_tile_to_dst_init_short and llk_pack_reconfig_l1_acc(1).
+ * Caller must have already called copy_init and llk_pack_reconfig_l1_acc(1).
  *
  * @tparam dst_batch  Max tiles per DST cycle (DST register capacity, typically 8 for fp16b half-sync).
  */
@@ -1130,7 +1130,7 @@ void apply_padded_mask_lightweight_runtime(
     uint32_t row_base = 0) {  // first out_cb tile-row of this query band; nonzero when heads span >1 DEST band
     uint32_t start = num_cols - num_padded;
 
-    copy_tile_to_dst_init_short(neginf_cb);
+    copy_init(neginf_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
@@ -1160,7 +1160,7 @@ void apply_partial_mask_lightweight(
     uint32_t num_cols,
     uint32_t num_rows,
     uint32_t row_base = 0) {  // first out_cb tile-row of this query band; nonzero when heads span >1 DEST band
-    copy_tile_to_dst_init_short(mask_cb);
+    copy_init(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
@@ -1196,7 +1196,7 @@ void apply_causal_mask_lightweight(
     uint32_t num_cols,
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0) {
-    copy_tile_to_dst_init_short(mask_cb);
+    copy_init(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {

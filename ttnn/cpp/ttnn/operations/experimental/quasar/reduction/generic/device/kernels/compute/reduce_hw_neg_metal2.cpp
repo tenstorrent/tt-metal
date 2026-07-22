@@ -54,7 +54,7 @@ void kernel_main() {
                 cb_input_obj.wait_front(onetile);
 
                 tile_regs_acquire();
-                copy_tile_init(cb_input);
+                copy_init(cb_input);
                 copy_tile(cb_input, 0, reduce_dst_idx);
                 negative_tile_init();
                 negative_tile(reduce_dst_idx);
@@ -77,7 +77,7 @@ void kernel_main() {
 
                 tile_regs_acquire();
                 if (wt > 0 || ht > 0) {
-                    copy_tile_init(cb_acc);
+                    copy_init(cb_acc);
                     copy_tile(cb_acc, 0, reduce_dst_idx);
                 }
                 reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
@@ -103,7 +103,7 @@ void kernel_main() {
         cb_acc_obj.wait_front(onetile);
 
         tile_regs_acquire();
-        copy_tile_init(cb_acc);
+        copy_init(cb_acc);
         copy_tile(cb_acc, 0, reduce_dst_idx);
         negative_tile_init();
         negative_tile(reduce_dst_idx);

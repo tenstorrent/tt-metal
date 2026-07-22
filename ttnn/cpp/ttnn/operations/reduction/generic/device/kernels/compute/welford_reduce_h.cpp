@@ -104,7 +104,7 @@ void kernel_main() {
         // - If is_std, sqrt_tile() turns variance into standard deviation in place.
         // - start_N advances by one tile height each iteration so Welford sees the correct
         //   element count / divisor progression across the whole H reduction.
-        copy_tile_to_dst_init_short(cb_in);
+        copy_init(cb_in);
         tile_regs_acquire();
 
         // Welford SFPU state (running mean in LREG4, M2 in LREG5)

@@ -50,12 +50,12 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // Copy predicate to destination register 0
-        copy_tile_init(predicate_dfb.get_id());
+        copy_init(predicate_dfb.get_id());
         copy_tile(predicate_dfb.get_id(), 0, 0);
 
         // Fill scalar and copy tensor based on variant
         fill_tile_init();
-        copy_tile_init(tensor_dfb.get_id());
+        copy_init(tensor_dfb.get_id());
 
         // TTS: scalar=false (reg 2), tensor=true (reg 1)
         // TST: scalar=true (reg 1), tensor=false (reg 2)
@@ -134,7 +134,8 @@ void kernel_main() {
     constexpr auto tensor_cb_id = tt::CBIndex::c_1;  // Either true (TTS) or false (TST) tensor
     constexpr auto cb_out_id = tt::CBIndex::c_3;
 
-    unary_op_init_common(predicate_cb_id, cb_out_id);
+    compute_kernel_hw_startup(predicate_cb_id, cb_out_id);
+    copy_init(predicate_cb_id);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;

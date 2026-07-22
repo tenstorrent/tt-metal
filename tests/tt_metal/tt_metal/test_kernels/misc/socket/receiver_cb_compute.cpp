@@ -22,8 +22,9 @@ void kernel_main() {
     set_receiver_socket_page_size(socket, page_size);
     assign_local_cb_to_socket(socket, input_cb_index);
 
-    unary_op_init_common(input_cb_index, output_cb_index);
-    copy_tile_init(input_cb_index);
+    compute_kernel_hw_startup(input_cb_index, output_cb_index);
+    copy_init(input_cb_index);
+    copy_init(input_cb_index);
     for (uint32_t p = 0; p < num_pages; ++p) {
         socket_wait_for_pages(socket, 1);
         cb_reserve_back(output_cb_index, num_tiles_per_page);

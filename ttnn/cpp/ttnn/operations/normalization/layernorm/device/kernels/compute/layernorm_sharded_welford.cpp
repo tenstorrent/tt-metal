@@ -301,7 +301,8 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in0, cb_in1, cb_in_id);
 #else
-    unary_op_init_common(cb_in_id, cb_ex_partial_id);
+    compute_kernel_hw_startup(cb_in_id, cb_ex_partial_id);
+    copy_init(cb_in_id);
 #endif
 
     // ---------------------------------------------------------------------------

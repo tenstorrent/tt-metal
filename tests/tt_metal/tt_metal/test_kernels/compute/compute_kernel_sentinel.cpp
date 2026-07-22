@@ -98,16 +98,23 @@ void kernel_main() {
     transpose_init(cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    unary_op_init_common(cb_in0, cb_out0);
+    // Migrated off unary_op_init_common (now a deprecated compute_kernel_hw_startup + copy_init
+    // forwarder, which is unsafe mid-kernel). The equivalent mid-kernel reconfig sequence produces
+    // the same SrcA/Pack diff the sentinel asserts: SrcA only here (pack already cb_out0).
+    reconfig_data_format_srca(cb_in0);
+    copy_init(cb_in0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    unary_op_init_common(cb_in1, cb_out1);
+    // SrcA (cb_in0 -> cb_in1) and Pack (cb_out0 -> cb_out1) both change.
+    reconfig_data_format_srca(cb_in1);
+    pack_reconfig_data_format(cb_out1);
+    copy_init(cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
     transpose_init(cb_in0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    copy_tile_to_dst_init_short(cb_in2);
+    copy_init(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     tilizeA_B_reduce_init<false, true>(cb_in0, cb_in1, 1, cb_out1);

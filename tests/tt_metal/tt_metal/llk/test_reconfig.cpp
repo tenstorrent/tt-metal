@@ -1067,8 +1067,8 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
 //                             Test Description
 // ------------------------------------------------------------------------
 // These tests aim to cover usage of these API calls:
-// - copy_tile_init
-// - copy_tile_to_dst_init_short
+// - copy_init
+// - copy_init
 // - copy_tile_to_dst_init_short_with_dt
 // - unpack_reconfig_data_format
 // - unpack_reconfig_data_format_srca

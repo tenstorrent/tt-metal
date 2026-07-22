@@ -93,7 +93,7 @@ void kernel_main() {
                 // stride and copy_tile would misread it (corrupting the amax for bf16 input).
                 reconfig_data_format_srca<false, true>(cb_tile_id);
                 pack_reconfig_data_format(cb_abs_id);
-                copy_tile_init(cb_tile_id);
+                copy_init(cb_tile_id);
                 cb_abs.reserve_back(block_wt);
                 abs_tile_init();
                 for (uint32_t k = 0; k < block_wt; ++k) {

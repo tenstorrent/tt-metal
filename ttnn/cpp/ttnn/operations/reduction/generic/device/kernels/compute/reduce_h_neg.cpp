@@ -45,8 +45,9 @@ void kernel_main() {
         CircularBuffer cb_scaler_obj(cb_scaler);
         CircularBuffer cb_output_obj(cb_output);
 
-        init_sfpu(cb_input, cb_output);
-        copy_tile_to_dst_init_short(cb_input);
+        compute_kernel_hw_startup(cb_input, cb_output);
+        copy_init(cb_input);
+        copy_init(cb_input);
         cb_scaler_obj.wait_front(onetile);
         PACK((llk_pack_reduce_mask_config<REDUCE_DIM, PackMode::Default>(cb_output)));
 
@@ -150,7 +151,7 @@ void kernel_main() {
                 cb_input_obj.wait_front(ntiles);
 
                 reconfig_data_format_srca(cb_input);
-                copy_tile_init(cb_input);
+                copy_init(cb_input);
                 negative_tile_init();
                 // Partial chunk (ntiles < row_chunk): the input CB depth matches row_chunk, but only consume ntiles
                 // tiles. Indexed reads plus a bulk pop of ntiles do not advance the CB head during reads, leaving
@@ -182,7 +183,7 @@ void kernel_main() {
 
                 if (ht > 0) {
                     reconfig_data_format_srca(cb_acc);
-                    copy_tile_init(cb_acc);
+                    copy_init(cb_acc);
                     for (uint32_t i = 0; i < ntiles; ++i) {
                         copy_tile(cb_acc, i, i);
                     }
@@ -217,7 +218,7 @@ void kernel_main() {
             cb_acc_obj.wait_front(ntiles);
 
             reconfig_data_format_srca(cb_acc);
-            copy_tile_init(cb_acc);
+            copy_init(cb_acc);
             for (uint32_t i = 0; i < ntiles; ++i) {
                 copy_tile(cb_acc, i, i);
             }

@@ -41,7 +41,7 @@ void kernel_main() {
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
 #if PRE_SCALE
-        copy_tile_to_dst_init_short(dfb_in0.get_id());  // need to copy from CB to DST to be able to run sfpu math
+        copy_init(dfb_in0.get_id());  // need to copy from CB to DST to be able to run sfpu math
 #endif
 
 #ifdef SFPU_OP_INIT_PRE_IN0_0

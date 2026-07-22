@@ -275,7 +275,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 #if defined FP32_DEST_ACC_EN
                 reconfig_data_format_srca(cb_intermed0);
 #endif
-                copy_tile_to_dst_init_short(cb_intermed0);
+                copy_init(cb_intermed0);
                 copy_tile(cb_intermed0, 0, 0);
                 dfb_intermed0_obj.pop_front(onetile);
             }

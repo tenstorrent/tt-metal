@@ -23,7 +23,8 @@ void kernel_main() {
     DataflowBuffer dfb_pre_in2(tt::CBIndex::c_1);
     DataflowBuffer dfb_out(tt::CBIndex::c_3);
 
-    unary_op_init_common(dfb_pre_in1.get_id(), dfb_out.get_id());
+    compute_kernel_hw_startup(dfb_pre_in1.get_id(), dfb_out.get_id());
+    copy_init(dfb_pre_in1.get_id());
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         dfb_pre_in1.wait_front(num_tiles_per_cycle);
@@ -33,11 +34,11 @@ void kernel_main() {
         tile_regs_acquire();
 
         // Always copy condition to dst reg 0
-        copy_tile_to_dst_init_short(dfb_pre_in1.get_id());
+        copy_init(dfb_pre_in1.get_id());
         copy_tile(dfb_pre_in1.get_id(), 0, 0);  // Copy condition to dst reg 0
 
         // Copy tensor to appropriate dst register based on variant
-        copy_tile_to_dst_init_short(dfb_pre_in2.get_id());
+        copy_init(dfb_pre_in2.get_id());
         if constexpr (scalar_is_true) {
             // TST: tensor is false value, goes to dst reg 2
             copy_tile(dfb_pre_in2.get_id(), 0, 2);  // Copy false tensor to dst reg 2

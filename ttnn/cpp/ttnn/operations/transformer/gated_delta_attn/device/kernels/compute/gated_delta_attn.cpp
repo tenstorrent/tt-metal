@@ -85,7 +85,7 @@ __attribute__((noinline)) static void fwd_sub_row(
 
     // Step 1: fwd_rhs = rhs_cb[row_i * Xt .. (row_i+1)*Xt - 1]
     CircularBuffer(cb_nm_P_a).reserve_back(Xt);
-    copy_tile_to_dst_init_short(rhs_cb);
+    copy_init(rhs_cb);
     for (uint32_t xt = 0; xt < Xt; xt++) {
         tile_regs_acquire();
         copy_tile(rhs_cb, row_i * Xt + xt, 0);
@@ -132,7 +132,7 @@ __attribute__((noinline)) static void fwd_sub_row(
         // fwd_rhs (nm_P_a) = nm_R_a
         CircularBuffer(cb_nm_R_a).wait_front(Xt);
         CircularBuffer(cb_nm_P_a).reserve_back(Xt);
-        copy_tile_to_dst_init_short(cb_nm_R_a);
+        copy_init(cb_nm_R_a);
         for (uint32_t xt = 0; xt < Xt; xt++) {
             tile_regs_acquire();
             copy_tile(cb_nm_R_a, xt, 0);
@@ -214,7 +214,7 @@ void kernel_main() {
     constexpr uint32_t kdt_tiles = Kt * Ct;
 
     // Pre-configure hardware UNPACK format registers for float32.
-    // TT Metal requires mm_init before any copy_tile_to_dst_init_short call.
+    // TT Metal requires mm_init before any copy_init call.
     // Without this, the first copy_tile in fwd_sub_row(row_i=0) reads tiles as zeros.
     mm_init(cb_v_beta_sc, cb_S, cb_v_cor);
 

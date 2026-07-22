@@ -28,7 +28,8 @@ void kernel_main() {
     CircularBuffer cb_out_exp(cb_out);
 
     compute_kernel_hw_startup(cb_in, cb_out);
-    unary_op_init_common(cb_in, cb_out);
+    compute_kernel_hw_startup(cb_in, cb_out);
+    copy_init(cb_in);
 
     for (uint32_t n = 0; n < num_blocks; n++) {
         // Tilize input via unpack and then pack (asymmetric: x_block_size rows → 1 tile)

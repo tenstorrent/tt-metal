@@ -43,7 +43,8 @@ void kernel_main() {
     CircularBuffer input_b_cb(input_b_cb_id);
     CircularBuffer out_cb(out_cb_id);
 
-    init_sfpu(input_a_cb_id, out_cb_id);
+    compute_kernel_hw_startup(input_a_cb_id, out_cb_id);
+    copy_init(input_a_cb_id);
     sfpu_bcast_init<kBcastDim>();
 
     input_a_cb.wait_front(NUM_TILES);
@@ -52,7 +53,7 @@ void kernel_main() {
 
     tile_regs_acquire();
 
-    copy_tile_to_dst_init_short(input_a_cb_id);
+    copy_init(input_a_cb_id);
     copy_tile(input_a_cb_id, 0, kDstData);
     copy_tile(input_b_cb_id, 0, kDstBcast);
 

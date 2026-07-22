@@ -12,7 +12,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
     constexpr uint32_t dst_id = 0;

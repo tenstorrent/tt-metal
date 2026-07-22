@@ -72,7 +72,7 @@ void apply_mask_on_reg(
     uint32_t mask_tile_idx = 0U) {
     const uint32_t mask_register = register_idx + 1U;  // mask register should be next to data register
     cb_wait_front(cb_attn_mask, onetile);
-    copy_tile_init(cb_attn_mask);
+    copy_init(cb_attn_mask);
     copy_tile(
         cb_attn_mask,
         /* tile_idx */ mask_tile_idx,
@@ -130,7 +130,8 @@ void update_cur_row_max_value(
 
     if (do_eltwise_max) {
         cb_wait_front(cb_prev_max, onetile);
-        copy_tile_to_dst_init_short_with_dt(cb_attention_weights, cb_prev_max);
+        reconfig_data_format_srca(cb_attention_weights, cb_prev_max);
+        copy_init(cb_prev_max);
         copy_tile(cb_prev_max, /* tile_idx */ 0, /* register idx */ prev_max_dst_idx);
 
         // find max value between current max and previous max
@@ -309,7 +310,7 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
     mul_tiles_bcast_cols(cb_prev_sum_exp, cb_exp_max_diff, 0, 0, exp_sum_dst_idx);
 
     // copy current sum exp to next register
-    copy_tile_init(cb_cur_sum_exp);
+    copy_init(cb_cur_sum_exp);
     copy_tile(cb_cur_sum_exp, /* tile_idx */ 0, /* register idx */ exp_sum_dst_idx + 1U);
 
     // add to updated previous exp sum with current exp sum
@@ -356,7 +357,7 @@ void update_cur_mm_out(
 
         // Load prev_mm_out tiles to DST via UnpackToDestFp32 (full FP32 precision)
         reconfig_data_format(cb_prev_mm_out, cb_prev_mm_out);
-        copy_tile_init(cb_prev_mm_out);
+        copy_init(cb_prev_mm_out);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_prev_mm_out, tile_idx + block_idx, block_idx);
         }
@@ -417,7 +418,7 @@ void recip_tile_inplace(uint32_t cb_in_idx) {
     const uint32_t dst_idx = 0;
     tile_regs_acquire();
     reconfig_data_format(cb_in_idx, cb_in_idx);
-    copy_tile_init(cb_in_idx);
+    copy_init(cb_in_idx);
     copy_tile(cb_in_idx, /* tile_idx */ 0, dst_idx);
     recip_tile_init</* legacy_compat */ false>();
     MATH((recip_tile_first_column(dst_idx)));
@@ -447,13 +448,14 @@ void compute_and_pack_lse(
     tile_regs_acquire();
 
     reconfig_data_format(cb_sum_exp, cb_sum_exp);
-    copy_tile_init(cb_sum_exp);
+    copy_init(cb_sum_exp);
     copy_tile(cb_sum_exp, /* tile_idx */ 0, lse_reg);
 
     log_tile_init</* fast_and_approx */ false>();
     log_tile</* fast_and_approx */ false>(lse_reg);
 
-    copy_tile_to_dst_init_short_with_dt(/* old_cb_idx */ cb_sum_exp, /* new_cb_idx */ cb_max);
+    reconfig_data_format_srca(/* old_cb_idx */ cb_sum_exp, /* new_cb_idx */ cb_max);
+    copy_init(/* new_cb_idx */ cb_max);
     copy_tile(cb_max, /* tile_idx */ 0, max_reg);
 
     // lse = scale * max + log(sum_exp)
@@ -463,7 +465,8 @@ void compute_and_pack_lse(
     add_binary_tile_init();
     add_binary_tile(max_reg, lse_reg, lse_reg);
 
-    copy_tile_to_dst_init_short_with_dt(/* old_cb_idx */ cb_max, /* new_cb_idx */ cb_mask_tile);
+    reconfig_data_format_srca(/* old_cb_idx */ cb_max, /* new_cb_idx */ cb_mask_tile);
+    copy_init(/* new_cb_idx */ cb_mask_tile);
     copy_tile(cb_mask_tile, /* tile_idx */ 0, mask_reg);
 
     mask_tile_init();
@@ -492,10 +495,12 @@ void pack_intermediate_result(
 
     for (uint32_t tile_idx = 0; tile_idx < tiles_count; ++tile_idx) {
         tile_regs_acquire();
-        copy_tile_to_dst_init_short_with_dt(/* old_cb_idx */ cb_mask_tile, /* new_cb_idx */ cb_in_idx);
+        reconfig_data_format_srca(/* old_cb_idx */ cb_mask_tile, /* new_cb_idx */ cb_in_idx);
+        copy_init(/* new_cb_idx */ cb_in_idx);
         copy_tile(cb_in_idx, /* tile_idx */ tile_idx, /* register idx */ dst_idx);
 
-        copy_tile_to_dst_init_short_with_dt(/* old_cb_idx */ cb_in_idx, /* new_cb_idx */ cb_mask_tile);
+        reconfig_data_format_srca(/* old_cb_idx */ cb_in_idx, /* new_cb_idx */ cb_mask_tile);
+        copy_init(/* new_cb_idx */ cb_mask_tile);
         copy_tile(cb_mask_tile, /* tile_idx */ 0, /* register idx */ dst_idx + 1U);
 
         mask_tile_init();

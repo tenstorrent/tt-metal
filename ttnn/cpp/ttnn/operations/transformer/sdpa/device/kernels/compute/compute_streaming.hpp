@@ -950,7 +950,7 @@ static inline void stamp_sliding_trailing_edge(
 /**
  * Combined lightweight mask for streaming ring SDPA. Applies causal, partial, and padded masks.
  * KV-pad rotation reuses the causal path with a compile-time-selected Q row mapping.
- * Caller must set up copy_tile_to_dst_init_short and llk_pack_reconfig_l1_acc(1) before calling,
+ * Caller must set up copy_init and llk_pack_reconfig_l1_acc(1) before calling,
  * and llk_pack_reconfig_l1_acc(0) after calling.
  */
 template <
@@ -987,7 +987,7 @@ static void apply_lightweight_mask_streaming(
     static_assert(!kv_pad_rotation_enabled || is_causal_sdpa, "KV-pad rotation mask is causal-only");
 
     // Caller-owned contract (see function comment): pack state for mask_cb is initialized
-    // before entry via copy_tile_to_dst_init_short + llk_pack_reconfig_l1_acc(1).
+    // before entry via copy_init + llk_pack_reconfig_l1_acc(1).
     // Per-row stamp geometry: floor division + remainder, distinct from the ceil-based loop
     // bounds in SlidingWindowLoopGeometry (causal reach here is `window`, not `window - 1`).
     constexpr bool has_sliding_window = sliding_window_size > 0;
@@ -1127,9 +1127,10 @@ template <bool reconfig_dt>
 static inline void begin_mask_l1_accumulate(uint32_t cb_qkt_im, uint32_t cb_mask_in) {
     configure_single_tile_pack(cb_qkt_im);
     if constexpr (reconfig_dt) {
-        copy_tile_to_dst_init_short_with_dt(cb_qkt_im, cb_mask_in);
+        reconfig_data_format_srca(cb_qkt_im, cb_mask_in);
+        copy_init(cb_mask_in);
     } else {
-        copy_tile_to_dst_init_short(cb_mask_in);
+        copy_init(cb_mask_in);
     }
     PACK((llk_pack_reconfig_l1_acc(1)));
 }

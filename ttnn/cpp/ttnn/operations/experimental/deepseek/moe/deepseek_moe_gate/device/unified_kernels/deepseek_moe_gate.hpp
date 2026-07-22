@@ -117,7 +117,7 @@ struct DeepseekMoeGate {
             cb_wait_front(CTArgs::bias_cb, 1);
 
             // Compute portion
-            copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
+            copy_init(CTArgs::input_indices_cb);
 
             tile_regs_acquire();
 
