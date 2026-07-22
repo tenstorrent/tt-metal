@@ -512,7 +512,7 @@ If you reach a point where the changes the port would require fall outside the h
 
 **Size is not a fit gap — do not capitulate on it.** This off-ramp is for when Metal 2.0 genuinely *cannot express* something, or the change reaches outside the op's directory — a real capability or scope limit. It is **not** for a port that is merely large. The workflow runs you as a fresh primary session on a 1M-context model; a long stretch with no green build until the last source flips is the *expected* shape of an atomic multi-source factory (see [Construct](#construct-paired-spec--run-args)), not a stop signal. A factory that genuinely overruns even a 1M primary budget is a *vehicle* limit, not a capability gap: hand the **whole** factory to another fresh primary instance to continue from `METAL2_PORT_PLAN.md` — never leave a half-converted factory, which does not build and is not a deliverable. And before recording any capitulation, re-read the [patterns catalog](../shared/port_patterns.md): the construct you think is unsupported is often covered there.
 
-Record in the port report's *Successful failure* section:
+Record it in the port report as a **[Handoff points](#handoff-points)** entry, and set the report's top-line **[Outcome](#outcome)** to `CAPITULATED`:
 
 - The op (path, factory).
 - The file and the specific lines / constructs that needed to change.
@@ -783,6 +783,13 @@ The report is read by the kernel-lib / API owners (for handoff points), by the d
 
 Structure the report with the following sections. Each section may be empty (write "none" with a one-line note); do not omit sections.
 
+### Outcome
+
+The port's result in one line, so a reader knows it at a glance. **Both values are success-tier** — a grounded capitulation is a complete deliverable, not a lesser result than a clean port (see [§When the discipline doesn't fit](#when-the-discipline-doesnt-fit)):
+
+- **`PORTED`** — the factory converted and its tests pass (note which factories, if the op has several and some are left for a later pass).
+- **`CAPITULATED`** — a grounded stop: Metal 2.0 cannot express something, or the change reaches outside the op's directory. Record the specifics as a [Handoff points](#handoff-points) entry.
+
 ### Provenance
 
 Record which version of the recipe docs this port ran against, so a reviewer can reconstruct the exact guidance you followed. Run this from your checkout root and paste the output verbatim — do not hand-edit it:
@@ -808,6 +815,7 @@ Escalations to teams outside the porter's scope. Each entry is something the por
 
 Includes (not exhaustive):
 
+- **Port capitulation (discipline-doesn't-fit stop).** A grounded stop — Metal 2.0 can't express something, or a change reaches outside the op directory. A **success-tier outcome, not a failure**; set the report's [Outcome](#outcome) to `CAPITULATED`. The entry's fields (op/factory, the constructs that couldn't convert, *why* mechanical conversion failed, and a sketch of the needed change) are specified in [§When the discipline doesn't fit](#when-the-discipline-doesnt-fit) — the framework's calibration signal, worth more than any workaround buried in a diff.
 - **Boundary-rule assumption violations.** A call site outside the op directory that required `sem::name` or `tensor::name` (per the [scope boundary](#read-this-first)). Cite the file:line, the callee, and the named handle that the call site demands. Tagged "API: requires implicit conversion / refactor."
 - **Kernel-lib gaps.** Cases where a shared kernel-lib helper or LLK is incompatible with Metal 2.0 binding semantics in a way the porter cannot work around. Cite the helper, the call site, the specific incompatibility.
 - **Framework gaps.** Audit-time entries that were flagged (e.g., an UNSUPPORTED feature) and that bit during the port. Cite the audit entry, what the port needed, and the workaround (if any) you adopted.
