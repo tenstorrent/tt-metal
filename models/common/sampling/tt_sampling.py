@@ -10,9 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.sampling._utils import compact_debug_list as _compact_debug_list
-from models.common.sampling._utils import is_default_value, is_llama33_70b_model, is_power_of_2
-from models.common.sampling._utils import log_sampling_debug as _log_sampling_debug
+from models.common.sampling._utils import is_default_value, is_power_of_2
 from models.common.sampling._utils import upper_power_of_2
 from models.common.sampling.tt_log_probs import LogProbsCalculator
 from models.common.sampling.vocab_padding import (
@@ -105,7 +103,6 @@ class TTSampling(LightweightModule):
     ):
         super().__init__()
         self.mesh_device = mesh_device
-        self._sampling_debug_enabled = is_llama33_70b_model(args)
         # Multi-step reduction is supported only on single device
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl
@@ -544,18 +541,6 @@ class TTSampling(LightweightModule):
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
-        _log_sampling_debug(
-            self._sampling_debug_enabled,
-            "TTSampling reset params",
-            force_argmax=self._force_argmax_sampling,
-            empty_slots=_compact_debug_list(empty_slots),
-            top_k=_compact_debug_list(k),
-            top_p=_compact_debug_list(p),
-            temperature=_compact_debug_list(temp),
-            enable_log_probs=_compact_debug_list(enable_log_probs),
-            num_logprobs=_compact_debug_list(num_logprobs),
-            sampling_dp=self._sampling_dp,
-        )
         if not self._force_argmax_sampling:
             # When _sampling_dp > 1, create multi-device host tensors so
             # copy_host_to_device_tensor writes per-row shards correctly.
@@ -679,16 +664,6 @@ class TTSampling(LightweightModule):
         Returns:
             Sampled token indices tensor
         """
-        _log_sampling_debug(
-            self._sampling_debug_enabled,
-            "TTSampling forward",
-            force_argmax=self._force_argmax_sampling,
-            logits_shape=list(x.shape),
-            tt_out_tok_shape=list(tt_out_tok.shape) if tt_out_tok is not None else None,
-            max_top_k=self.max_top_k,
-            multi_step_reduction=self.multi_step_reduction,
-            sampling_dp=self._sampling_dp,
-        )
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
             slice_valid_vocab = self._can_slice_valid_vocab_for_argmax()

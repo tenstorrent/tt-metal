@@ -17,11 +17,6 @@ from models.common.llama_models import (
     StopReason,
 )
 from models.common.sampling import SamplingParams, broadcast_sampling_params, format_sampling_params
-from models.common.sampling._utils import (
-    compact_debug_list as _compact_debug_list,
-    is_llama33_70b_model,
-    log_sampling_debug as _log_sampling_debug,
-)
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
 from models.tt_transformers.tt.common import (
@@ -36,10 +31,6 @@ from models.tt_transformers.tt.common import (
 # LlamaModel.prepare_decode_inputs_host: (tokens, current_pos, rope_idxs, page_table).
 # Used to refresh only the page-table trace input when KV blocks are reallocated.
 DECODE_PAGE_TABLE_INPUT_IDX = 3
-
-
-def _seed_debug_enabled() -> bool:
-    return os.getenv("TT_LLAMA_SEED_DEBUG", "").lower() in ("1", "true", "yes", "on")
 
 
 def _as_list(value):
@@ -74,63 +65,6 @@ def _fill_inactive_params_from_active(params, active_slots, max_batch):
                 values[idx] = fill_value
         updates[f.name] = values
     return replace(params, **updates)
-
-
-def _tensor_debug_summary(value):
-    if value is None:
-        return None
-    if isinstance(value, torch.Tensor):
-        summary = {"shape": list(value.shape), "dtype": str(value.dtype)}
-        if value.numel() <= 64:
-            summary["values"] = value.reshape(-1).tolist()
-        else:
-            summary["head"] = value.reshape(-1)[:8].tolist()
-        return summary
-    return value
-
-
-def _sampling_params_debug_summary(params):
-    if params is None:
-        return None
-    fields_to_log = (
-        "temperature",
-        "top_k",
-        "top_p",
-        "presence_penalty",
-        "frequency_penalty",
-        "repetition_penalty",
-        "seed",
-        "enable_log_probs",
-        "num_logprobs",
-    )
-    return {name: _compact_debug_list(getattr(params, name, None)) for name in fields_to_log if hasattr(params, name)}
-
-
-def _slot_remap_debug_summary(slot_remap, max_items=12):
-    if slot_remap is None:
-        return None
-    values = _as_list(slot_remap)
-    moves = [(idx, int(old)) for idx, old in enumerate(values) if int(old) != idx]
-    if len(moves) <= max_items:
-        return moves
-    half = max(1, max_items // 2)
-    return {"len": len(moves), "head": moves[:half], "tail": moves[-half:]}
-
-
-def _seed_manager_debug_summary(seed_manager, slots=None):
-    if seed_manager is None:
-        return None
-    if slots is None:
-        slots = range(seed_manager.max_batch_size)
-    summary = []
-    for slot in slots:
-        slot = int(slot)
-        if slot < 0 or slot >= seed_manager.max_batch_size:
-            continue
-        seed = seed_manager.seeds[slot]
-        if seed is not None:
-            summary.append((slot, seed))
-    return _compact_debug_list(summary)
 
 
 def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
@@ -251,7 +185,6 @@ class Generator(WarmupForwardMixin):
             self.model_args = self.model_args[0]
         if isinstance(self.model, List):
             self.model = self.model[0]
-        self._sampling_debug_enabled = is_llama33_70b_model(self.model_args)
         self.tokenizer = self.model_args.tokenizer
         self.trace_id_prefill = defaultdict(lambda: None)
         self.trace_inputs_prefill = defaultdict(lambda: None)
@@ -550,15 +483,6 @@ class Generator(WarmupForwardMixin):
             requires_slot_stable_prefill = explicit_seeded_prefill or any(
                 float(temp) == 0.0 for temp in temperature_values if temp is not None
             )
-            if explicit_seeded_prefill and _seed_debug_enabled():
-                seed_slot_pairs = [
-                    (idx, int(slot), seed_values[idx] if idx < len(seed_values) else None)
-                    for idx, slot in enumerate(empty_slots[: len(seed_values)])
-                ]
-                logger.info(
-                    f"SeedDBG Galaxy prefill: empty_slots={empty_slots}, prompt_lens={prompt_lens}, "
-                    f"seed_slot_pairs={seed_slot_pairs}"
-                )
 
         # If batch >= 16 and padded prompt_lens are all 128, and no cached tokens, use batched prefill.
         # Seeded or greedy on-device sampling currently requires slot-stable logits, so use the
@@ -589,25 +513,6 @@ class Generator(WarmupForwardMixin):
             and 128 in prefill_seq_lens
             and len(set(prefill_seq_lens)) > 1
         )
-        _log_sampling_debug(
-            self._sampling_debug_enabled,
-            "Galaxy prefill plan",
-            batch=batch,
-            batch_seq_len=batch_seq_len,
-            empty_slots=_compact_debug_list(empty_slots),
-            prompt_lens=_compact_debug_list(prompt_lens),
-            start_pos=_compact_debug_list(start_pos),
-            num_cached_tokens=_compact_debug_list(num_cached_tokens_list),
-            prefill_seq_lens=_compact_debug_list(prefill_seq_lens),
-            return_logits=return_logits,
-            save_logits_to_host=save_logits_to_host,
-            do_device_sampling=do_device_sampling,
-            use_batched_prefill=use_batched_prefill,
-            group_mixed_128_prefill=group_mixed_128_prefill,
-            tokens=_tensor_debug_summary(tokens),
-            page_table=_tensor_debug_summary(page_table),
-            sampling_params=_sampling_params_debug_summary(sampling_params),
-        )
 
         prefill_work_items = []
         if use_batched_prefill:
@@ -633,19 +538,6 @@ class Generator(WarmupForwardMixin):
             prefill_work_items.extend(
                 (False, [request_idx], [empty_slots[request_idx]]) for request_idx in range(batch)
             )
-        _log_sampling_debug(
-            self._sampling_debug_enabled,
-            "Galaxy prefill work items",
-            num_items=len(prefill_work_items),
-            items=[
-                {
-                    "batched": work_use_batched,
-                    "request_indices": request_indices,
-                    "request_slots": request_slots,
-                }
-                for work_use_batched, request_indices, request_slots in prefill_work_items
-            ],
-        )
 
         if do_device_sampling and use_batched_prefill:
             self.tt_logits_accumulated_batched = []
@@ -818,15 +710,6 @@ class Generator(WarmupForwardMixin):
             # Use batched list for batched prefill, persistent buffer for non-batched
             logits_source = self.tt_logits_accumulated_batched if use_batched_prefill else self.tt_logits_accumulated
             concat_sub_core_grids = getattr(self.model_args, "sub_core_grids", None)
-            _log_sampling_debug(
-                self._sampling_debug_enabled,
-                "Galaxy prefill sampling start",
-                max_batch=max_batch,
-                empty_slots=_compact_debug_list(empty_slots),
-                use_batched_prefill=use_batched_prefill,
-                logits_source_len=len(logits_source),
-                sampling_params=_sampling_params_debug_summary(sampling_params),
-            )
 
             if not explicit_seeded_prefill:
                 # Build the slot batch while the prefill sub-device manager is
@@ -918,13 +801,6 @@ class Generator(WarmupForwardMixin):
                     ttnn.deallocate(single_logits_batch)
 
                 output_toks = torch.stack(sampled_values).to(torch.int32)
-                _log_sampling_debug(
-                    self._sampling_debug_enabled,
-                    "Galaxy prefill sampled",
-                    sampled_slots=_compact_debug_list(empty_slots),
-                    sampled_by_slot=_compact_debug_list(slot_output_tokens.reshape(-1).tolist()),
-                    output_toks=_tensor_debug_summary(output_toks),
-                )
                 if log_prob_values:
                     prefill_log_probs = torch.stack(log_prob_values)
 
@@ -959,13 +835,6 @@ class Generator(WarmupForwardMixin):
                 # sampled_tokens has 32 entries ordered by slot.
                 sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
                 output_toks = sampled_tensor[empty_slots]
-                _log_sampling_debug(
-                    self._sampling_debug_enabled,
-                    "Galaxy prefill sampled",
-                    sampled_slots=_compact_debug_list(empty_slots),
-                    sampled_by_slot=_compact_debug_list(sampled_tensor.tolist()),
-                    output_toks=_tensor_debug_summary(output_toks),
-                )
 
                 if tt_log_probs is not None:
                     tt_lp = tt_log_probs
@@ -983,9 +852,6 @@ class Generator(WarmupForwardMixin):
             return tt_out_logits_all_users
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens.")
-        _log_sampling_debug(
-            self._sampling_debug_enabled, "Galaxy prefill complete", output_toks=_tensor_debug_summary(output_toks)
-        )
         if prefill_log_probs is not None:
             return output_toks, prefill_log_probs
         return output_toks
@@ -1432,14 +1298,47 @@ class Generator(WarmupForwardMixin):
             has_greedy = any(float(temp) == 0.0 for temp in temperature_values if temp is not None)
             has_random = any(float(temp) != 0.0 for temp in temperature_values if temp is not None)
             if has_greedy and has_random:
-                reset_inputs = True
-                reset_reasons.append("mixed_greedy_random_sampling")
+                # Mixed greedy+random batches use device-resident tokens/positions,
+                # exactly like all-greedy batches: the sampled token is fed back
+                # on-device and current_pos is advanced in-trace, so nothing is
+                # routed through a per-step host reload of the reused-trace input
+                # buffer. Forcing that host reload every step (the legacy behavior)
+                # routes the device-sampled token through the host readback, which
+                # under async/traced overlap is enqueue-mis-ordered vs the next
+                # step's trace overwrite -> interleaved stale/current tokens ->
+                # deterministic garbage for the whole mixed batch. Per-request
+                # sampling params are fixed for a request's lifetime and are
+                # uploaded at batch setup / refreshed on reset_batch, so no per-step
+                # re-upload is needed. (The residual reset-driven greedy "doubling"
+                # is handled by preserving device current_pos across page_table /
+                # reset_batch reloads -- see the page_table_changed branch below and
+                # the pre-reload drain in the lane runner.) Set
+                # LLAMA_MIXED_HOST_RESET=1 to restore the legacy per-step host reload
+                # (debug/fallback only).
+                if os.environ.get("LLAMA_MIXED_HOST_RESET") == "1":
+                    reset_inputs = True
+                    reset_reasons.append("mixed_greedy_random_sampling")
         page_table_changed = False
         if page_table is not None:
             page_table_changed = self.prev_page_table is None or torch.any(self.prev_page_table != page_table).item()
-            if page_table_changed:
+            if page_table_changed and not on_device_sampling:
+                # Host sampling: tokens/positions are host-authoritative every step,
+                # so a page-table change (new KV block) needs a full input reload.
                 reset_inputs = True
                 reset_reasons.append("page_table_changed")
+            elif page_table_changed:
+                # Device-resident decode (on-device sampling): tokens/positions live
+                # on device (fed back + plus_one in-trace) and the host copy is
+                # intentionally stale. A page-table change must NOT force a full
+                # reload -- under async overlap the stale host current_pos would
+                # clobber the device's advanced position and the slot would
+                # re-decode its previous token (the greedy "doubling"). Instead fall
+                # through to the page_table_changed branch in _decode_easy_trace_text,
+                # which refreshes ONLY the page-table trace input and preserves the
+                # device-produced tokens/positions. (Genuine (re)inits -- first
+                # decode, mode switch, reset_batch, slot remap -- still set
+                # reset_inputs via their own reasons and take the full-reload path.)
+                reset_reasons.append("page_table_changed_devres")
 
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
@@ -1470,21 +1369,6 @@ class Generator(WarmupForwardMixin):
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
-        _log_sampling_debug(
-            self._sampling_debug_enabled,
-            "Galaxy decode plan",
-            reset_inputs=reset_inputs,
-            reset_batch=reset_batch,
-            reset_reasons=reset_reasons,
-            on_device_logits=on_device_logits,
-            on_device_sampling=on_device_sampling,
-            active_slots=_compact_debug_list(active_seed_slots),
-            start_pos=_compact_debug_list(start_pos),
-            tokens=_tensor_debug_summary(tokens),
-            page_table=_tensor_debug_summary(page_table),
-            sampling_params=_sampling_params_debug_summary(sampling_params),
-            seed_state=_seed_manager_debug_summary(self.model.sampling.seed_manager, active_seed_slots),
-        )
 
         if enable_trace:
             tt_tok, tt_log_probs = self._decode_easy_trace_text(
@@ -1722,18 +1606,7 @@ class Generator(WarmupForwardMixin):
         if slot_remap is not None:
             sm_bs = seed_manager.max_batch_size
             rank_remap = slot_remap[0:sm_bs]
-            _log_sampling_debug(
-                self._sampling_debug_enabled,
-                "Galaxy decode slot remap",
-                slot_remap=_slot_remap_debug_summary(rank_remap),
-                seed_state_before=_seed_manager_debug_summary(seed_manager),
-            )
             seed_manager.apply_slot_remap(rank_remap)
-            _log_sampling_debug(
-                self._sampling_debug_enabled,
-                "Galaxy decode slot remap applied",
-                seed_state_after=_seed_manager_debug_summary(seed_manager),
-            )
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
@@ -1750,34 +1623,9 @@ class Generator(WarmupForwardMixin):
             if reset_batch:
                 sampling_module.reset_prompt_tokens(prompt_tokens)
                 sampling_module.reset_output_state(output_tokens)
-            _log_sampling_debug(
-                self._sampling_debug_enabled,
-                "Galaxy decode sampling params reset",
-                sampling_params=_sampling_params_debug_summary(sampling_params),
-                prompt_tokens=_tensor_debug_summary(prompt_tokens),
-                output_tokens=_tensor_debug_summary(output_tokens),
-            )
 
         if sampling_params is not None and (active_seed_slots is None or active_seed_slots):
             seed_values = getattr(sampling_params, "seed", None)
-            if _seed_debug_enabled():
-                debug_slots = (
-                    active_seed_slots if active_seed_slots is not None else list(range(seed_manager.max_batch_size))
-                )
-                seed_values_list = _as_list(seed_values)
-                seed_slot_pairs = [
-                    (
-                        slot,
-                        seed_values_list[slot] if slot < len(seed_values_list) else None,
-                        seed_manager.seeds[slot],
-                        seed_manager.seed_counters[slot],
-                    )
-                    for slot in debug_slots
-                ]
-                logger.info(
-                    f"SeedDBG Galaxy decode: reset_batch={reset_batch}, active_seed_slots={active_seed_slots}, "
-                    f"seed_slot_pairs={seed_slot_pairs}"
-                )
             seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
             if reset_inputs:
                 seed_manager.align_seed_counters_to_positions(seed_values, active_seed_slots, start_pos)

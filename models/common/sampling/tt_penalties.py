@@ -14,9 +14,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.sampling._utils import compact_debug_list as _compact_debug_list
-from models.common.sampling._utils import is_llama33_70b_model
-from models.common.sampling._utils import log_sampling_debug as _log_sampling_debug
 
 
 @dataclass
@@ -30,29 +27,6 @@ class PenaltyContext:
     repetition_penalties: ttnn.Tensor
     inverse_repetition_penalties: ttnn.Tensor
     sub_core_grids: Any | None = None
-
-
-def _tokens_debug_summary(tokens: torch.Tensor) -> dict[str, Any]:
-    valid = tokens >= 0
-    row_lengths = valid.sum(dim=1).tolist()
-    flat_valid = tokens[valid]
-    if flat_valid.numel() == 0:
-        unique_count = 0
-        duplicate_count = 0
-        head = []
-    else:
-        unique_count = int(torch.unique(flat_valid).numel())
-        duplicate_count = int(flat_valid.numel() - unique_count)
-        head = flat_valid[:16].tolist()
-    return {
-        "shape": list(tokens.shape),
-        "dtype": str(tokens.dtype),
-        "valid_tokens": int(valid.sum().item()),
-        "unique_tokens": unique_count,
-        "duplicate_tokens": duplicate_count,
-        "row_lengths": _compact_debug_list(row_lengths),
-        "head_tokens": head,
-    }
 
 
 def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> ttnn.Tensor:
@@ -109,7 +83,6 @@ class TTPenalties(LightweightModule):
     def __init__(self, mesh_device, args):
         super().__init__()
         self.mesh_device = mesh_device
-        self._sampling_debug_enabled = is_llama33_70b_model(args)
         self.cluster_shape = mesh_device.shape
         # Floor at 32 so that ROW_MAJOR [batch, vocab] buffers passed to
         # ttnn.tilize always have physical_volume divisible by TILE_HW
@@ -283,11 +256,6 @@ class TTPenalties(LightweightModule):
     def reset_prompt_tokens(self, prompt_tokens: torch.Tensor):
         prompt_tokens_2d = prompt_tokens.reshape(-1, prompt_tokens.shape[-1])
         prompt_tokens_2d = self._pad_batch_to_max(prompt_tokens_2d, pad_value=-1)
-        _log_sampling_debug(
-            self._sampling_debug_enabled,
-            "TTPenalties reset prompt tokens",
-            tokens=_tokens_debug_summary(prompt_tokens_2d),
-        )
 
         # Build reset masks on host to avoid device scatter_add races on
         # duplicate prompt token ids (common in penalty tests/prompts).
@@ -308,18 +276,11 @@ class TTPenalties(LightweightModule):
         if tokens is not None:
             tokens_2d = tokens.reshape(-1, tokens.shape[-1])
             tokens_2d = self._pad_batch_to_max(tokens_2d, pad_value=-1)
-            _log_sampling_debug(
-                self._sampling_debug_enabled,
-                "TTPenalties reset output tokens",
-                tokens=_tokens_debug_summary(tokens_2d),
-            )
             output_counts = self._token_counts_host(tokens_2d)
             output_mask = (output_counts > 0).to(torch.int32)
             self._copy_int_host_to_device(self.output_counts_gathered, output_counts, self._shard_dims_gathered)
             self._copy_int_host_to_device(self.output_counts, output_counts, self._shard_dims_mask)
             self._copy_int_host_to_device(self.output_mask, output_mask, self._shard_dims_mask)
-        else:
-            _log_sampling_debug(self._sampling_debug_enabled, "TTPenalties reset output tokens", tokens=None)
 
     def update_output_tokens(self, new_tokens):
         # Reshape decode token to [batch, 1] for scatter_add.
@@ -328,13 +289,6 @@ class TTPenalties(LightweightModule):
         batch = self.per_row_batch_size
         fast_path = (new_tokens.shape[-1] == batch and new_tokens.shape[-2] == 1) or (
             new_tokens.shape[-2] == batch and new_tokens.shape[-1] == 1
-        )
-        _log_sampling_debug(
-            self._sampling_debug_enabled,
-            "TTPenalties update output tokens",
-            new_tokens_shape=list(new_tokens.shape),
-            per_row_batch=batch,
-            fast_path=fast_path,
         )
         if fast_path:
             new_tokens = ttnn.reshape(new_tokens, [batch, 1], **self._op_kwargs)
