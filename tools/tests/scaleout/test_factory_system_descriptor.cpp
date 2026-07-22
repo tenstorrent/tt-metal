@@ -460,6 +460,13 @@ fsd::proto::FactorySystemDescriptor make_fsd_with_paths(
     return fsd;
 }
 
+// Add an eth connection between two hosts (only host_id matters for hierarchy queries).
+void add_connection(fsd::proto::FactorySystemDescriptor& fsd, uint32_t host_id_a, uint32_t host_id_b) {
+    auto* connection = fsd.mutable_eth_connections()->add_connection();
+    connection->mutable_endpoint_a()->set_host_id(host_id_a);
+    connection->mutable_endpoint_b()->set_host_id(host_id_b);
+}
+
 }  // namespace
 
 TEST(FsdQuery, LongestCommonPrefixByHostId) {
@@ -516,6 +523,45 @@ TEST(FsdQuery, ThrowsOnUnknownHostIdOrHostname) {
 TEST(FsdQuery, ThrowsOnDuplicateHostname) {
     auto fsd = make_fsd_with_paths({{"dup", {"sp_0"}}, {"dup", {"sp_1"}}});
     EXPECT_THROW(FsdQuery{fsd}, std::runtime_error);
+}
+
+TEST(FsdQuery, HierarchyDepthIsCommonPrefixLength) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"root", "sp_0", "node_0"}},
+        {"node1", {"root", "sp_0", "node_1"}},
+        {"node2", {"root", "sp_1"}},
+    });
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.hierarchy_depth(0u, 1u), 2u);  // share root, sp_0
+    EXPECT_EQ(query.hierarchy_depth(0u, 2u), 1u);  // share root only
+    EXPECT_EQ(query.hierarchy_depth("node0", "node1"), 2u);
+    EXPECT_EQ(query.hierarchy_depth(0u, 0u), 3u);  // full path with itself
+}
+
+TEST(FsdQuery, MaxDepthAndTiersFromConnections) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"root", "sp_0", "node_0"}},
+        {"node1", {"root", "sp_0", "node_1"}},
+        {"node2", {"root", "sp_1", "node_0"}},
+    });
+    add_connection(fsd, 0, 1);  // depth 2 (root, sp_0)
+    add_connection(fsd, 0, 2);  // depth 1 (root)
+    add_connection(fsd, 1, 2);  // depth 1 (root)
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.max_hierarchy_depth(), 2u);
+    // Distinct tiers, deepest-first; front() is the max depth.
+    EXPECT_EQ(query.hierarchy_tiers_deepest_first(), (std::vector<uint32_t>{2u, 1u}));
+    EXPECT_EQ(query.hierarchy_tiers_deepest_first().front(), query.max_hierarchy_depth());
+}
+
+TEST(FsdQuery, NoConnectionsMeansZeroMaxDepth) {
+    auto fsd = make_fsd_with_paths({{"node0", {"root", "sp_0"}}});
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.max_hierarchy_depth(), 0u);
+    EXPECT_TRUE(query.hierarchy_tiers_deepest_first().empty());
 }
 
 }  // namespace tt::scaleout_tools
