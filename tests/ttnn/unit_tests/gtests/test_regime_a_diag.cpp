@@ -113,7 +113,8 @@ TEST_F(RegimeADiagFixture, Run) {
     constexpr uint32_t kIn1Preserve = (1u << 22) | (1u << 25);
     if (mask == 0 || mask == 1024 || mask == 2048 || mask == 4096 || mask == 16384 || mask == 65536 || mask == 262144 ||
         mask == 524288 || mask == 2097152 || mask == 32 /*DIAG_RINGDRAIN: source-lifetime/ordering-preserving*/ ||
-        mask == 64 /*DIAG_REDTREE: fan-in-2 tree, same fp32-acc adds (associative) => bit-exact*/ ||
+        mask == 64 /*DIAG_REDTREE: fan-in-2 tree; reassociates sum (NOT bit-exact) but constant-input == K*/ ||
+        mask == 128 /*DIAG_RSCATTER: ring reduce-scatter; reassociates but constant-input sums to K exactly*/ ||
         (mask != 0u && (mask & ~kIn1Preserve) == 0u)) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
@@ -141,7 +142,9 @@ TEST_F(RegimeADiagFixture, Run) {
 // cached-program. A mispairing/repeat/omit shifts the per-element sums and collapses PCC below the 0.99 bar.
 TEST_F(RegimeADiagFixture, Correctness) {
     const uint32_t M = 256, K = 2048, N = 1024;
-    const uint32_t Ns = 1, Pk = 4, Sm = 2, kb = 2, nsb = 2;  // exercises ring + split-K reduction + M-split
+    // nsb=4 => N_bpc=1 (one output block/core), so this config is valid for ALL of chain / full-wait / tree /
+    // reduce-scatter (the last requires M_block==Pk && N_bpc==1). Exercises ring + split-K reduce + M-split.
+    const uint32_t Ns = 1, Pk = 4, Sm = 2, kb = 2, nsb = 4;
     const uint32_t Mt = M / 32, Kt = K / 32, Nt = N / 32;
     auto* device = device_;
 
@@ -182,18 +185,29 @@ TEST_F(RegimeADiagFixture, Correctness) {
     (void)Kt;
     (void)Nt;
 
-    // default progressive path (0) + the full-wait A/B baseline (1024) + the fan-in-2 reduction tree
-    // (DIAG_REDTREE, 64 — this config is Pk=4/Sm=2, so both mm-groups form a real depth-2 tree); each fresh
-    // then cached (2nd invocation = cached program). The tree sums the SAME four k-slice partials in a
-    // different association order, so PCC vs the f32 golden must stay >= 0.99 (a mis-linked channel / dropped
-    // partial / slot aliasing would collapse it).
-    for (uint32_t mask : {0u, 1024u, 64u}) {
+    // default progressive path (0) + full-wait A/B (1024) + fan-in-2 reduction tree (DIAG_REDTREE, 64) +
+    // ring reduce-scatter (DIAG_RSCATTER, 128). This config is Pk=4/Sm=2, so every reduction group is a real
+    // depth-2 tree / 4-core reduce-scatter ring. The tree and reduce-scatter sum the SAME four k-slice partials
+    // in a DIFFERENT association order (and round bf16 per hop), so they are NOT bit-identical to the chain —
+    // PCC vs the f32 golden must stay >= 0.99, and we ALSO report the elementwise max|out - chain| vs the chain
+    // (mask 0) to quantify the reassociation (a mis-linked ring / dropped partial / slot aliasing collapses PCC).
+    std::vector<float> chain_ref;  // mask-0 pass-0 output, the bitwise reference
+    for (uint32_t mask : {0u, 1024u, 64u, 128u}) {
         for (int pass = 0; pass < 2; ++pass) {  // pass 0 = fresh/compile, pass 1 = cached-program replay
             Tensor out =
                 ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
             const std::vector<float> got = out.to_vector<float>();
             const double p = pcc(got, golden);
-            fmt::print("DIAGCORR mask={} pass={} pcc={:.5f}\n", mask, pass, p);
+            if (mask == 0u && pass == 0) {
+                chain_ref = got;
+            }
+            double maxdiff = 0.0;
+            if (!chain_ref.empty() && got.size() == chain_ref.size()) {
+                for (size_t k = 0; k < got.size(); ++k) {
+                    maxdiff = std::max(maxdiff, std::abs(static_cast<double>(got[k]) - chain_ref[k]));
+                }
+            }
+            fmt::print("DIAGCORR mask={} pass={} pcc={:.5f} maxdiff_vs_chain={:.6f}\n", mask, pass, p, maxdiff);
             EXPECT_GT(p, 0.99) << "variant mask=" << mask << " pass=" << pass << " PCC too low (" << p << ")";
         }
     }

@@ -191,6 +191,15 @@ struct CorePlan {
     uint32_t red_channel{};       // chain: 0
     uint32_t red_parent_nrecv{};  // chain: 1
     uint32_t red_src_idx[2]{};    // chain: {red_prev_idx, self}
+
+    // DIAG_RSCATTER ring reduce-scatter over the Pk cores of a reduction group (factory post-process fills
+    // these; chain/tree leave them at self/0). rs_pos = position in the optimized Pk-cycle; rs_next/prev_idx =
+    // cyclic neighbours (core indices); rs_own_chunk = (rs_pos+1)%Pk = the block row-chunk this core finally
+    // owns and writes to DRAM.
+    uint32_t rs_pos{};
+    uint32_t rs_next_idx{};
+    uint32_t rs_prev_idx{};
+    uint32_t rs_own_chunk{};
 };
 
 struct ExecutionPlan {
@@ -419,6 +428,8 @@ inline PlanResult build_plan(const PlanInputs& in) {
             cp.red_parent_nrecv = 1u;
             cp.red_src_idx[0] = cp.red_prev_idx;
             cp.red_src_idx[1] = i;
+            cp.rs_next_idx = i;  // reduce-scatter ring links default to self (filled by the factory post-process)
+            cp.rs_prev_idx = i;
 
             plan.cores[i] = cp;
         }

@@ -335,6 +335,35 @@ void add_bias_and_addcmul_block(
     cb_pop_front(intermediate_cb, out_block_num_tiles);
 }
 
+#ifdef RSCATTER
+// Ring reduce-scatter helpers (test-only). Copy n_tiles from in_cb starting at tile in_tile_off -> out_cb
+// (used to seed the ring with this core's own row-chunk). No cb push/pop (caller manages).
+void rs_copy_chunk(uint32_t in_cb, uint32_t in_tile_off, uint32_t out_cb, uint32_t n_tiles) {
+    copy_tile_to_dst_init_short(in_cb);
+    reconfig_data_format_srca(in_cb);
+    pack_reconfig_data_format(out_cb);
+    for (uint32_t i = 0; i < n_tiles; ++i) {
+        acquire_dst();
+        copy_tile(in_cb, in_tile_off + i, 0);
+        pack_tile(0, out_cb);
+        release_dst();
+    }
+}
+// out_cb[0..n] = acc_cb[acc_tile_off..] + add_cb[0..n]. acc_cb is the resident fp32 matmul partial (read at a
+// row offset); add_cb is the received bf16 chunk. Adds this core's own row into the running ring sum.
+void rs_add_chunk(uint32_t acc_cb, uint32_t acc_tile_off, uint32_t add_cb, uint32_t out_cb, uint32_t n_tiles) {
+    add_tiles_init(acc_cb, add_cb);
+    reconfig_data_format(acc_cb, add_cb);
+    pack_reconfig_data_format(out_cb);
+    for (uint32_t i = 0; i < n_tiles; ++i) {
+        acquire_dst();
+        add_tiles(acc_cb, add_cb, acc_tile_off + i, i, 0);
+        pack_tile(0, out_cb);
+        release_dst();
+    }
+}
+#endif
+
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
     const uint32_t in0_cb,
@@ -417,6 +446,11 @@ void kernel_main() {
     // final (0 = leaf/copy, 1 = one add, 2 = root two adds). Follows is_reduce_bottom; never combined with
     // fusion, so it cannot collide with the fused is_reduce_top read below.
     const uint32_t tree_num_recv = get_arg_val<uint32_t>(argidx++);
+#endif
+#ifdef RSCATTER
+    // Ring reduce-scatter (test-only): this core's position in the Pk ring. Follows is_reduce_bottom; unfused
+    // only, so no collision with the fused is_reduce_top read below.
+    const uint32_t rs_ring_pos = get_arg_val<uint32_t>(argidx++);
 #endif
 
 // Any fusion active => the reduction ROOT (is_top) applies bias/activation/addcmul exactly once after the
@@ -571,11 +605,43 @@ void kernel_main() {
             cb_push_back(intermediate_cb, out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
+#ifndef RSCATTER
             cb_reserve_back(out_cb, out_block_num_tiles);
+#endif
 #ifdef REDUCE_K
-            // Split-K plan B column reduction: bottom band emits its own matmul partial; every other band
-            // adds the running sum forwarded up from the band below. The DM then either forwards out_cb up
-            // (non-top bands) or writes it to DRAM (top band).
+#ifdef RSCATTER
+            // Ring reduce-scatter (test-only, no-fusion). intermediate_cb (fp32, resident) = my matmul partial
+            // laid out row-major (row m = tiles [m*N_block .. m*N_block+N_block)). Seed cb_send with my own row
+            // `rs_ring_pos`; over P-1 rounds receive chunk d=(rs_ring_pos-t-1)%P, add my resident row d, and
+            // forward the running sum (rounds < P-2) or write my fully-reduced OWNED row (last round) -> out_cb.
+            {
+                constexpr uint32_t P = 4u;                            // Pk (RSCATTER requires Pk==4)
+                constexpr uint32_t cb_send_cb = tt::CBIndex::c_4;     // compute -> writer send-chunk CB (bf16)
+                constexpr uint32_t cb_recv_cb = tt::CBIndex::c_5;     // incoming-chunk CB (bf16), 2 slots
+                cb_wait_front(intermediate_cb, out_block_num_tiles);  // resident; popped after the ring
+                cb_reserve_back(cb_send_cb, N_block_tiles);           // seed: my own row `rs_ring_pos`
+                rs_copy_chunk(intermediate_cb, rs_ring_pos * N_block_tiles, cb_send_cb, N_block_tiles);
+                cb_push_back(cb_send_cb, N_block_tiles);
+                for (uint32_t t = 0; t + 1u < P; ++t) {
+                    const uint32_t d = (rs_ring_pos + P - t - 1u) % P;  // chunk received + reduced this round
+                    cb_wait_front(cb_recv_cb, N_block_tiles);
+                    if (t + 1u < P - 1u) {  // forward the running sum to next round's send
+                        cb_reserve_back(cb_send_cb, N_block_tiles);
+                        rs_add_chunk(intermediate_cb, d * N_block_tiles, cb_recv_cb, cb_send_cb, N_block_tiles);
+                        cb_push_back(cb_send_cb, N_block_tiles);
+                    } else {  // last round: this is my fully-reduced OWNED row -> writer writes it to DRAM
+                        cb_reserve_back(out_cb, N_block_tiles);
+                        rs_add_chunk(intermediate_cb, d * N_block_tiles, cb_recv_cb, out_cb, N_block_tiles);
+                        cb_push_back(out_cb, N_block_tiles);
+                    }
+                    cb_pop_front(cb_recv_cb, N_block_tiles);
+                }
+                cb_pop_front(intermediate_cb, out_block_num_tiles);
+            }
+#else  // non-RSCATTER REDUCE_K branches (chain / NO_REDUCE / REDTREE / fused) share the intermediate wait
+       // Split-K plan B column reduction: bottom band emits its own matmul partial; every other band
+       // adds the running sum forwarded up from the band below. The DM then either forwards out_cb up
+       // (non-top bands) or writes it to DRAM (top band).
             cb_wait_front(intermediate_cb, out_block_num_tiles);
 #ifdef DIAG_NO_REDUCE
             // NO_REDUCE ablation: force the bottom-band copy path on EVERY core so it never waits for or adds
@@ -585,8 +651,8 @@ void kernel_main() {
 #elif defined(REDTREE)
             // Fan-in-2 reduction tree (test-only, no-fusion). num_recv rounds of reduce-add. Leaf (num_recv==0)
             // forwards its own partial (copy_block); each round r<num_recv-1 accumulates in place; the final
-            // round writes intermediate + cb_reduce -> out_cb. num_recv==1 is byte-identical to the chain
-            // non-bottom path; num_recv==0 to the chain bottom path (addition is associative -> bit-exact).
+            // round writes intermediate + cb_reduce -> out_cb. num_recv==1 matches the chain non-bottom path;
+            // num_recv==0 the chain bottom path. (Tree reassociates the sum -> PCC-preserving, not bit-exact.)
             if (tree_num_recv == 0u) {
                 copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
             } else {
@@ -654,7 +720,8 @@ void kernel_main() {
                 cb_pop_front(intermediate_cb, out_block_num_tiles);
 #endif  // fusion kind
             }
-#endif  // fusion / no-fusion
+#endif  // DIAG_NO_REDUCE / REDTREE / no-fusion chain / fused
+#endif  // RSCATTER vs non-RSCATTER
 #elif !defined(FUSE_TERNARY)
             cb_wait_front(intermediate_cb, out_block_num_tiles);
 #ifndef FUSE_BIAS

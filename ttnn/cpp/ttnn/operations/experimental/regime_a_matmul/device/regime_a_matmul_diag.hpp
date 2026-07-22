@@ -39,9 +39,11 @@ enum RegimeADiag : uint32_t {
     // then kk1->kk3 at level 1; critical depth 2). kk3 stays the root/is_top DRAM writer. Two disjoint receive
     // CHANNELS at the root (channel 0 = kk2's partial on red_sem, channel 1 = kk1's summed partial on a second
     // red_sem2) avoid the single-counter fungibility hazard of a shared semaphore; the root sums them serially
-    // (round 0 then round 1) into the same reduce-add math as the chain, so output is bit-identical (addition
-    // is associative). Host-side topology post-process only (factory rewrites red links + num_recv/channel);
-    // the chain remains the production default and this bit selects the tree A/B. Must stay PCC-exact.
+    // (round 0 then round 1) with the same reduce-add math as the chain. NOTE: the tree RE-ASSOCIATES the sum
+    // ((p0+p1)+(p2+p3) vs the chain's ((p0+p1)+p2)+p3) and the partials round to bf16 at each hop (cb_reduce is
+    // bf16), so the output is NOT guaranteed bit-identical to the chain — only PCC-preserving (>=0.999 vs the
+    // f32 golden, verified). Host-side topology post-process only (factory rewrites red links + num_recv/channel);
+    // the chain remains the production default and this bit selects the tree A/B. Must stay PCC-preserving.
     // A/B OUTCOME (2026-07-22, fixed-config, 2 reversed batches x 10 relaunches, IQR-separated): the tree does
     // NOT beat the chain on the reduction-EXPOSED primary 256x2048x1024 (Sm=2) — it REGRESSES +1.07% (the
     // reduction tail is already overlapped by the 9us matmul floor, so the depth 3->2 saving is smaller than
@@ -51,6 +53,19 @@ enum RegimeADiag : uint32_t {
     // => NOT adopted as the global default (regresses the primary); kept as this diagnostic. The 32x2048x512
     // win is a candidate for SHAPE-SELECTIVE (picker-gated) tree use — a separate, future decision.
     DIAG_REDTREE = 1u << 6,
+    // Split-K reduction via ring REDUCE-SCATTER (test-only, Pk==4 + M_block==Pk + N_bpc==1). Instead of the
+    // chain propagating an entire output block through Pk-1 serial hops to one root, partition each Pk core's
+    // out block (M_block x N_block, one row per Pk core) into Pk contiguous row-chunks and run a ring
+    // reduce-scatter over the Pk cores: every core sends one chunk and reduces one received chunk per round,
+    // so after Pk-1 rounds each core owns ONE fully-reduced row-chunk and writes it to DRAM itself. All ring
+    // links carry 1/Pk-block payloads concurrently; reduction adds + output writes are distributed (no single
+    // root receive-wait tail). The resident fp32 matmul partial stays in intermediate_cb; only bf16 chunks
+    // cross the ring (reusing the in0-ring payload->credit protocol on red_sem/redfree_sem, double-buffered).
+    // NOTE: reduce-scatter RE-ASSOCIATES the K-sum and rounds bf16 per hop, so output is NOT bit-identical to
+    // the chain — PCC-preserving only (tested with PCC + elementwise maxdiff, never assumed). Unfused output
+    // only (v1); the ring order is an optimized cyclic Hamiltonian over the Pk cores' physical coords. Falls
+    // back to the chain when the block cannot be row-partitioned (M_block != Pk or N_bpc != 1).
+    DIAG_RSCATTER = 1u << 7,
     // A/B baseline for the progressive-cumulative-wait schedule. The default (this bit CLEAR) resident-in0
     // compute path begins matmul as each ring shard arrives (cumulative cb_wait_front during the first N
     // sub-block); this bit restores the OLD single full-slice startup barrier before any matmul. Compute-only
