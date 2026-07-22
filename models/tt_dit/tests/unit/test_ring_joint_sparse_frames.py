@@ -518,6 +518,12 @@ class TestSparseFramesRing:
             window=5,
             add_last_frame=True,
             all_gather_topology=all_gather_topology,
+            # fsl=3840 with chunk=fsl blows L1 CBs (~40 MB vs 1.5 MB budget). Ring-joint has extra
+            # CB overhead vs plain SDPA (rotation buffers + joint tensor slots), so shrink chunks
+            # into divisors of fsl that fit. (10, 12) tile chunks matches Wan dense-SDPA's (288, 512)
+            # shape closely within the sparse-frames divisor constraint (chunk must divide fsl).
+            q_chunk_size_tokens=320,  # 320 tokens = 10 tiles; fsl/12 = 3840/12
+            k_chunk_size_tokens=384,  # 384 tokens = 12 tiles; fsl/10 = 3840/10
         )
 
     @_MESH_TOPOLOGY
