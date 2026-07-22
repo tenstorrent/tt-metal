@@ -243,7 +243,7 @@ def render_summary(
         lines.append("")
 
     if by_op:
-        hdr = f"{'op':<34} " + " ".join(f"{_disp_level(c):>7}" for c in _LEVEL_COLS) + f" {'best ms':>9}"
+        hdr = f"{'op':<34} " + " ".join(f"{_disp_level(c):>8}" for c in _LEVEL_COLS) + f" {'best ms':>9}"
         lines.append(hdr)
         lines.append("-" * len(hdr))
         for sig in sorted(by_op):
@@ -253,11 +253,11 @@ def render_summary(
             for c in _LEVEL_COLS:
                 cell = op[c]
                 if cell is None:
-                    cells.append(f"{'—':>7}")
+                    cells.append(f"{'—':>8}")
                 else:
                     st, ms = cell
                     mark = "✓win" if st == "win" else ("·wedge" if st == "wedge" else "·try")
-                    cells.append(f"{mark:>7}")
+                    cells.append(f"{mark:>8}")
                     if ms is not None and (best is None or ms < best):
                         best = ms
             best_s = f"{best:.2f}" if best is not None else "—"
