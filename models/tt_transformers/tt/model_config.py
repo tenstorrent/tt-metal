@@ -522,16 +522,17 @@ class ModelArgs:
         prefetcher=None,
         use_hf_rope=False,  # Choose HF or mllama RoPE (default: mllama, previously, only that one was used). mllama will be removed, only HF will remain (Issue #37605).
     ):
-        self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
+        has_mesh_device = mesh_device is not None
+        self.num_devices = mesh_device.get_num_devices() if has_mesh_device else 0
         self.mesh_device = mesh_device
         self.arch_name = ttnn.get_arch_name()
-        self.dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
+        self.dram_grid_size = mesh_device.dram_grid_size() if has_mesh_device else None  # CoreCoord with (x, y)
         self.prefetcher = prefetcher
-        self.device_name = determine_device_name(self.mesh_device) if mesh_device is not None else "CPU"
+        self.device_name = determine_device_name(self.mesh_device) if has_mesh_device else "CPU"
 
         logger.info(f"Inferring device name: {self.device_name}")
-        self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else None
-        self.cluster_type = ttnn.cluster.get_cluster_type() if mesh_device is not None else None
+        self.cluster_shape = list(mesh_device.shape) if has_mesh_device else None
+        self.cluster_type = ttnn.cluster.get_cluster_type() if has_mesh_device else None
         self.is_galaxy_cluster = self.cluster_type in [
             ttnn.cluster.ClusterType.GALAXY,
             ttnn.cluster.ClusterType.TG,
@@ -680,7 +681,7 @@ class ModelArgs:
         if self.prefetcher is not None:
             self.use_qk_fused = False
 
-        if self.mesh_device is not None:  # Avoid issue with test_torch.py not having a device
+        if has_mesh_device:  # Avoid issue with test_torch.py not having a device
             # ============================================================================
             # Parameter initialization
             # ============================================================================
