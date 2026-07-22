@@ -30,7 +30,7 @@ from transformers.integrations.sdpa_attention import repeat_kv
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.vibevoice.common.config import MODEL_PATH
-from models.experimental.vibevoice.tests.pcc.lm_pcc_common import (
+from models.experimental.vibevoice.tests.pcc.lm_pcc_helpers import (
     PCC_THRESHOLD,
     PREFILL_CHUNK_SIZE,
     _get_hf_reference_model,
