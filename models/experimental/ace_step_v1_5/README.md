@@ -4,6 +4,8 @@
 
 Blackhole (BH_QB)
 
+> **Note:** Performance optimization currently targets **P150** (single-chip) — it is the perf-tuned SKU. BH_QB runs functionally (replicate path plus the optional mesh/TP features described below) but is not yet the primary perf-tuning target.
+
 ## About ACE-Step
 
 [ACE-Step](https://github.com/ace-step/ACE-Step-1.5) is an open-source music foundation model that generates stereo audio from text (and optional lyrics). Version 1.5 targets commercial-grade quality with fast inference: variable-length output at 48 kHz, multilingual prompts, and optional editing workflows (cover, repaint, vocal-to-BGM). Checkpoints are published on Hugging Face as [ACE-Step/Ace-Step1.5](https://huggingface.co/ACE-Step/Ace-Step1.5).
@@ -233,6 +235,51 @@ Automatic behavior (no extra flags):
 - **Wider VAE overlap** — fewer tile-boundary artifacts on decode.
 - **HF detokenizer** — demo auto-enables `ACE_STEP_PYTORCH_DETOK=1` when expect **>200 audio codes** (>40 s @ 5 Hz). See [Host PyTorch fallbacks](#host-pytorch-fallbacks-why-not-full-ttnn).
 
+### 6. Lyrics / vocals
+
+By default the demo is **instrumental** — no vocals. To generate sung vocals, pass lyric text with `--lyrics`. The prompt and lyrics are separate conditioning inputs: `--prompt` sets the musical style / instrumentation, `--lyrics` sets the words that are sung.
+
+| Keyword | Default | What it does |
+|---------|---------|--------------|
+| `--lyrics "<text>"` | `"[Instrumental]"` | Song lyrics to sing. Use `"[Instrumental]"` (or empty) for no vocals. Supports section tags `[verse]`, `[chorus]`, `[bridge]`; put each lyric line on its own line inside the quotes (multi-line strings are fine). |
+| `--instrumental` / `--no-instrumental` | auto | Force instrumental on/off. When unset it is **auto-derived** from `--lyrics` (`"[Instrumental]"` or empty ⇒ instrumental; any other text ⇒ vocals). Use `--no-instrumental` to force vocals even for sparse lyrics, or `--instrumental` to ignore supplied lyrics. |
+| `--prompt "<text>"` | *(required)* | Caption / musical style + instrumentation. Kept distinct from `--lyrics`. |
+| `--no-use-cot-caption` | off | Use the exact `--prompt` for DiT text conditioning (skip the LM caption rewrite). Recommended for multi-instrument lists like `"guitar, saxophone and drums"`, and pairs well with explicit lyrics so the caption is not re-worded. |
+
+**Example — base variant, 120 s, 1.7B LM, with lyrics:**
+
+```bash
+python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
+  --mesh-device BH_QB \
+  --variant acestep-v15-base \
+  --lm_variant acestep-5Hz-lm-1.7B \
+  --duration_sec 120 \
+  --infer_steps 50 \
+  --guidance_scale 7.0 \
+  --no-use-cot-caption \
+  --prompt "guitar, saxophone and prominent drums with clear kick and snare" \
+  --lyrics "[verse]
+City lights are calling out my name tonight
+Saxophone is bleeding through the neon light
+I got rhythm in my bones, I can't sit still
+Kick and snare are pulling me against my will
+
+[chorus]
+So play it loud, let the guitars ring
+Every heartbeat's got a song to sing
+We're dancing till the morning comes around
+Lost inside the groove, we own this sound
+
+[verse]
+Every note's a spark that sets the room on fire
+Drums are climbing up, taking me higher
+Hold me close and let the music take control
+This is where the night and morning roll" \
+  --out base_120s_1.7B_with_lyrics.wav
+```
+
+> At **120 s** this is a long clip on mesh, so the automatic long-clip behavior in [§5](#5-long-clips-30-s-on-mesh) applies (DiT trace forced off, host latent sampler, HF detokenizer). Because trace is off, the BH_QB `ACE_STEP_TP=2` default does not engage for this run; set `ACE_STEP_TP=off` explicitly if you want to be sure it stays disabled. For cleaner sustained vocals at this length, `acestep-5Hz-lm-4B` and `--clarity` help (see [Quality presets](#quality-presets-examples)).
+
 ### Weight caching (avoid reloading from disk)
 
 Weights are cached at two levels:
@@ -285,6 +332,8 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--prompt` | `str` | **(required)** | Text description of the music to generate. |
+| `--lyrics` | `str` | `"[Instrumental]"` | Lyrics to sing. `"[Instrumental]"`/empty ⇒ no vocals. Supports `[verse]`/`[chorus]`/`[bridge]` tags; multi-line strings OK. See [§6 Lyrics / vocals](#6-lyrics--vocals). |
+| `--instrumental` / `--no-instrumental` | bool | auto | Force instrumental on/off. Auto-derived from `--lyrics` when unset. |
 | `--variant` | `str` | `acestep-v15-turbo` | DiT checkpoint. Choices: `acestep-v15-base`, `acestep-v15-sft`, `acestep-v15-turbo`. |
 | `--lm_variant` | `str` | `acestep-5Hz-lm-1.7B` | 5 Hz LM size. Choices: `acestep-5Hz-lm-0.6B`, `acestep-5Hz-lm-1.7B`, `acestep-5Hz-lm-4B`. |
 | `--device_id` | `int` | `0` | TT device index (single-chip / preprocess device). |
