@@ -218,6 +218,37 @@ void kernel_main() {
             kv_pad_q_valid_tile_count}};
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
+
+    // Sparse-frames per-Q-frame accounting for correct is_first / is_last across ring iters.
+    // The host-computed active_ring_iter_mask is OOB-only and does not consider sparse-frames,
+    // so its "first active" and "last active" iters can be entirely drained for some Q frames.
+    // Compute must instead drive is_first / is_last_k_of_last_ring_iter off per-Q-frame counts
+    // of actually-processed K chunks. Precompute the expected total per Q frame here; track the
+    // running processed count across ring-iter calls (persist in this outer scope).
+    //
+    // Q is SP-sharded across `ring_size` devices, and `frame_allow` is a broadcast global table
+    // indexed by GLOBAL Q frame. `q_frame_offset` maps this device's local Q chunks to their
+    // global Q-frame indices — without it, every device would look up frame_allow row 0 and
+    // produce garbage. Arrays are sized to num_frames_padded_compile (max 32) and indexed by
+    // global Q frame; each device only reads/writes the slots for its own Q shard.
+    uint32_t q_frame_total_processed[num_frames_padded_compile] = {};
+    uint32_t q_frame_processed[num_frames_padded_compile] = {};
+    constexpr uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
+    const uint32_t q_frame_offset = ring_index * q_frames_per_shard;
+    if constexpr (sparse_frames_enabled) {
+        constexpr uint32_t chunks_per_frame = frame_seqlen_tiles / Sk_chunk_t;
+        for (uint32_t qf = 0; qf < num_frames_padded_compile; ++qf) {
+            uint32_t allowed_k_frames = 0;
+            for (uint32_t kf = 0; kf < num_frames_padded_compile; ++kf) {
+                const uint32_t bit_idx = qf * num_frames_padded_compile + kf;
+                if ((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) {
+                    allowed_k_frames++;
+                }
+            }
+            q_frame_total_processed[qf] = allowed_k_frames * chunks_per_frame;
+        }
+    }
+
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
@@ -364,7 +395,10 @@ void kernel_main() {
                 use_zigzag_balancing,
                 chunked_context,
                 is_first_active_iter,
-                frame_allow_words);
+                frame_allow_words,
+                q_frame_total_processed,
+                q_frame_processed,
+                q_frame_offset);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<

@@ -185,6 +185,8 @@ def _run_sparse_frames_op(
     q_chunk_size_tokens: int | None = None,
     k_chunk_size_tokens: int | None = None,
     sparse_frames_enabled: bool = True,
+    force_allow_all: bool = False,
+    allow_override: torch.Tensor | None = None,
 ):
     """Build small Q/K/V, run the ring op with sparse-frames enabled, compare to a pytorch ref.
 
@@ -222,11 +224,19 @@ def _run_sparse_frames_op(
     padded_K = torch.cat([K, torch.zeros(b, nh, n_pad - real_n, d)], dim=2)
     padded_V = torch.cat([V, torch.zeros(b, nh, n_pad - real_n, d)], dim=2)
 
-    if sparse_frames_enabled:
+    if allow_override is not None:
+        assert allow_override.shape == (num_frames_padded, num_frames_padded)
+        allow = allow_override.to(torch.uint8)
+    elif sparse_frames_enabled and not force_allow_all:
         allow = _frame_allow(num_frames_real, num_frames_padded, window, add_last_frame)
     else:
-        # Dense reference: every Q attends every K (padded frames stay all-zero rows/cols so
-        # the additive-mask helper's padding logic still keeps softmax finite).
+        # Dense-equivalent allow: every Q attends every K (padded frames stay all-zero rows/cols
+        # so the additive-mask helper's padding logic still keeps softmax finite). Used both for
+        # sparse_frames_enabled=False AND for force_allow_all=True — the difference: with
+        # sparse_frames_enabled=True + force_allow_all=True, the op still runs through the
+        # extension setup (pre-scan, ring_iter_mask, bitmap fetch) but the per-chunk skip path
+        # in try_skip_sparse_frames never fires. Diagnostic: isolates whether the sparse-frames
+        # bug is in the drain path vs the extension setup.
         allow = torch.zeros(num_frames_padded, num_frames_padded, dtype=torch.uint8)
         allow[:num_frames_real, :num_frames_real] = 1
     gt = _torch_sdpa_ref(
@@ -513,8 +523,13 @@ class TestSparseFramesRing:
 
     @_MESH_TOPOLOGY
     @pytest.mark.parametrize(
-        "sparse_frames_enabled",
-        [pytest.param(True, id="sparse"), pytest.param(False, id="dense")],
+        ("sparse_frames_enabled", "force_allow_all"),
+        [
+            pytest.param(True, False, id="sparse"),
+            pytest.param(False, False, id="dense"),
+            # Extension enabled but every (q_frame, k_frame) allowed — isolates the drain path.
+            pytest.param(True, True, id="sparse_allow_all"),
+        ],
     )
     @pytest.mark.parametrize(
         ("q_chunk_div", "k_chunk_div"),
@@ -540,6 +555,7 @@ class TestSparseFramesRing:
         q_chunk_div,
         k_chunk_div,
         sparse_frames_enabled,
+        force_allow_all,
     ):
         """Sub-frame chunks: q_chunk_size = fsl/N (and k likewise). The device op requires each
         chunk to sit inside one frame (never straddle a boundary), so chunk sizes must divide
@@ -574,4 +590,75 @@ class TestSparseFramesRing:
             q_chunk_size_tokens=frame_seqlen // q_chunk_div,
             k_chunk_size_tokens=frame_seqlen // k_chunk_div,
             sparse_frames_enabled=sparse_frames_enabled,
+            force_allow_all=force_allow_all,
+        )
+
+    @_MESH_TOPOLOGY
+    @pytest.mark.parametrize(
+        "drain_pattern",
+        ["tail_drain", "head_drain", "middle_drain", "drain_all", "drain_one_last", "drain_one_first"],
+    )
+    def test_drain_pattern(
+        self,
+        mesh_device,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+        drain_pattern,
+    ):
+        """Isolates the drain path by shape of the allow pattern. Every Q frame gets the same
+        K-frame allow mask, chosen so the drain fires at:
+          - tail_drain: after all processed chunks (K frames [0..N/2) allowed, [N/2..N) drained).
+            This mimics the causal-skip pattern (contiguous trailing drain), which is known to work.
+          - head_drain: before any processed chunks (K frames [0..N/2) drained, [N/2..N) allowed).
+            Drain fires BEFORE any real matmul in the ring iter loop.
+          - middle_drain: alternating (even K frames allowed, odd drained).
+            Drain fires interleaved with processing.
+
+        Diagnostic: if tail passes and head/middle hang, the drain path desyncs some state that
+        normal processing establishes on first-run. If all hang, drain is broken regardless of
+        position. If all pass, the bug is specific to the windowed pattern's shape."""
+        frame_seqlen = 128  # 4 tiles/frame, small
+        nf_real = 8
+        nf_padded = 8
+        half = nf_real // 2
+        allow = torch.zeros(nf_padded, nf_padded, dtype=torch.uint8)
+        for q in range(nf_real):
+            if drain_pattern == "tail_drain":
+                allow[q, :half] = 1  # K frames [0..half) allowed, [half..nf) drained
+            elif drain_pattern == "head_drain":
+                allow[q, half:nf_real] = 1  # K frames [half..nf) allowed, [0..half) drained
+            elif drain_pattern == "middle_drain":
+                for k in range(nf_real):
+                    if k % 2 == 0:
+                        allow[q, k] = 1  # even allowed, odd drained
+            elif drain_pattern == "drain_all":
+                pass  # every chunk drained — 100% drain, zero processing
+            elif drain_pattern == "drain_one_last":
+                allow[q, : nf_real - 1] = 1  # all allowed except the very last K frame
+            elif drain_pattern == "drain_one_first":
+                allow[q, 1:nf_real] = 1  # all allowed except the very first K frame
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=nf_real,
+            num_frames_padded=nf_padded,
+            frame_seqlen=frame_seqlen,
+            b=1,
+            nh=8,
+            d=128,
+            window=5,  # ignored — allow_override supersedes the built pattern
+            add_last_frame=True,
+            all_gather_topology=all_gather_topology,
+            sparse_frames_enabled=True,
+            allow_override=allow,
         )

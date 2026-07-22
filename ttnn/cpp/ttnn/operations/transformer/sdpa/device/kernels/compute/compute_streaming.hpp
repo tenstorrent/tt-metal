@@ -2284,7 +2284,23 @@ void sdpa_ring_v2(
     const bool use_zigzag_balancing = false,
     const ChunkedContext& chunked = {},
     const bool is_first_active_iter = true,
-    const uint32_t* frame_allow_words = nullptr) {
+    const uint32_t* frame_allow_words = nullptr,
+    // Sparse-frames per-Q-frame accounting. When sparse_frames_enabled, the caller-supplied
+    // active_ring_iter_mask reflects OOB-only work and can mark iters "active" that are
+    // fully drained for some Q chunks (sparse-frames unknown to the host mask). Compute-
+    // side is_first / is_last logic must therefore track ACTUAL processing history per Q
+    // frame. `q_frame_total_processed` is the precomputed count of processed K chunks
+    // expected for each Q frame across all ring iters (indexed by GLOBAL Q frame);
+    // `q_frame_processed` is a running counter maintained by this function across ring-iter
+    // calls (persist in caller scope; also GLOBAL-indexed). Ignored when
+    // !sparse_frames_enabled; may be nullptr in that case.
+    const uint32_t* q_frame_total_processed = nullptr,
+    uint32_t* q_frame_processed = nullptr,
+    // Sparse-frames global Q frame offset. Q is SP-sharded, so this device's local Q chunk
+    // 0 maps to GLOBAL Q frame `q_frame_offset`. Compute must use the GLOBAL index when
+    // looking up `frame_allow_words` (which is a broadcast global table) and when indexing
+    // the per-Q-frame counters above. Zero for non-sharded / non-sparse paths.
+    const uint32_t q_frame_offset = 0) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2471,9 +2487,12 @@ void sdpa_ring_v2(
         // exactly one q_frame. Computed once here and reused inline.
         uint32_t q_frame_for_this_chunk = 0;
         if constexpr (sparse_frames_enabled) {
-            // q_start_tile was set above under `is_causal_sdpa || chunked_enabled`; for the
-            // sparse-frames path (mutually exclusive with those), derive it from q_chunk.
-            q_frame_for_this_chunk = (q_chunk * Sq_chunk_t) / frame_seqlen_tiles;
+            // Derive the LOCAL Q-frame index from this device's q_chunk, then add the caller-
+            // supplied `q_frame_offset` to convert to the GLOBAL Q-frame index. `frame_allow`
+            // and the per-Q counters are indexed globally, so this offset is required whenever
+            // Q is SP-sharded (every device holds a different Q shard). Without it, all
+            // devices would look up frame_allow row 0 regardless of their actual Q shard.
+            q_frame_for_this_chunk = (q_chunk * Sq_chunk_t) / frame_seqlen_tiles + q_frame_offset;
         }
         uint32_t per_q_valid_kv = 0;
         for (uint32_t k = 0; k < num_kv_chunks; ++k) {
@@ -2532,11 +2551,25 @@ void sdpa_ring_v2(
             KV_chunks_processed++;
             KV_chunks_processed_in_iter++;
 
-            const bool is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
             const bool is_last_k = (KV_chunks_processed == per_q_valid_kv);
 
-            // Last K chunk of last ring_iter triggers per-row normalization
-            const bool is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
+            // Sparse-frames: is_first / is_last_k_of_last_ring_iter must be based on per-Q-frame
+            // ACTUAL processing history, not on the host's active_ring_iter_mask (which is
+            // OOB-only and does not know sparse-frames). Otherwise a Q chunk whose first-
+            // processed iter is not the mask's first-active iter waits for a non-existent prev
+            // accumulator, and a Q chunk whose last-processed iter isn't the mask's last-active
+            // iter never triggers final normalization.
+            bool is_first;
+            bool is_last_k_of_last_ring_iter;
+            if constexpr (sparse_frames_enabled) {
+                q_frame_processed[q_frame_for_this_chunk]++;
+                is_first = (q_frame_processed[q_frame_for_this_chunk] == 1);
+                is_last_k_of_last_ring_iter =
+                    (q_frame_processed[q_frame_for_this_chunk] == q_frame_total_processed[q_frame_for_this_chunk]);
+            } else {
+                is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
+                is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
+            }
 
             // Signal writer that last K-chunk is starting (for row-by-row DMA save/restore).
             if (is_last_k && q_per_core > 1) {
