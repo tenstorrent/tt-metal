@@ -46,7 +46,7 @@ void bind_repeat(nb::module_& mod) {
         nb::arg("repeat_dims"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("implementation") = "auto");
+        nb::arg("implementation") = "native");
 }
 
 }  // namespace ttnn::operations::data_movement
