@@ -42,13 +42,14 @@
 #endif
 
 #include "api/compute/eltwise_binary.h"
-#include "api/debug/dprint.h"  // DEBUG: matmul layer3 hang localization (remove after)
+#include "api/debug/dprint.h"       // DEBUG: matmul stem-conv1 Program-B hang localization (remove after)
 #include "api/debug/ring_buffer.h"  // DEBUG mcast2d compute-stall: ring-buffer markers (remove after)
-// DEBUG: neutralize compute-kernel DPRINT. DPRINT inside the compute (pack/math/unpack) perturbs the
-// kernel epilogue timing and re-triggers the program-completion stall when DPRINT is enabled on-device.
-// Keep DM-kernel DPRINT (reader/writer) for diagnosis; make the CMPM markers here no-ops.
-#undef DPRINT
-#define DPRINT(...) ((void)0)
+// DEBUG (stem conv1 split-conv Program-B hang): DPRINT re-ENABLED here to localize the compute stall
+// via the MMC markers below. NOTE: a prior layer3 mcast2d session neutralized DPRINT in this kernel
+// because DPRINT inside compute perturbs epilogue timing and re-triggered a *program-completion*
+// stall. That is a DIFFERENT hang. If these MMC prints change the failure mode, re-neutralize with:
+//   #undef DPRINT
+//   #define DPRINT(...) ((void)0)
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
@@ -168,7 +169,7 @@ inline void reblock_and_untilize(
 }
 
 void kernel_main() {
-    DPRINT("CMPM start\n");  // DEBUG: matmul layer3 hang
+    DPRINT("MMC start\n");  // DEBUG: stem conv1 Program-B hang
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
     const bool is_worker_core = get_arg(args::is_worker_core) == 1;
@@ -293,7 +294,7 @@ void kernel_main() {
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                DPRINT("CMPM blk {} {}\n", bh, bw);  // DEBUG: matmul layer3 hang
+                DPRINT("MMC bhbw {} {}\n", bh, bw);  // DEBUG: stem conv1 Program-B hang
                 bool enable_reload = false;
 
 #ifdef PACK_RELU
@@ -335,13 +336,17 @@ void kernel_main() {
                     // Newest ring marker per stuck core: 0xC0FFEE00 -> stuck at in0 wait (in0 data not
                     // delivered); 0xC0FFEE01 -> passed in0, stuck at in1 wait; 0xC0FFEE02 -> passed BOTH
                     // input waits, so the stall is later (partials reserve/wait, pack, or dest).
+                    DPRINT("MMC in0_wait blk={}\n", block);  // DEBUG: before in0 wait_front (consumer stall point)
                     UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE00u));
                     UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)block));
                     UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in0_block_num_tiles));
                     in0_cb.wait_front(in0_block_num_tiles);
+                    DPRINT("MMC in1_wait blk={}\n", block);  // DEBUG: in0 acquired, before in1 wait_front
                     UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE01u));
                     UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in1_block_num_tiles));
                     in1_cb.wait_front(in1_block_num_tiles);
+                    DPRINT(
+                        "MMC math blk={}\n", block);  // DEBUG: both inputs acquired, entering matmul+pack subblock loop
                     UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE02u));
 
                     int in0_index_subblock_offset = 0;
@@ -470,6 +475,7 @@ void kernel_main() {
                         }
                         in0_index_subblock_offset += in0_subblock_num_tiles;
                     }
+                    DPRINT("MMC pack blk={}\n", block);  // DEBUG: all subblock matmul+pack done for this block
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
@@ -505,9 +511,11 @@ void kernel_main() {
 
                     in0_cb.pop_front(in0_block_num_tiles);
                     in1_cb.pop_front(in1_block_num_tiles);
+                    DPRINT("MMC blk_done blk={}\n", block);  // DEBUG: in0/in1 popped, inner-dim block complete
                 }
 
 #ifdef FUSE_BIAS
+                DPRINT("MMC bias\n");  // DEBUG: inner-dim block loop done, entering bias+activation epilogue
 #ifdef PACK_RELU
                 // if last block we pack the final result with relu enabled
                 PACK((llk_pack_relu_config(ReluConfig::zero())));
@@ -640,5 +648,5 @@ void kernel_main() {
         bias_cb.pop_front(bias_ntiles);
     }
 #endif
-    DPRINT("CMPM end\n");  // DEBUG: matmul layer3 hang
+    DPRINT("MMC end\n");  // DEBUG: stem conv1 Program-B hang
 }
