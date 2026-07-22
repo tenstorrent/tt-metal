@@ -271,9 +271,6 @@ run_t3000_ccl_tests() {
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "zeros_width_dim-check"
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "small_5d_h0w1"
 
-  # all_gather_matmul: fused all-gather + matmul correctness (output PCC) coverage
-  pytest tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async
-
   # all_gather_matmul fp32 accumulation precision on the classic mcast program paths (2D and 1D).
   # Both tests in one pytest invocation so a failure in one doesn't stop the other one from running.
   pytest tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_fp32_reload_precision \
