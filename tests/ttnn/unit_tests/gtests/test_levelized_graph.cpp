@@ -1491,7 +1491,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
 
     for (size_t i = 0; i < levelized_graph.size(); ++i) {
         const auto& v = levelized_graph.get_vertex(i);
-        if (v.name == "ttnn::create_device_tensor") {
+        if (v.name == "tt::tt_metal::create_device_tensor") {
             create_tensor_ids.push_back(i);
         } else if (v.name.find("tensor[") != std::string::npos) {
             tensor_ids.push_back(i);
@@ -1586,7 +1586,7 @@ TEST_F(TestLevelizedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) 
 
     for (size_t i = 0; i < levelized_graph.size(); ++i) {
         const auto& v = levelized_graph.get_vertex(i);
-        if (v.name == "ttnn::create_device_tensor") {
+        if (v.name == "tt::tt_metal::create_device_tensor") {
             create_tensor_ids.push_back(i);
         } else if (v.name.find("tensor[") != std::string::npos) {
             tensor_ids.push_back(i);

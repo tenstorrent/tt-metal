@@ -55,9 +55,9 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_TRUE(operation0.arguments[1].find("RowMajorPageConfig") != std::string::npos);
     EXPECT_TRUE(operation0.arguments[1].find("DeviceStorage()") != std::string::npos);
 
-    // Find ttnn::create_device_tensor operation (output tensor creation)
+    // Find tt::tt_metal::create_device_tensor operation (output tensor creation)
     auto it = std::find_if(operations.begin(), operations.end(), [](const auto& op) {
-        return op.operation_name == "ttnn::create_device_tensor";
+        return op.operation_name == "tt::tt_metal::create_device_tensor";
     });
     ASSERT_NE(it, operations.end()) << "create_device_tensor operation not found";
     const auto& create_tensor_op = *it;

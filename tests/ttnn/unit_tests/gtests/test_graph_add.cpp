@@ -111,7 +111,8 @@ INSTANTIATE_TEST_SUITE_P(
                 .a_Shape = ttnn::Shape(ttnn::Array4D{1, 3, 32, 32}),
                 .b_Shape = ttnn::Shape(ttnn::Array4D{1, 3, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
-                .expected_calltrace = {"BinaryNgDeviceOperation", "ttnn::create_device_tensor", "Tensor::deallocate"},
+                .expected_calltrace =
+                    {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor", "Tensor::deallocate"},
                 .expected_peak_L1_memory_usage = 30720,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 3 * 4096,
@@ -125,7 +126,8 @@ INSTANTIATE_TEST_SUITE_P(
                 .a_Shape = ttnn::Shape(ttnn::Array4D{4, 3, 32, 32}),
                 .b_Shape = ttnn::Shape(ttnn::Array4D{1, 3, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
-                .expected_calltrace = {"BinaryNgDeviceOperation", "ttnn::create_device_tensor", "Tensor::deallocate"},
+                .expected_calltrace =
+                    {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor", "Tensor::deallocate"},
                 .expected_peak_L1_memory_usage = 67584,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 3 * 4096,
@@ -147,7 +149,8 @@ INSTANTIATE_TEST_SUITE_P(
                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
                             {6 * 32, 32 * 32},
                             ShardOrientation::COL_MAJOR}},
-                .expected_calltrace = {"BinaryNgDeviceOperation", "ttnn::create_device_tensor", "Tensor::deallocate"},
+                .expected_calltrace =
+                    {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor", "Tensor::deallocate"},
                 .expected_peak_L1_memory_usage = 20054016,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 0,
