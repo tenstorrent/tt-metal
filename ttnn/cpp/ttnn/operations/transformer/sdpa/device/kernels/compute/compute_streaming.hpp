@@ -2796,6 +2796,24 @@ void sdpa_ring_v2(
             }
         }
 
+        // Sparse-frames zero-work Q chunk: this Q frame has zero allowed K frames across the
+        // whole ring. All ring iters drained via try_skip_sparse_frames — no output was
+        // pushed. The writer still expects a per-Q-chunk output tile to save (its region is
+        // typically padded/discarded for padded Q frames, but the CB push must happen so the
+        // writer's wait completes). On the last host-mask-active iter, reserve+push placeholder
+        // tiles for cb_out / cb_max_out / cb_sum_out. Contents are unspecified — for padded Q
+        // frames (nf_padded > nf_real) the DRAM region is beyond real_n and discarded downstream.
+        if constexpr (sparse_frames_enabled) {
+            if (is_last_ring_iter && q_frame_total_processed[q_frame_for_this_chunk] == 0) {
+                CircularBuffer(cb_out).reserve_back(Sq_chunk_t * vDHt);
+                sdpa_cb_push_back_out_of_line(cb_out, Sq_chunk_t * vDHt);
+                CircularBuffer(cb_max_out).reserve_back(Sq_chunk_t);
+                sdpa_cb_push_back_out_of_line(cb_max_out, Sq_chunk_t);
+                CircularBuffer(cb_sum_out).reserve_back(Sq_chunk_t);
+                sdpa_cb_push_back_out_of_line(cb_sum_out, Sq_chunk_t);
+            }
+        }
+
         // Pop Q — not popped inside step since ring_mode gates the early Q pop.
         // When q_per_core == 1, Q is identical across ring iterations so we keep it
         // fronted in the CB and only pop on the last iteration to avoid redundant DRAM re-reads.
