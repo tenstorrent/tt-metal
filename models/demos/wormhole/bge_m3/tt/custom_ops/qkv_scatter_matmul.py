@@ -13,6 +13,7 @@ device time, warm reuse, and trace replay.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import ttnn
 
@@ -40,6 +41,17 @@ _QKV_SUBBLOCK_H = 4
 _QKV_SUBBLOCK_W = 2
 _GRID_X = 8
 _GRID_Y = 8
+
+
+@dataclass(frozen=True)
+class QKVScatterConfig:
+    """Explicit block configuration for the fixed-shape QKV scatter kernel."""
+
+    M_block_size: int = _QKV_M_BLOCK
+    K_block_size: int = _QKV_K_BLOCK
+    N_block_size: int = _QKV_N_BLOCK
+    subblock_h: int = _QKV_SUBBLOCK_H
+    subblock_w: int = _QKV_SUBBLOCK_W
 
 
 def _tile_bytes(dtype: ttnn.DataType) -> int:
@@ -99,7 +111,8 @@ def bge_qkv_scatter_matmul(
     bias_tensor: ttnn.Tensor | None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     dtype: ttnn.DataType = ttnn.bfloat8_b,
-) -> ttnn.Tensor:
+    config: QKVScatterConfig | None = None,
+) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """Run the exact B6/S8192 QKV matmul through a Python ProgramDescriptor.
 
     Required padded tile shape per DP shard: M=1536, K=32, N=96.  The output is
@@ -130,11 +143,20 @@ def bge_qkv_scatter_matmul(
     if (M, K, N) != (1536, 32, 96):
         raise ValueError(f"expected per-shard tile shape (1536,32,96), got {(M, K, N)}")
 
-    M_block = _QKV_M_BLOCK
-    K_block = _QKV_K_BLOCK
-    N_block = _QKV_N_BLOCK
-    sub_h = _QKV_SUBBLOCK_H
-    sub_w = _QKV_SUBBLOCK_W
+    config = config or QKVScatterConfig()
+    M_block = config.M_block_size
+    K_block = config.K_block_size
+    N_block = config.N_block_size
+    sub_h = config.subblock_h
+    sub_w = config.subblock_w
+    if min(M_block, K_block, N_block, sub_h, sub_w) <= 0:
+        raise ValueError(f"QKV block sizes must be positive, got {config}")
+    if M_block % sub_h or N_block % sub_w:
+        raise ValueError(f"QKV subblock must divide the output block, got {config}")
+    if sub_h * sub_w > 8:
+        raise ValueError(f"QKV subblock exceeds the 8-tile DST capacity, got {config}")
+    if M % M_block or K % K_block or N % N_block:
+        raise ValueError(f"QKV block sizes must divide tile shape {(M, K, N)}, got {config}")
     in0_num_subblocks = M_block // sub_h
     in1_num_subblocks = N_block // sub_w
     in0_block_num_tiles = M_block * K_block
