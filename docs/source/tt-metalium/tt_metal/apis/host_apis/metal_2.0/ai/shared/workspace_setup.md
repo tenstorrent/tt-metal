@@ -1,6 +1,6 @@
 # Metal 2.0 — Workspace Setup for Porting
 
-Use this when you have **no existing tt-metal checkout**. If you've been given an existing clone or worktree path, skip to **Run tests**.
+Use this when you have **no existing tt-metal checkout**. If you've been given an existing clone or worktree, you can skip **Clone** — but a checkout does *not* imply a ready environment: make sure the [Python environment](#python-environment) is created and **activated in your current shell**, and the [Build](#build) is done, before you **Run tests**.
 
 This doc is referenced by the [port recipe](../port/metal2_port.md) under "Before you begin." Scope: bootstrap only — clone, environment, build, test invocation patterns. The port itself lives in the recipe.
 
@@ -37,11 +37,13 @@ Use `--build-tests` (Metal **and** TTNN tests). Do **not** use `--build-metal-te
 
 Cold build on a warm farm node: ~7 minutes for Metal tests alone; expect a few minutes more for the full `--build-tests`. Subsequent incremental builds are fast.
 
-For iterative rebuilds during a port, target binaries directly:
+For iterative rebuilds during a port, just re-run the same command — it rebuilds incrementally:
 
 ```bash
-cmake --build build_Release --target ttnncpp unit_tests_ttnn -j 8
+./build_metal.sh --build-tests
 ```
+
+**Only ever build Metal through `./build_metal.sh`.** Do not hand-target the cmake binaries (`cmake --build … --target ttnncpp unit_tests_ttnn`): it looks faster but is prone to silent staleness on this setup, and other gotchas abound.
 
 ## Run tests
 
@@ -68,12 +70,12 @@ Tests that exercise the device require attached hardware. On a farm node with a 
 
 ## Run tests for the op you ported
 
-Tests for an op `<op>` live in two predictable places:
+Tests for an op `<op>` most commonly live in the two places below — but the layout is **not** reliably derivable from the op path, so treat these as starting points, not a formula. The port recipe's [Locate and confirm the op's tests](../port/metal2_port.md#locate-and-confirm-the-ops-tests) is the authority (search broadly, then confirm the set with the invoker):
 
 - **C++ gtests:** `tests/ttnn/unit_tests/gtests/test_<op>.cpp` (linked into the umbrella binary `./build/test/ttnn/unit_tests_ttnn`). UDM/specialized variants live in subdirs like `gtests/udm/<op>/` and link into sibling binaries (`unit_tests_ttnn_udm`, `unit_tests_ttnn_tensor`, `unit_tests_ttnn_ccl`, ...).
 - **Python pytests:** `tests/ttnn/unit_tests/operations/<op-family-slug>/` (plus nightly variants under `tests/ttnn/nightly/unit_tests/operations/<op-family-slug>/`).
 
-⚠ The pytest directory uses the **op-family slug**, not always the literal op name (e.g., reduction's tests live at `tests/ttnn/unit_tests/operations/reduce/`, not `reduction/`). The recipe asks the invoker to supply this path — confirm with `find` if unsure.
+⚠ The pytest directory uses the **op-family slug**, not always the literal op name (e.g., reduction's tests live at `tests/ttnn/unit_tests/operations/reduce/`, not `reduction/`). You **discover** this path yourself — the invoker does not supply it — then confirm the set with them; use the `find` commands below to resolve the slug.
 
 ### Find the tests for `<op>`
 
@@ -81,8 +83,8 @@ Tests for an op `<op>` live in two predictable places:
 # C++ sources
 find tests/ttnn -path '*<op>*' -name '*.cpp'
 
-# Python sources
-find tests/ttnn -path '*operations/<op>*' -name 'test_*.py'
+# Python sources — broad; then filter to THIS op (concat != nlp_concat_heads)
+find tests -path '*<op>*' -name 'test_*.py'
 
 # Which gtest binary owns the C++ tests (discovery only, no HW needed)
 for b in ./build/test/ttnn/unit_tests_ttnn*; do
