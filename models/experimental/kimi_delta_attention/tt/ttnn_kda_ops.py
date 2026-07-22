@@ -116,7 +116,10 @@ def causal_conv1d_silu_native(x, w_prep, kernel_size, C, device):
     out = ttnn.conv1d(
         input_tensor=xin, weight_tensor=w_prep, device=device, in_channels=C, out_channels=C, batch_size=1,
         input_length=Lin, kernel_size=kernel_size, stride=1, padding=0, dilation=1, groups=C, dtype=ttnn.bfloat16,
-        conv_config=_CONV1D_CFG, compute_config=_conv1d_compute_config(device), slice_config=ttnn.Conv2dL1FullSliceConfig,
+        conv_config=_CONV1D_CFG, compute_config=_conv1d_compute_config(device),
+        # default (auto DRAM-width) slicing, NOT Conv2dL1FullSliceConfig: L1-full keeps the whole conv
+        # resident in L1 and overflows it at long sequences (~T≥4096, program.cpp:1707). DRAM-width streams
+        # the sequence so it scales to any T; L1-full was only needed for trace capture (we don't trace).
         return_output_dim=False, return_weights_and_bias=False,
     )
     ttnn.deallocate(xin)

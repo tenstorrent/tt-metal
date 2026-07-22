@@ -434,6 +434,19 @@ TP-sharded). Regression: `test_kda_flat_optA.py`. **`use_qk_l2norm` param is stu
 auto-norms via `qk_norm = flat_qk && C==32`. Output-side (`output_head_major` to kill the s6 output
 reshapes) deferred as a separate step.
 
+### Phase 10 — enable long context: fix the T≥4096 conv L1 overflow
+
+T=5120 forward crashed with `program.cpp:1707` (statically-allocated CBs exceed max L1). Localized: NOT
+the chunk op (runs fine alone at T=5120) and NOT capacity (bf16 halves memory, still crashes) — it's the
+native short-conv's **`Conv2dL1FullSliceConfig`**, which keeps the whole conv resident in L1 (residency ∝
+input_length) and overflows at ~T≥4096. Fix: drop it → **default auto DRAM-width slicing** streams the
+sequence. L1-full was only for trace capture (we don't trace). **Enables T=5120 (18.4ms) and T=10240
+(37.3ms)**; common-case T=640 unchanged (3.19ms — DRAM-width adds no programs until the sequence needs
+slices). PCC unchanged (slicing doesn't touch numerics). Note: earlier "T=5120 fails → capacity → SP
+capacity driver" was **retracted** — it was a fixable CB-sizing bug, not a memory wall. Measured scaling
+(TP=4, per chip): `time(T) ≈ 1.0ms + 3.4µs/token`, per-token cost falling then plateauing ~3600 ns/tok;
+launch/movement-bound throughout (~50× off roofline even at long T).
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).
