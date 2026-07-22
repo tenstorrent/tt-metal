@@ -31,13 +31,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT        = params.TILE_CNT;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
-    const int num_faces_r_dim_A         = params.num_faces_r_dim_A;
-    const int num_faces_c_dim_A         = params.num_faces_c_dim_A;
-    const Operand& buffer_B             = params.buffer_B;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const int num_faces_r_dim_A     = params.num_faces_r_dim_A;
+    const int num_faces_c_dim_A     = params.num_faces_c_dim_A;
+    const Operand& buffer_B         = params.buffer_B;
 #endif
     tdma_descriptor_t td_val_A, td_val_B;
     const std::uint32_t buf_desc_id_a        = 0;
@@ -56,7 +54,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
         }
 
-        const auto tensor_shape = tensor_shape_from_face_dims(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+        const auto tensor_shape = tensor_shape_from_params(params);
 
         td_val_A = ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_A_src, buf_desc_id_a, formats.unpack_A_dst);
         td_val_B = ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_A_src, buf_desc_id_b, formats.unpack_A_dst);
@@ -153,10 +151,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
-    const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
-    const std::uint32_t TEST_FACE_C_DIM           = params.TEST_FACE_C_DIM;
-    const int num_faces_r_dim_A                   = params.num_faces_r_dim_A;
-    const int num_faces_c_dim_A                   = params.num_faces_c_dim_A;
     const std::uint32_t num_faces                 = params.num_faces;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t INPUT_NUM_BLOCKS          = params.INPUT_NUM_BLOCKS;
@@ -174,14 +168,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
             }
 
-            const auto tensor_shape = tensor_shape_from_face_dims(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+            const auto tensor_shape = tensor_shape_from_params(params);
 
             _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(tensor_shape);
             PROFILER_SYNC();
         }
         {
             ZONE_SCOPED("TILE_LOOP")
-            const auto tensor_shape = tensor_shape_from_face_dims(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+            const auto tensor_shape = tensor_shape_from_params(params);
 
             const std::uint32_t tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
             const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
@@ -241,10 +235,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
-    const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
-    const std::uint32_t TEST_FACE_C_DIM           = params.TEST_FACE_C_DIM;
-    const int num_faces_r_dim_A                   = params.num_faces_r_dim_A;
-    const int num_faces_c_dim_A                   = params.num_faces_c_dim_A;
     const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const Operand& buffer_Res                     = params.buffer_Res;
@@ -273,7 +263,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        const auto tensor_shape = tensor_shape_from_face_dims(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+        const auto tensor_shape = tensor_shape_from_params(params);
 
         tdma_descriptor_t tdma_desc =
             ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
@@ -285,7 +275,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        const auto tensor_shape = tensor_shape_from_face_dims(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+        const auto tensor_shape = tensor_shape_from_params(params);
 
         const std::uint32_t output_num_blocks     = static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS);
         const std::uint32_t output_tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
