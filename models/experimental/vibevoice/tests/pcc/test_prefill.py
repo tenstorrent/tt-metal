@@ -30,7 +30,7 @@ from transformers.integrations.sdpa_attention import repeat_kv
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.vibevoice.common.config import MODEL_PATH
-from models.experimental.vibevoice.tests.pcc.lm_pcc_helpers import (
+from models.experimental.vibevoice.tests.pcc.pcc_helpers import (
     PCC_THRESHOLD,
     PREFILL_CHUNK_SIZE,
     _get_hf_reference_model,
@@ -323,10 +323,7 @@ def test_full_prefill_chain_pcc(mesh_device, vv_config, lm_state):
     effective_lengths, max_pos = prefill_isl_sweep_effective_lengths(vv_config, FULL_PREFILL_ISL_SWEEP_LENGTHS)
     skipped = [n for n in FULL_PREFILL_ISL_SWEEP_LENGTHS if n not in effective_lengths]
     if skipped:
-        print(
-            f"[test_full_prefill_pcc] skipping ISL > max_position_embeddings={max_pos}: "
-            + ", ".join(str(n) for n in skipped)
-        )
+        print(f"[test_prefill] skipping ISL > max_position_embeddings={max_pos}: " + ", ".join(str(n) for n in skipped))
 
     ref_model = _load_ref_model()
     hf_lm_fp32 = _get_hf_reference_model(lm_state, vv_config, dtype=torch.float32)
@@ -343,7 +340,7 @@ def test_full_prefill_chain_pcc(mesh_device, vv_config, lm_state):
     )
 
     failures = []
-    print(f"[test_full_prefill_pcc] ISL sweep lengths={effective_lengths} seed={RANDOM_SEED}")
+    print(f"[test_prefill] ISL sweep lengths={effective_lengths} seed={RANDOM_SEED}")
 
     for seq_len in effective_lengths:
         inputs = _build_random_prefill_inputs(seq_len, processor.tokenizer, seed=RANDOM_SEED)
@@ -374,7 +371,7 @@ def test_full_prefill_chain_pcc(mesh_device, vv_config, lm_state):
         min_pcc = min(per_pos) if per_pos else float("nan")
         last_pcc = per_pos[-1] if per_pos else float("nan")
         print(
-            f"[test_full_prefill_pcc] ISL={seq_len} speech_PCC={pcc_embeds:.6f} "
+            f"[test_prefill] ISL={seq_len} speech_PCC={pcc_embeds:.6f} "
             f"hidden_PCC={pcc_hidden:.6f} hidden_med={hidden_median:.5f} last={last_pcc:.5f} min={min_pcc:.5f} "
             f"kv_K_min={worst_k_pcc:.5f} kv_V_min={worst_v_pcc:.5f} "
             f"kv_K_med={worst_k_med:.5f} kv_V_med={worst_v_med:.5f} "
