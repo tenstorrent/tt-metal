@@ -119,6 +119,22 @@ class SEQUENCE(TemplateParameter):
         return f"#define SEQUENCE {int(self.sequence)}"
 
 
+# bf16 and a real fp32 data format. bf16 exercises the ADDR_MOD / Haloize holes (and,
+# with dest_acc=Yes, the ALU_ACC_CTRL / ALU_FORMAT_SPEC hole); fp32 additionally drives the
+# ops with 32-bit operands so the format-spec state under test is genuinely fp32, not bf16.
+_BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+_FP32 = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+
+
+def _formats(polluter):
+    # reduce_block_max_row requires bf16 operand+scaler by its LLK contract ("Operand and
+    # scaler data format is bfloat16_b"), so it is bf16-only. matmul_custom_no_mop and the
+    # SDPA sub+bcast-col pair also run with a real fp32 data format.
+    if polluter == 1:
+        return [_BF16]
+    return [_BF16, _FP32]
+
+
 def _sequences(polluter):
     # reduce_block_max_row (1) is FORWARD-only: validating it as the run-1 op would
     # duplicate the fuser reduce test (masked-scalar pack + ReduceBlockMaxRowGolden).
@@ -127,11 +143,15 @@ def _sequences(polluter):
     return [Sequence.FORWARD, Sequence.REVERSE, Sequence.REPEAT]
 
 
-def _dest_accs(sequence):
-    # fp32 DEST only widens the escape surface for FORWARD: the ALU_ACC_CTRL /
-    # ALU_FORMAT_SPEC hole is "experimental init sets it, the following canonical op
-    # must reset it". In REVERSE/REPEAT the experimental op both sets and consumes it,
-    # so there is no cross-op escape to pin — bf16 is sufficient there.
+def _dest_accs(formats, sequence):
+    # A real fp32 data format needs a 32-bit DEST register (dest_acc=Yes).
+    if formats.output_format == DataFormat.Float32:
+        return [DestAccumulation.Yes]
+    # bf16: sweep both DEST widths on FORWARD. fp32 DEST arms the reduce polluter's
+    # ALU_ACC_CTRL_Zero_Flag_disabled_src / ALU_FORMAT_SPEC RMW (its only route to that
+    # cfg-reg hole, since reduce cannot use an fp32 data format), which the following
+    # canonical op must reset. In REVERSE/REPEAT the experimental op both sets and consumes
+    # that state, so there is no cross-op escape to pin — bf16 / No is sufficient there.
     if sequence == Sequence.FORWARD:
         return [DestAccumulation.No, DestAccumulation.Yes]
     return [DestAccumulation.No]
@@ -191,14 +211,16 @@ def _sdpa_sub_bcast_col_golden(src_A_tile, src_B_tile, formats, math_fidelity):
 
 
 @parametrize(
-    formats=[InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)],
+    # Conditional axes (resolved in dependency order): formats and sequence depend on
+    # polluter (reduce is bf16-only and FORWARD-only); dest_acc depends on formats and
+    # sequence (fp32 forces 32-bit DEST; bf16 sweeps both DEST widths on FORWARD).
+    polluter=list(POLLUTERS.keys()),
+    formats=_formats,
     # Two high-fidelity levels: HiFi2 and HiFi4 both take the matmul_no_mop high-fidelity
     # branch (identical ADDR_MOD_5 fidelity-increment programming; ADDR_MOD_6 is throttle-gated
     # and not written at THROTTLE_LEVEL 0), but drive a different fidelity-phase replay count,
     # so the polluter runs a longer MVMUL walk over its clobbered ADDR_MOD state at HiFi4.
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
-    polluter=list(POLLUTERS.keys()),
-    # Conditional axes: reduce is FORWARD-only; fp32 DEST is swept only for FORWARD.
     sequence=_sequences,
     dest_acc=_dest_accs,
 )
