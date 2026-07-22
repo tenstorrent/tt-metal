@@ -455,6 +455,19 @@ def get_civ2_node_name_and_serial_from_job_log(workflow_outputs_dir, workflow_ru
         CIV2 runner <name> is running on Kubernetes node: <node>
         CIV2 runner <name> has serial number(s): <serial>
 
+    Notes:
+    I thought there was an instance where this happens,
+    but it was actually because annotations don't get "reissued" on passing jobs when another attempt is launched
+    (because the job doesn't get rerun)
+
+    So on subsequent workflow run attempts, it looks like passing jobs don't have annotations;
+    the annotations are actually still present, but only visible on the prior run attempt on the UI.
+    From the API, we can always see the annotations.
+    E.g. https://api.github.com/repos/tenstorrent/tt-metal/check-runs/<job id>/annotations
+
+    So we should never have to exercise this fallback parser because we always generate pipeline data on each run attempt's jobs only.
+    (Unless github has an outage and doesn't upload annotations for some reason)
+
     Returns (node_name, serial), each None if not found (CPU-only runners have no serial).
     """
     log_file = _safe_job_log_file(workflow_outputs_dir, workflow_run_id, github_job_id)
