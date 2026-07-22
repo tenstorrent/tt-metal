@@ -51,7 +51,6 @@ std::vector<AsicChannelConnection> get_asic_channel_connections(
     PortType port_type, const std::vector<AsicChannel>& start_channels, const std::vector<AsicChannel>& end_channels) {
     // Validate and dispatch based on port type
     switch (port_type) {
-        case PortType::UNKNOWN: throw std::runtime_error("Port type is unknown");
         case PortType::WARP100:
             if (start_channels.size() != 2 || end_channels.size() != 2) {
                 throw std::runtime_error("WARP100 connections must have exactly 2 channels");

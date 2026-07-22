@@ -23,27 +23,10 @@
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include "tt_metal/fabric/port_lookup.hpp"
 
 namespace tt::tt_metal {
 
 namespace {
-
-// Single conversion point for scaleout's duplicated PortType. No default case so
-// enum drift is caught at compile time.
-PortType to_metal_port_type(tt::scaleout_tools::PortType pt) {
-    switch (pt) {
-        case tt::scaleout_tools::PortType::TRACE: return PortType::TRACE;
-        case tt::scaleout_tools::PortType::QSFP_DD: return PortType::QSFP_DD;
-        case tt::scaleout_tools::PortType::WARP100: return PortType::WARP100;
-        case tt::scaleout_tools::PortType::WARP400: return PortType::WARP400;
-        case tt::scaleout_tools::PortType::LINKING_BOARD_1: return PortType::LINKING_BOARD_1;
-        case tt::scaleout_tools::PortType::LINKING_BOARD_2: return PortType::LINKING_BOARD_2;
-        case tt::scaleout_tools::PortType::LINKING_BOARD_3: return PortType::LINKING_BOARD_3;
-        case tt::scaleout_tools::PortType::UNKNOWN: return PortType::UNKNOWN;
-    }
-    return PortType::UNKNOWN;
-}
 
 std::string get_mobo_name() {
     std::ifstream file("/sys/class/dmi/id/board_name");
@@ -589,18 +572,6 @@ PhysicalSystemDescriptor run_local_discovery(
     auto& asic_graph = psd.get_system_graph().asic_connectivity_graph[hostname_key];
     auto& exit_nodes = psd.get_exit_node_connection_table()[hostname_key];
 
-    auto make_eth_connection = [&](AsicID src_asic, uint8_t src_chan, uint8_t dst_chan, bool is_local) {
-        return EthConnection{
-            src_chan,
-            dst_chan,
-            is_local,
-            to_metal_port_type(tt::scaleout_tools::resolve_port_type(
-                psd.get_asic_descriptors().at(src_asic).board_type,
-                *psd.get_asic_descriptors().at(src_asic).asic_location,
-                src_chan)),
-        };
-    };
-
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
         auto [tray_id, asic_location] = get_asic_position(
             cluster_desc,
@@ -633,13 +604,12 @@ PhysicalSystemDescriptor run_local_discovery(
             if (!visited_dst.contains(dst_chip)) {
                 // This neighbor has not been visited. Add it to the graph and mark visited.
                 asic_graph[src_unique_id].push_back(
-                    {AsicID{chip_unique_ids.at(dst_chip)}, {make_eth_connection(src_unique_id, chan, dst_chan, true)}});
+                    {AsicID{chip_unique_ids.at(dst_chip)}, {EthConnection(chan, dst_chan, true)}});
                 visited_dst[dst_chip] = asic_graph[src_unique_id].size() - 1;
             } else {
                 // This neighbor has already been visited. There is more than one channel to it.
                 // Update the existing entry with the new channel.
-                asic_graph[src_unique_id][visited_dst[dst_chip]].second.push_back(
-                    make_eth_connection(src_unique_id, chan, dst_chan, true));
+                asic_graph[src_unique_id][visited_dst[dst_chip]].second.push_back(EthConnection(chan, dst_chan, true));
             }
         }
     }
@@ -657,18 +627,16 @@ PhysicalSystemDescriptor run_local_discovery(
             auto dst_unique_id = AsicID{std::get<0>(remote_info)};
             auto dst_chan = std::get<1>(remote_info);
             if (!visited_dst.contains(dst_unique_id)) {
-                asic_graph[local_unique_id].push_back(
-                    {dst_unique_id, {make_eth_connection(local_unique_id, eth_chan, dst_chan, false)}});
+                asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(eth_chan, dst_chan, false)}});
                 visited_dst[dst_unique_id] = asic_graph[local_unique_id].size() - 1;
             } else {
                 asic_graph[local_unique_id][visited_dst[dst_unique_id]].second.push_back(
-                    make_eth_connection(local_unique_id, eth_chan, dst_chan, false));
+                    EthConnection(eth_chan, dst_chan, false));
             }
             exit_nodes.push_back(ExitNodeConnection{
                 .src_exit_node = local_unique_id,
                 .dst_exit_node = dst_unique_id,
-                .eth_conn = make_eth_connection(local_unique_id, eth_chan, dst_chan, false),
-            });
+                .eth_conn = EthConnection(eth_chan, dst_chan, false)});
         }
     }
 

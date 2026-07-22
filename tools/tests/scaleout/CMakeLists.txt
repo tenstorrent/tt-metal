@@ -1,6 +1,11 @@
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/tools/scaleout)
-
 add_executable(test_factory_system_descriptor test_factory_system_descriptor.cpp)
+
+set_target_properties(
+    test_factory_system_descriptor
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tools/scaleout
+)
 
 # Add the protobuf generated headers directory for tests
 target_include_directories(test_factory_system_descriptor SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
@@ -20,6 +25,13 @@ add_dependencies(test_factory_system_descriptor scaleout_generated_protos)
 
 # Test for descriptor merger functionality
 add_executable(test_descriptor_merger test_descriptor_merger.cpp)
+
+set_target_properties(
+    test_descriptor_merger
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tools/scaleout
+)
 
 target_include_directories(test_descriptor_merger SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
 
@@ -42,6 +54,13 @@ add_executable(
     ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/cluster_validation_utils.cpp
     ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/ethernet_link_metrics_serialization.cpp
     ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/ethernet_link_api.cpp
+)
+
+set_target_properties(
+    test_link_retraining
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tools/scaleout
 )
 
 target_include_directories(
@@ -74,6 +93,13 @@ add_dependencies(test_link_retraining scaleout_generated_protos)
 # Test for MGD generation from cabling descriptors
 add_executable(test_cabling_descriptor_mgd_generation test_cabling_descriptor_mgd_generation.cpp)
 
+set_target_properties(
+    test_cabling_descriptor_mgd_generation
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tools/scaleout
+)
+
 target_include_directories(
     test_cabling_descriptor_mgd_generation
     PRIVATE
@@ -102,6 +128,13 @@ add_dependencies(test_cabling_descriptor_mgd_generation tt_metal)
 # Test for host_id assignment in DFS order (matching Python tt-CableGen behavior)
 add_executable(test_host_id_assignment test_host_id_assignment.cpp)
 
+set_target_properties(
+    test_host_id_assignment
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tools/scaleout
+)
+
 target_include_directories(test_host_id_assignment SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
 
 target_link_libraries(
@@ -117,6 +150,13 @@ target_link_libraries(
 add_dependencies(test_host_id_assignment scaleout_generated_protos)
 
 add_executable(test_generate_rank_bindings test_generate_rank_bindings.cpp)
+
+set_target_properties(
+    test_generate_rank_bindings
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tools/scaleout
+)
 
 target_include_directories(
     test_generate_rank_bindings

@@ -26,18 +26,11 @@ uint32_t board_type_to_proto(BoardType board_type) { return static_cast<uint32_t
 // Helper function to convert protobuf value to BoardType enum
 BoardType proto_to_board_type(uint32_t proto_value) { return static_cast<BoardType>(proto_value); }
 
-tt::fabric::proto::PortType port_type_to_proto(PortType port_type) {
-    return static_cast<tt::fabric::proto::PortType>(port_type);
-}
-
-PortType proto_to_port_type(tt::fabric::proto::PortType port_type) { return static_cast<PortType>(port_type); }
-
 // Convert EthConnection to protobuf
 void eth_connection_to_proto(const EthConnection& eth_conn, tt::fabric::proto::EthConnection* proto_conn) {
     proto_conn->set_src_chan(eth_conn.src_chan);
     proto_conn->set_dst_chan(eth_conn.dst_chan);
     proto_conn->set_is_local(eth_conn.is_local);
-    proto_conn->set_port_type(port_type_to_proto(eth_conn.port_type));
 }
 
 // Convert protobuf to EthConnection
@@ -46,7 +39,6 @@ EthConnection proto_to_eth_connection(const tt::fabric::proto::EthConnection& pr
     eth_conn.src_chan = proto_conn.src_chan();
     eth_conn.dst_chan = proto_conn.dst_chan();
     eth_conn.is_local = proto_conn.is_local();
-    eth_conn.port_type = proto_to_port_type(proto_conn.port_type());
     return eth_conn;
 }
 
