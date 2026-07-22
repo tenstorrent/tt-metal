@@ -197,26 +197,52 @@ static constexpr uint32_t SPSC_MARKER_WORDS = 2;
 // backend definition file needn't change; constant-folds to a per-RISC .bss word.
 [[maybe_unused]] static uint32_t g_prev_timer_hi = 0xFFFFFFFFu;
 
+// Tear-free 64-bit wall-clock read: HIGH and LOW are separate registers, so a tick between them would
+// pair an old high with a new (wrapped-small) low -> a timestamp ~2^32 too small = a backwards jump. Re-read
+// HIGH after LOW and retry if it moved, so (hi, lo) is always one consistent snapshot.
+inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_t& lo) {
+    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    do {
+        hi = p_reg[WALL_CLOCK_HIGH_INDEX];
+        lo = p_reg[WALL_CLOCK_LOW_INDEX];
+    } while (hi != p_reg[WALL_CLOCK_HIGH_INDEX]);
+}
+
 // Slow path of ring_ensure_room (out-of-line: ONE copy, not inlined at every zone scope). The ring is
 // FULL -> record when the stall begins, block until there's room for the caller's marker AND the
 // 2-marker stall zone, then emit the {START,END} back-pressure zone (two 2-word markers) so the stall
-// nests inside the caller's elongated zone. timer_hi is taken from the lane's last STICKY_TIMER on the
-// host (a stall rarely spans a wall-clock high tick), so only timer_low is carried here.
+// nests inside the caller's elongated zone.
+//
+// A stall CAN span a wall-clock high tick -- and under saturation EVERY lane's in-flight stall straddles
+// each ~3.2 s (2^32-cycle) tick at once. So carry the FULL (hi, lo) for both start and end and emit a
+// STICKY_TIMER whenever the high half advances (start vs the last emitted hi; end vs start). Without this
+// the host reconstructs stall_end with the pre-tick hi -> a ~2^32 backwards jump on that lane (was a
+// deterministic ~lanes*ticks batch of ts regressions). Reserve room for both stall markers + up to 2
+// stickies so the whole zone is written without a mid-zone re-check.
 __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    const uint32_t stall_start_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-    const uint32_t need = nwords + 2 * SPSC_MARKER_WORDS;  // caller marker + {START,END} stall zone
+    uint32_t start_hi, start_lo;
+    read_wall_clock(start_hi, start_lo);
+    const uint32_t need = nwords + 2 * SPSC_MARKER_WORDS + 2;  // caller marker + {START,END} + up to 2 TIMER stickies
     while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_CAPACITY - need)) {
         invalidate_l1_cache();  // re-read the X280-updated head (and the terminate flag)
         if (profiler_control_buffer[PROFILER_TERMINATE]) {
             return;  // teardown: drop the marker + skip the stall zone rather than stall on a dead ring
         }
     }
-    const uint32_t stall_end_lo = p_reg[WALL_CLOCK_LOW_INDEX];
+    uint32_t end_hi, end_lo;
+    read_wall_clock(end_hi, end_lo);
+    if (start_hi != g_prev_timer_hi) {  // hi ticked before the stall began -> anchor the START's high half
+        profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ppfmt::w0(ppfmt::T_STICKY_TIMER, start_hi);
+        g_prev_timer_hi = start_hi;
+    }
     profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ppfmt::w0(ZONE_START, PROFILER_STALL_ZONE_ID);
-    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = stall_start_lo;
+    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = start_lo;
+    if (end_hi != g_prev_timer_hi) {  // hi ticked DURING the stall -> anchor the END before its low half
+        profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ppfmt::w0(ppfmt::T_STICKY_TIMER, end_hi);
+        g_prev_timer_hi = end_hi;
+    }
     profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ppfmt::w0(ZONE_END, PROFILER_STALL_ZONE_ID);
-    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = stall_end_lo;
+    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = end_lo;
 }
 
 // Fast path stays inline (just the room check); the full-ring path is out-of-line above.
@@ -245,17 +271,6 @@ inline __attribute__((always_inline)) void publish_tail() {
         asm volatile("fence" ::: "memory");
         profiler_control_buffer[TAIL_INDEX] = wIndex;
     }
-}
-
-// Tear-free 64-bit wall-clock read: HIGH and LOW are separate registers, so a tick between them would
-// pair an old high with a new (wrapped-small) low -> a timestamp ~2^32 too small = a backwards jump. Re-read
-// HIGH after LOW and retry if it moved, so (hi, lo) is always one consistent snapshot.
-inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_t& lo) {
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    do {
-        hi = p_reg[WALL_CLOCK_HIGH_INDEX];
-        lo = p_reg[WALL_CLOCK_LOW_INDEX];
-    } while (hi != p_reg[WALL_CLOCK_HIGH_INDEX]);
 }
 
 // Append one 2-word timing marker (type|srcloc-hash , timer_low), preceded by a STICKY_TIMER when the

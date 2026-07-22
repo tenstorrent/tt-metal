@@ -707,6 +707,7 @@ int main(int argc, char** argv) {
         std::vector<uint64_t> last_ts(NL, 0);  // per-lane last timestamp (monotonicity check)
         uint32_t cur_prog = 0;                 // GLOBAL: runtime host-id (BRISC-only STICKY_PROG, program-global)
         uint64_t mk = 0, starts = 0, ends = 0, prog_ok = 0, ts_bad = 0, stall = 0;
+        uint64_t ts_bad_stall = 0, ts_bad_big = 0;  // DIAG: regressions that land on a STALL zone / are ~2^32-scale
         Batch batch;
         batch.reserve(BATCH_RECS);
         std::vector<uint32_t> buf;
@@ -749,6 +750,12 @@ int main(int argc, char** argv) {
             }
             if (ts < last_ts[lane]) {
                 ts_bad++;
+                if (zone == 0x7FFFu) {
+                    ts_bad_stall++;  // regressing record is itself a STALL zone
+                }
+                if (last_ts[lane] - ts >= (1ull << 31)) {
+                    ts_bad_big++;  // ~2^32-scale backward jump (a dropped timer_hi tick)
+                }
             }
             last_ts[lane] = ts;
             mk++;
@@ -911,6 +918,14 @@ int main(int argc, char** argv) {
         fl_ts_bad[h] = ts_bad;
         fl_unbal[h] = unbal;
         fl_stall[h] = stall;
+        if (ts_bad) {
+            printf(
+                "  [flusher %llu DIAG] ts_bad=%llu  on-stall-zone=%llu  ~2^32-jump=%llu\n",
+                (unsigned long long)h,
+                (unsigned long long)ts_bad,
+                (unsigned long long)ts_bad_stall,
+                (unsigned long long)ts_bad_big);
+        }
     };
     // Consumer: pop record batches, do the "sink" work (a real profiler emits Tracy zones here). We do a
     // representative touch of every record so the compiler can't elide it and the cost is real-ish.
