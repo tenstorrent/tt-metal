@@ -1659,7 +1659,7 @@ class ModelArgs:
                     in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                     out_subblock_h=1,  # Must be divisible by per_core_M
                     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                    per_core_M=7
+                    per_core_M=1  # workaround for issue #50656
                     if self.device_name == "P100"
                     else (
                         max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
