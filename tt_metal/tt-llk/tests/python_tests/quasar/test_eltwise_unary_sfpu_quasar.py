@@ -65,6 +65,16 @@ SFPU_UNARY_FORMATS = input_output_formats(
     ]
 )
 
+# The trigonometry / inverse-hyperbolic transcendentals. Float-only (they share the
+# SFPU_UNARY_FORMATS set), each with its own safe input domain (see prepare_trig_inputs).
+TRIGONOMETRY_OPS = [
+    MathOperation.Sin,
+    MathOperation.Cos,
+    MathOperation.Acosh,
+    MathOperation.Asinh,
+    MathOperation.Atanh,
+]
+
 # The six comparison-to-zero modes. These run integer formats too (and UInt16 via
 # the Int16 container), so the sweep adds them to the float formats above.
 COMP_OPS = [
@@ -343,6 +353,38 @@ def prepare_inputs_for_operation(
     return src_A
 
 
+def prepare_trig_inputs(
+    src_A: torch.Tensor,
+    mathop: MathOperation,
+    input_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Map the uniform [0, 1] stimulus into each op's safe domain so the Quasar kernel
+    stays in its accurate range:
+      sin / cos — [-pi, pi] (argument reduction is valid far wider, but a small domain
+                  keeps the Maclaurin polynomial precise).
+      asinh    — [-10, 10] (log polynomial stable away from overflow).
+      acosh    — [1.1, 50]  (x >= 1 domain; avoid near-1 where the 3rd-order log loses
+                  precision).
+      atanh    — [-0.9, 0.9] (|x| < 1 domain with margin so RECIP does not blow up).
+    """
+    torch_format = format_dict[input_format]
+    u = src_A.to(torch.float32)  # uniform [0, 1] from the uniform stimuli spec
+
+    if mathop in (MathOperation.Sin, MathOperation.Cos):
+        lo, hi = -math.pi, math.pi
+    elif mathop == MathOperation.Asinh:
+        lo, hi = -10.0, 10.0
+    elif mathop == MathOperation.Acosh:
+        lo, hi = 1.1, 50.0
+    elif mathop == MathOperation.Atanh:
+        lo, hi = -0.9, 0.9
+    else:
+        return src_A
+
+    return (lo + u * (hi - lo)).to(torch_format)
+
+
 def prepare_unary_inputs(
     mathop: MathOperation,
     src_A: torch.Tensor,
@@ -355,6 +397,8 @@ def prepare_unary_inputs(
         return prepare_abs_inputs(src_A, src_B, input_format, output_format)
     if mathop == MathOperation.Square:
         return prepare_square_inputs(src_A, src_B, input_format, output_format)
+    if mathop in TRIGONOMETRY_OPS:
+        return prepare_trig_inputs(src_A, mathop, input_format)
     if mathop in COMP_OPS:
         # Unsigned formats need non-negative stimuli (a signed split would wrap under the unsigned
         # dtype); signed formats use the sign-vs-magnitude builder.
@@ -584,6 +628,12 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Sigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
+    # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,
+    # fed a uniform [0, 1] stimulus that prepare_trig_inputs maps into each op's domain.
+    *[
+        OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
+        for op in TRIGONOMETRY_OPS
+    ],
 ] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_OPS]
 
 OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}
@@ -823,5 +873,7 @@ def test_eltwise_unary_sfpu_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     ), "Assert against golden failed"

@@ -20,6 +20,7 @@
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
+#include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_recip.h"
@@ -67,12 +68,25 @@ inline constexpr bool is_zero_comp_op(SfpuType op)
 }
 
 /**
+ * @brief Whether OPERATION is one of the trigonometry / inverse-hyperbolic ops.
+ *
+ * They share one init (@ref init_trigonometry, which programs ADDR_MOD_6 for the
+ * auto-incrementing Dest store) since every trig body has the same load/compute/store shape.
+ *
+ * @param op The SFPU operation type to classify.
+ */
+inline constexpr bool is_trig_op(SfpuType op)
+{
+    return op == SfpuType::sine || op == SfpuType::cosine || op == SfpuType::acosh || op == SfpuType::asinh || op == SfpuType::atanh;
+}
+
+/**
  * @brief Run the per-operation init step for a Quasar unary SFPU op.
  *
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
  * @note Pair with @ref call_unary_sfpu_operation_quasar for the calculate step.
  */
-template <SfpuType OPERATION>
+template <SfpuType OPERATION, bool is_fp32_dest_acc_en>
 void init_unary_sfpu_operation_quasar()
 {
     if constexpr (OPERATION == SfpuType::gelu)
@@ -90,6 +104,10 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::typecast)
     {
         init_typecast();
+    }
+    else if constexpr (is_trig_op(OPERATION))
+    {
+        init_trigonometry<OPERATION, is_fp32_dest_acc_en>();
     }
 }
 
@@ -205,6 +223,13 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     else if constexpr (OPERATION == SfpuType::square)
     {
         _llk_math_eltwise_unary_sfpu_params_(calculate_square<ITERATIONS>, dst_index);
+    }
+    else if constexpr (is_trig_op(OPERATION))
+    {
+        // One op-templated kernel serves sine/cosine/acosh/asinh/atanh; OPERATION picks the branch
+        // at compile time. APPROXIMATION_MODE=false selects the full-polynomial (accurate) path;
+        // VectorMode::RC (the params default) runs the functor once per face.
+        _llk_math_eltwise_unary_sfpu_params_(calculate_trigonometry<OPERATION, false /* APPROX */, is_fp32_dest_acc_en, ITERATIONS>, dst_index);
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {

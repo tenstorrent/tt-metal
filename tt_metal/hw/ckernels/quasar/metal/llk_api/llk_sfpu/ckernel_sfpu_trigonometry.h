@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-// SPDX-FileCopyrightText: © 2026 Jason Davies <jason@jasondavies.com>
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,8 +15,6 @@
 #include "sfpu/ckernel_sfpu_log.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel::sfpu {
 
@@ -289,7 +286,7 @@ inline void calculate_cosine() {
 
         // sfpi::vFloat rounding_bias;
         // rounding_bias = sfpi::sFloat16b(0x1.8p23f);
-        // j = __builtin_rvtt_sfpmad(v.get(), one, rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        // j = __builtin_rvtt_sfpmad(v.get(), one, rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         j = j + ROUNDING_BIAS;
 
@@ -345,7 +342,7 @@ sfpi_inline sfpi::vFloat sfpu_atan_bf16(sfpi::vFloat val) {
     v_else {
         sfpi::vFloat absval_minus_1 = t0 - 1.0f;
 
-        v_if(absval_minus_1 >= 0.0f) { t0 = sfpu_reciprocal<false>(t0); }
+        v_if(absval_minus_1 >= 0.0f) { t0 = _sfpu_reciprocal_<2>(t0); }
         v_endif;
 
         sfpi::vFloat t1 = t0 * t0;
@@ -609,21 +606,9 @@ inline void calculate_asin() {
     }
 }
 
-// fp32-dest asin/acos route through the endpoint sqrt (_sfpu_sqrt_endpoint_), which reads the sqrt
-// seed/refinement constants from vConstIntPrgm0/1/2. Prime them via asin_acos_init (a no-op for bf16
-// dest, which uses the self-contained sfpu_sqrt_custom). Templated on the dest-acc flag so the bare
-// init path picks the right variant; the counter reset preserves the previous bare-init behavior.
-template <bool is_fp32_dest_acc_en>
-inline void asin_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
-    asin_acos_init<is_fp32_dest_acc_en>();
-}
+inline void asin_init() { math::_reset_counters_<p_setrwc::SET_ABD_F>(); }
 
-template <bool is_fp32_dest_acc_en>
-inline void acos_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
-    asin_acos_init<is_fp32_dest_acc_en>();
-}
+inline void acos_init() { math::_reset_counters_<p_setrwc::SET_ABD_F>(); }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_acos() {
@@ -806,7 +791,7 @@ inline void calculate_sinh() {
 
 template <bool APPROXIMATION_MODE>
 void sine_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_reset_counters_<p_setrwc::SET_ABD_F>();
     // P2 and P3 of four-part Cody-Waite reduction by PI.
     sfpi::vConstFloatPrgm0 = -0x1.51p-21f;
     sfpi::vConstFloatPrgm1 = -0x1.0b4612p-33f;
@@ -816,7 +801,7 @@ void sine_init() {
 
 template <bool APPROXIMATION_MODE>
 void cosine_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_reset_counters_<p_setrwc::SET_ABD_F>();
     // P2 and P3 of four-part Cody-Waite reduction by PI/2.
     sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
     sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
@@ -826,7 +811,7 @@ void cosine_init() {
 
 template <bool APPROXIMATION_MODE>
 void tangent_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_reset_counters_<p_setrwc::SET_ABD_F>();
     // P2 and P3 of four-part Cody-Waite reduction by PI/2.
     sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
     sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
@@ -836,7 +821,7 @@ void tangent_init() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void cosh_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_reset_counters_<p_setrwc::SET_ABD_F>();
     sfpi::vConstFloatPrgm0 = 1.442695f;  // log2(e) == 1 / ln(2)
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm1 = -0.693145752f;   // -ln(2)_hi
@@ -849,7 +834,7 @@ void cosh_init() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void sinh_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_reset_counters_<p_setrwc::SET_ABD_F>();
     sfpi::vConstFloatPrgm0 = 1.442695f;  // log2(e) == 1 / ln(2)
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm1 = -0.693145752f;    // -ln(2)_hi
@@ -862,13 +847,13 @@ void sinh_init() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void atan_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_reset_counters_<p_setrwc::SET_ABD_F>();
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;
         sfpi::vConstFloatPrgm2 = -0x1.555552p-2f;
     } else {
-        // sfpu_atan_bf16 uses sfpu_reciprocal<false>.
-        sfpu_reciprocal_init<false>();
+        // sfpu_atan_bf16 uses _sfpu_reciprocal_<2>.
+        _init_sfpu_reciprocal_<false>();
     }
 }
 
@@ -1030,10 +1015,7 @@ inline void calculate_acosh() {
 
         // Build the log1p argument per region, clamping the out-of-domain lanes
         // (x < 1) to a safe value so the shared log1p runs over the whole vector.
-        // The argument is materialised to DST before log1p; round-tripping through
-        // DST severs the sqrt/reciprocal expression from the log1p polynomial so
-        // the SFPU register allocator stays within its reload budget. The x <= 1
-        // lanes are overwritten with their exact results afterwards.
+        // The x <= 1 lanes are overwritten with their exact results afterwards.
         //
         // arg = x - 1 is the common term in every region, so it is computed once
         // and the per-region sqrt term is accumulated onto it:
@@ -1045,9 +1027,12 @@ inline void calculate_acosh() {
         sfpi::vFloat arg = inp - 1.0f;
         v_if(inp < LOG1P_LARGE) { arg = arg + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>((inp + 1.0f) * arg); }
         v_endif;
-        sfpi::dst_reg[0] = arg;
 
-        sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+        // [FIX] Pass arg directly to log1p. The prior code round-tripped through
+        // dst_reg[0] (store arg, reload), but on Quasar that mid-kernel Dest
+        // store->reload returns the STALE pre-store value, so log1p ran on the
+        // original input instead of the reduced arg (acosh collapsed to ~ln(1+x)).
+        sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(arg);
         // Large region carries the extra ln(2) from acosh(x) ~= LN2 + ln(x).
         v_if(inp >= LOG1P_LARGE) { res = res + LN2; }
         v_endif;
@@ -1089,8 +1074,8 @@ inline void calculate_asinh() {
         // reload budget and the kernel fails to compile (internal compiler error:
         // maximum number of generated reload insns), so the recompute is deliberate.
         // Build the per-region log1p argument over |x|, clamp |x| < 0.75 lanes to a
-        // safe value, materialise to DST, run the shared log1p, then overwrite the
-        // |x| < 0.75 lanes with the direct polynomial. Sign is restored from inp.
+        // safe value, run the shared log1p, then overwrite the |x| < 0.75 lanes with
+        // the direct polynomial. Sign is restored from inp.
         sfpi::vFloat inp = sfpi::dst_reg[0];
 
         // Mid/large region (|x| >= 0.75): asinh(|x|) = log1p(arg). The large
@@ -1107,9 +1092,10 @@ inline void calculate_asinh() {
             arg = sfpi::abs(inp) + (inp * inp) * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(1.0f + root);
         }
         v_endif;
-        sfpi::dst_reg[0] = arg;
 
-        sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+        // [FIX] Pass arg directly to log1p (see acosh): the Quasar mid-kernel Dest
+        // store->reload returns the stale pre-store value.
+        sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(arg);
         v_if(sfpi::abs(inp) >= LOG1P_LARGE) { res = res + LN2; }
         v_endif;
 
@@ -1159,15 +1145,14 @@ inline void calculate_atanh() {
         v_if(a >= 1.0f) { a = 0.0f; }
         v_endif;
 
-        // Build the log1p argument, then materialise it to DST before the log1p
-        // polynomial. Round-tripping through DST cuts the reciprocal->log1p
-        // expression so the SFPU register allocator does not exceed its reload
-        // budget (the fused form overflows it). The boundary lanes are restored
-        // from `inp` afterwards, so clobbering DST here is safe.
+        // Build the log1p argument. The boundary lanes are restored from `inp`
+        // afterwards.
         sfpi::vFloat den = 1.0f - a;
-        sfpi::dst_reg[0] = (a + a) * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(den);
+        // [FIX] Pass arg directly to log1p (see acosh): the Quasar mid-kernel Dest
+        // store->reload returns the stale pre-store value.
+        sfpi::vFloat arg = (a + a) * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(den);
 
-        sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+        sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(arg);
         res = sfpi::copysgn(0.5f * res, inp);
 
         // Boundary fix-ups: |x| == 1 -> +/-inf, |x| > 1 -> NaN. abs(inp) is
@@ -1190,7 +1175,7 @@ inline void calculate_atanh() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_inverse_hyperbolic() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_reset_counters_<p_setrwc::SET_ABD_F>();
     // asinh/acosh route through calculate_log1p_fp32, which expects the log1p
     // polynomial constants in vConstFloatPrgm0/1/2. The sqrt used internally is
     // self-contained (_sfpu_sqrt_ge0_) and does not touch the program registers.
@@ -1199,10 +1184,55 @@ void init_inverse_hyperbolic() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_atanh() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_reset_counters_<p_setrwc::SET_ABD_F>();
     // atanh routes through calculate_log1p_fp32; the reciprocal it uses is the
     // self-contained _sfpu_reciprocal_gt0_, so log1p owns the program registers.
     log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
+}
+
+// Single entry points for the trigonometry / inverse-hyperbolic family, matching
+// the unary-SFPU harness contract (one init + one calculate, templated on the op).
+// The if-constexpr switch selects the per-op body above; only the five ops in the
+// harness is_trig_op set (sine/cosine/acosh/asinh/atanh) are valid.
+template <SfpuType OPERATION, bool is_fp32_dest_acc_en>
+inline void init_trigonometry() {
+    static_assert(
+        OPERATION == SfpuType::sine || OPERATION == SfpuType::cosine || OPERATION == SfpuType::acosh ||
+            OPERATION == SfpuType::asinh || OPERATION == SfpuType::atanh,
+        "init_trigonometry: OPERATION must be a trigonometry SfpuType (sine/cosine/acosh/asinh/atanh)");
+
+    if constexpr (OPERATION == SfpuType::sine) {
+        sine_init<false /* APPROXIMATION_MODE */>();
+    } else if constexpr (OPERATION == SfpuType::cosine) {
+        cosine_init<false /* APPROXIMATION_MODE */>();
+    } else if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh) {
+        init_inverse_hyperbolic<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>();
+    } else if constexpr (OPERATION == SfpuType::atanh) {
+        init_atanh<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>();
+    }
+}
+
+template <SfpuType OPERATION, bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
+inline void calculate_trigonometry() {
+    static_assert(
+        OPERATION == SfpuType::sine || OPERATION == SfpuType::cosine || OPERATION == SfpuType::acosh ||
+            OPERATION == SfpuType::asinh || OPERATION == SfpuType::atanh,
+        "calculate_trigonometry: OPERATION must be a trigonometry SfpuType (sine/cosine/acosh/asinh/atanh)");
+    static_assert(
+        !APPROXIMATION_MODE || OPERATION == SfpuType::sine || OPERATION == SfpuType::cosine,
+        "calculate_trigonometry: APPROXIMATION_MODE only affects sine/cosine; pass false for acosh/asinh/atanh");
+
+    if constexpr (OPERATION == SfpuType::sine) {
+        calculate_sine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
+    } else if constexpr (OPERATION == SfpuType::cosine) {
+        calculate_cosine<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
+    } else if constexpr (OPERATION == SfpuType::acosh) {
+        calculate_acosh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
+    } else if constexpr (OPERATION == SfpuType::asinh) {
+        calculate_asinh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
+    } else if constexpr (OPERATION == SfpuType::atanh) {
+        calculate_atanh<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>();
+    }
 }
 
 }  // namespace ckernel::sfpu
