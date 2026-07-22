@@ -1850,7 +1850,7 @@ void RingReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-        ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+        ttnn::experimental::prim::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
             program,
             shared_vars.reader_kernel_id,
             shared_vars.writer_kernel_id,
@@ -1950,7 +1950,7 @@ void LineReduceScatterMeshWorkloadFactory::override_runtime_arguments(
             operation_attributes.topology == ttnn::ccl::Topology::Linear,
             "LineReduceScatterMeshWorkloadFactory expects Linear topology");
 
-        line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+        ttnn::experimental::prim::line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
             program,
             shared_vars.reader_kernel_id,
             shared_vars.writer_kernel_id,

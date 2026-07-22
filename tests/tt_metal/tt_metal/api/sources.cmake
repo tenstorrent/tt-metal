@@ -29,6 +29,7 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
+    metal2_host_api/test_mesh_workload_factories_hw.cpp
     metal2_host_api/test_program_spec.cpp
     metal2_host_api/test_program_spec_hw.cpp
     metal2_host_api/test_scratchpad_hw.cpp
@@ -77,29 +78,13 @@ set(UNIT_TESTS_API_SOURCES
     disaggregation/test_kv_chunk_address_table.cpp
 )
 
-# tt-emule ASAN sanitizer tests. These EXPECT_DEATH tests assert on the emule
-# ASAN panic (e.g. "Illegal Semaphore Access") and JIT kernels that reference
-# emule-only defines/intrinsics (EMULE_SEM_BASE, __emule_local_l1_to_ptr). They
-# only build/pass under the emule backend; on ttsim/HW the kernels fail to
-# compile and the death tests fail. Gate them so they never enter the non-emule
-# unit_tests_api binary.
+# tt-emule ASAN sanitizer tests. Their source list is emule-team-owned (see
+# CODEOWNERS for tests/tt_metal/tt_metal/api/emule/) and lives in that dir's
+# sources.cmake, so adding a new emule api test needs only an emule review — not an
+# infra review of this shared file. They build/pass only under the emule backend, so
+# they're gated here and stay out of the non-emule unit_tests_api binary.
 if(TT_METAL_USE_EMULE)
-    list(
-        APPEND
-        UNIT_TESTS_API_SOURCES
-        emule/test_alignment_writes.cpp
-        emule/test_cb_leak.cpp
-        emule/test_cb_pages.cpp
-        emule/test_host_alignment.cpp
-        emule/test_metadata_size.cpp
-        emule/test_noc_without_barrier.cpp
-        emule/test_padded_write.cpp
-        emule/test_semaphore_write.cpp
-        emule/test_tensor_bad_access.cpp
-        emule/test_valid_mem_wrong_alloc.cpp
-        emule/test_write_beyond_res_pages.cpp
-        emule/test_write_outside_tensor.cpp
-    )
+    include(${CMAKE_CURRENT_LIST_DIR}/emule/sources.cmake)
 endif()
 
 # Runtime tensor tests build into their own executable (unit_tests_tensor),

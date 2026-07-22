@@ -103,7 +103,7 @@ BatchNormOperation::spec_return_value_t BatchNormOperation::compute_output_specs
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(operation_attributes.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 }

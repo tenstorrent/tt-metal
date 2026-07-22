@@ -49,7 +49,7 @@ jobs:
   validate-test-type:
     # Fail fast on a bad selection before spending a build on it. Emits the
     # normalized selection (empty/"all" -> "all") consumed by the impl filter.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       test-type: ${{ steps.validate.outputs.selection }}
     env:
@@ -102,8 +102,8 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: bh_spsg
-      sp-config: spsg
+      enabled-skus: bh_sc1
+      sp-config: sc1
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       # Keep the perf checks in a focused job so the long functional run remains unchanged.
       exclude-test-group: sdpa_perf
@@ -122,8 +122,79 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: bh_spsg
-      sp-config: spsg
+      enabled-skus: bh_sc1
+      sp-config: sc1
       # Select the perf entry by its test_group so adding more perf checks needs no workflow edit.
       test-type: sdpa_perf
       resource-prefix: sdpa-perf
+
+  ai-run-summary:
+    name: "AI Run Summary"
+    # One run-level summary across both test groups. Each impl invocation
+    # uploads its leg matrix as test_matrix_<resource-prefix>; we merge them
+    # into expected-jobs so legs that produced no ai_job_summary artifact are
+    # reconciled as infra failures rather than silently dropped.
+    needs: [Galaxy-Blaze-models-prefill, Galaxy-Blaze-models-prefill-SDPA-Perf-tests]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Download per-group matrices
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: test_matrix_*
+          path: matrices
+          merge-multiple: true
+        continue-on-error: true
+      - name: Merge matrices into expected-jobs union
+        id: merge
+        run: |
+          if compgen -G "matrices/test_matrix_*.json" > /dev/null; then
+            merged=$(jq -cs 'add // []' matrices/test_matrix_*.json)
+          else
+            merged='[]'
+          fi
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$merged" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      - name: Aggregate upstream run result
+        id: run-result
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          RESULT=$(jq -rn --argjson n "$NEEDS" '
+            [$n[].result] as $r |
+            if   any($r[]; . == "failure")   then "failure"
+            elif any($r[]; . == "cancelled") then "cancelled"
+            elif any($r[]; . == "success")   then "success"
+            else                                  "skipped"
+            end')
+          echo "run-result=$RESULT" >> "$GITHUB_OUTPUT"
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ steps.merge.outputs.matrix }}
+          run-result: ${{ steps.run-result.outputs.run-result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi

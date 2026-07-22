@@ -6,9 +6,11 @@
 
 #include <cstddef>
 #include <optional>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/sdpa/device/block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
 #include <tt-metalium/base_types.hpp>
 
 namespace ttnn::operations::experimental::indexer_score {
@@ -27,31 +29,26 @@ inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_
     return cfg.head_group_size == 0 ? Hi : static_cast<uint32_t>(cfg.head_group_size);
 }
 
-// Block-cyclic (per-SP-shard) K cache layout. Chunked prefill stores each of `sp` SP shards' per-chunk slab
-// (chunk_local keys) back-to-back in its local cache, so after the SP all-gather the [B,1,T,D] k holds keys in
-// a PERMUTED physical order: physical row r holds the natural token at
-// P[r] = (lr/chunk_local)*chunk_global + c*chunk_local + (lr%chunk_local), where c = r/sll, lr = r%sll,
-// sll = T/sp, chunk_global = sp*chunk_local. The reader reads K back in LOGICAL token order (invP per tile),
-// so the causal mask and block-max-pool -- both keyed on the logical column -- stay byte-identical and the
-// score columns come out in natural token order. RESOLVED at the ttnn entry (interface + naming match
-// sparse_sdpa): the caller names the mesh axis the cache was striped over (block_cyclic_sp_axis) and passes
-// the per-shard chunk length (block_cyclic_chunk_local); sp = the mesh extent on that axis (DERIVED, not
-// free). Hashed (it shapes the reader binary). sp == 1 is the identity, represented as no block_cyclic at all.
-struct BlockCyclicLayout {
-    uint32_t sp;           // SP shard count the cache was gathered across (derived from the mesh sp axis)
-    uint32_t chunk_local;  // per-shard chunk length (elements); == chunk_size_global / sp == per-chip seq_len
-};
+// Shared type (sp, chunk_local) with sparse_sdpa / sparse_sdpa_msa — see block_cyclic_layout.hpp; the
+// indexer reader reads K in logical order via this invP (reader_indexer_score.cpp).
+using ttnn::prim::BlockCyclicLayout;
 
 struct operation_attributes_t {
     // Absolute chunk_start of rank 0. Rank r uses chunk_start_idx + r*Sq; the per-device value is derived
     // host-side and passed to compute as a RUNTIME arg (hash-excluded), so distinct values reuse one program.
-    uint32_t chunk_start_idx{0};             // elements, tile-aligned
-    std::optional<uint32_t> cluster_axis{};  // mesh axis that is the SP ring; unset = linear device order
-    // Second mesh axis (TP) that the query sequence is ALSO block-cyclically sub-sharded over, on top of the
-    // SP block-cyclic layout. When set (alongside a named cluster_axis + block_cyclic), each device owns a
-    // Sq-row sub-range [tp_rank*Sq, (tp_rank+1)*Sq) of its SP chip's chunk_local-wide slab; the causal geometry
-    // adds that TP sub-offset to the exact block-cyclic position. unset = query sharded on the SP axis only.
-    std::optional<uint32_t> seq_subshard_axis{};
+    uint32_t chunk_start_idx{0};  // elements, tile-aligned
+    // Mesh axes the query sequence is sharded over, outermost (SP ring) first: {} = linear device order,
+    // {sp} = 1D SP ring, {sp, tp} = 2D SP ring + TP sub-shard. The SP axis sets each device's causal offset;
+    // the optional TP axis (only alongside an SP axis + block_cyclic) adds a Sq-row sub-offset so each device
+    // owns [tp_rank*Sq, (tp_rank+1)*Sq) of its SP chip's chunk_local slab. Read via sp_axis()/tp_axis().
+    // Hashed via those accessors (it shapes the causal geometry, so distinct shardings get distinct programs).
+    std::vector<uint32_t> seq_shard_axes{};
+    std::optional<uint32_t> sp_axis() const {
+        return seq_shard_axes.empty() ? std::nullopt : std::optional<uint32_t>(seq_shard_axes.front());
+    }
+    std::optional<uint32_t> tp_axis() const {
+        return seq_shard_axes.size() >= 2 ? std::optional<uint32_t>(seq_shard_axes[1]) : std::nullopt;
+    }
     // ReLU on each per-head q.kT before the gate-mul. true = DSA/GLM (relu(q.k)*w); false = raw dot (M3 MSA).
     // Compile-time, so the true path is byte-identical to before.
     bool apply_relu{true};
@@ -98,6 +95,6 @@ struct tensor_args_t {
 
 using tensor_return_value_t = Tensor;
 
-using spec_return_value_t = TensorSpec;
+using spec_return_value_t = tt::tt_metal::TensorSpec;
 
 }  // namespace ttnn::operations::experimental::indexer_score

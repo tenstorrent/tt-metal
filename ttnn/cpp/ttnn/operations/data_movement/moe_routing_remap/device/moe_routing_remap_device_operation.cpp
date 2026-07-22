@@ -55,7 +55,7 @@ MoeRoutingRemapDeviceOperation::spec_return_value_t MoeRoutingRemapDeviceOperati
 
     const auto mem_config = operation_attributes.output_mem_config.value_or(routing_weights.memory_config());
     const auto& old_spec = routing_weights.tensor_spec();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         old_spec.logical_shape(),
         TensorLayout(
             old_spec.tensor_layout().get_data_type(),

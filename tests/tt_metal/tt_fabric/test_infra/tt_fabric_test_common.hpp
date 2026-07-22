@@ -873,6 +873,19 @@ public:
         return hops;
     }
 
+    uint32_t get_full_line_mcast_hops(RoutingDirection direction) const override {
+        // Full-line hops in one direction: axis_dim - 1. Uses the GLOBAL mesh shape (mesh_shape_ is
+        // initialized with MeshScope::GLOBAL) so big-mesh / multi-host setups hop across the whole
+        // mesh, not just the local host shard.
+        switch (direction) {
+            case RoutingDirection::E:
+            case RoutingDirection::W: return mesh_shape_[EW_DIM] - 1;
+            case RoutingDirection::N:
+            case RoutingDirection::S: return mesh_shape_[NS_DIM] - 1;
+            default: TT_THROW("Unsupported routing direction for full-line multicast hops");
+        }
+    }
+
     /**
      * Unlike traditional multicast that sends in all directions from a source, unidirectional
      * linear multicast divides the mesh into halves and only sends in ONE direction per source:
@@ -1687,29 +1700,38 @@ public:
         return path;
     }
 
-    bool validate_num_links_supported(uint32_t num_links) const override {
-        // Validate that num_links doesn't exceed available routing planes for any row/column
+    uint32_t get_max_num_links() const override {
+        // Maximum num_links usable on this platform: the minimum, across all local devices, of the
+        // usable routing planes for that device. Shared by validate_num_links_supported and by the
+        // YAML max/all resolution so both stay consistent.
         const auto num_pci_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
         const auto num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
 
+        uint32_t max_num_links = std::numeric_limits<uint32_t>::max();
         std::vector<FabricNodeId> devices = get_local_node_ids();
         for (const auto& device : devices) {
             uint32_t max_routing_planes = get_max_routing_planes_for_device(device);
             // TODO: remove this once we have correct
-            if (num_pci_devices != num_devices) {
+            if (num_pci_devices != num_devices && max_routing_planes > 0) {
                 max_routing_planes -= 1;
             }
-            if (num_links > max_routing_planes) {
-                log_warning(
-                    LogTest,
-                    "Skipping: Requested num_links ({}) exceeds maximum available routing planes ({}) for "
-                    "device {}. "
-                    "Please reduce num_links or check your fabric configuration.",
-                    num_links,
-                    max_routing_planes,
-                    device.chip_id);
-                return false;  // Indicate test should be skipped
-            }
+            max_num_links = std::min(max_num_links, max_routing_planes);
+        }
+
+        return (max_num_links == std::numeric_limits<uint32_t>::max()) ? 0 : max_num_links;
+    }
+
+    bool validate_num_links_supported(uint32_t num_links) const override {
+        // Validate that num_links doesn't exceed available routing planes for any device
+        uint32_t max_num_links = get_max_num_links();
+        if (num_links > max_num_links) {
+            log_warning(
+                LogTest,
+                "Skipping: Requested num_links ({}) exceeds maximum available routing planes ({}). "
+                "Please reduce num_links or check your fabric configuration.",
+                num_links,
+                max_num_links);
+            return false;  // Indicate test should be skipped
         }
 
         return true;

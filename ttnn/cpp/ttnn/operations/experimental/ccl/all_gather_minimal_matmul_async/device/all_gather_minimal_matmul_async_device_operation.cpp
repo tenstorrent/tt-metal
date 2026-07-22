@@ -348,18 +348,18 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
 
     // Create specs for output tensors
     // Layout: [activation_gather_intermediate, (optional: weight_gather_intermediate), chunks...]
-    std::vector<TensorSpec> output_specs;
+    std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(chunks + 1 + (fsdp_fused ? 1 : 0));
 
     output_specs.push_back(
-        TensorSpec(intermediate_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+        tt::tt_metal::TensorSpec(intermediate_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
 
     if (fsdp_fused) {
         // Gathered weight intermediate: [K_full, N_local] = [K_local * fsdp_ring_size, N_local].
         // Derive from in1_input_tensor_shape so we don't depend on persistent_weight_buffer being provided.
         ttnn::Shape weight_intermediate_shape(in1_input_tensor_shape);
         weight_intermediate_shape[-2] = weight_intermediate_shape[-2] * attributes.fsdp_ring_size;
-        output_specs.push_back(TensorSpec(
+        output_specs.push_back(tt::tt_metal::TensorSpec(
             weight_intermediate_shape,
             TensorLayout(in1_input_tensor.dtype(), PageConfig(Layout::TILE), in1_input_tensor.memory_config())));
     }
@@ -368,7 +368,8 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
     for (int32_t i = 0; i < chunks; ++i) {
         ttnn::Shape output_shape(in0_input_tensor_shape);
         output_shape[-1] = N_per_chunk;
-        output_specs.push_back(TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+        output_specs.push_back(
+            tt::tt_metal::TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
     }
 
     return output_specs;

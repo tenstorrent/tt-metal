@@ -97,7 +97,7 @@ MSDAOperation::spec_return_value_t MSDAOperation::compute_output_specs(
     const uint32_t Q = as[1];
 
     Shape out_shape({N, Q, D});
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         out_shape,
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), attrs.output_memory_config));

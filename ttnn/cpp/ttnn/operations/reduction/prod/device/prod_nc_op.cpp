@@ -19,27 +19,27 @@ ttnn::Shape compute_output_shape(const ttnn::Shape& input_shape, int64_t dim) {
     return output_shape;
 }
 
-Tensor create_output_tensor(
-    const Tensor& input_tensor, const ttnn::Shape& output_shape, const MemoryConfig& mem_config) {
+ttnn::Tensor create_output_tensor(
+    const ttnn::Tensor& input_tensor, const ttnn::Shape& output_shape, const MemoryConfig& mem_config) {
     TT_FATAL(
-        input_tensor.storage_type() == tt_metal::StorageType::DEVICE,
+        input_tensor.storage_type() == ttnn::StorageType::DEVICE,
         "Input tensor must be stored on device. Storage type: {}",
         input_tensor.storage_type());
-    return create_device_tensor(
-        ttnn::TensorSpec(
+    return ttnn::create_device_tensor(
+        tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config)),
         input_tensor.device());
 }
 
 // output as arg
-Tensor prod_(const Tensor& input, const Tensor& output, const int64_t& dim) {
+ttnn::Tensor prod_(const ttnn::Tensor& input, const ttnn::Tensor& output, const int64_t& dim) {
     ttnn::prim::prod_nc(input, output, dim);
     return output;
 }
 
 // output creation inside
-Tensor prod_(const Tensor& input, const int64_t& dim, const MemoryConfig& mem_config) {
+ttnn::Tensor prod_(const ttnn::Tensor& input, const int64_t& dim, const MemoryConfig& mem_config) {
     const auto& input_shape = input.padded_shape();
     auto output_shape = compute_output_shape(input_shape, dim);
     auto output = create_output_tensor(input, output_shape, mem_config);
@@ -50,9 +50,9 @@ Tensor prod_(const Tensor& input, const int64_t& dim, const MemoryConfig& mem_co
 
 }  // namespace
 
-Tensor prod_nc(
-    const Tensor& input,
-    const Tensor& output,
+ttnn::Tensor prod_nc(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& output,
     ttsl::SmallVector<int64_t>& dims,
     const MemoryConfig& output_mem_config) {
     TT_FATAL(!dims.empty(), "prod_nc dims should not be empty");

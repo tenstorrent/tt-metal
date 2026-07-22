@@ -161,9 +161,9 @@ void PerformDeviceWork(
     _exit(0);
 }
 
-ttnn::TensorSpec MakeAllGatherInputSpec() {
-    return ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 7 * 32}),
+tt::tt_metal::TensorSpec MakeAllGatherInputSpec() {
+    return tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{4, 2, 5 * 32, 7 * 32}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 }
 
@@ -176,12 +176,7 @@ ttnn::graph::ConstraintQueryResponse RunAllGatherConstraintQuery(distributed::Me
         device,
         dist_input,
         /*dim=*/3,
-        /*cluster_axis=*/std::optional<uint32_t>(1),
-        /*subdevice_id=*/std::optional<SubDeviceId>{},
-        /*memory_config=*/std::optional<MemoryConfig>{},
-        /*optional_output_tensor=*/std::optional<::ttnn::Tensor>{},
-        /*num_links=*/std::optional<uint32_t>(1),
-        /*topology=*/std::optional<tt_fabric::Topology>(tt_fabric::Topology::Linear));
+        /*cluster_axis=*/std::optional<uint32_t>(1));
 }
 
 struct LegacyMockFabricCleanup {

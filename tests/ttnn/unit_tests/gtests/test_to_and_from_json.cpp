@@ -38,14 +38,14 @@ INSTANTIATE_TEST_SUITE_P(
         // Interleaved
         TestMemoryConfigParams{
             ttnn::MemoryConfig{
-                ttnn::TensorMemoryLayout::INTERLEAVED,
+                tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
                 ttnn::BufferType::DRAM
             }
         },
         // Sharded
         TestMemoryConfigParams{
             ttnn::MemoryConfig{
-                ttnn::TensorMemoryLayout::WIDTH_SHARDED,
+                tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
                 ttnn::BufferType::DRAM,
                 tt::tt_metal::ShardSpec(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{1, 2}, CoreCoord{7, 4}}}},
