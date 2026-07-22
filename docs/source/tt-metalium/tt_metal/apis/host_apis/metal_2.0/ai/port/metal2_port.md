@@ -137,9 +137,9 @@ An op's coverage is usually split across several trees — check each:
 
 If you have no existing tt-metal checkout, follow [`workspace_setup.md`](../shared/workspace_setup.md) for the clone / Python-env / build sequence. Key facts captured there that often trip up porters:
 
-- The right build flag for op work is `./build_metal.sh --build-tests`. `--build-metal-tests` alone is **insufficient** — it omits TTNN gtests entirely.
+- **Build only via `./build_metal.sh`** — never hand-targeted cmake (the *why* is in [workspace_setup](../shared/workspace_setup.md#build)). Two commands cover everything: `./build_metal.sh` (Metal only) and `./build_metal.sh --build-tests` (Metal **and** TTNN tests — the one for op work). `--build-metal-tests` alone is **insufficient**: it omits TTNN gtests entirely.
 - `PYTHONPATH` must be `$(pwd)` from inside your clone, not a path copied from someone else's instructions.
-- Iterative rebuilds during the port: `cmake --build build_Release --target ttnncpp unit_tests_ttnn -j 8`.
+- Iterative rebuilds during the port: just re-run `./build_metal.sh --build-tests` — it rebuilds incrementally.
 
 ### Use a subagent for builds and tests
 
@@ -348,7 +348,7 @@ This change is wrong in context: INT32 support is Quasar-only, and this op doesn
 
 ### Kernel-side whitelist
 
-The following are the *only* changes you should be making to kernel code during a Metal 2.0 port. The single `#include` a porter adds to a kernel is `experimental/kernel_args.h` (which pulls in `get_arg`, `args::`, `dfb::`, `sem::`, `tensor::`); the generated headers are auto-included by the build system — do not `#include` them yourself.
+The following are the *only* changes you should be making to kernel code during a Metal 2.0 port. In `#include` terms, the port **adds exactly two headers**: `experimental/kernel_args.h` (the argument accessors `get_arg` / `args::` and the binding tokens `dfb::`, `sem::`, `tensor::`) and `api/dataflow/dataflow_buffer.h` (the `DataflowBuffer` type that replaces the legacy `CircularBuffer` — rule 1; the now-unused `CircularBuffer` include drops with rule 1's sweep). **Nothing else changes.** Types the kernel keeps using unchanged across the port — `TensorAccessor`, `Semaphore` — come from the same headers before *and* after, so you neither add nor touch their includes (don't go hunting for them). The *generated* headers (`kernel_args_generated.h`, `kernel_bindings_generated.h`) are auto-included by the build system — do **not** `#include` those yourself.
 
 **1. CircularBuffer → DataflowBuffer.** The object-type swap. The canonical FIFO methods (`reserve_back` / `push_back` / `wait_front` / `pop_front`) map **1:1**, names unchanged. Variable-name updates are limited to following the API rename (`cb_*` → `dfb_*`), to keep the kernel readable — don't rename for any other reason.
 
@@ -711,15 +711,17 @@ In the *default* DM and compute cases the arch-agnostic helpers already emit a c
 
 *Build, test, anti-pattern self-audit.*
 
+> **Environment precondition — check before you build or test.** A checkout does *not* imply a ready environment. Ensure your Python venv is **active in this shell**: if there's no `python_env`, run `./create_venv.sh`, then `source python_env/bin/activate` (see [workspace_setup — Python environment](../shared/workspace_setup.md#python-environment)). Porters who inherit a clone routinely miss this and hit import / `pytest` failures that look like port bugs but aren't.
+
 ### Build
 
-Build the ported op's TTNN target and its test binary via the [build/test helper subagent](#use-a-subagent-for-builds-and-tests):
+Build via the [build/test helper subagent](#use-a-subagent-for-builds-and-tests), always through `./build_metal.sh` (never hand-targeted cmake — [why](../shared/workspace_setup.md#build)):
 
 ```bash
-cmake --build build_Release --target ttnncpp unit_tests_ttnn -j 8
+./build_metal.sh --build-tests
 ```
 
-(If the op's tests live in a sibling binary — `unit_tests_ttnn_udm`, `unit_tests_ttnn_tensor`, `unit_tests_ttnn_ccl`, etc. — substitute or add it to the target list.)
+This builds Metal plus **all** TTNN test binaries — the umbrella `unit_tests_ttnn` and every sibling (`unit_tests_ttnn_udm`, `unit_tests_ttnn_tensor`, `unit_tests_ttnn_ccl`, etc.) — so there's no target list to maintain; you choose the right binary at *run* time. Rebuilds are incremental: re-run the same command.
 
 The helper returns SUCCESS / FAILURE + key errors. On FAILURE, common causes:
 
