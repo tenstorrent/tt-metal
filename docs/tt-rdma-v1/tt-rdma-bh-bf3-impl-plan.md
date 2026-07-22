@@ -343,7 +343,48 @@ Post-MVP: T2/T3 throughput (§6), Profile L (BH.5), PFC (BH.6), the outbound tra
 
 ---
 
-## 11. Bootstrap — starting the actual build
+## 11. Fabric ↔ external integration — TT↔TT stays stock tt-fabric
+
+The chip runs a **mix of firmware/kernels across its 14 independent ETH SS**, selected per rail:
+- **TT↔TT rails → stock tt-fabric (unchanged).** tt-fabric / the EDM *is* tt-metal's chip-to-chip
+  mechanism — reliable, line-rate, HW-sequenced mesh routing, with its own reserved L1 region
+  (`MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE`). No custom code, no risk.
+- **External rails (erisc↔BF3/Mellanox) → the custom TT-RDMA active-eth kernel** (Profile E).
+
+This works because tt-fabric only routes between TT chips; it will never route over a link whose
+partner is a non-TT BF3/Mellanox. So external cores are inherently *not* fabric cores — free for the
+RDMA kernel — and the fabric cores are untouched. Dispatch is per-`CoreCoord` (`CreateKernel`), and
+the **`board_topology.yaml` role (EXTERNAL vs TT_INTERNAL)** is the selector for which rails get the
+RDMA kernel.
+
+**This supersedes the custom "Profile L" of §2.3/§7.** Profile L was re-inventing reliable TT↔TT,
+which is exactly what tt-fabric already does — so **TT↔TT uses stock tt-fabric, and the custom
+surface area shrinks to the external rails + the BF3 gateway.** Keep Profile L in mind only as a
+fallback if a deployment can't run tt-fabric on the TT↔TT rails.
+
+### 11.1 How much does the external rail integrate *under* tt-fabric?
+Stock tt-fabric **cannot** route packets over the external link (foreign wire — TT-RDMA-raw/RoCE to
+a non-TT partner). Integration is via a **bridge**, at increasing cost:
+
+| Level | What | Status |
+|---|---|---|
+| Stock fabric routes over the external link | — | **No** — protocol/partner mismatch; external rail is not a fabric port |
+| **Loose (NoC hand-off)** | workload moves fabric-delivered data (in L1/DRAM) to the RDMA rail; the two mechanisms meet only at the chip-global NoC | **Available now**, no fabric change — the near-term path |
+| **Tight bridge (edge node)** | an on-chip edge that *terminates* fabric and *re-originates* TT-RDMA (egress), and *injects* inbound TT-RDMA into fabric (ingress) | **Custom** — the on-chip half of the gateway; real, novel work |
+| **Transparent** (`fabric_send(external_dest)` "just works") | fabric control plane carries an external-egress destination type + the tight bridge | **Frontier** — the uncovered mesh-egress / bidirectional gap (`tt-rdma-mesh-egress-multicast.md`, `tt-rdma-bidirectional-mesh-gap.md`) |
+
+**The composition (loose, near-term):** interior mesh chip ──tt-fabric (TT↔TT)──▶ edge chip L1/DRAM
+──chip-global NoC──▶ edge chip's EXTERNAL erisc ──custom TT-RDMA (`0x1AF6`)──▶ BF3 gateway ──▶ RoCE.
+Fabric and RDMA meet at the NoC; no custom TT↔TT protocol needed.
+
+### 11.2 Coexistence verification (a gate, not an assumption)
+Architecturally sound (independent SS; matches `runtime-workload-coexistence.md`), but verify in the
+tt-metal runtime: **a custom user active-eth kernel on the external cores running concurrently with
+tt-fabric active on the TT↔TT cores** in the same mesh — confirm the external cores are *not* in the
+fabric reserved set and that enabling fabric doesn't claim them. Add this as an explicit BH-phase
+gate before relying on the mix.
+
+## 12. Bootstrap — starting the actual build
 
 **Principle: get one frame across the real link, both ways, before any RDMA semantics.** The
 wire is frozen; everything else layers onto a working spine. Do **not** start with `doca_rdma`/
@@ -393,7 +434,7 @@ RoCE/MR/QP complexity, and reuses everything from the link bring-up (trained lin
 `erisc_ports.sh`, `tt-exalens`, the BF3 already on the wire). The shared headers + M-3 test mean
 both sides build against identical bytes from day one — the spec is executable, not prose.
 
-## 12. References
+## 13. References
 
 - Wire: `tt-rdma-wire-protocol-v1.md` · SDK: `tt-rdma-host-sdk.md` · RX FW: `tt-rdma-fw-arch-rx.md`
 - Chip-side: `tt-rdma-blackhole-port.md` · Gateway: `bf3-gateway-design.md`
