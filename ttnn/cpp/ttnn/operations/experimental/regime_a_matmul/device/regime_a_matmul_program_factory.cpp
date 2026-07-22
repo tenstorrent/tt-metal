@@ -20,6 +20,7 @@
 #include <tt-metalium/experimental/device.hpp>  // get_worker_noc_hop_distance (physical ring-order diag)
 
 #include "regime_a_matmul_config.hpp"
+#include "regime_a_matmul_diag.hpp"  // internal-only RegimeADiag enum (not reachable from the public header)
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -36,8 +37,9 @@ constexpr const char* kWriterKernel =
 constexpr const char* kComputeKernel =
     "ttnn/cpp/ttnn/operations/experimental/regime_a_matmul/device/kernels/compute.cpp";
 
-constexpr uint32_t kTileBytesBf16 = 2048u;
-constexpr uint32_t kTileBytesFp32 = 4096u;
+// Tile-byte sizes are defined once in regime_a_matmul_plan.hpp (single source of truth), reached via `plan::`.
+using plan::kTileBytesBf16;
+using plan::kTileBytesFp32;
 
 // Largest divisor of v that is <= cap (always >= 1).
 uint32_t largest_div(uint32_t v, uint32_t cap) {
@@ -111,20 +113,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     std::map<std::string, std::string> rdefs;  // in1 reader
     std::map<std::string, std::string> wdefs;  // in0 ring/reduce writer
     std::map<std::string, std::string> ddefs;  // compute (added to cdefs below)
-    if (diag & RegimeADiag::DIAG_SKIP_IN1_READ) {
-        rdefs["DIAG_SKIP_IN1_READ"] = "1";
-    }
     if (diag & RegimeADiag::DIAG_FWD_FLUSH_FIRST) {
         rdefs["DIAG_FWD_FLUSH_FIRST"] = "1";  // A/B baseline: OLD per-block flush-before-signal in1 forward
     }
     if (diag & RegimeADiag::DIAG_NO_COALESCE) {
         rdefs["DIAG_NO_COALESCE"] = "1";  // A/B baseline: OLD K_block per-row in1 reads (no coalescing)
-    }
-    if (diag & RegimeADiag::DIAG_SKIP_IN0_READ) {
-        wdefs["DIAG_SKIP_IN0_READ"] = "1";
-    }
-    if (diag & RegimeADiag::DIAG_SKIP_IN0_FORWARD) {
-        wdefs["DIAG_SKIP_IN0_FORWARD"] = "1";
     }
     if (diag & RegimeADiag::DIAG_NO_REDUCE) {
         wdefs["DIAG_NO_REDUCE"] = "1";
@@ -134,6 +127,28 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         rdefs["DIAG_ZONES"] = "1";
         wdefs["DIAG_ZONES"] = "1";
         ddefs["DIAG_ZONES"] = "1";
+    }
+    if (diag & RegimeADiag::DIAG_RINGDRAIN) {  // test-only: phase-1 deferred-drain (writer only)
+        wdefs["DIAG_RINGDRAIN"] = "1";
+    }
+    if (diag & RegimeADiag::DIAG_REDTREE) {  // test-only: fan-in-2 reduction tree (Pk==4); writer + compute
+        TT_FATAL(Pk == 4u, "DIAG_REDTREE requires k_slices (Pk) == 4 (fan-in-2 depth-2 tree); got Pk={}", Pk);
+        wdefs["REDTREE"] = "1";
+        ddefs["REDTREE"] = "1";
+    }
+    if (diag & RegimeADiag::DIAG_RSCATTER) {  // test-only: ring reduce-scatter over the Pk cores (tile-partition)
+        const uint32_t rs_T = geo.M_block_capacity * geo.N_sub;  // tiles in one output block
+        TT_FATAL(
+            Pk > 1u && geo.N_bpc == 1u && rs_T % Pk == 0u && rs_T >= Pk,
+            "DIAG_RSCATTER requires Pk>1, N_bpc==1, and the output block (M_block*N_sub={}) divisible by Pk={} "
+            "and >= Pk (row/tile-partitionable into Pk chunks); got M_block={} N_sub={} N_bpc={}",
+            rs_T,
+            Pk,
+            geo.M_block_capacity,
+            geo.N_sub,
+            geo.N_bpc);
+        wdefs["RSCATTER"] = "1";
+        ddefs["RSCATTER"] = "1";
     }
     if (diag & RegimeADiag::DIAG_BARRIER_DRAIN) {
         wdefs["DIAG_BARRIER_DRAIN"] = "1";  // A/B baseline: OLD per-block phase-2 completion barrier
@@ -442,26 +457,151 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             }
         }
     }
-    if (diag & RegimeADiag::DIAG_LOCAL_FEED) {
-        rdefs["DIAG_LOCAL_FEED"] = "1";
-        wdefs["DIAG_LOCAL_FEED"] = "1";
-        ddefs["DIAG_LOCAL_FEED"] = "1";
+    // ---- DIAG_REDTREE: rewrite the linear reduction chain into a fan-in-2 tree (Pk==4 only). ----
+    // Groups: fixing a bank b and a within-bank (nn,mm) sub-index `sub` in [0, mfac), the 4 k-slices are the
+    // cores i_kk = b*preaders + kk*mfac + sub for kk=0..3 (this is exactly the chain's reduction group). We
+    // re-link them as two level-0 pairs feeding one level-1 root:
+    //   kk0 --ch0--> kk1        (kk1 sums kk0's partial: num_recv=1)
+    //   kk2 --ch0--> kk3        (root channel 0)
+    //   kk1 --ch1--> kk3        (root channel 1; kk3 sums both: num_recv=2, is_top)
+    // Critical depth drops from 3 (chain) to 2. The root's two channels use disjoint semaphores (red_sem /
+    // red_sem2) and disjoint reduce-CB slots so partials never alias. Output is bit-identical to the chain
+    // (same fp32-acc adds, associativity). This mutates ONLY reduction fields (num_recv / red_channel /
+    // red_parent_nrecv / red_next_idx / red_src_idx / is_top / is_bottom); ring + ownership + placement are
+    // untouched, so mask-0 stays byte-identical and only this diagnostic program sees the tree.
+    if (diag & RegimeADiag::DIAG_REDTREE) {
+        const uint32_t mfac = geo.mfac;          // Ns*Sm
+        const uint32_t preaders = geo.preaders;  // Pk*Ns*Sm
+        for (uint32_t b = 0; b < 8u; ++b) {
+            for (uint32_t sub = 0; sub < mfac; ++sub) {
+                const uint32_t i0 = b * preaders + 0u * mfac + sub;
+                const uint32_t i1 = b * preaders + 1u * mfac + sub;
+                const uint32_t i2 = b * preaders + 2u * mfac + sub;
+                const uint32_t i3 = b * preaders + 3u * mfac + sub;
+                auto& c0 = P.cores[i0];
+                auto& c1 = P.cores[i1];
+                auto& c2 = P.cores[i2];
+                auto& c3 = P.cores[i3];
+                // kk0: leaf -> kk1 (channel 0)
+                c0.num_recv = 0u;
+                c0.is_bottom = true;
+                c0.is_top = false;
+                c0.red_next_idx = i1;
+                c0.red_channel = 0u;
+                c0.red_parent_nrecv = 1u;
+                c0.red_src_idx[0] = i0;
+                c0.red_src_idx[1] = i0;
+                // kk1: recv kk0 (channel 0) -> kk3 (channel 1)
+                c1.num_recv = 1u;
+                c1.is_bottom = false;
+                c1.is_top = false;
+                c1.red_next_idx = i3;
+                c1.red_channel = 1u;
+                c1.red_parent_nrecv = 2u;
+                c1.red_src_idx[0] = i0;
+                c1.red_src_idx[1] = i1;
+                // kk2: leaf -> kk3 (channel 0)
+                c2.num_recv = 0u;
+                c2.is_bottom = true;
+                c2.is_top = false;
+                c2.red_next_idx = i3;
+                c2.red_channel = 0u;
+                c2.red_parent_nrecv = 2u;
+                c2.red_src_idx[0] = i2;
+                c2.red_src_idx[1] = i2;
+                // kk3: root, recv kk2 (channel 0) + kk1 (channel 1)
+                c3.num_recv = 2u;
+                c3.is_bottom = false;
+                c3.is_top = true;
+                c3.red_next_idx = i3;
+                c3.red_channel = 0u;
+                c3.red_parent_nrecv = 0u;
+                c3.red_src_idx[0] = i2;  // channel 0 source
+                c3.red_src_idx[1] = i1;  // channel 1 source
+            }
+        }
     }
+
+    // ---- DIAG_RSCATTER: assign the ring reduce-scatter cyclic order over each group's Pk cores. ----
+    // For each (bank b, within-bank sub) group, order the Pk k-slice cores into a Hamiltonian CYCLE with small
+    // NoC hops (a poor wraparound edge would serialize the whole ring). Pk==4 keeps the exact min-(maxedge,tot)
+    // 3!-search; Pk>4 uses a greedy nearest-neighbour cycle over physical worker-coord Manhattan distance
+    // (P! is infeasible). rs_pos = cycle position; rs_next/prev_idx = cyclic neighbours; rs_own_chunk =
+    // (rs_pos+1)%Pk (the tile-chunk this core finally owns + writes). Mutates only rs_* fields.
+    if (diag & RegimeADiag::DIAG_RSCATTER) {
+        const uint32_t mfac = geo.mfac;
+        const uint32_t preaders = geo.preaders;
+        auto phys_xy = [&](uint32_t idx) {
+            const auto& c = P.cores[idx].coord;
+            auto w = device->worker_core_from_logical_core(CoreCoord{c.x, c.y});
+            return std::pair<int, int>{static_cast<int>(w.x), static_cast<int>(w.y)};
+        };
+        for (uint32_t b = 0; b < 8u; ++b) {
+            for (uint32_t sub = 0; sub < mfac; ++sub) {
+                std::vector<uint32_t> idx(Pk);
+                std::vector<std::pair<int, int>> xy(Pk);
+                for (uint32_t kk = 0; kk < Pk; ++kk) {
+                    idx[kk] = b * preaders + kk * mfac + sub;
+                    xy[kk] = phys_xy(idx[kk]);
+                }
+                auto dist = [&](uint32_t a, uint32_t c) {
+                    return std::abs(xy[a].first - xy[c].first) + std::abs(xy[a].second - xy[c].second);
+                };
+                std::vector<uint32_t> ord(Pk);
+                if (Pk == 4u) {
+                    // exact min-(maxedge,total) cycle over the 3! orderings of {1,2,3} (position 0 fixed)
+                    const uint32_t perms[6][3] = {{1, 2, 3}, {1, 3, 2}, {2, 1, 3}, {2, 3, 1}, {3, 1, 2}, {3, 2, 1}};
+                    int best_max = 1 << 30, best_tot = 1 << 30;
+                    for (const auto& pm : perms) {
+                        uint32_t o[4] = {0, pm[0], pm[1], pm[2]};
+                        int mx = 0, tot = 0;
+                        for (uint32_t p = 0; p < 4u; ++p) {
+                            int e = dist(o[p], o[(p + 1u) % 4u]);
+                            mx = std::max(mx, e);
+                            tot += e;
+                        }
+                        if (mx < best_max || (mx == best_max && tot < best_tot)) {
+                            best_max = mx;
+                            best_tot = tot;
+                            for (uint32_t p = 0; p < 4u; ++p) {
+                                ord[p] = o[p];
+                            }
+                        }
+                    }
+                } else {
+                    // greedy nearest-neighbour Hamiltonian cycle (start at local 0)
+                    std::vector<bool> vis(Pk, false);
+                    ord[0] = 0;
+                    vis[0] = true;
+                    for (uint32_t p = 1; p < Pk; ++p) {
+                        int best = -1, bestd = 1 << 30;
+                        for (uint32_t cand = 0; cand < Pk; ++cand) {
+                            if (vis[cand]) {
+                                continue;
+                            }
+                            int dd = dist(ord[p - 1], cand);
+                            if (dd < bestd) {
+                                bestd = dd;
+                                best = (int)cand;
+                            }
+                        }
+                        ord[p] = (uint32_t)best;
+                        vis[best] = true;
+                    }
+                }
+                for (uint32_t p = 0; p < Pk; ++p) {
+                    auto& cp = P.cores[idx[ord[p]]];
+                    cp.rs_pos = p;
+                    cp.rs_next_idx = idx[ord[(p + 1u) % Pk]];
+                    cp.rs_prev_idx = idx[ord[(p + Pk - 1u) % Pk]];
+                    cp.rs_own_chunk = (p + 1u) % Pk;
+                }
+            }
+        }
+    }
+
     if (diag & RegimeADiag::DIAG_FULL_IN0_WAIT) {
         ddefs["DIAG_FULL_IN0_WAIT"] = "1";  // A/B baseline: old full-slice startup barrier (compute-only)
-    }
-    const bool scatter = (diag & RegimeADiag::DIAG_IN0_SCATTER) != 0u;
-    if (scatter) {
-        wdefs["DIAG_IN0_SCATTER"] = "1";  // writer phase-1 uses direct scatter; needs the G-1 ahead peers (below)
-    }
-    // Replicated shorter ring: IN0_REPL (2 or 4) goes to BOTH the writer (seed reads + R-bundle rotation) and
-    // the in1 reader (matching shard order). No runtime-arg change (nearest-neighbor forward reuses fwd_next).
-    if (diag & RegimeADiag::DIAG_IN0_REPL2) {
-        wdefs["IN0_REPL"] = "2";
-        rdefs["IN0_REPL"] = "2";
-    } else if (diag & RegimeADiag::DIAG_IN0_REPL4) {
-        wdefs["IN0_REPL"] = "4";
-        rdefs["IN0_REPL"] = "4";
     }
 
     // ---- Fused-epilogue / output-split kernel defines (empty => byte-identical no-fusion compile). ----
@@ -517,6 +657,15 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     if (cb.cb7_tiles > 0u) {
         mkcb(program, all_cores, 7, cb.cb7_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // reduce (Pk>1 only)
     }
+    // DIAG_RSCATTER only (unfused): c_4 = compute->writer send-chunk CB; c_5 = incoming-chunk recv CB. Both
+    // bf16, EXACTLY double-buffered (2 x chunk_tiles, chunk_tiles = M_block*N_sub / Pk) so the FIFO period is
+    // 2 and matches the writer's fixed recv-slot offset (t%2) for the remote chunk writes. Reuse c_4/c_5
+    // (bias/residual CBs in fused builds; unused on the unfused reduce-scatter compile). c_7 unused here.
+    if (diag & RegimeADiag::DIAG_RSCATTER) {
+        const uint32_t rs_chunk = (geo.M_block_capacity * geo.N_sub) / Pk;
+        mkcb(program, all_cores, 4, 2u * rs_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
+        mkcb(program, all_cores, 5, 2u * rs_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
+    }
     // Fused-epilogue operand CBs (only when the matching fusion is active). c_4 bias [1,N_sub], c_5 residual
     // [M,N] block, c_6 gate [1,N_sub] (broadcast) or [M,N] block. Sized to hold a full sub-block so the
     // writer can stream all M rows while compute consumes them (matches minimal_matmul's ternary CB sizing).
@@ -541,17 +690,12 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         in1valid_sem = CreateSemaphore(program, all_cores, 0u);
         in1ready_sem = CreateSemaphore(program, all_cores, 0u);
     }
-    // DIAG_IN0_XCHG: G-1 per-slot readiness semaphores so the writer pushes each in0 slot the moment its
-    // direct-exchange write lands (incremental overlap), rather than one ring counter. Created only for the
-    // xchg program so the public path's semaphore layout is unchanged.
-    const bool xchg = (diag & RegimeADiag::DIAG_IN0_XCHG) != 0u;
-    const bool xchgrr = (diag & RegimeADiag::DIAG_IN0_XCHGRR) != 0u;
-    std::vector<uint32_t> xchg_slotsem;
-    if (xchg || xchgrr) {  // both direct-exchange schedules use G-1 per-slot readiness semaphores
-        for (uint32_t d = 1; d < geo.G; ++d) {
-            xchg_slotsem.push_back(CreateSemaphore(program, all_cores, 0u));
-        }
-        wdefs[xchg ? "DIAG_IN0_XCHG" : "DIAG_IN0_XCHGRR"] = "1";
+    // DIAG_REDTREE only: the fan-in-2 root's SECOND receive channel (channel 1). Disjoint from red_sem so the
+    // two incoming partials never share a counter. Allocated only for the tree diagnostic (mask 0 unaffected);
+    // passed to the writer as a RUNTIME arg (below) so the writer's compile-time-arg layout is unchanged.
+    uint32_t red_sem2 = 0u;
+    if (diag & RegimeADiag::DIAG_REDTREE) {
+        red_sem2 = CreateSemaphore(program, all_cores, 0u);
     }
 
     // ---- Kernels ----
@@ -565,8 +709,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         geo.N_bpc,               // 5 N_bpc
         geo.in1_shard_stride_n,  // 6 in1_shard_stride_n (physical per-bank width)
         in1valid_sem,            // 7
-        in1ready_sem,            // 8
-        0u};                     // 9 in1_mcast (0 for v1: unicast forward)
+        in1ready_sem};           // 8
 
     auto mk = [&](const char* src,
                   const CoreRangeSet& g,
@@ -711,28 +854,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             cp.valid_k,              // 14 valid K tiles (rest of capacity zero)
             cp.valid_m,              // 15 valid M tiles (rest zero / not written)
             cp.valid_n};             // 16 valid N tiles (rest zero / not written)
-        // DIAG_IN0_SCATTER (test-only variant): append the G-1 ring peers AHEAD of this core (args 17..),
-        // in d-ahead order (ring_next^1..ring_next^{G-1}). Core scatters its own shard to peer d's cb0 slot
-        // d; each peer receives from the core d-behind, reproducing the ring's cb0 layout. Appended only for
-        // the scatter program (distinct hash), so the public path's arg layout is unchanged.
-        if (scatter || xchg || xchgrr) {
-            // XCHG/XCHGRR: prepend the G-1 per-slot semaphore IDs (args 17..17+G-2). Then (scatter/xchg/
-            // xchgrr) the G-1 ahead peers in d-ahead order (ring_next^1..). Core writes its own shard to peer
-            // d's slot d and signals that peer's slot-d sem. Appended only for these programs; public-path
-            // arg layout unchanged.
-            if (xchg || xchgrr) {
-                for (uint32_t d = 1; d < geo.G; ++d) {
-                    wa.push_back(xchg_slotsem[d - 1]);
-                }
-            }
-            uint32_t cur = i;
-            for (uint32_t d = 1; d < geo.G; ++d) {
-                cur = P.cores[cur].ring_next_idx;
-                auto pc = phys(cur);
-                wa.push_back(pc.x);
-                wa.push_back(pc.y);
-            }
-        }
         // Fused-epilogue / output-split writer args (index 17+). Never combined with the diag ablations above
         // (those only run via the internal diag entry, which passes no fusion). Order MUST match the writer
         // kernel's fidx reads: bias, then residual/gate/broadcast, then chunk count/width/addresses.
@@ -751,12 +872,53 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                 wa.push_back(tensor_return_value[c].buffer()->address());
             }
         }
+        // DIAG_REDTREE tree args (index 17+; never combined with fusion/chunks, which the diag entry disables).
+        // The writer reads these only under #ifdef REDTREE. red_src[0/1] are the channel-0/1 source cores this
+        // core reverse-credits; for leaves (num_recv==0) they point at self and are unused.
+        if (diag & RegimeADiag::DIAG_REDTREE) {
+            auto rs0 = phys(cp.red_src_idx[0]);
+            auto rs1 = phys(cp.red_src_idx[1]);
+            wa.push_back(cp.num_recv);          // 17 incoming partials to receive (0/1/2)
+            wa.push_back(cp.red_parent_nrecv);  // 18 parent's num_recv (sender reduce-slot cadence)
+            wa.push_back(cp.red_channel);       // 19 channel this core writes at its parent (0/1)
+            wa.push_back(red_sem2);             // 20 channel-1 receive semaphore id
+            wa.push_back(rs0.x);                // 21 channel-0 source x
+            wa.push_back(rs0.y);                // 22 channel-0 source y
+            wa.push_back(rs1.x);                // 23 channel-1 source x
+            wa.push_back(rs1.y);                // 24 channel-1 source y
+        }
+        // DIAG_RSCATTER ring reduce-scatter args (index 17+; unfused only). next/prev = my cyclic neighbours
+        // in the optimized Pk ring; owned_row = the block M-row this core finally writes to DRAM.
+        if (diag & RegimeADiag::DIAG_RSCATTER) {
+            auto rn = phys(cp.rs_next_idx);
+            auto rp = phys(cp.rs_prev_idx);
+            wa.push_back(rn.x);                                     // 17 next core x
+            wa.push_back(rn.y);                                     // 18 next core y
+            wa.push_back(rp.x);                                     // 19 prev core x
+            wa.push_back(rp.y);                                     // 20 prev core y
+            wa.push_back(cp.rs_own_chunk);                          // 21 owned tile-chunk index (0..Pk-1)
+            wa.push_back(Pk);                                       // 22 P = ring size (Pk)
+            wa.push_back((geo.M_block_capacity * geo.N_sub) / Pk);  // 23 chunk_tiles
+        }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
         // compute runtime args: fixed rectangular block over the schedule capacities. N_end spans ALL
         // N_bpc sub-blocks (spec §7); zero-filled tail positions contribute zero. When a fusion is active the
         // reduction-root flag (is_top) follows, then the addcmul scalar bits + gate-broadcast flag.
         std::vector<uint32_t> ca = {0u, geo.M_block_capacity, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u};
+        // DIAG_REDTREE (never combined with fusion): compute reads num_recv right after is_reduce_bottom and
+        // runs num_recv reduce-add rounds. Follows is_reduce_bottom (arg 4) so the fused is_reduce_top (arg 5,
+        // present only under fusion) never collides with it.
+        if (diag & RegimeADiag::DIAG_REDTREE) {
+            ca.push_back(cp.num_recv);
+        }
+        // DIAG_RSCATTER (never combined with fusion): compute reads ring position + P + chunk_tiles after
+        // is_reduce_bottom.
+        if (diag & RegimeADiag::DIAG_RSCATTER) {
+            ca.push_back(cp.rs_pos);
+            ca.push_back(Pk);
+            ca.push_back((geo.M_block_capacity * geo.N_sub) / Pk);
+        }
         if (has_bias || has_ternary || has_activation) {
             ca.push_back(cp.is_top ? 1u : 0u);
         }
