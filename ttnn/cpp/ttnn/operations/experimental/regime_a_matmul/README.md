@@ -30,7 +30,13 @@ out = ttnn.experimental.regime_a_matmul(in0, in1, config=cfg)   # config optiona
 
 Config knobs (all in tiles / slice counts): `k_slices` (Pk, split-K depth), `n_slices` (Ns),
 `m_slices` (Sm), `k_block_tiles` (kb), `n_subblock_tiles` (nsb). The grid is `8 × Pk × Ns × Sm` cores.
-`config=None` selects via the ported FLUX/LTX picker (lookup table + cost-model fallback).
+`config=None` (recommended) selects via the ported FLUX/LTX picker (lookup table + cost-model fallback).
+A manual `RegimeAMatmulConfig` must set **all five** fields explicitly and is immutable (there is no
+zero-argument constructor — the old all-ones default builds only 8 workers, which is invalid for most shapes).
+
+**Numerics are fixed, not arguments.** The op always runs BF16 in/out, HiFi2 math, FP32 dest-accumulation,
+and DRAM-interleaved output. There are deliberately no `dtype` / `memory_config` / `compute_kernel_config`
+parameters (they were previously accepted but ignored). Split `dim` is always `-1` (validated in the wrapper).
 
 ## Structure
 
