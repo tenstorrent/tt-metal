@@ -108,30 +108,61 @@ def _deliver_local_device_map(device_map, rank: int, attach_timeout_s: float = 3
     :func:`publish_serialized_table_and_wait_ready`).
     """
     mod = _import_migration_client()
-    endpoint_id = int(os.environ.get("PREFILL_MIGRATION_ENDPOINT_ID", "1"))
-    base = f"/ep_{endpoint_id}"
-    suffix = "" if rank == 0 else f"_r{rank}"
-    deadline = time.monotonic() + attach_timeout_s
-    for side in ("a", "b"):
-        cmd = f"{base}_{side}_cmd{suffix}"
-        table = f"{base}_{side}_table{suffix}"
-        resp = f"{base}_{side}_resp{suffix}"
-        # The worker's queues may not exist the instant the runner reaches this (endpoint bring-up
-        # races the runner's device open); retry the attach briefly, exactly like the smoke sender.
-        while True:
-            try:
-                client = mod.MigrationLayerClient(cmd, table, resp)
-                break
-            except RuntimeError as e:
-                if time.monotonic() >= deadline:
-                    raise RuntimeError(
-                        f"[migration] could not attach to local worker queue {cmd} (rank {rank}, "
-                        f"endpoint_id={endpoint_id}): {e}. Is the migration_endpoint worker for THIS "
-                        f"host running? (queues are /ep_<endpoint_id>_{{a,b}}_* per tt-llm-engine b64f8dee)"
-                    ) from e
-                time.sleep(0.1)
-        client.send_device_map(device_map)
-        logger.info(f"[migration] delivered {len(device_map)} device-map entries -> {cmd}")
+
+    def _discover():
+        trios = []
+        skipped = []
+        for side in ("a", "b"):
+            candidates = glob.glob(f"/dev/shm/ep_*_{side}_cmd") + glob.glob(f"/dev/shm/ep_*_{side}_cmd_r*")
+            candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            for c in candidates:
+                name = "/" + os.path.basename(c)  # "/ep_<pid>_<side>_cmd[_r<rank>]"
+                if not os.access(c, os.R_OK | os.W_OK):
+                    st = os.stat(c)
+                    import pwd
+
+                    owner = pwd.getpwuid(st.st_uid).pw_name
+                    skipped.append(
+                        f"{name} (owner={owner}, mtime={time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))})"
+                    )
+                    continue
+                trios.append(
+                    (
+                        name,
+                        name.replace(f"_{side}_cmd", f"_{side}_table"),
+                        name.replace(f"_{side}_cmd", f"_{side}_resp"),
+                    )
+                )
+        return trios, skipped
+
+    deadline = time.monotonic() + timeout_s
+    trios, skipped = _discover()
+    while not trios:
+        if time.monotonic() >= deadline:
+            if skipped:
+                details = "\n  ".join(skipped)
+                raise RuntimeError(
+                    f"[migration] local worker queues (/dev/shm/ep_*_{{a,b}}_cmd*) are present "
+                    f"but none are accessible by this user. Skipped {len(skipped)}:\n  {details}\n"
+                    f"This is usually caused by stale shm files from another user's previous run."
+                )
+            raise RuntimeError(
+                "[migration] no local worker queues (/dev/shm/ep_*_{a,b}_cmd*) on this host -- is the "
+                "migration_endpoint/worker for THIS host running? (The /mig_ep* outward queues are the "
+                "master-only control channel, NOT the device-map queues.)"
+            )
+        time.sleep(0.25)
+        trios, skipped = _discover()
+
+    for cmd, table, resp in trios:
+        try:
+            mod.MigrationLayerClient(cmd, table, resp).send_device_map(device_map)
+            logger.info(f"[migration] delivered {len(device_map)} local device-map entries -> {cmd}")
+        except RuntimeError as e:
+            if "Permission denied" in str(e):
+                logger.warning(f"[migration] skipping inaccessible worker queue {cmd}: {e}")
+                continue
+            raise RuntimeError(f"[migration] could not attach to local worker queue {cmd}: {e}") from e
 
 
 def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
