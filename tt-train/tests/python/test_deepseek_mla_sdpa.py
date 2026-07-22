@@ -139,50 +139,53 @@ def test_mla_fused_sdpa_matches_composite_forward_and_backward():
     """Compare fused-SDPA MLA against the old composite path for output and parameter gradients."""
     ctx = ttml.autograd.AutoContext.get_instance()
 
-    device = ctx.get_device()
-    cfg = _make_config()
-    rope_params = ttml.ops.rope.build_rope_params(cfg.max_seq_len, cfg.qk_rope_head_dim, cfg.rope_theta)
-    module = MultiHeadLatentAttention(cfg, rope_params)
+    try:
+        device = ctx.get_device()
+        cfg = _make_config()
+        rope_params = ttml.ops.rope.build_rope_params(cfg.max_seq_len, cfg.qk_rope_head_dim, cfg.rope_theta)
+        module = MultiHeadLatentAttention(cfg, rope_params)
 
-    ctx.set_gradient_mode(ttml.autograd.GradMode.DISABLED)
-    x, mask = _make_inputs()
-    out_composite = _old_composite_forward(module, x, mask)
-    ttnn.synchronize_device(device)
-    out_composite_np = _to_numpy(out_composite)
-    ctx.reset_graph()
+        ctx.set_gradient_mode(ttml.autograd.GradMode.DISABLED)
+        x, mask = _make_inputs()
+        out_composite = _old_composite_forward(module, x, mask)
+        ttnn.synchronize_device(device)
+        out_composite_np = _to_numpy(out_composite)
+        ctx.reset_graph()
 
-    x, _ = _make_inputs()
-    out_fused = module(x)  # MLA is causal-only: no mask argument
-    ttnn.synchronize_device(device)
-    out_fused_np = _to_numpy(out_fused)
-    ctx.reset_graph()
+        x, _ = _make_inputs()
+        out_fused = module(x)  # MLA is causal-only: no mask argument
+        ttnn.synchronize_device(device)
+        out_fused_np = _to_numpy(out_fused)
+        ctx.reset_graph()
 
-    _assert_close("forward", _compare_arrays(out_composite_np, out_fused_np))
+        _assert_close("forward", _compare_arrays(out_composite_np, out_fused_np))
 
-    ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED)
-    opt_cfg = ttml.optimizers.SGDConfig.make(0.0, 0.0, 0.0, 0.0, False)
-    zero_grad = ttml.optimizers.SGD(module.parameters(), opt_cfg)
+        ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED)
+        opt_cfg = ttml.optimizers.SGDConfig.make(0.0, 0.0, 0.0, 0.0, False)
+        zero_grad = ttml.optimizers.SGD(module.parameters(), opt_cfg)
 
-    zero_grad.zero_grad()
-    x, mask = _make_inputs()
-    loss = ttml.ops.unary.mean(_old_composite_forward(module, x, mask))
-    loss.backward(False)
-    ttnn.synchronize_device(device)
-    composite_grads = {
-        name: _grad_to_numpy(param) for name, param in module.parameters().items() if param.is_grad_initialized()
-    }
-    ctx.reset_graph()
+        zero_grad.zero_grad()
+        x, mask = _make_inputs()
+        loss = ttml.ops.unary.mean(_old_composite_forward(module, x, mask))
+        loss.backward(False)
+        ttnn.synchronize_device(device)
+        composite_grads = {
+            name: _grad_to_numpy(param) for name, param in module.parameters().items() if param.is_grad_initialized()
+        }
+        ctx.reset_graph()
 
-    zero_grad.zero_grad()
-    x, _ = _make_inputs()
-    loss = ttml.ops.unary.mean(module(x))  # MLA is causal-only: no mask argument
-    loss.backward(False)
-    ttnn.synchronize_device(device)
-    fused_grads = {
-        name: _grad_to_numpy(param) for name, param in module.parameters().items() if param.is_grad_initialized()
-    }
-    ctx.reset_graph()
+        zero_grad.zero_grad()
+        x, _ = _make_inputs()
+        loss = ttml.ops.unary.mean(module(x))  # MLA is causal-only: no mask argument
+        loss.backward(False)
+        ttnn.synchronize_device(device)
+        fused_grads = {
+            name: _grad_to_numpy(param) for name, param in module.parameters().items() if param.is_grad_initialized()
+        }
+        ctx.reset_graph()
 
-    assert set(composite_grads) == set(fused_grads)
-    for name in sorted(composite_grads):
-        _assert_close(f"grad {name}", _compare_arrays(composite_grads[name], fused_grads[name]))
+        assert set(composite_grads) == set(fused_grads)
+        for name in sorted(composite_grads):
+            _assert_close(f"grad {name}", _compare_arrays(composite_grads[name], fused_grads[name]))
+    finally:
+        ctx.close_device()
