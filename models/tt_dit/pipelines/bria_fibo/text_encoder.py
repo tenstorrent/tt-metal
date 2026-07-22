@@ -4,7 +4,7 @@
 
 """SmolLM3 text-encoder wrapper for the Bria FIBO pipeline.
 
-Tokenizes a single prompt, runs it through the (sp1-validated) on-device SmolLM3 encoder, and
+Tokenizes a single prompt, runs it through the on-device SmolLM3 encoder, and
 returns host tensors matching the diffusers ``pipeline_bria_fibo.py`` contract: ``prompt_embeds =
 cat(hidden_states[-1], hidden_states[-2])`` plus the full list of hidden states (used by
 ``build_text_encoder_layers`` to feed the transformer's per-block caption injection).

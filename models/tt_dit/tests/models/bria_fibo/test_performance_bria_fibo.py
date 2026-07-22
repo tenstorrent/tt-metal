@@ -575,13 +575,13 @@ def test_fibo_encode_device_profile(*, mesh_device):
 
     ckpt = _fibo_local()
     ccl = CCLManager(mesh_device, num_links=_num_links(mesh_device), topology=ttnn.Topology.Linear)
-    # tp factor = mesh[tp_axis] (tp=2 on 2x2, tp=8 on 4x8) -> tensor-parallel on axis 1, matching the
-    # pipeline's encoder_parallel_config and tests/encoders/smollm3::test_smollm3_encoder_full_mesh.
+    # tp on axis 0, sp on axis 1 (SP mandatory) -- matches the pipeline's encoder_parallel_config and
+    # test_fibo_wrapper_encode / tests/encoders/smollm3::test_smollm3_encoder_full_mesh.
     encoder = SmolLM3TextEncoderWrapper(
         ckpt,
         device=mesh_device,
         ccl_manager=ccl,
-        parallel_config=EncoderParallelConfig.from_tuple((mesh_device.shape[1], 1)),
+        parallel_config=EncoderParallelConfig.from_tuples(tp=(mesh_device.shape[0], 0), sp=(mesh_device.shape[1], 1)),
     )
 
     prompt_embeds, hidden_states = _profile_forward(
