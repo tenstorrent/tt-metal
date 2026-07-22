@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""DeepSeek-V4 HCA compressor (TTNN prefill). Mirrors ``DeepseekV4HCACompressor``
-(reference ``modeling_deepseek_v4.py``, paper §2.3.2) in stateless single-shot mode:
-every complete window of ``compress_rate`` source tokens is softmax-pooled into one
-compressed KV entry, RMS-normed, and RoPE'd at its window's absolute position."""
+"""DeepSeek-V4 Heavily Compressed Attention (TTNN prefill). Mirrors ``DeepseekV4Attention``
+(reference ``modeling_deepseek_v4.py``, paper §2.3.2). ``TtHCACompressor`` softmax-pools
+every complete window of ``compress_rate`` source tokens into one compressed KV entry;
+``TtHCA`` is the block that composes it with the query/kv stems (and, as they land, the
+attention core + output projection)."""
 
 from __future__ import annotations
 
@@ -28,7 +29,40 @@ def hca_block_bias(position_ids: torch.Tensor, compressed_len: int, compress_rat
     )
 
 
-class TtHCACompressor(LightweightModule):
+class _TtHCABase(LightweightModule):
+    """Shared TTNN helpers for the HCA compressor/block: weight tilize and interleaved
+    cos/sin from the reference compress rotary. Not instantiated directly; subclasses set
+    ``device`` / ``dtype`` / ``memory_config`` / ``rotary_emb`` before calling these."""
+
+    def _to_tt_linear_weight(self, weight: torch.Tensor):
+        torch_weight = weight.detach().transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0).to(torch.bfloat16)
+        return ttnn.from_torch(
+            torch_weight,
+            device=self.device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.memory_config,
+        )
+
+    def _from_torch(self, x: torch.Tensor):
+        return ttnn.from_torch(
+            x.to(torch.bfloat16),
+            device=self.device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.memory_config,
+        )
+
+    def _cos_sin(self, positions: torch.Tensor):
+        """Interleaved cos/sin [1, 1, N, rope_head_dim] from the reference compress rotary."""
+        positions = positions[:1].to(torch.long)
+        cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions, layer_type="compress")
+        cos = cos.repeat_interleave(2, dim=-1).unsqueeze(1)
+        sin = sin.repeat_interleave(2, dim=-1).unsqueeze(1)
+        return self._from_torch(cos), self._from_torch(sin)
+
+
+class TtHCACompressor(_TtHCABase):
     def __init__(
         self,
         device,
@@ -82,32 +116,6 @@ class TtHCACompressor(LightweightModule):
             **kwargs,
         )
 
-    def _to_tt_linear_weight(self, weight: torch.Tensor):
-        torch_weight = weight.detach().transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0).to(torch.bfloat16)
-        return ttnn.from_torch(
-            torch_weight,
-            device=self.device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.memory_config,
-        )
-
-    def _from_torch(self, x: torch.Tensor):
-        return ttnn.from_torch(
-            x.to(torch.bfloat16),
-            device=self.device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.memory_config,
-        )
-
-    def _compress_cos_sin(self, positions: torch.Tensor):
-        """Interleaved cos/sin [1, 1, T, rope_head_dim] from the reference compress rotary."""
-        cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions, layer_type="compress")
-        cos = cos.repeat_interleave(2, dim=-1).unsqueeze(1)
-        sin = sin.repeat_interleave(2, dim=-1).unsqueeze(1)
-        return self._from_torch(cos), self._from_torch(sin)
-
     def forward(self, hidden_states, position_ids: torch.Tensor):
         """``hidden_states``: TTNN tensor [B, 1, S, hidden]. ``position_ids``: torch [B, S].
         Returns ``(compressed_kv, block_bias)`` — compressed_kv TTNN [B, 1, T, head_dim];
@@ -143,7 +151,7 @@ class TtHCACompressor(LightweightModule):
             nope = ttnn.slice(compressed, [0, 0, 0, 0], [batch, 1, n_windows, nope_dim])
             rope = ttnn.slice(compressed, [0, 0, 0, nope_dim], [batch, 1, n_windows, self.head_dim])
             positions = (torch.arange(n_windows) * self.compress_rate).unsqueeze(0)
-            cos, sin = self._compress_cos_sin(positions)
+            cos, sin = self._cos_sin(positions)
             rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
             compressed_kv = ttnn.concat([nope, rope], dim=-1)
         else:
@@ -157,19 +165,24 @@ class TtHCACompressor(LightweightModule):
         return compressed_kv, block_bias
 
 
-class TtHCAQueryPath(LightweightModule):
-    """DeepSeek-V4 HCA query path (TTNN prefill). Mirrors ``DeepseekV4Attention``
-    lines 817-820: q_a_proj (LoRA down) -> weighted RMSNorm -> q_b_proj (up, heads)
-    -> unweighted RMSNorm over head_dim -> partial RoPE on the trailing rope_head_dim
-    at per-token positions (compress rope). Output ``q`` [B, num_heads, S, head_dim]."""
+class TtHCA(_TtHCABase):
+    """DeepSeek-V4 Heavily Compressed Attention block (TTNN prefill), mirrors
+    ``DeepseekV4Attention``. Brought up stage by stage: query/kv stems now; attention
+    core + output projection to follow. Composes ``TtHCACompressor`` for the long-range
+    compressed-KV branch. ``_q_stem`` / ``_kv_stem`` mirror the reference query path
+    (L817-820) and sliding KV path (L822-823); the full ``forward`` assembles them with
+    the compressor + attention once those land."""
 
     def __init__(
         self,
         device,
         *,
+        compressor: TtHCACompressor,
         q_a_proj_weight: torch.Tensor,
         q_a_norm_weight: torch.Tensor,
         q_b_proj_weight: torch.Tensor,
+        kv_proj_weight: torch.Tensor,
+        kv_norm_weight: torch.Tensor,
         rotary_emb,
         num_heads: int,
         head_dim: int,
@@ -186,11 +199,14 @@ class TtHCAQueryPath(LightweightModule):
         self.rope_head_dim = int(rope_head_dim)
         self.rotary_emb = rotary_emb
         self.rms_norm_eps = float(rms_norm_eps)
+        self.compressor = compressor
 
         self.wq_a = self._to_tt_linear_weight(q_a_proj_weight)
         self.wq_b = self._to_tt_linear_weight(q_b_proj_weight)
         self.q_a_norm_weight = self._from_torch(q_a_norm_weight.detach().reshape(1, 1, 1, -1))
         self.q_b_norm_weight = self._from_torch(torch.ones(1, 1, 1, self.head_dim))
+        self.wkv = self._to_tt_linear_weight(kv_proj_weight)
+        self.kv_norm_weight = self._from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
         self.trans_mat = ttnn.from_torch(
             get_rot_transformation_mat(),
             device=device,
@@ -200,12 +216,16 @@ class TtHCAQueryPath(LightweightModule):
         )
 
     @classmethod
-    def from_reference(cls, device, reference, config, **kwargs) -> "TtHCAQueryPath":
+    def from_reference(cls, device, reference, config, **kwargs) -> "TtHCA":
+        compressor = TtHCACompressor.from_reference(device, reference.compressor, config)
         return cls(
             device,
+            compressor=compressor,
             q_a_proj_weight=reference.q_a_proj.weight,
             q_a_norm_weight=reference.q_a_norm.weight,
             q_b_proj_weight=reference.q_b_proj.weight,
+            kv_proj_weight=reference.kv_proj.weight,
+            kv_norm_weight=reference.kv_norm.weight,
             rotary_emb=reference.compressor.rotary_emb,
             num_heads=config.num_attention_heads,
             head_dim=config.head_dim,
@@ -214,35 +234,9 @@ class TtHCAQueryPath(LightweightModule):
             **kwargs,
         )
 
-    def _to_tt_linear_weight(self, weight: torch.Tensor):
-        torch_weight = weight.detach().transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0).to(torch.bfloat16)
-        return ttnn.from_torch(
-            torch_weight,
-            device=self.device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.memory_config,
-        )
-
-    def _from_torch(self, x: torch.Tensor):
-        return ttnn.from_torch(
-            x.to(torch.bfloat16),
-            device=self.device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.memory_config,
-        )
-
-    def _cos_sin(self, position_ids: torch.Tensor):
-        positions = position_ids[:1].to(torch.long)
-        cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions, layer_type="compress")
-        cos = cos.repeat_interleave(2, dim=-1).unsqueeze(1)
-        sin = sin.repeat_interleave(2, dim=-1).unsqueeze(1)
-        return self._from_torch(cos), self._from_torch(sin)
-
-    def forward(self, hidden_states, position_ids: torch.Tensor):
-        """``hidden_states``: TTNN [B, 1, S, hidden]. ``position_ids``: torch [B, S].
-        Returns ``q`` TTNN [B, num_heads, S, head_dim]."""
+    def _q_stem(self, hidden_states, position_ids: torch.Tensor):
+        """Query path (reference L817-820). ``hidden_states``: TTNN [B, 1, S, hidden];
+        ``position_ids``: torch [B, S]. Returns ``q`` TTNN [B, num_heads, S, head_dim]."""
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
             raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
@@ -259,6 +253,25 @@ class TtHCAQueryPath(LightweightModule):
         nope_dim = self.head_dim - self.rope_head_dim
         nope = ttnn.slice(q, [0, 0, 0, 0], [batch, self.num_heads, seq_len, nope_dim])
         rope = ttnn.slice(q, [0, 0, 0, nope_dim], [batch, self.num_heads, seq_len, self.head_dim])
+        cos, sin = self._cos_sin(position_ids)
+        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
+        return ttnn.concat([nope, rope], dim=-1)
+
+    def _kv_stem(self, hidden_states, position_ids: torch.Tensor):
+        """Sliding KV path (reference L822-823, K == V). ``hidden_states``: TTNN
+        [B, 1, S, hidden]. Returns ``sliding_kv`` TTNN [B, 1, S, head_dim] (full S in
+        stateless single-shot; sliding-window truncation is chunked-prefill only)."""
+        input_shape = tuple(hidden_states.shape)
+        if len(input_shape) != 4 or input_shape[1] != 1:
+            raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
+        batch, seq_len = input_shape[0], input_shape[2]
+
+        kv = ttnn.linear(hidden_states, self.wkv, memory_config=self.memory_config)
+        kv = ttnn.rms_norm(kv, weight=self.kv_norm_weight, epsilon=self.rms_norm_eps)
+
+        nope_dim = self.head_dim - self.rope_head_dim
+        nope = ttnn.slice(kv, [0, 0, 0, 0], [batch, 1, seq_len, nope_dim])
+        rope = ttnn.slice(kv, [0, 0, 0, nope_dim], [batch, 1, seq_len, self.head_dim])
         cos, sin = self._cos_sin(position_ids)
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1)
