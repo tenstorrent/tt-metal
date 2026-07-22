@@ -276,7 +276,6 @@ def test_unpack_tilize_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         "dest_acc": dest_acc,
-        "boot_mode": boot_mode,
         "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
@@ -286,6 +285,7 @@ def test_unpack_tilize_quasar(
         return
 
     configuration = TestConfig(
+        boot_mode=boot_mode,
         **{
             **test_config_kwargs,
             "templates": test_config_kwargs["templates"]
