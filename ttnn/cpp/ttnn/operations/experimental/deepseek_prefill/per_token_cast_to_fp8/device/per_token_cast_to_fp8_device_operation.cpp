@@ -45,12 +45,10 @@ ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape) {
 }  // namespace
 
 PerTokenCastToFp8DeviceOperation::program_factory_t PerTokenCastToFp8DeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    if (tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE) {
-        return PerTokenCastToFp8TileProgramFactory{};
-    } else {
-        return PerTokenCastToFp8RowMajorProgramFactory{};
-    }
+    const operation_attributes_t&, const tensor_args_t&) {
+    // Single factory for both layouts; create() branches on input.layout(). ROW_MAJOR/TILE stay separate
+    // program-cache entries because compute_program_hash hashes input.layout().
+    return PerTokenCastToFp8ProgramFactory{};
 }
 
 void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(

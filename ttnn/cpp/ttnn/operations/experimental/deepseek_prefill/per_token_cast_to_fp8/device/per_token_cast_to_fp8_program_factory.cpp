@@ -343,33 +343,16 @@ void apply_io_overrides(
 
 }  // namespace
 
-PerTokenCastToFp8RowMajorProgramFactory::cached_program_t PerTokenCastToFp8RowMajorProgramFactory::create(
+PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactory::create(
     const PerTokenCastToFp8Params& operation_attributes,
     const PerTokenCastToFp8Inputs& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& [output_e4m3, output_scale] = tensor_return_value;
-    return create_program(
-        operation_attributes, tensor_args.input_tensor, output_e4m3, output_scale, /*tile_layout=*/false);
+    const bool tile_layout = tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE;
+    return create_program(operation_attributes, tensor_args.input_tensor, output_e4m3, output_scale, tile_layout);
 }
 
-void PerTokenCastToFp8RowMajorProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const PerTokenCastToFp8Params& /*operation_attributes*/,
-    const PerTokenCastToFp8Inputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    apply_io_overrides(cached_program, tensor_args, tensor_return_value);
-}
-
-PerTokenCastToFp8TileProgramFactory::cached_program_t PerTokenCastToFp8TileProgramFactory::create(
-    const PerTokenCastToFp8Params& operation_attributes,
-    const PerTokenCastToFp8Inputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    const auto& [output_e4m3, output_scale] = tensor_return_value;
-    return create_program(
-        operation_attributes, tensor_args.input_tensor, output_e4m3, output_scale, /*tile_layout=*/true);
-}
-
-void PerTokenCastToFp8TileProgramFactory::override_runtime_arguments(
+void PerTokenCastToFp8ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const PerTokenCastToFp8Params& /*operation_attributes*/,
     const PerTokenCastToFp8Inputs& tensor_args,

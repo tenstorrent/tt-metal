@@ -18,26 +18,11 @@ struct PerTokenCastToFp8SharedVariables {
     std::vector<CoreCoord> all_cores_vec;
 };
 
-// ROW_MAJOR-layout input variant. Compute kernel does not skip tilization of input.
-struct PerTokenCastToFp8RowMajorProgramFactory {
-    using shared_variables_t = PerTokenCastToFp8SharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-    using tensor_return_value_t = std::tuple<Tensor, Tensor>;
-
-    static cached_program_t create(
-        const PerTokenCastToFp8Params& operation_attributes,
-        const PerTokenCastToFp8Inputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const PerTokenCastToFp8Params& operation_attributes,
-        const PerTokenCastToFp8Inputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-};
-
-// TILE-layout input variant. Compute kernel skips tilization of input.
-struct PerTokenCastToFp8TileProgramFactory {
+// Single factory for both input layouts. create() reads the input layout and selects the ROW_MAJOR vs
+// TILE work-split / kernel define internally (compute skips input tilization only for TILE); everything
+// else is shared. ROW_MAJOR and TILE stay distinct program-cache entries via compute_program_hash, which
+// hashes input.layout().
+struct PerTokenCastToFp8ProgramFactory {
     using shared_variables_t = PerTokenCastToFp8SharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor>;
