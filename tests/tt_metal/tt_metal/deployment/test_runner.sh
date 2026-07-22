@@ -42,6 +42,12 @@ run_test python tests/tt_metal/tt_metal/deployment/eth/test_runner.py
 MESSAGE='DRAM tests\t'
 run_test python tests/tt_metal/tt_metal/deployment/dram/test_runner.py
 
+MESSAGE='PCIe read test\t'
+run_test ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741824/32768/1/0/0/iterations:5/manual_time' --device-id=0
+
+MESSAGE='PCIe write test\t'
+run_test ./build/tools/mem_bench --benchmark_filter='Device Writing Host/1073741824/32768/0/1/0/iterations:5/manual_time' --device-id=0
+
 if [ "$failures" -gt 0 ]
 then
 	echo "$failures tests failed"
