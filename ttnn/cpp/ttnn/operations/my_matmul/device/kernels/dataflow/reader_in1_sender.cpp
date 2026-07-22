@@ -1,4 +1,4 @@
-// Ovaj je leva kolona \ {0, 0}
+// Ovo je prvi red \ {0, 0}
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
@@ -62,39 +62,40 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in1_receiver_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_receiver_sem_addr);
 
-    noc_semaphore_set(in0_receiver_sem_ptr, VALID);  // set local receiver flag to VALID - this value is later multicast
-                                                     // by noc_semaphore_set_multicast() calls
+    noc_semaphore_set(in1_receiver_sem_ptr, VALID);  // set local receiver flag to VALID - this value is later multicast
+    // by noc_semaphore_set_multicast() calls
 
     for (uint32_t block_iter_k = 0; block_iter_k < num_blocks_k; block_iter_k++) {
         cb_reserve_back(cb_in0, k_block_A);
         cb_reserve_back(cb_in1, k_block_B);
 
         uint32_t k_offset = block_iter_k * sub_block_k;
-        uint32_t in0_l1_write_addr = get_write_ptr(cb_in0);
-        uint32_t in0_block_start_l1_write_adder = in0_l1_write_addr;  // save the addr for later multicast
-        for (uint32_t y = top; y < bot; y++) {
-            for (uint32_t kt = k_offset; kt < k_offset + sub_block_k; kt++) {
-                noc_async_read_page(y * Kt + kt, s0, in0_l1_write_addr);
-                in0_l1_write_addr += in0_tile_bytes;
+        uint32_t in1_l1_write_addr = get_write_ptr(cb_in1);
+        uint32_t in1_block_start_l1_write_adder = in1_l1_write_addr;  // save the addr for later multicast
+        for (uint32_t kt = k_offset; kt < k_offset + sub_block_k; kt++) {
+            const uint32_t row = kt * Nt;
+            for (uint32_t x = left; x < right; x++) {
+                noc_async_read_page(row + x, s1, in1_l1_write_addr);
+                in1_l1_write_addr += in1_tile_bytes;
             }
         }
 
         // Is this needed? Probably...
         noc_async_read_barrier();
 
-        noc_semaphore_wait(in0_sender_sem_ptr, in0_num_dests);  // wait for receivers to signal ready
-        noc_semaphore_set(in0_sender_sem_ptr, 0);               // reset for next iteration
+        noc_semaphore_wait(in1_sender_sem_ptr, in1_num_dests);  // wait for receivers to signal ready
+        noc_semaphore_set(in1_sender_sem_ptr, 0);               // reset for next iteration
 
-        uint64_t in0_mcast = get_noc_multicast_addr(
-            in0_recv_start_x, in0_recv_start_y, in0_recv_end_x, in0_recv_end_y, in0_block_start_l1_write_adder);
+        uint64_t in1_mcast = get_noc_multicast_addr(
+            in1_recv_start_x, in1_recv_start_y, in1_recv_end_x, in1_recv_end_y, in1_block_start_l1_write_adder);
         noc_async_write_multicast(
-            in0_block_start_l1_write_adder,
-            in0_mcast,
-            in0_multicast_bytes,
-            in0_num_dests);  // data to all receivers' L1
-        uint64_t in0_sem_mcast = get_noc_multicast_addr(
-            in0_recv_start_x, in0_recv_start_y, in0_recv_end_x, in0_recv_end_y, in0_receiver_sem_addr);
-        noc_semaphore_set_multicast(in0_receiver_sem_addr, in0_sem_mcast, in0_num_dests);  // flag VALID to all
+            in1_block_start_l1_write_adder,
+            in1_mcast,
+            in1_multicast_bytes,
+            in1_num_dests);  // data to all receivers' L1
+        uint64_t in1_sem_mcast = get_noc_multicast_addr(
+            in1_recv_start_x, in1_recv_start_y, in1_recv_end_x, in1_recv_end_y, in1_receiver_sem_addr);
+        noc_semaphore_set_multicast(in1_receiver_sem_addr, in1_sem_mcast, in1_num_dests);  // flag VALID to all
 
         // uint32_t in1_l1_write_addr = get_write_ptr(cb_in1);
         // for (uint32_t kt = k_offset; kt < k_offset + sub_block_k; kt++) {
@@ -105,11 +106,11 @@ void kernel_main() {
         //     }
         // }
 
-        // Read in1 sender's data
-        uint64_t in1_sender_counter = get_noc_addr(in1_sender_phys_x, in1_sender_phys_y, in1_sender_sem_addr);
-        noc_semaphore_set(in1_receiver_sem_ptr, INVALID);  // reinit semaphore to INVALID
-        noc_semaphore_inc(in1_sender_counter, 1);          // signal to sender semaphore we are ready
-        noc_semaphore_wait(in1_receiver_sem_ptr, VALID);   // wait until sender increments our semaphore
+        // Read in0 sender's data
+        uint64_t in0_sender_counter = get_noc_addr(in0_sender_phys_x, in0_sender_phys_y, in0_sender_sem_addr);
+        noc_semaphore_set(in0_receiver_sem_ptr, INVALID);  // reinit semaphore to INVALID
+        noc_semaphore_inc(in0_sender_counter, 1);          // signal to sender semaphore we are ready
+        noc_semaphore_wait(in0_receiver_sem_ptr, VALID);   // wait until sender increments our semaphore
 
         // Is this needed?
         // noc_async_read_barrier();
@@ -117,6 +118,62 @@ void kernel_main() {
         cb_push_back(cb_in0, k_block_A);
         cb_push_back(cb_in1, k_block_B);
     }
+
+    // for (uint32_t block_iter_k = 0; block_iter_k < num_blocks_k; block_iter_k++) {
+    //     cb_reserve_back(cb_in0, k_block_A);
+    //     cb_reserve_back(cb_in1, k_block_B);
+
+    //     uint32_t k_offset = block_iter_k * sub_block_k;
+    //     uint32_t in0_l1_write_addr = get_write_ptr(cb_in0);
+    //     uint32_t in0_block_start_l1_write_adder = in0_l1_write_addr;  // save the addr for later multicast
+    //     for (uint32_t y = top; y < bot; y++) {
+    //         for (uint32_t kt = k_offset; kt < k_offset + sub_block_k; kt++) {
+    //             noc_async_read_page(y * Kt + kt, s0, in0_l1_write_addr);
+    //             in0_l1_write_addr += in0_tile_bytes;
+    //         }
+    //     }
+
+    //     uint32_t in1_l1_write_addr = get_write_ptr(cb_in1);
+    //     for (uint32_t kt = k_offset; kt < k_offset + sub_block_k; kt++) {
+    //         const uint32_t row = kt * Nt;
+    //         for (uint32_t x = left; x < right; x++) {
+    //             noc_async_read_page(row + x, s1, in1_l1_write_addr);
+    //             in1_l1_write_addr += in1_tile_bytes;
+    //         }
+    //     }
+
+    //     // Wait for data to arrive...
+    //     noc_async_read_barrier();
+
+    //     noc_semaphore_wait(in0_sender_sem_ptr, num_dests);  // wait for receivers to signal ready
+    //     noc_semaphore_set(in0_sender_sem_ptr, 0);           // reset for next iteration
+
+    //     noc_semaphore_wait(in1_sender_sem_ptr, num_dests);  // wait for receivers to signal ready
+    //     noc_semaphore_set(in1_sender_sem_ptr, 0);           // reset for next iteration
+
+    //     uint64_t in0_mcast =
+    //         get_noc_multicast_addr(in0_recv_start_x, in0_recv_start_y, in0_in0_recv_end_x, in0_recv_end_y,
+    //         in0_block_start_l1_write_adder);
+    //     noc_async_write_multicast(
+    //         in0_block_start_l1_write_adder, in0_mcast, multicast_bytes, num_dests);  // data to all receivers' L1
+    //     uint64_t in0_sem_mcast =
+    //         get_noc_multicast_addr(in0_recv_start_x, in0_recv_start_y, in0_recv_end_x, in0_recv_end_y,
+    //         in0_receiver_sem_addr);
+    //     noc_semaphore_set_multicast(in0_receiver_sem_addr, in0_sem_mcast, num_dests);  // flag VALID to all
+
+    //     uint64_t in1_mcast =
+    //         get_noc_multicast_addr(in1_recv_start_x, in1_recv_start_y, in1_recv_end_x, in1_recv_end_y,
+    //         in1_block_start_l1_write_adder);
+    //     noc_async_write_multicast(
+    //         in1_block_start_l1_write_adder, in1_mcast, multicast_bytes, num_dests);  // data to all receivers' L1
+    //     uint64_t in1_sem_mcast =
+    //         get_noc_multicast_addr(in1_recv_start_x, in1_recv_start_y, in1_recv_end_x, in1_recv_end_y,
+    //         in1_receiver_sem_addr);
+    //     noc_semaphore_set_multicast(in1_receiver_sem_addr, in1_sem_mcast, num_dests);  // flag VALID to all
+
+    //     cb_push_back(cb_in0, k_block_A);
+    //     cb_push_back(cb_in1, k_block_B);
+    // }
 }
 
 // // TODO: fix block sizes

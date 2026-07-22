@@ -156,7 +156,23 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
     });
 
     // TODO: this will fail for smaller matmuls
-    CoreRangeSet sender_cores{CoreRange{CoreCoord{0, 0}, CoreCoord{0, y_cores - 1}}};
+    CoreRangeSet in0_in1_sender_cores{CoreCoord(0, 0)};
+    CoreRangeSet in0_sender_cores{CoreRange{CoreCoord{0, 1}, CoreCoord{0, y_cores - 1}}};
+    CoreRangeSet in1_sender_cores{CoreRange{CoreCoord{1, 0}, CoreCoord{x_cores - 1, 0}}};
+    CoreRangeSet receiver_cores{CoreRange{CoreCoord{1, 1}, CoreCoord{x_cores - 1, y_cores - 1}}};
+
+    /// READER KERNEL DESCRIPTORS
+    std::vector<uint32_t> reader_in0_in1_sender_ct_args;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_in0_in1_sender_ct_args);
+    TensorAccessorArgs(*src1_buffer).append_to(reader_in0_in1_sender_ct_args);
+    KernelDescriptor reader_in0_in1_sender_desc;
+    reader_in0_in1_sender_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/my_matmul/device/kernels/dataflow/reader_in0_in1_sender.cpp";
+    reader_in0_in1_sender_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_in0_in1_sender_desc.core_ranges = in0_in1_sender_cores;
+    reader_in0_in1_sender_desc.compile_time_args = reader_in0_in1_sender_ct_args;
+    reader_in0_in1_sender_desc.config = ReaderConfigDescriptor{};
+
     std::vector<uint32_t> reader_in0_sender_ct_args;
     TensorAccessorArgs(*src0_buffer).append_to(reader_in0_sender_ct_args);
     TensorAccessorArgs(*src1_buffer).append_to(reader_in0_sender_ct_args);
@@ -164,21 +180,33 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
     reader_in0_sender_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/my_matmul/device/kernels/dataflow/reader_in0_sender.cpp";
     reader_in0_sender_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_in0_sender_desc.core_ranges = sender_cores;
+    reader_in0_sender_desc.core_ranges = in0_sender_cores;
     reader_in0_sender_desc.compile_time_args = reader_in0_sender_ct_args;
     reader_in0_sender_desc.config = ReaderConfigDescriptor{};
 
-    CoreRangeSet receiver_cores{CoreRange{CoreCoord{1, 0}, CoreCoord{x_cores - 1, y_cores - 1}}};
-    std::vector<uint32_t> reader_in0_receiver_ct_args;
-    TensorAccessorArgs(*src0_buffer).append_to(reader_in0_receiver_ct_args);
-    TensorAccessorArgs(*src1_buffer).append_to(reader_in0_receiver_ct_args);
-    KernelDescriptor reader_in0_receiver_desc;
-    reader_in0_receiver_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/my_matmul/device/kernels/dataflow/reader_in0_receiver.cpp";
-    reader_in0_receiver_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_in0_receiver_desc.core_ranges = receiver_cores;
-    reader_in0_receiver_desc.compile_time_args = reader_in0_receiver_ct_args;
-    reader_in0_receiver_desc.config = ReaderConfigDescriptor{};
+    std::vector<uint32_t> reader_in1_sender_ct_args;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_in1_sender_ct_args);
+    TensorAccessorArgs(*src1_buffer).append_to(reader_in1_sender_ct_args);
+    KernelDescriptor reader_in1_sender_desc;
+    reader_in1_sender_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/my_matmul/device/kernels/dataflow/reader_in1_sender.cpp";
+    reader_in1_sender_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_in1_sender_desc.core_ranges = in1_sender_cores;
+    reader_in1_sender_desc.compile_time_args = reader_in1_sender_ct_args;
+    reader_in1_sender_desc.config = ReaderConfigDescriptor{};
+
+    std::vector<uint32_t> reader_receiver_ct_args;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_receiver_ct_args);
+    TensorAccessorArgs(*src1_buffer).append_to(reader_receiver_ct_args);
+    KernelDescriptor reader_receiver_desc;
+    reader_receiver_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/my_matmul/device/kernels/dataflow/reader_receiver.cpp";
+    reader_receiver_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_receiver_desc.core_ranges = receiver_cores;
+    reader_receiver_desc.compile_time_args = reader_receiver_ct_args;
+    reader_receiver_desc.config = ReaderConfigDescriptor{};
+
+    /// END READER KERNEL DESCRIPTORS
 
     std::vector<uint32_t> writer_ct_args;
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
@@ -199,7 +227,8 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
         .math_approx_mode = false,
     };
 
-    uint32_t num_dests = x_cores - 1;
+    uint32_t in0_num_dests = x_cores - 1;  // row multicast fan-out
+    uint32_t in1_num_dests = y_cores - 1;  // column multicast fan-out
 
     for (uint32_t core_y = 0; core_y < y_cores; core_y++) {
         for (uint32_t core_x = 0; core_x < x_cores; core_x++) {
@@ -222,11 +251,50 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
             uint32_t out_block_tiles =
                 num_blocks_m * sub_block_m * num_blocks_n * sub_block_n;  // per_core_Mt * per_core_Nt
 
-            CoreCoord recv_start = device->worker_core_from_logical_core(CoreCoord{1, core_y});
-            CoreCoord recv_end = device->worker_core_from_logical_core(CoreCoord{x_cores - 1, core_y});
-            CoreCoord sender_phys = device->worker_core_from_logical_core(CoreCoord{0, core_y});
+            CoreCoord in0_recv_start = device->worker_core_from_logical_core(CoreCoord{1, core_y});
+            CoreCoord in0_recv_end = device->worker_core_from_logical_core(CoreCoord{x_cores - 1, core_y});
+            CoreCoord in0_sender_phys = device->worker_core_from_logical_core(CoreCoord{0, core_y});
 
-            if (sender_cores.contains(core)) {
+            CoreCoord in1_recv_start = device->worker_core_from_logical_core(CoreCoord{core_x, 1});
+            CoreCoord in1_recv_end = device->worker_core_from_logical_core(CoreCoord{core_x, y_cores - 1});
+            CoreCoord in1_sender_phys = device->worker_core_from_logical_core(CoreCoord{core_x, 0});
+
+            if (in0_in1_sender_cores.contains(core)) {
+                reader_in0_in1_sender_desc.emplace_runtime_args(
+                    core,
+                    {src0_buffer,
+                     src1_buffer,
+                     Mt,
+                     Kt,
+                     Nt,
+                     top,
+                     left,
+                     bot,
+                     right,
+                     num_blocks_k,
+                     sub_block_k,
+                     k_block_A,
+                     k_block_B,
+
+                     (uint32_t)in0_recv_start.x,
+                     (uint32_t)in0_recv_start.y,
+                     (uint32_t)in0_recv_end.x,
+                     (uint32_t)in0_recv_end.y,
+                     (uint32_t)in0_sender_phys.x,
+                     (uint32_t)in0_sender_phys.y,
+
+                     (uint32_t)in1_recv_start.x,
+                     (uint32_t)in1_recv_start.y,
+                     (uint32_t)in1_recv_end.x,
+                     (uint32_t)in1_recv_end.y,
+                     (uint32_t)in1_sender_phys.x,
+                     (uint32_t)in1_sender_phys.y,
+
+                     in0_num_dests,
+                     in1_num_dests});
+            }
+
+            if (in0_sender_cores.contains(core)) {
                 reader_in0_sender_desc.emplace_runtime_args(
                     core,
                     {src0_buffer,
@@ -242,17 +310,27 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
                      sub_block_k,
                      k_block_A,
                      k_block_B,
-                     (uint32_t)recv_start.x,
-                     (uint32_t)recv_start.y,
-                     (uint32_t)recv_end.x,
-                     (uint32_t)recv_end.y,
-                     (uint32_t)sender_phys.x,
-                     (uint32_t)sender_phys.y,
-                     num_dests});
+
+                     (uint32_t)in0_recv_start.x,
+                     (uint32_t)in0_recv_start.y,
+                     (uint32_t)in0_recv_end.x,
+                     (uint32_t)in0_recv_end.y,
+                     (uint32_t)in0_sender_phys.x,
+                     (uint32_t)in0_sender_phys.y,
+
+                     (uint32_t)in1_recv_start.x,
+                     (uint32_t)in1_recv_start.y,
+                     (uint32_t)in1_recv_end.x,
+                     (uint32_t)in1_recv_end.y,
+                     (uint32_t)in1_sender_phys.x,
+                     (uint32_t)in1_sender_phys.y,
+
+                     in0_num_dests,
+                     in1_num_dests});
             }
 
-            if (receiver_cores.contains(core)) {
-                reader_in0_receiver_desc.emplace_runtime_args(
+            if (in1_sender_cores.contains(core)) {
+                reader_in1_sender_desc.emplace_runtime_args(
                     core,
                     {src0_buffer,
                      src1_buffer,
@@ -267,13 +345,58 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
                      sub_block_k,
                      k_block_A,
                      k_block_B,
-                     (uint32_t)recv_start.x,
-                     (uint32_t)recv_start.y,
-                     (uint32_t)recv_end.x,
-                     (uint32_t)recv_end.y,
-                     (uint32_t)sender_phys.x,
-                     (uint32_t)sender_phys.y,
-                     num_dests});
+
+                     (uint32_t)in0_recv_start.x,
+                     (uint32_t)in0_recv_start.y,
+                     (uint32_t)in0_recv_end.x,
+                     (uint32_t)in0_recv_end.y,
+                     (uint32_t)in0_sender_phys.x,
+                     (uint32_t)in0_sender_phys.y,
+
+                     (uint32_t)in1_recv_start.x,
+                     (uint32_t)in1_recv_start.y,
+                     (uint32_t)in1_recv_end.x,
+                     (uint32_t)in1_recv_end.y,
+                     (uint32_t)in1_sender_phys.x,
+                     (uint32_t)in1_sender_phys.y,
+
+                     in0_num_dests,
+                     in1_num_dests});
+            }
+
+            if (receiver_cores.contains(core)) {
+                reader_receiver_desc.emplace_runtime_args(
+                    core,
+                    {src0_buffer,
+                     src1_buffer,
+                     Mt,
+                     Kt,
+                     Nt,
+                     top,
+                     left,
+                     bot,
+                     right,
+                     num_blocks_k,
+                     sub_block_k,
+                     k_block_A,
+                     k_block_B,
+
+                     (uint32_t)in0_recv_start.x,
+                     (uint32_t)in0_recv_start.y,
+                     (uint32_t)in0_recv_end.x,
+                     (uint32_t)in0_recv_end.y,
+                     (uint32_t)in0_sender_phys.x,
+                     (uint32_t)in0_sender_phys.y,
+
+                     (uint32_t)in1_recv_start.x,
+                     (uint32_t)in1_recv_start.y,
+                     (uint32_t)in1_recv_end.x,
+                     (uint32_t)in1_recv_end.y,
+                     (uint32_t)in1_sender_phys.x,
+                     (uint32_t)in1_sender_phys.y,
+
+                     in0_num_dests,
+                     in1_num_dests});
             }
 
             compute_desc.emplace_runtime_args(
@@ -294,8 +417,10 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
         }
     }
 
+    desc.kernels.push_back(std::move(reader_in0_in1_sender_desc));
     desc.kernels.push_back(std::move(reader_in0_sender_desc));
-    desc.kernels.push_back(std::move(reader_in0_receiver_desc));
+    desc.kernels.push_back(std::move(reader_in1_sender_desc));
+    desc.kernels.push_back(std::move(reader_receiver_desc));
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc));
 
@@ -303,11 +428,17 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
 
     uint32_t in0_sender_sem_id = 0;
     uint32_t in0_receiver_sem_id = 1;
+    uint32_t in1_sender_sem_id = 2;
+    uint32_t in1_receiver_sem_id = 3;
 
     desc.semaphores.push_back(
         SemaphoreDescriptor{.id = in0_sender_sem_id, .core_ranges = used_cores, .initial_value = INVALID});
     desc.semaphores.push_back(
         SemaphoreDescriptor{.id = in0_receiver_sem_id, .core_ranges = used_cores, .initial_value = INVALID});
+    desc.semaphores.push_back(
+        SemaphoreDescriptor{.id = in1_sender_sem_id, .core_ranges = used_cores, .initial_value = INVALID});
+    desc.semaphores.push_back(
+        SemaphoreDescriptor{.id = in1_receiver_sem_id, .core_ranges = used_cores, .initial_value = INVALID});
 
     return desc;
 }
