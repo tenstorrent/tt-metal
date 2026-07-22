@@ -50,11 +50,21 @@ AllGatherRegimeAMatmulAsyncDeviceOperation::compute_output_specs(
     const auto& act = tensor_args.input_tensor;
     const auto& weight = tensor_args.weight_tensor;
     const uint32_t N = weight.logical_shape()[-1];
+    const uint32_t K_global = weight.logical_shape()[-2];
     const auto dtype = operation_attributes.output_dtype.value_or(DataType::BFLOAT16);
     const auto mem = operation_attributes.output_mem_config.value_or(MemoryConfig{});
     ttnn::Shape out_shape(act.logical_shape());
     out_shape[-1] = N;  // [.., M, N]
-    return {TensorSpec(out_shape, TensorLayout(dtype, PageConfig(Layout::TILE), mem))};
+
+    // Slot 1: the per-device DRAM gather buffer [.., M, K_global] (interleaved bf16). Allocated as a mesh
+    // tensor so it lives at the SAME address on every device — the fabric injector writes remote shards by
+    // reusing this device's TensorAccessor addresses (valid on the neighbour because the address matches).
+    ttnn::Shape gather_shape(act.logical_shape());
+    gather_shape[-1] = K_global;  // [.., M, K_global]
+    const MemoryConfig gather_mem(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    return {
+        TensorSpec(out_shape, TensorLayout(dtype, PageConfig(Layout::TILE), mem)),
+        TensorSpec(gather_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), gather_mem))};
 }
 
 AllGatherRegimeAMatmulAsyncDeviceOperation::tensor_return_value_t

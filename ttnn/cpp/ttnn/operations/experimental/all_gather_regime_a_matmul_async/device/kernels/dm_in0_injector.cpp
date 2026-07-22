@@ -2,36 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Fused all-gather + regime_a_matmul — Phase A in0 INJECTOR (fabric worker core).
-// (REGIME_A_AGMM_EXECUTION_PLAN.md Task 3; design: REGIME_A_AGMM_TASK3_BLUEPRINT.md §B.2.)
+// Fused all-gather + regime_a_matmul — Phase A in0 INJECTOR (fabric worker core, fabric mux v2).
+// (REGIME_A_AGMM_EXECUTION_PLAN.md Task 3, milestone #17; design: REGIME_A_AGMM_TASK3_BLUEPRINT.md §B.2.)
 //
-// Reads this device's local in0 shard once, writes it into the LOCAL slice of the persistent DRAM gather
-// buffer, then fabric-unicasts it (per tile) into every remote device's gather buffer at that device's
-// global-K offset, and atomic-incs each remote device's readiness semaphore AFTER the payload is flushed
-// (payload-before-readiness ordering on the same mux channel). Uses fabric mux v2.
+// D=2 full-gather-barrier producer. For every tile of this device's in0 K-shard:
+//   1. read it from the shard DRAM buffer into L1,
+//   2. write it into the LOCAL slice of this device's DRAM gather buffer (at the shard's global-K offset),
+//   3. fabric-unicast it into the forward neighbour's gather buffer at the SAME global offset (the gather
+//      buffer is a mesh tensor => identical address on the neighbour, so this device's TensorAccessor noc
+//      address is valid there).
+// Then, after the payload has flushed on the fabric channel, atomic-inc the neighbour's gather_progress
+// GlobalSemaphore (payload-before-readiness on the same channel). Finally wait until this device's own
+// gather_progress reaches D-1 (all remote shards landed here) and fan out the local gather_ready semaphore to
+// every regime_a compute core, releasing their in0 reads.
 //
-// NOTE: this is the streaming/gather producer. The compile-gated AGMM_FULL_GATHER_BARRIER path increments a
-// single per-device barrier semaphore once the whole shard has landed instead of per transport chunk.
+// Runtime-arg contract (must match all_gather_regime_a_matmul_async_program_factory.cpp create_at()):
+//   a0  in0_shard_addr            (DRAM base of this device's in0 shard [M, K_local])
+//   a1  gather_local_addr         (DRAM base of this device's gather buffer [M, K_global])
+//   a2  Mt                        (M tiles)
+//   a3  Kt_local                  (K tiles owned locally)
+//   a4  Kt_global                 (K tiles of the gather buffer = row stride)
+//   a5  k_tile_global_base        (global K-tile offset of this device's shard)
+//   a6  tile_bytes                (bf16 tile = 2048)
+//   a7  num_hops                  (fabric distance to the forward neighbour)
+//   a8  progress_sem_addr         (gather_progress GlobalSemaphore L1 address; local read + remote target)
+//   a9  nbr_inj_x                 (neighbour injector core x — where its gather_progress lives)
+//   a10 nbr_inj_y                 (neighbour injector core y)
+//   a11 ready_sem_id              (local gather_ready semaphore id, fanned out to compute cores)
+//   a12 expected_remote           (remote shards to await before fan-out = D-1)
+//   a13 num_compute_cores
+//   a14.. per compute core: (x, y)  [num_compute_cores pairs]
+//   ...   then FabricMuxV2Sender::build_from_args() args (appended by the factory).
 //
-// Runtime-arg contract (must match all_gather_regime_a_matmul_async_program_factory.cpp create()):
-//   a0  in0_addr                 (DRAM base of this device's local in0 shard [M, K_local])
-//   a1  gather_local_addr        (DRAM base of this device's own gather buffer [M, K_global])
-//   a2  pkt_hdr_l1_addr          (L1 scratch for the fabric packet header)
-//   a3  payload_l1_addr          (L1 scratch for one tile's payload)
-//   a4  Mt                       (M tiles)
-//   a5  Kt_local                 (K tiles owned locally by this device)
-//   a6  Kt_global                (K tiles of the full gathered buffer = row stride)
-//   a7  k_tile_global_base       (global K-tile offset of this device's shard)
-//   a8  tile_bytes               (bf16 tile = 2048)
-//   a9  n_remote                 (number of remote destinations to unicast to)
-//   then, per remote destination r in [0, n_remote):
-//     dst_gather_noc_base_lo/hi  (2 words: noc addr base of remote gather buffer)
-//     ready_sem_noc_lo/hi        (2 words: noc addr of remote readiness semaphore)
-//     num_hops                   (1 word: fabric distance to that destination)
-//   ... followed by the FabricMuxV2Sender::build_from_args() args (appended last by the factory).
-//
-// TensorAccessor compile args for in0 (local shard) and the gather buffer are provided as CT args by the
-// factory; addressing uses the shared linear addrgen (global tile id = m*Kt_global + k_global).
+// CT args: TensorAccessorArgs(in0 shard) then TensorAccessorArgs(gather buffer). L1 scratch: CB c_0 = payload
+// tile, CB c_1 = fabric packet header.
 
 #include <cstdint>
 #include "dataflow_api.h"
@@ -40,79 +44,84 @@
 
 void kernel_main() {
     size_t a = 0;
-    const uint32_t in0_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t in0_shard_addr = get_arg_val<uint32_t>(a++);
     const uint32_t gather_local_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t pkt_hdr_l1_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t payload_l1_addr = get_arg_val<uint32_t>(a++);
     const uint32_t Mt = get_arg_val<uint32_t>(a++);
     const uint32_t Kt_local = get_arg_val<uint32_t>(a++);
     const uint32_t Kt_global = get_arg_val<uint32_t>(a++);
     const uint32_t k_tile_global_base = get_arg_val<uint32_t>(a++);
     const uint32_t tile_bytes = get_arg_val<uint32_t>(a++);
-    const uint32_t n_remote = get_arg_val<uint32_t>(a++);
+    const uint32_t num_hops = get_arg_val<uint32_t>(a++);
+    const uint32_t progress_sem_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t nbr_inj_x = get_arg_val<uint32_t>(a++);
+    const uint32_t nbr_inj_y = get_arg_val<uint32_t>(a++);
+    const uint32_t ready_sem_id = get_arg_val<uint32_t>(a++);
+    const uint32_t expected_remote = get_arg_val<uint32_t>(a++);
+    const uint32_t num_compute_cores = get_arg_val<uint32_t>(a++);
 
-    struct RemoteDst {
-        uint64_t gather_noc_base;
-        uint64_t ready_sem_noc;
-        uint32_t num_hops;
-    };
-    RemoteDst dsts[8];  // D<=8 supported (7 remote + self)
-    for (uint32_t r = 0; r < n_remote; ++r) {
-        uint32_t lo = get_arg_val<uint32_t>(a++);
-        uint32_t hi = get_arg_val<uint32_t>(a++);
-        dsts[r].gather_noc_base = (static_cast<uint64_t>(hi) << 32) | lo;
-        lo = get_arg_val<uint32_t>(a++);
-        hi = get_arg_val<uint32_t>(a++);
-        dsts[r].ready_sem_noc = (static_cast<uint64_t>(hi) << 32) | lo;
-        dsts[r].num_hops = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t kMaxComputeCores = 128u;
+    uint32_t cc_x[kMaxComputeCores];
+    uint32_t cc_y[kMaxComputeCores];
+    for (uint32_t i = 0; i < num_compute_cores; ++i) {
+        cc_x[i] = get_arg_val<uint32_t>(a++);
+        cc_y[i] = get_arg_val<uint32_t>(a++);
     }
 
-    // in0 (local shard) and gather-buffer accessors from CT args (factory-provided).
+    // in0 shard + gather-buffer accessors from CT args.
     constexpr auto in0_args = TensorAccessorArgs<0>();
-    const auto in0_acc = TensorAccessor(in0_args, in0_addr, tile_bytes);
+    const auto in0_acc = TensorAccessor(in0_args, in0_shard_addr, tile_bytes);
     constexpr auto gather_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto gather_local = TensorAccessor(gather_args, gather_local_addr, tile_bytes);
+    const auto gather_acc = TensorAccessor(gather_args, gather_local_addr, tile_bytes);
+
+    // L1 scratch.
+    constexpr uint32_t payload_cb = 0, hdr_cb = 1;
+    const uint32_t payload_l1 = get_write_ptr(payload_cb);
+    auto* pkt_hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(hdr_cb));
 
     auto sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(a);
-    auto* pkt_hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(pkt_hdr_l1_addr);
     sender.open();
 
-    // Stream each local tile: read from DRAM shard -> local gather slice -> unicast to each remote gather.
+    // Stream each local shard tile: DRAM shard -> L1 -> local gather slice + fabric unicast to neighbour gather.
     for (uint32_t m = 0; m < Mt; ++m) {
         for (uint32_t kl = 0; kl < Kt_local; ++kl) {
             const uint32_t k_global = k_tile_global_base + kl;
             const uint32_t local_tile_id = m * Kt_local + kl;          // in shard [M, K_local]
             const uint32_t global_tile_id = m * Kt_global + k_global;  // in gather [M, K_global]
 
-            // 1) read the shard tile into L1
-            noc_async_read_tile(local_tile_id, in0_acc, payload_l1_addr);
+            noc_async_read_page(local_tile_id, in0_acc, payload_l1);
             noc_async_read_barrier();
-            // 2) write into this device's own gather buffer (local NoC)
-            noc_async_write_tile(global_tile_id, gather_local, payload_l1_addr);
-            // 3) fabric-unicast into every remote device's gather buffer at the same global offset
-            for (uint32_t r = 0; r < n_remote; ++r) {
-                const uint64_t dst = dsts[r].gather_noc_base + static_cast<uint64_t>(global_tile_id) * tile_bytes;
-                tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
-                    &sender,
-                    pkt_hdr,
-                    payload_l1_addr,
-                    tile_bytes,
-                    tt::tt_fabric::NocUnicastCommandHeader{dst},
-                    dsts[r].num_hops);
-            }
+            noc_async_write_page(global_tile_id, gather_acc, payload_l1);  // local gather write
+
+            const uint64_t dst = get_noc_addr(global_tile_id, gather_acc);  // neighbour gather slot (same addr)
+            tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
+                &sender,
+                pkt_hdr,
+                payload_l1,
+                tile_bytes,
+                tt::tt_fabric::NocUnicastCommandHeader{dst},
+                (uint8_t)num_hops);
         }
     }
-    noc_async_writes_flushed();
+    noc_async_writes_flushed();  // local gather writes departed L1
 
-    // 4) signal readiness AFTER payload is flushed (same channel => ordered).
-    for (uint32_t r = 0; r < n_remote; ++r) {
-        tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
-            &sender,
-            pkt_hdr,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{dsts[r].ready_sem_noc, /*inc=*/1u, /*wrap=*/32u},
-            dsts[r].num_hops);
-    }
+    // Signal readiness to the neighbour AFTER the payload flushed (same channel => ordered delivery).
+    const uint64_t nbr_progress = get_noc_addr(nbr_inj_x, nbr_inj_y, progress_sem_addr);
+    tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+        &sender,
+        pkt_hdr,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{nbr_progress, /*inc=*/1u, /*wrap=*/32u},
+        (uint8_t)num_hops);
 
     noc_async_write_barrier();
     sender.close();
+
+    // Wait until every remote shard has landed in THIS device's gather buffer, then release the compute readers.
+    volatile tt_l1_ptr uint32_t* progress_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(progress_sem_addr);
+    noc_semaphore_wait_min(progress_ptr, expected_remote);
+
+    const uint32_t ready_addr = get_semaphore(ready_sem_id);
+    for (uint32_t i = 0; i < num_compute_cores; ++i) {
+        noc_semaphore_inc(get_noc_addr(cc_x[i], cc_y[i], ready_addr), 1);
+    }
+    noc_async_atomic_barrier();
 }
