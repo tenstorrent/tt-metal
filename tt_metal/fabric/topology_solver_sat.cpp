@@ -29,6 +29,12 @@ namespace tt::tt_fabric::detail {
 // Full definition of the opaque session type forward-declared in topology_solver.hpp.
 struct TopologySatSession {
     TopologySatSolver solver;
+    // Minimal-host priming (see TOPOLOGY_OCCUPANCY_SOLVE_README §7): when the session carries an occupancy objective,
+    // create_and_encode primes the solver (warm descent + full-packing lock) and makes the achieved cap PERMANENT.
+    // The primed model is returned by the FIRST solve_and_decode; subsequent calls are bounded (warm + capped).
+    std::vector<int> primed_first_mapping;
+    bool has_primed_mapping = false;
+    int enum_loop_budget = 0;  // >0 => bound each solve_and_decode with solve_limited (occupancy objective present)
 };
 
 // ── Adjacency and Edge Helpers ────────────────────────────────────────────────
@@ -789,7 +795,12 @@ inline bool topology_sat_solve_minimize_groups(
     size_t& best_k_out,
     size_t hard_cap_k = 0,
     int hard_conflict_cap = 0,
-    bool* hard_cap_met_out = nullptr) {
+    bool* hard_cap_met_out = nullptr,
+    bool make_cap_permanent = false) {
+    // make_cap_permanent: after settling on best_k, assert "<= best_k occupied" as a PERMANENT unit clause (not a
+    // one-shot assumption) so the SAME solver can be reused for blocking-clause enumeration / incremental .next with
+    // every subsequent solve() automatically bounded to best_k. Used by topology_sat_search_n and the session; the
+    // single solve leaves it false (it never re-solves after this).
     best_mapping_out.clear();
     best_k_out = 0;
     if (hard_cap_met_out != nullptr) {
@@ -924,6 +935,22 @@ inline bool topology_sat_solve_minimize_groups(
                 topology_sat_elapsed_ms(t_lock),
                 st,
                 best_k_out);
+        }
+    }
+
+    // Permanently cap the solver at the achieved occupancy so it can be reused for enumeration / incremental .next.
+    // (One-shot assume() is cleared after each solve(); a unit clause is not.) Only when a real bound exists.
+    if (make_cap_permanent && !best_mapping_out.empty() && best_k_out < num_present) {
+        const int bound = atmost_lit(best_k_out);
+        if (bound != 0) {
+            solver.add(bound);
+            solver.add(0);
+            if (profile) {
+                log_info(
+                    tt::LogFabric,
+                    "[topo-sat-profile]   minimize.permanent_cap : asserted <= {} occupied (unit clause)",
+                    best_k_out);
+            }
         }
     }
     return !best_mapping_out.empty();
@@ -2351,26 +2378,63 @@ bool topology_sat_search_n(
         topology_sat_add_shape_clause_or_unsat(solver, enc, forbid_clause);
     }
 
-    // HARD minimal-host cap: every enumerated solution must occupy at most K host groups (solver chooses which K).
-    // Driven by MappingConstraints::max_same_rank_groups_used; the full-packing tightening applies when a used host
-    // must be completely filled. No soft fallback here -- enumeration relies on the cap being satisfiable.
-    if (constraint_data.max_same_rank_groups_used > 0) {
-        const size_t K = constraint_data.max_same_rank_groups_used;
-        if (topology_sat_max_groups_cap_capacity_feasible(constraint_data, graph_data.n_target, K)) {
-            size_t max_cap = 0;
-            for (const auto& g : constraint_data.same_rank_groups) {
-                max_cap = std::max(max_cap, g.size());
-            }
-            const bool full_packing = (max_cap > 0 && graph_data.n_target == K * max_cap);
-            topology_sat_encode_at_most_k_groups(solver, constraint_data, enc, K, full_packing);
-        } else if (!quiet_mode) {
-            log_warning(
-                tt::LogFabric,
-                "Topology SAT enumeration: hard host-group cap k={} is infeasible for {} target(s); encoding "
-                "without cap",
-                K,
-                graph_data.n_target);
+    // Minimal-host occupancy objective (same strategy as the single solve): PRIME the solver with the warm descent
+    // + full-packing lock and make the achieved cap PERMANENT (unit clause), so every enumerated solution occupies
+    // the minimal host count -- not just the first. The primed model is the first solution; the loop below finds
+    // the rest (warm, permanently capped, only a blocking clause added). See TOPOLOGY_OCCUPANCY_SOLVE_README §6.
+    const int kEnumLoopConflictBudget =
+        static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_CONFLICT_BUDGET", 1'000'000));
+    if (constraint_data.max_same_rank_groups_used > 0 || constraint_data.minimize_same_rank_groups_used) {
+        const int kDescentBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_DESCENT_BUDGET", 20'000));
+        const int kLockBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_LOCK_BUDGET", 0));
+        size_t max_cap = 0;
+        for (const auto& g : constraint_data.same_rank_groups) {
+            max_cap = std::max(max_cap, g.size());
         }
+        const size_t k_floor = (max_cap > 0) ? (graph_data.n_target + max_cap - 1) / max_cap : 1;
+        const size_t hard_cap_k = constraint_data.max_same_rank_groups_used;
+        std::vector<int> first_mapping;
+        size_t best_k = 0;
+        bool hard_cap_met = false;
+        const bool primed = topology_sat_solve_minimize_groups(
+            solver,
+            enc,
+            constraint_data,
+            kDescentBudget,
+            k_floor,
+            first_mapping,
+            best_k,
+            hard_cap_k,
+            kLockBudget,
+            &hard_cap_met,
+            /*make_cap_permanent=*/true);
+        if (primed && !first_mapping.empty()) {
+            all_mappings_out.push_back(first_mapping);
+            if (!quiet_mode) {
+                log_info(
+                    tt::LogFabric,
+                    "topology_sat_search_n: primed minimal-host enumeration at {} occupied host group(s) "
+                    "(hard_cap_k={}, met={})",
+                    best_k,
+                    hard_cap_k,
+                    hard_cap_met);
+            }
+            if (all_mappings_out.size() >= max_solutions ||
+                !topology_sat_add_blocking_clause_for_mapping(solver, enc, all_mappings_out.back(), unique_shapes)) {
+                // Reached the cap with the first solution, or can't block it -> done.
+                if (!all_mappings_out.empty()) {
+                    state.mapping = all_mappings_out.back();
+                    std::fill(state.used.begin(), state.used.end(), false);
+                    for (int gi : state.mapping) {
+                        if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
+                            state.used[static_cast<size_t>(gi)] = true;
+                        }
+                    }
+                }
+                return !all_mappings_out.empty();
+            }
+        }
+        // If priming failed, fall through to the plain enumeration loop below (best-effort, uncapped).
     }
 
     using enum_clock = std::chrono::steady_clock;
@@ -2379,7 +2443,9 @@ bool topology_sat_search_n(
     auto last_enum_progress_log = enum_clock::now() - kEnumProgressLogInterval;
 
     while (all_mappings_out.size() < max_solutions) {
-        const int status = solver.solve();
+        // Bounded so enumeration always terminates: each subsequent minimal-host solution is warm + capped, but a
+        // distinct packing can still be hard -- on unknown/unsat we stop and return what we have. (README §6 Step 3)
+        const int status = solver.solve_limited(kEnumLoopConflictBudget);
         if (status != TopologySatSolver::kSat) {
             break;
         }
@@ -2436,25 +2502,47 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
     if (!topology_sat_encode_hard_constraints(session->solver, graph_data, constraint_data, enc, validation_mode)) {
         return nullptr;
     }
-    // Same HARD minimal-host cap as topology_sat_search_n, so every incremental (.next) solution occupies at most K
-    // host groups.
-    if (constraint_data.max_same_rank_groups_used > 0) {
-        const size_t K = constraint_data.max_same_rank_groups_used;
-        if (topology_sat_max_groups_cap_capacity_feasible(constraint_data, graph_data.n_target, K)) {
-            size_t max_cap = 0;
-            for (const auto& g : constraint_data.same_rank_groups) {
-                max_cap = std::max(max_cap, g.size());
-            }
-            const bool full_packing = (max_cap > 0 && graph_data.n_target == K * max_cap);
-            topology_sat_encode_at_most_k_groups(session->solver, constraint_data, enc, K, full_packing);
-        } else {
-            log_warning(
-                tt::LogFabric,
-                "Topology SAT enumeration session: hard host-group cap k={} is infeasible for {} target(s); "
-                "encoding without cap",
-                K,
-                graph_data.n_target);
+    // Same minimal-host strategy as topology_sat_search_n: PRIME the solver with the warm descent + full-packing
+    // lock, make the achieved cap PERMANENT, and stash the primed model so every incremental (.next) solution
+    // occupies the minimal host count. See TOPOLOGY_OCCUPANCY_SOLVE_README §7.
+    if (constraint_data.max_same_rank_groups_used > 0 || constraint_data.minimize_same_rank_groups_used) {
+        const int kDescentBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_DESCENT_BUDGET", 20'000));
+        const int kLockBudget = static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_LOCK_BUDGET", 0));
+        session->enum_loop_budget =
+            static_cast<int>(topology_sat_env_long("TT_TOPO_SAT_CONFLICT_BUDGET", 1'000'000));
+        size_t max_cap = 0;
+        for (const auto& g : constraint_data.same_rank_groups) {
+            max_cap = std::max(max_cap, g.size());
         }
+        const size_t k_floor = (max_cap > 0) ? (graph_data.n_target + max_cap - 1) / max_cap : 1;
+        const size_t hard_cap_k = constraint_data.max_same_rank_groups_used;
+        std::vector<int> first_mapping;
+        size_t best_k = 0;
+        bool hard_cap_met = false;
+        const bool primed = topology_sat_solve_minimize_groups(
+            session->solver,
+            enc,
+            constraint_data,
+            kDescentBudget,
+            k_floor,
+            first_mapping,
+            best_k,
+            hard_cap_k,
+            kLockBudget,
+            &hard_cap_met,
+            /*make_cap_permanent=*/true);
+        if (primed && !first_mapping.empty()) {
+            session->primed_first_mapping = std::move(first_mapping);
+            session->has_primed_mapping = true;
+            log_info(
+                tt::LogFabric,
+                "Topology SAT enumeration session: primed minimal-host enumeration at {} occupied host group(s) "
+                "(hard_cap_k={}, met={})",
+                best_k,
+                hard_cap_k,
+                hard_cap_met);
+        }
+        // If priming failed, the session falls back to plain (unbounded, uncapped) enumeration.
     }
     return session;
 }
@@ -2469,7 +2557,17 @@ bool topology_sat_session_add_blocking_clause(
 
 bool topology_sat_session_solve_and_decode(
     TopologySatSession* session, const TopologySatHardEncoding& enc, std::vector<int>& raw_out) {
-    if (session->solver.solve() != TopologySatSolver::kSat) {
+    // First call after a minimal-host prime returns the primed model directly (already decoded); no extra solve.
+    if (session->has_primed_mapping) {
+        session->has_primed_mapping = false;
+        raw_out = session->primed_first_mapping;
+        return true;
+    }
+    // With an occupancy objective the solver is permanently capped -- bound each solve so enumeration terminates
+    // (a distinct minimal-host packing can still be hard); on unknown/unsat we report no further solution.
+    const int status = (session->enum_loop_budget > 0) ? session->solver.solve_limited(session->enum_loop_budget)
+                                                        : session->solver.solve();
+    if (status != TopologySatSolver::kSat) {
         return false;
     }
     return topology_sat_decode_hard_solution(session->solver, enc, raw_out);
