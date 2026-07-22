@@ -951,3 +951,120 @@ def test_tensor_prefetcher_streaming_matmul(
     passing, output_str = comp_pcc(expected, out_torch, pcc_threshold)
     logger.info(f"[{name} win={window_blocks} {distribution_strategy}] {output_str}")
     assert passing, f"[{name} win={window_blocks} {distribution_strategy}] PCC check failed: {output_str}"
+
+
+@pytest.mark.parametrize(
+    "distribution_strategy",
+    [ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D],
+    ids=["strided", "contiguous"],
+)
+def test_tensor_prefetcher_streaming_mcast_in0(device, distribution_strategy):
+    """Mcast-in0 consumes receiver-contiguous in1 K-blocks in natural FIFO order."""
+    num_dram_banks = device.dram_grid_size().x
+    recv_per_bank = 2
+    receiver_count = num_dram_banks * recv_per_bank
+    ring_cols = num_dram_banks
+    ring_rows = recv_per_bank
+    receiver_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
+    )
+
+    dtype = ttnn.bfloat16
+    M = ttnn.TILE_SIZE
+    k_tiles = 2 * receiver_count
+    K = k_tiles * ttnn.TILE_SIZE
+    N = receiver_count * ttnn.TILE_SIZE
+    in0_block_w = 1
+    block_count = k_tiles // in0_block_w
+    assert block_count != receiver_count
+
+    torch.manual_seed(zlib.crc32(f"streaming_mcast_in0_{distribution_strategy}".encode()))
+    pt_weight = torch.randn(1, 1, K, N)
+    tt_weight = _make_recv_contig_weight(
+        device,
+        pt_weight,
+        num_dram_banks=num_dram_banks,
+        ring_size=receiver_count,
+        dtype=dtype,
+        distribution_strategy=distribution_strategy,
+    )
+
+    pt_act = torch.randn(1, 1, M, K)
+    act_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, K // receiver_count),
+        core_grid=receiver_cores,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_act = ttnn.from_torch(pt_act, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config)
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(ring_cols, ring_rows),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=recv_per_bank,
+        untilize_out=False,
+        stream_in1=False,
+    )
+
+    if distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D:
+        bank_to_receivers = [
+            (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
+        ]
+    else:
+        bank_to_receivers = [
+            (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
+            for b in range(num_dram_banks)
+        ]
+
+    page_size_bytes = in0_block_w * program_config.per_core_N * _bytes_per_tile(dtype)
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
+        device,
+        [program_config],
+        [tt_weight],
+        bank_to_receivers=bank_to_receivers,
+        size=2 * page_size_bytes,
+    )
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, N // receiver_count),
+        core_grid=receiver_cores,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+
+    with tensor_prefetcher_session(device):
+        tt_out = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+            tt_act,
+            tt_weight,
+            global_cb=gcb,
+            program_config=program_config,
+            memory_config=output_mem_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+        )
+
+    expected = pt_act.float() @ pt_weight.float()
+    out_torch = ttnn.to_torch(tt_out)
+    passing, output_str = comp_pcc(expected, out_torch, 0.999)
+    logger.info(f"[streaming_mcast_in0 {distribution_strategy}] {output_str}")
+    assert passing, f"streaming_mcast_in0 PCC failed: {output_str}"

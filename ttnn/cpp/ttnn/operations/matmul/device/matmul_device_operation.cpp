@@ -1033,6 +1033,89 @@ void validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
         ring_size);
 }
 
+void validate_dram_sender_global_cb_mcast_in0_geometry(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& gcb,
+    const Tensor& input_tensor_b,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
+    TT_FATAL(
+        tt::tt_metal::experimental::sender_core_type(gcb) == tt::tt_metal::experimental::SenderCoreType::Dram,
+        "mcast_in0 global_cb requires programmable DRAM senders");
+    TT_FATAL(
+        input_tensor_b.buffer() != nullptr && input_tensor_b.buffer()->is_dram(),
+        "mcast_in0 global_cb requires an in1 weight in DRAM");
+    TT_FATAL(
+        input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED,
+        "mcast_in0 global_cb requires a receiver-contiguous ND_SHARDED in1 weight, but got {}",
+        input_tensor_b.memory_config().memory_layout());
+    TT_FATAL(
+        !program_config.stream_in1,
+        "mcast_in0 global_cb consumes natural-order K-blocks and requires stream_in1=false");
+    TT_FATAL(program_config.in0_block_w > 0, "mcast_in0 global_cb requires in0_block_w > 0");
+    TT_FATAL(
+        program_config.out_block_h == program_config.per_core_M &&
+            program_config.out_block_w == program_config.per_core_N,
+        "mcast_in0 global_cb requires one output block per worker: out_block_h ({}) must equal per_core_M ({}) "
+        "and out_block_w ({}) must equal per_core_N ({})",
+        program_config.out_block_h,
+        program_config.per_core_M,
+        program_config.out_block_w,
+        program_config.per_core_N);
+
+    const uint32_t receiver_count = gcb.receiver_cores().num_cores();
+    TT_FATAL(receiver_count > 0, "mcast_in0 global_cb has no receivers");
+    const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();
+    const uint32_t weight_N_tiles = b_shape_padded[-1] / in1_tile.get_width();
+    TT_FATAL(
+        weight_K_tiles % program_config.in0_block_w == 0,
+        "mcast_in0 global_cb weight K ({} tiles) must be divisible by in0_block_w ({}); remainder {}",
+        weight_K_tiles,
+        program_config.in0_block_w,
+        weight_K_tiles % program_config.in0_block_w);
+    TT_FATAL(
+        weight_N_tiles == receiver_count * program_config.per_core_N,
+        "mcast_in0 global_cb weight N ({} tiles) must equal receiver_count ({}) * per_core_N ({}) = {}",
+        weight_N_tiles,
+        receiver_count,
+        program_config.per_core_N,
+        receiver_count * program_config.per_core_N);
+    const uint32_t in1_block_size_bytes =
+        program_config.in0_block_w * program_config.per_core_N *
+        in1_tile.get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype()));
+    TT_FATAL(
+        gcb.size() % in1_block_size_bytes == 0,
+        "mcast_in0 global_cb size {} must be a multiple of its in1 K-block page size {}",
+        gcb.size(),
+        in1_block_size_bytes);
+    TT_FATAL(
+        gcb.size() >= 2 * in1_block_size_bytes,
+        "mcast_in0 global_cb requires a two-page streaming window: size {} must be at least {}",
+        gcb.size(),
+        2 * in1_block_size_bytes);
+
+    const auto& nd_shard_spec = input_tensor_b.nd_shard_spec();
+    TT_FATAL(nd_shard_spec.has_value(), "mcast_in0 global_cb weight must have an NdShardSpec");
+    TT_FATAL(
+        nd_shard_spec->shard_shape.rank() == 2,
+        "mcast_in0 global_cb weight shard shape must be 2D, but got rank {}",
+        nd_shard_spec->shard_shape.rank());
+    TT_FATAL(
+        nd_shard_spec->shard_shape[0] == static_cast<uint32_t>(b_shape_padded[-2]) &&
+            nd_shard_spec->shard_shape[1] == static_cast<uint32_t>(program_config.per_core_N) * in1_tile.get_width(),
+        "mcast_in0 global_cb weight shard shape {} must be (K={}, per_core_N*tile_width={})",
+        nd_shard_spec->shard_shape,
+        b_shape_padded[-2],
+        program_config.per_core_N * in1_tile.get_width());
+    const auto& distribution = input_tensor_b.buffer()->buffer_distribution_spec();
+    TT_FATAL(distribution.has_value(), "mcast_in0 global_cb weight must have a BufferDistributionSpec");
+    TT_FATAL(
+        distribution->num_shards() == receiver_count,
+        "mcast_in0 global_cb weight has {} shards but the GCB has {} receivers",
+        distribution->num_shards(),
+        receiver_count);
+}
+
 // Helper: warns if a caller of MatmulDeviceOperation's static API hasn't populated
 // allowed_worker_cores on a program_config variant that supports the field. ttnn::prim::matmul()
 // normalizes its attributes before launch, but direct callers (e.g. CCL fused ops in
@@ -1713,6 +1796,26 @@ void validate_matmul_mcast1d_config(
         "{}: Matmul1D does not support mcast_in0 and gather_in0 at the "
         "same time.",
         config_name);
+    TT_FATAL(
+        program_config.gather_in0 || !program_config.stream_in1,
+        "{}: stream_in1 is the gather_in0 ring-rotation mode and requires gather_in0=true",
+        config_name);
+
+    if (attributes.global_cb.has_value() && !program_config.gather_in0) {
+        TT_FATAL(
+            program_config.mcast_in0,
+            "{}: global_cb without gather_in0 is supported only for mcast_in0=true",
+            config_name);
+        validate_dram_sender_global_cb_mcast_in0_geometry(
+            attributes.global_cb.value(), input_tensor_b, b_shape_padded, in1_tile, program_config);
+        TT_FATAL(
+            program_config.fuse_batch || get_batch_size(a_shape_padded) == 1,
+            "{}: mcast_in0 global_cb requires one effective activation batch, but fuse_batch={} and "
+            "activation batch size={}",
+            config_name,
+            program_config.fuse_batch,
+            get_batch_size(a_shape_padded));
+    }
 
     // Gather in0 specific validation
     if (program_config.gather_in0) {
@@ -1813,7 +1916,9 @@ void validate_matmul_mcast1d_config(
     } else {
         const auto device_grid_1d = input_tensor_a.device()->compute_with_storage_grid_size();
         check_tensor_in_grid(input_tensor_a, device_grid_1d);
-        check_tensor_in_grid(input_tensor_b, device_grid_1d);
+        if (!attributes.global_cb.has_value()) {
+            check_tensor_in_grid(input_tensor_b, device_grid_1d);
+        }
     }
     if (program_config.mcast_in0 || program_config.gather_in0) {
         if (input_tensor_a.is_sharded()) {
@@ -2065,7 +2170,7 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
     const auto& config = operation_attributes.program_config.value();
 
     return std::visit(
-        [](const auto& c) -> program_factory_t {
+        [&operation_attributes](const auto& c) -> program_factory_t {
             using T = std::decay_t<decltype(c)>;
             if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig>) {
                 return MatmulMultiCoreProgramFactory{};
@@ -2074,8 +2179,9 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
                 return MatmulMultiCoreReuseMcast2DProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                // gather_in0 uses the legacy MeshWorkload path (create_descriptor not yet supported)
-                if (c.gather_in0) {
+                // GCB-backed paths use the legacy MeshWorkload builder because ProgramDescriptor
+                // cannot attach an experimental GlobalCircularBuffer.
+                if (c.gather_in0 || (c.mcast_in0 && operation_attributes.global_cb.has_value())) {
                     return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
                 }
                 return MatmulMultiCoreReuseMcast1DProgramFactory{};
