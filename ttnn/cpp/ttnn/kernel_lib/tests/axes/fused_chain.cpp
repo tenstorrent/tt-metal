@@ -35,52 +35,30 @@ void kernel_main() {
             eltwise_chain(
                 EltwiseShape::tiles(batch, blk),
                 BinaryFpu<
-                    cb_a,
-                    cb_b,
+                    input(cb_a, InputLifecycle::Bulk, OperandKind::Block),
+                    input(cb_b, InputLifecycle::Bulk, OperandKind::Block),
                     BinaryFpuOp::Add,
-                    BroadcastDim::None,
-                    InputLifecycle::Bulk,
-                    InputLifecycle::Bulk,
-                    BinaryDataFormatReconfig::Input,
-                    Dst::D0,
-                    OperandKind::Block,
-                    OperandKind::Block>{},
+                    BroadcastDim::None>{},
                 Exp<>{},
                 DestReuseBinary<
-                    cb_c,
+                    input(cb_c, InputLifecycle::Bulk, OperandKind::Block),
                     BinaryFpuOp::Mul,
-                    DestReuseType::DEST_TO_SRCA,
-                    InputLifecycle::Bulk,
-                    DestReuseReconfig::Input,
-                    Dst::D0,
-                    Dst::D0,
-                    OperandKind::Block>{},
-                PackTile<cb_out, OutputLifecycle::Bulk, PackTileReconfig::Output>{});
+                    DestReuseType::DEST_TO_SRCA>{},
+                PackTile<output(cb_out, OutputLifecycle::Bulk)>{});
         }
     } else {  // Chunked: single call over all N, bounded CB via per-chunk wait/pop
         eltwise_chain(
             EltwiseShape::tiles(n, blk),
             BinaryFpu<
-                cb_a,
-                cb_b,
+                input(cb_a, InputLifecycle::Chunked, OperandKind::Block),
+                input(cb_b, InputLifecycle::Chunked, OperandKind::Block),
                 BinaryFpuOp::Add,
-                BroadcastDim::None,
-                InputLifecycle::Chunked,
-                InputLifecycle::Chunked,
-                BinaryDataFormatReconfig::Input,
-                Dst::D0,
-                OperandKind::Block,
-                OperandKind::Block>{},
+                BroadcastDim::None>{},
             Exp<>{},
             DestReuseBinary<
-                cb_c,
+                input(cb_c, InputLifecycle::Chunked, OperandKind::Block),
                 BinaryFpuOp::Mul,
-                DestReuseType::DEST_TO_SRCA,
-                InputLifecycle::Chunked,
-                DestReuseReconfig::Input,
-                Dst::D0,
-                Dst::D0,
-                OperandKind::Block>{},
-            PackTile<cb_out, OutputLifecycle::Chunked, PackTileReconfig::Output>{});
+                DestReuseType::DEST_TO_SRCA>{},
+            PackTile<output(cb_out, OutputLifecycle::Chunked)>{});
     }
 }
