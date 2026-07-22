@@ -8,6 +8,8 @@ Minimal single-device, single-expert test for TtRoutedExpert profiling.
 The simplest scenario: 1 chip, 1 expert, minimal dimensions.
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -34,6 +36,16 @@ SINGLE_CHIP_MESH_PARAMS = [
         id="single-chip",
     ),
 ]
+
+
+def _perf_toggle_makes_output_garbage():
+    """True when an RE_SKIP_* perf-investigation toggle is set. Those toggles strip
+    compute/output/read work to isolate DRAM I/O, so the numerical result is garbage
+    and PCC/NaN checks must be skipped on that run."""
+    return any(
+        os.environ.get(var) not in (None, "", "0")
+        for var in ("RE_SKIP_MATMUL", "RE_SKIP_OUTPUT_WRITE", "RE_SKIP_WEIGHT_READ")
+    )
 
 
 def run_single_routed_expert(
@@ -133,10 +145,20 @@ def run_single_routed_expert(
         activation=ttnn.RoutedExpertActivation.Silu,
     )
 
-    # Run TTNN forward
-    logger.debug("Running TTNN forward...")
-    tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
+    # Run TTNN forward. ROUTED_EXPERT_PERF_ITERS > 1 repeats the op back-to-back
+    # (warm, cached program) so a tracy profiling run captures multiple device
+    # invocations to median over; the first (cold) iteration is dropped in
+    # analysis. The signpost above brackets the whole loop.
+    perf_iters = max(1, int(os.environ.get("ROUTED_EXPERT_PERF_ITERS", "1")))
+    logger.debug(f"Running TTNN forward ({perf_iters} iters)...")
+    for _ in range(perf_iters):
+        tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
+    ttnn.synchronize_device(mesh_device)
     logger.debug(f"TTNN output shape: {tt_output.shape}")
+
+    if _perf_toggle_makes_output_garbage():
+        logger.warning("RE_SKIP_* set: skipping PCC/NaN checks (perf-only run)")
+        return
 
     # Convert back to torch for comparison. For a 1-device replicated tensor,
     # ConcatMeshToTensor(dim=0) with 1 slice is a no-op that returns the tensor.
