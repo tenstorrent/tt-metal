@@ -237,10 +237,11 @@ void kernel_main() {
     if constexpr (sparse_frames_enabled) {
         // Both divisions are guaranteed non-zero here: sparse_frames_enabled implies frame_seqlen
         // (tokens) is set and tile-aligned (TT_FATAL in device_operation.cpp), so frame_seqlen_tiles
-        // > 0 and Sk_chunk_t > 0.
-        constexpr uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
+        // > 0 and Sk_chunk_t > 0. Left non-constexpr so GCC doesn't parse-time-evaluate the division
+        // in the sparse-disabled build (where frame_seqlen_tiles is 0 as a compile-time arg).
+        const uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
         q_frame_offset = ring_index * q_frames_per_shard;
-        constexpr uint32_t chunks_per_frame = frame_seqlen_tiles / Sk_chunk_t;
+        const uint32_t chunks_per_frame = frame_seqlen_tiles / Sk_chunk_t;
         for (uint32_t qf = 0; qf < num_frames_padded_compile; ++qf) {
             uint32_t allowed_k_frames = 0;
             for (uint32_t kf = 0; kf < num_frames_padded_compile; ++kf) {
