@@ -927,37 +927,8 @@ bool run_sfpu_all_same_buffer(
     sfpu_defines["SFPU_OP_UNARY_COMP_INCLUDE"] = "1";
 
     const auto dest_buffer_data = run_sfpu_pipeline(mesh_device, test_config, sfpu_defines, packed_input);
-    const bool ok =
-        is_fp32 ? sfpu_util::is_close_packed_sfpu_output_f32(dest_buffer_data, packed_golden, test_config.sfpu_op)
-                : sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
-
-    // On mismatch, dump the first few (input, golden, actual) triples so failures are diagnosable from the
-    // log instead of just a boolean. bf16 path only (the Float32 path is relu-only and already passing).
-    if (!ok && !is_fp32) {
-        const auto in_u = unpack_vector<bfloat16, uint32_t>(packed_input);
-        const auto gold_u = unpack_vector<bfloat16, uint32_t>(packed_golden);
-        const auto got_u = unpack_vector<bfloat16, uint32_t>(dest_buffer_data);
-        const size_t n = std::min<size_t>({in_u.size(), gold_u.size(), got_u.size()});
-        int shown = 0;
-        for (size_t i = 0; i < n && shown < 24; ++i) {
-            const float in = static_cast<float>(in_u[i]);
-            const float gold = static_cast<float>(gold_u[i]);
-            const float got = static_cast<float>(got_u[i]);
-            if (gold != got) {
-                log_error(
-                    tt::LogTest,
-                    "sfpu mismatch op={} 32bit_dest={} idx={} in={} golden={} actual={}",
-                    test_config.sfpu_op,
-                    test_config.en_32bit_dest,
-                    i,
-                    in,
-                    gold,
-                    got);
-                ++shown;
-            }
-        }
-    }
-    return ok;
+    return is_fp32 ? sfpu_util::is_close_packed_sfpu_output_f32(dest_buffer_data, packed_golden, test_config.sfpu_op)
+                   : sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
 }
 
 namespace {
