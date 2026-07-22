@@ -6,15 +6,26 @@ LOGDIR="."
 LOGFILE="deployment_$(hostname)_$(date +%4Y-%m-%d-%H-%M-%S).log"
 ITERS=5
 
+usage() {
+	echo "Usage: $0 [-l logdir]"
+	echo "	-l <logdir>		The directory where to save the log file"
+}
+
 while [ -n "$1" ]
 do
 	case "$1" in
 	-l)
+		if [ -z "$2" ]; then echo "Missing argument to $1"; exit 1; fi
 		LOGDIR="$2"
 		shift
 		;;
+	-h)
+		usage
+		exit
+		;;
 	*)
 		echo "Unknown option: $1"
+		usage
 		exit 1
 		;;
 	esac
