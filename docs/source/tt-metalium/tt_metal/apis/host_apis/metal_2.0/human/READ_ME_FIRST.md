@@ -114,9 +114,8 @@ However, some required op fixups _do_ introduce semantic/functional changes. The
 ### Basic Porting step
 The porting step requires a capable AI model with **full context availability**. To ensure a good result, it is *essential* that you do the following:
  - Use **Claude Opus 1M** (with Max effort)
- - Launch the port as your **primary session**. You cannot use a subagent for the main port, because subagents cannot delegate builds to subagents.
+ - Launch the port as your **primary session**. You cannot use a subagent for the main port. Subagents cannot spawn helper subagents, and are limited in their ability to handle long-running background tasks; the porter needs both capabilities.
  - Launch the port in a **fresh instance**. Do not reuse the same session that you used for the audit, or that you used for a previous port. You need to have the full context window available to ensure peak AI performance.
- - Ask the AI agent to **launch all builds and tests using subagents**. The build and test output are very context intensive.
  - If the AI agent reports that it can only port a subset of ProgramFactories for the op within its context budget, respect this and launch the remaining ones from another fresh instance.
 
 Experiments have demonstrated that porting quality falls off significantly if you don't follow these guidelines. Please be very conscious of context window size for Metal 2.0 ports.
@@ -133,8 +132,6 @@ Here is the additional info you will need:
 
 Audit report:  METAL2_PREPORT_AUDIT.md in the op directory (GREEN)
 Audit brief:   METAL2_PORT_BRIEF.md in the op directory
-
-Delegate every build and test run to a subagent. The builds and tests are spammy; it is important to preserves your context for the effort of the port itself.
 
 Please commit METAL2_PREPORT_AUDIT.md, METAL2_PORT_BRIEF.md, METAL2_PORT_PLAN.md and METAL2_PORT_REPORT.md alongside the port.
 ```
