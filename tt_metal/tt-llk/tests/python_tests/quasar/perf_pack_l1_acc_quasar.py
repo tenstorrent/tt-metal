@@ -12,6 +12,7 @@ from quasar.test_pack_l1_acc_quasar import (
 )
 from quasar.test_pack_l1_acc_quasar import test_pack_l1_acc_quasar as run_pack_l1_acc
 
+
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
