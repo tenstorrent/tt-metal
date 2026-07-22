@@ -75,18 +75,36 @@ bool is_demoted(const PadCodegenParams& operation_attributes, const PadCodegenIn
         return false;
     }
     const DataType dtype = input.dtype();
+    // tensor_args.input is always the 4D-unsqueezed tensor (try_pad_codegen builds
+    // PadCodegenInputs from input_4d), so logical_shape()[0..3] is N,C,H,W directly -- matching
+    // the ledger's shapes requires N/C too, not just H/W: several ledger entries (and, more
+    // importantly, non-demoted sweep points outside the ledger) share the same H/W bucket
+    // (H=32, W=32, front=0, out=64x64) but differ in C -- an H/W-only match would either miss the
+    // C=3 ledger entry below or wrongly demote an unrelated C=1 config that happens to land in
+    // the same bucket.
     const auto& in_shape = input.logical_shape();
+    const uint32_t N = in_shape[0];
+    const uint32_t C = in_shape[1];
     const uint32_t H = in_shape[2];
     const uint32_t W = in_shape[3];
-    const uint32_t front_h = operation_attributes.front_h;
-    const uint32_t front_w = operation_attributes.front_w;
-    const uint32_t H_out = operation_attributes.H_out;
-    const uint32_t W_out = operation_attributes.W_out;
+    const auto& a = operation_attributes;
 
-    auto shape_is = [&](uint32_t h, uint32_t w, uint32_t fh, uint32_t fw, uint32_t ho, uint32_t wo) {
-        return H == h && W == w && front_h == fh && front_w == fw && H_out == ho && W_out == wo;
+    auto shape_is = [&](uint32_t n,
+                        uint32_t c,
+                        uint32_t h,
+                        uint32_t w,
+                        uint32_t fn,
+                        uint32_t fc,
+                        uint32_t fh,
+                        uint32_t fw,
+                        uint32_t no,
+                        uint32_t co,
+                        uint32_t ho,
+                        uint32_t wo) {
+        return N == n && C == c && H == h && W == w && a.front_n == fn && a.front_c == fc && a.front_h == fh &&
+               a.front_w == fw && a.N_out == no && a.C_out == co && a.H_out == ho && a.W_out == wo;
     };
-    auto value_is = [&](float raw) { return operation_attributes.packed_pad_value == pack_pad_value(dtype, raw); };
+    auto value_is = [&](float raw) { return a.packed_pad_value == pack_pad_value(dtype, raw); };
     auto dtype_in = [&](std::initializer_list<DataType> set) {
         return std::find(set.begin(), set.end(), dtype) != set.end();
     };
@@ -94,52 +112,61 @@ bool is_demoted(const PadCodegenParams& operation_attributes, const PadCodegenIn
         DataType::BFLOAT16, DataType::FLOAT32, DataType::INT32, DataType::UINT32};
 
     // [1, 1, 32, 32]|padding=[[0,0],[0,0],[0,32],[0,32]]&value=3|{bfloat16,int32}|row_major
-    if (shape_is(32, 32, 0, 0, 64, 64) && value_is(3) && dtype_in({DataType::BFLOAT16, DataType::INT32})) {
+    if (shape_is(1, 1, 32, 32, 0, 0, 0, 0, 1, 1, 64, 64) && value_is(3) &&
+        dtype_in({DataType::BFLOAT16, DataType::INT32})) {
         return true;
     }
     // [1, 1, 32, 32]|padding=[[0,0],[0,0],[3,25],[4,6]]&value=0|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(32, 32, 3, 4, 60, 42) && value_is(0) && dtype_in(kAllFourDtypes)) {
+    if (shape_is(1, 1, 32, 32, 0, 0, 3, 4, 1, 1, 60, 42) && value_is(0) && dtype_in(kAllFourDtypes)) {
         return true;
     }
     // [1, 1, 32, 32]|padding=[[0,0],[0,0],[3,25],[4,6]]&value=3|{fp32,int32,uint32}|row_major
-    if (shape_is(32, 32, 3, 4, 60, 42) && value_is(3) &&
+    if (shape_is(1, 1, 32, 32, 0, 0, 3, 4, 1, 1, 60, 42) && value_is(3) &&
         dtype_in({DataType::FLOAT32, DataType::INT32, DataType::UINT32})) {
         return true;
     }
     // [1, 1, 64, 64]|padding=[[0,0],[0,0],[0,15],[0,31]]&value=0|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(64, 64, 0, 0, 79, 95) && value_is(0) && dtype_in(kAllFourDtypes)) {
+    if (shape_is(1, 1, 64, 64, 0, 0, 0, 0, 1, 1, 79, 95) && value_is(0) && dtype_in(kAllFourDtypes)) {
         return true;
     }
     // [1, 1, 64, 64]|padding=[[0,0],[0,0],[0,15],[0,31]]&value=3|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(64, 64, 0, 0, 79, 95) && value_is(3) && dtype_in(kAllFourDtypes)) {
+    if (shape_is(1, 1, 64, 64, 0, 0, 0, 0, 1, 1, 79, 95) && value_is(3) && dtype_in(kAllFourDtypes)) {
         return true;
     }
-    // [1, 32, 32]|padding=[[0,0],[0,7],[0,9]]&value=0|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(32, 32, 0, 0, 39, 41) && value_is(0) && dtype_in(kAllFourDtypes)) {
+    // [1, 32, 32]|padding=[[0,0],[0,7],[0,9]]&value=0|{bf16,fp32,int32,uint32}|row_major (3D:
+    // unsqueeze_to_4D prepends N=1, dim0=1 becomes C)
+    if (shape_is(1, 1, 32, 32, 0, 0, 0, 0, 1, 1, 39, 41) && value_is(0) && dtype_in(kAllFourDtypes)) {
         return true;
     }
     // [1, 32, 32]|padding=[[0,0],[0,7],[0,9]]&value=3|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(32, 32, 0, 0, 39, 41) && value_is(3) && dtype_in(kAllFourDtypes)) {
+    if (shape_is(1, 1, 32, 32, 0, 0, 0, 0, 1, 1, 39, 41) && value_is(3) && dtype_in(kAllFourDtypes)) {
         return true;
     }
-    // [32, 32]|padding=[[0,32],[0,32]]&value=0|{float32}|row_major
-    if (shape_is(32, 32, 0, 0, 64, 64) && value_is(0) && dtype_in({DataType::FLOAT32})) {
+    // [3, 32, 32]|padding=[[0,1],[0,32],[0,32]]&value=0|int32|row_major (3D: dim0=3 becomes C,
+    // back-padded 3->4; shares the H=W=32/out=64x64 bucket with entries above but is the only
+    // C=3 one -- phase 7's back-to-translate finding)
+    if (shape_is(1, 3, 32, 32, 0, 0, 0, 0, 1, 4, 64, 64) && value_is(0) && dtype_in({DataType::INT32})) {
+        return true;
+    }
+    // [32, 32]|padding=[[0,32],[0,32]]&value=0|{float32}|row_major (2D: unsqueeze_to_4D prepends
+    // N=1, C=1)
+    if (shape_is(1, 1, 32, 32, 0, 0, 0, 0, 1, 1, 64, 64) && value_is(0) && dtype_in({DataType::FLOAT32})) {
         return true;
     }
     // [32, 32]|padding=[[4,2],[0,6]]&value=0|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(32, 32, 4, 0, 38, 38) && value_is(0) && dtype_in(kAllFourDtypes)) {
+    if (shape_is(1, 1, 32, 32, 0, 0, 4, 0, 1, 1, 38, 38) && value_is(0) && dtype_in(kAllFourDtypes)) {
         return true;
     }
     // [32, 32]|padding=[[4,2],[0,6]]&value=3|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(32, 32, 4, 0, 38, 38) && value_is(3) && dtype_in(kAllFourDtypes)) {
+    if (shape_is(1, 1, 32, 32, 0, 0, 4, 0, 1, 1, 38, 38) && value_is(3) && dtype_in(kAllFourDtypes)) {
         return true;
     }
     // [64, 64]|padding=[[0,31],[0,15]]&value=0|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(64, 64, 0, 0, 95, 79) && value_is(0) && dtype_in(kAllFourDtypes)) {
+    if (shape_is(1, 1, 64, 64, 0, 0, 0, 0, 1, 1, 95, 79) && value_is(0) && dtype_in(kAllFourDtypes)) {
         return true;
     }
     // [64, 64]|padding=[[0,31],[0,15]]&value=3|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(64, 64, 0, 0, 95, 79) && value_is(3) && dtype_in(kAllFourDtypes)) {
+    if (shape_is(1, 1, 64, 64, 0, 0, 0, 0, 1, 1, 95, 79) && value_is(3) && dtype_in(kAllFourDtypes)) {
         return true;
     }
     return false;

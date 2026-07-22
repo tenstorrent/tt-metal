@@ -31,8 +31,8 @@ file(
     moe_routing_remap/device/kernels/*.cpp
     non_zero_indices/device/kernels/*.cpp
     move/device/kernels/*.cpp
-    pad/device/kernels/*.cpp
-    pad/device/kernels/*.hpp
+    pad/device/kernels/dataflow/*.cpp
+    pad/device/kernels/dataflow/*.hpp
     pad/codegen/kernels/*
     permute/device/kernels/*.cpp
     reshape_on_device/device/kernels/*.cpp
