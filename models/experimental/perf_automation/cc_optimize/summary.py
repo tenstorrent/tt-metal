@@ -243,7 +243,7 @@ def render_summary(
         lines.append("")
 
     if by_op:
-        hdr = f"{'op':<34} " + " ".join(f"{_disp_level(c):>8}" for c in _LEVEL_COLS) + f" {'best ms':>9}"
+        hdr = f"{'op':<34} " + "  ".join(f"{_disp_level(c):<8}" for c in _LEVEL_COLS) + f"  {'best ms':>9}"
         lines.append(hdr)
         lines.append("-" * len(hdr))
         for sig in sorted(by_op):
@@ -253,15 +253,15 @@ def render_summary(
             for c in _LEVEL_COLS:
                 cell = op[c]
                 if cell is None:
-                    cells.append(f"{'—':>8}")
+                    cells.append(f"{'—':<8}")
                 else:
                     st, ms = cell
                     mark = "✓win" if st == "win" else ("·wedge" if st == "wedge" else "·try")
-                    cells.append(f"{mark:>8}")
+                    cells.append(f"{mark:<8}")
                     if ms is not None and (best is None or ms < best):
                         best = ms
             best_s = f"{best:.2f}" if best is not None else "—"
-            lines.append(f"{_op_label(sig):<34} " + " ".join(cells) + f" {best_s:>9}")
+            lines.append(f"{_op_label(sig):<34} " + "  ".join(cells) + f"  {best_s:>9}")
     else:
         lines.append("(no kernel attempts recorded — nothing was tried, or the run stopped before any lever)")
 
@@ -274,14 +274,14 @@ def render_summary(
     if attempts:
         lines.append("")
         lines.append("Per-attempt detail (every optimization tried — win OR fail — with gain vs baseline and WHY):")
-        ah = f"{'op':<34} {'lever':>10} {'ms':>9} {'gain vs base':>13}  {'result':<10} why tried / why it won or failed"
+        ah = f"{'op':<34} {'lever':>12} {'ms':>9} {'gain vs base':>13}  {'result':<10} why tried / why it won or failed"
         lines.append(ah)
         lines.append("-" * min(len(ah), 120))
         for a in attempts:
             if not isinstance(a, dict):
                 continue
             sig = _op_label(a.get("op_signature", "?"))
-            lever = _disp_level(_level_of(a.get("kernel_kind", "")) or (a.get("kernel_kind") or "?"))
+            lever = _disp_level(a.get("kernel_kind") or "?")
             ms = a.get("measured_ms")
             ms_s = f"{ms:.2f}" if isinstance(ms, (int, float)) else "—"
             if baseline_ms and isinstance(ms, (int, float)):
@@ -290,7 +290,7 @@ def render_summary(
                 gain_s = "—"
             res = "✓ win" if a.get("beat_baseline") else ("· wedged" if a.get("wedged") else "· no gain")
             note = " ".join((a.get("note") or "").split())[:200] or "(no reason recorded)"
-            lines.append(f"{sig:<34} {lever:>10} {ms_s:>9} {gain_s:>13}  {res:<10} {note}")
+            lines.append(f"{sig:<34} {lever:>12} {ms_s:>9} {gain_s:>13}  {res:<10} {note}")
 
     # --- Code changes: the actual source diff for EVERY attempt tried (win or fail) ---
     if any(isinstance(a, dict) and (a.get("diff") or "").strip() for a in attempts):
@@ -304,7 +304,7 @@ def render_summary(
             if not d:
                 continue
             sig = _op_label(a.get("op_signature", "?"))
-            lever = _disp_level(_level_of(a.get("kernel_kind", "")) or (a.get("kernel_kind") or "?"))
+            lever = _disp_level(a.get("kernel_kind") or "?")
             res = "win" if a.get("beat_baseline") else ("wedged" if a.get("wedged") else "no gain")
             ms = a.get("measured_ms")
             gain = f"  {baseline_ms - ms:+.2f} ms" if (baseline_ms and isinstance(ms, (int, float))) else ""
