@@ -16,29 +16,33 @@ namespace ckernel::sfpu {
 // 2^31 as float (used for INT32 sign-magnitude conversion edge cases)
 constexpr float TWO_POW_31 = 2147483648.0f;
 
-// Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|
-// Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
-// Returns: unsigned remainder r
-sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_signed, const sfpi::vInt& b_signed) {
-    // Get absolute values for unsigned remainder computation
-    sfpi::vMag a = sfpi::abs(a_signed);
-    sfpi::vMag b = sfpi::abs(b_signed);
-
-    // Convert to float for reciprocal computation
-    // Handle 2^31 edge case where sign-magnitude conversion yields negative
-    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
+// Computes 1/|b| for the unsigned remainder (single Newton–Raphson refinement). Split recip and
+// remainder computation so that the tensor-scalar path can hoist this loop-invariant work above its
+// element loop, since a scalar divisor is identical for every lane and iteration.
+sfpi_inline sfpi::vFloat unsigned_remainder_recip(const sfpi::vMag& b) {
+    // Convert to float; handle 2^31 edge case where sign-magnitude conversion yields negative
     sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::Nearest);
-    v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
-    v_endif;
     v_if(b_f < 0.0f) { b_f = TWO_POW_31; }
     v_endif;
 
-    // Compute reciprocal of b using a single Newton–Raphson refinement
-    // Accuracy is sufficient because we apply an integer correction later.
     sfpi::vFloat inv_b_f = sfpi::approx_recip(b_f);
     // One NR step: inv_b = inv_b * (2 - b * inv_b)
     sfpi::vFloat e = -inv_b_f * b_f + 1.0f;
-    inv_b_f = e * inv_b_f + inv_b_f;
+    return e * inv_b_f + inv_b_f;
+}
+
+// Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|, given |b| and 1/|b| precomputed.
+// Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
+// Returns: unsigned remainder r
+sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
+    const sfpi::vInt& a_signed, sfpi::vMag b, const sfpi::vFloat& inv_b_f) {
+    // Get absolute value of a for unsigned remainder computation
+    sfpi::vMag a = sfpi::abs(a_signed);
+
+    // Convert to float; handle 2^31 edge case where sign-magnitude conversion yields negative
+    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
+    v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
+    v_endif;
 
     // Initial quotient approximation: q = a * (1/b)
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
@@ -70,6 +74,13 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     v_endif;
 
     return r;
+}
+
+// Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|
+// Returns: unsigned remainder r
+sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_signed, const sfpi::vInt& b_signed) {
+    sfpi::vMag b = sfpi::abs(b_signed);
+    return compute_unsigned_remainder_int32(a_signed, b, unsigned_remainder_recip(b));
 }
 
 // Remainder = a - floor(a / b) * b

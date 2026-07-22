@@ -21,35 +21,64 @@ inline void init_remainder(const uint value, const uint recip) {
     sfpi::vConstFloatPrgm1 = Converter::as_float(recip);
 }
 
-// Unary uint32 remainder: This mirrors the tensor-tensor kernel in ckernel_sfpu_binary_remainder.h
-// t = (uint32)a >> 1 (always < 2^31)
+// Unary uint32 remainder mirrors the tensor-tensor kernel in ckernel_sfpu_binary_remainder.h.
+// The divisor is a compile-time literal, so these runtime checks fold at compile time and only take branches:
+//   scalar >= 2^31 -> one conditional subtract
+//   power-of-two -> bitmask
+//   else (< 2^31) -> range-reduce + full helper (1/|b| hoisted). Unlike Wormhole,Blackhole's helper uses the
+//   fractional_mul intrinsic, so divisor width does not change its cost. Small-b branch is not needed.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_remainder_uint32_scalar(uint scalar) {
     sfpi::vInt b = static_cast<int>(scalar);
+
+    if (scalar >= 0x80000000u) {
+        // b >= 2^31: a < 2^32 <= 2b and a % b = (a >=u b) ? a - b : a.
+        // a is a signed vInt, so a < 0 means the uint32's MSB is set i.e. a >= 2^31.
+        // Only a >= 2^31 can be >=u b, so low-half a keeps r = a. For low-half a and high-half b,
+        // a - b overflows. Gating on `a < 0` ensures the compare only runs when both operands are in [2^31, 2^32).
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
 
-        // Call the helper unconditionally with t < 2^31
-        sfpi::vInt t = sfpi::vInt(sfpi::vUInt(a) >> 1);
-        sfpi::vInt rt = compute_unsigned_remainder_int32(t, b);
+            sfpi::vInt r = a;
+            v_if(a < 0 && sfpi::vUInt(a) >= sfpi::vUInt(b)) { r = a - b; }
+            v_endif;
 
-        // Reload a from DEST instead of keeping it live across the helper.
-        a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = r;
+            sfpi::dst_reg++;
+        }
+    } else if ((scalar & (scalar - 1u)) == 0u) {
+        // Power of two (non-zero: scalar == 0 is rejected by the host TT_FATAL): a % b == a & (b-1)
+        sfpi::vInt mask = static_cast<int>(scalar - 1u);
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = a & mask;
+            sfpi::dst_reg++;
+        }
+    } else {
+        // b < 2^31: range-reduce each a via t = (uint32)a >> 1 (< 2^31). |b| and 1/|b| depend only
+        // on the divisor, so compute them once above the loop.
+        sfpi::vMag b_mag = sfpi::abs(b);
+        sfpi::vFloat inv_b_f = unsigned_remainder_recip(b_mag);
 
-        // b < 2^31 uses x = 2 * rt + (a & 1); b >= 2^31 keeps x = a (already in [0, 2b) since a < 2b)
-        v_if(b >= 0) { a = rt + rt + (a & 1); }
-        v_endif;
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+            sfpi::vInt t = sfpi::vInt(sfpi::vUInt(a) >> 1);
+            sfpi::vInt rt = compute_unsigned_remainder_int32(t, b_mag, inv_b_f);
 
-        // x % b = (x >=u b) ? x - b : x
-        sfpi::vInt r = a;
-        v_if(sfpi::vUInt(a) >= sfpi::vUInt(b)) { r = a - b; }
-        v_endif;
-        v_if(b < 0 && a >= 0) { r = a; }
-        v_endif;
+            // Reload a from DEST instead of keeping it live across the helper
+            a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+            sfpi::vInt x = rt + rt + (a & 1);  // x = 2 * (t % b) + (a & 1), in [0, 2b)
 
-        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = r;
-        sfpi::dst_reg++;
+            sfpi::vInt r = x;
+            v_if(sfpi::vUInt(x) >= sfpi::vUInt(b)) { r = x - b; }
+            v_endif;
+
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = r;
+            sfpi::dst_reg++;
+        }
     }
 }
 
