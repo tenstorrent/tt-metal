@@ -96,8 +96,9 @@ __attribute__((noinline)) void push_entries_to_host(
 }
 
 // Service a host clock-sync handshake, moved here from the BRISC so the drop-critical dispatch_s read path is never
-// stalled by sync work. Capture the reserved core's wall clock, publish it to sync_ack_device_time in L1, then fire the
-// token to the host's pinned ACK word; the host reads device_time straight from L1 once it observes the token. The ACK
+// stalled by sync work. Capture the reserved core's wall clock, then NOC-write it to the host ACK buffer followed by
+// the handshake token one word past it (barrier between so the token lands last). The host polls the token in its own
+// memory and reads device_time from the same buffer, so no blocking host->device read is needed per handshake. The ACK
 // keeps the host-provided PinnedMemory encoding (sync_ack_pcie_xy_enc); only the servicing core changed.
 __attribute__((noinline)) void realtime_profiler_service_sync() {
     const uint32_t host_time = rt_profiler_msg->sync_host_timestamp;
@@ -125,6 +126,21 @@ __attribute__((noinline)) void realtime_profiler_service_sync() {
         const uint32_t ack_pcie_xy_enc = rt_profiler_msg->sync_ack_pcie_xy_enc;
 #endif
         noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
+        // device_time [lo, hi] first, then the token, barrier between so the token is visible to the host only after
+        // device_time lands; the host then reads device_time from the same ACK buffer, replacing a blocking
+        // host->device read per handshake. device_time goes one word in (host offset 4): its L1 source
+        // (sync_ack_device_time) sits at 4 mod 16, and NOC PCIe writes require src and dst to share the low 4 bits
+        // (NOC_PCIE_WRITE_ALIGNMENT_BYTES=16), so the dst must also be 4 mod 16. The token source (sync_request) is
+        // 16-aligned, so the token lands at the base (word 0). Host layout: kSyncAckTokenWord in
+        // realtime_profiler_manager.cpp.
+        noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+            noc_index,
+            reinterpret_cast<uint32_t>(&rt_profiler_msg->sync_ack_device_time[0]),
+            ack_pcie_xy_enc,
+            ack_pcie_addr + sizeof(uint32_t),
+            2 * sizeof(uint32_t),
+            1);
+        noc_async_write_barrier();
         noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
             noc_index,
             reinterpret_cast<uint32_t>(&rt_profiler_msg->sync_request),
