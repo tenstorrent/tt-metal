@@ -11,19 +11,21 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    // same arg indices as in reader_binary_diff_lengths for compat
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t Mt = get_arg_val<uint32_t>(2);
-    uint32_t Kt = get_arg_val<uint32_t>(3);
-    uint32_t Nt = get_arg_val<uint32_t>(4);
-    uint32_t MtKt = get_arg_val<uint32_t>(5);  // if 0
-    uint32_t KtNt = get_arg_val<uint32_t>(6);
-    uint32_t batch = get_arg_val<uint32_t>(7);
-    uint32_t bcast_B = get_arg_val<uint32_t>(8);  // if 1 we broadcast B to batch
-    uint32_t output_tile_start_id = get_arg_val<uint32_t>(9);
-    uint32_t num_output_tiles = get_arg_val<uint32_t>(10);
-    uint32_t MtNt = get_arg_val<uint32_t>(11);
+    // Core-invariant common runtime args: tensor base addresses (idx 0 = in0/a, idx 1 = in1/b) and the
+    // grid-wide matmul dimensions (idx 2-9), all identical on every core.
+    uint32_t src0_addr = get_common_arg_val<uint32_t>(0);
+    uint32_t src1_addr = get_common_arg_val<uint32_t>(1);
+    uint32_t Mt = get_common_arg_val<uint32_t>(2);
+    uint32_t Kt = get_common_arg_val<uint32_t>(3);
+    uint32_t Nt = get_common_arg_val<uint32_t>(4);
+    uint32_t MtKt = get_common_arg_val<uint32_t>(5);  // if 0
+    uint32_t KtNt = get_common_arg_val<uint32_t>(6);
+    uint32_t batch = get_common_arg_val<uint32_t>(7);
+    uint32_t bcast_B = get_common_arg_val<uint32_t>(8);  // if 1 we broadcast B to batch
+    uint32_t MtNt = get_common_arg_val<uint32_t>(9);
+    // Per-core runtime args.
+    uint32_t output_tile_start_id = get_arg_val<uint32_t>(0);
+    uint32_t num_output_tiles = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(0);
     constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(1);

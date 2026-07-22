@@ -18,9 +18,14 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 void kernel_main() {
+    // Common runtime args (identical on every core running this kernel; see program factories).
+    // in0 tensor base address
+    const uint32_t in0_tensor_addr = get_common_arg_val<uint32_t>(0);
+    // sparsity tensor base address (0 when sparsity is disabled)
+    const uint32_t sparsity_addr = get_common_arg_val<uint32_t>(1);
+
     uint32_t rt_args_idx = 0;
     // in0 tensor args
-    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
     // in0 mcast args
     const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(rt_args_idx++);
@@ -30,8 +35,6 @@ void kernel_main() {
 
     // padding args
     const uint32_t last_block_h = get_arg_val<uint32_t>(rt_args_idx++);
-    // sparsity args
-    const uint32_t sparsity_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
     // COMPILE TIME ARGS
     // in0 tensor args

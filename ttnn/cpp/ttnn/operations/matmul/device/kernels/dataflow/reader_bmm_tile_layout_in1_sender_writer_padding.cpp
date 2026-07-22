@@ -14,10 +14,15 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 void kernel_main() {
+    // Common runtime args (identical on every core running this kernel; see program factories).
+    // Tensor base addresses: in1 (common idx 0), sparsity (common idx 1), out (common idx 2), bias (common idx 3).
+    const uint32_t in1_tensor_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t sparsity_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t out_tensor_addr = get_common_arg_val<uint32_t>(2);
+
     // READER
     uint32_t rt_args_idx = 0;
     // in1 tensor args
-    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
     // in1 mcast args
     const uint32_t in1_mcast_dest_noc_start_x = get_arg_val<uint32_t>(rt_args_idx++);
@@ -25,12 +30,8 @@ void kernel_main() {
     const uint32_t in1_mcast_dest_noc_end_x = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t in1_mcast_dest_noc_end_y = get_arg_val<uint32_t>(rt_args_idx++);
 
-    // sparsity args
-    const uint32_t sparsity_addr = get_arg_val<uint32_t>(rt_args_idx++);
-
     // WRITER
     // out tensor args
-    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     // padding args (READER)
@@ -92,8 +93,8 @@ void kernel_main() {
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
 
 #ifdef FUSE_BIAS
-    // in3 mcast args
-    const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    // in3 (bias) base address is common runtime arg idx 3; only the per-core start tile id is an RTA.
+    const uint32_t in3_tensor_addr = get_common_arg_val<uint32_t>(3);
     const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(29);
@@ -116,7 +117,7 @@ void kernel_main() {
     // Bias accessor will be defined later after TensorAccessor args
 #endif  // BIAS_SHARDED
 #else
-    rt_args_idx += 2;  // Skip over placeholders
+    rt_args_idx += 1;  // Skip over the bias start-tile-id placeholder (bias address is now common runtime arg 3)
 #endif  // FUSE_BIAS
 #ifndef OUT_SHARDED
     const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);

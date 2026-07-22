@@ -654,9 +654,10 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
         // in0 sender and in1 sender
         if (core == start_core) {
+            // in0 tensor base address (common idx 0) and sparsity buffer address (common idx 1) are
+            // core-invariant and set once as common runtime args after this loop.
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
-                (std::uint32_t)in0_buffer->address(),
                 (std::uint32_t)Kt * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
@@ -666,8 +667,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
                 // padding args
                 (std::uint32_t)out_block_h,  // last_block_h
-                // sparsity args
-                (std::uint32_t)sparsity_buffer->address()  // sparsity_addr
             };
 
             tt_metal::SetRuntimeArgs(
@@ -686,10 +685,11 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
             tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);
         }
         if (i < num_cores_with_work) {
+            // in1 (common idx 0), sparsity (common idx 1), out (common idx 2) base addresses are core-invariant
+            // and set once as common runtime args after this loop.
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
-                (std::uint32_t)in1_buffer->address(),
                 (std::uint32_t)per_core_N * output_idx_x,  // in1_tensor_start_tile_id
                 // in1 mcast args
                 (std::uint32_t)0,  // in1_mcast_dest_noc_start_x
@@ -697,12 +697,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 (std::uint32_t)0,  // in1_mcast_dest_noc_end_x
                 (std::uint32_t)0,  // in1_mcast_dest_noc_end_y
 
-                // sparsity args
-                (std::uint32_t)sparsity_buffer->address(),  // sparsity_addr
-
                 // WRITER
                 // out tensor args
-                (std::uint32_t)out_buffer->address(),
                 ((std::uint32_t)output_idx_x * per_core_N) +
                     (output_idx_y * per_core_M * Nt)  // out_tensor_start_tile_id
             };
@@ -735,8 +731,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            mm_in1_sender_writer_args.push_back(0);
-            mm_in1_sender_writer_args.push_back(0);
+            mm_in1_sender_writer_args.push_back(0);  // bias start-tile-id placeholder (bias addr is common idx 3)
 
             if (output_idx_x == num_blocks_x - 1) {
                 mm_in1_sender_writer_args.push_back(last_out_num_blocks_w);
@@ -754,6 +749,21 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
         }
     }
+
+    // in0 tensor base address + sparsity buffer address are identical on every core; dispatch once.
+    tt_metal::SetCommonRuntimeArgs(
+        program,
+        mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
+        {(std::uint32_t)in0_buffer->address(), (std::uint32_t)sparsity_buffer->address()});
+
+    // in1 sender/writer common args: in1 (0), sparsity (1), out (2), bias (3 = 0, sparse has no bias) addresses.
+    tt_metal::SetCommonRuntimeArgs(
+        program,
+        mm_kernel_in1_sender_writer_id,
+        {(std::uint32_t)in1_buffer->address(),
+         (std::uint32_t)sparsity_buffer->address(),
+         (std::uint32_t)out_buffer->address(),
+         (std::uint32_t)0});
 
     auto shared_vars = SparseMatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t{
         {mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, mm_kernel_in1_sender_writer_id},
@@ -780,23 +790,20 @@ void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments
     auto* sparsity_buffer = tensor_args.input_tensors.at(2).buffer();
     auto* dst_buffer = tensor_return_value.at(0).buffer();
 
-    // Manually unroll sender core
-    // in0 sender
-    auto& reader_sender_runtime_args = GetRuntimeArgs(program, shared_vars.kernels.at(0), shared_vars.start_core);
-    reader_sender_runtime_args[0] = src_buffer_a->address();
-    reader_sender_runtime_args[7] = sparsity_buffer->address();
+    // in0 sender: base address (common idx 0) and sparsity address (common idx 1) are common runtime args
+    // (identical on every core), so patch them once.
+    {
+        auto& reader_common_runtime_args = GetCommonRuntimeArgs(program, shared_vars.kernels.at(0));
+        reader_common_runtime_args[0] = src_buffer_a->address();
+        reader_common_runtime_args[1] = sparsity_buffer->address();
+    }
 
-    auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.kernels.at(1));
-
-    for (uint32_t i = 0; i < shared_vars.num_cores_with_work; ++i) {
-        const auto& core = shared_vars.cores[i];
-
-        auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
-
-        // in1 sender
-        writer_runtime_args[0] = src_buffer_b->address();
-        writer_runtime_args[6] = sparsity_buffer->address();
-        writer_runtime_args[7] = dst_buffer->address();
+    // in1 sender/writer: in1 (0), sparsity (1), out (2) base addresses are common runtime args, patched once.
+    {
+        auto& writer_common_runtime_args = GetCommonRuntimeArgs(program, shared_vars.kernels.at(1));
+        writer_common_runtime_args[0] = src_buffer_b->address();
+        writer_common_runtime_args[1] = sparsity_buffer->address();
+        writer_common_runtime_args[2] = dst_buffer->address();
     }
 }
 
