@@ -921,13 +921,16 @@ def _stub_import_path(demo_dir: Path, component_safe: str, repo_root: Path) -> s
 
 
 _FORWARD_TORCH_CALL_RE = re.compile(r"\btorch\.[A-Za-z_]\w*\s*\(")
+_DEVICE_READBACK_RE = re.compile(r"(?<!ttnn)\.to_torch\s*\(")
 
 
 def _stub_body_is_native(stub_path: Path) -> bool:
     """True iff the stub is a PURE ttnn forward: it must not delegate to the torch reference AND its
     compute path (every method except __init__) must not call torch (`torch.<fn>(`) or read data off the
-    device (`.to_torch(`). Weight prep in __init__ (torch.cat/detach/float staged via ttnn.from_torch) is
-    allowed; isinstance/type refs are not calls and are allowed. Host reimplementation — torch math or a
+    device via a bare `.to_torch(`. `ttnn.to_torch(` is allowed: it is the standard ttnn input-marshalling
+    call (e.g. coercing a torch test input onto device and staging it back with ttnn.from_torch), not host
+    compute. Weight prep in __init__ (torch.cat/detach/float staged via ttnn.from_torch) is allowed;
+    isinstance/type refs are not calls and are allowed. Host reimplementation — torch math or a bare
     device->host readback anywhere in the forward — is rejected even at PCC 1.0. Does NOT check for a
     snapshot — compose with the caller's snapshot check.
 
@@ -958,7 +961,7 @@ def _stub_body_is_native(stub_path: Path) -> bool:
             return False
         if "self._torch_module" in head or "_coerce_to_torch" in head or "throw_exception_on_fallback" in head:
             return False
-        if re.search(r"\.to_torch\s*\(", text) and re.search(r"\btorch\.[A-Za-z_]\w*\s*\(", text):
+        if _DEVICE_READBACK_RE.search(text) and _FORWARD_TORCH_CALL_RE.search(text):
             return False
         return True
 
@@ -1037,7 +1040,7 @@ def _stub_body_is_native(stub_path: Path) -> bool:
             if seg:
                 compute.append(seg)
     compute_src = "\n".join(compute)
-    if _FORWARD_TORCH_CALL_RE.search(compute_src) or re.search(r"\.to_torch\s*\(", compute_src):
+    if _FORWARD_TORCH_CALL_RE.search(compute_src) or _DEVICE_READBACK_RE.search(compute_src):
         return False
     return True
 
