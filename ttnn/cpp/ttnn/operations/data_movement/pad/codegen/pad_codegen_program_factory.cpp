@@ -31,6 +31,11 @@ constexpr uint32_t kSeqPad = 5;
 constexpr uint32_t kL1Align = 16;
 constexpr uint32_t kL1SafetyMargin = 64 * 1024;
 
+// common/codegen_common/builder_utils.py: usable_l1()'s _L1_OVERHEAD -- a flat firmware/dispatch/
+// runtime reservation subtracted from the raw per-core L1 size, independent of the allocator's
+// actual base address (which reserves a different, allocator-internal amount).
+constexpr uint32_t kL1FirmwareOverhead = 100'000;
+
 }  // namespace
 
 uint32_t pack_pad_value(DataType dtype, float value) {
@@ -111,15 +116,21 @@ PadCodegenParams build_pad_codegen_params(
         attrs.write_batch = kPadCodegenWriteBatchDefault;
     } else {
         // ops/pad/spec.py: RM batches are L1-clamped via _rm_pad_batches_for_l1 at the
-        // wide-stick L1 cliff; usable_l1 mirrors that helper's device-derived budget as the
-        // repo-wide convention (device->l1_size_per_core() - allocator's L1 base address).
+        // wide-stick L1 cliff, against usable_l1(device) = device's raw per-core L1 size minus
+        // the fixed firmware/dispatch overhead (builder_utils.py's _L1_OVERHEAD) -- NOT the
+        // allocator's base address, which reserves a different, allocator-internal amount and
+        // would silently desync this port's read_batch/write_batch cache-key fields from the
+        // generator's.
         const uint32_t elem_size = input_4d.element_size();
         const uint32_t dram_alignment = input_4d.buffer()->alignment();
+        // input_page mirrors spec.py's stage_buf_size (DRAM-pitch-aligned staging read). output_page
+        // mirrors stick_size_out_aligned, which spec.py aligns to _L1_ALIGN (an L1 CB-page quantity),
+        // NOT dram_alignment -- using dram_alignment here would over-align the output page and can
+        // shrink read_batch/write_batch earlier than the generator does for the same device.
         const uint32_t input_page = tt::align(W * elem_size, dram_alignment);
-        const uint32_t output_page = tt::align(attrs.W_out * elem_size, dram_alignment);
+        const uint32_t output_page = tt::align(attrs.W_out * elem_size, kL1Align);
         IDevice* device = input_4d.device();
-        const uint32_t budget =
-            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        const uint32_t budget = device->l1_size_per_core() - kL1FirmwareOverhead;
         const auto [rb, wb] = rm_pad_batches_for_l1(
             input_page, output_page, budget, kPadCodegenReadBatchDefault, kPadCodegenWriteBatchDefault);
         attrs.read_batch = rb;
