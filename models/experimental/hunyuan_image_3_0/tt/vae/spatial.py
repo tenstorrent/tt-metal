@@ -61,6 +61,11 @@ _GN_STATS = os.environ.get("HY_GN_STATS", "split").lower()
 # stays in DRAM (a single such tensor would not fit L1 across the worker grid anyway).
 # 2M elems (~4 MB bf16) covers the mid block / early up-level res tensors; measured
 # consistently faster than all-DRAM with identical PCC (0.999845). Always on (no env knob).
+# NOTE: this is the true ceiling, not just a storage limit. Raising it to include u1
+# (8.4M) or u2 (34M) was tried and both FAIL with a hard L1 clash: the conv3d that
+# consumes the L1-resident normalize output needs ~1340 KB/core of static circular
+# buffers, which cannot coexist with the L1 activation buffer (TT_THROW "circular
+# buffers clash with L1 buffers"). u0 is the largest level whose GN->conv chain fits L1.
 _L1_RESIDENT_MAX_ELEMENTS = 2 * 1024 * 1024
 
 
