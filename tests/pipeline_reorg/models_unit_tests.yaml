@@ -756,6 +756,124 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+- name: Stable Diffusion XL LoRA unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    exit_code=0
+    pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/test_lora_fusion.py || exit_code=$?
+    pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py || exit_code=$?
+    pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/pcc || exit_code=$?
+    exit $exit_code
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 40
+      tier: 2
+    wh_n300:
+      timeout: 36
+      tier: 2
+    bh_p150b_civ2:
+      timeout: 30
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL refiner unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 600 models/demos/stable_diffusion_xl_base/refiner/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 2
+    wh_n300:
+      timeout: 20
+      tier: 2
+    bh_p150b_civ2:
+      timeout: 15
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL VAE unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 600 models/demos/stable_diffusion_xl_base/vae/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/vae/tests/pcc/test_welford_state_leak_regression.py
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 2
+    wh_n300:
+      timeout: 20
+      tier: 2
+    bh_p150b_civ2:
+      timeout: 15
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL base unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 600 models/demos/stable_diffusion_xl_base/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_euler_discrete_scheduler.py
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 2
+    wh_n300:
+      timeout: 20
+      tier: 2
+    bh_p150b_civ2:
+      timeout: 30
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL base unet-loop unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    exit_code=0
+    pytest --timeout 1800 models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    exit $exit_code
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 60
+      tier: 2
+    wh_n300:
+      timeout: 60
+      tier: 2
+    bh_p150:
+      timeout: 50
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL refiner unet-loop unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    exit_code=0
+    pytest --timeout 1800 models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    exit $exit_code
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 60
+      tier: 2
+    wh_n300:
+      timeout: 60
+      tier: 2
+    bh_p150:
+      timeout: 50
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
 # ============================================================================
 # Multihost (exabox) model-unit tests
 # ============================================================================
