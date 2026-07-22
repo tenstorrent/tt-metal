@@ -10,11 +10,6 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import rotate_half
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, get_cos_sin_matrix
-from models.demos.deepseek_v3_d_p.tt.mla.utils import (
-    create_balanced_chunk_order,
-    reorder_tensor_chunks,
-    reverse_reorder_tensor_chunks,
-)
 
 PCC_REQUIRED = 0.99
 
@@ -36,10 +31,8 @@ PCC_REQUIRED = 0.99
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", [128 * 1024], ids=["seq128k"])
-@pytest.mark.parametrize("is_balanced", [False, True], ids=["unbalanced", "balanced"])
 def test_rope_prefill(
     seq_len,
-    is_balanced,
     request,
     mesh_device,
 ):
@@ -72,23 +65,15 @@ def test_rope_prefill(
         hf_config=config,
         mesh_device=mesh_device,
         sp_axis=sp_axis,
-        is_balanced=is_balanced,
     )
     rope_tensors = rope_setup.get_rope_tensors(seq_len)
 
     # Create test input tensor: [batch, num_heads, seq_len, head_dim]
     torch_input = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=torch.bfloat16)
 
-    # Reorder input for balanced ring attention
-    sp_factor = mesh_shape[sp_axis]
-    chunk_order = create_balanced_chunk_order(sp_factor) if is_balanced else None
-    tt_input_torch = torch_input
-    if is_balanced:
-        tt_input_torch = reorder_tensor_chunks(torch_input, chunk_order, seq_dim=2)
-
     # Convert to TTNN tensor, shard over (sp_axis=seq, tp_axis=heads)
     tt_input = ttnn.from_torch(
-        tt_input_torch,
+        torch_input,
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -132,10 +117,6 @@ def test_rope_prefill(
     rotated_half_q = rotate_half(torch_input, meta_style=True)
     reference_output = (torch_input * cos_broadcast) + (rotated_half_q * sin_broadcast)
 
-    # Reverse-reorder output for balanced comparison
-    if is_balanced:
-        tt_output_torch = reverse_reorder_tensor_chunks(tt_output_torch, chunk_order, seq_dim=2)
-
     # Compare outputs
     logger.info(f"Comparing outputs: TTNN shape={tt_output_torch.shape}, Reference shape={reference_output.shape}")
     passing, pcc = comp_pcc(reference_output, tt_output_torch, PCC_REQUIRED)
@@ -143,4 +124,4 @@ def test_rope_prefill(
 
     assert passing, f"RoPE prefill test failed: PCC {pcc:.6f} < {PCC_REQUIRED} for seq_len={seq_len}"
 
-    logger.info(f"✓ RoPE prefill test passed (balanced={is_balanced}, seq_len={seq_len}) with PCC={pcc:.6f}")
+    logger.info(f"✓ RoPE prefill test passed (seq_len={seq_len}) with PCC={pcc:.6f}")

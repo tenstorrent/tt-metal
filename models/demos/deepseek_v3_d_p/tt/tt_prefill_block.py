@@ -213,7 +213,6 @@ class TtPrefillBlock(LightweightModule):
         topology: TopologyArg = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
-        is_balanced: bool = False,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
@@ -284,7 +283,6 @@ class TtPrefillBlock(LightweightModule):
             # Pass the full per-axis topology: MLA's q/kv/wo CCLs use the TP element (cluster_axis=
             # tp_axis), but its ring-attention SDPA runs on the SP axis and needs the SP element.
             topology=topology,
-            is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
             slot_num=slot_num,
             layer_num=layer_num,
@@ -329,7 +327,6 @@ class TtPrefillBlock(LightweightModule):
                 layer_idx=layer_idx,
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
-                is_balanced=is_balanced,
             )
         else:
             # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
@@ -369,7 +366,6 @@ class TtPrefillBlock(LightweightModule):
         weight_cache_path=None,
         layer_idx=0,
         routing_use_l1_small_for_semaphores=False,
-        is_balanced=False,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -419,7 +415,6 @@ class TtPrefillBlock(LightweightModule):
             layer_idx=layer_idx,
             overlap_shared_expert_with_dispatch=True,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
-            is_balanced=is_balanced,
         )
 
     def forward(

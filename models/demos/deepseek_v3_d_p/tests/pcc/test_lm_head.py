@@ -51,7 +51,6 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
 
 
 @pytest.mark.parametrize("is_column_parallel", [True, False], ids=["col", "row"])
-@pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.parametrize(
     "batch_seq_len, emb_dim, vocab_size, run_full_pcc_check",
     [
@@ -111,7 +110,6 @@ def test_lm_head(
     run_full_pcc_check: bool,
     num_links: int,
     topology: ttnn.Topology,
-    is_balanced: bool,
     is_column_parallel: bool,
 ):
     """
@@ -165,7 +163,6 @@ def test_lm_head(
         topology=topology,
         activations_dtype=ttnn_activations_dtype,
         weights_dtype=ttnn_weights_dtype,
-        is_balanced=is_balanced,
         is_column_parallel=is_column_parallel,
     )
 
@@ -211,45 +208,27 @@ def test_lm_head(
 
 
 def test_global_to_local_token_id():
-    """Verify token mapping for both balanced and sequential modes."""
+    """Verify sequential token mapping."""
     from models.demos.deepseek_v3_d_p.tt.mla.utils import global_to_local_token_id
 
     sp_factor = 4
     seq_len = 1024
-    chunk_size_balanced = seq_len // (2 * sp_factor)  # 128
     chunk_size_sequential = seq_len // sp_factor  # 256
 
-    # === is_balanced=True (zigzag) ===
     # Token 0 -> device 0, offset 0
-    device_id, local_id = global_to_local_token_id(0, sp_factor, seq_len, is_balanced=True)
-    assert device_id == 0 and local_id == 0, f"Expected (0, 0), got ({device_id}, {local_id})"
-
-    # Token at start of chunk 1 -> device 1, offset 0
-    device_id, local_id = global_to_local_token_id(chunk_size_balanced, sp_factor, seq_len, is_balanced=True)
-    assert device_id == 1 and local_id == 0, f"Expected (1, 0), got ({device_id}, {local_id})"
-
-    # Token at start of chunk 7 (last chunk) -> device 0, with offset chunk_size
-    # Chunk 7 maps to device: num_chunks - 1 - chunk_id = 8 - 1 - 7 = 0
-    device_id, local_id = global_to_local_token_id(7 * chunk_size_balanced, sp_factor, seq_len, is_balanced=True)
-    assert (
-        device_id == 0 and local_id == chunk_size_balanced
-    ), f"Expected (0, {chunk_size_balanced}), got ({device_id}, {local_id})"
-
-    # === is_balanced=False (sequential) ===
-    # Token 0 -> device 0, offset 0
-    device_id, local_id = global_to_local_token_id(0, sp_factor, seq_len, is_balanced=False)
+    device_id, local_id = global_to_local_token_id(0, sp_factor, seq_len)
     assert device_id == 0 and local_id == 0, f"Expected (0, 0), got ({device_id}, {local_id})"
 
     # Token 256 -> device 1, offset 0
-    device_id, local_id = global_to_local_token_id(chunk_size_sequential, sp_factor, seq_len, is_balanced=False)
+    device_id, local_id = global_to_local_token_id(chunk_size_sequential, sp_factor, seq_len)
     assert device_id == 1 and local_id == 0, f"Expected (1, 0), got ({device_id}, {local_id})"
 
     # Token 512 -> device 2, offset 0
-    device_id, local_id = global_to_local_token_id(2 * chunk_size_sequential, sp_factor, seq_len, is_balanced=False)
+    device_id, local_id = global_to_local_token_id(2 * chunk_size_sequential, sp_factor, seq_len)
     assert device_id == 2 and local_id == 0, f"Expected (2, 0), got ({device_id}, {local_id})"
 
     # Last token (1023) -> device 3, offset 255
-    device_id, local_id = global_to_local_token_id(seq_len - 1, sp_factor, seq_len, is_balanced=False)
+    device_id, local_id = global_to_local_token_id(seq_len - 1, sp_factor, seq_len)
     assert (
         device_id == 3 and local_id == chunk_size_sequential - 1
     ), f"Expected (3, {chunk_size_sequential - 1}), got ({device_id}, {local_id})"

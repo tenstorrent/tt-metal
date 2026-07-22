@@ -669,7 +669,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         sparse_kv_cache_format=kv_cache_format if has_indexer else MlaKvCacheFormat.BF16_RM,
     )
 
-    rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(total, chunk)
+    rope = RotarySetup(config, mesh_device, sp_axis=sp_axis).get_rope_tensors_indexed(total, chunk)
     # Sparse mode profiles the selected cache format. Dense ring attention retains its tiled bfloat8_b
     # cache because it has a different cache contract.
     if has_indexer:
