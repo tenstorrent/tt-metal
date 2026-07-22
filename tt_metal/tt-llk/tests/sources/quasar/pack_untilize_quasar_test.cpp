@@ -41,10 +41,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (unpack_to_dest)
         {
             // Only the end-to-end path uses the unpack→pack dest-dvalid
-            // handshake. Isolates deliberately have no consumer.
+            // handshake. Isolates deliberately have no consumer, so clear the
+            // persisted wait mask rather than leaving UNP_DEST blocked.
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+            }
+            else
+            {
+                auto cfg                                         = (std::uint32_t volatile*)TENSIX_CFG_BASE;
+                cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
             }
 
             DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
@@ -82,6 +88,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (unpack_to_dest)
         {
             _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
+            // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
+            // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
+            // ZEROACC to wipe subsequent tile rows after packing the first one.
             _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape_A, BLOCK_CT_DIM);
         }
         else
@@ -169,7 +178,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         {
             ZONE_SCOPED("INIT")
-            // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
+            // PACK_ISOLATE and L1_CONGESTION measure pack without the
+            // FPU→PACK dest-dvalid handshake (WH/BH style).
             if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -263,7 +273,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     std::uint32_t const buf_desc_id = 31;
     {
         ZONE_SCOPED("INIT")
-        // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
+        // Match WH/BH PACK_ISOLATE and L1_CONGESTION: no math↔pack handshake;
+        // pack from whatever is in dest.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
@@ -309,6 +320,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
+        // _llk_pack_untilize_ packs one block ct_dim of tiles (one tile row) at a time.
         const std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
@@ -321,6 +333,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                 {
+                    // Each tile row is produced in alternating banks (SyncHalf).
+                    // Read from dest_idx 0; section_done zeroes the current bank
+                    // and switches the packer to the other bank.
                     if (tensor_shape.total_num_faces() == NUM_FACES)
                     {
                         _llk_pack_untilize_(0, y * y_stride_external);

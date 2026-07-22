@@ -69,6 +69,8 @@ def generate_pack_untilize_combinations(
 
     Args:
         formats_list: List of input-output format pairs
+        is_perf: Restrict combinations to performance-test dimensions, tile
+            sizes, and destination synchronization modes.
 
     Returns: List of (format, dest_acc, dest_sync, input_dimensions, tile_dimensions) tuples
     """
