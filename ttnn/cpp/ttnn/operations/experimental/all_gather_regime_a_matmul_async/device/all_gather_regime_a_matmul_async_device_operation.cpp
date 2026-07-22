@@ -11,6 +11,12 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
+AllGatherRegimeAMatmulAsyncDeviceOperation::program_factory_t
+AllGatherRegimeAMatmulAsyncDeviceOperation::select_program_factory(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
+    return AllGatherRegimeAMatmulAsyncProgramFactory{};
+}
+
 void AllGatherRegimeAMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& act = tensor_args.input_tensor;

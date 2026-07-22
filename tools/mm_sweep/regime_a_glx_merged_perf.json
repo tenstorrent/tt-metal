@@ -1,0 +1,2617 @@
+{
+  "mt8": [
+    {
+      "M": 32,
+      "K": 256,
+      "N": 6144,
+      "Mt": 1,
+      "family": "K256",
+      "ai": 28.3,
+      "cfg": [
+        3,
+        1,
+        1,
+        1,
+        8
+      ],
+      "cores": 24,
+      "W": 1,
+      "us_med": 9.551111111111112,
+      "us_all": [
+        9.537777777777778,
+        9.551111111111112,
+        9.553333333333335
+      ],
+      "spread_pct": 0.16309412861137684,
+      "eff_gbps": 372.242345276873,
+      "delivered_gbps": 372.242345276873,
+      "sched_over_valid": 1.0,
+      "ideal_us": 6.944,
+      "wall_over_ideal": 1.3754480286738353,
+      "excess_us": 2.607111111111112,
+      "per_risc_us": {
+        "BRISC": 9.2,
+        "NCRISC": 9.5,
+        "TRISC": 8.7
+      },
+      "core_spread_pct": 16.0,
+      "pcc": 0.9999942477943088,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 2048,
+      "N": 512,
+      "Mt": 1,
+      "family": "K2048",
+      "ai": 29.7,
+      "cfg": [
+        2,
+        4,
+        1,
+        2,
+        1
+      ],
+      "cores": 64,
+      "W": 1,
+      "us_med": 8.004444444444445,
+      "us_all": [
+        7.975555555555556,
+        8.004444444444445,
+        8.015555555555556
+      ],
+      "spread_pct": 0.5015324602953473,
+      "eff_gbps": 282.4670738478623,
+      "delivered_gbps": 282.4670738478623,
+      "sched_over_valid": 1.0,
+      "ideal_us": 4.4159999999999995,
+      "wall_over_ideal": 1.8126006441223836,
+      "excess_us": 3.5884444444444457,
+      "per_risc_us": {
+        "BRISC": 7.7,
+        "NCRISC": 8.0,
+        "TRISC": 7.6
+      },
+      "core_spread_pct": 46.0,
+      "pcc": 0.9999920983103565,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 2048,
+      "N": 1024,
+      "Mt": 1,
+      "family": "K2048",
+      "ai": 30.6,
+      "cfg": [
+        4,
+        2,
+        1,
+        4,
+        1
+      ],
+      "cores": 64,
+      "W": 1,
+      "us_med": 12.644814814814815,
+      "us_all": [
+        12.595555555555556,
+        12.644814814814815,
+        12.677407407407406
+      ],
+      "spread_pct": 0.6498470948012073,
+      "eff_gbps": 347.2500043935444,
+      "delivered_gbps": 347.2500043935444,
+      "sched_over_valid": 1.0,
+      "ideal_us": 8.576,
+      "wall_over_ideal": 1.474442025981205,
+      "excess_us": 4.068814814814814,
+      "per_risc_us": {
+        "BRISC": 12.6,
+        "NCRISC": 12.6,
+        "TRISC": 12.3
+      },
+      "core_spread_pct": 31.0,
+      "pcc": 0.9999936353263241,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 2048,
+      "N": 1536,
+      "Mt": 1,
+      "family": "K2048",
+      "ai": 30.9,
+      "cfg": [
+        2,
+        2,
+        1,
+        4,
+        3
+      ],
+      "cores": 32,
+      "W": 1,
+      "us_med": 17.18888888888889,
+      "us_all": [
+        17.184074074074076,
+        17.18888888888889,
+        17.232962962962965
+      ],
+      "spread_pct": 0.2845011530917978,
+      "eff_gbps": 379.36320620555915,
+      "delivered_gbps": 379.36320620555915,
+      "sched_over_valid": 1.0,
+      "ideal_us": 12.735999999999999,
+      "wall_over_ideal": 1.3496300949190398,
+      "excess_us": 4.452888888888891,
+      "per_risc_us": {
+        "BRISC": 16.5,
+        "NCRISC": 17.2,
+        "TRISC": 16.7
+      },
+      "core_spread_pct": 15.0,
+      "pcc": 0.9999936153141955,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 2048,
+      "N": 2048,
+      "Mt": 1,
+      "family": "K2048",
+      "ai": 31.0,
+      "cfg": [
+        2,
+        2,
+        1,
+        4,
+        4
+      ],
+      "cores": 32,
+      "W": 1,
+      "us_med": 22.204814814814814,
+      "us_all": [
+        22.186666666666664,
+        22.204814814814814,
+        22.22851851851852
+      ],
+      "spread_pct": 0.18863514957266841,
+      "eff_gbps": 389.58901806415025,
+      "delivered_gbps": 389.58901806415025,
+      "sched_over_valid": 1.0,
+      "ideal_us": 16.895999999999997,
+      "wall_over_ideal": 1.314205422278339,
+      "excess_us": 5.308814814814816,
+      "per_risc_us": {
+        "BRISC": 21.5,
+        "NCRISC": 22.2,
+        "TRISC": 21.7
+      },
+      "core_spread_pct": 17.0,
+      "pcc": 0.99999362076597,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 2304,
+      "N": 6144,
+      "Mt": 1,
+      "family": "K2304",
+      "ai": 31.4,
+      "cfg": [
+        2,
+        3,
+        1,
+        1,
+        6
+      ],
+      "cores": 48,
+      "W": 3,
+      "us_med": 67.77333333333334,
+      "us_all": [
+        67.53481481481482,
+        67.77333333333334,
+        68.00703703703704
+      ],
+      "spread_pct": 0.6992278331066437,
+      "eff_gbps": 425.71646665355104,
+      "delivered_gbps": 425.71646665355104,
+      "sched_over_valid": 1.0,
+      "ideal_us": 56.352,
+      "wall_over_ideal": 1.202678402422866,
+      "excess_us": 11.421333333333344,
+      "per_risc_us": {
+        "BRISC": 67.6,
+        "NCRISC": 67.8,
+        "TRISC": 67.2
+      },
+      "core_spread_pct": 5.0,
+      "pcc": 0.9999928577199557,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 6080,
+      "N": 4640,
+      "Mt": 1,
+      "family": "K6080",
+      "ai": 31.6,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 142.0311111111111,
+      "us_all": [
+        141.8303703703704,
+        142.0311111111111,
+        142.60333333333332
+      ],
+      "spread_pct": 0.5449911474844562,
+      "eff_gbps": 402.08430077917205,
+      "delivered_gbps": 425.77533560722225,
+      "sched_over_valid": 1.0589205666128743,
+      "ideal_us": 111.54,
+      "wall_over_ideal": 1.27336481182635,
+      "excess_us": 30.491111111111096,
+      "per_risc_us": {
+        "BRISC": 142.0,
+        "NCRISC": 141.5,
+        "TRISC": 141.7
+      },
+      "core_spread_pct": 56.0,
+      "pcc": 0.9999859836330132,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 6100,
+      "N": 4608,
+      "Mt": 1,
+      "family": "K6100",
+      "ai": 31.6,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 135.28259259259258,
+      "us_all": [
+        135.1051851851852,
+        135.28259259259258,
+        135.43037037037038
+      ],
+      "spread_pct": 0.24069038115706204,
+      "eff_gbps": 421.44573745492977,
+      "delivered_gbps": 423.6408461848038,
+      "sched_over_valid": 1.0052085204209922,
+      "ideal_us": 111.356,
+      "wall_over_ideal": 1.2148657691780649,
+      "excess_us": 23.926592592592584,
+      "per_risc_us": {
+        "BRISC": 135.1,
+        "NCRISC": 134.7,
+        "TRISC": 134.8
+      },
+      "core_spread_pct": 8.0,
+      "pcc": 0.9999860568978594,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 768,
+      "Mt": 1,
+      "family": "K6144",
+      "ai": 30.6,
+      "cfg": [
+        1,
+        6,
+        1,
+        2,
+        3
+      ],
+      "cores": 48,
+      "W": 2,
+      "us_med": 25.847407407407406,
+      "us_all": [
+        25.805555555555557,
+        25.847407407407406,
+        25.916666666666664
+      ],
+      "spread_pct": 0.43057050592032914,
+      "eff_gbps": 382.2260331289047,
+      "delivered_gbps": 382.2260331289047,
+      "sched_over_valid": 1.0,
+      "ideal_us": 19.296,
+      "wall_over_ideal": 1.3395215281616608,
+      "excess_us": 6.551407407407407,
+      "per_risc_us": {
+        "BRISC": 25.9,
+        "NCRISC": 25.3,
+        "TRISC": 25.4
+      },
+      "core_spread_pct": 21.0,
+      "pcc": 0.9999905386834296,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 1536,
+      "Mt": 1,
+      "family": "K6144",
+      "ai": 31.2,
+      "cfg": [
+        1,
+        6,
+        1,
+        4,
+        2
+      ],
+      "cores": 48,
+      "W": 1,
+      "us_med": 46.83,
+      "us_all": [
+        46.64296296296296,
+        46.83,
+        46.882592592592594
+      ],
+      "spread_pct": 0.513753017405673,
+      "eff_gbps": 413.5359385009609,
+      "delivered_gbps": 413.5359385009609,
+      "sched_over_valid": 1.0,
+      "ideal_us": 37.824000000000005,
+      "wall_over_ideal": 1.2381027918781724,
+      "excess_us": 9.005999999999993,
+      "per_risc_us": {
+        "BRISC": 46.8,
+        "NCRISC": 46.4,
+        "TRISC": 46.4
+      },
+      "core_spread_pct": 13.0,
+      "pcc": 0.9999906929706518,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 2304,
+      "Mt": 1,
+      "family": "K6144",
+      "ai": 31.4,
+      "cfg": [
+        1,
+        4,
+        1,
+        2,
+        9
+      ],
+      "cores": 32,
+      "W": 3,
+      "us_med": 70.00740740740741,
+      "us_all": [
+        69.91444444444444,
+        70.00740740740741,
+        70.42148148148148
+      ],
+      "spread_pct": 0.7252250104625229,
+      "eff_gbps": 412.13101682361656,
+      "delivered_gbps": 412.13101682361656,
+      "sched_over_valid": 1.0,
+      "ideal_us": 56.352,
+      "wall_over_ideal": 1.2423233852819318,
+      "excess_us": 13.655407407407417,
+      "per_risc_us": {
+        "BRISC": 70.0,
+        "NCRISC": 68.9,
+        "TRISC": 69.3
+      },
+      "core_spread_pct": 10.0,
+      "pcc": 0.9999920750761625,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 3072,
+      "Mt": 1,
+      "family": "K6144",
+      "ai": 31.5,
+      "cfg": [
+        1,
+        3,
+        1,
+        4,
+        6
+      ],
+      "cores": 24,
+      "W": 2,
+      "us_med": 91.74962962962964,
+      "us_all": [
+        91.3637037037037,
+        91.74962962962964,
+        91.8062962962963
+      ],
+      "spread_pct": 0.48442934628387635,
+      "eff_gbps": 417.8606513700731,
+      "delivered_gbps": 417.8606513700731,
+      "sched_over_valid": 1.0,
+      "ideal_us": 74.88,
+      "wall_over_ideal": 1.2252888572333018,
+      "excess_us": 16.869629629629642,
+      "per_risc_us": {
+        "BRISC": 90.9,
+        "NCRISC": 91.7,
+        "TRISC": 91.1
+      },
+      "core_spread_pct": 7.0,
+      "pcc": 0.9999927803356932,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 4600,
+      "Mt": 1,
+      "family": "K6144",
+      "ai": 31.6,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 134.6351851851852,
+      "us_all": [
+        134.50444444444443,
+        134.6351851851852,
+        134.71555555555557
+      ],
+      "spread_pct": 0.15695474746809135,
+      "eff_gbps": 425.6779676216937,
+      "delivered_gbps": 425.6779676216937,
+      "sched_over_valid": 1.0,
+      "ideal_us": 111.93599999999999,
+      "wall_over_ideal": 1.202787174681829,
+      "excess_us": 22.699185185185215,
+      "per_risc_us": {
+        "BRISC": 134.5,
+        "NCRISC": 134.1,
+        "TRISC": 134.2
+      },
+      "core_spread_pct": 10.0,
+      "pcc": 0.9999859752381394,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 4608,
+      "Mt": 1,
+      "family": "K6144",
+      "ai": 31.6,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 134.59185185185186,
+      "us_all": [
+        134.3362962962963,
+        134.59185185185186,
+        134.8548148148148
+      ],
+      "spread_pct": 0.38598542077923925,
+      "eff_gbps": 425.81501934518076,
+      "delivered_gbps": 425.81501934518076,
+      "sched_over_valid": 1.0,
+      "ideal_us": 111.93599999999999,
+      "wall_over_ideal": 1.2024000487050803,
+      "excess_us": 22.655851851851864,
+      "per_risc_us": {
+        "BRISC": 134.6,
+        "NCRISC": 134.2,
+        "TRISC": 134.3
+      },
+      "core_spread_pct": 11.0,
+      "pcc": 0.9999860167510416,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 6144,
+      "Mt": 1,
+      "family": "K6144",
+      "ai": 31.7,
+      "cfg": [
+        1,
+        6,
+        1,
+        4,
+        2
+      ],
+      "cores": 48,
+      "W": 1,
+      "us_med": 173.3440740740741,
+      "us_all": [
+        173.23481481481483,
+        173.3440740740741,
+        173.78444444444446
+      ],
+      "spread_pct": 0.3172743482406698,
+      "eff_gbps": 440.07217672409183,
+      "delivered_gbps": 440.07217672409183,
+      "sched_over_valid": 1.0,
+      "ideal_us": 148.992,
+      "wall_over_ideal": 1.1634455143502611,
+      "excess_us": 24.352074074074096,
+      "per_risc_us": {
+        "BRISC": 173.2,
+        "NCRISC": 172.7,
+        "TRISC": 172.8
+      },
+      "core_spread_pct": 4.0,
+      "pcc": 0.9999906650754432,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 9216,
+      "Mt": 1,
+      "family": "K6144",
+      "ai": 31.7,
+      "cfg": [
+        1,
+        3,
+        1,
+        4,
+        6
+      ],
+      "cores": 24,
+      "W": 2,
+      "us_med": 265.1377777777778,
+      "us_all": [
+        265.1211111111111,
+        265.1377777777778,
+        265.1662962962963
+      ],
+      "spread_pct": 0.017043224130988046,
+      "eff_gbps": 430.8297706852622,
+      "delivered_gbps": 430.8297706852622,
+      "sched_over_valid": 1.0,
+      "ideal_us": 223.104,
+      "wall_over_ideal": 1.1884044112959775,
+      "excess_us": 42.03377777777777,
+      "per_risc_us": {
+        "BRISC": 264.3,
+        "NCRISC": 265.1,
+        "TRISC": 264.5
+      },
+      "core_spread_pct": 4.0,
+      "pcc": 0.9999928565706365,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 15360,
+      "N": 768,
+      "Mt": 1,
+      "family": "K15360",
+      "ai": 30.7,
+      "cfg": [
+        1,
+        6,
+        1,
+        2,
+        3
+      ],
+      "cores": 48,
+      "W": 5,
+      "us_med": 59.026296296296294,
+      "us_all": [
+        58.61037037037037,
+        59.026296296296294,
+        59.044074074074075
+      ],
+      "spread_pct": 0.7399777564329453,
+      "eff_gbps": 417.18951628589895,
+      "delivered_gbps": 417.18951628589895,
+      "sched_over_valid": 1.0,
+      "ideal_us": 48.096000000000004,
+      "wall_over_ideal": 1.2272599862004385,
+      "excess_us": 10.93029629629629,
+      "per_risc_us": {
+        "BRISC": 59.0,
+        "NCRISC": 58.4,
+        "TRISC": 58.6
+      },
+      "core_spread_pct": 11.0,
+      "pcc": 0.9999906480772092,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 32,
+      "K": 15360,
+      "N": 1536,
+      "Mt": 1,
+      "family": "K15360",
+      "ai": 31.3,
+      "cfg": [
+        1,
+        6,
+        1,
+        2,
+        3
+      ],
+      "cores": 48,
+      "W": 5,
+      "us_med": 111.53185185185185,
+      "us_all": [
+        111.02666666666667,
+        111.53185185185185,
+        111.5974074074074
+      ],
+      "spread_pct": 0.5140573502528506,
+      "eff_gbps": 432.7666330163115,
+      "delivered_gbps": 432.7666330163115,
+      "sched_over_valid": 1.0,
+      "ideal_us": 94.27199999999999,
+      "wall_over_ideal": 1.1830856654346134,
+      "excess_us": 17.259851851851863,
+      "per_risc_us": {
+        "BRISC": 111.6,
+        "NCRISC": 111.1,
+        "TRISC": 111.2
+      },
+      "core_spread_pct": 5.0,
+      "pcc": 0.9999904899129443,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 2048,
+      "N": 512,
+      "Mt": 2,
+      "family": "K2048",
+      "ai": 55.4,
+      "cfg": [
+        2,
+        4,
+        1,
+        2,
+        1
+      ],
+      "cores": 64,
+      "W": 1,
+      "us_med": 10.119259259259259,
+      "us_all": [
+        10.092222222222222,
+        10.119259259259259,
+        10.155185185185184
+      ],
+      "spread_pct": 0.6238761055451436,
+      "eff_gbps": 239.62544469658152,
+      "delivered_gbps": 239.62544469658152,
+      "sched_over_valid": 1.0,
+      "ideal_us": 4.736,
+      "wall_over_ideal": 2.1366679179179178,
+      "excess_us": 5.383259259259259,
+      "per_risc_us": {
+        "BRISC": 9.1,
+        "NCRISC": 10.2,
+        "TRISC": 9.7
+      },
+      "core_spread_pct": 62.0,
+      "pcc": 0.9999920775544594,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 2048,
+      "N": 1024,
+      "Mt": 2,
+      "family": "K2048",
+      "ai": 58.5,
+      "cfg": [
+        2,
+        4,
+        1,
+        2,
+        2
+      ],
+      "cores": 64,
+      "W": 1,
+      "us_med": 14.34851851851852,
+      "us_all": [
+        14.28037037037037,
+        14.34851851851852,
+        14.432222222222222
+      ],
+      "spread_pct": 1.0633607386466792,
+      "eff_gbps": 319.720812575824,
+      "delivered_gbps": 319.720812575824,
+      "sched_over_valid": 1.0,
+      "ideal_us": 8.96,
+      "wall_over_ideal": 1.601397156084656,
+      "excess_us": 5.388518518518518,
+      "per_risc_us": {
+        "BRISC": 13.9,
+        "NCRISC": 14.3,
+        "TRISC": 13.8
+      },
+      "core_spread_pct": 36.0,
+      "pcc": 0.9999922383062634,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 2048,
+      "N": 1536,
+      "Mt": 2,
+      "family": "K2048",
+      "ai": 59.7,
+      "cfg": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 19.274814814814814,
+      "us_all": [
+        19.23814814814815,
+        19.274814814814814,
+        19.326666666666664
+      ],
+      "spread_pct": 0.460119746645347,
+      "eff_gbps": 350.20870835094735,
+      "delivered_gbps": 350.20870835094735,
+      "sched_over_valid": 1.0,
+      "ideal_us": 13.184,
+      "wall_over_ideal": 1.4619853469974828,
+      "excess_us": 6.090814814814815,
+      "per_risc_us": {
+        "BRISC": 19.3,
+        "NCRISC": 19.1,
+        "TRISC": 18.9
+      },
+      "core_spread_pct": 43.0,
+      "pcc": 0.9999921833876224,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 2048,
+      "N": 2048,
+      "Mt": 2,
+      "family": "K2048",
+      "ai": 60.2,
+      "cfg": [
+        3,
+        2,
+        1,
+        2,
+        3
+      ],
+      "cores": 48,
+      "W": 2,
+      "us_med": 23.865925925925925,
+      "us_all": [
+        23.849629629629632,
+        23.865925925925925,
+        23.924074074074074
+      ],
+      "spread_pct": 0.3121408826909231,
+      "eff_gbps": 373.4569539712592,
+      "delivered_gbps": 418.76606971041934,
+      "sched_over_valid": 1.1213235294117647,
+      "ideal_us": 17.408,
+      "wall_over_ideal": 1.3709746051198255,
+      "excess_us": 6.457925925925924,
+      "per_risc_us": {
+        "BRISC": 23.9,
+        "NCRISC": 23.3,
+        "TRISC": 23.2
+      },
+      "core_spread_pct": 23.0,
+      "pcc": 0.9999935664071864,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 2304,
+      "N": 6144,
+      "Mt": 2,
+      "family": "K2304",
+      "ai": 61.6,
+      "cfg": [
+        4,
+        3,
+        1,
+        1,
+        3
+      ],
+      "cores": 96,
+      "W": 3,
+      "us_med": 70.70851851851852,
+      "us_all": [
+        70.30111111111111,
+        70.70851851851852,
+        70.8037037037037
+      ],
+      "spread_pct": 0.7149141523499434,
+      "eff_gbps": 415.6910173744062,
+      "delivered_gbps": 415.6910173744062,
+      "sched_over_valid": 1.0,
+      "ideal_us": 57.408,
+      "wall_over_ideal": 1.2316840600355092,
+      "excess_us": 13.300518518518516,
+      "per_risc_us": {
+        "BRISC": 70.6,
+        "NCRISC": 70.5,
+        "TRISC": 70.1
+      },
+      "core_spread_pct": 18.0,
+      "pcc": 0.9999928421295204,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 4608,
+      "N": 6144,
+      "Mt": 2,
+      "family": "K4608",
+      "ai": 62.5,
+      "cfg": [
+        1,
+        6,
+        1,
+        1,
+        8
+      ],
+      "cores": 48,
+      "W": 3,
+      "us_med": 139.18555555555557,
+      "us_all": [
+        138.44444444444446,
+        139.18555555555557,
+        139.7277777777778
+      ],
+      "spread_pct": 0.92696629213483,
+      "eff_gbps": 416.7053094589956,
+      "delivered_gbps": 416.7053094589956,
+      "sched_over_valid": 1.0,
+      "ideal_us": 113.28,
+      "wall_over_ideal": 1.228686048336472,
+      "excess_us": 25.905555555555566,
+      "per_risc_us": {
+        "BRISC": 139.7,
+        "NCRISC": 138.1,
+        "TRISC": 138.7
+      },
+      "core_spread_pct": 8.0,
+      "pcc": 0.9999906518960859,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 6080,
+      "N": 4640,
+      "Mt": 2,
+      "family": "K6080",
+      "ai": 62.5,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 144.8425925925926,
+      "us_all": [
+        144.73962962962963,
+        144.8425925925926,
+        144.92555555555558
+      ],
+      "spread_pct": 0.12845543850133098,
+      "eff_gbps": 399.0163319056447,
+      "delivered_gbps": 444.3192492488653,
+      "sched_over_valid": 1.113536498936924,
+      "ideal_us": 112.88000000000001,
+      "wall_over_ideal": 1.2831554978082265,
+      "excess_us": 31.9625925925926,
+      "per_risc_us": {
+        "BRISC": 144.7,
+        "NCRISC": 144.1,
+        "TRISC": 144.3
+      },
+      "core_spread_pct": 51.0,
+      "pcc": 0.9999860233623301,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 6144,
+      "N": 768,
+      "Mt": 2,
+      "family": "K6144",
+      "ai": 58.5,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 28.39814814814815,
+      "us_all": [
+        28.21814814814815,
+        28.39814814814815,
+        28.466296296296296
+      ],
+      "spread_pct": 0.8793920382207353,
+      "eff_gbps": 363.4715878708836,
+      "delivered_gbps": 363.4715878708836,
+      "sched_over_valid": 1.0,
+      "ideal_us": 20.16,
+      "wall_over_ideal": 1.4086383009994121,
+      "excess_us": 8.238148148148149,
+      "per_risc_us": {
+        "BRISC": 28.5,
+        "NCRISC": 27.9,
+        "TRISC": 28.1
+      },
+      "core_spread_pct": 28.0,
+      "pcc": 0.999986203431677,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 6144,
+      "N": 1536,
+      "Mt": 2,
+      "family": "K6144",
+      "ai": 60.8,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 49.85592592592593,
+      "us_all": [
+        49.78962962962963,
+        49.85592592592593,
+        50.00666666666666
+      ],
+      "spread_pct": 0.43590811711495986,
+      "eff_gbps": 398.2958420931425,
+      "delivered_gbps": 398.2958420931425,
+      "sched_over_valid": 1.0,
+      "ideal_us": 38.784,
+      "wall_over_ideal": 1.285476637941572,
+      "excess_us": 11.071925925925932,
+      "per_risc_us": {
+        "BRISC": 50.0,
+        "NCRISC": 49.4,
+        "TRISC": 49.6
+      },
+      "core_spread_pct": 17.0,
+      "pcc": 0.9999859326294934,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 6144,
+      "N": 2304,
+      "Mt": 2,
+      "family": "K6144",
+      "ai": 61.6,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 72.86148148148148,
+      "us_all": [
+        72.5625925925926,
+        72.86148148148148,
+        72.9385185185185
+      ],
+      "spread_pct": 0.518071243728257,
+      "eff_gbps": 403.4078830454541,
+      "delivered_gbps": 447.0317009444608,
+      "sched_over_valid": 1.1081382385730212,
+      "ideal_us": 57.408,
+      "wall_over_ideal": 1.269186898715884,
+      "excess_us": 15.453481481481475,
+      "per_risc_us": {
+        "BRISC": 72.6,
+        "NCRISC": 71.9,
+        "TRISC": 72.1
+      },
+      "core_spread_pct": 17.0,
+      "pcc": 0.9999859254682101,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 48,
+      "K": 6144,
+      "N": 4608,
+      "Mt": 2,
+      "family": "K6144",
+      "ai": 47.1,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 135.21592592592594,
+      "us_all": [
+        134.54925925925926,
+        135.21592592592594,
+        135.35555555555555
+      ],
+      "spread_pct": 0.5992573283087835,
+      "eff_gbps": 428.93882213085783,
+      "delivered_gbps": 428.93882213085783,
+      "sched_over_valid": 1.0,
+      "ideal_us": 113.28,
+      "wall_over_ideal": 1.1936434138941203,
+      "excess_us": 21.935925925925943,
+      "per_risc_us": {
+        "BRISC": 135.2,
+        "NCRISC": 134.5,
+        "TRISC": 134.7
+      },
+      "core_spread_pct": 7.0,
+      "pcc": 0.9999906308513385,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 6144,
+      "N": 4608,
+      "Mt": 2,
+      "family": "K6144",
+      "ai": 62.5,
+      "cfg": [
+        1,
+        6,
+        1,
+        4,
+        2
+      ],
+      "cores": 48,
+      "W": 1,
+      "us_med": 134.65,
+      "us_all": [
+        134.60666666666668,
+        134.65,
+        135.20703703703705
+      ],
+      "spread_pct": 0.446018302984278,
+      "eff_gbps": 430.7416264389157,
+      "delivered_gbps": 430.7416264389157,
+      "sched_over_valid": 1.0,
+      "ideal_us": 113.28,
+      "wall_over_ideal": 1.1886475988700564,
+      "excess_us": 21.370000000000005,
+      "per_risc_us": {
+        "BRISC": 135.2,
+        "NCRISC": 134.6,
+        "TRISC": 134.7
+      },
+      "core_spread_pct": 7.0,
+      "pcc": 0.9999906567608295,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 6144,
+      "N": 6144,
+      "Mt": 2,
+      "family": "K6144",
+      "ai": 62.7,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 183.00037037037035,
+      "us_all": [
+        182.93555555555557,
+        183.00037037037035,
+        183.1840740740741
+      ],
+      "spread_pct": 0.13585030956054392,
+      "eff_gbps": 421.1485246943439,
+      "delivered_gbps": 421.1485246943439,
+      "sched_over_valid": 1.0,
+      "ideal_us": 150.52800000000002,
+      "wall_over_ideal": 1.2157231237402366,
+      "excess_us": 32.47237037037033,
+      "per_risc_us": {
+        "BRISC": 183.2,
+        "NCRISC": 182.4,
+        "TRISC": 182.7
+      },
+      "core_spread_pct": 15.0,
+      "pcc": 0.9999859791260196,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 6144,
+      "N": 9216,
+      "Mt": 2,
+      "family": "K6144",
+      "ai": 62.9,
+      "cfg": [
+        1,
+        6,
+        1,
+        4,
+        2
+      ],
+      "cores": 48,
+      "W": 1,
+      "us_med": 262.1474074074074,
+      "us_all": [
+        261.14592592592595,
+        262.1474074074074,
+        263.1777777777778
+      ],
+      "spread_pct": 0.7780522880637201,
+      "eff_gbps": 439.4942873531714,
+      "delivered_gbps": 439.4942873531714,
+      "sched_over_valid": 1.0,
+      "ideal_us": 225.024,
+      "wall_over_ideal": 1.164975324442759,
+      "excess_us": 37.1234074074074,
+      "per_risc_us": {
+        "BRISC": 261.1,
+        "NCRISC": 260.4,
+        "TRISC": 260.6
+      },
+      "core_spread_pct": 6.0,
+      "pcc": 0.9999906401287783,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 15360,
+      "N": 768,
+      "Mt": 2,
+      "family": "K15360",
+      "ai": 58.9,
+      "cfg": [
+        1,
+        10,
+        1,
+        2,
+        3
+      ],
+      "cores": 80,
+      "W": 3,
+      "us_med": 65.75185185185185,
+      "us_all": [
+        65.67592592592592,
+        65.75185185185185,
+        66.12148148148148
+      ],
+      "spread_pct": 0.6784153390666888,
+      "eff_gbps": 390.21477384104094,
+      "delivered_gbps": 390.21477384104094,
+      "sched_over_valid": 1.0,
+      "ideal_us": 50.111999999999995,
+      "wall_over_ideal": 1.3120979376566861,
+      "excess_us": 15.639851851851859,
+      "per_risc_us": {
+        "BRISC": 65.7,
+        "NCRISC": 64.7,
+        "TRISC": 65.0
+      },
+      "core_spread_pct": 26.0,
+      "pcc": 0.9999872909554065,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 64,
+      "K": 15360,
+      "N": 1536,
+      "Mt": 2,
+      "family": "K15360",
+      "ai": 61.2,
+      "cfg": [
+        1,
+        12,
+        1,
+        1,
+        3
+      ],
+      "cores": 96,
+      "W": 5,
+      "us_med": 120.15481481481481,
+      "us_all": [
+        120.00777777777778,
+        120.15481481481481,
+        120.49555555555555
+      ],
+      "spread_pct": 0.40645513716703685,
+      "eff_gbps": 410.70853528472526,
+      "delivered_gbps": 410.70853528472526,
+      "sched_over_valid": 1.0,
+      "ideal_us": 96.384,
+      "wall_over_ideal": 1.2466261497220992,
+      "excess_us": 23.770814814814813,
+      "per_risc_us": {
+        "BRISC": 120.2,
+        "NCRISC": 119.2,
+        "TRISC": 119.5
+      },
+      "core_spread_pct": 24.0,
+      "pcc": 0.9999861113761874,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 128,
+      "K": 2048,
+      "N": 512,
+      "Mt": 4,
+      "family": "K2048",
+      "ai": 97.5,
+      "cfg": [
+        1,
+        4,
+        2,
+        2,
+        2
+      ],
+      "cores": 64,
+      "W": 1,
+      "us_med": 11.270000000000001,
+      "us_all": [
+        11.228148148148147,
+        11.270000000000001,
+        11.41111111111111
+      ],
+      "spread_pct": 1.6295025728987957,
+      "eff_gbps": 244.2335403726708,
+      "delivered_gbps": 244.2335403726708,
+      "sched_over_valid": 1.0,
+      "ideal_us": 5.3759999999999994,
+      "wall_over_ideal": 2.096354166666667,
+      "excess_us": 5.894000000000002,
+      "per_risc_us": {
+        "BRISC": 11.3,
+        "NCRISC": 10.5,
+        "TRISC": 10.7
+      },
+      "core_spread_pct": 42.0,
+      "pcc": 0.9999920699295842,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 128,
+      "K": 2048,
+      "N": 1024,
+      "Mt": 4,
+      "family": "K2048",
+      "ai": 107.8,
+      "cfg": [
+        1,
+        4,
+        2,
+        2,
+        4
+      ],
+      "cores": 64,
+      "W": 1,
+      "us_med": 16.89777777777778,
+      "us_all": [
+        16.885185185185186,
+        16.89777777777778,
+        17.000740740740742
+      ],
+      "spread_pct": 0.6843606053959218,
+      "eff_gbps": 294.7568648079958,
+      "delivered_gbps": 294.7568648079958,
+      "sched_over_valid": 1.0,
+      "ideal_us": 9.728000000000002,
+      "wall_over_ideal": 1.7370248538011694,
+      "excess_us": 7.169777777777778,
+      "per_risc_us": {
+        "BRISC": 17.0,
+        "NCRISC": 15.7,
+        "TRISC": 16.1
+      },
+      "core_spread_pct": 39.0,
+      "pcc": 0.9999921548541283,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 128,
+      "K": 2048,
+      "N": 1536,
+      "Mt": 4,
+      "family": "K2048",
+      "ai": 111.7,
+      "cfg": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 24.12666666666667,
+      "us_all": [
+        24.04148148148148,
+        24.12666666666667,
+        24.606296296296296
+      ],
+      "spread_pct": 2.3493344836085854,
+      "eff_gbps": 298.7963525835866,
+      "delivered_gbps": 298.7963525835866,
+      "sched_over_valid": 1.0,
+      "ideal_us": 14.08,
+      "wall_over_ideal": 1.7135416666666667,
+      "excess_us": 10.046666666666669,
+      "per_risc_us": {
+        "BRISC": 24.1,
+        "NCRISC": 23.5,
+        "TRISC": 23.6
+      },
+      "core_spread_pct": 62.0,
+      "pcc": 0.999992089264666,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 128,
+      "K": 2048,
+      "N": 2048,
+      "Mt": 4,
+      "family": "K2048",
+      "ai": 113.8,
+      "cfg": [
+        3,
+        4,
+        1,
+        2,
+        3
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 30.246296296296297,
+      "us_all": [
+        29.99074074074074,
+        30.246296296296297,
+        30.281111111111112
+      ],
+      "spread_pct": 0.9682000617474582,
+      "eff_gbps": 312.01122635155815,
+      "delivered_gbps": 348.8458850180616,
+      "sched_over_valid": 1.1180555555555556,
+      "ideal_us": 18.432,
+      "wall_over_ideal": 1.640966595936214,
+      "excess_us": 11.814296296296298,
+      "per_risc_us": {
+        "BRISC": 30.3,
+        "NCRISC": 29.0,
+        "TRISC": 29.4
+      },
+      "core_spread_pct": 55.0,
+      "pcc": 0.9999921196223259,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 128,
+      "K": 2304,
+      "N": 6144,
+      "Mt": 4,
+      "family": "K2304",
+      "ai": 118.9,
+      "cfg": [
+        2,
+        3,
+        1,
+        1,
+        6
+      ],
+      "cores": 48,
+      "W": 3,
+      "us_med": 77.47925925925927,
+      "us_all": [
+        76.71629629629629,
+        77.47925925925927,
+        77.80518518518518
+      ],
+      "spread_pct": 1.4193710351752968,
+      "eff_gbps": 393.3212616040613,
+      "delivered_gbps": 393.3212616040613,
+      "sched_over_valid": 1.0,
+      "ideal_us": 59.519999999999996,
+      "wall_over_ideal": 1.3017348665870174,
+      "excess_us": 17.95925925925927,
+      "per_risc_us": {
+        "BRISC": 75.6,
+        "NCRISC": 77.5,
+        "TRISC": 76.1
+      },
+      "core_spread_pct": 19.0,
+      "pcc": 0.9999928241054331,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 128,
+      "K": 6080,
+      "N": 4640,
+      "Mt": 4,
+      "family": "K6080",
+      "ai": 122.1,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 151.14074074074074,
+      "us_all": [
+        150.86777777777777,
+        151.14074074074074,
+        151.86592592592592
+      ],
+      "spread_pct": 0.6616045936716713,
+      "eff_gbps": 391.4677122132915,
+      "delivered_gbps": 435.3435326406587,
+      "sched_over_valid": 1.1120803046036691,
+      "ideal_us": 115.56,
+      "wall_over_ideal": 1.3078984141635577,
+      "excess_us": 35.58074074074074,
+      "per_risc_us": {
+        "BRISC": 150.9,
+        "NCRISC": 149.9,
+        "TRISC": 150.3
+      },
+      "core_spread_pct": 47.0,
+      "pcc": 0.9999859484489004,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 128,
+      "K": 6144,
+      "N": 768,
+      "Mt": 4,
+      "family": "K6144",
+      "ai": 107.8,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 32.797777777777775,
+      "us_all": [
+        32.77444444444445,
+        32.797777777777775,
+        32.86925925925926
+      ],
+      "spread_pct": 0.289294956549241,
+      "eff_gbps": 341.68949115793754,
+      "delivered_gbps": 341.68949115793754,
+      "sched_over_valid": 1.0,
+      "ideal_us": 21.888,
+      "wall_over_ideal": 1.4984364847303442,
+      "excess_us": 10.909777777777773,
+      "per_risc_us": {
+        "BRISC": 32.8,
+        "NCRISC": 32.1,
+        "TRISC": 32.3
+      },
+      "core_spread_pct": 73.0,
+      "pcc": 0.9999858733822898,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 128,
+      "K": 6144,
+      "N": 1536,
+      "Mt": 4,
+      "family": "K6144",
+      "ai": 115.9,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 57.02814814814815,
+      "us_all": [
+        56.967777777777776,
+        57.02814814814815,
+        57.55407407407407
+      ],
+      "spread_pct": 1.0291717865199959,
+      "eff_gbps": 365.44142983322075,
+      "delivered_gbps": 365.44142983322075,
+      "sched_over_valid": 1.0,
+      "ideal_us": 40.704,
+      "wall_over_ideal": 1.4010453063126018,
+      "excess_us": 16.324148148148147,
+      "per_risc_us": {
+        "BRISC": 57.0,
+        "NCRISC": 55.9,
+        "TRISC": 56.3
+      },
+      "core_spread_pct": 40.0,
+      "pcc": 0.9999859823491845,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 128,
+      "K": 6144,
+      "N": 2304,
+      "Mt": 4,
+      "family": "K6144",
+      "ai": 118.9,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 76.99555555555555,
+      "us_all": [
+        76.5174074074074,
+        76.99555555555555,
+        77.16111111111111
+      ],
+      "spread_pct": 0.8412513250434467,
+      "eff_gbps": 395.79219579773724,
+      "delivered_gbps": 395.79219579773724,
+      "sched_over_valid": 1.0,
+      "ideal_us": 59.519999999999996,
+      "wall_over_ideal": 1.2936081242532855,
+      "excess_us": 17.47555555555556,
+      "per_risc_us": {
+        "BRISC": 76.5,
+        "NCRISC": 75.8,
+        "TRISC": 76.0
+      },
+      "core_spread_pct": 28.0,
+      "pcc": 0.9999860034831248,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 128,
+      "K": 6144,
+      "N": 4608,
+      "Mt": 4,
+      "family": "K6144",
+      "ai": 122.1,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 141.84629629629632,
+      "us_all": [
+        139.35037037037037,
+        141.84629629629632,
+        142.03851851851852
+      ],
+      "spread_pct": 1.9290570530982363,
+      "eff_gbps": 418.5912325547997,
+      "delivered_gbps": 418.5912325547997,
+      "sched_over_valid": 1.0,
+      "ideal_us": 115.968,
+      "wall_over_ideal": 1.2231503198839018,
+      "excess_us": 25.878296296296313,
+      "per_risc_us": {
+        "BRISC": 139.4,
+        "NCRISC": 138.7,
+        "TRISC": 138.9
+      },
+      "core_spread_pct": 15.0,
+      "pcc": 0.9999859307382419,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 128,
+      "K": 6144,
+      "N": 6144,
+      "Mt": 4,
+      "family": "K6144",
+      "ai": 122.9,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 192.99,
+      "us_all": [
+        192.87555555555556,
+        192.99,
+        193.19444444444446
+      ],
+      "spread_pct": 0.165334009263315,
+      "eff_gbps": 407.49883413648377,
+      "delivered_gbps": 407.49883413648377,
+      "sched_over_valid": 1.0,
+      "ideal_us": 153.6,
+      "wall_over_ideal": 1.2564453125000001,
+      "excess_us": 39.390000000000015,
+      "per_risc_us": {
+        "BRISC": 193.0,
+        "NCRISC": 191.9,
+        "TRISC": 192.3
+      },
+      "core_spread_pct": 24.0,
+      "pcc": 0.9999859896840038,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 128,
+      "K": 15360,
+      "N": 768,
+      "Mt": 4,
+      "family": "K15360",
+      "ai": 108.9,
+      "cfg": [
+        1,
+        6,
+        1,
+        2,
+        3
+      ],
+      "cores": 48,
+      "W": 5,
+      "us_med": 71.25074074074074,
+      "us_all": [
+        70.79407407407408,
+        71.25074074074074,
+        71.39037037037036
+      ],
+      "spread_pct": 0.8422969070438919,
+      "eff_gbps": 389.07283926872753,
+      "delivered_gbps": 389.07283926872753,
+      "sched_over_valid": 1.0,
+      "ideal_us": 54.144000000000005,
+      "wall_over_ideal": 1.315948964626565,
+      "excess_us": 17.106740740740733,
+      "per_risc_us": {
+        "BRISC": 70.8,
+        "NCRISC": 69.6,
+        "TRISC": 69.9
+      },
+      "core_spread_pct": 38.0,
+      "pcc": 0.9999905400714231,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 128,
+      "K": 15360,
+      "N": 1536,
+      "Mt": 4,
+      "family": "K15360",
+      "ai": 117.3,
+      "cfg": [
+        1,
+        12,
+        1,
+        1,
+        3
+      ],
+      "cores": 96,
+      "W": 5,
+      "us_med": 126.77296296296296,
+      "us_all": [
+        126.58518518518518,
+        126.77296296296296,
+        127.34000000000002
+      ],
+      "spread_pct": 0.5962900111182797,
+      "eff_gbps": 406.3271441801763,
+      "delivered_gbps": 406.3271441801763,
+      "sched_over_valid": 1.0,
+      "ideal_us": 100.60799999999999,
+      "wall_over_ideal": 1.2600684136744889,
+      "excess_us": 26.164962962962974,
+      "per_risc_us": {
+        "BRISC": 126.6,
+        "NCRISC": 125.1,
+        "TRISC": 125.7
+      },
+      "core_spread_pct": 50.0,
+      "pcc": 0.9999860131956799,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 256,
+      "K": 2048,
+      "N": 512,
+      "Mt": 8,
+      "family": "K2048",
+      "ai": 157.5,
+      "cfg": [
+        1,
+        4,
+        3,
+        2,
+        2
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 17.465555555555554,
+      "us_all": [
+        17.354074074074074,
+        17.465555555555554,
+        17.54925925925926
+      ],
+      "spread_pct": 1.1247225542086376,
+      "eff_gbps": 195.1195877600356,
+      "delivered_gbps": 204.5003371715758,
+      "sched_over_valid": 1.0480769230769231,
+      "ideal_us": 6.656000000000001,
+      "wall_over_ideal": 2.6240317841880336,
+      "excess_us": 10.809555555555553,
+      "per_risc_us": {
+        "BRISC": 17.5,
+        "NCRISC": 16.5,
+        "TRISC": 16.8
+      },
+      "core_spread_pct": 73.0,
+      "pcc": 0.9999920327085797,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 256,
+      "K": 2048,
+      "N": 1024,
+      "Mt": 8,
+      "family": "K2048",
+      "ai": 186.2,
+      "cfg": [
+        1,
+        4,
+        2,
+        2,
+        4
+      ],
+      "cores": 64,
+      "W": 1,
+      "us_med": 22.864814814814817,
+      "us_all": [
+        22.824444444444442,
+        22.864814814814817,
+        22.86740740740741
+      ],
+      "spread_pct": 0.18823223963913244,
+      "eff_gbps": 252.22893982343888,
+      "delivered_gbps": 252.22893982343888,
+      "sched_over_valid": 1.0,
+      "ideal_us": 11.264,
+      "wall_over_ideal": 2.0299018834175087,
+      "excess_us": 11.600814814814818,
+      "per_risc_us": {
+        "BRISC": 22.9,
+        "NCRISC": 20.6,
+        "TRISC": 21.3
+      },
+      "core_spread_pct": 60.0,
+      "pcc": 0.9999920998334642,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 256,
+      "K": 2048,
+      "N": 1536,
+      "Mt": 8,
+      "family": "K2048",
+      "ai": 198.2,
+      "cfg": [
+        1,
+        4,
+        3,
+        2,
+        3
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 31.58407407407407,
+      "us_all": [
+        31.49407407407407,
+        31.58407407407407,
+        31.820740740740742
+      ],
+      "spread_pct": 1.0372321659571622,
+      "eff_gbps": 257.2962557313227,
+      "delivered_gbps": 264.55865004631966,
+      "sched_over_valid": 1.028225806451613,
+      "ideal_us": 15.872,
+      "wall_over_ideal": 1.989924021804062,
+      "excess_us": 15.71207407407407,
+      "per_risc_us": {
+        "BRISC": 31.6,
+        "NCRISC": 30.3,
+        "TRISC": 30.7
+      },
+      "core_spread_pct": 43.0,
+      "pcc": 0.9999921133707661,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 256,
+      "K": 2048,
+      "N": 2048,
+      "Mt": 8,
+      "family": "K2048",
+      "ai": 204.8,
+      "cfg": [
+        1,
+        4,
+        3,
+        2,
+        4
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 40.36074074074074,
+      "us_all": [
+        40.168888888888894,
+        40.36074074074074,
+        40.41185185185185
+      ],
+      "spread_pct": 0.6048535811757588,
+      "eff_gbps": 259.80098005028725,
+      "delivered_gbps": 266.29600455154446,
+      "sched_over_valid": 1.025,
+      "ideal_us": 20.48,
+      "wall_over_ideal": 1.9707392939814814,
+      "excess_us": 19.880740740740737,
+      "per_risc_us": {
+        "BRISC": 40.4,
+        "NCRISC": 38.8,
+        "TRISC": 39.3
+      },
+      "core_spread_pct": 50.0,
+      "pcc": 0.9999921019890315,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 256,
+      "K": 2304,
+      "N": 6144,
+      "Mt": 8,
+      "family": "K2304",
+      "ai": 222.1,
+      "cfg": [
+        4,
+        3,
+        1,
+        1,
+        3
+      ],
+      "cores": 96,
+      "W": 3,
+      "us_med": 99.0362962962963,
+      "us_all": [
+        98.23962962962963,
+        99.0362962962963,
+        99.48814814814814
+      ],
+      "spread_pct": 1.2708909054579216,
+      "eff_gbps": 329.5451185124795,
+      "delivered_gbps": 329.5451185124795,
+      "sched_over_valid": 1.0,
+      "ideal_us": 63.74400000000001,
+      "wall_over_ideal": 1.5536567566562545,
+      "excess_us": 35.29229629629629,
+      "per_risc_us": {
+        "BRISC": 92.3,
+        "NCRISC": 99.0,
+        "TRISC": 97.5
+      },
+      "core_spread_pct": 39.0,
+      "pcc": 0.9999928384443487,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 256,
+      "K": 6080,
+      "N": 4640,
+      "Mt": 8,
+      "family": "K6080",
+      "ai": 233.3,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 162.99962962962962,
+      "us_all": [
+        162.3285185185185,
+        162.99962962962962,
+        165.57999999999998
+      ],
+      "spread_pct": 2.0030254148537345,
+      "eff_gbps": 379.8231943267311,
+      "delivered_gbps": 401.258138736966,
+      "sched_over_valid": 1.05643400595435,
+      "ideal_us": 120.92,
+      "wall_over_ideal": 1.3479956138738804,
+      "excess_us": 42.07962962962962,
+      "per_risc_us": {
+        "BRISC": 162.3,
+        "NCRISC": 161.3,
+        "TRISC": 161.7
+      },
+      "core_spread_pct": 34.0,
+      "pcc": 0.9999859952913486,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 256,
+      "K": 6144,
+      "N": 768,
+      "Mt": 8,
+      "family": "K6144",
+      "ai": 186.2,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 44.71259259259259,
+      "us_all": [
+        44.62814814814815,
+        44.71259259259259,
+        44.7862962962963
+      ],
+      "spread_pct": 0.35436860974638656,
+      "eff_gbps": 290.2119346608793,
+      "delivered_gbps": 290.2119346608793,
+      "sched_over_valid": 1.0,
+      "ideal_us": 25.344,
+      "wall_over_ideal": 1.7642279274223718,
+      "excess_us": 19.36859259259259,
+      "per_risc_us": {
+        "BRISC": 44.6,
+        "NCRISC": 43.6,
+        "TRISC": 44.0
+      },
+      "core_spread_pct": 68.0,
+      "pcc": 0.9999860661374692,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 256,
+      "K": 6144,
+      "N": 1536,
+      "Mt": 8,
+      "family": "K6144",
+      "ai": 211.9,
+      "cfg": [
+        1,
+        6,
+        2,
+        4,
+        2
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 66.79814814814814,
+      "us_all": [
+        66.56740740740742,
+        66.79814814814814,
+        67.40703703703704
+      ],
+      "spread_pct": 1.261322413371015,
+      "eff_gbps": 341.42455490560286,
+      "delivered_gbps": 341.42455490560286,
+      "sched_over_valid": 1.0,
+      "ideal_us": 44.544,
+      "wall_over_ideal": 1.4995992310557684,
+      "excess_us": 22.254148148148147,
+      "per_risc_us": {
+        "BRISC": 66.6,
+        "NCRISC": 65.4,
+        "TRISC": 65.7
+      },
+      "core_spread_pct": 42.0,
+      "pcc": 0.9999906173567107,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 256,
+      "K": 6144,
+      "N": 2304,
+      "Mt": 8,
+      "family": "K6144",
+      "ai": 222.1,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 89.32296296296296,
+      "us_all": [
+        88.2625925925926,
+        89.32296296296296,
+        89.81444444444445
+      ],
+      "spread_pct": 1.7582214687653408,
+      "eff_gbps": 365.38116199227113,
+      "delivered_gbps": 365.38116199227113,
+      "sched_over_valid": 1.0,
+      "ideal_us": 63.74400000000001,
+      "wall_over_ideal": 1.4012764019039117,
+      "excess_us": 25.578962962962954,
+      "per_risc_us": {
+        "BRISC": 89.8,
+        "NCRISC": 88.8,
+        "TRISC": 89.2
+      },
+      "core_spread_pct": 34.0,
+      "pcc": 0.999985920349404,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 256,
+      "K": 6144,
+      "N": 4608,
+      "Mt": 8,
+      "family": "K6144",
+      "ai": 233.3,
+      "cfg": [
+        1,
+        6,
+        2,
+        4,
+        2
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 156.09814814814814,
+      "us_all": [
+        155.10296296296295,
+        156.09814814814814,
+        158.00037037037038
+      ],
+      "spread_pct": 1.8680541957791614,
+      "eff_gbps": 398.0068228678538,
+      "delivered_gbps": 398.0068228678538,
+      "sched_over_valid": 1.0,
+      "ideal_us": 121.344,
+      "wall_over_ideal": 1.2864101080246915,
+      "excess_us": 34.75414814814815,
+      "per_risc_us": {
+        "BRISC": 155.1,
+        "NCRISC": 154.0,
+        "TRISC": 154.4
+      },
+      "core_spread_pct": 20.0,
+      "pcc": 0.9999906293907811,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 256,
+      "K": 6144,
+      "N": 6144,
+      "Mt": 8,
+      "family": "K6144",
+      "ai": 236.3,
+      "cfg": [
+        1,
+        6,
+        2,
+        4,
+        2
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 211.47037037037038,
+      "us_all": [
+        209.64481481481482,
+        211.47037037037038,
+        211.7074074074074
+      ],
+      "spread_pct": 0.9838509931259336,
+      "eff_gbps": 386.7630621573813,
+      "delivered_gbps": 386.7630621573813,
+      "sched_over_valid": 1.0,
+      "ideal_us": 159.744,
+      "wall_over_ideal": 1.3238079074667617,
+      "excess_us": 51.726370370370375,
+      "per_risc_us": {
+        "BRISC": 209.6,
+        "NCRISC": 208.5,
+        "TRISC": 208.9
+      },
+      "core_spread_pct": 22.0,
+      "pcc": 0.9999906548707005,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 256,
+      "K": 15360,
+      "N": 768,
+      "Mt": 8,
+      "family": "K15360",
+      "ai": 189.6,
+      "cfg": [
+        1,
+        6,
+        2,
+        2,
+        3
+      ],
+      "cores": 96,
+      "W": 5,
+      "us_med": 101.07333333333334,
+      "us_all": [
+        101.0011111111111,
+        101.07333333333334,
+        101.38925925925926
+      ],
+      "spread_pct": 0.3843008694440604,
+      "eff_gbps": 315.1226436250907,
+      "delivered_gbps": 315.1226436250907,
+      "sched_over_valid": 1.0,
+      "ideal_us": 62.208,
+      "wall_over_ideal": 1.624764231824417,
+      "excess_us": 38.86533333333334,
+      "per_risc_us": {
+        "BRISC": 101.0,
+        "NCRISC": 99.7,
+        "TRISC": 100.1
+      },
+      "core_spread_pct": 59.0,
+      "pcc": 0.9999906888946624,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 256,
+      "K": 15360,
+      "N": 1536,
+      "Mt": 8,
+      "family": "K15360",
+      "ai": 216.3,
+      "cfg": [
+        1,
+        6,
+        2,
+        2,
+        6
+      ],
+      "cores": 96,
+      "W": 5,
+      "us_med": 148.88555555555556,
+      "us_all": [
+        147.54407407407408,
+        148.88555555555556,
+        149.18444444444444
+      ],
+      "spread_pct": 1.1117832963910292,
+      "eff_gbps": 375.0308200929872,
+      "delivered_gbps": 375.0308200929872,
+      "sched_over_valid": 1.0,
+      "ideal_us": 109.056,
+      "wall_over_ideal": 1.3652211300208659,
+      "excess_us": 39.82955555555556,
+      "per_risc_us": {
+        "BRISC": 148.9,
+        "NCRISC": 146.5,
+        "TRISC": 147.3
+      },
+      "core_spread_pct": 37.0,
+      "pcc": 0.9999906581897231,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    }
+  ],
+  "mt16": [
+    {
+      "M": 512,
+      "K": 2304,
+      "N": 6144,
+      "Mt": 16,
+      "family": "K2304",
+      "ai": 392.2,
+      "cfg": [
+        4,
+        3,
+        1,
+        1,
+        1
+      ],
+      "cores": 96,
+      "W": 3,
+      "us_med": 166.7625925925926,
+      "us_all": [
+        165.3274074074074,
+        166.7625925925926,
+        167.42074074074074
+      ],
+      "spread_pct": 1.2661744148535792,
+      "eff_gbps": 221.64625426698854,
+      "delivered_gbps": 221.64625426698854,
+      "sched_over_valid": 1.0,
+      "ideal_us": 72.19200000000001,
+      "wall_over_ideal": 2.309987153598634,
+      "excess_us": 94.57059259259259,
+      "per_risc_us": {
+        "BRISC": 163.3,
+        "NCRISC": 165.2,
+        "TRISC": 164.3
+      },
+      "core_spread_pct": 20.0,
+      "pcc": 0.9999928354209602,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 512,
+      "K": 3072,
+      "N": 6144,
+      "Mt": 16,
+      "family": "K3072",
+      "ai": 409.6,
+      "cfg": [
+        2,
+        6,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 174.22333333333333,
+      "us_all": [
+        173.21407407407406,
+        174.22333333333333,
+        180.57185185185187
+      ],
+      "spread_pct": 4.247794422658345,
+      "eff_gbps": 270.835823751124,
+      "delivered_gbps": 270.835823751124,
+      "sched_over_valid": 1.0,
+      "ideal_us": 92.16,
+      "wall_over_ideal": 1.8904441550925926,
+      "excess_us": 82.06333333333333,
+      "per_risc_us": {
+        "BRISC": 178.7,
+        "NCRISC": 176.6,
+        "TRISC": 179.6
+      },
+      "core_spread_pct": 48.0,
+      "pcc": 0.9999906424271651,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 512,
+      "K": 6144,
+      "N": 768,
+      "Mt": 16,
+      "family": "K6144",
+      "ai": 292.6,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 77.86703703703705,
+      "us_all": [
+        77.83074074074074,
+        77.86703703703705,
+        78.07037037037037
+      ],
+      "spread_pct": 0.3078855826746589,
+      "eff_gbps": 212.09323776047484,
+      "delivered_gbps": 212.09323776047484,
+      "sched_over_valid": 1.0,
+      "ideal_us": 32.256,
+      "wall_over_ideal": 2.4140326462375077,
+      "excess_us": 45.61103703703705,
+      "per_risc_us": {
+        "BRISC": 77.9,
+        "NCRISC": 76.3,
+        "TRISC": 76.9
+      },
+      "core_spread_pct": 60.0,
+      "pcc": 0.9999859703194082,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 512,
+      "K": 6144,
+      "N": 2304,
+      "Mt": 16,
+      "family": "K6144",
+      "ai": 392.2,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 129.93962962962962,
+      "us_all": [
+        129.30074074074074,
+        129.93962962962962,
+        130.02370370370372
+      ],
+      "spread_pct": 0.5591328857215018,
+      "eff_gbps": 284.4575138882159,
+      "delivered_gbps": 284.4575138882159,
+      "sched_over_valid": 1.0,
+      "ideal_us": 72.19200000000001,
+      "wall_over_ideal": 1.7999172987260308,
+      "excess_us": 57.747629629629614,
+      "per_risc_us": {
+        "BRISC": 129.9,
+        "NCRISC": 128.0,
+        "TRISC": 129.0
+      },
+      "core_spread_pct": 35.0,
+      "pcc": 0.9999859722038976,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 512,
+      "K": 6144,
+      "N": 4608,
+      "Mt": 16,
+      "family": "K6144",
+      "ai": 428.7,
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "cores": 96,
+      "W": 1,
+      "us_med": 202.88888888888889,
+      "us_all": [
+        202.8296296296296,
+        202.88888888888889,
+        206.89407407407407
+      ],
+      "spread_pct": 2.0038711562340312,
+      "eff_gbps": 333.3506944140197,
+      "delivered_gbps": 333.3506944140197,
+      "sched_over_valid": 1.0,
+      "ideal_us": 132.096,
+      "wall_over_ideal": 1.5359200043066321,
+      "excess_us": 70.79288888888888,
+      "per_risc_us": {
+        "BRISC": 202.8,
+        "NCRISC": 201.0,
+        "TRISC": 202.0
+      },
+      "core_spread_pct": 21.0,
+      "pcc": 0.9999859568279376,
+      "n_ok": 3,
+      "cls": "ok",
+      "cache": "warmup-fresh + 8 cached-program iters"
+    },
+    {
+      "M": 512,
+      "K": 15360,
+      "N": 768,
+      "Mt": 16,
+      "family": "K15360",
+      "cls": "picker_infeasible",
+      "cfg": null,
+      "W": null,
+      "ai": 301.2
+    }
+  ]
+}
