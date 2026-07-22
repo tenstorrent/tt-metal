@@ -66,6 +66,11 @@ def test_cba_cbb_index_mismatch_illegal(device, expect_error):
     _expect_build_failure(device, expect_error, "cba_cbb_index_mismatch.cpp", "AIndex and BIndex must match")
 
 
+def test_cba_cbb_lifecycle_mismatch_illegal(device, expect_error):
+    """BinaryFpu same CB for both operands with mismatched lifecycles — must not compile."""
+    _expect_build_failure(device, expect_error, "cba_cbb_lifecycle_mismatch.cpp", "same InputLifecycle")
+
+
 def test_setupowner_caller_not_hoistable_illegal(device, expect_error):
     """SetupOwner::Caller on a chain whose setup isn't fully boot-hoistable (non-uniform SFPU)
     — the caller can't own a once-before-the-loop setup that doesn't exist, so it must not compile."""
@@ -73,114 +78,96 @@ def test_setupowner_caller_not_hoistable_illegal(device, expect_error):
 
 
 def test_setupowner_caller_reconfig_illegal(device, expect_error):
-    """SetupOwner::Caller with a live (non-None) reconfig knob — under Caller the chain emits
-    no reconfig, so the knob is inert/deceptive; must not compile (force the caller to declare None)."""
-    _expect_build_failure(device, expect_error, "setupowner_caller_reconfig.cpp", "non-None reconfig knob")
-
-
-def test_l1_accumulation_wrong_lifecycle_illegal(device, expect_error):
-    """L1 accumulation cannot use a general-purpose streaming output lifecycle."""
-    _expect_build_failure(
-        device,
-        expect_error,
-        "l1_accumulation_wrong_lifecycle.cpp",
-        "L1 accumulation requires OutputLifecycle::L1Accumulation",
-    )
+    """SetupOwner::Caller with enabled operand reconfig — under Caller the chain emits no
+    reconfig, so the setting is inert/deceptive; the input/output specs must disable it."""
+    _expect_build_failure(device, expect_error, "setupowner_caller_reconfig.cpp", "enabled operand reconfig")
 
 
 def test_l1_lifecycle_without_accumulation_illegal(device, expect_error):
-    """L1-purpose output lifecycles cannot silently run with accumulation disabled."""
     _expect_build_failure(
         device,
         expect_error,
         "l1_lifecycle_without_accumulation.cpp",
-        "those lifecycles require L1 accumulation",
+        "OutputLifecycle::L1Accumulation requires L1 accumulation",
+    )
+
+
+def test_l1_wrong_lifecycle_illegal(device, expect_error):
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_wrong_lifecycle.cpp",
+        "L1 accumulation requires OutputLifecycle::L1Accumulation or CallerManaged",
+    )
+
+
+def test_dest_wrong_output_illegal(device, expect_error):
+    _expect_build_failure(
+        device,
+        expect_error,
+        "dest_wrong_output.cpp",
+        "DEST accumulation must be enabled on both BinaryFpu and output(...)",
+    )
+
+
+def test_dest_output_without_accumulation_illegal(device, expect_error):
+    _expect_build_failure(
+        device,
+        expect_error,
+        "dest_output_without_accumulation.cpp",
+        "DEST accumulation must be enabled on both BinaryFpu and output(...)",
+    )
+
+
+def test_pack_relu_with_l1_illegal(device, expect_error):
+    _expect_build_failure(
+        device,
+        expect_error,
+        "pack_relu_with_l1.cpp",
+        "pack ReLU cannot be combined with L1 accumulation",
     )
 
 
 def test_l1_accumulation_multiple_output_cbs_illegal(device, expect_error):
-    """The packer-global accumulation bracket may target only one output CB."""
     _expect_build_failure(
         device,
         expect_error,
         "l1_accumulation_multiple_output_cbs.cpp",
-        "L1 accumulation supports only one output CB",
+        "L1 accumulation requires one output CB",
     )
 
 
 def test_l1_accumulation_mixed_pack_modes_illegal(device, expect_error):
-    """Ordinary packs cannot inherit the chain-wide L1-accumulation mode."""
     _expect_build_failure(
         device,
         expect_error,
         "l1_accumulation_mixed_pack_modes.cpp",
-        "cannot mix accumulating and ordinary PackTile elements",
+        "cannot mix ordinary and accumulating PackTile elements",
     )
 
 
 def test_l1_accumulation_mixed_accumulation_modes_illegal(device, expect_error):
-    """Preloaded and seed-first packs cannot share one packer-global accumulation region."""
     _expect_build_failure(
         device,
         expect_error,
         "l1_accumulation_mixed_accumulation_modes.cpp",
-        "must all use the same L1 accumulation mode",
+        "must use one L1 accumulation mode",
     )
 
 
 def test_l1_accumulation_multiple_lifecycle_owners_illegal(device, expect_error):
-    """Only one pack may reserve and publish the shared accumulator tile."""
     _expect_build_failure(
         device,
         expect_error,
         "l1_accumulation_multiple_lifecycle_owners.cpp",
-        "only one PackTile may own the L1-accumulation",
-    )
-
-
-def test_dest_accumulation_wrong_lifecycle_illegal(device, expect_error):
-    """DEST accumulation cannot use an ordinary streaming output lifecycle."""
-    _expect_build_failure(
-        device,
-        expect_error,
-        "dest_accumulation_wrong_lifecycle.cpp",
-        "DEST accumulation requires OutputLifecycle::DestAccumulation",
-    )
-
-
-def test_dest_lifecycle_without_accumulation_illegal(device, expect_error):
-    """DEST-purpose output lifecycles cannot silently run without an accumulating BinaryFpu."""
-    _expect_build_failure(
-        device,
-        expect_error,
-        "dest_lifecycle_without_accumulation.cpp",
-        "those lifecycles require an accumulating BinaryFpu",
+        "only one PackTile may manage the L1-accumulation output lifecycle",
     )
 
 
 def test_dest_accumulation_pack_mismatch_illegal(device, expect_error):
-    """The single final pack must read the sticky accumulator slot."""
     _expect_build_failure(
         device,
         expect_error,
         "dest_accumulation_pack_mismatch.cpp",
         "PackTile must pack the sticky DEST slot",
     )
-
-
-def test_relu_l1_accumulation_illegal(device, expect_error):
-    """Packer ReLU on an L1-accumulating pack — clamp-vs-accumulate ordering unverified; forbidden."""
-    _expect_build_failure(device, expect_error, "relu_l1_accumulation.cpp", "packer ReLU combined with L1 accumulation")
-
-
-def test_relu_dest_accumulation_illegal(device, expect_error):
-    """Packer ReLU on a DEST-accumulation chain — the set/reset aren't wired on that walk; forbidden."""
-    _expect_build_failure(
-        device, expect_error, "relu_dest_accumulation.cpp", "packer ReLU combined with DEST accumulation"
-    )
-
-
-def test_relu_setupowner_caller_illegal(device, expect_error):
-    """SetupOwner::Caller with a packer-ReLU knob — the chain emits no setup under Caller, so the ReLU
-    is inert; must not compile (all reconfigs are None, so ReLU is the sole trigger)."""
-    _expect_build_failure(device, expect_error, "relu_setupowner_caller.cpp", "non-None reconfig knob")
