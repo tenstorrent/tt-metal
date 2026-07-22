@@ -317,6 +317,9 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     if (two_pass_l1_replay) {
         reduce_defines["WELFORD_TWO_PASS_L1_REPLAY"] = "1";
     }
+    if (sfpu_two_pass && input_cb_data_format == tt::DataFormat::Bfp8_b) {
+        reduce_defines["WELFORD_TWO_PASS_BFP8_INPUT"] = "1";
+    }
 
     // welford_fp32_input gates the transpose re-init / welford PreserveStats recovery in the
     // W-reduce compute kernel's wt-inner loop, needed because transpose_tile's UnpackToDestFp32

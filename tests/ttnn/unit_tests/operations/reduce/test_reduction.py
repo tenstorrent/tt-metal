@@ -259,6 +259,23 @@ def test_std_var_hw_reduce_batch_crosses_tree_block(device):
         torch.testing.assert_close(actual, reference, rtol=0.01, atol=1e-7)
 
 
+@pytest.mark.parametrize("width", [96, 128], ids=["Wt3_retained", "Wt4_replay"])
+def test_std_var_bfp8_two_pass_w_replay(device, monkeypatch, width):
+    torch.manual_seed(20260722)
+    source = torch.randn((1, 1, 32, width), dtype=torch.float32) * 3.0 + 100.0
+    tt_input = ttnn.from_torch(source, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for operation in (ttnn.var, ttnn.std):
+        monkeypatch.setenv("TTNN_STD_VAR_USE_WELFORD", "1")
+        welford = ttnn.to_torch(ttnn.from_device(operation(tt_input, dim=-1, keepdim=True, correction=True)))
+
+        monkeypatch.delenv("TTNN_STD_VAR_USE_WELFORD")
+        two_pass = ttnn.to_torch(ttnn.from_device(operation(tt_input, dim=-1, keepdim=True, correction=True)))
+
+        assert torch.isfinite(two_pass).all()
+        torch.testing.assert_close(two_pass, welford, rtol=0, atol=0)
+
+
 # Test a 1D, 2D, 3D, and 4D tensor
 @pytest.mark.parametrize("input_shape", [(2,), (3, 10), (6, 3, 60), (1, 11, 67, 77)])
 @pytest.mark.parametrize("dim", [None, 0, 1, 2, 3])

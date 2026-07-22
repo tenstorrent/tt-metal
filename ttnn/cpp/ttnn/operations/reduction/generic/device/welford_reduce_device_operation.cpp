@@ -104,7 +104,8 @@ ttnn::Tensor welford_reduce(
         /*default_fp32_acc=*/true));
 
     const bool sfpu_two_pass =
-        (input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16) &&
+        (input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
+         input_tensor.dtype() == DataType::BFLOAT8_B) &&
         std::getenv("TTNN_STD_VAR_USE_WELFORD") == nullptr;
 
     return ttnn::device_operation::launch<WelfordReduceDeviceOperation>(
