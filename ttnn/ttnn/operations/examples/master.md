@@ -35,6 +35,27 @@ stores) and `noc_async_write` it to every output page; keep reads on NoC0 / writ
 1 core where read/write overlap already hides the read. Ceiling is set by pure-write vs combined DRAM
 bandwidth, so expect ~1.4–1.5× at grid scale, not 2×.
 
+## ⭐ T1 — [`page_walk_order`](page_walk_order/README.md)
+**Concept:** the temporal ORDER a single reader walks its interleaved-DRAM page indices — a large
+constant stride that collides with the bank count serializes reads on one bank; a unit (or coprime)
+stride spreads them across all banks. Independent of core placement.
+**Situation:** one reader streams N pages and an index mapping makes it walk the page indices with a
+stride equal to the DRAM bank count (the author picked a loop order without noticing the collision).
+Interleaved DRAM puts page `p` in bank `p % num_banks`, so every read in a block hits the same bank —
+serialized, no cross-bank parallelism — and it is mysteriously slow.
+**Measured win:** walking with **stride 1 (or a stride coprime to the bank count) is ~1.26–1.31×
+faster** than stride == bank count (WH B0, 1 core, num_banks=12 queried; 2 KB pages 1.26×, 4 KB 1.31×;
+17.6→22.2 GB/s). The win is **bounded, not ~12×**: a single reader is NCRISC-issue / one-NoC-port
+limited (~26 GB/s vs ~200 GB/s DRAM) so it can't keep all banks busy — walk order only sets how well
+the limited concurrency spreads. It is bank **spread**, not contiguity (`coprime` ≡ `unit`), and the
+gap only appears once reads are DRAM-service-bound: ~1.0× at 512 B pages (issue-bound), growing to
+1.31× at 4 KB.
+**Gist:** don't let a reader's page-index stride be a multiple of `num_dram_banks` — query the bank
+count (`device.dram_grid_size().x*.y`) and keep the stride 1 or coprime to it so consecutive reads
+land on different banks. Issue a block of reads under one barrier so several are outstanding (bank
+parallelism needs concurrency to manifest). Bounded ~1.3× on one core; matters most for larger pages
+(≥2 KB) where reads are DRAM-service-bound. No effect for tiny pages or a single-bank/single-page source.
+
 ## ⭐⭐ T2 — [`noc_placement`](noc_placement/README.md)
 **Concept:** two knobs for interleaved-DRAM NoC contention — core **placement** (column/row/diagonal)
 and **NoC selection** (which NoC a read/write stream uses) — as a switchable placement × NoC × op matrix.
