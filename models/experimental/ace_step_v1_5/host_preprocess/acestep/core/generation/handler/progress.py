@@ -49,8 +49,27 @@ class ProgressMixin:
             raise ValueError(f"Progress estimates path escapes project root: {resolved}")
         return resolved
 
+    def _progress_path_within_root(self) -> bool:
+        """Confirm the progress-estimates cache path stays within the project root.
+
+        ``_progress_estimates_path`` is derived internally (project root + a
+        fixed filename), never from request/user input, but containment is
+        validated defensively so that a misconfigured ``ACESTEP_PROJECT_ROOT``
+        or a future change cannot redirect reads/writes outside the intended
+        directory.
+        """
+        try:
+            root = os.path.realpath(self._get_project_root())
+            target = os.path.realpath(self._progress_estimates_path)
+            return os.path.commonpath([root, target]) == root
+        except (ValueError, OSError, TypeError):
+            return False
+
     def _load_progress_estimates(self) -> None:
         """Load persisted diffusion progress estimates if available."""
+        if not self._progress_path_within_root():
+            logger.debug("[progress] estimates path outside project root; skipping load")
+            return
         try:
             progress_path = self._resolve_progress_estimates_path()
             if os.path.exists(progress_path):
@@ -64,6 +83,9 @@ class ProgressMixin:
 
     def _save_progress_estimates(self) -> None:
         """Persist diffusion progress estimates."""
+        if not self._progress_path_within_root():
+            logger.debug("[progress] estimates path outside project root; skipping save")
+            return
         try:
             progress_path = self._resolve_progress_estimates_path()
             os.makedirs(os.path.dirname(progress_path) or ".", exist_ok=True)

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Input normalization and batch preparation helpers for service generation."""
 
-import random
+import secrets
 from typing import Any, Dict, List, Optional, Union
 
 from acestep.constants import DEFAULT_DIT_INSTRUCTION
@@ -29,7 +29,7 @@ class ServiceGenerateRequestMixin:
             seed_list = list(seed)
             if len(seed_list) < batch_size:
                 while len(seed_list) < batch_size:
-                    seed_list.append(random.randint(0, 2**32 - 1))
+                    seed_list.append(secrets.randbelow(2**32))
             elif len(seed_list) > batch_size:
                 seed_list = seed_list[:batch_size]
             return seed_list

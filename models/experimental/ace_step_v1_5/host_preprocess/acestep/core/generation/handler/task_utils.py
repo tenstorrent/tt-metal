@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Task and seed helpers for handler decomposition."""
 
-import random
+import secrets
 from typing import List, Optional, Tuple
 
 import torch
@@ -24,7 +24,7 @@ class TaskUtilsMixin:
         seed_value_for_ui = ""
         try:
             if use_random_seed:
-                actual_seed_list = [random.randint(0, 2**32 - 1) for _ in range(actual_batch_size)]
+                actual_seed_list = [secrets.randbelow(2**32) for _ in range(actual_batch_size)]
                 seed_value_for_ui = ", ".join(str(s) for s in actual_seed_list)
             else:
                 seed_list: List[int] = []
@@ -49,15 +49,15 @@ class TaskUtilsMixin:
                 for i in range(actual_batch_size):
                     seed_val = seed_list[i] if i < len(seed_list) else -1
                     if has_single_non_negative_seed and actual_batch_size > 1 and i > 0:
-                        actual_seed_list.append(random.randint(0, 2**32 - 1))
+                        actual_seed_list.append(secrets.randbelow(2**32))
                     elif seed_val == -1:
-                        actual_seed_list.append(random.randint(0, 2**32 - 1))
+                        actual_seed_list.append(secrets.randbelow(2**32))
                     else:
                         actual_seed_list.append(int(seed_val))
                 seed_value_for_ui = ", ".join(str(s) for s in actual_seed_list)
         except (TypeError, ValueError, OverflowError):
             logger.exception("[prepare_seeds] Failed to prepare seeds")
-            actual_seed_list = [random.randint(0, 2**32 - 1) for _ in range(actual_batch_size)]
+            actual_seed_list = [secrets.randbelow(2**32) for _ in range(actual_batch_size)]
             seed_value_for_ui = ", ".join(str(s) for s in actual_seed_list)
 
         return actual_seed_list, seed_value_for_ui

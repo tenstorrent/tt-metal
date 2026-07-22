@@ -84,6 +84,22 @@ class InitServiceOrchestratorMixin:
                 checkpoint_dir = str(get_checkpoints_dir())
             checkpoint_path = Path(checkpoint_dir)
 
+            # ``config_path`` is expected to be a simple checkpoint name (e.g.
+            # "acestep-v15-turbo") that is joined onto ``checkpoint_dir``.
+            # Reject any value that would resolve outside the checkpoint
+            # directory (absolute paths or ".." traversal) before it is used to
+            # touch the filesystem.
+            resolved_ckpt_root = os.path.realpath(checkpoint_dir)
+            resolved_model_path = os.path.realpath(os.path.join(checkpoint_dir, config_path))
+            try:
+                within_root = os.path.commonpath([resolved_ckpt_root, resolved_model_path]) == resolved_ckpt_root
+            except (ValueError, TypeError):
+                within_root = False
+            if not within_root:
+                error_msg = f"Invalid config_path '{config_path}': resolves outside checkpoint directory"
+                logger.error("[initialize_service] {}", error_msg)
+                return error_msg, False
+
             # Resolve VAE selection: explicit param > env var > default.
             resolved_vae_variant = vae_checkpoint or os.environ.get("ACESTEP_VAE_CHECKPOINT") or DEFAULT_VAE_VARIANT
 

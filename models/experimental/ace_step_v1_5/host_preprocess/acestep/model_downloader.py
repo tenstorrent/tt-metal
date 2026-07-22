@@ -132,10 +132,21 @@ def _sync_model_code_files(model_name: str, checkpoints_dir) -> List[str]:
         return []
 
     synced = []
+    target_root = os.path.realpath(target_dir)
     for src_file in source_dir.glob("*.py"):
         if src_file.name == "__init__.py":
             continue
         dst_file = target_dir / src_file.name
+        # Defensive containment: the destination is built from a glob-derived
+        # basename, but confirm it still resolves inside target_dir before
+        # writing so a copy can never land outside the checkpoint directory.
+        try:
+            within_root = os.path.commonpath([target_root, os.path.realpath(dst_file)]) == target_root
+        except (ValueError, TypeError):
+            within_root = False
+        if not within_root:
+            logger.warning(f"[Model Sync] Skipping {src_file.name}: destination outside target directory")
+            continue
         shutil.copy2(src_file, dst_file)
         synced.append(src_file.name)
         logger.debug(f"[Model Sync] Synced {src_file.name} -> {dst_file}")
