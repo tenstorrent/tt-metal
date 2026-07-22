@@ -246,7 +246,8 @@ void kernel_main() {
     for (uint32_t step = 0; step < G; ++step) {
         uint32_t slot = base0 + step * shard_bytes;
         if (step == 0) {
-            // read our OWN shard (shard index = ring_pos) into slot 0
+            // Z_R_INJECT: read our OWN shard (shard index = ring_pos) from DRAM into slot 0 (+ barrier).
+            RA_ZONE("Z_R_INJECT");
             uint32_t p = slot;
             for (uint32_t wb = 0; wb < W; ++wb) {
                 const uint32_t sb = ring_pos * W + wb;  // capacity-local block index of own shard
@@ -264,9 +265,11 @@ void kernel_main() {
             }
             noc_async_read_barrier();
         } else {
-            noc_semaphore_wait_min(fwd_ptr, step);  // prev forwarded a shard into our slot `step`
+            RA_ZONE("Z_R_RECVWAIT");                // wait for prev to forward a shard into our slot `step`
+            noc_semaphore_wait_min(fwd_ptr, step);  // (ring-hop latency exposed to this core)
         }
-        if (step + 1 < G) {  // forward this slot to the next core's slot (step+1)
+        if (step + 1 < G) {  // Z_R_FWD: forward this slot to the next core's slot (step+1) + signal
+            RA_ZONE("Z_R_FWD");
             uint64_t dst = get_noc_addr(fwd_next_x, fwd_next_y, base0 + (step + 1) * shard_bytes);
             noc_async_write(slot, dst, shard_bytes);
             noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, fwd_addr), 1);
