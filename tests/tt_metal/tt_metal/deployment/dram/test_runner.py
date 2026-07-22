@@ -6,7 +6,6 @@ from typing import Optional, AsyncIterator, Iterator, TextIO
 from dataclasses import dataclass, asdict
 from argparse import ArgumentParser
 from asyncio import StreamReader
-from dateutil import parser
 from enum import Enum, auto
 from sys import stdout
 import fileinput
