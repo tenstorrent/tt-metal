@@ -92,6 +92,113 @@ def _get_num_devices(device: Any) -> int:
     return int(device.get_num_devices())
 
 
+# ---------------------------------------------------------------------------
+# DeepSeek fused ring TP reduce (GLM4_MOE_MOE_RING_REDUCE=1)
+# ---------------------------------------------------------------------------
+# Replaces the decode MoE TP=8 (cluster_axis=0) all-reduce with the DeepSeek ring
+# ops: concat(shared, routed) on dim0 -> deepseek_moe_fast_reduce_nc (local sum +
+# split) -> deepseek_moe_reduce_scatter (cross-device ring RS) -> all_gather (restore
+# replication). Validated on Mesh(8,4)/hidden=5120 at PCC 0.9997 vs the 2-step
+# all-reduce (see experiments/decode_ring_reduce/test_ring_reduce_glm4.py). The DP
+# (cluster_axis=1) reduce is left to the caller, unchanged.
+_RING_REDUCE_NUM_LINKS = 3
+_RING_REDUCE_SHARD_CORE_W = 128  # per-core shard width (tiles*TILE_SIZE); 5 cores * 128 = 640
+_RING_L1_INTERLEAVED = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+
+def ring_tp_reduce_supported(*, device: Any, tp_axis: int, hidden_size: int, tokens: int) -> bool:
+    """True iff the ring TP reduce config is representable for this shape.
+
+    Requires an 8-device TP axis, hidden/tp divisible by the 128-wide shard core, a
+    core count that fits a single grid row, and a tile-sized (<=32) token block.
+    """
+    if device.__class__.__name__ != "MeshDevice":
+        return False
+    mesh_rows, mesh_cols = _get_mesh_shape(device)
+    tp_size = (mesh_rows, mesh_cols)[tp_axis]
+    if tp_size != 8:
+        return False
+    slice_w = hidden_size // tp_size
+    if hidden_size % tp_size != 0 or slice_w % _RING_REDUCE_SHARD_CORE_W != 0:
+        return False
+    ncores = slice_w // _RING_REDUCE_SHARD_CORE_W
+    grid = device.compute_with_storage_grid_size()
+    if ncores < 1 or ncores > int(getattr(grid, "x")):
+        return False
+    # deepseek RS input shard block is [1,1,32,128]; token dim must fit one tile block.
+    return 0 < tokens <= ttnn.TILE_SIZE
+
+
+def _ring_rs_input_memory_config(*, users: int, hidden_size: int, tp_size: int) -> ttnn.MemoryConfig:
+    """WIDTH-sharded L1 input config for deepseek_moe_reduce_scatter, sized to hidden/tp.
+
+    hidden=5120, tp=8 -> slice 640 -> 5 cores x 128 on row 0 (matches the validated
+    "three_links_partial" config in tests/nightly/tg/ccl/...6U.py).
+    """
+    slice_w = hidden_size // tp_size
+    ncores = slice_w // _RING_REDUCE_SHARD_CORE_W
+    return ttnn.MemoryConfig(
+        ttnn.BufferType.L1,
+        ttnn.NdShardSpec(
+            ttnn.Shape([1, 1, users, _RING_REDUCE_SHARD_CORE_W]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ncores - 1, 0))]),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+
+def ring_tp_reduce_combined(
+    shared_scaled: ttnn.Tensor,
+    routed: ttnn.Tensor,
+    *,
+    device: Any,
+    tp_axis: int,
+    hidden_size: int,
+) -> ttnn.Tensor:
+    """Fused ring TP reduce of (shared_scaled + routed) over the 8-device TP axis.
+
+    Consumes both inputs. Returns the TP-reduced result replicated across the TP axis
+    ([1,1,tokens,hidden] per device). Caller still performs the DP (axis=1) reduce.
+    """
+    users = int(shared_scaled.shape[-2])
+    tp_size = _get_mesh_shape(device)[tp_axis]
+    rs_in_mc = _ring_rs_input_memory_config(users=users, hidden_size=hidden_size, tp_size=tp_size)
+
+    # Stack the two per-device partials on dim0; fast_reduce_nc sums them locally and
+    # emits the per-device split list the ring reduce-scatter consumes.
+    stack = ttnn.concat([shared_scaled, routed], dim=0)
+    ttnn.deallocate(shared_scaled, force=False)
+    ttnn.deallocate(routed, force=False)
+
+    split = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+        stack,
+        dim=0,
+        split_size=hidden_size // tp_size,
+        output_memory_config=rs_in_mc,
+    )
+    ttnn.deallocate(stack, force=False)
+
+    scattered = ttnn.experimental.deepseek_moe_reduce_scatter(
+        split,
+        output_memory_config=_RING_L1_INTERLEAVED,
+        dim=3,
+        num_links=_RING_REDUCE_NUM_LINKS,
+        topology=ttnn.Topology.Ring,
+        cluster_axis=tp_axis,
+    )
+    # Restore full-hidden replication across the TP axis for the residual add.
+    gathered = ttnn.all_gather(
+        scattered,
+        dim=3,
+        cluster_axis=tp_axis,
+        num_links=_RING_REDUCE_NUM_LINKS,
+        topology=ttnn.Topology.Ring,
+    )
+    ttnn.deallocate(scattered, force=False)
+    return gathered
+
+
 def _make_sparse_matmul_program_config(
     *,
     device: Any,
@@ -251,18 +358,35 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeHParams) -> Glm4MoeMoERun
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
-    sparsity_block_size = 32
-    per_core_M = 1
+    # sparsity_block_size is the sparse-matmul token tile height (output_tile=[block,32]);
+    # it must stay a valid tile height (32). per_core_M is the decode token-block count (1).
+    # Both are exposed for geometry sweeps but default to the only tile-valid decode values.
+    try:
+        sparsity_block_size = int(os.environ.get("GLM4_MOE_MOE_SPARSE_BLOCK_SIZE", "32").strip() or "32")
+    except ValueError:
+        sparsity_block_size = 32
+    sparsity_block_size = max(1, sparsity_block_size)
+    try:
+        per_core_M = int(os.environ.get("GLM4_MOE_MOE_SPARSE_PER_CORE_M", "1").strip() or "1")
+    except ValueError:
+        per_core_M = 1
+    per_core_M = max(1, per_core_M)
+    # Decode sparse matmul K-block width (tiles). Default 8; override for sweeps.
+    try:
+        in0_block_w = int(os.environ.get("GLM4_MOE_MOE_SPARSE_IN0_BLOCK_W", "8").strip() or "8")
+    except ValueError:
+        in0_block_w = 8
+    in0_block_w = max(1, in0_block_w)
     gate_up_program_config = _make_sparse_matmul_program_config(
         device=device,
         out_features=int(hparams.moe_intermediate_size),
-        in0_block_w=8,
+        in0_block_w=in0_block_w,
         per_core_M=per_core_M,
     )
     down_program_config = _make_sparse_matmul_program_config(
         device=device,
         out_features=int(hparams.hidden_size),
-        in0_block_w=8,
+        in0_block_w=in0_block_w,
         per_core_M=per_core_M,
     )
 
@@ -275,7 +399,7 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeHParams) -> Glm4MoeMoERun
         gate_up_fused_program_config = _make_sparse_matmul_program_config(
             device=device,
             out_features=int(hparams.moe_intermediate_size) * 2,
-            in0_block_w=8,
+            in0_block_w=in0_block_w,
             per_core_M=per_core_M,
         )
 
@@ -458,6 +582,15 @@ def moe_sparse_experts_forward_tt(
         os.environ.get("GLM4_MOE_MOE_SPARSE_FIDELITY", ""),
         default=ttnn.MathFidelity.HiFi2,
     )
+    # Asymmetric expert fidelity (mirrors deepseek_v3/tt/experts.py): gate/up may run
+    # at low fidelity (SPARSE_FIDELITY, e.g. lofi) while the reduction-heavy down (w2)
+    # projection keeps a higher fidelity to recover accuracy. Opt-in and default to
+    # the gate/up fidelity so existing configs are byte-for-byte unchanged unless
+    # GLM4_MOE_MOE_SPARSE_DOWN_FIDELITY is explicitly set (e.g. "hifi2").
+    sparse_down_fidelity = _parse_math_fidelity(
+        os.environ.get("GLM4_MOE_MOE_SPARSE_DOWN_FIDELITY", ""),
+        default=sparse_fidelity,
+    )
     sparse_fp32_acc = os.environ.get("GLM4_MOE_MOE_SPARSE_FP32_ACC", "").strip() == "1"
     sparse_approx = os.environ.get("GLM4_MOE_MOE_SPARSE_APPROX", "1").strip() != "0"
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -465,6 +598,17 @@ def moe_sparse_experts_forward_tt(
         math_approx_mode=sparse_approx,
         fp32_dest_acc_en=sparse_fp32_acc,
         packer_l1_acc=packer_l1_acc,
+    )
+    # Down-projection compute config (== gate/up config unless DOWN_FIDELITY overrides).
+    down_compute_kernel_config = (
+        compute_kernel_config
+        if sparse_down_fidelity == sparse_fidelity
+        else ttnn.WormholeComputeKernelConfig(
+            math_fidelity=sparse_down_fidelity,
+            math_approx_mode=sparse_approx,
+            fp32_dest_acc_en=sparse_fp32_acc,
+            packer_l1_acc=packer_l1_acc,
+        )
     )
 
     input_shape = hidden_states.shape
@@ -745,7 +889,7 @@ def moe_sparse_experts_forward_tt(
     if tuple(x_ff.shape) != _x_ff_target:
         x_ff = ttnn.reshape(x_ff, _x_ff_target)
 
-    # Down projection (w2).
+    # Down projection (w2). Uses the (optionally higher-fidelity) down config.
     expert_output_sparse = ttnn.sparse_matmul(
         x_ff,
         moe_w.w2_experts,
@@ -755,7 +899,7 @@ def moe_sparse_experts_forward_tt(
         is_input_a_sparse=True,
         is_input_b_sparse=False,
         dtype=ttnn.bfloat16,
-        compute_kernel_config=compute_kernel_config,
+        compute_kernel_config=down_compute_kernel_config,
         output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
     )
     ttnn.deallocate(x_ff, force=False)
@@ -849,12 +993,28 @@ def moe_a2a_experts_forward_tt(
         os.environ.get("GLM4_MOE_MOE_SPARSE_FIDELITY", ""),
         default=ttnn.MathFidelity.HiFi2,
     )
+    # Asymmetric expert fidelity (see moe_sparse_experts_forward_tt): gate/up run at
+    # SPARSE_FIDELITY, down (w2) at DOWN_FIDELITY (default == gate/up, opt-in higher).
+    sparse_down_fidelity = _parse_math_fidelity(
+        os.environ.get("GLM4_MOE_MOE_SPARSE_DOWN_FIDELITY", ""),
+        default=sparse_fidelity,
+    )
     sparse_fp32_acc = os.environ.get("GLM4_MOE_MOE_SPARSE_FP32_ACC", "").strip() == "1"
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=sparse_fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=sparse_fp32_acc,
         packer_l1_acc=packer_l1_acc,
+    )
+    down_compute_kernel_config = (
+        compute_kernel_config
+        if sparse_down_fidelity == sparse_fidelity
+        else ttnn.WormholeComputeKernelConfig(
+            math_fidelity=sparse_down_fidelity,
+            math_approx_mode=True,
+            fp32_dest_acc_en=sparse_fp32_acc,
+            packer_l1_acc=packer_l1_acc,
+        )
     )
 
     input_shape = hidden_states.shape
@@ -1018,7 +1178,7 @@ def moe_a2a_experts_forward_tt(
         is_input_a_sparse=True,
         is_input_b_sparse=False,
         dtype=ttnn.bfloat16,
-        compute_kernel_config=compute_kernel_config,
+        compute_kernel_config=down_compute_kernel_config,
         output_tile=ttnn.Tile([block, ttnn.TILE_SIZE]),
     )
     ttnn.deallocate(x_ff, force=False)

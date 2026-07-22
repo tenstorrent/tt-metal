@@ -27,6 +27,8 @@ from models.experimental.glm4_moe.tt.moe_tt import (
     Glm4MoeMoERuntime,
     moe_sparse_experts_forward_tt,
     moe_topk_tt,
+    ring_tp_reduce_combined,
+    ring_tp_reduce_supported,
     shared_expert_forward_tt,
     _env_bool,
     _get_mesh_shape,
@@ -906,58 +908,90 @@ class Glm4MoeDecoderLayer:
                     sub_core_grids=worker_scg,
                 )
 
-            combined = ttnn.add(
-                shared_out_partial,
-                routed_out_partial,
-                memory_config=moe_ep_large_act_mc,
-                sub_core_grids=worker_scg,
+            # Ring TP reduce (opt-in GLM4_MOE_MOE_RING_REDUCE=1): fuse the shared+routed
+            # axis-0 (TP=8) reduce with the DeepSeek ring ops; only the DP (axis=1)
+            # reduce then remains. Validated at PCC 0.9997 vs the 2-step all-reduce
+            # (experiments/decode_ring_reduce/test_ring_reduce_glm4.py). Falls back to
+            # the standard add+all_reduce path when disabled / prefill / unsupported shape.
+            _hidden_last = int(shared_out_partial.shape[-1])
+            _tokens_last = int(shared_out_partial.shape[-2])
+            _ring_reduce = (
+                _env_bool("GLM4_MOE_MOE_RING_REDUCE", default=False)
+                and not is_tg_prefill
+                and tp_axis == 0
+                and ring_tp_reduce_supported(device=device, tp_axis=0, hidden_size=_hidden_last, tokens=_tokens_last)
             )
-            ttnn.deallocate(shared_out_partial, force=False)
-            ttnn.deallocate(routed_out_partial, force=False)
-
-            # EP reduce: 2-step device all_reduce or host-side fallback
-            _ep_reduce_device = _env_bool("GLM4_MOE_EP_REDUCE_DEVICE", default=False)
-            if _ep_reduce_device:
-                # 2-step device-side: axis=0 (8-way TP) then axis=1 (4-way DP)
-                # During prefill, use rs_ag (no CCL handle) instead of ccl-based reduce
-                _fused_ccl = self.tt_ccl if not is_tg_prefill else None
-                _fused_impl = _reduce_impl if is_tg_prefill else None
-                mlp_out = _simple_all_reduce(
-                    combined,
-                    device,
-                    cluster_axis=0,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    ccl=_fused_ccl,
-                    impl=_fused_impl,
-                    subdevice_id=sub_device_id,
+            if _ring_reduce:
+                mlp_out = ring_tp_reduce_combined(
+                    shared_out_partial,
+                    routed_out_partial,
+                    device=device,
+                    tp_axis=0,
+                    hidden_size=_hidden_last,
                 )
-                mesh_shape2 = _get_mesh_shape(device)
-                if mesh_shape2[1] > 1:
+                # DP (axis=1) reduce; ring already performed the axis=0 TP reduce.
+                if _get_mesh_shape(device)[1] > 1:
                     mlp_out = _simple_all_reduce(
                         mlp_out,
                         device,
                         cluster_axis=1,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        ccl=self.tt_ccl,
+                        subdevice_id=sub_device_id,
+                    )
+            else:
+                combined = ttnn.add(
+                    shared_out_partial,
+                    routed_out_partial,
+                    memory_config=moe_ep_large_act_mc,
+                    sub_core_grids=worker_scg,
+                )
+                ttnn.deallocate(shared_out_partial, force=False)
+                ttnn.deallocate(routed_out_partial, force=False)
+
+                # EP reduce: 2-step device all_reduce or host-side fallback
+                _ep_reduce_device = _env_bool("GLM4_MOE_EP_REDUCE_DEVICE", default=False)
+                if _ep_reduce_device:
+                    # 2-step device-side: axis=0 (8-way TP) then axis=1 (4-way DP)
+                    # During prefill, use rs_ag (no CCL handle) instead of ccl-based reduce
+                    _fused_ccl = self.tt_ccl if not is_tg_prefill else None
+                    _fused_impl = _reduce_impl if is_tg_prefill else None
+                    mlp_out = _simple_all_reduce(
+                        combined,
+                        device,
+                        cluster_axis=0,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         ccl=_fused_ccl,
                         impl=_fused_impl,
                         subdevice_id=sub_device_id,
                     )
-            else:
-                # Host-side 32-way sum fallback
-                _orig_dtype = combined.dtype
-                dev_tensors = ttnn.get_device_tensors(combined)
-                host_sum = ttnn.to_torch(dev_tensors[0].cpu())
-                for i in range(1, len(dev_tensors)):
-                    host_sum = host_sum + ttnn.to_torch(dev_tensors[i].cpu())
-                ttnn.deallocate(combined, force=False)
-                mlp_out = ttnn.from_torch(
-                    host_sum,
-                    device=device,
-                    dtype=_orig_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-                )
+                    mesh_shape2 = _get_mesh_shape(device)
+                    if mesh_shape2[1] > 1:
+                        mlp_out = _simple_all_reduce(
+                            mlp_out,
+                            device,
+                            cluster_axis=1,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            ccl=_fused_ccl,
+                            impl=_fused_impl,
+                            subdevice_id=sub_device_id,
+                        )
+                else:
+                    # Host-side 32-way sum fallback
+                    _orig_dtype = combined.dtype
+                    dev_tensors = ttnn.get_device_tensors(combined)
+                    host_sum = ttnn.to_torch(dev_tensors[0].cpu())
+                    for i in range(1, len(dev_tensors)):
+                        host_sum = host_sum + ttnn.to_torch(dev_tensors[i].cpu())
+                    ttnn.deallocate(combined, force=False)
+                    mlp_out = ttnn.from_torch(
+                        host_sum,
+                        device=device,
+                        dtype=_orig_dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                    )
         else:
             # Fallback: separate reduces (original behavior)
             if tp_enabled and tp_axis is not None:

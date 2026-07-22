@@ -899,23 +899,54 @@ def convert_decoder_layer_weights(
         if layer_idx == int(hparams.first_k_dense_replace):
             logger.info(f"  Expert dtypes: w1={w1_dtype.name}, w2={w2_dtype.name}, w3={w3_dtype.name}")
 
-        # Fast path: skip loading expert tensors from safetensors when cache is warm.
-        # On warm cache, ttnn.as_tensor() loads from .tensorbin files directly, making
-        # the CPU-side dequant + transpose + stack completely redundant (~4-6s/layer saved).
+        fuse_gate_up = os.environ.get("GLM4_MOE_FUSE_EXPERTS_GATE_UP", "").strip() == "1"
+        # Cache key bump for fused gate+up: v1 caches were poisoned with all-zeros when the
+        # warm w1_experts fast-path skipped safetensors loads and we cat()'d dummy zeros into
+        # a missing w1w3 cache (gibberish decode with FUSE_EXPERTS_GATE_UP=1).
+        w1w3_cache_name = "w1w3_experts_v2"
+
+        def _expert_tensorbin_path(name: str, dtype: ttnn.DataType) -> Optional[str]:
+            cache_file = c(name, experts_variant)
+            if cache_file is None:
+                return None
+            return str(cache_file) + f"_dtype_{dtype.name}_layout_TILE.tensorbin"
+
+        # Fast path: skip loading expert tensors from safetensors when *all required*
+        # caches are warm. On warm cache, ttnn.as_tensor() loads from .tensorbin files
+        # directly (~4-6s/layer saved). Cache-hit must key off the tensors we will
+        # actually convert — never treat w1-only warm as enough for fused w1w3.
         _expert_cache_hit = False
         if cache_dir is not None:
-            _w1_cache = c("w1_experts", experts_variant)
-            if _w1_cache is not None:
-                _w1_path = str(_w1_cache) + f"_dtype_{w1_dtype.name}_layout_TILE.tensorbin"
-                _expert_cache_hit = os.path.isfile(_w1_path)
+            if fuse_gate_up:
+                _w1w3_path = _expert_tensorbin_path(w1w3_cache_name, w1_dtype)
+                _w2_path = _expert_tensorbin_path("w2_experts", w2_dtype)
+                _expert_cache_hit = bool(
+                    _w1w3_path and _w2_path and os.path.isfile(_w1w3_path) and os.path.isfile(_w2_path)
+                )
+            else:
+                _w1_path = _expert_tensorbin_path("w1_experts", w1_dtype)
+                _expert_cache_hit = bool(_w1_path and os.path.isfile(_w1_path))
             if _expert_cache_hit:
-                logger.info("  [L{}] Expert weight cache HIT — skipping {} expert loads", layer_idx, num_experts * 3)
+                logger.info(
+                    "  [L{}] Expert weight cache HIT — skipping {} expert loads (fuse_gate_up={})",
+                    layer_idx,
+                    num_experts * 3,
+                    fuse_gate_up,
+                )
+
+        w1_stacked: Optional[torch.Tensor] = None
+        w3_stacked: Optional[torch.Tensor] = None
+        w2_stacked: Optional[torch.Tensor] = None
+        w1w3_stacked: Optional[torch.Tensor] = None
 
         if _expert_cache_hit:
-            # Dummy tensors — ttnn.as_tensor ignores input when cache file exists
-            w1_stacked = torch.zeros(num_experts, hidden, moe_intermediate, dtype=torch.bfloat16)
-            w3_stacked = torch.zeros(num_experts, hidden, moe_intermediate, dtype=torch.bfloat16)
+            # Dummy tensors — ttnn.as_tensor ignores input when cache file exists.
             w2_stacked = torch.zeros(num_experts, moe_intermediate, hidden, dtype=torch.bfloat16)
+            if fuse_gate_up:
+                w1w3_stacked = torch.zeros(num_experts, hidden, 2 * moe_intermediate, dtype=torch.bfloat16)
+            else:
+                w1_stacked = torch.zeros(num_experts, hidden, moe_intermediate, dtype=torch.bfloat16)
+                w3_stacked = torch.zeros(num_experts, hidden, moe_intermediate, dtype=torch.bfloat16)
         else:
             w1_list: list[torch.Tensor] = []
             w3_list: list[torch.Tensor] = []
@@ -950,24 +981,25 @@ def convert_decoder_layer_weights(
             w1_stacked = torch.stack(w1_list, dim=0)  # [num_experts, hidden, moe_intermediate]
             w3_stacked = torch.stack(w3_list, dim=0)  # [num_experts, hidden, moe_intermediate]
             w2_stacked = torch.stack(w2_list, dim=0)  # [num_experts, moe_intermediate, hidden]
+            if fuse_gate_up:
+                w1w3_stacked = torch.cat([w1_stacked, w3_stacked], dim=2)  # [E, hidden, 2*I]
 
         _msync("after expert stacking")
 
-        fuse_gate_up = os.environ.get("GLM4_MOE_FUSE_EXPERTS_GATE_UP", "").strip() == "1"
-
         if fuse_gate_up:
             # Fused gate+up: single w1w3 tensor replaces separate w1 and w3 (saves DRAM).
-            w1w3_stacked = torch.cat([w1_stacked, w3_stacked], dim=2)  # [E, hidden, 2*moe_intermediate]
+            assert w1w3_stacked is not None and w2_stacked is not None
             w1w3_experts_tt = _experts_weight_tt(
                 device=device,
                 torch_weights=w1w3_stacked,
-                cache_file=c("w1w3_experts", experts_variant),
+                cache_file=c(w1w3_cache_name, experts_variant),
                 dtype=w1_dtype,
             )
             _msync("after w1w3_experts")
             w1_experts: Optional[ttnn.Tensor] = None
             w3_experts: Optional[ttnn.Tensor] = None
         else:
+            assert w1_stacked is not None and w3_stacked is not None and w2_stacked is not None
             w1_experts = _experts_weight_tt(
                 device=device,
                 torch_weights=w1_stacked,
@@ -984,6 +1016,7 @@ def convert_decoder_layer_weights(
             _msync("after w3_experts")
             w1w3_experts_tt = None
 
+        assert w2_stacked is not None
         w2_experts = _experts_weight_tt(
             device=device,
             torch_weights=w2_stacked,
