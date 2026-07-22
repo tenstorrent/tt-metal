@@ -216,7 +216,7 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         total_cores);
 }
 
-TensorSpec Conv3dDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
     const auto& input_tensor_a_shape = input_tensor_a.logical_shape();
@@ -236,7 +236,7 @@ TensorSpec Conv3dDeviceOperation::compute_output_specs(
     const auto& memory_config = args.output_mem_config;
     auto dtype = args.dtype;
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
             dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config, output_shape, padded_output_shape));

@@ -123,10 +123,10 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     log_debug(tt::LogOp, "selected_experts_k: {}", selected_experts_k);
 
     auto mem_config = operation_attributes.output_mem_config;
-    auto output_tokens_spec = TensorSpec(
+    auto output_tokens_spec = tt::tt_metal::TensorSpec(
         Shape(output_shape),
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
-    auto metadata_spec = TensorSpec(
+    auto metadata_spec = tt::tt_metal::TensorSpec(
         Shape(metadata_shape),
         tt::tt_metal::TensorLayout(
             tensor_args.expert_indices_tensor.dtype(),

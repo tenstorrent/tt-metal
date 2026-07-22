@@ -35,7 +35,7 @@ void DramPrefetcherConsumerDeviceOperation::validate_on_program_cache_hit(
 
 DramPrefetcherConsumerDeviceOperation::spec_return_value_t DramPrefetcherConsumerDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t&) {
-    return std::vector<ttnn::TensorSpec>{};
+    return std::vector<tt::tt_metal::TensorSpec>{};
 }
 
 DramPrefetcherConsumerDeviceOperation::tensor_return_value_t

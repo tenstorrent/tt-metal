@@ -177,7 +177,7 @@ void BcastDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec BcastDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec BcastDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -196,7 +196,7 @@ TensorSpec BcastDeviceOperation::compute_output_specs(
             operation_attributes.output_mem_config.memory_layout(),
             operation_attributes.output_mem_config.buffer_type(),
             shard_spec);
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 input_tensor.dtype(),
@@ -206,7 +206,7 @@ TensorSpec BcastDeviceOperation::compute_output_specs(
                 input_tensor.padded_shape()));
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),

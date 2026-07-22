@@ -249,7 +249,7 @@ struct MinimalMatmulFusedOpSignaler {
     uint32_t input_tensor_Wt = 0;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Ring;
     bool read_local_slice_from_input = false;
-    std::optional<tt::tt_metal::Tensor> ag_input;
+    std::optional<ttnn::Tensor> ag_input;
 
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
@@ -262,7 +262,7 @@ struct MinimalMatmulFusedOpSignaler {
         uint32_t input_tensor_Wt,
         tt::tt_fabric::Topology topology,
         bool read_local_slice_from_input,
-        const std::optional<const tt::tt_metal::Tensor>& ag_input);
+        const std::optional<const ttnn::Tensor>& ag_input);
 
     void init_fused_op(
         tt::tt_metal::Program& program,

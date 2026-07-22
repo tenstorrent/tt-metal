@@ -34,7 +34,7 @@ namespace ttnn::experimental::prim {
 struct StridedAllGatherMinimalMatmulAsync {
     using operation_attributes_t = StridedAllGatherMinimalMatmulAsyncParams;
     using tensor_args_t = StridedAllGatherMinimalMatmulAsyncInputs;
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<StridedAllGatherMinimalMatmulAsyncProgramFactory>;
