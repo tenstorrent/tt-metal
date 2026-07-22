@@ -145,6 +145,7 @@ jobs:
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
+      checkout-filter: tree:0
 
   build-tsan:
     if: ${{ github.ref_name == 'main' ||
@@ -173,6 +174,7 @@ jobs:
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
+      checkout-filter: tree:0
 
   build-asan:
     if: ${{ github.ref_name == 'main' ||
@@ -201,6 +203,7 @@ jobs:
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
+      checkout-filter: tree:0
 
   build-sweeps:
     if: ${{ github.ref_name == 'main' ||
