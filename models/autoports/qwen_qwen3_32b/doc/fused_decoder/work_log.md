@@ -205,3 +205,6 @@ allocator evidence, current-source direct candidate, post-fix context log,
 performance JSON/log, final suite, watcher/device log, raw/reduced profiler
 CSVs, graph-pattern audit, and strict stage scope. The full review ledger is
 in `stage_review.md`.
+
+Stage implementation and evidence checkpoint: `4bceff06006` (`Add fused
+Qwen3-32B decoder stage`). This is a local commit; it was not pushed.
