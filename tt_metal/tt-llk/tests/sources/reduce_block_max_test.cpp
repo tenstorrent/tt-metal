@@ -26,14 +26,23 @@
 //   * REINIT_MODE   - re-arm the reduce config after the clobber, matching the SDPA
 //                     inner-loop reinit paths: 0 = none, 1 = reinit_short (reprogram
 //                     MOP + addrmods), 2 = reinit_minimal (ADDR_MOD_1/2/6 only).
+//   * RESPECT_TRIGGER   - split the block reduce into two half-width unpack MOP runs
+//                     separated by a HW semaphore wait; the PACK thread plays the
+//                     producer and posts the tokens. Requires an even BLOCK_CT_DIM.
+//   * OVERLAP_FIRST_HALF - runtime family only: gate the first half on the early
+//                     UNPACK_MATH_DONE token instead of FPU_SFPU.
 //
 // The compile-time short/minimal reinit lib fns are Blackhole-only, so the driver
 // only requests those on Blackhole; the runtime reinit fns exist on both arches
 // (runtime reinit_minimal is Blackhole-only).
 //
-// respect_trigger / overlap_first_half (the SDPA MOP-split producer/consumer
-// handshake) are out of scope here — they are owned by the packer layer two levels
-// above the LLK and need the SDPA compute-kernel scaffolding to drive faithfully.
+// The trigger/overlap handshake here is driven by the test's own PACK thread as a
+// stand-in for the SDPA packer two levels above the LLK: because operand A is
+// pre-staged in L1, PACK posts the data-ready tokens up front (before it waits on
+// math), which releases the split unpack. This exercises the split-MOP Z-counter
+// continuity and the semaphore post/wait/get balance — it does NOT reproduce the
+// SDPA case where run()#1 reduces genuinely-earlier-arriving data while the packer
+// is still writing the second half (that needs a real block producer).
 //
 // Reference: on-silicon compute kernels
 //   tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_block_max_row{,_runtime}/compute.cpp
@@ -56,10 +65,7 @@ static constexpr DstSync DST_SYNC = DstSync::SyncHalf;
 // 32x32 operand tile: 4 faces (2x2 face grid).
 static constexpr std::uint32_t NUM_FACES = 4;
 
-// respect_trigger is a producer/consumer handshake owned by the packer layer above
-// the LLK; the standalone correctness sweep exercises the untriggered block reduce.
-static constexpr bool RESPECT_TRIGGER    = false;
-static constexpr bool OVERLAP_FIRST_HALF = false;
+// RESPECT_TRIGGER / OVERLAP_FIRST_HALF are supplied by the Python driver (params.h).
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -238,6 +244,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_ROW>(tensor_shape.face_r_dim);
 
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
+
+    // Producer half of the trigger handshake. Operand A is pre-staged in L1, so the
+    // second half is always "ready": post the data-ready tokens up front (before the
+    // math-done wait below) to release the split unpack — the unpack waits on these
+    // between its two half-block MOP runs and consumes them in its uninit.
+    //   * FPU_SFPU        - gates run()#2 (and run()#1 on the non-overlap path).
+    //   * UNPACK_MATH_DONE - the early first-half token (runtime overlap path only).
+    if constexpr (RESPECT_TRIGGER)
+    {
+        if constexpr (USE_RUNTIME && OVERLAP_FIRST_HALF)
+        {
+            t6_semaphore_post<>(ckernel::semaphore::UNPACK_MATH_DONE);
+        }
+        t6_semaphore_post<>(ckernel::semaphore::FPU_SFPU);
+    }
 
     // Single output tile: the per-row maxima live in column [0] of DEST[0].
     _llk_packer_wait_for_math_done_();

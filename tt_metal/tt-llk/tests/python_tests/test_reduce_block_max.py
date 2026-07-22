@@ -24,6 +24,10 @@ Coverage (Blackhole + Wormhole B0):
   * reinit_short / reinit_minimal re-arm after the init, guarding the reconfig-escape
     path. Compile-time reinit_short/minimal are Blackhole-only lib fns; runtime
     reinit_short runs on both arches, runtime reinit_minimal is Blackhole-only.
+  * trigger handshake (respect_trigger, + overlap_first_half on the runtime family):
+    the unpack splits the block reduce into two half-width MOP runs gated by HW
+    semaphores; the PACK thread plays the producer. Both arches. Validates split-MOP
+    correctness + semaphore balance (not the SDPA live-data overlap; see the C++ note).
 """
 
 import pytest
@@ -37,8 +41,10 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CLOBBER_OP,
+    OVERLAP_FIRST_HALF,
     REDUCE_BLOCK_CT_DIM,
     REINIT_MODE,
+    RESPECT_TRIGGER,
     USE_RUNTIME,
 )
 from helpers.tilize_untilize import tilize, untilize
@@ -84,6 +90,8 @@ def _run_reduce_block_max(
     use_runtime=False,
     reinit="none",
     clobber="none",
+    respect_trigger=False,
+    overlap_first_half=False,
 ):
     dest_acc = _dest_acc(formats.output_format)
 
@@ -127,6 +135,8 @@ def _run_reduce_block_max(
             USE_RUNTIME(use_runtime),
             REINIT_MODE(_REINIT_DEFINE[reinit]),
             CLOBBER_OP(_CLOBBER_DEFINE[clobber]),
+            RESPECT_TRIGGER(respect_trigger),
+            OVERLAP_FIRST_HALF(overlap_first_half),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -235,4 +245,36 @@ def test_reduce_block_max_reinit_runtime(formats, block_ct_dim, reinit):
         use_runtime=True,
         reinit=reinit,
         clobber=_CLOBBER_FOR_REINIT[reinit],
+    )
+
+
+# block_ct_dim must be even: respect_trigger splits the unpack MOP into two half-block
+# runs (outerloop = block_ct_dim / 2), so an odd width would drop a tile.
+@parametrize(
+    formats=FORMATS,
+    block_ct_dim=[2, 4, 8],
+)
+def test_reduce_block_max_trigger(formats, block_ct_dim):
+    """Compile-time trigger handshake: the unpack splits the block reduce into two
+    half-width MOP runs separated by a HW semaphore wait on FPU_SFPU, with the PACK
+    thread posting the data-ready token. Validates split-MOP Z-counter continuity and
+    semaphore post/wait/get balance; the reduce must still match golden. Both arches."""
+    _run_reduce_block_max(formats, block_ct_dim, respect_trigger=True)
+
+
+@parametrize(
+    formats=FORMATS,
+    block_ct_dim=[2, 4, 8],
+    overlap_first_half=[False, True],
+)
+def test_reduce_block_max_trigger_runtime(formats, block_ct_dim, overlap_first_half):
+    """Runtime trigger handshake. overlap_first_half switches run()#1's gate from
+    FPU_SFPU to the early UNPACK_MATH_DONE token (so the first-half reduce overlaps
+    the second-half pack); the PACK thread posts both tokens. Both arches."""
+    _run_reduce_block_max(
+        formats,
+        block_ct_dim,
+        use_runtime=True,
+        respect_trigger=True,
+        overlap_first_half=overlap_first_half,
     )

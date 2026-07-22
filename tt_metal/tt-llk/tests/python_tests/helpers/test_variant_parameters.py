@@ -352,6 +352,36 @@ class CLOBBER_OP(TemplateParameter):
 
 
 @dataclass
+class RESPECT_TRIGGER(TemplateParameter):
+    """Enable the reduce_block_max_row producer/consumer trigger handshake.
+
+    When true, the unpack splits the block reduce into two half-width MOP runs
+    separated by a HW semaphore wait (FPU_SFPU), so the reduce can start on the
+    first half of the block before the second half is signalled. The test's PACK
+    thread plays the producer (posts the tokens). Requires an even block_ct_dim
+    (the unpack MOP outerloop is block_ct_dim / 2)."""
+
+    respect_trigger: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool RESPECT_TRIGGER = {str(self.respect_trigger).lower()};"
+
+
+@dataclass
+class OVERLAP_FIRST_HALF(TemplateParameter):
+    """Overlap the first-half reduce with the second-half pack (runtime family only).
+
+    When true (and RESPECT_TRIGGER + USE_RUNTIME), the unpack's first half gates on
+    the early UNPACK_MATH_DONE token instead of FPU_SFPU, so run()#1 overlaps the
+    second-half pack. Ignored by the compile-time unpack family (no overlap path)."""
+
+    overlap_first_half: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool OVERLAP_FIRST_HALF = {str(self.overlap_first_half).lower()};"
+
+
+@dataclass
 class ITERATIONS(TemplateParameter):
     iterations: int = 8
 
