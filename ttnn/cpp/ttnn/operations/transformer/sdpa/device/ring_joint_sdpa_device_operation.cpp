@@ -275,8 +275,11 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // bit-packed uint32 vector `frame_allow_packed` describe the frame-block-sparse pattern the
     // kernel applies. Constraints:
     //   * frame_allow_packed is required, bit `q*nf_padded + k` = 1 iff Q frame q attends K frame k.
-    //   * frame_seqlen (tokens) divides TILE_HEIGHT and equals both q_chunk_size and k_chunk_size
-    //     in tiles (Sq_chunk_t = Sk_chunk_t = fsl/32) so each SDPA chunk sits in one frame.
+    //   * frame_seqlen (tokens) is a multiple of TILE_HEIGHT AND is a multiple of both
+    //     q_chunk_size and k_chunk_size — i.e. each SDPA chunk sits inside one frame. Chunks
+    //     smaller than a frame are allowed (multiple chunks per frame, each mapped to the same
+    //     q_frame/k_frame index via integer division in the compute kernel); a chunk that
+    //     straddles a frame boundary would misindex frame_allow.
     //   * num_frames_padded divides ring_size (each SP shard = whole number of frames), and is
     //     <= 32 (packed representation caps at 32*32 = 1024 bits).
     //   * logical_n == num_frames_real * frame_seqlen (un-padded); the padded frames are all-zero
@@ -299,16 +302,19 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             tt::constants::TILE_HEIGHT);
         // SDPAProgramConfig.q_chunk_size / k_chunk_size are in TOKENS (see how the program factory
         // converts them via `/ TILE_HEIGHT` at ring_joint_sdpa_program_factory.cpp:349). The
-        // sparse-frames path requires each chunk to hold exactly one frame => q/k_chunk_size
-        // (tokens) == frame_seqlen (tokens).
+        // sparse-frames path requires each chunk to sit inside one frame — equivalently, chunk
+        // size (tokens) must divide frame_seqlen (tokens). The compute kernel derives
+        // q_frame/k_frame via integer division of the chunk's start-tile by frame_seqlen_tiles
+        // (compute_streaming.hpp:2417, 2474), so any divisor works. This lets callers shrink
+        // chunks to fit L1 CB budgets at large frame_seqlen (e.g. 720p fsl=3840).
         TT_FATAL(
-            args.get_q_chunk_size() == fsl,
-            "sparse-frames requires q_chunk_size ({}) tokens == frame_seqlen ({}) tokens",
+            args.get_q_chunk_size() > 0 && fsl % args.get_q_chunk_size() == 0,
+            "sparse-frames requires q_chunk_size ({}) tokens to divide frame_seqlen ({}) tokens",
             args.get_q_chunk_size(),
             fsl);
         TT_FATAL(
-            args.get_k_chunk_size() == fsl,
-            "sparse-frames requires k_chunk_size ({}) tokens == frame_seqlen ({}) tokens",
+            args.get_k_chunk_size() > 0 && fsl % args.get_k_chunk_size() == 0,
+            "sparse-frames requires k_chunk_size ({}) tokens to divide frame_seqlen ({}) tokens",
             args.get_k_chunk_size(),
             fsl);
         TT_FATAL(

@@ -78,9 +78,11 @@ void kernel_main() {
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
     // Sparse-frames extension (SR windowed pattern). All three set together at the host or all
     // zero (feature disabled). Slots placed after the CB block (base = cb_arg_offset + 23 = 72).
-    // With `sparse_frames_enabled=1`, the kernel treats each Q chunk as one frame (Sq_chunk_t ==
-    // Sk_chunk_t == frame_seqlen_tiles) and drains K/V chunks whose (q_frame, k_frame) pair is
-    // disallowed by the packed frame_allow bitmap in runtime args 11..(11+31).
+    // With `sparse_frames_enabled=1`, the kernel maps each Q chunk to a single frame via integer
+    // division (host requires frame_seqlen_tiles % Sq_chunk_t == 0 and % Sk_chunk_t == 0, so no
+    // chunk straddles a frame boundary; chunk sizes may be smaller than the frame to fit L1) and
+    // drains K/V chunks whose (q_frame, k_frame) pair is disallowed by the packed frame_allow
+    // bitmap in runtime args 11..(11+31).
     constexpr bool sparse_frames_enabled = get_compile_time_arg_val(72) == 1;
     constexpr uint32_t frame_seqlen_tiles = get_compile_time_arg_val(73);
     constexpr uint32_t num_frames_padded_compile = get_compile_time_arg_val(74);

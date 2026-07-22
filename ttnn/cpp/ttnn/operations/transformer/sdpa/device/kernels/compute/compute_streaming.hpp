@@ -2466,7 +2466,9 @@ void sdpa_ring_v2(
         // skip predicates so `is_last_k` fires on the right chunk in the main loop below.
         //
         // Sparse-frames: q_frame is uniform within a Q chunk when the pattern is enabled (host
-        // asserts Sq_chunk_t == frame_seqlen_tiles). Computed once here and reused inline.
+        // asserts frame_seqlen_tiles % Sq_chunk_t == 0, so no Q chunk straddles a frame). Chunks
+        // may be smaller than a frame; the integer division below still maps every chunk to
+        // exactly one q_frame. Computed once here and reused inline.
         uint32_t q_frame_for_this_chunk = 0;
         if constexpr (sparse_frames_enabled) {
             // q_start_tile was set above under `is_causal_sdpa || chunked_enabled`; for the

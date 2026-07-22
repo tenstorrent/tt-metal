@@ -180,12 +180,27 @@ def _run_sparse_frames_op(
     dtype=ttnn.bfloat16,
     all_gather_topology=ttnn.Topology.Linear,
     pcc_threshold: float = 0.999,
+    q_chunk_size_tokens: int | None = None,
+    k_chunk_size_tokens: int | None = None,
 ):
-    """Build small Q/K/V, run the ring op with sparse-frames enabled, compare to a pytorch ref."""
+    """Build small Q/K/V, run the ring op with sparse-frames enabled, compare to a pytorch ref.
+
+    q_chunk_size_tokens / k_chunk_size_tokens (in TOKENS — SDPAProgramConfig's chunk sizes are
+    tokens, see sdpa_device_operation.cpp's `% TILE_WIDTH == 0` check) default to `frame_seqlen`
+    so each SDPA chunk == one frame. Override with a divisor of frame_seqlen to exercise the
+    sub-frame chunk path (multiple chunks per frame — needed at large fsl to fit L1 CB budgets)."""
     assert num_frames_padded % sp_factor == 0, "num_frames_padded must be a multiple of sp_factor"
     assert frame_seqlen % ttnn.TILE_SIZE == 0, "frame_seqlen must be tile-aligned"
     n_pad = num_frames_padded * frame_seqlen
     fsl_tiles = frame_seqlen // ttnn.TILE_SIZE
+    q_chunk_size_tokens = q_chunk_size_tokens if q_chunk_size_tokens is not None else frame_seqlen
+    k_chunk_size_tokens = k_chunk_size_tokens if k_chunk_size_tokens is not None else frame_seqlen
+    assert (
+        frame_seqlen % q_chunk_size_tokens == 0
+    ), f"q_chunk_size_tokens ({q_chunk_size_tokens}) must divide frame_seqlen ({frame_seqlen})"
+    assert (
+        frame_seqlen % k_chunk_size_tokens == 0
+    ), f"k_chunk_size_tokens ({k_chunk_size_tokens}) must divide frame_seqlen ({frame_seqlen})"
 
     # Golden reference on host.
     torch.manual_seed(0)
@@ -273,8 +288,8 @@ def _run_sparse_frames_op(
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_compute_grid,
-        q_chunk_size=fsl_tiles,
-        k_chunk_size=fsl_tiles,
+        q_chunk_size=q_chunk_size_tokens,
+        k_chunk_size=k_chunk_size_tokens,
         exp_approx_mode=False,
     )
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -516,4 +531,67 @@ class TestSparseFramesRing:
             window=5,
             add_last_frame=True,
             all_gather_topology=all_gather_topology,
+        )
+
+    @requires_sparse_frames
+    @pytest.mark.parametrize(
+        "mesh_device",
+        [c[0] for c in _MESH_CONFIGS],
+        ids=[c[-1] for c in _MESH_CONFIGS],
+        indirect=["mesh_device"],
+    )
+    @pytest.mark.parametrize(
+        ("q_chunk_div", "k_chunk_div"),
+        [
+            pytest.param(2, 2, id="chunk_half_fsl"),
+            pytest.param(4, 4, id="chunk_quarter_fsl"),
+            pytest.param(1, 4, id="asym_qfull_kquarter"),
+            pytest.param(4, 1, id="asym_qquarter_kfull"),
+        ],
+    )
+    def test_sub_frame_chunks(
+        self,
+        mesh_device,
+        mesh_config,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+        q_chunk_div,
+        k_chunk_div,
+    ):
+        """Sub-frame chunks: q_chunk_size = fsl/N (and k likewise). The device op requires each
+        chunk to sit inside one frame (never straddle a boundary), so chunk sizes must divide
+        frame_seqlen. Motivation: at large fsl (720p = 3840 tokens/frame) chunk=fsl blows L1
+        CBs (~40 MB vs 1.5 MB budget); dropping to fsl/5..fsl/8 fits.
+
+        Uses fsl=64 so both symmetric (fsl/2, fsl/4 = 32, 16 tokens... wait, chunks must be
+        multiples of TILE_SIZE=32 too) — use fsl=128 so fsl/2=64, fsl/4=32 are both valid.
+        Asymmetric cases prove q and k chunk sizes are independent — the frame_allow indexing
+        walks each independently (compute_streaming.hpp:2417 for k, 2474 for q)."""
+        mesh_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor = self._extract(mesh_config)
+        if tuple(mesh_device.shape) != mesh_shape:
+            pytest.skip(f"parametrized for mesh {mesh_shape}, got {tuple(mesh_device.shape)}")
+        frame_seqlen = 128  # supports fsl/1 (128), fsl/2 (64), fsl/4 (32); all tile-aligned
+        assert frame_seqlen % q_chunk_div == 0 and (frame_seqlen // q_chunk_div) % ttnn.TILE_SIZE == 0
+        assert frame_seqlen % k_chunk_div == 0 and (frame_seqlen // k_chunk_div) % ttnn.TILE_SIZE == 0
+        nf_real = 8 if sp_factor == 8 else 6
+        nf_padded = 8
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=nf_real,
+            num_frames_padded=nf_padded,
+            frame_seqlen=frame_seqlen,
+            b=1,
+            nh=8,
+            d=128,
+            window=5,
+            add_last_frame=True,
+            all_gather_topology=all_gather_topology,
+            q_chunk_size_tokens=frame_seqlen // q_chunk_div,
+            k_chunk_size_tokens=frame_seqlen // k_chunk_div,
         )
