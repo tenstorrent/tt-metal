@@ -8,7 +8,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <cstring>
+#include <tt-metalium/bfloat16.hpp>
 #include <fmt/format.h>
 
 using namespace tt::constants;
@@ -16,12 +16,10 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-// Convert a float to bf16 packed into the upper 16 bits of a uint32 (for generate_bcast_unary_scalar).
-static uint32_t f32_to_bf16_packed(float v) {
-    uint32_t bits;
-    std::memcpy(&bits, &v, 4);
-    return bits & 0xFFFF0000u;
-}
+// Pack a float as a bf16 broadcast scalar for the reader's generate_bcast_unary_scalar,
+// which reads the value from the upper 16 bits. Duplicating into both halves means the
+// upper half carries the value regardless of pack order; bfloat16 rounds tie-to-even.
+static uint32_t f32_to_bf16_packed(float v) { return pack_two_bfloat16_into_uint32({bfloat16(v), bfloat16(v)}); }
 
 // Pack the 12 reader coefficient runtime args (Y, then Cb, then Cr; the two
 // chroma weight rows pre-scaled by 0.25 so the compute kernel's 4-corner sum
