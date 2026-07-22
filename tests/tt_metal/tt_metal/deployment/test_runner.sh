@@ -21,6 +21,7 @@ fi
 truncate -s0 "$LOGFILE"
 
 failures=0
+passes=0
 
 run_test() {
 	for i in $(seq "$ITERS")
@@ -31,6 +32,7 @@ run_test() {
 			failures=$((failures + 1))
 			echo "$FAIL"
 		else
+			passes=$((passes + 1))
 			echo "$PASS"
 		fi
 	done
@@ -48,8 +50,13 @@ run_test ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741
 MESSAGE='PCIe write test\t'
 run_test ./build/tools/mem_bench --benchmark_filter='Device Writing Host/1073741824/32768/0/1/0/iterations:5/manual_time' --device-id=0
 
+if [ "$passes" -gt 0 ]
+then
+	echo "$passes tests $PASS"
+fi
+
 if [ "$failures" -gt 0 ]
 then
-	echo "$failures tests failed"
+	echo "$failures tests $FAIL"
 	exit 1
 fi
