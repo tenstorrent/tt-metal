@@ -53,10 +53,13 @@ class _TtHCABase(LightweightModule):
             memory_config=self.memory_config,
         )
 
-    def _cos_sin(self, positions: torch.Tensor):
-        """Interleaved cos/sin [1, 1, N, rope_head_dim] from the reference compress rotary."""
+    def _cos_sin(self, positions: torch.Tensor, negate_sin: bool = False):
+        """Interleaved cos/sin [1, 1, N, rope_head_dim] from the reference compress rotary.
+        ``negate_sin`` gives the conjugate rotation used for undo-RoPE (rope with -sin)."""
         positions = positions[:1].to(torch.long)
         cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions, layer_type="compress")
+        if negate_sin:
+            sin = -sin
         cos = cos.repeat_interleave(2, dim=-1).unsqueeze(1)
         sin = sin.repeat_interleave(2, dim=-1).unsqueeze(1)
         return self._from_torch(cos), self._from_torch(sin)
@@ -183,10 +186,12 @@ class TtHCA(_TtHCABase):
         q_b_proj_weight: torch.Tensor,
         kv_proj_weight: torch.Tensor,
         kv_norm_weight: torch.Tensor,
+        sinks: torch.Tensor,
         rotary_emb,
         num_heads: int,
         head_dim: int,
         rope_head_dim: int,
+        sliding_window: int,
         rms_norm_eps: float = 1e-6,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -197,9 +202,15 @@ class TtHCA(_TtHCABase):
         self.num_heads = int(num_heads)
         self.head_dim = int(head_dim)
         self.rope_head_dim = int(rope_head_dim)
+        self.sliding_window = int(sliding_window)
+        self.scaling = self.head_dim**-0.5
         self.rotary_emb = rotary_emb
         self.rms_norm_eps = float(rms_norm_eps)
         self.compressor = compressor
+
+        # sink pre-divided by scale: SDPA scales BOTH QK and the sink by `scale` internally,
+        # but the reference scales only QK -> divide the sink so the kernel's ×scale cancels.
+        self.sinks_sdpa = self._from_torch(sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling)
 
         self.wq_a = self._to_tt_linear_weight(q_a_proj_weight)
         self.wq_b = self._to_tt_linear_weight(q_b_proj_weight)
@@ -226,10 +237,12 @@ class TtHCA(_TtHCABase):
             q_b_proj_weight=reference.q_b_proj.weight,
             kv_proj_weight=reference.kv_proj.weight,
             kv_norm_weight=reference.kv_norm.weight,
+            sinks=reference.sinks,
             rotary_emb=reference.compressor.rotary_emb,
             num_heads=config.num_attention_heads,
             head_dim=config.head_dim,
             rope_head_dim=config.qk_rope_head_dim,
+            sliding_window=config.sliding_window,
             rms_norm_eps=config.rms_norm_eps,
             **kwargs,
         )
@@ -273,5 +286,54 @@ class TtHCA(_TtHCABase):
         nope = ttnn.slice(kv, [0, 0, 0, 0], [batch, 1, seq_len, nope_dim])
         rope = ttnn.slice(kv, [0, 0, 0, nope_dim], [batch, 1, seq_len, self.head_dim])
         cos, sin = self._cos_sin(position_ids)
+        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
+        return ttnn.concat([nope, rope], dim=-1)
+
+    def _attn_mask(self, batch: int, seq_len: int, block_bias: torch.Tensor, sk_pad: int):
+        """Combined additive mask [B, 1, S, sk_pad] (TILE): sliding-window causal (width
+        ``sliding_window``) over the S main keys, block_bias over the T compressed keys, then
+        -inf over the [S+T, sk_pad) tile-padding so SDPA ignores the zero-padded KV columns.
+        Built on host, uploaded to device."""
+        t_len = block_bias.shape[-1]
+        i = torch.arange(seq_len).view(seq_len, 1)
+        j = torch.arange(seq_len).view(1, seq_len)
+        allowed = (j <= i) & (i - j < self.sliding_window)
+        main = torch.zeros(seq_len, seq_len).masked_fill(~allowed, float("-inf"))
+        full = torch.full((batch, 1, seq_len, sk_pad), float("-inf"))
+        full[..., :seq_len] = main.view(1, 1, seq_len, seq_len)
+        full[..., seq_len : seq_len + t_len] = block_bias.to(torch.float32)
+        return self._from_torch(full)
+
+    def _attention(self, q, sliding_kv, compressed_kv, block_bias: torch.Tensor, position_ids: torch.Tensor):
+        """Attention core (reference L833/843/718-746/869). Inputs: ``q`` [B,64,S,512],
+        ``sliding_kv`` [B,1,S,512], ``compressed_kv`` [B,1,T,512], ``block_bias`` host
+        torch [B,1,S,T], ``position_ids`` torch [B,S]. Concats KV, runs SDPA with the
+        combined mask + per-head sink, then undoes V's RoPE. Returns [B,64,S,512]."""
+        batch, seq_len = q.shape[0], q.shape[2]
+        # Pad the concatenated KV seq (S + T) up to a multiple of 32: SDPA tile-pads a
+        # non-aligned Sk with ZEROS and a provided mask's pad columns default to 0 (= attend),
+        # polluting the softmax -- pad explicitly and mark those columns -inf in _attn_mask.
+        sk = seq_len + compressed_kv.shape[2]
+        sk_pad = ((sk + 31) // 32) * 32
+        parts = [sliding_kv, compressed_kv]
+        if sk_pad > sk:
+            parts.append(self._from_torch(torch.zeros(batch, 1, sk_pad - sk, self.head_dim)))
+        kv = ttnn.concat(parts, dim=2)
+        mask = self._attn_mask(batch, seq_len, block_bias, sk_pad)
+
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            kv,
+            kv,
+            attn_mask=mask,
+            is_causal=False,
+            scale=self.scaling,
+            attention_sink=self.sinks_sdpa,
+        )
+
+        nope_dim = self.head_dim - self.rope_head_dim
+        nope = ttnn.slice(attn, [0, 0, 0, 0], [batch, self.num_heads, seq_len, nope_dim])
+        rope = ttnn.slice(attn, [0, 0, 0, nope_dim], [batch, self.num_heads, seq_len, self.head_dim])
+        cos, sin = self._cos_sin(position_ids, negate_sin=True)
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1)
