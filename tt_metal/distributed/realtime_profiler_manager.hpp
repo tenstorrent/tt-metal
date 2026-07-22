@@ -114,9 +114,6 @@ private:
         // Updated after each successful re-anchor or init SYNC_CHECK handshake; used to pace the servo to at most one
         // re-anchor per kServoInterval per device.
         std::optional<std::chrono::steady_clock::time_point> last_finish_sync_at;
-        enum class FinishSyncPhase : uint8_t { Idle, AwaitingResponse };
-        FinishSyncPhase finish_sync_phase = FinishSyncPhase::Idle;
-        std::chrono::steady_clock::time_point finish_sync_deadline;
 
         DeviceState();
         ~DeviceState();
@@ -147,24 +144,20 @@ private:
     // reuse it (see kRtProfilerMinSyncInterval) instead of re-running the host-device sync.
     void cache_calibration(const DeviceState& dev_state);
 
-    // Receiver thread entry point: drain every device socket, advance the finish-sync handshake, and publish decoded
-    // records to the context-wide service's ring readers.
+    // Receiver thread entry point: drain every device socket, run the sync servo, and publish decoded records to the
+    // context-wide service's ring readers.
     void run_receiver();
     uint64_t run_receiver_loop();
     uint64_t drain_receiver_on_shutdown();
     // One drain pass over every device; wakes readers if any pages were read. Returns the number of pages read.
-    uint32_t drain_all_devices(
-        bool scan_sync_marker, std::vector<uint32_t>& page_buf, std::vector<tt::ProgramRealtimeRecord>& record_buf);
+    uint32_t drain_all_devices(std::vector<uint32_t>& page_buf, std::vector<tt::ProgramRealtimeRecord>& record_buf);
     // Pages read and records published while draining one device.
     struct DrainCounts {
         uint32_t pages = 0;
         size_t records = 0;
     };
     DrainCounts drain_device_pages(
-        DeviceState& dev_state,
-        bool scan_sync_marker,
-        std::vector<uint32_t>& page_buf,
-        std::vector<tt::ProgramRealtimeRecord>& record_buf);
+        DeviceState& dev_state, std::vector<uint32_t>& page_buf, std::vector<tt::ProgramRealtimeRecord>& record_buf);
     // Decode program records from drained pages and publish them to the broadcast ring; returns the count published.
     size_t publish_pages(
         const DeviceState& dev_state,
@@ -175,10 +168,7 @@ private:
     // available (one MMIO store) or WriteToDeviceL1 otherwise. The host->device latency of this write is the
     // sync-error floor, so the fast path measurably tightens it (~3x lower jitter on Blackhole).
     static void write_sync_timestamp(DeviceState& dev_state, uint32_t value);
-    [[nodiscard]] bool has_active_finish_sync() const;
     void start_finish_syncs(std::chrono::steady_clock::time_point now);
-    void advance_finish_sync(DeviceState& dev_state, std::chrono::steady_clock::time_point now);
-    void service_finish_sync(std::chrono::steady_clock::time_point now, bool allow_start);
 
     // Owning MeshDevice's ContextId; all MetalContext access must go through instance(context_id_) so a non-default
     // context doesn't leak to silicon DEFAULT_CONTEXT_ID. See #38445 / #39849.
@@ -188,7 +178,6 @@ private:
     std::vector<DeviceState> devices_;
     std::thread receiver_thread_;
     std::atomic<bool> stop_{false};
-    std::atomic<bool> finish_sync_busy_{false};
 
     // Receiver diagnostics
     std::atomic<uint32_t> peak_fifo_pages_{0};  // all-time peak D2H FIFO usage (diagnostics getter)

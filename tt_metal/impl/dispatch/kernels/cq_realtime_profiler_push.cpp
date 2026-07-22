@@ -17,8 +17,8 @@
 #include "hostdev/realtime_profiler_msgs.h"
 // Uncomment to compile in ncrisc_debug L1 heartbeats (RT_PROF_NCRISC_DBG_* in realtime_profiler_ring_buffer.hpp):
 // #define RT_PROFILER_NCRISC_DEBUG
+#include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
-#include "api/debug/dprint.h"
 
 // Real-time profiler page size - must match host-side
 // RealtimeProfilerRuntimeSizes::page_size (which is also RT_PROFILER_ENTRY_SIZE).
@@ -95,6 +95,42 @@ __attribute__((noinline)) void push_entries_to_host(
     RT_PROF_NCRISC_DBG_INC(ring_buffer, push_write_barrier_exit_count);
 }
 
+// Service a host clock-sync handshake, moved here from the BRISC so the drop-critical dispatch_s read path is never
+// stalled by sync work. Capture the reserved core's wall clock, publish it to sync_ack_device_time in L1, then fire the
+// token to the host's pinned ACK word; the host reads device_time straight from L1 once it observes the token. The ACK
+// keeps the host-provided PinnedMemory encoding (sync_ack_pcie_xy_enc); only the servicing core changed.
+__attribute__((noinline)) void realtime_profiler_service_sync() {
+    const uint32_t host_time = rt_profiler_msg->sync_host_timestamp;
+    if (host_time == 0) {
+        return;
+    }
+
+    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    const uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
+    const uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
+
+    // Publish device_time before the token ACK so once the host observes the token it reads a stable value.
+    rt_profiler_msg->sync_ack_device_time[0] = time_lo;
+    rt_profiler_msg->sync_ack_device_time[1] = time_hi;
+
+    rt_profiler_msg->sync_request = host_time;
+    if (rt_profiler_msg->sync_ack_pcie_xy_enc != 0) {
+        const uint64_t ack_pcie_addr = (static_cast<uint64_t>(rt_profiler_msg->sync_ack_host_addr_hi) << 32) |
+                                       static_cast<uint64_t>(rt_profiler_msg->sync_ack_host_addr_lo);
+        noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
+        noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+            noc_index,
+            reinterpret_cast<uint32_t>(&rt_profiler_msg->sync_request),
+            rt_profiler_msg->sync_ack_pcie_xy_enc,
+            ack_pcie_addr,
+            sizeof(uint32_t),
+            1);
+        noc_async_write_barrier();
+    }
+
+    rt_profiler_msg->sync_host_timestamp = 0;
+}
+
 void kernel_main() {
     RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_STARTED);
     RT_PROF_NCRISC_DBG_SET(
@@ -147,6 +183,10 @@ void kernel_main() {
         invalidate_l1_cache();
         loop_count++;
         RT_PROF_NCRISC_DBG_SET(ring_buffer, loop_iteration, loop_count);
+
+        if (rt_profiler_msg->sync_host_timestamp != 0) {
+            realtime_profiler_service_sync();
+        }
 
         const uint32_t read_index = ring_buffer->read_index;
         const uint32_t write_index = ring_buffer->write_index;

@@ -6,9 +6,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <span>
-#include <string>
-#include <string_view>
 #include <unordered_map>
 #include <tracy/TracyTTDevice.hpp>
 #include "context/context_types.hpp"
@@ -37,10 +34,6 @@ private:
     void AddDevice(uint32_t chip_id, int64_t host_anchor, double device_anchor, double frequency);
     // Handle a single program record.
     void HandleRecord(const tt::ProgramRealtimeRecord& record);
-#if defined(TRACY_ENABLE)
-    // Tracy source location for a record's kernel-source set, reused across records.
-    const tracy::SourceLocationData* GetOrCreateSrcLoc(std::span<const std::string_view> sources);
-#endif
     // Send a GpuCalibration event to Tracy, updating the host-device clock mapping.
     void CalibrateDevice(uint32_t chip_id, int64_t host_anchor, uint64_t device_anchor, double frequency);
     TracyTTCtx GetContext(uint32_t chip_id);
@@ -74,17 +67,6 @@ private:
     // often collapses the device zones. The Tracy view only needs occasional drift correction, so throttle it.
     std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> last_calibrate_at_by_chip_;
     static constexpr std::chrono::seconds kTracyRecalibrateInterval{30};
-#if defined(TRACY_ENABLE)
-    // One Tracy source location per program, reused across records; runtime_id is not part of the srcloc, so it stays
-    // constant per program. Keyed on the span's data pointer: DataCollector owns one stable, MetalContext-lifetime
-    // vector<string_view> per program, so that pointer identifies the source set and dedups across runtime_ids (which
-    // are unique per run outside trace). Bounded by distinct programs, well under Tracy's 32K srcloc cap.
-    struct CachedZoneSrcLoc {
-        std::string file;  // joined kernel sources; srcloc.file points into this
-        tracy::SourceLocationData srcloc{};
-    };
-    std::unordered_map<const std::string_view*, CachedZoneSrcLoc> srcloc_cache_;
-#endif
     SkippedEndBeforeStartStats skipped_end_before_start_stats_;
 };
 
