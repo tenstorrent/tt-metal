@@ -9,6 +9,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_program_factory.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::prim {
@@ -16,7 +17,7 @@ namespace ttnn::prim {
 struct RepeatInterleaveCodegenDeviceOperation {
     using operation_attributes_t = RepeatInterleaveCodegenParams;
     using tensor_args_t = RepeatInterleaveCodegenInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<RepeatInterleaveCodegenProgramFactory>;
 
