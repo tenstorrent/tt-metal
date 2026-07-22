@@ -119,18 +119,48 @@ class TestYUVConversion:
             assert diff_cr.float().mean().item() < 0.5, f"Cr mean error too high: {diff_cr.float().mean().item()}"
 
     def test_program_cache_reuse(self, device, H, W, T):
-        """Run twice with different seeds — verifies override_runtime_arguments."""
-        Y1, Cb1, Cr1, rY1, rCb1, rCr1 = self._run(H, W, T, device, seed=42)
-        Y2, Cb2, Cr2, rY2, rCb2, rCr2 = self._run(H, W, T, device, seed=99)
+        """Second (cache-hit) run with a different input at a DIFFERENT address,
+        to verify override_runtime_arguments re-points the kernels to the new
+        buffers.
 
-        for name, got, ref, tol in [
-            ("Y  iter1", Y1, rY1, 1),
-            ("Cb iter1", Cb1, rCb1, 2),
-            ("Y  iter2", Y2, rY2, 1),
-            ("Cb iter2", Cb2, rCb2, 2),
-        ]:
-            diff = (got.squeeze(0).int() - ref.int()).abs()
-            assert diff.max().item() <= tol, f"{name}: max error {diff.max().item()}"
+        The first input and a dummy are kept allocated across the second
+        invocation so the allocator cannot hand back the first input's address;
+        otherwise a stale-address bug in override_runtime_arguments would go
+        undetected (the second input would coincidentally reuse the same slot).
+        """
+        coefficients = ttnn.experimental.YUVCoefficients(y=list(_Y_COEFF), cb=list(_CB_COEFF), cr=list(_CR_COEFF))
+
+        def run(seed):
+            gen = torch.Generator().manual_seed(seed)
+            cpu = torch.rand(3, H, W, T, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
+            tt_in = ttnn.from_torch(cpu, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients)
+            ttnn.synchronize_device(device)
+            outs = (ttnn.to_torch(tt_Y), ttnn.to_torch(tt_Cb), ttnn.to_torch(tt_Cr))
+            return cpu, tt_in, outs
+
+        cpu1, in1, out1 = run(42)  # keep in1 alive across the second run
+        # Occupy space so the second input can't be handed the first's address.
+        dummy = ttnn.from_torch(
+            torch.zeros(3, H, W, T, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        cpu2, in2, out2 = run(99)
+
+        assert in2.buffer_address() != in1.buffer_address(), (
+            "second input reused the first input's DRAM address; this run would not "
+            "exercise override_runtime_arguments"
+        )
+
+        for name, (Y, Cb, Cr), cpu in [("iter1", out1, cpu1), ("iter2", out2, cpu2)]:
+            ref_Y, ref_Cb, ref_Cr = _host_yuv_reference(cpu)
+            assert (Y.squeeze(0).int() - ref_Y.int()).abs().max().item() <= 1, f"{name} Y mismatch"
+            assert (Cb.squeeze(0).int() - ref_Cb.int()).abs().max().item() <= 2, f"{name} Cb mismatch"
+            assert (Cr.squeeze(0).int() - ref_Cr.int()).abs().max().item() <= 2, f"{name} Cr mismatch"
+
+        del dummy, in1, in2
 
     def test_extreme_values(self, device, H, W, T):
         """All-ones and all-negative-ones inputs: verify clamp prevents overflow."""
