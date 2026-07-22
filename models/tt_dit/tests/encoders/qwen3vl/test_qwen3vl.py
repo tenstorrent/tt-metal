@@ -67,7 +67,9 @@ def _reference_lm(weights: str):
     ("mesh_device", "submesh_shape", "tp_axis"),
     [
         pytest.param((2, 4), (2, 4), 1, id="tp4_fsdp2"),  # TP=4 (axis 1), FSDP on axis 0 (size 2)
-        pytest.param((4, 2), (4, 2), 1, id="tp2_fsdp4"),  # SP4xTP2 denoiser: encoder TP=2, FSDP on axis 0 (size 4)
+        pytest.param(
+            (2, 4), (2, 4), 0, id="tp2_fsdp4"
+        ),  # SP4xTP2 denoiser: encoder TP=2 (axis 0), FSDP on axis 1 (size 4)
     ],
     indirect=["mesh_device"],
 )

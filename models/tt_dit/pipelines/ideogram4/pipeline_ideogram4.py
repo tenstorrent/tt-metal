@@ -200,8 +200,9 @@ _DEFAULT_QWEN_REPO = "Qwen/Qwen3-VL-8B-Instruct"
 # Per-mesh-shape parallelism presets (Blackhole). Ideogram is always cfg-parallel factor 1
 # (both distilled nets resident on the full mesh, sequential CFG); tp/sp are (factor, mesh_axis).
 _PRESETS: dict[tuple[int, ...], dict] = {
-    # BH loudbox: SP4 x TP2 (the default full-mesh config).
-    (4, 2): {"tp": (2, 1), "sp": (4, 0), "num_links": 2, "topology": ttnn.Topology.Linear},
+    # BH loudbox 2x4 (mesh-shape convention shared with the other BH pipelines): SP4 (axis 1) x
+    # TP2 (axis 0). SP takes the size-4 axis since Ideogram is SP-heavy (full-mesh sequential CFG).
+    (2, 4): {"tp": (2, 0), "sp": (4, 1), "num_links": 2, "topology": ttnn.Topology.Linear},
     # BH Galaxy 4x8, 2D torus Ring: TP4 (axis 0) x SP8 (axis 1).
     (4, 8): {"tp": (4, 0), "sp": (8, 1), "num_links": 2, "topology": ttnn.Topology.Ring},
 }

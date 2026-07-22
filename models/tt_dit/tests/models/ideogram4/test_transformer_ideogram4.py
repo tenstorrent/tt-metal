@@ -166,8 +166,8 @@ def _build_inputs(batch_size: int, text_len: int, image_len: int, torch_dtype, n
             (2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, id="sp2tp4_pad20"
         ),  # SP=2, TP=4 (pad 20)
         pytest.param(
-            (4, 2), (4, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, id="sp4tp2"
-        ),  # SP=4, TP=2 (full 4x2 loudbox); num_links=2
+            (2, 4), (2, 4), 1, 0, 2, line_params, ttnn.Topology.Linear, id="sp4tp2"
+        ),  # SP=4 (axis 1), TP=2 (axis 0) — full 2x4 loudbox; num_links=2
         # BH Galaxy 4x8, 2D torus Ring: SP=8 (axis 1), TP=4 (axis 0), 2 links/neighbor. 18 heads -> pad 20.
         pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, id="bh_galaxy_sp8tp4"),
     ],

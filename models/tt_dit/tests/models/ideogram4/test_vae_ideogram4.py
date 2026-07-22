@@ -89,10 +89,10 @@ def _make_akl(weights: str, torch_dtype) -> AutoencoderKL:
         ),
         # SP4xTP2 denoiser: VAE TP=2, replicated on the size-4 axis.
         pytest.param(
-            (4, 2), (4, 2), 1, 1, {**line_params, **_L1}, ttnn.Topology.Linear, 64, 64, "random", id="tp2_512px"
+            (2, 4), (2, 4), 0, 1, {**line_params, **_L1}, ttnn.Topology.Linear, 64, 64, "random", id="tp2_512px"
         ),
         pytest.param(
-            (4, 2), (4, 2), 1, 1, {**line_params, **_L1}, ttnn.Topology.Linear, 128, 128, "random", id="tp2_1024px"
+            (2, 4), (2, 4), 0, 1, {**line_params, **_L1}, ttnn.Topology.Linear, 128, 128, "random", id="tp2_1024px"
         ),
         # BH Galaxy 4x8, 2D torus Ring: VAE TP=4 (axis 0), replicated on the size-8 axis, 2 links/neighbor.
         pytest.param(

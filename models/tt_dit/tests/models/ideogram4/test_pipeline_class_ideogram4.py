@@ -100,7 +100,7 @@ _RING_PIPE = {**ring_params, "l1_small_size": 32768, "trace_region_size": 600000
 # Pipeline mesh configs: the parallel config (tp/sp/num_links/topology) is DISCOVERED from the
 # mesh shape via Ideogram4Pipeline._PRESETS, so tests only pick a mesh shape + its device_params.
 _PIPE_CONFIGS = [
-    pytest.param((4, 2), _LINE_PIPE, id="sp4tp2"),  # BH loudbox: SP4 x TP2
+    pytest.param((2, 4), _LINE_PIPE, id="sp4tp2"),  # BH loudbox 2x4: SP4 x TP2
     pytest.param((4, 8), _RING_PIPE, id="bh_galaxy_sp8tp4"),  # BH Galaxy: TP4 x SP8 (Ring)
 ]
 

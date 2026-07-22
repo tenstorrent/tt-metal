@@ -36,7 +36,7 @@ _RING_PIPE = {**ring_params, "l1_small_size": 32768, "trace_region_size": 600000
 # placeholders that catch a gross (>~2x) regression without flaking; tighten once stable CI
 # baselines exist. Keyed by mesh shape.
 _PERF_TARGETS = {
-    (4, 2): {"encoder": 30.0, "denoising": 90.0, "vae": 30.0, "total": 130.0},  # BH LoudBox SP4xTP2
+    (2, 4): {"encoder": 30.0, "denoising": 90.0, "vae": 30.0, "total": 130.0},  # BH LoudBox 2x4 SP4xTP2
     (4, 8): {"encoder": 30.0, "denoising": 60.0, "vae": 30.0, "total": 100.0},  # BH Galaxy TP4xSP8
 }
 
@@ -47,7 +47,7 @@ _PERF_TARGETS = {
 @pytest.mark.parametrize(
     ("mesh_device", "device_params"),
     [
-        pytest.param((4, 2), _LINE_PIPE, id="sp4tp2"),  # BH loudbox: SP4 x TP2
+        pytest.param((2, 4), _LINE_PIPE, id="sp4tp2"),  # BH loudbox 2x4: SP4 x TP2
         pytest.param((4, 8), _RING_PIPE, id="bh_galaxy_sp8tp4"),  # BH Galaxy: TP4 x SP8 (Ring)
     ],
     indirect=True,
@@ -73,7 +73,7 @@ def test_latency(*, mesh_device, is_ci_env, height, width, preset) -> None:
             )
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="BH_LB" if tuple(mesh_device.shape) == (4, 2) else "BH_GLX",
+            run_type="BH_LB" if tuple(mesh_device.shape) == (2, 4) else "BH_GLX",
             ml_model_name="Ideogram4",
             batch_size=1,
             config_params={"width": width, "height": height, "preset": preset},
