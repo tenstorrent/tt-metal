@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-def get_conv3d_config(in_channels, grid_size):
+def get_conv3d_config(in_channels, grid_size, weights_dtype=ttnn.bfloat16):
     shape_to_blocking = {
         # (60, 106, 768): (128, 96, 1, 2, 16),
         # (120, 212, 512): (128, 128, 1, 8, 4),
@@ -30,16 +30,19 @@ def get_conv3d_config(in_channels, grid_size):
         256: (128, 128, 4, 4, 2),
         128: (128, 128, 1, 2, 16),
     }
-    blocking = shape_to_blocking.get((in_channels), None)
-    if blocking is None:
-        C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = 128, 32, 1, 2, 16
-        logger.warning(
-            f"No blocking found for input shape {in_channels}. Using default blocking: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
-        )
+    if weights_dtype == ttnn.float32:
+        C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = 32, 32, 1, 1, 1
     else:
-        C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
+        blocking = shape_to_blocking.get((in_channels), None)
+        if blocking is None:
+            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = 128, 32, 1, 2, 16
+            logger.warning(
+                f"No blocking found for input shape {in_channels}. Using default blocking: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
+            )
+        else:
+            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
     return ttnn.Conv3dConfig(
-        weights_dtype=ttnn.bfloat16,
+        weights_dtype=weights_dtype,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         T_out_block=T_out_block,
         W_out_block=W_out_block,
@@ -66,8 +69,10 @@ class ContextParallelConv3d(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: MochiVAEParallelConfig,
         ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
+        self.dtype = dtype
 
         self.halos_chunk_map = {
             768: 30,  # 16
@@ -108,8 +113,12 @@ class ContextParallelConv3d(Module):
         self.padding = (0, height_pad, width_pad)
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
-        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0)
-        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0) if bias else None
+        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+        self.bias = (
+            Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+            if bias
+            else None
+        )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -121,11 +130,12 @@ class ContextParallelConv3d(Module):
         self.conv_config = get_conv3d_config(
             self.in_channels,
             self.grid_size,
+            weights_dtype=dtype,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
-            weight_tt = ttnn.from_torch(state["weight"], dtype=ttnn.bfloat16, pad_value=0)
+            weight_tt = ttnn.from_torch(state["weight"], dtype=self.dtype, pad_value=0)
             prepared = ttnn.experimental.prepare_conv3d_weights(
                 weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
             )
@@ -194,7 +204,7 @@ class ContextParallelConv3d(Module):
             stride=self.stride,
             padding=self.padding,
             padding_mode=self.padding_mode,
-            dtype=ttnn.bfloat16,
+            dtype=self.dtype,
             groups=self.groups,
             compute_kernel_config=self.compute_kernel_config,
         )

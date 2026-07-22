@@ -368,6 +368,10 @@ def run_test_exp_ring_joint_sdpa(
     ids=["4x32", "4x8", "1x4"],
     indirect=["mesh_device"],
 )
+@pytest.mark.skipif(
+    ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+    reason="test_ring_joint_sdpa_dit_bh_glx requires a Blackhole Galaxy cluster",
+)
 def test_exp_ring_joint_sdpa_dit_bh_glx_custom(
     mesh_device,
     num_links,

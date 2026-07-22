@@ -19,9 +19,9 @@ void RandDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-TensorSpec RandDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec RandDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         operation_attributes.shape,
         tt::tt_metal::TensorLayout(
             operation_attributes.dtype,
@@ -32,22 +32,13 @@ TensorSpec RandDeviceOperation::compute_output_specs(
 RandDeviceOperation::tensor_return_value_t RandDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     return create_device_tensor(
-        ttnn::TensorSpec(
+        tt::tt_metal::TensorSpec(
             operation_attributes.shape,
             tt::tt_metal::TensorLayout(
                 operation_attributes.dtype,
                 tt::tt_metal::PageConfig(operation_attributes.layout),
                 operation_attributes.memory_config)),
         operation_attributes.device);
-}
-
-ttsl::hash::hash_t RandDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    return tt::tt_metal::operation::hash_operation<RandDeviceOperation>(
-        operation_attributes.shape,
-        operation_attributes.dtype,
-        operation_attributes.layout,
-        operation_attributes.memory_config);
 }
 
 }  // namespace ttnn::operations::rand

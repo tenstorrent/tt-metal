@@ -13,7 +13,7 @@ Key design:
   - decode_forward always uses local sharded path (no 1D distributed decode)
   - prefill_forward switches between local and distributed based on prefill_distributed config
   - Config provides program_config/memory_config for sharded, None for interleaved
-  - from_model_args() sets prefill_distributed=True only when dim > 4096 for backward compatibility
+  - from_model_args() sets prefill_distributed=True when dim >= 4096 for backward compatibility
 """
 
 import math
@@ -192,7 +192,7 @@ class RMSNorm1D(LightweightModule):
         """
         Sharded decode - standard LLM decode path.
 
-        Execution: to_sharded -> rms_norm(sharded) with program_config and memory_config
+        Execution: to_sharded -> rms_norm(sharded) with program_config and memory_config.
         Output: sharded if decode_out_sharded=True, interleaved otherwise
         """
         self.load_device_weights()
@@ -278,7 +278,7 @@ class RMSNorm1D(LightweightModule):
         Uses Ring topology, no cluster_axis.
 
         Execution:
-          rms_norm_pre_all_gather -> all_gather(Ring) -> rms_norm_post_all_gather
+          rms_norm_pre_all_gather -> all_gather(stats) -> rms_norm_post_all_gather
         """
         self.load_device_weights()
         x = _load_input_device_tensor(x, self.config, mode="prefill")
@@ -404,10 +404,11 @@ class RMSNorm1D(LightweightModule):
             packer_l1_acc=False,
         )
 
-        # Determine prefill_distributed based on dim and num_devices
-        # This preserves backward compatibility with TTTv1's is_distributed_norm() logic
+        # Determine prefill_distributed based on dim and num_devices.
+        # Keep dim=4096 on the distributed path so multichip prefill norms match
+        # fractured activations produced by TTTv2 integration.
         num_devices = mesh_device.get_num_devices()
-        prefill_distributed = num_devices > 1 and dim > 4096
+        prefill_distributed = num_devices > 1 and dim >= 4096
 
         # Build config
         config = RMSNorm1DConfig(

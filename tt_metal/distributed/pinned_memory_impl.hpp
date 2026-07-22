@@ -93,6 +93,15 @@ private:
     // Offset from the aligned mapped base to the actual host buffer start
     size_t host_offset_ = 0;
 
+    // Mock/emulated devices have no SysmemManager (MockChip::get_sysmem_manager()
+    // returns nullptr), so there is nothing to map host memory to. In that case we
+    // keep the host pointer only and hand out dummy device/NOC addresses: this lets
+    // H2D/D2H socket construction proceed (it just bakes these as compile-time args
+    // for JIT and never dereferences the buffer at compile time). The runtime
+    // write_tensor/read_tensor path is not exercised under mock.
+    bool is_mock_ = false;
+    void* mock_host_ptr_ = nullptr;
+
     // Map from device ID to SysmemBuffer (keyed by MMIO device ID)
     std::unordered_map<ChipId, std::unique_ptr<tt::umd::SysmemBuffer>> device_buffers_;
 

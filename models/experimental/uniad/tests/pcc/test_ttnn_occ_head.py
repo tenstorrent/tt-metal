@@ -9,7 +9,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.uniad.reference.occ_head import OccHead
 from models.experimental.uniad.tt.ttnn_occ_head import TtOccHead
-from models.experimental.uniad.common import load_torch_model
+from models.experimental.uniad.tests.common import load_torch_model
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -99,6 +99,13 @@ def test_occhead(reset_seeds, device, model_location_generator):
     tt_output["seg_out"] = ttnn.to_torch(tt_output["seg_out"])
     tt_output["ins_seg_out"] = ttnn.to_torch(tt_output["ins_seg_out"])
 
+    # NOTE on coverage: the reference OccHead.forward is a zero-output stub
+    # (it returns seg_out/ins_seg_out = torch.zeros_like(...) unconditionally —
+    # UniAD's eval config does not run occupancy inference here). So the
+    # seg_out / ins_seg_out asserts below are zero-vs-zero structural checks
+    # (they confirm the tt head also emits zeros of the right shape), NOT an
+    # accuracy check of any occ prediction. Only seg_gt / ins_seg_gt exercise
+    # real compute (the GT-label reformatting in get_ins_seg_gt + slicing).
     _, pcc = assert_with_pcc(torch_out["seg_gt"], tt_output["seg_gt"], 0.99)
     logger.info(f"pcc: {pcc}")
     _, pcc = assert_with_pcc(torch_out["ins_seg_gt"], tt_output["ins_seg_gt"], 0.99)

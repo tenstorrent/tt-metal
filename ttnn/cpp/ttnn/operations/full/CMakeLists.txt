@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_full ${LIB_TYPE})
 add_library(TTNN::Ops::Full ALIAS ttnn_op_full)
 
-tt_reuse_precompile_headers(ttnn_op_full TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_full TTNN::PCHLean)
 TT_ENABLE_UNITY_BUILD(ttnn_op_full)
 
 set_target_properties(
@@ -11,7 +13,11 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_full
@@ -19,26 +25,16 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_FULL_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/full_device_operation.cpp
-        device/full_program_factory_interleaved.cpp
-        device/full_program_factory_nd_sharded.cpp
-        device/full_program_factory_sharded.cpp
-        full.cpp
+        ${TTNN_OP_FULL_SRCS}
 )
 
-target_include_directories(ttnn_op_full PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_full
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_full PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -49,4 +45,20 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_full LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_full FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_FULL_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_FULL_NANOBIND_SRCS})
+endif()

@@ -4,9 +4,9 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
 
 // No-issue flow: write -> signal "first batch done" -> wait locked -> wait unlocked -> write (no writes while locked)
 void kernel_main() {
@@ -20,12 +20,12 @@ void kernel_main() {
     uint32_t other_noc_x = get_arg_val<uint32_t>(7);
     uint32_t other_noc_y = get_arg_val<uint32_t>(8);
 
-    experimental::Semaphore my_sem(my_sem_id);
-    experimental::Semaphore other_sem(other_sem_id);
-    experimental::Noc noc;
-    experimental::UnicastEndpoint unicast_endpoint;
+    Semaphore my_sem(my_sem_id);
+    Semaphore other_sem(other_sem_id);
+    Noc noc;
+    UnicastEndpoint unicast_endpoint;
 
-    experimental::CoreLocalMem<uint32_t> local_buffer(local_buffer_addr);
+    CoreLocalMem<uint32_t> local_buffer(local_buffer_addr);
     uint32_t write_size = num_elements * sizeof(uint32_t);
 
     // First batch: write while locker has not locked (no issue)

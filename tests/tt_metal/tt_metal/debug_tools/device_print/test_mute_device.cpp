@@ -72,7 +72,7 @@ void RunTest(DevicePrintFixture* fixture, const std::shared_ptr<distributed::Mes
     // printed from, we still need to drain the print buffer to prevent hanging the core.
     CreateKernel(
         program_,
-        "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 

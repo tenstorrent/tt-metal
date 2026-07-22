@@ -9,34 +9,92 @@ on:
       package-artifact-name:
         required: true
         type: string
-      runner:
+      enabled-skus:
         required: true
         type: string
+        description: "Comma-separated SKUs to run (must match tests yaml and sku_config.yaml)."
       per-test-timeout:
         required: false
         type: string
-        default: 10
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
       product:
         required: true
         type: string # tt-metalium or tt-nn
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
+      test-category:
+        required: false
+        type: string
+        default: merge_gate
+        description: "Time-budget workflow key passed to verify_time_budget.py."
 
 jobs:
-  metalium-basic:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ${{ inputs.product == 'tt-metalium' && './tests/pipeline_reorg/runtime_validation_basic_tests.yaml' || './tests/pipeline_reorg/ttnn_validation_basic_tests.yaml' }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+      - name: Verify test timeouts against budget
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
+          python3 .github/scripts/utils/verify_time_budget.py \
+            "${{ env.TESTS_YAML_PATH }}" \
+            ./.github/time_budget.yaml \
+            "${{ inputs.test-category }}" \
+            "${extra[@]}"
+
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            "${{ env.TESTS_YAML_PATH }}" \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
+
+  basic:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
     timeout-minutes: 45
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
         UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
       volumes:
         - /work
-        - ${{ (!contains(inputs.runner, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
+        - ${{ (!contains(join(matrix.test-group.runs_on, ','), 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       options: --device /dev/tenstorrent
     defaults:
       run:
@@ -44,7 +102,8 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: Checkout actions
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions/download-artifact-with-retry
           sparse-checkout-cone-mode: false
@@ -59,7 +118,7 @@ jobs:
         timeout-minutes: 10
         run: |
           # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
-          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-validation_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
 
       - name: Set up env vars for watcher
         if: ${{ inputs.enable-watcher == true }}
@@ -68,10 +127,11 @@ jobs:
           echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
           echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
           echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_DISABLE_ETH=1" >> $GITHUB_ENV
 
       - name: Run a test
         id: test
-        timeout-minutes: 30
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           GTEST_COLOR: yes
           GTEST_OUTPUT: xml:/work/test-reports/
@@ -79,8 +139,8 @@ jobs:
           TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
-        run: |
-          /usr/bin/${{ inputs.product }}-validation-basic
+          TT_LOGGER_LEVEL: warn
+        run: ${{ matrix.test-group.cmd }}
 
       - name: workaround
         run: |
@@ -93,7 +153,7 @@ jobs:
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
         with:
-          name: ${{ inputs.product }} ${{ inputs.runner }} basic tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
+          name: ${{ inputs.product }} ${{ matrix.test-group.sku }} basic tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
           path: /work/test-reports/*.xml
           reporter: jest-junit
           working-directory: /work
@@ -104,8 +164,3 @@ jobs:
         with:
           path: /work/test-reports/
           prefix: "test_reports_"
-
-      - name: Check for slow tests
-        uses: tenstorrent/tt-metal/.github/actions/detect-slow-tests@main
-        with:
-          threshold: ${{ inputs.per-test-timeout }}

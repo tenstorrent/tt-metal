@@ -283,7 +283,9 @@ def test_conv2d_block_sharded_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1042330  # Measured: 1.04ms for Conv2D SDXL block sharded
+    expected_duration_ns = (
+        993500  # Updated 2026-07-09: ~3% faster (~0.9935ms) after CircularBuffer->DataflowBuffer kernel port
+    )
 
     # Log the performance result
     print(

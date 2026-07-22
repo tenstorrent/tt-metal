@@ -119,7 +119,7 @@ MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output
     // Output 0: Per-expert total tokens
     auto per_expert_total_tokens_row_bytes = tt::align(experts_per_device * sizeof(uint32_t), l1_alignment);
     auto per_expert_total_tokens_row_elements = per_expert_total_tokens_row_bytes / sizeof(uint32_t);
-    auto per_expert_spec = TensorSpec(
+    auto per_expert_spec = tt::tt_metal::TensorSpec(
         Shape({1, per_expert_total_tokens_row_elements}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
@@ -130,7 +130,7 @@ MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output
     uint32_t activation_row_elements = (2 * experts_per_device) + 1;
     uint32_t activation_row_bytes = tt::align(activation_row_elements * sizeof(uint32_t), l1_alignment);
     uint32_t activation_total_bytes = (total_tokens + 1) * activation_row_bytes;  // +1 for sentinel row
-    auto activation_spec = TensorSpec(
+    auto activation_spec = tt::tt_metal::TensorSpec(
         Shape({1, activation_total_bytes / sizeof(uint32_t)}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
@@ -142,7 +142,7 @@ MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output
     // (total_tokens + 1) entries per expert: token IDs + sentinel.
     uint32_t e_t_row_bytes = (total_tokens + 1) * tt::align(sizeof(uint32_t), l1_alignment);
     uint32_t e_t_row_elements = e_t_row_bytes / sizeof(uint32_t);
-    auto e_t_spec = TensorSpec(
+    auto e_t_spec = tt::tt_metal::TensorSpec(
         Shape({experts_per_device, e_t_row_elements}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
@@ -164,7 +164,7 @@ MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output
     };
 
     auto tilize_output_shape = ttnn::Shape({shard_cores.num_cores(), 2, 32, hidden_size});
-    auto tilize_output_spec = TensorSpec(
+    auto tilize_output_spec = tt::tt_metal::TensorSpec(
         Shape(tilize_output_shape),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
@@ -175,7 +175,7 @@ MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output
     const auto& tilize_output_layout = tilize_output_spec.tensor_layout();
     const tt::tt_metal::TensorLayout output_layout(
         tilize_output_layout.get_data_type(), ROW_MAJOR_LAYOUT, tilize_output_layout.get_memory_config());
-    const auto output_spec = TensorSpec(tilize_output_shape, output_layout);
+    const auto output_spec = tt::tt_metal::TensorSpec(tilize_output_shape, output_layout);
 
     return {per_expert_spec, activation_spec, e_t_spec, tilize_output_spec, output_spec};
 }
@@ -189,7 +189,7 @@ MoEGPTDeviceOperation::tensor_return_value_t MoEGPTDeviceOperation::create_outpu
 
     // Re-perceive tilize output tensor as RM for output[4] (same buffer, different layout view)
     const auto output_tensor =
-        tt::tt_metal::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
+        ttnn::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
     TT_FATAL(
         output_tensor.tensor_spec() == output_specs[4],
         "Reinterpreted tensor spec does not match expected output_specs[4]");

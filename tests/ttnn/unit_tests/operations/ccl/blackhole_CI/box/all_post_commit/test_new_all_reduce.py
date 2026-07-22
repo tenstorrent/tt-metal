@@ -70,9 +70,8 @@ def run_all_reduce_impl(
     validate_all=True,
     profiler=BenchmarkProfiler(),
     linear=True,
+    cluster_shape=(4, 1),
 ):
-    cluster_shape = (4, 1)
-
     if output_dtype is None:
         output_dtype = input_dtype
 

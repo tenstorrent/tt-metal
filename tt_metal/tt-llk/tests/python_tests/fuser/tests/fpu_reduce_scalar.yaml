@@ -1,0 +1,28 @@
+# Scalar reduce that sums all elements in each tile down to one value.
+
+operands:
+  - name: "input_A"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [256, 256]
+    format: "Float16_b"
+    const_value: 1.0
+  - name: "reduce_scalar_out"
+    dims: [256, 256]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_SCALAR"
+        reduce_pool: "SUM"
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [64, 128]
+    pack:
+      - output: "reduce_scalar_out"
+        packer: "Packer"

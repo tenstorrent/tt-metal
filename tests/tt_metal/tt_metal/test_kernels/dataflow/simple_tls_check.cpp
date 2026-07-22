@@ -4,6 +4,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "simple_tls_check_defines.h"
 #include "api/kernel_thread_globals.h"
+#include "experimental/kernel_args.h"
 
 uint32_t shared_global = 5;
 uint32_t uninitialized_global;
@@ -11,12 +12,12 @@ thread_local uint32_t thread_local_var = 10;
 thread_local uint32_t uninitialized_thread_local_var;
 
 void kernel_main() {
-    const uintptr_t signal_address = get_arg_val<uint32_t>(0);
-    const uint32_t dram_dst_address = get_arg_val<uint32_t>(1);
-    const uint32_t dram_dst_bank_id = get_arg_val<uint32_t>(2);
-    const uint32_t base_l1_result_addr = get_arg_val<uint32_t>(3);
+    const uintptr_t signal_address = get_arg(args::signal_address);
+    const uint32_t dram_dst_address = get_arg(args::dram_dst_address);
+    const uint32_t dram_dst_bank_id = get_arg(args::dram_dst_bank_id);
+    const uint32_t base_l1_result_addr = get_arg(args::l1_result_addr);
 
-    constexpr uint32_t kernel_id = get_named_compile_time_arg_val("kernel_id");
+    constexpr uint32_t kernel_id = get_arg(args::kernel_id);
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
 

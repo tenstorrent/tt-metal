@@ -4,6 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "nlp_concat_heads_decode_subcoregrids_program_factory.hpp"
 #include "nlp_concat_heads_decode_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -12,13 +13,14 @@ namespace ttnn::experimental::prim {
 
 using namespace tt;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
-NLPConcatHeadsDecodeSubcoregridsProgramFactory::cached_program_t NLPConcatHeadsDecodeSubcoregridsProgramFactory::create(
+ProgramDescriptor NLPConcatHeadsDecodeSubcoregridsProgramFactory::create_descriptor(
     const NlpConcatHeadsDecodeParams& /*operation_attributes*/,
     const NlpConcatHeadsDecodeInputs& tensor_args,
     Tensor& output) {
     const auto& input_tensor = tensor_args.input;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    ProgramDescriptor desc;
 
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t head_dim = input_shape[-1];
@@ -51,13 +53,18 @@ NLPConcatHeadsDecodeSubcoregridsProgramFactory::cached_program_t NLPConcatHeadsD
     const auto in_cores = in_shard_spec.grid;
 
     uint32_t q_output_cb_index = CBIndex::c_16;
-    tt_metal::CircularBufferConfig cb_q_output_config =
-        tt_metal::CircularBufferConfig(q_num_tiles * single_tile_size, {{q_output_cb_index, cb_data_format}})
-            .set_page_size(q_output_cb_index, single_tile_size)
-            .set_globally_allocated_address(*output.buffer());
-    auto cb_q_output = tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = q_num_tiles * single_tile_size,
+        .core_ranges = q_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(q_output_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+        .buffer = output.buffer(),
+    });
 
-    uint32_t q_start_addr = input_tensor.buffer()->address();
+    Buffer* in_buffer = input_tensor.buffer();
 
     // cores to read and write to output
     const uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
@@ -89,82 +96,56 @@ NLPConcatHeadsDecodeSubcoregridsProgramFactory::cached_program_t NLPConcatHeadsD
         in_num_cores,
         face_h,
         face_hw};
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program,
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
-        "reader_tm_tile_layout_nlp_concat_heads_decode_subcoregrid.cpp",
-        q_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-    reader_compile_time_args[6] = 2;  // read the second phase
-    auto writer_kernel_id = tt_metal::CreateKernel(
-        program,
+        "reader_tm_tile_layout_nlp_concat_heads_decode_subcoregrid.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = q_cores;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    std::vector<uint32_t> writer_compile_time_args = reader_compile_time_args;
+    writer_compile_time_args[6] = 2;  // read the second phase
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
-        "reader_tm_tile_layout_nlp_concat_heads_decode_subcoregrid.cpp",
-        q_cores,
-        tt_metal::WriterDataMovementConfig(reader_compile_time_args));
+        "reader_tm_tile_layout_nlp_concat_heads_decode_subcoregrid.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = q_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        // in_tile_offset_by_batch is the start address of each batch in the input tile. The first face_h batches are in
-        // the upper half of the tile and rest are in the lower half of tile.
-        uint32_t in_tile_offset_by_batch = i < face_h ? i * sub_tile_line_bytes : (i + face_h) * sub_tile_line_bytes;
+        // in_tile_offset_by_batch is the byte offset of head row i within the input shard. Within
+        // a single 32x32 tile (= 2*face_h rows), the first face_h rows live in face 0 and the rest
+        // live in face 2 (the existing formula uses (i + face_h) * sub_tile_line_bytes to land at
+        // the start of face 2 directly). When padded_heads > 32 we additionally skip past
+        // (i / (2*face_h)) head-tiles' worth of bytes.
+        uint32_t head_tile_idx = i / (2 * face_h);
+        uint32_t head_in_tile = i % (2 * face_h);
+        uint32_t in_tile_offset_by_batch = (head_in_tile < face_h ? head_in_tile * sub_tile_line_bytes
+                                                                  : (head_in_tile + face_h) * sub_tile_line_bytes) +
+                                           head_tile_idx * head_size;
 
         const auto& core = cores[i];
-        std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(2 + (2 * in_num_cores));
-        reader_runtime_args = {
-            in_tile_offset_by_batch,
-            q_start_addr,
-        };
-        reader_runtime_args.insert(reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
-        reader_runtime_args.insert(reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
+        KernelDescriptor::RTArgList rt_args;
+        rt_args.reserve(2 + (2 * in_num_cores));
+        rt_args.push_back(in_tile_offset_by_batch);
+        rt_args.push_back(in_buffer);
+        rt_args.append(noc_x_coords);
+        rt_args.append(noc_y_coords);
 
-        tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-        tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, reader_runtime_args);
+        reader_desc.emplace_runtime_args(core, rt_args);
+        writer_desc.emplace_runtime_args(core, rt_args);
     }
 
-    return cached_program_t{
-        std::move(program),
-        {/* reader_kernel_id     = */ reader_kernel_id,
-         /* writer_kernel_id     = */ writer_kernel_id,
-         /* cores                = */ cores,
-         /* element_size         = */ element_size,
-         /* sub_tile_line_bytes  = */ sub_tile_line_bytes,
-         /* num_cores            = */ num_cores,
-         /* cb_q_output          = */ cb_q_output,
-         /* face_h               = */ face_h,
-         /* tile_w               = */ tile_w}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void NLPConcatHeadsDecodeSubcoregridsProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const NlpConcatHeadsDecodeParams& /*operation_attributes*/,
-    const NlpConcatHeadsDecodeInputs& tensor_args,
-    Tensor& output) {
-    const auto& input_tensor = tensor_args.input;
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-
-    auto *dst_buffer_query = output.buffer();
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_q_output, *dst_buffer_query);
-
-    uint32_t q_start_addr = input_tensor.buffer()->address();
-
-    auto& reader_args_by_core = GetRuntimeArgs(program, shared_variables.reader_kernel_id);
-    auto& writer_args_by_core = GetRuntimeArgs(program, shared_variables.writer_kernel_id);
-
-    for (uint32_t i = 0; i < shared_variables.num_cores; ++i) {
-        uint32_t in_tile_offset_by_batch = i < shared_variables.face_h
-                                               ? i * shared_variables.sub_tile_line_bytes
-                                               : (i + shared_variables.face_h) * shared_variables.sub_tile_line_bytes;
-        const auto& core = shared_variables.cores[i];
-        auto& runtime_args_reader = reader_args_by_core[core.x][core.y];
-        runtime_args_reader[0] = in_tile_offset_by_batch;
-        runtime_args_reader[1] = q_start_addr;
-
-        auto& runtime_args_writer = writer_args_by_core[core.x][core.y];
-        runtime_args_writer[0] = in_tile_offset_by_batch;
-        runtime_args_writer[1] = q_start_addr;
-    }
+    return desc;
 }
 
 }  // namespace ttnn::experimental::prim

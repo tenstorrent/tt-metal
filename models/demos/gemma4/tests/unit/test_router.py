@@ -17,6 +17,7 @@ from models.demos.gemma4.tt.router import Gemma4Router
 from ...tests.test_factory import (
     TestFactory,
     compare_tensors,
+    get_pcc_threshold,
     parametrize_batch_seq,
     parametrize_mesh_with_fabric,
     skip_if_not_moe,
@@ -26,11 +27,20 @@ from ...tests.test_factory import (
 @skip_if_not_moe
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq()
-def test_router(batch_size, seq_len, mesh_device):
+def test_router(batch_size, seq_len, mesh_device, reset_seeds, request):
     """Test Router returns dense routing weights that match HF reference."""
     hf_text_config = TestFactory.create_hf_text_config(num_experts=8, top_k=4)
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx=0)
     hf_router = hf_layer.router
+
+    # Boost router proj σ so softmax produces peaked distributions. The
+    # factory's default N(0, 0.02) gives expert_scores std ≈ 0.019, which
+    # makes the post-softmax distribution near-uniform across experts; bf16
+    # and fp32 then disagree on topk rankings purely due to mantissa
+    # precision (a test artifact, not a routing bug). Real trained Gemma4
+    # routing is peaked, so we mirror that here.
+    with torch.no_grad():
+        hf_router.proj.weight.normal_(0, 1.0)
 
     state_dict = {
         "scale": hf_router.scale.data.clone(),
@@ -71,6 +81,5 @@ def test_router(batch_size, seq_len, mesh_device):
         .float()
     )
 
-    pcc_thresh = 0.90 if seq_len > 1 else 0.5
-    passing, pcc_msg = compare_tensors(tt_dense_torch, ref_dense, pcc_threshold=pcc_thresh)
+    passing, pcc_msg = compare_tensors(tt_dense_torch, ref_dense, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"Router dense routing PCC too low: {pcc_msg}"

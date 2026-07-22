@@ -6,9 +6,13 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
+#include <cstdint>
 #include <optional>
 
 namespace ttnn::prim {
+
+// Normalize a possibly-negative dim into [0, rank) for indexing against logical shape.
+inline int32_t normalize_dim(int32_t dim, int32_t rank) noexcept { return dim < 0 ? dim + rank : dim; }
 
 /*
  * Generates the output shape for the reduction operation.
@@ -19,6 +23,6 @@ namespace ttnn::prim {
  * @param keepdim Whether to keep the reduced dimension.
  * @return The output shape.
  */
-ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const std::optional<int>& dim, bool keepdim);
+ttsl::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const std::optional<int>& dim, bool keepdim);
 
 }  // namespace ttnn::prim

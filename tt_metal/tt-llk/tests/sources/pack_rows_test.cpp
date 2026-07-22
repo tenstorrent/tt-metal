@@ -26,7 +26,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /*num_faces*/, 4 /*num_faces*/);
     _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, FACE_R_DIM, 4 /*num_faces*/, formats.unpack_A_src, formats.unpack_A_dst);
+        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
 
     const int num_total_tiles = params.NUM_TILES_IN_BLOCK * params.NUM_BLOCKS;
 
@@ -41,8 +41,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_lib_math_wrappers.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -55,11 +54,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool is_int_fpu_en = false;
 
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-#ifdef ARCH_BLACKHOLE
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(4 /*num_faces*/, formats.math);
-#else
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(4 /*num_faces*/, formats.math);
-#endif
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
+        4 /*num_faces*/, formats.math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
@@ -84,7 +80,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_pack.h"
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "llk_pack_rows.h"
 #include "params.h"
@@ -96,12 +92,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const bool UNTILIZE = false;
 
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-#else
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>();
-#endif
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
     _llk_pack_rows_init_(params.NUM_ROWS_TO_PACK);
 
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;

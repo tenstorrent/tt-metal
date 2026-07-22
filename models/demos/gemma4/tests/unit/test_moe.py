@@ -13,8 +13,10 @@ import ttnn
 from models.demos.gemma4.tt.moe import MoEBlock
 
 from ...tests.test_factory import (
+    PREFILL_BUCKETS,
     TestFactory,
     compare_tensors,
+    get_pcc_threshold,
     parametrize_batch_seq,
     parametrize_mesh_with_fabric,
     skip_if_not_moe,
@@ -23,8 +25,8 @@ from ...tests.test_factory import (
 
 @skip_if_not_moe
 @parametrize_mesh_with_fabric()
-@parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
-def test_moe(batch_size, seq_len, mesh_device):
+@parametrize_batch_seq(configs=[(1, L) for L in PREFILL_BUCKETS])
+def test_moe(batch_size, seq_len, mesh_device, reset_seeds, request):
     """Test MoE end-to-end on device against HF reference.
 
     Uses HF routing for the reference, TT router+experts for the test.
@@ -39,6 +41,15 @@ def test_moe(batch_size, seq_len, mesh_device):
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx=0)
     hf_router = hf_layer.router
     hf_experts = hf_layer.experts
+
+    # Boost router proj σ so softmax produces peaked distributions. The
+    # factory's default N(0, 0.02) gives expert_scores std ≈ 0.019, which
+    # makes the post-softmax distribution near-uniform across experts; bf16
+    # and fp32 then disagree on topk rankings purely due to mantissa
+    # precision (a test artifact, not a routing bug). Real trained Gemma4
+    # routing is peaked, so we mirror that here.
+    with torch.no_grad():
+        hf_router.proj.weight.normal_(0, 1.0)
 
     state_dict = {
         "router.scale": hf_router.scale.data.clone(),
@@ -89,5 +100,5 @@ def test_moe(batch_size, seq_len, mesh_device):
         .float()[:seq_len]
     )
 
-    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.80)
+    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"MoE (tp={tp}) PCC too low: {pcc_msg}"

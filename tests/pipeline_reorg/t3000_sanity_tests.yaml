@@ -1,0 +1,42 @@
+# This file defines the test matrix for the T3000 sanity tests pipeline.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The command to run the test.
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# The multiprocess tests are currently disabled as they are not stable. We will re-enable them once we have improved their stability.
+# - name: t3k_ttnn_multiprocess_tests
+#   cmd: |
+#     source tests/scripts/t3000/run_t3000_unit_tests.sh
+#     run_t3000_ttnn_multiprocess_tests
+#   skus:
+#     wh_llmbox:
+#       timeout: 15
+#   owner_id: UBHPP2NDP # Joseph Chu
+#   team: ttnn
+
+- name: t3k_ttnn_ccl_tests
+  cmd: |
+    source tests/scripts/t3000/run_t3000_unit_tests.sh
+    run_t3000_ccl_tests
+  skus:
+    wh_llmbox:
+      timeout: 10
+  owner_id: U06MJ6CVCGZ # Yu Gao
+  team: ttnn
+
+- name: t3k_fabric_tests
+  cmd: |
+    source tests/scripts/t3000/run_t3000_unit_tests.sh
+    run_t3000_ttfabric_tests
+  skus:
+    wh_llmbox:
+      timeout: 20
+  owner_id: ULMEPM2MA # Sean Nijjar
+  team: scaleout
+  upload_benchmarks: true

@@ -1,0 +1,107 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <stdint.h>
+
+#include "api/dataflow/dataflow_api.h"
+#include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+    // same arg indices as in reader_binary_diff_lengths for compat
+    uint32_t Mt = get_arg(args::Mt);
+    uint32_t Kt = get_arg(args::Kt);
+    uint32_t Nt = get_arg(args::Nt);
+    uint32_t MtKt = get_arg(args::MtKt);  // if 0
+    uint32_t KtNt = get_arg(args::KtNt);
+    uint32_t batch = get_arg(args::batch);
+    uint32_t bcast_B = get_arg(args::bcast_B);  // if 1 we broadcast B to batch
+    uint32_t output_tile_start_id = get_arg(args::output_tile_start_id);
+    uint32_t num_output_tiles = get_arg(args::num_output_tiles);
+    uint32_t MtNt = get_arg(args::MtNt);
+
+    constexpr uint32_t in0_last_ktile_w = get_arg(args::in0_last_ktile_w);
+    constexpr uint32_t in0_last_ktile_h = get_arg(args::in0_last_ktile_h);
+
+    // DPRINT("Mt={} Kt={} Nt={} MtKt={} KtNt={}\n", Mt, Kt, Nt, MtKt, KtNt);
+    // DPRINT("batch={}\n", batch);
+
+    constexpr uint32_t cb_id_in0 = dfb::in0;
+    constexpr uint32_t cb_id_in1 = dfb::in1;
+
+    constexpr uint32_t onetile = 1;
+    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
+    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
+
+    uint32_t itileA = output_tile_start_id / Nt * Kt;  // input0 row = output row * input0 width
+
+    // Keep track of end of output row and end of output batch
+    uint32_t outbatch = output_tile_start_id % MtNt;
+    uint32_t itileB_batch = output_tile_start_id % Nt;
+    uint32_t itileB = itileB_batch;  // input1 col = output col if we are bcasting
+    if (bcast_B == 0) {
+        itileB += output_tile_start_id / MtNt * KtNt;  // offset into correct batch if not bcasting
+    }
+
+    const auto s0 = TensorAccessor(tensor::in0);
+    const auto s1 = TensorAccessor(tensor::in1);
+
+    Noc noc;
+    DataflowBuffer cb_in0(dfb::in0);
+    DataflowBuffer cb_in1(dfb::in1);
+
+    for (uint32_t n = 0; n < num_output_tiles; n++) {
+        for (uint32_t kt = 0; kt < Kt; kt++) {
+            {  // Read A's tile at (mt, kt)
+                cb_in0.reserve_back(onetile);
+                noc.async_read(s0, cb_in0, in0_tile_bytes, {.page_id = itileA}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                if constexpr (in0_last_ktile_w > 0) {
+                    if (kt == Kt - 1) {
+                        constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(cb_in0.get_write_ptr());
+                    }
+                }
+                if constexpr (in0_last_ktile_h > 0) {
+                    if (kt == Kt - 1) {
+                        constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(cb_in0.get_write_ptr());
+                    }
+                }
+                cb_in0.push_back(onetile);
+            }
+
+            {  // Read B's tile at (kt, nt)
+                cb_in1.reserve_back(onetile);
+                noc.async_read(s1, cb_in1, in1_tile_bytes, {.page_id = itileB}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                cb_in1.push_back(onetile);
+            }
+            // DPRINT("Pushed itileA={} itileB={}\n", itileA, itileB);
+
+            itileA += 1;   // A is MK
+            itileB += Nt;  // B is KN, so to get k++ we stride by Nt
+        }  // Kt loop
+        outbatch += 1;
+        itileB_batch += 1;
+        itileB -= KtNt;  // revert B to previous state before the K loop (to avoid multiplies)
+        itileB += 1;     // Move to next B col
+
+        if (itileB_batch == Nt) {
+            itileB_batch = 0;
+            itileB -= Nt;  // Go back to first column in batch
+            if (outbatch == MtNt) {
+                if (bcast_B == 0) {
+                    itileB += KtNt;  // Move B to start of next batch
+                }
+                outbatch = 0;
+            }
+        } else {
+            itileA -= Kt;  // resets tileA to kt=0, keep the same mt
+        }
+    }  // batch loop
+}

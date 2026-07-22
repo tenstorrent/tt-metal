@@ -4,10 +4,11 @@
 
 #pragma once
 
+#include "impl/context/context_types.hpp"
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
+#include <tt-metalium/mesh_trace_id.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <optional>
@@ -19,7 +20,9 @@ public:
     ~Data();
 
 private:
-    Data(std::optional<int> rank);  // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
+    Data(
+        std::optional<int> rank,
+        ContextId context_id);  // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
 
     void serialize_rpc();
     RpcServer& get_rpc_server();
@@ -35,6 +38,7 @@ private:
     void rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results);
     void rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results);
     void rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builder& results);
+    void rpc_get_system_mesh(rpc::Inspector::GetSystemMeshResults::Builder& results);
 
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);
     static void populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id);
@@ -47,6 +51,8 @@ private:
         rpc::CoreCategory category_type,
         const std::unordered_map<tt_cxy_pair, CoreInfo>& core_info,
         const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device);
+
+    ContextId context_id;  // Owning MetalContext's id
 
     inspector::Logger logger;
     RpcServerController rpc_server_controller;
@@ -67,12 +73,19 @@ private:
     static constexpr size_t kRuntimeEntriesCapacity = 8192;
     std::array<inspector::MeshWorkloadRuntimeEntry, kRuntimeEntriesCapacity> runtime_entries{};
     size_t runtime_entries_write_pos{0};
+    std::mutex trace_runtime_entries_mutex;
+    std::unordered_map<tt::tt_metal::distributed::MeshTraceId, std::vector<inspector::MeshWorkloadRuntimeEntry>>
+        trace_runtime_entries;
     // store dispatch core info by virtual core
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> dispatch_core_info;
     // store dispatch_s core info by virtual core
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> dispatch_s_core_info;
     // store prefetcher core info by virtual core
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> prefetcher_core_info;
+
+    std::atomic<bool> kernel_path_collection_enabled{false};
+    std::mutex kernel_path_mutex;
+    std::unordered_map<int, std::vector<std::string>> kernel_id_to_processor_elf_paths;
 
     // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
     std::atomic<uint64_t> fw_compile_hash;

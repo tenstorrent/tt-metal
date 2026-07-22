@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -22,8 +22,8 @@ void kernel_main() {
 
     size_t arg_idx = 0;
 
-    experimental::Semaphore master_sem(get_arg_val<uint32_t>(arg_idx++));
-    experimental::Semaphore subordinate_sem(get_arg_val<uint32_t>(arg_idx++));
+    Semaphore master_sem(get_arg_val<uint32_t>(arg_idx++));
+    Semaphore subordinate_sem(get_arg_val<uint32_t>(arg_idx++));
 
     std::array<uint32_t, n_cbs> output_buffer_addrs;
     for (size_t i = 0; i < n_cbs; i++) {
@@ -33,7 +33,7 @@ void kernel_main() {
     auto get_idx = [n_pages](size_t i, size_t j) -> size_t { return i * n_pages + j; };
 
     for (int32_t i = 0; i < n_cbs; i++) {
-        experimental::CircularBuffer cb(i);
+        CircularBuffer cb(i);
         auto* const output_buffer = reinterpret_cast<uint8_t*>(output_buffer_addrs[i]);
         for (int32_t j = 0; j < n_pages; j++) {
             // First level signal indicates the writer has pushed new pages to the CB

@@ -42,7 +42,7 @@ def test_eltwise_exp(device, num_tiles):
     (_, core_grid, core_group_1, core_group_2, work_per_core1, _) = ttnn.split_work_to_cores(all_cores, num_tiles)
     assert (
         len(core_group_2.ranges()) == 0
-    ), "tt_metal/kernels/compute/eltwise_sfpu.cpp kernel has number of tiles to compile as compile time arg, does not support 2 core groups"
+    ), "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp kernel has number of tiles to compile as compile time arg, does not support 2 core groups"
 
     input_cb_data_format = ttnn.bfloat16  # this will be mapped tt::DataFormat::Float16_b
     cb_total_size = 2 * 2 * 1024  # tt::DataFormat::Float16_b hard coded to have size 2 * 1024
@@ -105,7 +105,7 @@ def test_eltwise_exp(device, num_tiles):
 
     sfpu_defines = [("SFPU_OP_EXP_INCLUDE", "1"), ("SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);")]
     compute_kernel_descriptor = ttnn.KernelDescriptor(
-        kernel_source="tt_metal/kernels/compute/eltwise_sfpu.cpp",
+        kernel_source="tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
         # source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH, expecting this to be the default value
         core_ranges=core_grid,
         compile_time_args=compute_compile_time_args,

@@ -340,7 +340,7 @@ def test_topk_bfloat8_with_inf(N, C, H, W, dim, k, sub_core_grids, device):
         (torch.int32, ttnn.int32),
     ],
 )
-def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dtype, device):
+def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dtype, device, expect_error):
     torch.manual_seed(0)
     shape = [1, 1, 32, 64]
 
@@ -351,7 +351,7 @@ def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dty
 
     ttnn_input = ttnn.from_torch(input_torch, ttnn_input_tensor_dtype, layout=ttnn.Layout.TILE, device=device)
 
-    with pytest.raises(Exception):
+    with expect_error(RuntimeError, "Input tensor must be BFLOAT16, or BFLOAT8_B"):
         ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True)
 
 
@@ -366,15 +366,56 @@ def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dty
         (ttnn.bfloat16, ttnn.bfloat16),
     ],
 )
-def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
+def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device, expect_error):
     torch.manual_seed(0)
+    k = 32
     shape = [1, 1, 32, 64]
+    output_shape = [1, 1, 32, k]
 
     input_torch = torch.randn(shape, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
 
-    value_tensor = ttnn.empty_like(ttnn_input, dtype=value_dtype)
-    index_tensor = ttnn.empty_like(ttnn_input, dtype=index_dtype)
+    # Preallocated outputs must carry the topk output shape ([..., k]); allocating at the input shape would
+    # trip the shape check in topk() before dtype validation is reached and defeat the purpose of this test.
+    output_torch = torch.zeros(output_shape, dtype=torch.bfloat16)
+    value_tensor = ttnn.from_torch(output_torch, value_dtype, layout=ttnn.Layout.TILE, device=device)
+    index_tensor = ttnn.from_torch(output_torch, index_dtype, layout=ttnn.Layout.TILE, device=device)
 
-    with pytest.raises(Exception):
-        ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, output_tensor=(value_tensor, index_tensor))
+    # The value dtype must be BFLOAT16/BFLOAT8_B and the index dtype UINT16/UINT32; match whichever is
+    # violated first for the given parametrization.
+    with expect_error(
+        RuntimeError,
+        "Preallocated (output tensor must be BFLOAT16 or BFLOAT8_B|indices tensor must be UINT16 or UINT32)",
+    ):
+        ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, output_tensor=(value_tensor, index_tensor))
+
+
+@pytest.mark.parametrize("largest", [True, False])
+def test_topk_multicore_local_write_correctness(largest, device):
+    """
+    Correctness guard for the multi-core topk local-writer path: an input width >= multi_core_min_width
+    (8192) routes to TopKMultiCoreProgramFactory + writer_local_topk, which NoC-writes each local-topk
+    tile from its CB slot to the final core and then cb_pop_front releases the slot back to the compute
+    producer. Correct aggregation at the final core relies on each write being drained before its slot is
+    reused; a regression there -- e.g. a WAR hazard where the producer's next pack_tile overwrites the
+    slot while the NoC write's source-read is still in flight -- would corrupt the landed values and make
+    this check fail.
+
+    This is a value-correctness guard, not a deterministic race reproducer: such a WAR is latent (masked
+    by compute-pack latency), so it would not necessarily surface on every run.
+    """
+    torch.manual_seed(2005)
+    W, k = 8192, 32  # W >= 8192 -> multi-core path; k=32 -> Kt=1
+    t = torch.randn((1, 1, 32, W), dtype=torch.bfloat16)
+    x = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    v, i = ttnn.topk(x, k, dim=-1, largest=largest, sorted=True)
+    ttnn.synchronize_device(device)
+
+    got = ttnn.to_torch(v).float()
+    ref, _ = torch.topk(t.float(), k, dim=-1, largest=largest, sorted=True)
+    # Compare the (order-insensitive) set of top-k values per row.
+    got_s = got.sort(dim=-1, descending=True).values
+    ref_s = ref.sort(dim=-1, descending=True).values
+    assert torch.allclose(
+        got_s, ref_s, atol=1e-2
+    ), f"multi-core topk values mismatch (WAR regression?): max_diff={(got_s - ref_s).abs().max():.4f}"

@@ -15,6 +15,15 @@ TTNN_TO_TORCH_DTYPE = {
 }
 
 
+@pytest.fixture
+def isolate_program_cache(device):
+    """Ensure each test starts with an empty program cache and cleans up after."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    yield
+    device.disable_and_clear_program_cache()
+
+
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "shape_output_end",
@@ -51,6 +60,59 @@ def test_untilize_with_unpadding_fp32(device, dtype, shape_output_end, input_buf
     torch_result = torch_tensor[slices]
 
     assert torch.equal(result, torch_result), f"untilize_with_unpadding lost {dtype} precision"
+
+
+def test_untilize_with_unpadding_reuses_cache_when_only_width_l1_heuristic_changes(device, isolate_program_cache):
+    """
+    Regression test for issue #46533 first-shot fix.
+
+    This shape keeps the height-side CB estimate tiny (1 tile row) while making the
+    width-side estimate large enough to react to unrelated resident L1 buffers.
+    enough_space_width is not consumed by factory selection or descriptor creation,
+    so changing only that heuristic must not fork the program cache.
+    """
+    torch.manual_seed(0)
+
+    input_shape = [1, 10240, 32]
+    output_end = [0, 10239, 31]
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    assert device.num_program_cache_entries() == 0, "Program cache should be empty before the test"
+
+    with device.cache_entries_counter.measure():
+        output_tensor = ttnn.untilize_with_unpadding(
+            input_tensor, output_tensor_end=output_end, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    assert_equal(ttnn.to_torch(output_tensor), torch_input)
+    assert device.cache_entries_counter.total == 1
+
+    ttnn.synchronize_device(device)
+
+    hog_shape = [1, 1, 32, 16384]
+    hog_tensors = [
+        ttnn.allocate_tensor_on_device(
+            ttnn.Shape(hog_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+        )
+        for _ in range(3)
+    ]
+    assert len(hog_tensors) == 3
+
+    with device.cache_entries_counter.measure():
+        output_tensor = ttnn.untilize_with_unpadding(
+            input_tensor, output_tensor_end=output_end, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    assert_equal(ttnn.to_torch(output_tensor), torch_input)
+    assert device.cache_entries_counter.total == 1
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -107,6 +169,42 @@ def test_untilize_with_unpadding_height_sharded(
     torch_result = torch_tensor[slices]
 
     assert_equal(result, torch_result)
+
+
+@pytest.mark.parametrize(
+    "hw, out_channels",
+    [
+        (2048, 2),  # issue #19475: 4 bytes, below 16-byte NOC alignment
+        (2048, 4),  # issue #19475: 8 bytes, below 16-byte NOC alignment
+        (2048, 8),  # issue #19475: 16 bytes, at alignment boundary
+    ],
+)
+def test_untilize_with_unpadding_height_sharded_narrow_width_regression(device, hw, out_channels):
+    """Regression test for issue #19475 / PR #38428.
+
+    HEIGHT_SHARDED TILE → ROW_MAJOR where the actual output row width is below
+    the 16-byte L1 NOC alignment boundary.  The CB page size must be
+    aligned_page_size (≥ 16 bytes), not block_row_size, to avoid overflow.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.rand((hw, out_channels), dtype=torch.bfloat16)
+
+    num_cores = 64
+    shard_shape = [hw // num_cores, max(out_channels, 32)]  # pad width to TILE_WIDTH
+    core_range_set = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size())
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_range_set, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    output_tensor_end = [hw - 1, out_channels - 1]
+
+    tt_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    tt_out = ttnn.untilize_with_unpadding(tt_tensor, output_tensor_end=output_tensor_end)
+    result = ttnn.to_torch(tt_out)
+
+    assert_equal(result, torch_input)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -226,7 +324,22 @@ def test_untilize_with_unpadding_block_sharded(device, dtype, shape, output_end,
         ([4, 4, 256, 512], [2, 1, 255, 511]),
         ([4, 4, 256, 512], [2, 1, 126, 255]),
         ([4, 3, 64, 64], [2, 0, 31, 31]),
-        ([4, 4, 3, 64, 64], [2, 3, 0, 31, 31]),
+        # Blocked until reshape supports ND-sharded tensors without going through
+        # ttnn::experimental::view. The rank>4 wrapper in untilize_with_unpadding
+        # (build_ndiml_untilize_val -> squeeze_from_ND_to_4D -> ttnn::reshape) routes
+        # through PerformView -> view_device, which rejects ND-sharded inputs for any
+        # rank change other than 0D/1D -> 2D expansion. See:
+        #   - ttnn/core/tensor/tensor_ops.cpp view_device (TT_FATAL on ND_SHARDED)
+        #   - ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.cpp PerformView
+        #   - ttnn/cpp/ttnn/operations/data_movement/common/common.cpp squeeze_from_ND_to_4D
+        # GitHub issue: #36172
+        pytest.param(
+            [4, 4, 3, 64, 64],
+            [2, 3, 0, 31, 31],
+            marks=pytest.mark.skip(
+                reason="blocked until reshape supports ND-sharded tensors without using ttnn::experimental::view"
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -701,3 +814,72 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_legacy_shard(
     else:
         slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
         assert_equal(input_torch_tensor[slices], ttnn.to_torch(ttnn_output_tensor))
+
+
+# ---------------------------------------------------------------------------
+# Legacy 2D HEIGHT_SHARDED (tiled) input -> INTERLEAVED (L1 or DRAM) untilize-with-unpadding where:
+#   * outer dim > 1 (global_batch > 1: several logical matrices), and
+#   * inner H is NOT tile-aligned, so each matrix carries its own interior tile-padding tail.
+#
+# The writer walks each core's absolute rows, maps every one to its (matrix, row-in-matrix), strips
+# each matrix's interior pad rows, and lands it at its own row offset in the output -- for any
+# alignment of matrices to cores.
+#
+# Expected behavior: bitwise match (assert_equal).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "shard_layout, tensor_shape, output_end, shard_shape, num_cores",
+    [
+        # --- HEIGHT_SHARDED ---
+        # Baseline (no outer dim): single shard.
+        # Tensor [1,1,30,64] padded [1,1,32,64] => single shard of (32, 64).
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [1, 1, 30, 64], [0, 0, 29, 63], (32, 64), 1),
+        # Outer dim 2 on dim 0.
+        # Tensor [2,1,30,64] padded [2,1,32,64] => physical (64, 64) = 2 shards of (32, 64).
+        # Each shard is one matrix slice (32 rows including 2 tile-padded tail rows).
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [2, 1, 30, 64], [1, 0, 29, 63], (32, 64), 2),
+        # Outer dim 4: four matrices, one per core.
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [4, 1, 30, 64], [3, 0, 29, 63], (32, 64), 4),
+        # Outer product spread across dims 0 and 1 (2 x 2 = 4 slices).
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [2, 2, 30, 64], [1, 1, 29, 63], (32, 64), 4),
+    ],
+    ids=lambda p: str(p).replace(" ", "") if isinstance(p, list) else None,
+)
+@pytest.mark.parametrize(
+    "output_buffer_type",
+    [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
+    ids=["dram", "l1"],
+)
+def test_untilize_with_unpadding_sharded_multi_batch_unpadding_regression(
+    device, dtype, shard_layout, tensor_shape, output_end, shard_shape, num_cores, output_buffer_type
+):
+    """Legacy 2D HEIGHT_SHARDED (tiled) input, non-tile-aligned H, outer_dim > 1, interleaved output.
+
+    Each outer-dim slice is a logical matrix carrying its own interior tile-padding tail.
+    untilize-with-unpadding strips each matrix's pad rows and lands it at its own row offset in the
+    output; the result must match the sliced torch reference bitwise.
+    """
+    torch.manual_seed(42)
+    torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+
+    shard_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))})
+    input_shard_spec = ttnn.ShardSpec(shard_core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_memory_config = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, input_shard_spec)
+
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)
+
+    tile_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    tile_tensor = ttnn.to_device(tile_tensor, device, memory_config=input_memory_config)
+
+    untilized = ttnn.untilize_with_unpadding(
+        tile_tensor, output_tensor_end=output_end, memory_config=output_memory_config
+    )
+    result = ttnn.to_torch(untilized)
+
+    slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
+    torch_result = torch_tensor[slices]
+
+    assert_equal(result, torch_result)

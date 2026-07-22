@@ -112,7 +112,7 @@ AllToAllAsyncGenericDeviceOperation::spec_return_value_t AllToAllAsyncGenericDev
     auto shape = input_tensor.logical_shape();
     shape[operation_attributes.in_dim] *= operation_attributes.num_devices;
     shape[operation_attributes.out_dim] /= operation_attributes.num_devices;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.output_mem_config));

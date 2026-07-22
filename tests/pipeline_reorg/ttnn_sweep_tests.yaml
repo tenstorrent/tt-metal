@@ -1,0 +1,23 @@
+# Sweep budget definitions for ttnn-run-sweeps workflow.
+#
+# Budget enforcement via verify_time_budget.py. The sweep workflow generates its
+# own matrix (compute_sweep_matrix.py) — the cmd field is a placeholder.
+#
+# For max allowed timeout refer to .github/time_budget.yaml.
+
+- name: ttnn sweeps
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name ALL --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+  skus:
+    wh_n150:
+      timeout: 900
+    wh_n300:
+      timeout: 900
+    bh_p150b_civ2:
+      timeout: 900
+    wh_galaxy:
+      timeout: 900
+    bh_loudbox:
+      timeout: 300
+  owner_id: U08T3JQEB36 # stevendae
+  team: ttnn
+  category: sweep

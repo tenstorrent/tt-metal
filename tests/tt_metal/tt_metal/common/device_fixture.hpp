@@ -20,6 +20,9 @@ private:
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
 
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         // Save time. Don't do any setup if invalid dispatch mode
         if (!this->validate_dispatch_mode()) {
@@ -94,6 +97,9 @@ public:
 
 class MeshDeviceSingleCardFixture : public MeshDispatchFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -122,6 +128,8 @@ protected:
         return true;
     }
 
+    virtual size_t num_command_queues() const { return 1; }
+
     void create_devices() {
         std::vector<ChipId> ids;
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
@@ -130,7 +138,7 @@ protected:
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
-            ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
+            ids, l1_small_size_, trace_region_size_, num_command_queues(), dispatch_core_config);
         devices_.clear();
         for (const auto& [device_id, device] : id_to_device_) {
             devices_.push_back(device);
@@ -163,9 +171,6 @@ protected:
 class QuasarMeshDeviceSingleCardFixture : public MeshDeviceSingleCardFixture {
 protected:
     void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         if (this->arch_ != tt::ARCH::QUASAR) {
             GTEST_SKIP() << "Not a Quasar device";
@@ -173,6 +178,11 @@ protected:
         this->create_devices();
         init_max_cbs();
     }
+};
+
+class QuasarMultiCQMeshDeviceSingleCardFixture : public QuasarMeshDeviceSingleCardFixture {
+protected:
+    size_t num_command_queues() const override { return 2; }
 };
 
 }  // namespace tt::tt_metal

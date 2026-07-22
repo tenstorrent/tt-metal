@@ -24,10 +24,11 @@
 #include "api/compute/xlogy.h"
 #include "api/compute/atan2.h"
 #include "api/compute/binary_comp.h"
+#include "api/compute/isclose.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/compute/bcast.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 ALWI void process_tile(
     tt::CBIndex cb_pre_lhs,
@@ -37,9 +38,9 @@ ALWI void process_tile(
     tt::CBIndex cb_out,
     uint32_t freq,
     uint32_t tile_start,
-    uint32_t num_tiles_per_cycle) {
+    uint32_t num_tiles_per_cycle ISCLOSE_RT_ARG_PARAMS) {
     using namespace ckernel;
-    experimental::CircularBuffer exp_cb_out(cb_out);
+    CircularBuffer exp_cb_out(cb_out);
 
 #if BCAST_INPUT  // ROW_A_COL_B
 #define CB_PRE_BCAST cb_pre_rhs
@@ -59,18 +60,19 @@ ALWI void process_tile(
     auto cb_right = cb_post_rhs;
 #endif
 
-    experimental::CircularBuffer exp_cb_raw_other(cb_raw_other);
-    experimental::CircularBuffer exp_cb_llk_post(cb_llk_post);
-    experimental::CircularBuffer exp_cb_post_bcast(CB_POST_BCAST);
-    experimental::CircularBuffer exp_cb_post_other(CB_POST_OTHER);
+    CircularBuffer exp_cb_raw_other(cb_raw_other);
+    CircularBuffer exp_cb_llk_post(cb_llk_post);
+    CircularBuffer exp_cb_post_bcast(CB_POST_BCAST);
+    CircularBuffer exp_cb_post_other(CB_POST_OTHER);
 
     unary_op_init_common(cb_left, cb_out);
-    PREPROCESS(BCAST_OP, CB_PRE_BCAST, CB_POST_BCAST, cb_out, num_tiles_per_cycle);
+    PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
     exp_cb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_cb_raw_other.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
+        pack_reconfig_data_format(cb_out, cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(cb_raw_other, cb_llk_post);
 
         tile_regs_acquire();
@@ -84,11 +86,9 @@ ALWI void process_tile(
         exp_cb_raw_other.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_raw_other);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-#ifdef ARCH_BLACKHOLE
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
-#endif
 
-        PREPROCESS(OTHER_OP, cb_llk_post, CB_POST_OTHER, cb_out, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, CircularBuffer(cb_llk_post), exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_other.wait_front(num_tiles_per_cycle);
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);
@@ -107,7 +107,11 @@ ALWI void process_tile(
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
 #endif
+#if ISCLOSE_OP
+            BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+#else
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
+#endif
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
         tile_regs_commit();
@@ -127,6 +131,10 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t tile_freq = get_arg_val<uint32_t>(1);
     uint32_t tile_start = get_arg_val<uint32_t>(2);
+#ifdef ISCLOSE_OP
+    const uint32_t rtol_bits = get_arg_val<uint32_t>(ISCLOSE_RTOL_RT_ARG_IDX);
+    const uint32_t atol_bits = get_arg_val<uint32_t>(ISCLOSE_ATOL_RT_ARG_IDX);
+#endif
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
@@ -151,7 +159,7 @@ void kernel_main() {
 #endif
 
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
@@ -163,7 +171,14 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
-            cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out, tile_freq, tile_start, num_tiles_per_cycle);
+            cb_pre_lhs,
+            cb_post_lhs,
+            cb_pre_rhs,
+            cb_post_rhs,
+            cb_out,
+            tile_freq,
+            tile_start,
+            num_tiles_per_cycle ISCLOSE_RT_ARG_FWD);
     }
 
     if (remaining_iterations > 0) {
@@ -175,6 +190,6 @@ void kernel_main() {
             cb_out,
             remaining_iterations,
             tile_start,
-            num_tiles_per_cycle);
+            num_tiles_per_cycle ISCLOSE_RT_ARG_FWD);
     }
 }

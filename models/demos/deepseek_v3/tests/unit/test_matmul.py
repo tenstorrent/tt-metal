@@ -16,6 +16,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     dram_sharded_weight_config,
     get_activation_sharding_core_counts_for_dram_matmul,
     get_dram_sharded_matmul_config,
+    get_fabric_config,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
@@ -260,8 +261,8 @@ def test_matmul_dram_sharded_single_device(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,  # TODO: Remove this once we have a fix for issue #40860
-            "trace_region_size": 90112,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 0,
+            "fabric_config": get_fabric_config(),
         }
     ],
     indirect=True,
@@ -713,7 +714,7 @@ def test_matmul_interleaved_single_device(
 )
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90112, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 @pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
 def test_matmul_interleaved_mesh_device(

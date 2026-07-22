@@ -51,7 +51,9 @@ class TtDETRTrack3DCoder(TtBaseBBoxCoder):
         track_scores = ttnn.to_torch(track_scores)
         _, bbox_index = track_scores.topk(max_num)
 
-        obj_idxes = ttnn.to_torch(obj_idxes)
+        # obj_idxes originates from ttnn.int32 which round-trips as torch.uint32;
+        # torch's index_cpu doesn't support UInt32, so promote to long for indexing.
+        obj_idxes = ttnn.to_torch(obj_idxes).to(torch.long)
         bbox_preds = ttnn.to_torch(bbox_preds)
 
         # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/15553>

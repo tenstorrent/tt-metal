@@ -10,7 +10,6 @@ from helpers.llk_params import (
     FastMode,
     MathOperation,
     PerfRunType,
-    ReducePool,
     StableSort,
     Transpose,
 )
@@ -20,6 +19,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    CLAMP_NEGATIVE,
     FAST_MODE,
     ITERATIONS,
     LOOP_FACTOR,
@@ -29,13 +29,12 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
-    generate_input_dim,
 )
 
 _OPS_WITHOUT_DEST_ACC = {
     MathOperation.Abs,
-    MathOperation.Acosh,
-    MathOperation.Asinh,
+    # Acosh/Asinh now select their log1p polynomial precision from the dest-accum
+    # (is_fp32_dest_acc_en) flag, so both modes are exercised.
     MathOperation.Celu,
     MathOperation.Cos,
     MathOperation.Elu,
@@ -43,6 +42,7 @@ _OPS_WITHOUT_DEST_ACC = {
     MathOperation.Exp,
     MathOperation.Fill,
     MathOperation.Gelu,
+    MathOperation.GeluTanh,
     MathOperation.Hardsigmoid,
     MathOperation.Log,
     MathOperation.Neg,
@@ -105,7 +105,16 @@ def _get_stable_sort_modes(mathop):
         MathOperation.Rsqrt,
         MathOperation.Silu,
         MathOperation.Gelu,
+        MathOperation.GeluTanh,
         MathOperation.Exp,
+        MathOperation.Lrelu,
+        MathOperation.ReluMin,
+        MathOperation.Erfinv,
+        MathOperation.Heaviside,
+        MathOperation.Softshrink,
+        MathOperation.Softsign,
+        MathOperation.Square,
+        MathOperation.Log,
         MathOperation.TopKLocalSort,
         MathOperation.TopKMerge,
         MathOperation.TopKRebuild,
@@ -140,10 +149,11 @@ def test_perf_eltwise_unary_sfpu(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 
-    # If dest_acc is on, we unpack Float32 into 16-bit format in src registers
-    # (later copied over in dest reg for SFPU op)
+    # A 32-bit (fp32) input with dest_acc ON unpacks straight into the 32-bit Dest
+    # register. With dest_acc OFF it goes through the source registers (converted to 16-bit)
+    # and is copied into Dest for the SFPU op.
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
     configuration = PerfConfig(
@@ -162,6 +172,7 @@ def test_perf_eltwise_unary_sfpu(
             ITERATIONS(iterations),
             FAST_MODE(fast_mode),
             STABLE_SORT(stable_sort),
+            CLAMP_NEGATIVE(False),
         ],
         runtimes=[
             TILE_COUNT(tile_count_A),
@@ -182,57 +193,6 @@ def test_perf_eltwise_unary_sfpu(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
-    )
-
-    configuration.run(perf_report)
-
-
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float32],
-        same=True,
-    ),
-    dest_acc=[DestAccumulation.Yes],
-    mathop=[MathOperation.ReduceRow],
-    reduce_pool=[ReducePool.Max],
-    loop_factor=list(range(10, 201, 10)),
-)
-def test_perf_sfpu_reduce_row_max(
-    perf_report, formats, dest_acc, mathop, reduce_pool, loop_factor
-):
-    input_dimensions = [32, 32]
-    tile_count = 1
-
-    configuration = PerfConfig(
-        "sources/sfpu_reduce_row_max_perf.cpp",
-        formats,
-        run_types=[
-            PerfRunType.MATH_ISOLATE,
-        ],
-        templates=[
-            MATH_OP(mathop=mathop, pool_type=reduce_pool),
-            APPROX_MODE(ApproximationMode.No),
-            generate_input_dim(input_dimensions, input_dimensions),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_count),
-            LOOP_FACTOR(loop_factor),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
-        ),
-        unpack_to_dest=True,
-        dest_acc=dest_acc,
-        disable_format_inference=True,
-        compile_time_formats=True,
     )
 
     configuration.run(perf_report)

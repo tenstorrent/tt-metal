@@ -25,7 +25,7 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
@@ -73,25 +73,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def _validate_shard_grid_for_device(memory_config, device):
@@ -396,13 +382,22 @@ def run(
     if isinstance(result, (list, tuple)) and len(result) == 2:
         output_tensor_q = mesh_tensor_to_torch(result[0], device if is_mesh_device else None)
         output_tensor_k = mesh_tensor_to_torch(result[1], device if is_mesh_device else None)
+        # If mesh assembly doubled the output (replicate_with_topology sends
+        # full tensor to each device, mesh_tensor_to_torch concatenates),
+        # fall back to device 0.
+        if is_mesh_device:
+            if list(output_tensor_q.shape[-2:]) != list(shape_a[-2:]):
+                dev_tensors = ttnn.get_device_tensors(result[0])
+                output_tensor_q = ttnn.to_torch(dev_tensors[0])
+            if list(output_tensor_k.shape[-2:]) != list(shape_b[-2:]):
+                dev_tensors = ttnn.get_device_tensors(result[1])
+                output_tensor_k = ttnn.to_torch(dev_tensors[0])
     else:
         e2e_perf = stop_measuring_time(start_time)
         return [(False, f"Expected tuple of 2 tensors, got {type(result)}"), e2e_perf]
 
     e2e_perf = stop_measuring_time(start_time)
 
-    # Verify outputs are valid (non-NaN, non-zero, correct shapes)
     q_valid = not torch.isnan(output_tensor_q).any() and output_tensor_q.numel() > 0
     k_valid = not torch.isnan(output_tensor_k).any() and output_tensor_k.numel() > 0
 

@@ -22,9 +22,14 @@ from models.tt_transformers.tt.rope import get_rot_mats
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -180,14 +185,17 @@ def test_decoder_inference(
 
         # Reference model
         attn_mask = torch.triu(torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min), diagonal=1)
-        if (
-            model_args.sliding_window is not None
-            and model_args.sliding_window > 0
-            and (
-                hasattr(reference_model.decoder, "attention_type")
-                and reference_model.decoder.attention_type == "sliding_attention"
-            )
-        ):
+        # transformers 5.x moved the per-layer sliding flag from decoder.attention_type to
+        # decoder.self_attn.layer_type / .is_sliding. Detect both so the sliding-window mask is
+        # applied to the reference (otherwise it stays full-causal while the TT decoder applies the
+        # sliding window -> they diverge over a long prefill).
+        _ref_attn = getattr(reference_model.decoder, "self_attn", None)
+        _ref_is_sliding = (
+            getattr(reference_model.decoder, "attention_type", None) == "sliding_attention"  # transformers <5
+            or getattr(_ref_attn, "layer_type", None) == "sliding_attention"  # transformers 5.x
+            or getattr(_ref_attn, "is_sliding", False)  # transformers 5.x
+        )
+        if model_args.sliding_window is not None and model_args.sliding_window > 0 and _ref_is_sliding:
             attn_mask += torch.tril(
                 torch.full((max_seq_len, max_seq_len), -float("inf")), diagonal=-model_args.sliding_window
             )

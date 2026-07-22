@@ -12,7 +12,7 @@
 using namespace ckernel;
 
 /**
- * @brief Sets up addr mods for transpose dest operations
+ * @brief Sets up addr mods for transpose dest operations.
  */
 inline void _llk_math_transpose_dest_addrmod_()
 {
@@ -39,7 +39,8 @@ inline void _llk_math_transpose_dest_addrmod_()
 }
 
 /**
- * @brief Sets up mop config for transpose dest operations
+ * @brief Sets up mop config for transpose dest operations.
+ *
  * @tparam TRANSPOSE_OF_FACES: Set to true to transpose the faces of the tile, not only to transpose within the faces
  * @tparam EN_32BIT_DEST: Set to true if the destination register is in 32-bit mode
  */
@@ -186,8 +187,10 @@ inline void _llk_math_transpose_dest_mop_config_()
 
 /**
  * @brief Initializes a 32x32 in place transpose operation on a tile in the destination register.
+ *
  * @tparam TRANSPOSE_OF_FACES: Set to true to transpose the faces of the tile, not only to transpose within the faces
  * @tparam EN_32BIT_DEST: Set to true if the destination register is in 32-bit mode
+ * @note @ref _llk_math_transpose_dest_ runs the configured transpose with matching template args.
  */
 template <bool TRANSPOSE_OF_FACES, bool EN_32BIT_DEST>
 inline void _llk_math_transpose_dest_init_()
@@ -201,7 +204,10 @@ inline void _llk_math_transpose_dest_init_()
 
 /**
  * @brief Performs a 32x32 in place transpose operation on a tile in the destination register at tile_idx.
+ *
  * @param tile_idx: Tile index into the destination register
+ * @note Call @ref _llk_math_transpose_dest_init_ with matching template args before this function.
+ * @note On the unpack thread, @ref _llk_unpack_set_srcB_dummy_valid_ (T0) must set a dummy SrcB dvalid, since the MOVD2B reads here stall on SrcB validity.
  */
 inline void _llk_math_transpose_dest_(const std::uint32_t tile_idx)
 {

@@ -9,7 +9,7 @@
 namespace ttnn::prim {
 
 struct FillPadParams {
-    float fill_value;
+    tt::tt_metal::PadValue fill_value;
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 

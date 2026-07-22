@@ -13,13 +13,12 @@
 //
 #pragma once
 
-#include <utility>
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_WAYPOINT) && !defined(FORCE_WATCHER_OFF)
 
 #include "hostdev/dev_msgs.h"
 #include "internal/hw_thread.h"
-
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_WAYPOINT) && !defined(FORCE_WATCHER_OFF)
 #include <cstddef>
+#include <utility>
 
 template <size_t N, size_t... Is>
 constexpr uint32_t fold(const char (&s)[N], std::index_sequence<Is...>) {

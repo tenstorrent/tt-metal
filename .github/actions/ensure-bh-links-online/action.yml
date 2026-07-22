@@ -1,11 +1,6 @@
 name: "Ensure BH Eth links online"
 description: "Perform smi reset and health check in a loop"
 
-inputs:
-  runner-label:
-    required: true
-    description: "Runner label to determine health check parameters"
-
 runs:
   using: "composite"
   steps:
@@ -18,7 +13,7 @@ runs:
         # https://tenstorrent.atlassian.net/browse/BH-84
         for i in {1..10}; do
           echo "Health check attempt $i"
-          if tt-smi -r >/dev/null 2>&1 && ./build/test/tt_metal/tt_fabric/test_system_health ${{ inputs.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}; then
+          if tt-smi -r >/dev/null 2>&1 && ./build/test/tt_metal/tt_fabric/test_system_health; then
             echo "Health checks passed"
             break
           fi

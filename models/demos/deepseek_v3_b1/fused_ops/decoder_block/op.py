@@ -145,7 +145,6 @@ class DecoderBlock:
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
-        metadata_tensor,
         sdpa_scale,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
@@ -174,6 +173,9 @@ class DecoderBlock:
         gate_proj_weights_tensor=None,
         up_proj_weights_tensor=None,
         down_proj_weights_tensor=None,
+        sram_gate_proj_weights_tensor=None,
+        sram_up_proj_weights_tensor=None,
+        sram_down_proj_weights_tensor=None,
         moe_final_output_tensor=None,
         rmsnorm_gamma_tensor=None,
         shared_gate_weights_overlapped=None,
@@ -200,8 +202,9 @@ class DecoderBlock:
         broadcast_topology_override=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
+        termination_semaphore=None,
         is_torus=True,
-        forward_metadata=False,
+        enable_sram_bspm=False,
     ):
         """Build io_tensors and mesh_program_descriptor without executing.
 
@@ -226,7 +229,6 @@ class DecoderBlock:
             dkv_matmul_weights_tensor,
             dkv_rmsnorm_gamma_tensor,
             kv_cache_tensor,
-            metadata_tensor,
             sdpa_scale,
             None,
             sdpa_kv_cache_buffer,
@@ -256,7 +258,6 @@ class DecoderBlock:
             upstream_socket=upstream_socket,
             fabric_config=fabric_config,
             broadcast_topology_override=broadcast_topology_override,
-            forward_metadata=forward_metadata,
         )
 
         moe = MoeOp(
@@ -269,6 +270,9 @@ class DecoderBlock:
             gate_proj_weights_tensor=gate_proj_weights_tensor,
             up_proj_weights_tensor=up_proj_weights_tensor,
             down_proj_weights_tensor=down_proj_weights_tensor,
+            sram_gate_proj_weights_tensor=sram_gate_proj_weights_tensor,
+            sram_up_proj_weights_tensor=sram_up_proj_weights_tensor,
+            sram_down_proj_weights_tensor=sram_down_proj_weights_tensor,
             final_output_tensor=moe_final_output_tensor,
             rmsnorm_gamma_tensor=rmsnorm_gamma_tensor,
             shared_gate_weights_overlapped=shared_gate_weights_overlapped,
@@ -286,16 +290,18 @@ class DecoderBlock:
             reduce_semaphores=reduce_semaphores,
             reduce_root_coord=reduce_root_coord,
             reconfig_moe_cbs=True,
+            enable_sram_bspm=enable_sram_bspm,
             semaphores=moe_semaphores,
             noc_mode=noc_mode,
             cb_id_context=moe_cb_id_context,
             downstream_sockets=downstream_sockets,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
+            termination_semaphore=termination_semaphore,
             bcast_sender_coord=sender_coord,
             is_torus=is_torus,
-            forward_metadata_size_bytes=DeepseekMetadata.aligned_size_bytes() if forward_metadata else 0,
-            metadata_l1_addr=metadata_addr if forward_metadata else 0,
+            forward_metadata_size_bytes=DeepseekMetadata.aligned_size_bytes(),
+            metadata_l1_addr=metadata_addr,
         )
 
         moe._build_descriptors()
@@ -322,7 +328,6 @@ class DecoderBlock:
             qrope_sin_tensor,
             krope_cos_tensor,
             krope_sin_tensor,
-            metadata_tensor,
             kv_cache_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,

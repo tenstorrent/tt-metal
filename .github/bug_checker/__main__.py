@@ -16,6 +16,7 @@ from bug_checker.github_client import (
 )
 from bug_checker.logger import set_verbose
 from bug_checker.orchestrator import (
+    BugCheckFailed,
     check_rule_command,
     dry_run_command,
     list_rules_command,
@@ -115,21 +116,24 @@ def main() -> int:
         dry_run_command(pr_info=pr_info, post_comments=args.post_comments)
         return 0
 
-    if args.subcommand == "check-rule":
-        findings = check_rule_command(
-            pr_info=pr_info,
-            rule_id=args.rule_id,
-            sarif_path=sarif_path,
-            post_comments=args.post_comments,
-        )
-    else:
-        findings = run_bug_check(
-            pr_info=pr_info,
-            sarif_path=sarif_path,
-            post_comments=args.post_comments,
-        )
+    try:
+        if args.subcommand == "check-rule":
+            findings = check_rule_command(
+                pr_info=pr_info,
+                rule_id=args.rule_id,
+                sarif_path=sarif_path,
+                post_comments=args.post_comments,
+            )
+        else:
+            findings = run_bug_check(
+                pr_info=pr_info,
+                sarif_path=sarif_path,
+                post_comments=args.post_comments,
+            )
+    except BugCheckFailed:
+        return 1
 
-    # Exit code: 1 if any blocking findings, 0 otherwise
+    # Exit code: 1 if any blocking findings or if analysis failed, 0 otherwise
     has_blocking = any(f.severity == "blocking" for f in findings)
     return 1 if has_blocking else 0
 

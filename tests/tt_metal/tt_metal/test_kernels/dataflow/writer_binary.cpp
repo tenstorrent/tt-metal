@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     uint32_t dst0_addr  = get_arg_val<uint32_t>(0);
@@ -16,10 +16,10 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(6);
     uint32_t ublock_size_tiles = get_arg_val<uint32_t>(7);
 
-    experimental::CircularBuffer cb0(cb_id_out0);
-    experimental::CircularBuffer cb1(cb_id_out1);
-    experimental::Noc noc;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_dst;
+    CircularBuffer cb0(cb_id_out0);
+    CircularBuffer cb1(cb_id_out1);
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram_dst;
 
     uint32_t ublock0_size_bytes = cb0.get_tile_size() * ublock_size_tiles;
     uint32_t ublock1_size_bytes = cb1.get_tile_size() * ublock_size_tiles;

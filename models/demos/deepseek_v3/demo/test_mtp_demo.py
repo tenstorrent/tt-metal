@@ -9,8 +9,14 @@ import pytest
 
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
 
-MODEL_PATH = Path(os.environ["DEEPSEEK_V3_HF_MODEL"])
-CACHE_DIR = Path(os.environ["DEEPSEEK_V3_CACHE"])
+MODEL_PATH = Path(
+    os.getenv(
+        "DEEPSEEK_V3_HF_MODEL",
+        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked",
+    )
+)
+_ds_cache = os.getenv("DEEPSEEK_V3_CACHE")
+CACHE_DIR = Path(_ds_cache) if _ds_cache else None
 
 
 def _assert_demo_outputs_match(baseline: dict, mtp: dict) -> None:
@@ -114,7 +120,7 @@ def test_mtp_demp_compare_outputs(
         sampling_top_p=1.0,
     )
 
-    baseline = run_demo(enable_mtp=False, **common_kwargs)
+    baseline = run_demo(enable_mtp=False, sample_on_device=False, **common_kwargs)
     mtp = run_demo(enable_mtp=True, sample_on_device=False, **common_kwargs)
 
     _assert_demo_outputs_match(baseline, mtp)

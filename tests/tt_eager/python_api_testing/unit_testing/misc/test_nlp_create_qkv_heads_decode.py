@@ -16,7 +16,6 @@ from models.common.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     nearest_32,
-    is_blackhole,
     skip_for_blackhole,
 )
 
@@ -99,8 +98,6 @@ def test_create_head_interleaved(
     n_local_kv_heads = n_kv_heads // parallel_factor
     if n_local_heads > 32 or n_local_kv_heads == 0:
         pytest.skip("Skipping due to impossible parallelization")
-    if is_blackhole() and is_dram:
-        pytest.skip("Skipping DRAM test on blackhole due to issue #16667")
     for i in range(3):
         # multiple loops to test program caching
         run_test_create_head_interleaved(device, n_local_heads, n_local_kv_heads, head_dim, batch, is_dram)

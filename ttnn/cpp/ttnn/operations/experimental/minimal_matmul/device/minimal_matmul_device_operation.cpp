@@ -86,6 +86,31 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(chunks >= 1, "minimal_matmul requires chunks >= 1, got chunks={}", chunks);
     TT_FATAL(dim == -1, "minimal_matmul currently only supports dim=-1, got dim={}", dim);
 
+    // Validate fused SwiGLU constraints. The weight packs gate/up tile-pairs along N, so
+    // its width must be an even number of tiles; the matmul output collapses each pair to
+    // one tile (silu(gate)*up).
+    if (operation_attributes.fuse_swiglu) {
+        TT_FATAL(
+            !operation_attributes.fused_activation.has_value(),
+            "minimal_matmul cannot combine fuse_swiglu with a unary fused_activation");
+        TT_FATAL(
+            !operation_attributes.fused_ternary_scalar.has_value(),
+            "minimal_matmul cannot combine fuse_swiglu with fused ternary (addcmul)");
+        TT_FATAL(
+            N % (2 * tt::constants::TILE_WIDTH) == 0,
+            "minimal_matmul fuse_swiglu requires weight width N={} to be a multiple of 2*TILE_WIDTH={}",
+            N,
+            2 * tt::constants::TILE_WIDTH);
+        // For chunked split each chunk must hold whole gate/up pairs, so the per-chunk weight
+        // width must be a multiple of 2 tiles (the output per-chunk width is a multiple of 1 tile).
+        TT_FATAL(
+            (N / chunks) % (2 * tt::constants::TILE_WIDTH) == 0,
+            "minimal_matmul fuse_swiglu requires per-chunk weight width N/chunks={} to be a multiple of "
+            "2*TILE_WIDTH={}",
+            N / chunks,
+            2 * tt::constants::TILE_WIDTH);
+    }
+
     if (chunks > 1) {
         // Validate N is divisible by chunks
         TT_FATAL(N % chunks == 0, "Output width N={} must be divisible by chunks={}", N, chunks);
@@ -215,21 +240,24 @@ MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::
     const auto& in1_input_tensor = tensor_args.weight_tensor;
     const auto& in0_input_tensor_shape = in0_input_tensor.logical_shape();
     const auto& in1_input_tensor_shape = in1_input_tensor.logical_shape();
-    const uint32_t N = in1_input_tensor_shape[-1];
+    // For SwiGLU the weight is a [gate|up] matrix of width 2*N; the op emits silu(gate)*up
+    // of width N, so the output along the last dim is half the weight width.
+    const uint32_t N = operation_attributes.fuse_swiglu ? (in1_input_tensor_shape[-1] / 2) : in1_input_tensor_shape[-1];
     const int32_t chunks = operation_attributes.chunks;
 
     const auto& memory_config = operation_attributes.output_mem_config.value_or(in0_input_tensor.memory_config());
     auto dtype = operation_attributes.output_dtype.value_or(in0_input_tensor.dtype());
 
     // Create specs for output tensors
-    std::vector<TensorSpec> output_specs;
+    std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(chunks);
 
     const uint32_t N_per_chunk = N / chunks;
     for (int32_t i = 0; i < chunks; ++i) {
         ttnn::Shape output_shape(in0_input_tensor_shape);
         output_shape[-1] = N_per_chunk;
-        output_specs.push_back(TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+        output_specs.push_back(
+            tt::tt_metal::TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
     }
 
     return output_specs;
@@ -267,7 +295,8 @@ std::vector<Tensor> minimal_matmul(
     int32_t dim,
     std::optional<float> fused_ternary_scalar,
     const std::optional<Tensor>& fused_ternary_input_a,
-    const std::optional<Tensor>& fused_ternary_input_b) {
+    const std::optional<Tensor>& fused_ternary_input_b,
+    bool fuse_swiglu) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -288,7 +317,8 @@ std::vector<Tensor> minimal_matmul(
             .fused_ternary_scalar = fused_ternary_scalar,
             .compute_kernel_config = kernel_config_val,
             .chunks = chunks,
-            .dim = dim},
+            .dim = dim,
+            .fuse_swiglu = fuse_swiglu},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,

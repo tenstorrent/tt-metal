@@ -22,8 +22,6 @@ on:
           - P150b
           - n300-llmbox
           - topology-6u
-          - BH-LLMBox
-          - BH-DeskBox
           - BH-LoudBox
         default: "N150"
       load-to-db:
@@ -77,7 +75,8 @@ jobs:
           fi
 
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
 
@@ -172,7 +171,7 @@ jobs:
         run: |
           RUNNER="$RUNNER_LABEL"
           case "$RUNNER" in
-            P100a|P150b|BH-LLMBox|BH-DeskBox|BH-LoudBox)
+            P100a|P150b|BH-LoudBox)
               ARCH="blackhole"
               ;;
             *)
@@ -195,21 +194,26 @@ jobs:
           echo "ci_version=$CI_VERSION" >> $GITHUB_OUTPUT
           echo "Derived arch=$ARCH ci_version=$CI_VERSION for runner=$RUNNER"
 
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
     name: Build
-    needs: [validate-inputs]
+    needs: [check-harbor, validate-inputs]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
       build-wheel: true
       platform: ${{ needs.validate-inputs.outputs.platform }}
 
   trace-model:
     name: "Trace: ${{ matrix.slug }}"
-    needs: [validate-inputs, build-artifact]
+    needs: [check-harbor, validate-inputs, build-artifact]
     strategy:
       fail-fast: false
       matrix:
@@ -243,12 +247,13 @@ jobs:
     timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
+        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -311,7 +316,7 @@ jobs:
           if [[ "$STATUS" != "200" ]]; then
             echo "::error::LFC does not serve ${INPUT_HF_MODEL} (HTTP $STATUS at $URL)."
             echo "::error::Upload the weights to /mldata/model_checkpoints/pytorch/huggingface/${INPUT_HF_MODEL}/,"
-            echo "::error::or re-run this workflow on a CIv1 runner label (topology-6u, BH-LLMBox, BH-DeskBox, BH-LoudBox)"
+            echo "::error::or re-run this workflow on a CIv1 runner label (topology-6u, BH-LoudBox)"
             echo "::error::where /mnt/MLPerf provides the weights."
             exit 1
           fi
@@ -388,6 +393,63 @@ jobs:
             echo "trace_uid=$TRACE_UID" >> $GITHUB_OUTPUT
           fi
 
+      - name: Write pytest results to job summary
+        if: always()
+        env:
+          SLUG: ${{ matrix.slug }}
+          TEST_PATH: ${{ matrix.test_path }}
+        run: |
+          RESULTS_FILE="model_tracer/traced_operations/_test_results.json"
+          if [[ ! -f "$RESULTS_FILE" ]]; then
+            echo "### Pytest Results — \`$SLUG\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> No test results file found (test may not have started)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open("model_tracer/traced_operations/_test_results.json") as f:
+              r = json.load(f)
+
+          passed = r.get("passed", 0)
+          failed = r.get("failed", 0)
+          total = r.get("total", 0)
+          exit_code = r.get("exit_code", "?")
+          slug = os.environ["SLUG"]
+          test_path = r.get("test_path", os.environ.get("TEST_PATH", ""))
+
+          if failed > 0:
+              status_icon = ":x:"
+              verdict = "FAILED"
+          elif passed > 0:
+              status_icon = ":white_check_mark:"
+              verdict = "PASSED"
+          else:
+              status_icon = ":warning:"
+              verdict = "UNKNOWN"
+
+          summary = f"""### {status_icon} Pytest Results — `{slug}`
+
+          | Metric | Value |
+          |---|---|
+          | Test Path | `{test_path}` |
+          | Passed | {passed} |
+          | Failed | {failed} |
+          | Total | {total} |
+          | Exit Code | {exit_code} |
+          | Verdict | **{verdict}** |
+          """
+
+          import textwrap
+          summary = textwrap.dedent(summary)
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(summary)
+          PY
+
       - name: Write leg status sidecar
         if: always()
         env:
@@ -418,6 +480,18 @@ jobs:
               except Exception as exc:
                   stats["parse_error"] = str(exc)
 
+          test_stats = {"passed": None, "failed": None, "total": None}
+          results_file = "model_tracer/traced_operations/_test_results.json"
+          if os.path.isfile(results_file):
+              try:
+                  with open(results_file) as f:
+                      tr = json.load(f)
+                  test_stats["passed"] = tr.get("passed", 0)
+                  test_stats["failed"] = tr.get("failed", 0)
+                  test_stats["total"] = tr.get("total", 0)
+              except Exception:
+                  pass
+
           record = {
               "slug": os.environ["SLUG"],
               "test_path": os.environ["TEST_PATH"],
@@ -426,6 +500,7 @@ jobs:
               "outcome": os.environ.get("TRACE_OUTCOME") or "skipped",
               "trace_uid": os.environ.get("TRACE_UID") or None,
               "stats": stats,
+              "test_stats": test_stats,
           }
           out_path = f"/work/leg-status/{record['slug']}.json"
           with open(out_path, "w") as f:
@@ -535,9 +610,10 @@ jobs:
       trace-uid: ${{ steps.homogenize.outputs.trace_uid }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
@@ -822,7 +898,7 @@ jobs:
     name: Summarize batch
     needs: [validate-inputs, trace-model, homogenize-and-load]
     if: ${{ always() && needs.trace-model.result != 'cancelled' && needs.trace-model.result != 'skipped' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Download all leg status sidecars
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -847,6 +923,8 @@ jobs:
           rows = []
           success = 0
           failed = 0
+          total_tests_passed = 0
+          total_tests_failed = 0
           status_dir = Path("leg_status")
           if status_dir.is_dir():
               for p in sorted(status_dir.glob("*.json")):
@@ -859,9 +937,16 @@ jobs:
                   success += int(ok)
                   failed += int(not ok)
                   hf = rec.get("hf_model") or ""
+                  ts = rec.get("test_stats", {}) or {}
+                  tp = ts.get("passed")
+                  tf = ts.get("failed")
+                  total_tests_passed += tp or 0
+                  total_tests_failed += tf or 0
+                  test_col = f"{tp or 0} passed, {tf or 0} failed" if tp is not None else "-"
                   rows.append(
                       f"| {icon} | `{rec.get('slug')}` | `{rec.get('test_path')}` | "
-                      f"`{hf}` | {rec.get('stats', {}).get('unique_operations') or '-'} | "
+                      f"`{hf}` | {test_col} | "
+                      f"{rec.get('stats', {}).get('unique_operations') or '-'} | "
                       f"{rec.get('stats', {}).get('total_configurations') or '-'} | "
                       f"`{rec.get('trace_uid') or '-'}` |"
                   )
@@ -871,6 +956,7 @@ jobs:
               "",
               f"- Models requested: **{os.environ.get('MODEL_COUNT', '?')}**",
               f"- Succeeded: **{success}** / Failed: **{failed}**",
+              f"- Pytest totals: **{total_tests_passed} passed**, **{total_tests_failed} failed**",
               f"- Load to DB: **{os.environ.get('LOAD_TO_DB', 'false')}**",
               f"- Run Validation: **{os.environ.get('RUN_VALIDATION', 'false')}**",
           ]
@@ -882,10 +968,10 @@ jobs:
               lines.append(f"- Homogenized `trace_uid`: **`{trace_uid}`**")
           lines.extend([
               "",
-              "| Status | Slug | test_path | HF_MODEL | Unique ops | Total configs | Leg trace_uid |",
-              "|---|---|---|---|---|---|---|",
+              "| Status | Slug | test_path | HF_MODEL | Pytest Results | Unique ops | Total configs | Leg trace_uid |",
+              "|---|---|---|---|---|---|---|---|",
           ])
-          lines.extend(rows or ["| — | (no leg sidecars found) | | | | | |"])
+          lines.extend(rows or ["| — | (no leg sidecars found) | | | | | | |"])
 
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
           if summary_path:

@@ -60,3 +60,28 @@ struct DevicePrintHeader {
 static_assert(sizeof(DevicePrintHeader) == sizeof(uint32_t));
 
 }  // namespace device_print_detail::structures
+
+namespace device_print_dispatch {
+
+struct NocLocationInputInfo {
+    uint16_t x : 6;
+    uint16_t y : 6;
+    uint64_t rw_ptr_addr : 52;
+    uint16_t buf_offset;
+    uint16_t buf_size;
+} __attribute__((packed, aligned(4)));
+
+static_assert(sizeof(NocLocationInputInfo) == 12, "NocLocationInputInfo must be 12 bytes");
+static_assert(sizeof(NocLocationInputInfo) % 4 == 0, "NocLocationInputInfo must be 4-byte aligned");
+
+struct DramStreamMessageHeader {
+    uint16_t x : 6;
+    uint16_t y : 6;
+    uint16_t align : 6;
+    uint16_t buffer_wrapped : 1;
+    uint16_t length : 13;
+} __attribute__((packed, aligned(4)));
+
+static_assert(sizeof(DramStreamMessageHeader) == 4, "DramStreamMessageHeader must be 4 bytes");
+
+}  // namespace device_print_dispatch

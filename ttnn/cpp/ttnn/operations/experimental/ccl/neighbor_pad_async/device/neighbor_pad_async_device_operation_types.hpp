@@ -36,6 +36,8 @@ struct NeighborPadAsyncParams {
     std::optional<uint32_t> pad2_cluster_axis;
     uint32_t pad2_num_links = 0;
     bool using_persistent_buffers = false;
+    uint32_t logical_h = 0;  // 0 = no masking; >0 zeros interior rows at global index >= logical_h
+    uint32_t t_front_pad = 0;  // 0 = no T-front padding; >0 prepends zero T-frames to output (B=1 only)
 
     // Constructor required because GlobalSemaphore is not default constructible
     NeighborPadAsyncParams(
@@ -56,7 +58,9 @@ struct NeighborPadAsyncParams {
         uint32_t pad2_right = 0,
         std::optional<uint32_t> pad2_cluster_axis = std::nullopt,
         uint32_t pad2_num_links = 0,
-        bool using_persistent_buffers = false) :
+        bool using_persistent_buffers = false,
+        uint32_t logical_h = 0,
+        uint32_t t_front_pad = 0) :
         dim(dim),
         padding_left(padding_left),
         padding_right(padding_right),
@@ -74,30 +78,47 @@ struct NeighborPadAsyncParams {
         pad2_right(pad2_right),
         pad2_cluster_axis(pad2_cluster_axis),
         pad2_num_links(pad2_num_links),
-        using_persistent_buffers(using_persistent_buffers) {}
+        using_persistent_buffers(using_persistent_buffers),
+        logical_h(logical_h),
+        t_front_pad(t_front_pad) {}
 
-    auto attributes() const {
-        using ttsl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("dim", dim);
-        attrs.emplace_back("padding_left", padding_left);
-        attrs.emplace_back("padding_right", padding_right);
-        attrs.emplace_back("padding_mode", padding_mode);
-        attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("h_neighbor_semaphore", h_neighbor_semaphore);
-        attrs.emplace_back("w_neighbor_semaphore", w_neighbor_semaphore);
-        attrs.emplace_back("barrier_semaphore", barrier_semaphore);
-        attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("output_mem_config", output_mem_config);
-        attrs.emplace_back("topology", topology);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("pad_dim2", pad_dim2);
-        attrs.emplace_back("pad2_left", pad2_left);
-        attrs.emplace_back("pad2_right", pad2_right);
-        attrs.emplace_back("pad2_cluster_axis", pad2_cluster_axis);
-        attrs.emplace_back("pad2_num_links", pad2_num_links);
-        attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
-        return attrs;
+    // Program-cache hash / canonical-key fields
+    static constexpr auto attribute_names = std::make_tuple(
+        "dim",
+        "padding_left",
+        "padding_right",
+        "padding_mode",
+        "cluster_axis",
+        "num_links",
+        "output_mem_config",
+        "topology",
+        "ring_size",
+        "pad_dim2",
+        "pad2_left",
+        "pad2_right",
+        "pad2_cluster_axis",
+        "pad2_num_links",
+        "logical_h",
+        "t_front_pad");
+
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            this->dim,
+            this->padding_left,
+            this->padding_right,
+            this->padding_mode,
+            this->cluster_axis,
+            this->num_links,
+            this->output_mem_config,
+            this->topology,
+            this->ring_size,
+            this->pad_dim2,
+            this->pad2_left,
+            this->pad2_right,
+            this->pad2_cluster_axis,
+            this->pad2_num_links,
+            this->logical_h,
+            this->t_front_pad);
     }
 };
 

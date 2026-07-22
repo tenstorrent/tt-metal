@@ -6,6 +6,11 @@ import torch
 import ttnn
 import pytest
 
+from tests.ttnn.python_api_testing.typecast_test_helpers import (
+    make_typecast_test_input,
+    typecast_test_input_bounds,
+)
+
 
 # use case for TG Llama : need to achieve (int32 + int32) addition with (uint16 + int32) inputs
 def test_typecast_uint16(device):
@@ -93,8 +98,8 @@ def test_typecast_uint16(device):
 def test_typecast_subcore_grid(device, shape, sub_core_grid):
     torch.manual_seed(0)
 
-    in_data1 = torch.randint(0, 65500, (shape), dtype=torch.int32)
-    in_data2 = torch.randint(0, 128000, (shape), dtype=torch.int32)
+    in_data1 = make_typecast_test_input(shape, torch.int32, *typecast_test_input_bounds(ttnn.uint16, ttnn.uint32))
+    in_data2 = make_typecast_test_input(shape, torch.int32, *typecast_test_input_bounds(ttnn.int32, ttnn.int32))
 
     input_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
@@ -165,7 +170,7 @@ def test_typecast_subcore_grid_large_tensor(device, shape, sub_core_grid):
     """Regression test: large tensors with sub_core_grids must not overflow L1."""
     torch.manual_seed(0)
 
-    in_data = torch.randint(0, 65500, shape, dtype=torch.int32)
+    in_data = make_typecast_test_input(shape, torch.int32, *typecast_test_input_bounds(ttnn.uint16, ttnn.uint32))
     input_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     input_tensor = ttnn.from_torch(

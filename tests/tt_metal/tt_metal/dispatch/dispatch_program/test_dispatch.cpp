@@ -175,7 +175,7 @@ TEST_F(MeshDispatchFixture, EthTestBlank) {
             CoreCoord eth_core = *eth_cores.begin();
             CreateKernel(
                 program,
-                "tt_metal/kernels/dataflow/blank.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
                 eth_core,
                 tt::tt_metal::EthernetConfig{
                     .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER,
@@ -328,21 +328,22 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 
             CreateKernel(
                 program,
-                "tt_metal/kernels/dataflow/blank.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
                 core_coord,
                 DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
             CreateKernel(
                 program,
-                "tt_metal/kernels/dataflow/blank.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
                 core_coord,
                 DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
             CreateKernel(
                 program,
-                "tt_metal/kernels/dataflow/blank.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
                 core_coord,
-                EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = static_cast<NOC>(erisc_idx), .processor = dm_processor});
+                EthernetConfig{
+                    .eth_mode = Eth::RECEIVER, .noc = static_cast<NOC>(erisc_idx), .processor = dm_processor});
 
             workload.add_program(device_range, std::move(program));
             this->RunProgram(mesh_device, workload);
@@ -385,11 +386,13 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 class EarlyReturnFixture : public MeshDispatchFixture {
     void SetUp() override {
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(true);
+        get_shared_devices().needs_recovery = true;
         MeshDispatchFixture::SetUp();
     }
     void TearDown() override {
         MeshDispatchFixture::TearDown();
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(false);
+        get_shared_devices().needs_recovery = true;
     }
 };
 
@@ -403,7 +406,7 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
         // Kernel will block if it doesn't early return.
         CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             worker,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 

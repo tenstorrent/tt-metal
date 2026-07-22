@@ -136,6 +136,7 @@ int main() {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
+    noc_clear_all_packet_tags();
 
     DEVICE_PRINT_INITIALIZE_LOCK();
     deassert_all_reset();  // Bring all riscs on eth cores out of reset

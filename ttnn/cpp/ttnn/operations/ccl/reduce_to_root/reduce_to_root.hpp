@@ -25,7 +25,7 @@ std::vector<ttnn::Tensor> reduce_to_root(
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor = std::nullopt,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt);
 
-std::vector<ttnn::TensorSpec> reduce_to_root_tensor_spec(
+std::vector<tt::tt_metal::TensorSpec> reduce_to_root_tensor_spec(
     const ttnn::Tensor& input_tensor_l,
     const ttnn::Tensor& input_tensor_s,
     const ttnn::Tensor& input_tensor_m,

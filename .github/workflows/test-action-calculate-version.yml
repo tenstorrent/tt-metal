@@ -14,11 +14,12 @@ on:
 jobs:
   test-calculate-version:
     name: Test Calculate Version Action
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0  # Fetch all history for git tag operations
 
@@ -136,11 +137,12 @@ jobs:
 
   test-version-bumping:
     name: Test Version Bumping Logic
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
 
@@ -244,11 +246,12 @@ jobs:
 
   test-dev-tag-versioning:
     name: Test Dev Tag Minor Version Bumping
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
 
@@ -393,11 +396,12 @@ jobs:
 
   test-dev-tag-consistency:
     name: Test Dev Tag Consistency
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
 
@@ -547,11 +551,12 @@ jobs:
 
   test-edge-cases:
     name: Test Edge Cases
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
 
@@ -616,12 +621,13 @@ jobs:
 
   integration-test:
     name: Integration Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs: [test-calculate-version, test-version-bumping, test-edge-cases]
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
 
@@ -675,11 +681,12 @@ jobs:
 
   test-force-bump-and-ignore-commits:
     name: Test Force Bump and Ignore Commits
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
 
@@ -904,11 +911,12 @@ jobs:
 
   test-dev-tag-rc-comparison:
     name: Test Dev Tag RC vs Semver Comparison
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
 
@@ -1097,7 +1105,7 @@ jobs:
 
   final-test-summary:
     name: Final Test Summary
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs: [test-calculate-version, test-version-bumping, test-dev-tag-versioning, test-dev-tag-consistency, test-edge-cases, integration-test, test-force-bump-and-ignore-commits, test-dev-tag-rc-comparison]
     steps:
       - name: Test summary

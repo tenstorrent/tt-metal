@@ -53,9 +53,9 @@ NlpCreateQkvHeadsFalcon7BProgramFactory::cached_program_t NlpCreateQkvHeadsFalco
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Tensor& q = tensor_return_value.q;
-    tt_metal::Tensor& k = tensor_return_value.k;
-    tt_metal::Tensor& v = tensor_return_value.v;
+    ttnn::Tensor& q = tensor_return_value.q;
+    ttnn::Tensor& k = tensor_return_value.k;
+    ttnn::Tensor& v = tensor_return_value.v;
 
     tt_metal::Buffer* q_buffer = q.buffer();
     TT_ASSERT(q_buffer != nullptr, "Output q buffer should be allocated on device!");

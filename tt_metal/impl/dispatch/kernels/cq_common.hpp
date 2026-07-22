@@ -7,11 +7,15 @@
 #include "core_config.h"
 #include "internal/risc_attribs.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "cq_commands.hpp"
 #include "cq_helpers.hpp"
+#include "telemetry.hpp"
 
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
 #include <limits>
+#include <array>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
@@ -33,8 +37,10 @@ struct CQWriteInterface {
 
 constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
-FORCE_INLINE
-uint32_t round_up_pow2(uint32_t v, uint32_t pow2_size) { return (v + (pow2_size - 1)) & ~(pow2_size - 1); }
+template <typename T>
+FORCE_INLINE T round_up_pow2(T v, uint32_t pow2_size) {
+    return (v + (pow2_size - 1)) & ~static_cast<T>(pow2_size - 1);
+}
 
 FORCE_INLINE
 uint32_t div_up(uint32_t n, uint32_t d) { return (n + d - 1) / d; }
@@ -56,6 +62,44 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     int32_t diff = a - b;
     return diff > 0;
 }
+
+// On Quasar, accesses to L1 semaphores must bypass the L1 D$ via the uncached alias so that
+// updates from other RISCs/cores are visible. No-op on BH/WH.
+constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
+#ifdef ARCH_QUASAR
+    return addr + MEM_L1_UNCACHED_BASE;
+#else
+    return addr;
+#endif
+}
+
+// Inverse of l1_uncached_addr: maps an uncached-alias address back to its cached form.
+// Identity on non-Quasar. Used to store the host-visible (cached-form) prefetch_q_rd_ptr value.
+constexpr FORCE_INLINE uintptr_t l1_cached_addr(uintptr_t addr) {
+#ifdef ARCH_QUASAR
+    ASSERT(addr >= MEM_L1_UNCACHED_BASE);
+    return addr - MEM_L1_UNCACHED_BASE;
+#else
+    return addr;
+#endif
+}
+
+template <typename T>
+FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
+    return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
+}
+
+#ifdef ARCH_QUASAR
+// Returns a pointer to the L1 worker completion counter for `stream`. Workers signal completion
+// into L1 (DISPATCH_MESSAGE_ADDR) on Quasar rather than NOC stream registers. `completion_counter_offset`
+// selects this CQ's range of counters, when multiple CQs share this dispatch core. `first_stream_used`
+// is the index of the first stream used by this CQ.
+FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
+    uint32_t stream, uint32_t first_stream_used, uint32_t completion_counter_offset) {
+    return uncached_l1_ptr<uint32_t>(
+        DISPATCH_MESSAGE_ADDR + L1_ALIGNMENT * (completion_counter_offset + stream - first_stream_used));
+}
+#endif
 
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
 
@@ -190,12 +234,12 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(
     uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF, uint8_t noc = noc_index) {
 #if defined(ARCH_BLACKHOLE)
     noc_async_writes_flushed();  // ensure inline_l1_src_addr is not overwritten
-    uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
+    uintptr_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
     volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
     *inline_l1_src_addr_ptr = val;
     cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_REG_CMD_BUF>(
-        inline_l1_src_addr, dst_addr, 4);
+        static_cast<uint32_t>(inline_l1_src_addr), dst_addr, 4);
 #else
     if constexpr (wait) {
         WAYPOINT("NISW");
@@ -221,7 +265,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
 #if defined(ARCH_BLACKHOLE)
     // On Blackhole inline writes are disabled so use cq_noc_async_write_init_state with inline write cmd buf
     // See comment in `noc_inline_dw_write` for more details
-    uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
+    uintptr_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
     volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, NCRISC_WR_REG_CMD_BUF>(0, dst_addr, 0);
@@ -246,7 +290,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
 template <uint32_t sem_id>
 FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(sem_id)));
 
     // Downstream component sets the MSB as a terminate bit
     // Mask that off to avoid a race between the sem count and terminate
@@ -271,7 +315,7 @@ class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
 
         // Ensure last sem_inc has landed
         noc_async_atomic_barrier();
@@ -292,7 +336,7 @@ public:
     // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate
@@ -347,8 +391,12 @@ public:
             }
         }
 #endif
+#ifdef ARCH_QUASAR
+        Semaphore<fd_core_type>(downstream_sem_id).up(n);
+#else
         noc_semaphore_inc(
             get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
+#endif
     }
 
     uint32_t additional_count{0};
@@ -381,7 +429,7 @@ class CBReader {
 public:
     FORCE_INLINE void wait_all_pages() {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
 
         uint32_t to_wait_for = upstream_count_;
 
@@ -398,7 +446,7 @@ public:
 
     // Return available space (in bytes) after data_ptr. This data will always be contiguous in memory and will never
     // wrap around.
-    uint32_t available_bytes(uint32_t data_ptr) const { return cb_fence_ - data_ptr; }
+    uint32_t available_bytes(uintptr_t data_ptr) const { return static_cast<uint32_t>(cb_fence_ - data_ptr); }
 
 protected:
     FORCE_INLINE void init() {
@@ -421,12 +469,15 @@ protected:
 
     // Acquire pages from upstream. Updates the cb_fence and returns the number of pages acquired. May block waiting for
     // credits from upstream if we already acquired all the pages previously.
+    template <typename T = NoTelemetryBlockGuard>
     FORCE_INLINE uint32_t acquire_pages() {
+        static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
 
         if (local_count_ == upstream_count_) {
             WAYPOINT("UAPW");
+            T block_guard;
             uint32_t heartbeat = 0;
             do {
                 invalidate_l1_cache();
@@ -436,7 +487,7 @@ protected:
         }
 
         // Set a fence to limit how much is processed at once
-        uint32_t limit = (block_next_start_addr_[rd_block_idx_] - cb_fence_) >> cb_log_page_size;
+        uint32_t limit = static_cast<uint32_t>((block_next_start_addr_[rd_block_idx_] - cb_fence_) >> cb_log_page_size);
         uint32_t available = upstream_count_ - local_count_;
         uint32_t usable = (available > limit) ? limit : available;
 
@@ -447,9 +498,9 @@ protected:
     }
 
     // Byte address fence delimiting the end of currently usable data (do not process beyond this address).
-    uint32_t cb_fence_{0};
+    uintptr_t cb_fence_{0};
     // Byte addresses of the start of the next block for each block index; used to cap processing per block and wrap.
-    uint32_t block_next_start_addr_[cb_blocks]{};
+    uintptr_t block_next_start_addr_[cb_blocks]{};
     // Current read block index within the circular buffer.
     uint32_t rd_block_idx_{0};
 
@@ -478,13 +529,16 @@ public:
         this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);
     }
 
-    // Returns how much data is available. Will block until data is available. May release old pages before cmd_ptr to
+    // Returns how much data is available. Will block until data is available. Tracks via blocked
+    // counter addresses if check_blocking is true.May release old pages before cmd_ptr to
     // writer. Updates cmd_ptr on wrap-around.
     // noc_increment_nonposted_writes_issued() must be called before calling this function.
     // If this function doesn't return sufficient data, there are two options:
     // 1. Process all the available data and then call this function again.
     // 2. Call get_cb_page_and_release_pages to attempt to get more data.
-    FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uint32_t& cmd_ptr) {
+    template <typename T = NoTelemetryBlockGuard>
+    FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uintptr_t& cmd_ptr) {
+        static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
         if (this->available_bytes(cmd_ptr) == 0) {
             if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
                 if (this->rd_block_idx_ == cb_blocks - 1) {
@@ -493,7 +547,7 @@ public:
                 }
                 move_rd_to_next_block_and_release_pages();
             }
-            this->acquire_pages();
+            this->template acquire_pages<T>();
         }
         return this->available_bytes(cmd_ptr);
     }
@@ -505,7 +559,7 @@ public:
     // cmd_ptr is set to the base address after on_boundary is called).
     // noc_increment_nonposted_writes_issued() must be called before on_boundary returns.
     template <typename OnBoundaryFn>
-    FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
+    FORCE_INLINE uint32_t get_cb_page_and_release_pages(uintptr_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
         if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
             const bool will_wrap = (this->rd_block_idx_ == cb_blocks - 1);
             on_boundary(will_wrap);
@@ -518,10 +572,10 @@ public:
         return this->acquire_pages();
     }
 
-    FORCE_INLINE void release_all_pages(uint32_t curr_ptr) {
+    FORCE_INLINE void release_all_pages(uintptr_t curr_ptr) {
         release_block_pages();
-        uint32_t pages_to_release =
-            cb_pages_per_block - ((this->block_next_start_addr_[this->rd_block_idx_] - curr_ptr) >> cb_log_page_size);
+        uint32_t pages_to_release = static_cast<uint32_t>(
+            cb_pages_per_block - ((this->block_next_start_addr_[this->rd_block_idx_] - curr_ptr) >> cb_log_page_size));
         if (pages_to_release != 0) {
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(pages_to_release);
         }
@@ -569,7 +623,7 @@ public:
 
     // Get a new CB page. Will update cmd_ptr on wrap-around. Returns the number of pages acquired. Will not release
     // pages to writer.
-    FORCE_INLINE uint32_t get_cb_page(uint32_t& cmd_ptr) {
+    FORCE_INLINE uint32_t get_cb_page(uintptr_t& cmd_ptr) {
         // Strided past the data that has arrived, get the next page
         if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
             if (this->rd_block_idx_ == cb_blocks - 1) {
@@ -583,7 +637,7 @@ public:
     }
 
     // Returns how much data is available. Will block until data is available.
-    FORCE_INLINE uint32_t wait_for_available_data(uint32_t& cmd_ptr) {
+    FORCE_INLINE uint32_t wait_for_available_data(uintptr_t& cmd_ptr) {
         if (this->available_bytes(cmd_ptr) == 0) {
             get_cb_page(cmd_ptr);
         }
@@ -591,11 +645,11 @@ public:
     }
 
     // Advance cmd_ptr by length. If we wrap around, wrap the fence (should only happen if we hit the end exactly).
-    FORCE_INLINE void consumed_data(uint32_t& cmd_ptr, uint32_t length) {
+    FORCE_INLINE void consumed_data(uintptr_t& cmd_ptr, uint32_t length) {
         // This is ugly: get_cb_page code can wrap and this can wrap
         // They peacefully coexist because we won't wrap there and here at once
         if (cmd_ptr + length >= cb_end) {
-            length -= cb_end - cmd_ptr;
+            length -= static_cast<uint32_t>(cb_end - cmd_ptr);
             cmd_ptr = cb_base;
             if (this->cb_fence_ == cb_end) {
                 // We hit the nail on the head, wrap the fence
@@ -636,4 +690,43 @@ FORCE_INLINE void careful_copy_from_l1_to_local_cache(
         l1_cache[n + 5] = v5;
         n += 6;
     }
+}
+
+template <bool telemetry_enabled, size_t max_num_worker_sems>
+FORCE_INLINE uint32_t set_sub_device_worker_counts(
+    uintptr_t cmd_ptr,
+    std::array<uint32_t, max_num_worker_sems>& workers_per_sub_device,
+    volatile tt_l1_ptr uint32_t* sub_device_worker_counts_update,
+    uintptr_t dispatch_telemetry_base) {
+    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+    uint32_t num_sub_devices = cmd->set_sub_device_worker_counts.num_sub_devices;
+    ASSERT(num_sub_devices <= max_num_worker_sems);
+    volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
+
+    static uint32_t local_sub_device_worker_counts_update = 0;
+
+    for (uint32_t i = 0; i < num_sub_devices; ++i) {
+        uint32_t worker_count = *(data_ptr++);
+        workers_per_sub_device[i] = worker_count;
+        if constexpr (telemetry_enabled) {
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                dispatch_telemetry_base)
+                ->workers_per_sub_device[i] = worker_count;
+        }
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        DPRINT("dispatch_s sub_device_idx={} num_workers={}\n", i, workers_per_sub_device[i]);
+#endif
+    }
+    for (uint32_t i = num_sub_devices; i < max_num_worker_sems; ++i) {
+        workers_per_sub_device[i] = 0;
+        if constexpr (telemetry_enabled) {
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                dispatch_telemetry_base)
+                ->workers_per_sub_device[i] = 0;
+        }
+    }
+
+    *sub_device_worker_counts_update = ++local_sub_device_worker_counts_update;
+    uint32_t command_size = sizeof(CQDispatchCmd) + num_sub_devices * sizeof(uint32_t);
+    return round_up_pow2(command_size, L1_ALIGNMENT);
 }

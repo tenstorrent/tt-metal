@@ -27,10 +27,23 @@ REPORT_DIR = METAL_HOME / "generated/test_reports"
 FAKE_TEST_ID = "fake/test_hang.py::test_hung_operation[device0]"
 
 
+@pytest.fixture
+def reset_device_after_hang():
+    """Always reset the card after the test.
+
+    This test intentionally hangs the device and has no opt-out — there's no
+    failure mode where a caller wants to keep the broken state. Without a
+    reset here, subsequent test files (e.g. test_triage.py's manual-hang
+    fixture) start on a broken device and fail with "Inspector data unavailable".
+    """
+    yield
+    subprocess.run(["tt-smi", "-r"], check=True)
+
+
 @pytest.mark.skipif(not HANG_APP.exists(), reason="Hang app binary not built")
 @pytest.mark.skipif(not TRIAGE_SCRIPT.exists(), reason="tt-triage.py not found")
 @pytest.mark.skipif(not HANG_REPORT_SCRIPT.exists(), reason="hang_report.py not found")
-def test_hang_generates_junit_xml():
+def test_hang_generates_junit_xml(reset_device_after_hang):
     existing = set(REPORT_DIR.glob("hang_report_*.xml")) if REPORT_DIR.exists() else set()
 
     triage_output_path = METAL_HOME / "generated/triage_output.txt"

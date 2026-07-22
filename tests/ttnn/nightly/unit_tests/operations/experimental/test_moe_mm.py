@@ -470,6 +470,11 @@ SHAPE2TIME = {
 @pytest.mark.parametrize("check_accuracy", [True], ids=["check_accuracy_True"])
 @pytest.mark.parametrize("dump_outputs", [False], ids=["dump_outputs_False"])
 def test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
+    if ttnn.device.is_blackhole() or ttnn.device.is_wormhole_b0():
+        pytest.skip(
+            reason="Disabled by issue #44858: stable nightly moe_mm failures (blackhole TT_FATAL num_cores/required_cores and wormhole TT_THROW system_memory_manager)"
+        )
+
     accuracy_metrics = run_test_moe_mm(
         device,
         M,

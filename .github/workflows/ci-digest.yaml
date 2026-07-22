@@ -1,0 +1,104 @@
+name: "CI Digest"
+
+on:
+  schedule:
+    # Off :00, which GitHub sheds first under load. Weekdays only.
+    - cron: "12 8 * * 1-5"  # disaggregated-prefill
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: "which digest to run now (manual runs ignore the schedule and skip Slack)"
+        type: choice
+        default: all
+        options: [all, disaggregated-prefill]  # keep in sync with the matrix below
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: ci-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    name: "digest · ${{ matrix.name }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: disaggregated-prefill
+            schedule: "12 8 * * 1-5"  # must match a cron in on.schedule (gates this leg)
+            slack_channel: "C0B7VTPPMRD"  # SLACK_BOT_TOKEN bot must be a member of this channel
+            workflows:  # file names; must be shell-safe (no spaces) — passed unquoted to --workflows
+              - blackhole-e2e-tests.yaml
+              - t3000-e2e-tests.yaml
+              - blaze-models-prefill-tests.yaml
+              - demo-sp-release.yaml
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+
+      # Step-level `if` (matrix is unavailable in a job-level `if`). Scheduled runs
+      # match github.event.schedule (survives late delivery); dispatch uses `digest`.
+      - name: Generate digest
+        id: digest
+        if: >-
+          (github.event_name == 'schedule' && github.event.schedule == matrix.schedule) ||
+          (github.event_name == 'workflow_dispatch' && (inputs.digest == 'all' || inputs.digest == matrix.name))
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/ci_digest.py --out-dir out \
+            --name "${{ matrix.name }}" \
+            --workflows ${{ join(matrix.workflows, ' ') }}
+          shopt -s nullglob
+          files=(out/ci-digest-*.md)
+          if [ ${#files[@]} -gt 0 ]; then
+            { echo; cat "${files[0]}"; } >> "$GITHUB_STEP_SUMMARY"
+            echo "produced=true" >> "$GITHUB_OUTPUT"
+            jf=(out/ci-digest-*.json)
+            ag=$(python3 -c "import json,sys; print(str(json.load(open(sys.argv[1]))['all_green']).lower())" "${jf[0]}")
+            echo "all_green=$ag" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Digest in the run log, so it's readable without opening the Step Summary.
+      - name: Print digest
+        if: steps.digest.outputs.produced == 'true'
+        run: cat out/ci-digest-*.md
+
+      - name: Upload digest
+        if: steps.digest.outputs.produced == 'true'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ci-digest-${{ matrix.name }}-${{ github.run_id }}
+          path: out/
+
+      # Single Slack gate: both Slack steps below key off this step's `go` output.
+      - name: Gate Slack notification
+        id: notify
+        if: steps.digest.outputs.produced == 'true' && matrix.slack_channel != '' && github.event_name == 'schedule'
+        run: echo "go=true" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve this job's id
+        if: steps.notify.outputs.go == 'true'
+        id: jobid
+        uses: tenstorrent/tt-github-actions/.github/actions/job_id@main
+        with:
+          job_name: "digest · ${{ matrix.name }}"
+
+      # #summary-<job_id> deep-links to this job's step summary on the run page.
+      - name: Notify Slack
+        if: steps.notify.outputs.go == 'true'
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          errors: true  # fail the step on a Slack API error (default false swallows it)
+          payload: |
+            channel: "${{ matrix.slack_channel }}"
+            text: "🗞️ ${{ matrix.name }} digest: <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}#summary-${{ steps.jobid.outputs.job_id }}|open summary> ${{ steps.digest.outputs.all_green == 'true' && ':git-approved:' || ':git-check-failed:' }}"

@@ -7,11 +7,14 @@
 #include <stdint.h>
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "hlk_desc.hpp"
 #include <hostdevcommon/kernel_structs.h>
+#include <tt-metalium/face_geometry.hpp>
+#include <tt-metalium/tile.hpp>
 
 namespace tt::tt_metal {
 enum class MathFidelity : uint8_t;
@@ -41,6 +44,14 @@ public:
 
     bool dst_full_sync_en{};
 
+    // When set, jit_build emits the 2x-packed src-register format as the
+    // unpack_dst_format for 2x-capable inputs.
+    bool enable_2x_src_format{};
+
+    // (Quasar only) Explicit unpack-to-dest flag; emitted as `constexpr bool UnpackToDestEn` into
+    // chlkc_descriptors.h. Default false; WH/BH never set it (they keep UnpackToDestEn hardcoded in llk_defs.h).
+    bool unpack_to_dest_en{};
+
     JitBuildOptions(const JitBuildEnv& env);
     void set_name(const std::string& name);
 
@@ -58,6 +69,14 @@ public:
         uint32_t tile_r_dim,
         uint32_t tile_c_dim);
     void set_cb_tile_size_all_cores(CBIndex cb_id, uint32_t tile_size);
+
+    void set_cb_data_fmt_and_tile(CBIndex cb_id, DataFormat data_format, const std::optional<Tile>& tile);
+    void set_cb_data_fmt_tile_and_face_geometry(
+        CBIndex cb_id,
+        DataFormat data_format,
+        const std::optional<Tile>& tile,
+        const std::optional<FaceGeometry>& unpack_face_geometry);
+
     // old API name
     void set_hlk_operand_dataformat_all_cores(HlkOperand op_id, DataFormat data_format);
 };

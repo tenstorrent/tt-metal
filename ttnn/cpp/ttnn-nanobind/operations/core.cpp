@@ -271,15 +271,15 @@ void py_module(nb::module_& mod) {
 
     mod.def(
            "allocate_tensor_on_device",
-           [](const ttnn::TensorSpec& spec, MeshDevice* device) {
-               return tt::tt_metal::create_device_tensor(spec, device);
+           [](const tt::tt_metal::TensorSpec& spec, MeshDevice* device) {
+               return ttnn::create_device_tensor(spec, device);
            },
            nb::arg("tensor_spec"),
            nb::arg("mesh_device"))
         .def(
             "allocate_tensor_on_host",
-            [](const ttnn::TensorSpec& spec, MeshDevice* device) {
-                return tt::tt_metal::allocate_tensor_on_host(spec, device);
+            [](const tt::tt_metal::TensorSpec& spec, MeshDevice* device) {
+                return ttnn::allocate_tensor_on_host(spec, device);
             },
             nb::arg("tensor_spec"),
             nb::arg("mesh_device"));
@@ -291,8 +291,8 @@ void py_module(nb::module_& mod) {
               ttnn::Layout layout,
               MeshDevice* device,
               const std::optional<ttnn::MemoryConfig>& mem_config) {
-               return tt::tt_metal::create_device_tensor(
-                   TensorSpec(
+               return ttnn::create_device_tensor(
+                   tt::tt_metal::TensorSpec(
                        shape,
                        tt::tt_metal::TensorLayout(
                            dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
@@ -310,8 +310,8 @@ void py_module(nb::module_& mod) {
                ttnn::Layout layout,
                MeshDevice* device,
                const std::optional<ttnn::MemoryConfig>& mem_config) {
-                return tt::tt_metal::allocate_tensor_on_host(
-                    TensorSpec(
+                return ttnn::allocate_tensor_on_host(
+                    tt::tt_metal::TensorSpec(
                         shape,
                         tt::tt_metal::TensorLayout(
                             dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),

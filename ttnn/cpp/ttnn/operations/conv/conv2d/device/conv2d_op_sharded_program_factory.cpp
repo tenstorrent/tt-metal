@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <umd/device/types/xy_pair.hpp>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <utility>
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/core_coord.hpp"
@@ -15,6 +16,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -22,8 +24,9 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <utility>
+#include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn::prim {
@@ -32,6 +35,7 @@ namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::get_num_cores_channels_from_parallel_config;
 using ttnn::operations::conv::is_1d_depthwise_conv;
+using ttnn::operations::conv::should_coalesce_1d_depthwise_conv_reads;
 using ttnn::operations::conv::SkipMcast;
 
 // Compute kernel addressing mode divides addresses with 16
@@ -169,9 +173,25 @@ ActivationReuseConfig calculate_activation_reuse_params(
     return config;
 }
 
-Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::create(
-    const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+namespace {
+
+// The intermediate conv_reader_indices tensor is allocated once by
+// create_workload_descriptor and parked on the WorkloadDescriptor; we receive
+// the raw Buffer* here and wire it into the READER_INDICES CB and reader CT args.
+tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    Tensor& output_tensor,
+    tt::tt_metal::Buffer* conv_reader_indices_buffer) {
+    using tt::tt_metal::CBDescriptor;
+    using tt::tt_metal::CBFormatDescriptor;
+    using tt::tt_metal::ComputeConfigDescriptor;
+    using tt::tt_metal::DataMovementConfigDescriptor;
+    using tt::tt_metal::KernelDescriptor;
+    using tt::tt_metal::ProgramDescriptor;
+    using tt::tt_metal::SemaphoreDescriptor;
+
+    ProgramDescriptor desc;
     const auto& a = tensor_args.a;
     const auto& b = tensor_args.b;
 
@@ -310,7 +330,19 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     }
 
     const bool is_conv_1d_depthwise_conv =
-        is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, filter_w, ashape[1], has_bias);
+        is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, ashape[1], has_bias);
+    const uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
+    const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
+        is_conv_1d_depthwise_conv,
+        a.memory_config().memory_layout(),
+        input_channels_padded,
+        filter_w,
+        dilation_w,
+        a.dtype());
+    TT_FATAL(
+        !coalesce_1d_depthwise_kw_reads || filter_h == 1,
+        "Coalesced 1D depthwise reads require filter_h == 1, got {}",
+        filter_h);
 
     const bool enable_split_reader =
         is_split_reader_supported(a.memory_config().memory_layout(), is_conv_1d_depthwise_conv, act_block_h_ntiles) &&
@@ -348,6 +380,17 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     }
 
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
+    if (is_conv_1d_depthwise_conv && height_sharded) {
+        const uint32_t expected_act_block_w_ntiles =
+            tt::round_up(
+                input_channels_padded * (coalesce_1d_depthwise_kw_reads ? filter_w : 1), tt::constants::TILE_WIDTH) /
+            tt::constants::TILE_WIDTH;
+        TT_FATAL(
+            act_block_w_ntiles == expected_act_block_w_ntiles,
+            "1D depthwise activation block width mismatch. Got {} tiles, expected {} tiles",
+            act_block_w_ntiles,
+            expected_act_block_w_ntiles);
+    }
     // check is for 16-byte alignment
     TT_FATAL(
         // Since fp16 is smalleset data format used for halo output, 8 input_channels is enough for 16 byte alignment
@@ -404,7 +447,9 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         out_block_h_ntiles);
 
     const uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
-    const uint32_t num_blocks_act_w = slice_inner_dim ? filter_h : 1;
+    const uint32_t num_blocks_act_w = is_conv_1d_depthwise_conv
+                                          ? (coalesce_1d_depthwise_kw_reads ? 1 : filter_h * filter_w)
+                                          : (slice_inner_dim ? filter_h : 1);
     const uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
 
     // act block info
@@ -417,7 +462,6 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         act_block_h_nsubblocks_split = block_config.act_block_h_ntiles - act_block_h_nsubblocks_split_last;
     }
     uint32_t act_block_h_datums_split = act_block_h_nsubblocks_split * tt::constants::TILE_HEIGHT;
-    uint32_t act_block_h_datums_split_last = act_block_h_nsubblocks_split_last * tt::constants::TILE_HEIGHT;
 
     uint32_t act_block_num_tiles_split = act_block_h_nsubblocks_split * act_block_w_ntiles;
     uint32_t act_block_num_tiles_split_last = act_block_h_nsubblocks_split_last * act_block_w_ntiles;
@@ -430,9 +474,9 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         weight_block_w_ntiles,
         out_subblock_w_ntiles);
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
-    // For 1D depthwise conv, weight_block_h_ntiles must accommodate inner_dim = act_block_h_ntiles * TILE_HEIGHT *
-    // kernel_w. So weight_block_h_ntiles = act_block_h_ntiles * kernel_w (filter_w).
-    uint32_t weight_block_h_ntiles = is_conv_1d_depthwise_conv ? act_block_h_ntiles * filter_w : act_block_w_ntiles;
+    uint32_t weight_block_h_ntiles = is_conv_1d_depthwise_conv
+                                         ? act_block_h_ntiles * (coalesce_1d_depthwise_kw_reads ? filter_w : 1)
+                                         : act_block_w_ntiles;
     uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
 
     // writer of conv op partially removes padding on the width
@@ -471,15 +515,13 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     const uint32_t in0_num_blocks_w = conv_act_c_blocks * num_blocks_act_w;
 
     // weight
-    const uint32_t weight_dram_addr = b.buffer()->address();
+    tt::tt_metal::Buffer* weights_buffer = b.buffer();
 
     // bias
     tt::tt_metal::Buffer* bias_buffer = nullptr;
-    uint32_t bias_dram_addr = 0;
     uint32_t bias_ntiles = 0;
     if (has_bias) {
         bias_buffer = bias.value().buffer();
-        bias_dram_addr = bias_buffer->address();
         bias_ntiles =
             bias.value().padded_shape()[3] / tt::constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
     }
@@ -556,30 +598,6 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         act_block_h_ntiles);
     uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
 
-    std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
-        ttnn::operations::sliding_window::generate_sliding_window_op_config(
-            op_trace_metadata,
-            shard_boundaries,
-            stride_w,
-            true,
-            enable_split_reader ? act_block_h_datums_split : act_block_h_datums,
-            enable_split_reader ? act_block_h_datums_split_last : 0);
-
-    // create sharded ttnn config tensors
-    sliding_window::ParallelConfig input_parallel_config = {
-        .grid = a.memory_config().shard_spec().value().grid,
-        .shard_scheme = a.memory_config().memory_layout(),
-        .shard_orientation = a.memory_config().shard_spec().value().orientation,
-    };
-
-    Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
-        conv_sharded_input_top_left_indices, input_parallel_config, config_tensors_in_dram);
-    conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
-        conv_reader_indices_tensor, input_parallel_config, block_sharded, a.device(), config_tensors_in_dram);
-
-    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
-    const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
-
     TT_FATAL(
         act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0,
         "Activation matrix height in tiles ({}) must be divisible by per-core output matrix height in tiles ({})",
@@ -598,14 +616,13 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     }
     uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
 
-    uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
+    const uint32_t act_block_w_logical_scalars =
+        is_conv_1d_depthwise_conv
+            ? shard_shape[1] * (coalesce_1d_depthwise_kw_reads ? filter_w : 1)
+            : (!slice_inner_dim ? shard_shape[1] * filter_h * filter_w : shard_shape[1] * filter_w);
     uint32_t act_block_w_extra_align_bytes =
-        !slice_inner_dim
-            ? (tt::round_up(shard_shape[1] * filter_h * filter_w, tt::constants::TILE_WIDTH) -
-               (shard_shape[1] * filter_h * filter_w)) *
-                  a.element_size()
-            : (tt::round_up(shard_shape[1] * filter_w, tt::constants::TILE_WIDTH) - (shard_shape[1] * filter_w)) *
-                  a.element_size();
+        (tt::round_up(act_block_w_logical_scalars, tt::constants::TILE_WIDTH) - act_block_w_logical_scalars) *
+        a.element_size();
     const uint32_t act_block_w_extra_align_scalars = act_block_w_extra_align_bytes / a.element_size();
     // When using block float format, we must handle cases where the data doesn't align to 16-scalar boundaries.
     // If act_block_w_extra_align_bytes contains a number of scalars that isn't a multiple of 16,
@@ -636,6 +653,14 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         .enable_weights_double_buffer = enable_weights_double_buffer,
         .enable_activation_reuse = enable_activation_reuse,
         .force_split_reader = force_split_reader};
+    // The conv_reader_indices tensor itself is allocated once in
+    // create_workload_descriptor and parked on workload_descriptor.buffers; we
+    // receive the raw Buffer* and read its page size for the CB sizing below.
+    // Pass the actual DRAM/L1-small config buffer page size into get_cb_info so the predicted
+    // READER_INDICES CB footprint matches the CB this factory creates. Without this, the in-DRAM
+    // path was sized to the worst case (1 uint16 per output row), holding spare L1 that is never
+    // populated by the reader kernel.
+    const uint32_t reader_indices_actual_page_size = conv_reader_indices_buffer->page_size();
     std::vector<CBInfo> cb_info = get_cb_info(
         compute_kernel_config,
         block_config,
@@ -652,23 +677,15 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         has_bias,
         is_conv_1d_depthwise_conv,
         skip_activation_mcast,
-        input_channels_padded);
+        input_channels_padded,
+        reader_indices_actual_page_size);
 
-    if (config_tensors_in_dram) {
-        // The actual CB reader size is difficult to calculate in calculate_L1_size. So instead keep the CB size as the
-        // maximum possible size.
-        TT_FATAL(
-            access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size >=
-                conv_reader_indices_storage.get_buffer()->page_size(),
-            "CB page size {} should be greater than the config tensor page size {}",
-            access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size,
-            conv_reader_indices_storage.get_buffer()->page_size());
-    } else {
-        access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size =
-            conv_reader_indices_storage.get_buffer()->page_size();
-    }
-    // call function to allocate circular buffers
-    allocate_cbs(cb_info, program, all_cores, a, output, conv_reader_indices_tensor);
+    // Emit CBDescriptors directly onto the ProgramDescriptor.  The framework
+    // tracks the globally-allocated CBs (ACT_SHARDED on input, OUT/PARTIALS on
+    // output, READER_INDICES on the workload-scoped indices buffer) and patches
+    // their addresses on cache hits — no per-op UpdateDynamicCircularBufferAddress
+    // override needed.
+    emit_cb_descriptors(cb_info, desc, all_cores, a.buffer(), output.buffer(), conv_reader_indices_buffer);
 
     const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
     const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
@@ -683,8 +700,8 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     CoreRangeSet mcast_sender_cores =
         CoreRangeSet(CoreRange(top_left_core, top_left_core));  // If single core, this kernel doesn't do mcasting
     CoreRangeSet mcast_receiver_cores;
-    uint32_t weights_mcast_sender_semaphore_id{};
-    uint32_t weights_mcast_receiver_semaphore_id{};
+    uint32_t weights_mcast_sender_semaphore_id = 0;
+    uint32_t weights_mcast_receiver_semaphore_id = 0;
     uint32_t act_mcast_sender_semaphore_id = 0;
     uint32_t act_mcast_receiver_semaphore_id = 0;
     uint32_t act_split_reader_reserve_done_semaphore_id = 0;
@@ -700,6 +717,18 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     // When split reader is enabled with overlapped CBs, both readers write to the same circular buffer.
     // This requires synchronization between the main reader and the second reader to prevent race conditions.
     const bool split_reader_cb_shared = enable_split_reader && overlap_act_cb && block_sharded;
+
+    // Sequential semaphore IDs match the order in which CreateSemaphore would have
+    // allocated them; the framework realises desc.semaphores in this order on cache miss.
+    auto push_semaphore = [&desc](const CoreRangeSet& cores) -> uint32_t {
+        uint32_t id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = id,
+            .core_ranges = cores,
+            .initial_value = 0,  // 0 == INVALID
+        });
+        return id;
+    };
 
     if (block_sharded) {
         const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
@@ -718,32 +747,31 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         if (populate_skipped_work_cores) {
             mcast_sender_cores = input_cores.subtract(mcast_receiver_cores);
         }
-        act_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-        act_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+        act_mcast_sender_semaphore_id = push_semaphore(all_cores);
+        act_mcast_receiver_semaphore_id = push_semaphore(all_cores);
 
         if (split_reader_cb_shared) {
-            weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-            weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-            act_split_reader_reserve_done_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-            act_split_reader_write_done_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+            weights_mcast_sender_semaphore_id = push_semaphore(all_cores);
+            weights_mcast_receiver_semaphore_id = push_semaphore(all_cores);
+            act_split_reader_reserve_done_semaphore_id = push_semaphore(all_cores);
+            act_split_reader_write_done_semaphore_id = push_semaphore(all_cores);
         } else {
-            weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
-            weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
+            weights_mcast_sender_semaphore_id = push_semaphore(output_cores);
+            weights_mcast_receiver_semaphore_id = push_semaphore(output_cores);
         }
     } else {
         // 1D mcast
         if (!skip_weights_mcast) {
             mcast_receiver_cores = all_cores.subtract(mcast_sender_cores);
-            weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
-            weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
+            weights_mcast_sender_semaphore_id = push_semaphore(output_cores);
+            weights_mcast_receiver_semaphore_id = push_semaphore(output_cores);
         }
     }
 
-    const tt::tt_metal::CBHandle cb_sharded_act = get_cb_info_by_name(cb_info, Conv2dCb::ACT_SHARDED).handle;
-    const tt::tt_metal::CBHandle cb_output = get_cb_info_by_name(cb_info, Conv2dCb::OUT).handle;
-    const bool partials_cb_uses_output = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
+    // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
+    const bool partials_cb_uses_output =
+        !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
-    const tt::tt_metal::CBHandle cb_partials = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).handle;
 
     std::string reader_kernel;
     std::string compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
@@ -831,7 +859,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index,
         (uint32_t)enable_split_reader,
-        (uint32_t)enable_activation_reuse};
+        (uint32_t)(is_conv_1d_depthwise_conv ? coalesce_1d_depthwise_kw_reads : enable_activation_reuse)};
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -842,9 +870,9 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";               // Needed for split reader
         writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
-        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->address());
-        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
-        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
+        reader_compile_time_args.push_back(conv_reader_indices_buffer->address());
+        reader_compile_time_args.push_back(conv_reader_indices_buffer->page_size());
+        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(reader_compile_time_args);
     } else {
         // Put enough 0s so that the offsets of activation reuse args are the same.
         // TensorAccessorArgs appends 2 CT args (is_dram + aligned_page_size), so we need 4 zeros total
@@ -1009,107 +1037,151 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
 
     const bool check_skip_compute = input_cores != output_cores;
 
-    std::vector<uint32_t> compute_kernel_args = {
-        act_block_w_ntiles,
-        act_num_subblocks,
-        act_block_num_tiles,
-        act_subblock_num_tiles,
-        enable_split_reader ? act_block_h_ntiles : act_subblock_h_ntiles * act_num_subblocks,  // reader_num_h_subblocks
-        weight_num_subblocks,
-        weight_block_num_tiles,
-        weight_block_w_ntiles,
+    std::vector<uint32_t> compute_kernel_args;
+    if (is_conv_1d_depthwise_conv) {
+        // compute_depthwise_conv1d.cpp uses a specialized dest-reuse accumulation path. The last
+        // two args select the coalesced kernel-width activation layout when the reader can fetch
+        // all kernel-width sticks as one NoC packet.
 
-        num_blocks_act_h_per_core,
-        in0_num_blocks_w,
-        num_blocks_weight_w_per_core,
+        // Dest-reuse read-back scratch CB. A single height block accumulates in place (alias OUT);
+        // multiple blocks use the dedicated MATMUL_PARTIALS scratch (out_cb can't double as it).
+        const bool use_partials_scratch = !coalesce_1d_depthwise_kw_reads && num_blocks_act_h_per_core > 1;
+        const uint32_t dest_reuse_scratch_cb_id =
+            get_cb_info_by_name(cb_info, use_partials_scratch ? Conv2dCb::MATMUL_PARTIALS : Conv2dCb::OUT).index;
 
-        out_subblock_h_ntiles,
-        out_subblock_w_ntiles,
-        out_subblock_num_tiles,
-
-        height_sharded,
-        untilize_out,
-
-        bias_ntiles_per_core,
-
-        get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
-        get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
-        get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
-        get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
-        get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).index,
-        get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).index,
-        get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
-        get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
-        get_cb_info_by_name(cb_info, Conv2dCb::TEMP_SUM).index,
-        partials_cb_uses_output,
-        conv_act_c_blocks,
-        check_skip_compute,
-        pack_relu,
-        weight_block_w_ntiles <= 8,  // packer_untilize
-        packer_l1_acc_en,
-        has_bias,
-        enable_split_reader,
-        enable_activation_reuse};
-
-    if (enable_activation_reuse) {
-        compute_kernel_args.push_back(activation_reuse_config.image_width_tiles);
-        compute_kernel_args.push_back(activation_reuse_config.reuse_window_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
-        compute_kernel_args.push_back(activation_reuse_config.tilized_cb_row_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
-        compute_kernel_args.push_back(
-            activation_reuse_config.tilized_cb_second_reader_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
+        compute_kernel_args = {
+            act_block_w_ntiles,                                         // 0: in0_block_w
+            act_num_subblocks,                                          // 1: in0_num_subblocks
+            act_block_num_tiles,                                        // 2: in0_block_num_tiles
+            num_blocks_act_h_per_core,                                  // 3: in0_num_blocks_h
+            in0_num_blocks_w,                                           // 4: in0_num_blocks_w
+            get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,          // 5: in0_cb_id (raw RM)
+            get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,      // 6: in1_cb_id
+            get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,  // 7: tilized_in0_cb_id
+            get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,          // 8: out_cb_id
+            filter_w,                                                   // 9: kernel_width
+            coalesce_1d_depthwise_kw_reads,                             // 10: coalesced activation block
+            dest_reuse_scratch_cb_id,                                   // 11: dest-reuse read-back scratch
+        };
     } else {
-        std::vector<uint32_t> activation_reuse_dummy_args = {0, 0, 0, 0};
-        compute_kernel_args.insert(
-            compute_kernel_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
+        compute_kernel_args = {
+            act_block_w_ntiles,
+            act_num_subblocks,
+            act_block_num_tiles,
+            act_subblock_num_tiles,
+            enable_split_reader ? act_block_h_ntiles
+                                : act_subblock_h_ntiles * act_num_subblocks,  // reader_num_h_subblocks
+            weight_num_subblocks,
+            weight_block_num_tiles,
+            weight_block_w_ntiles,
+
+            num_blocks_act_h_per_core,
+            in0_num_blocks_w,
+            num_blocks_weight_w_per_core,
+
+            out_subblock_h_ntiles,
+            out_subblock_w_ntiles,
+            out_subblock_num_tiles,
+
+            height_sharded,
+            untilize_out,
+
+            bias_ntiles_per_core,
+
+            get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
+            get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
+            get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
+            get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
+            get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).index,
+            get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).index,
+            get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
+            get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
+            partials_cb_uses_output,
+            conv_act_c_blocks,
+            check_skip_compute,
+            pack_relu,
+            weight_block_w_ntiles <= 8,  // packer_untilize
+            packer_l1_acc_en,
+            has_bias,
+            enable_split_reader,
+            enable_activation_reuse};
+
+        if (enable_activation_reuse) {
+            compute_kernel_args.push_back(activation_reuse_config.image_width_tiles);
+            compute_kernel_args.push_back(activation_reuse_config.reuse_window_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
+            compute_kernel_args.push_back(
+                activation_reuse_config.tilized_cb_row_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
+            compute_kernel_args.push_back(
+                activation_reuse_config.tilized_cb_second_reader_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
+        } else {
+            std::vector<uint32_t> activation_reuse_dummy_args = {0, 0, 0, 0};
+            compute_kernel_args.insert(
+                compute_kernel_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
+        }
+        compute_kernel_args.push_back(static_cast<uint32_t>(split_reader_cb_shared));
     }
-    compute_kernel_args.push_back(static_cast<uint32_t>(split_reader_cb_shared));
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const tt::tt_metal::NOC reader_noc =
         writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
-    tt::tt_metal::KernelHandle writer_mcast_sender_id = CreateKernel(
-        program,
-        writer_mcast_sender_kernel,
-        mcast_sender_cores,
-        tt::tt_metal::DataMovementConfig{
+    // Build the writer_mcast_sender kernel descriptor (placed on mcast_sender_cores).
+    // We build runtime_args below after kernel placement is fixed.
+    KernelDescriptor writer_mcast_sender_desc;
+    writer_mcast_sender_desc.kernel_source = writer_mcast_sender_kernel;
+    writer_mcast_sender_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_mcast_sender_desc.core_ranges = mcast_sender_cores;
+    writer_mcast_sender_desc.compile_time_args = writer_compile_time_args;
+    for (const auto& [k, v] : writer_mcast_sender_defines) {
+        writer_mcast_sender_desc.defines.emplace_back(k, v);
+    }
+    writer_mcast_sender_desc.config = DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = writer_mcast_noc,
+    };
+
+    // Optional writer_mcast_receiver kernel (created only when weights mcast is not skipped).
+    KernelDescriptor writer_mcast_receiver_desc;
+    const bool create_writer_mcast_receiver = !skip_weights_mcast;
+    if (create_writer_mcast_receiver) {
+        writer_mcast_receiver_desc.kernel_source = writer_mcast_receiver_kernel;
+        writer_mcast_receiver_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer_mcast_receiver_desc.core_ranges = mcast_receiver_cores;
+        writer_mcast_receiver_desc.compile_time_args = writer_compile_time_args;
+        for (const auto& [k, v] : writer_defines) {
+            writer_mcast_receiver_desc.defines.emplace_back(k, v);
+        }
+        writer_mcast_receiver_desc.config = DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = writer_mcast_noc,
-            .compile_args = writer_compile_time_args,
-            .defines = writer_mcast_sender_defines});
-
-    tt::tt_metal::KernelHandle writer_mcast_receiver_id = -1;
-    if (!skip_weights_mcast) {
-        writer_mcast_receiver_id = CreateKernel(
-            program,
-            writer_mcast_receiver_kernel,
-            mcast_receiver_cores,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = writer_mcast_noc,
-                .compile_args = writer_compile_time_args,
-                .defines = writer_defines});
+        };
     }
 
-    tt::tt_metal::KernelHandle reader_id = CreateKernel(
-        program,
-        reader_kernel,
-        height_sharded ? input_cores : all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = reader_noc,
-            .compile_args = reader_compile_time_args,
-            .defines = reader_defines});
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = reader_kernel;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = height_sharded ? input_cores : all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    for (const auto& [k, v] : reader_defines) {
+        reader_desc.defines.emplace_back(k, v);
+    }
+    reader_desc.config = DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = reader_noc,
+    };
 
-    tt::tt_metal::KernelHandle compute_kernel_id = CreateKernel(
-        program,
-        compute_kernel,
-        height_sharded ? input_cores : all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .compile_args = compute_kernel_args,
-            .defines = compute_defines});
+    KernelDescriptor compute_kernel_desc;
+    compute_kernel_desc.kernel_source = compute_kernel;
+    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = height_sharded ? input_cores : all_cores;
+    compute_kernel_desc.compile_time_args = std::move(compute_kernel_args);
+    for (const auto& [k, v] : compute_defines) {
+        compute_kernel_desc.defines.emplace_back(k, v);
+    }
+    compute_kernel_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+    };
 
     // Helper lambda to setup mcast arguments
     auto setup_mcast_args = [&](bool is_noc_0, uint32_t start_x, uint32_t start_y, uint32_t end_x, uint32_t end_y) {
@@ -1173,7 +1245,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                 reader_rt_args.push_back(static_cast<uint32_t>(is_sender_core));    // is_receiver_core
                 reader_rt_args.push_back(transpose_mcast ? core.x : core.y);        // dram config reader index
                 reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
-                SetRuntimeArgs(program, reader_id, core, reader_rt_args);
+                reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
             }
         }
     } else {
@@ -1189,24 +1261,37 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     }
                 }
                 std::vector<uint32_t> reader_rt_args{core_index, reader_remaining_tiles_to_push};
-                SetRuntimeArgs(program, reader_id, core, reader_rt_args);
+                reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
                 core_index++;
             }
         }
     }
 
     // Setup writer mcast arguments
-    // Setup sender args first
+    // Setup sender args first.  runtime_args[0] is the weight buffer address and
+    // runtime_args[1] is the (optional) bias buffer address; both are registered
+    // as Buffer* bindings via emplace_runtime_args so the framework's fast
+    // cache-hit path patches addresses without GetRuntimeArgs.  When bias is
+    // absent we embed a literal 0 — has_bias gates the bias read on the kernel
+    // side.
     for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
         for (const CoreCoord& core : core_range) {
             if (populate_skipped_work_cores && !output_cores.contains(core)) {
-                std::vector<uint32_t> args = std::vector<uint32_t>(14, 0);
-                args[10] = weights_mcast_sender_semaphore_id;
-                args[11] = weights_mcast_receiver_semaphore_id;
-                args[12] =
-                    static_cast<uint32_t>(true);  // is_sender_core, is always true for cores that belong to input_cores
-                args[13] = static_cast<uint32_t>(true);  //  skip work
-                SetRuntimeArgs(program, writer_mcast_sender_id, core, args);
+                // Pad-out path: 14 zeros with only the semaphore/bias-flag slots
+                // populated.  weight/bias addresses are unused for skipped work
+                // cores so we keep them as literal zeros (no buffer binding).
+                KernelDescriptor::RTArgList args;
+                args.reserve(14);
+                args.push_back(uint32_t{0});  // 0: weight addr (unused for skipped cores)
+                args.push_back(uint32_t{0});  // 1: bias addr (unused)
+                for (int i = 2; i < 10; ++i) {
+                    args.push_back(uint32_t{0});
+                }
+                args.push_back(weights_mcast_sender_semaphore_id);
+                args.push_back(weights_mcast_receiver_semaphore_id);
+                args.push_back(uint32_t{1});  // is_sender_core, always true for input_cores
+                args.push_back(uint32_t{1});  // skip_work
+                writer_mcast_sender_desc.emplace_runtime_args(core, args);
                 continue;
             }
             // Calculate weight slice indices
@@ -1220,8 +1305,17 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                 "bias_tile_offset {} should be less than bias_ntiles {}",
                 bias_tile_offset,
                 bias_ntiles);
-            std::vector<uint32_t> sender_rt_args = {
-                weight_dram_addr, bias_dram_addr, out_start_tile_id_w, bias_tile_offset};
+
+            KernelDescriptor::RTArgList sender_rt_args;
+            sender_rt_args.push_back(weights_buffer);  // 0: weight buffer address (Buffer* binding)
+            if (bias_buffer != nullptr) {
+                sender_rt_args.push_back(bias_buffer);  // 1: bias buffer address (Buffer* binding)
+            } else {
+                sender_rt_args.push_back(uint32_t{0});  // 1: bias placeholder (has_bias gates the read)
+            }
+            sender_rt_args.push_back(out_start_tile_id_w);  // 2
+            sender_rt_args.push_back(bias_tile_offset);     // 3
+
             if (block_sharded) {
                 const bool is_sender_core = input_cores.contains(core);
                 // 2D multicast setup
@@ -1237,17 +1331,14 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                         bottom_right_core_physical.x,
                         right_core_physical.y);
 
-                    sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
-
-                    sender_rt_args.insert(
-                        sender_rt_args.end(),
-                        {num_cores_x - 1,
-                         num_cores_x - 1,  // mcast_num_dests, mcast_num_cores
-                         weights_mcast_sender_semaphore_id,
-                         weights_mcast_receiver_semaphore_id,
-                         static_cast<uint32_t>(is_sender_core),
-                         static_cast<uint32_t>(false)});  // skip_work
-                    SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
+                    sender_rt_args.append(mcast_coords);
+                    sender_rt_args.push_back(num_cores_x - 1);  // mcast_num_dests
+                    sender_rt_args.push_back(num_cores_x - 1);  // mcast_num_cores
+                    sender_rt_args.push_back(weights_mcast_sender_semaphore_id);
+                    sender_rt_args.push_back(weights_mcast_receiver_semaphore_id);
+                    sender_rt_args.push_back(static_cast<uint32_t>(is_sender_core));
+                    sender_rt_args.push_back(uint32_t{0});  // skip_work
+                    writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
                 } else {
                     CoreCoord top_core = {(std::size_t)core.x, 0};
                     CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
@@ -1259,18 +1350,14 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                         top_core_physical.x,
                         bottom_right_core_physical.y);
 
-                    sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
-                    sender_rt_args.insert(
-                        sender_rt_args.end(),
-                        {
-                            num_cores_y - 1,
-                            num_cores_y - 1,  // mcast_num_dests, mcast_num_cores
-                            weights_mcast_sender_semaphore_id,
-                            weights_mcast_receiver_semaphore_id,
-                            static_cast<uint32_t>(is_sender_core),
-                            static_cast<uint32_t>(false)  // skip_work
-                        });
-                    SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
+                    sender_rt_args.append(mcast_coords);
+                    sender_rt_args.push_back(num_cores_y - 1);  // mcast_num_dests
+                    sender_rt_args.push_back(num_cores_y - 1);  // mcast_num_cores
+                    sender_rt_args.push_back(weights_mcast_sender_semaphore_id);
+                    sender_rt_args.push_back(weights_mcast_receiver_semaphore_id);
+                    sender_rt_args.push_back(static_cast<uint32_t>(is_sender_core));
+                    sender_rt_args.push_back(uint32_t{0});  // skip_work
+                    writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
                 }
             } else {
                 // 1D multicast setup
@@ -1281,13 +1368,11 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     bottom_right_core_physical.x,
                     bottom_right_core_physical.y);
 
-                sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
-                sender_rt_args.insert(
-                    sender_rt_args.end(),
-                    {total_active_num_cores - 1,
-                     total_num_cores - 1,  // mcast_num_dests, mcast_num_cores
-                     weights_mcast_sender_semaphore_id,
-                     weights_mcast_receiver_semaphore_id});
+                sender_rt_args.append(mcast_coords);
+                sender_rt_args.push_back(total_active_num_cores - 1);  // mcast_num_dests
+                sender_rt_args.push_back(total_num_cores - 1);         // mcast_num_cores
+                sender_rt_args.push_back(weights_mcast_sender_semaphore_id);
+                sender_rt_args.push_back(weights_mcast_receiver_semaphore_id);
                 if (enable_activation_reuse) {
                     uint32_t writer_remaining_tiles_to_push = 0;
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
@@ -1298,53 +1383,56 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     }
                     sender_rt_args.push_back(writer_remaining_tiles_to_push);
                 }
-                SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
+                writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
             }
         }
     }
 
     // Setup receiver args second
-    for (const CoreRange& core_range : mcast_receiver_cores.ranges()) {
-        // Helper lambda to create receiver runtime args
-        auto create_receiver_args = [&](uint32_t sender_noc_x, uint32_t sender_noc_y) {
-            return std::vector<uint32_t>{
-                sender_noc_x, sender_noc_y, weights_mcast_sender_semaphore_id, weights_mcast_receiver_semaphore_id};
-        };
+    if (create_writer_mcast_receiver) {
+        for (const CoreRange& core_range : mcast_receiver_cores.ranges()) {
+            // Helper lambda to create receiver runtime args
+            auto create_receiver_args = [&](uint32_t sender_noc_x, uint32_t sender_noc_y) {
+                return std::vector<uint32_t>{
+                    sender_noc_x, sender_noc_y, weights_mcast_sender_semaphore_id, weights_mcast_receiver_semaphore_id};
+            };
 
-        for (const CoreCoord& core : core_range) {
-            std::vector<uint32_t> receiver_args;
-            if (block_sharded) {
-                if (transpose_mcast) {
-                    CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
-                    CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
-                    receiver_args = create_receiver_args(top_left_core_physical.x, right_core_physical.y);
-                } else {
-                    CoreCoord top_core = {(std::size_t)core.x, 0};
-                    CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
-                    receiver_args = create_receiver_args(top_core_physical.x, top_left_core_physical.y);
-                }
-                const bool is_sender_core = input_cores.contains(core);
-                receiver_args.push_back(static_cast<uint32_t>(is_sender_core));
-            } else {
-                bool is_no_op_core = !input_cores.contains(core);
-                receiver_args = std::vector<uint32_t>{
-                    static_cast<uint32_t>(is_no_op_core),
-                    top_left_core_physical.x,
-                    top_left_core_physical.y,
-                    weights_mcast_sender_semaphore_id,
-                    weights_mcast_receiver_semaphore_id};
-                if (enable_activation_reuse) {
-                    uint32_t writer_remaining_tiles_to_push = 0;
-                    if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
-                        writer_remaining_tiles_to_push =
-                            activation_reuse_config.partial_core_writer_remaining_tiles_to_push_to_push;
-                    } else if (activation_reuse_config.cores_with_non_meaningful_work.contains(core)) {
-                        writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
+            for (const CoreCoord& core : core_range) {
+                std::vector<uint32_t> receiver_args;
+                if (block_sharded) {
+                    if (transpose_mcast) {
+                        CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
+                        CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
+                        receiver_args = create_receiver_args(top_left_core_physical.x, right_core_physical.y);
+                    } else {
+                        CoreCoord top_core = {(std::size_t)core.x, 0};
+                        CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
+                        receiver_args = create_receiver_args(top_core_physical.x, top_left_core_physical.y);
                     }
-                    receiver_args.push_back(writer_remaining_tiles_to_push);
+                    const bool is_sender_core = input_cores.contains(core);
+                    receiver_args.push_back(static_cast<uint32_t>(is_sender_core));
+                } else {
+                    bool is_no_op_core = !input_cores.contains(core);
+                    receiver_args = std::vector<uint32_t>{
+                        static_cast<uint32_t>(is_no_op_core),
+                        top_left_core_physical.x,
+                        top_left_core_physical.y,
+                        weights_mcast_sender_semaphore_id,
+                        weights_mcast_receiver_semaphore_id};
+                    if (enable_activation_reuse) {
+                        uint32_t writer_remaining_tiles_to_push = 0;
+                        if (activation_reuse_config.has_partial_core &&
+                            core == activation_reuse_config.partial_work_core) {
+                            writer_remaining_tiles_to_push =
+                                activation_reuse_config.partial_core_writer_remaining_tiles_to_push_to_push;
+                        } else if (activation_reuse_config.cores_with_non_meaningful_work.contains(core)) {
+                            writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
+                        }
+                        receiver_args.push_back(writer_remaining_tiles_to_push);
+                    }
                 }
+                writer_mcast_receiver_desc.runtime_args.emplace_back(core, std::move(receiver_args));
             }
-            SetRuntimeArgs(program, writer_mcast_receiver_id, core, receiver_args);
         }
     }
 
@@ -1355,64 +1443,157 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         for (const CoreRange range : all_cores.ranges()) {
             for (const CoreCoord core : range) {
                 bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
-                SetRuntimeArgs(
-                    program, compute_kernel_id, core, std::vector<uint32_t>{static_cast<uint32_t>(skip_compute)});
+                compute_kernel_desc.runtime_args.emplace_back(
+                    core, std::vector<uint32_t>{static_cast<uint32_t>(skip_compute)});
             }
         }
     }
 
-    std::vector<CoreCoord> mcast_sender_cores_vec;
-    for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
-        std::vector<CoreCoord> core_range_vec = grid_to_cores(core_range.start_coord, core_range.end_coord, true);
-        mcast_sender_cores_vec.insert(mcast_sender_cores_vec.end(), core_range_vec.begin(), core_range_vec.end());
+    // Descriptor-path CB-size check (mirrors the legacy post_conv2d_op_memory_checks
+    // CB-sizing equality).  The L1-allocator delta half of the legacy check requires a
+    // realised Program and so isn't reachable here: the framework realises the Program
+    // after this function returns.
+    post_conv2d_op_memory_checks_descriptor(desc, operation_attributes, tensor_args, reader_indices_actual_page_size);
+
+    desc.kernels.push_back(std::move(writer_mcast_sender_desc));
+    if (create_writer_mcast_receiver) {
+        desc.kernels.push_back(std::move(writer_mcast_receiver_desc));
     }
-    post_conv2d_op_memory_checks(program, operation_attributes, tensor_args, output_tensor);
-    // Capture conv_reader_indices_storage to cache this with the program
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .mcast_sender_cores_vec = mcast_sender_cores_vec,
-            .writer_mcast_sender_id = writer_mcast_sender_id,
-            .cb_sharded_act = cb_sharded_act,
-            .cb_output = cb_output,
-            .cb_partials = cb_partials,
-            .partials_cb_uses_output = partials_cb_uses_output,
-            .has_bias = has_bias,
-            .conv_reader_indices_storage = conv_reader_indices_storage,
-        }};
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(compute_kernel_desc));
+    return desc;
 }
 
-void Conv2dShardedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const Conv2dParams& /*operation_attributes*/,
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
+    const Conv2dParams& operation_attributes,
     const Conv2dInputs& tensor_args,
-    Tensor& output_tensor) {
-    auto* src_buffer_a = tensor_args.a.buffer();
-    auto* src_buffer_b = tensor_args.b.buffer();
+    Tensor& output_tensor,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
 
-    const auto& shared_variables = cached_program.shared_variables;
-    auto& program = cached_program.program;
+    // Allocate the conv_reader_indices tensor on device once for the whole
+    // workload.  Wrap it in a shared_ptr<Tensor> so ~Tensor doesn't fire when
+    // the local goes out of scope: ~Tensor calls DeviceStorage::deallocate
+    // which force-frees the device buffer regardless of any shared_ptr
+    // ownership of the MeshBuffer (see WorkloadBuffer rationale in
+    // workload_descriptor.hpp).  Holding the Tensor in the WorkloadDescriptor
+    // defers destruction until the cached workload is evicted.
+    const auto& a = tensor_args.a;
+    const auto& sliding_window_config = operation_attributes.sliding_window_config;
+    const auto& block_config = operation_attributes.block_config;
+    const auto& parallelization_config = operation_attributes.parallelization_config;
+    const auto enable_activation_reuse = operation_attributes.enable_activation_reuse;
+    const auto force_split_reader = operation_attributes.force_split_reader;
+    const bool config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
+    const bool block_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
-    std::optional<tt::tt_metal::Buffer*> src_buffer_c = std::nullopt;
-    if (shared_variables.has_bias) {
-        src_buffer_c = tensor_args.bias.value().buffer();
-        TT_FATAL(src_buffer_c.value() != nullptr, "Source buffer C must not be null when bias is present");
+    sliding_window::ParallelConfig input_parallel_config = {
+        .grid = a.memory_config().shard_spec().value().grid,
+        .shard_scheme = a.memory_config().memory_layout(),
+        .shard_orientation = a.memory_config().shard_spec().value().orientation,
+    };
+
+    std::vector<uint32_t> op_trace_metadata =
+        ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
+    std::vector<sliding_window::ShardBoundary> shard_boundaries =
+        ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
+
+    const uint32_t stride_w = sliding_window_config.is_transpose ? 1 : (uint32_t)sliding_window_config.stride_hw.second;
+    const uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
+
+    // Determine the (act_block_h_datums, last) pair for the host-side index
+    // generator.  This must agree exactly with the enable_split_reader path
+    // computed by build_program_descriptor_sharded(), since the generated index tensor
+    // is consumed by the reader kernel.
+    const auto& b = tensor_args.b;
+    const auto output_channels = operation_attributes.output_channels;
+    const auto groups = operation_attributes.groups;
+    const auto has_bias = operation_attributes.has_bias;
+    const uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;
+    const uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;
+    const uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
+    const ttnn::Shape ashape(operation_attributes.input_tensor_shape);
+    const std::array<uint32_t, 2> shard_shape = a.shard_spec().value().shape;
+
+    uint32_t input_channels_padded = shard_shape[1];
+    if (block_sharded) {
+        const uint32_t in_num_cores_x = input_parallel_config.grid.bounding_box().end_coord.x + 1;
+        const uint32_t in_num_cores_y = input_parallel_config.grid.bounding_box().end_coord.y + 1;
+        const bool transpose_mcast = a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
+        input_channels_padded = shard_shape[1] * (transpose_mcast ? in_num_cores_y : in_num_cores_x);
     }
+    const bool is_conv_1d_depthwise_conv =
+        is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, ashape[1], has_bias);
 
-    auto& writer_sender_kernel_args_by_core = GetRuntimeArgs(program, shared_variables.writer_mcast_sender_id);
-    for (const auto& core : shared_variables.mcast_sender_cores_vec) {
-        auto& runtime_args = writer_sender_kernel_args_by_core[core.x][core.y];
-        runtime_args[0] = src_buffer_b->address();
-        if (shared_variables.has_bias) {
-            runtime_args[1] = (*src_buffer_c)->address();
-        }
-    }
+    auto compute_kernel_config_args =
+        get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
+    const bool fp32_dest_acc_en = std::get<2>(compute_kernel_config_args);
 
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_sharded_act, *src_buffer_a);
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *output_tensor.buffer());
-    if (shared_variables.partials_cb_uses_output) {
-        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_partials, *output_tensor.buffer());
+    const bool enable_split_reader =
+        is_split_reader_supported(a.memory_config().memory_layout(), is_conv_1d_depthwise_conv, act_block_h_ntiles) &&
+        force_split_reader.value_or(is_split_reader_viable(
+            a.memory_config().memory_layout(),
+            act_block_h_ntiles,
+            input_channels_padded,
+            filter_w,
+            tt::tt_metal::hal::get_arch(),
+            a.dtype(),
+            parallelization_config.per_core_out_matrix_width_ntile * block_config.act_block_w_ntiles,
+            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())),
+            dilation_w,
+            parallelization_config.per_core_out_matrix_height_ntile / block_config.act_block_h_ntiles,
+            block_config.act_block_w_ntiles,
+            fp32_dest_acc_en,
+            output_tensor.dtype(),
+            enable_activation_reuse));
+
+    uint32_t act_block_h_nsubblocks_split = block_config.act_block_h_ntiles;
+    uint32_t act_block_h_nsubblocks_split_last = 0;
+    if (enable_split_reader) {
+        act_block_h_nsubblocks_split_last = block_config.act_block_h_ntiles / 2;
+        act_block_h_nsubblocks_split = block_config.act_block_h_ntiles - act_block_h_nsubblocks_split_last;
     }
+    const uint32_t act_block_h_datums = act_block_h_ntiles * tt::constants::TILE_HEIGHT;
+    const uint32_t act_block_h_datums_split = act_block_h_nsubblocks_split * tt::constants::TILE_HEIGHT;
+    const uint32_t act_block_h_datums_split_last = act_block_h_nsubblocks_split_last * tt::constants::TILE_HEIGHT;
+
+    std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
+        ttnn::operations::sliding_window::generate_sliding_window_op_config(
+            op_trace_metadata,
+            shard_boundaries,
+            stride_w,
+            true,
+            enable_split_reader ? act_block_h_datums_split : act_block_h_datums,
+            enable_split_reader ? act_block_h_datums_split_last : 0);
+
+    Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
+        conv_sharded_input_top_left_indices, input_parallel_config, config_tensors_in_dram);
+    conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
+        conv_reader_indices_tensor, input_parallel_config, block_sharded, a.device(), config_tensors_in_dram);
+
+    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
+
+    auto conv_reader_indices_tensor_owner = std::make_shared<Tensor>(std::move(conv_reader_indices_tensor));
+    tt::tt_metal::Buffer* conv_reader_indices_buffer = conv_reader_indices_tensor_owner->buffer();
+    workload_descriptor.buffers.push_back({conv_reader_indices_tensor_owner, conv_reader_indices_buffer});
+
+    // Single-device op: per-coord program is structurally identical for every
+    // coord in `tensor_coords` (conv2d doesn't depend on cluster position).
+    // Build the ProgramDescriptor once and copy into each range entry.
+    tt::tt_metal::ProgramDescriptor desc =
+        build_program_descriptor_sharded(operation_attributes, tensor_args, output_tensor, conv_reader_indices_buffer);
+
+    auto ranges = tensor_coords.ranges();
+    workload_descriptor.programs.reserve(ranges.size());
+    for (size_t i = 0; i + 1 < ranges.size(); ++i) {
+        workload_descriptor.programs.push_back({ranges[i], desc});
+    }
+    if (!ranges.empty()) {
+        workload_descriptor.programs.push_back({ranges.back(), std::move(desc)});
+    }
+    return workload_descriptor;
 }
 
 }  // namespace ttnn::prim

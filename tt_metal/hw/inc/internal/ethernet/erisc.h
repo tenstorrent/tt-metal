@@ -13,7 +13,7 @@ inline void (*toggle_macpcs_ptr)(uint32_t);
 #if defined(ARCH_BLACKHOLE)
 volatile inline uint32_t* flag_disable = (uint32_t*)(GET_MAILBOX_ADDRESS_DEV(aerisc_run_flag));
 #else
-volatile inline uint32_t* flag_disable = (uint32_t*)(eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
+volatile inline uint32_t* flag_disable = (uint32_t*)(uintptr_t)(eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 #endif
 
 namespace internal_ {
@@ -30,8 +30,7 @@ inline __attribute__((always_inline)) void risc_context_switch([[maybe_unused]] 
     if (!skip_sync) {
         ncrisc_noc_full_sync<1>();
     }
-    service_eth_msg();
-    update_boot_results_eth_link_status_check();
+    aerisc_context_switch();
 
     // Not harmful to initialize the counters again
     ncrisc_noc_counters_init<1>();

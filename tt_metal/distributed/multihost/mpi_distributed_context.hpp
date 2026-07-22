@@ -6,6 +6,7 @@
 
 #include <mpi.h>
 #include <memory>
+#include <optional>
 #include "api/tt-metalium/distributed_context.hpp"
 
 namespace tt::tt_metal::distributed::multihost {
@@ -58,7 +59,16 @@ public:
     // factory (initialises MPI environment once per process)
     static void create(int argc, char** argv);
     static const ContextPtr& get_current_world();
+    /// MPI communicator spanning the full job (`MPI_COMM_WORLD`). Rank/size are global even when
+    /// `get_current_world()` was split via `TT_RUN_SUBCONTEXT_ID`. Safe to use for cross-subcontext p2p.
+    static ContextPtr get_world_context();
     static bool is_initialized();
+
+    [[nodiscard]] std::optional<SubcontextId> subcontext_id() const override;
+    [[nodiscard]] int subcontext_count() const override;
+    [[nodiscard]] Size subcontext_size(SubcontextId subcontext_id) const override;
+    [[nodiscard]] ttsl::Span<const int> subcontext_sizes() const override;
+    [[nodiscard]] Rank local_to_world_rank(SubcontextId subcontext_id, Rank local_rank) const override;
 
     // destructor – communicator MPI_COMM_WORLD is freed automatically by MPI_Finalize
     // All other communicators are freed here
@@ -71,39 +81,39 @@ public:
     void barrier() const override;
 
     /* ---------------- point‑to‑point ------------------- */
-    void send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
-    void ssend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
-    void recv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const override;
+    void send(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const override;
+    void ssend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const override;
+    void recv(ttsl::Span<std::byte> buf, Rank src, Tag tag) const override;
 
-    [[nodiscard]] RequestPtr isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
-    [[nodiscard]] RequestPtr irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const override;
+    [[nodiscard]] RequestPtr isend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const override;
+    [[nodiscard]] RequestPtr irecv(ttsl::Span<std::byte> buf, Rank src, Tag tag) const override;
 
     /* ---------------- collectives ---------------------- */
-    void broadcast(tt::stl::Span<std::byte> buf, Rank root) const override;
+    void broadcast(ttsl::Span<std::byte> buf, Rank root) const override;
     void all_reduce(
-        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
+        ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
     void reduce(
-        tt::stl::Span<std::byte> send_buf,
-        tt::stl::Span<std::byte> recv_buf,
+        ttsl::Span<std::byte> send_buf,
+        ttsl::Span<std::byte> recv_buf,
         ReduceOp op,
         DType dtype,
         Rank root) const override;
-    void gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const override;
-    void scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const override;
-    void all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const override;
-    void all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const override;
+    void gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const override;
+    void scatter(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const override;
+    void all_gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const override;
+    void all_to_all(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const override;
     void reduce_scatter(
-        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
+        ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
     void scan(
-        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
+        ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
 
     void translate_ranks_to_other_ctx(
-        tt::stl::Span<int> ranks, const ContextPtr& other_ctx, tt::stl::Span<int> translated_ranks) const override;
+        ttsl::Span<int> ranks, const ContextPtr& other_ctx, ttsl::Span<int> translated_ranks) const override;
 
     /* ------------- communicator management ------------- */
     [[nodiscard]] ContextPtr duplicate() const override;
     [[nodiscard]] ContextPtr split(Color color, Key key) const override;
-    [[nodiscard]] ContextPtr create_sub_context(tt::stl::Span<int> ranks) const override;
+    [[nodiscard]] ContextPtr create_sub_context(ttsl::Span<int> ranks) const override;
     void abort(int error_code) const override;
     void revoke_and_shrink() override;
     [[nodiscard]] bool is_revoked() override;
@@ -125,8 +135,10 @@ private:
     int rank_{0};
     int size_{0};
 
-    // caching our own world communicator which is duplicator of MPI_COMM_WORLD
+    // Subcommunicator for this process after optional TT_RUN_SUBCONTEXT_ID split (or duplicate of world).
     inline static ContextPtr current_world_;
+    // Lazily-created view of MPI_COMM_WORLD (not freed in destructor).
+    inline static ContextPtr mpi_job_world_;
 };
 
 }  // namespace tt::tt_metal::distributed::multihost

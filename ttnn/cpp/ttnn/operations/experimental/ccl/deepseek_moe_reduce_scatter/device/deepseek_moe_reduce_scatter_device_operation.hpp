@@ -18,7 +18,7 @@ namespace ttnn::experimental::prim {
 struct DeepseekMoEReduceScatterDeviceOperation {
     using operation_attributes_t = DeepseekMoEReduceScatterParams;
     using tensor_args_t = DeepseekMoEReduceScatterInputs;
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
     using program_factory_t = std::variant<DeepseekMoEReduceScatterMeshWorkloadFactory>;
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);

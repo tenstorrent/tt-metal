@@ -1,0 +1,10 @@
+--- a/src/vivify.hpp
++++ b/src/vivify.hpp
+@@ -6,6 +6,7 @@
+ #include <array>
+ #include <cstdint>
++#include <tuple>
+ #include <vector>
+
+ namespace CaDiCaL {
+

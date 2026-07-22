@@ -5,10 +5,10 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
 
 struct RemoteCoord {
     uint32_t x;
@@ -48,11 +48,11 @@ void kernel_main() {
     constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;
     constexpr uint32_t cb_ex2_global = tt::CBIndex::c_14;
 
-    experimental::Noc noc;
-    experimental::Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
-    experimental::Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    experimental::Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(16));
-    experimental::UnicastEndpoint remote_ep;
+    Noc noc;
+    Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
+    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
+    Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(16));
+    UnicastEndpoint remote_ep;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);
     const DataFormat data_format = get_dataformat(cb_ex_partial2);
@@ -85,9 +85,9 @@ void kernel_main() {
     const auto& global_reduce_sender =
         [&](const uint32_t cb_partial_id, const uint32_t cb_external_id, const uint32_t cb_reduce_first_stage_id)
             __attribute__((always_inline)) {
-                experimental::CircularBuffer cb_partial_obj(cb_partial_id);
-                experimental::CircularBuffer cb_external_obj(cb_external_id);
-                experimental::CircularBuffer cb_reduce_first_stage_obj(cb_reduce_first_stage_id);
+                CircularBuffer cb_partial_obj(cb_partial_id);
+                CircularBuffer cb_external_obj(cb_external_id);
+                CircularBuffer cb_reduce_first_stage_obj(cb_reduce_first_stage_id);
 
                 uint32_t num_tiles_per_partial_result = 2;
                 if constexpr (rms_norm) {
@@ -130,7 +130,7 @@ void kernel_main() {
                     write_offset = 0;
                     for (uint32_t block = 0; block < num_blocks_first_stage; ++block) {
                         for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; ++tile_idx) {
-                            noc.async_read<experimental::Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
+                            noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                                 remote_ep,
                                 cb_external_obj,
                                 single_tile_size_bytes,
@@ -157,7 +157,7 @@ void kernel_main() {
                         write_offset = 0;
                         for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
                             for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; ++tile_idx) {
-                                noc.async_read<experimental::Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
+                                noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                                     remote_ep,
                                     cb_external_obj,
                                     single_tile_size_bytes,
@@ -177,6 +177,7 @@ void kernel_main() {
                              1));  // push back partials from all cores -> compute can start reducing now
                     }
                 }
+                cb_partial_obj.pop_front(num_tiles_per_partial_result * block_h);
             };
     global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2);
     noc.async_write_barrier();

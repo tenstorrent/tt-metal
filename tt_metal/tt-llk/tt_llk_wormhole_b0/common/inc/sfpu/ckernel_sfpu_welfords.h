@@ -6,43 +6,11 @@
 
 #include <array>
 #include <cstdint>
-#include <type_traits>
 
+#include "api/numeric/bfloat16.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-
-// C++17 compatible bit_cast replacement using union
-template <typename To, typename From>
-inline To _bit_cast_(const From& from) noexcept
-{
-    static_assert(sizeof(To) == sizeof(From), "Types must have same size");
-    static_assert(std::is_trivially_copyable_v<From>, "From must be trivially copyable");
-    static_assert(std::is_trivially_copyable_v<To>, "To must be trivially copyable");
-
-    union
-    {
-        From f;
-        To t;
-    } u;
-
-    u.f = from;
-    return u.t;
-}
-
-// Optimized float to 16-bit parts conversion
-struct FloatBits
-{
-    std::uint16_t high16;
-    std::uint16_t low16;
-
-    explicit FloatBits(float value)
-    {
-        const std::uint32_t bits = _bit_cast_<std::uint32_t>(value);
-        high16                   = static_cast<std::uint16_t>(bits >> 16);
-        low16                    = static_cast<std::uint16_t>(bits & 0xFFFF);
-    }
-};
 
 /**
  * @brief Loads the reciprocal of (idx + 1) into LREG7, using a lookup table if available.

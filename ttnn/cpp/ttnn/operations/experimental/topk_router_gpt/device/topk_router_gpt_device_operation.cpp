@@ -99,12 +99,12 @@ spec_return_value_t TopkRouterGptDeviceOperation::compute_output_specs(
     uint32_t k_padded = tt::round_up(attrs.k, 8);
 
     // Slot 0: indices_rm [B, k_padded] uint16 RM
-    auto idx_spec = TensorSpec(
+    auto idx_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape({B, k_padded}),
         tt::tt_metal::TensorLayout(DataType::UINT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), l1_rm));
 
     // Slot 1: weights_rm [B, k_padded] bf16 RM
-    auto wgt_spec = TensorSpec(
+    auto wgt_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape({B, k_padded}),
         tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), l1_rm));
 

@@ -200,6 +200,68 @@ class TtVADHead:
             if self.use_pe:
                 self.ego_map_pos_mlp = ttnn.linear
 
+        # select_and_pad_pred_map fast-path cache. On cold call we test
+        # whether every map score sits below `map_thresh` (i.e. no valid
+        # map vectors); if so, the entire host-side .item() + boolean-mask
+        # loop collapses to producing a (1, 1, D) zero output, which the
+        # fast path reproduces without any host syncs. None until first
+        # call resolves it; True / False thereafter.
+        self._sap_pred_map_all_zero_cache = None
+
+        # select_and_pad_pred_map does a data-dependent host-side filter (.item()
+        # + to_torch + boolean-mask gather + from_torch/zeros pad) whenever any
+        # map vector passes map_thresh — unavoidable host syncs that block Metal
+        # Trace capture. Its inputs (map_query/score/pos, motion_pos) are fully
+        # deterministic across warm calls, so when `_sap_use_cache` is set the
+        # function caches its final output once (populated by the compile-warmup
+        # pass, outside capture) and returns device-side clones thereafter. The
+        # flag defaults off, so the eager (non-trace) path is unchanged.
+        self._sap_use_cache = False
+        self._sap_sel_cache = None
+
+        # bev_mask / bev_pos depend only on (bs, bev_h, bev_w) which are static.
+        # `ttnn.zeros` does a host->device write of the zero-fill, which is
+        # forbidden inside trace capture; cache the device tensors so the
+        # zeros/embedding chain only runs on the cold pass.
+        self._bev_mask_cache = {}
+        self._bev_pos_cache = {}
+
+        # Constant device tensors (zeros/ones/arange) that recur on every warm
+        # call with fixed shapes. Materialising them fresh each call does a
+        # host->device fill / iota that blocks Metal-Trace capture; cache by
+        # shape and hand back a device-side clone (zeros/ones) or the cached
+        # read-only tensor (arange base).
+        self._const_zeros_cache = {}
+        self._const_ones_cache = {}
+        self._base_idx_cache = {}
+
+    def _const_tensor(self, create_fn, cache, shape, dtype=None, layout=None):
+        key = (tuple(shape), dtype, layout)
+        t = cache.get(key)
+        if t is None:
+            kw = {}
+            if dtype is not None:
+                kw["dtype"] = dtype
+            if layout is not None:
+                kw["layout"] = layout
+            t = create_fn(shape, device=self.device, **kw)
+            cache[key] = t
+        return ttnn.clone(t)
+
+    def _const_zeros(self, shape, dtype=None, layout=None):
+        return self._const_tensor(ttnn.zeros, self._const_zeros_cache, shape, dtype, layout)
+
+    def _const_ones(self, shape, dtype=None, layout=None):
+        return self._const_tensor(ttnn.ones, self._const_ones_cache, shape, dtype, layout)
+
+    def _arange_base(self, count, num_pts):
+        key = (count, num_pts)
+        t = self._base_idx_cache.get(key)
+        if t is None:
+            t = ttnn.arange(0, count, dtype=ttnn.uint32, device=self.device) * num_pts
+            self._base_idx_cache[key] = t
+        return t
+
     def __call__(
         self,
         mlvl_feats,
@@ -212,20 +274,22 @@ class TtVADHead:
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
         if not self.as_two_stage:
             object_query_embeds = self.query_embedding.weight
-        self.bbox_coder = CustomNMSFreeCoder(
-            self.bbox_coder["pc_range"],
-            voxel_size=self.bbox_coder["voxel_size"],
-            post_center_range=self.bbox_coder["post_center_range"],
-            max_num=self.bbox_coder["max_num"],
-            num_classes=self.bbox_coder["num_classes"],
-        )
-        self.map_bbox_coder = MapNMSFreeCoder(
-            self.map_bbox_coder["pc_range"],
-            voxel_size=self.map_bbox_coder["voxel_size"],
-            post_center_range=self.map_bbox_coder["post_center_range"],
-            max_num=self.map_bbox_coder["max_num"],
-            num_classes=self.map_bbox_coder["num_classes"],
-        )
+        if isinstance(self.bbox_coder, dict):
+            self.bbox_coder = CustomNMSFreeCoder(
+                self.bbox_coder["pc_range"],
+                voxel_size=self.bbox_coder["voxel_size"],
+                post_center_range=self.bbox_coder["post_center_range"],
+                max_num=self.bbox_coder["max_num"],
+                num_classes=self.bbox_coder["num_classes"],
+            )
+        if isinstance(self.map_bbox_coder, dict):
+            self.map_bbox_coder = MapNMSFreeCoder(
+                self.map_bbox_coder["pc_range"],
+                voxel_size=self.map_bbox_coder["voxel_size"],
+                post_center_range=self.map_bbox_coder["post_center_range"],
+                max_num=self.map_bbox_coder["max_num"],
+                num_classes=self.map_bbox_coder["num_classes"],
+            )
 
         if self.map_query_embed_type == "all_pts":
             map_query_embeds = self.map_query_embedding.weight
@@ -238,10 +302,17 @@ class TtVADHead:
             )
 
         bev_queries = self.bev_embedding.weight
-
-        bev_mask = ttnn.zeros((bs, self.bev_h, self.bev_w), device=self.device, dtype=ttnn.bfloat16)
-        bev_pos = self.positional_encoding(bev_mask)
-        bev_pos = ttnn.to_layout(bev_pos, layout=ttnn.ROW_MAJOR_LAYOUT)
+        bev_key = (bs, self.bev_h, self.bev_w)
+        cached_bev_pos = self._bev_pos_cache.get(bev_key)
+        if cached_bev_pos is None:
+            bev_mask = ttnn.zeros((bs, self.bev_h, self.bev_w), device=self.device, dtype=ttnn.bfloat16)
+            bev_pos = self.positional_encoding(bev_mask)
+            bev_pos = ttnn.to_layout(bev_pos, layout=ttnn.ROW_MAJOR_LAYOUT)
+            self._bev_mask_cache[bev_key] = bev_mask
+            self._bev_pos_cache[bev_key] = bev_pos
+        else:
+            bev_mask = self._bev_mask_cache[bev_key]
+            bev_pos = cached_bev_pos
 
         if only_bev:  # only use encoder to obtain BEV features, TODO: refine the workaround
             return self.transformer.get_bev_features(
@@ -271,10 +342,7 @@ class TtVADHead:
                 img_metas=img_metas,
                 prev_bev=prev_bev,
             )
-        ttnn.deallocate(bev_queries)
-        ttnn.deallocate(bev_mask)
-        ttnn.deallocate(bev_pos)
-        ttnn.deallocate(map_query_embeds)
+        # bev_mask / bev_pos stay alive in self._bev_*_cache for the next call.
         (
             bev_embed,
             hs,
@@ -503,7 +571,7 @@ class TtVADHead:
 
                 if self.use_pe:
                     (num_query, batch) = ca_motion_query.shape[0], ca_motion_query.shape[1]
-                    motion_pos = ttnn.zeros((num_query, batch, 2), device=self.device, layout=ttnn.TILE_LAYOUT)
+                    motion_pos = self._const_zeros((num_query, batch, 2), layout=ttnn.TILE_LAYOUT)
                     motion_pos = self.pos_mlp(
                         motion_pos, self.params.head.pos_mlp.weight, bias=self.params.head.pos_mlp.bias
                     )
@@ -589,7 +657,7 @@ class TtVADHead:
             ego_his_feats = ttnn.repeat(ego_his_feats, (batch, 1, 1))
         # # Interaction
         ego_query = ego_his_feats
-        ego_pos = ttnn.zeros((batch, 1, 2), device=self.device, layout=ttnn.TILE_LAYOUT)
+        ego_pos = self._const_zeros((batch, 1, 2), layout=ttnn.TILE_LAYOUT)
         ego_pos_emb = ttnn.linear(
             ego_pos, self.params.head.ego_agent_pos_mlp.weight, bias=self.params.head.ego_agent_pos_mlp.bias
         )  # 0.9999987105141137
@@ -637,7 +705,7 @@ class TtVADHead:
         )
 
         # # ego <-> map interaction
-        ego_pos = ttnn.zeros((batch, 1, 2), device=self.device, layout=ttnn.TILE_LAYOUT)
+        ego_pos = self._const_zeros((batch, 1, 2), layout=ttnn.TILE_LAYOUT)
         ego_pos_emb = self.ego_map_pos_mlp(
             ego_pos,
             self.params.head.ego_map_pos_mlp.weight,
@@ -660,16 +728,21 @@ class TtVADHead:
         result = ttnn.add(x_sq, y_sq)
         map_dis = ttnn.sqrt(result)
         map_dis = ttnn.to_layout(map_dis, ttnn.ROW_MAJOR_LAYOUT)
-        min_map_pos_idx = ttnn.argmax((map_dis * -1), dim=-1)  # [B, P]
-        min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])
-        min_map_pos = ttnn.reshape(map_pos, [map_pos.shape[0] * map_pos.shape[1], map_pos.shape[2], map_pos.shape[3]])
-        min_map_pos = ttnn.to_torch(min_map_pos)
-        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx).long()
-        min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
-
-        min_map_pos = ttnn.from_torch(min_map_pos, dtype=ttnn.bfloat16, device=self.device)
-
-        min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, 2))  # [B, P, 2]
+        min_map_pos_idx = ttnn.argmax((map_dis * -1), dim=-1)  # [B, num_map]
+        min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])  # [B*num_map]
+        # Device-side gather via ttnn.embedding (same pattern as Step 1 in
+        # select_and_pad_pred_map, commit cd355a3e19e). Replaces the prior
+        # to_torch + torch advanced indexing + from_torch chain. Flatten
+        # map_pos into an (B*num_map*num_pts, 2) embedding table and look
+        # up by linearized indices = arange(B*num_map) * num_pts + per-row
+        # point index.
+        num_pts = map_pos.shape[2]
+        coord_dim = map_pos.shape[3]
+        table = ttnn.reshape(map_pos, [batch * num_map * num_pts, coord_dim])
+        base = self._arange_base(batch * num_map, num_pts)
+        linearized_idx = base + min_map_pos_idx
+        min_map_pos = ttnn.embedding(linearized_idx, table, layout=ttnn.TILE_LAYOUT)  # [B*num_map, 2]
+        min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, coord_dim))  # [B, num_map, 2]
         map_query, map_pos, map_mask = self.select_and_pad_query(
             map_query, min_map_pos, map_conf, score_thresh=self.query_thresh, use_fix_pad=self.query_use_fix_pad
         )
@@ -812,6 +885,11 @@ class TtVADHead:
         pe_normalization=True,
         use_fix_pad=False,
     ):
+        if self._sap_use_cache and self._sap_sel_cache is not None:
+            # Trace capture/replay: return device-side clones of the cached,
+            # deterministic output (no host syncs).
+            return tuple(ttnn.clone(_t) for _t in self._sap_sel_cache)
+
         map_query = ttnn.unsqueeze(map_query, 0)
         batch, num_map = map_pos.shape[0], map_pos.shape[1]
         map_pos = ttnn.to_layout(map_pos, ttnn.TILE_LAYOUT)
@@ -823,68 +901,90 @@ class TtVADHead:
         result = ttnn.add(x_sq, y_sq)
         map_dis = ttnn.sqrt(result)
         map_dis = ttnn.to_layout(map_dis, ttnn.ROW_MAJOR_LAYOUT)
-        min_map_pos_idx = ttnn.argmax((map_dis * -1), dim=-1)  # [B, P]
-        min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])
-        min_map_pos = ttnn.reshape(map_pos, [map_pos.shape[0] * map_pos.shape[1], map_pos.shape[2], map_pos.shape[3]])
-        min_map_pos = ttnn.to_torch(min_map_pos)
-        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx).long()
-
-        min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
-
-        min_map_pos = ttnn.from_torch(min_map_pos, dtype=ttnn.bfloat16, device=self.device)  # [B*P, 2]
-        min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, 2))  # [B, P, 2]
-        min_map_pos = ttnn.to_layout(min_map_pos, layout=ttnn.TILE_LAYOUT)
+        min_map_pos_idx = ttnn.argmax((map_dis * -1), dim=-1)  # [B, num_map]
+        min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])  # [B*num_map]
+        # Device-side gather via ttnn.embedding (avoids the prior to_torch +
+        # torch advanced indexing + from_torch host roundtrip). Flatten map_pos
+        # into an (B*num_map*num_pts, 2) "embedding table" and look up by
+        # linearized indices = (row_offset * num_pts) + per-row point index.
+        num_pts = map_pos.shape[2]
+        coord_dim = map_pos.shape[3]
+        table = ttnn.reshape(map_pos, [batch * num_map * num_pts, coord_dim])
+        base = self._arange_base(batch * num_map, num_pts)
+        linearized_idx = base + min_map_pos_idx
+        min_map_pos = ttnn.embedding(linearized_idx, table, layout=ttnn.TILE_LAYOUT)  # [B*num_map, 2]
+        min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, coord_dim))  # [B, num_map, 2]
 
         map_score = ttnn.sigmoid(map_score)
         map_max_score = ttnn.max(map_score, dim=-1)[0]
         map_max_score = ttnn.unsqueeze(map_max_score, 0)
         map_idx = map_max_score > map_thresh
-        batch_max_pnum = 0
-        for i in range(map_score.shape[0]):
-            pnum = int(ttnn.sum(map_idx[i]).item())
-            if pnum > batch_max_pnum:
-                batch_max_pnum = pnum
-        batch_max_pnum = max(batch_max_pnum, 1)
-        selected_map_query, selected_map_pos, selected_padding_mask = [], [], []
-        for i in range(map_score.shape[0]):
-            dim = map_query.shape[-1]
-            valid_pnum = int(ttnn.sum(map_idx[i]).item())
-            map_query = ttnn.to_torch(map_query)
-            min_map_pos = ttnn.to_torch(min_map_pos)
-            map_idx = ttnn.to_torch(map_idx, dtype=torch.bool)
-            if valid_pnum > 0:
-                valid_map_query = map_query[i, map_idx[i]]
-                valid_map_pos = min_map_pos[i, map_idx[i]]
-                valid_map_query = ttnn.from_torch(valid_map_query, dtype=ttnn.bfloat16, device=self.device)
-                valid_map_pos = ttnn.from_torch(valid_map_pos, dtype=ttnn.bfloat16, device=self.device)
-                pad_pnum = batch_max_pnum - valid_pnum
-                padding_mask = torch.tensor([False], device="cpu")
-                padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
-                padding_mask = ttnn.repeat(padding_mask, [batch_max_pnum])
-                if pad_pnum != 0:
-                    valid_map_query = ttnn.concat(
-                        [valid_map_query, ttnn.zeros((pad_pnum, dim), device=self.device)],
-                        dim=0,
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
-                    )
-                    valid_map_pos = ttnn.concat(
-                        [valid_map_pos, ttnn.zeros((pad_pnum, 2), device=self.device)],
-                        dim=0,
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
-                    )
-                    padding_mask[valid_pnum:] = True
-            else:
-                valid_map_query = ttnn.zeros((batch_max_pnum, dim), device=self.device, dtype=ttnn.bfloat16)
-                valid_map_pos = ttnn.zeros((batch_max_pnum, 2), device=self.device, dtype=ttnn.bfloat16)
-                padding_mask = torch.ones(batch_max_pnum)
-                padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
-            selected_map_query.append(valid_map_query)
-            selected_map_pos.append(valid_map_pos)
-            selected_padding_mask.append(padding_mask)
 
-        selected_map_query = ttnn.stack(selected_map_query, dim=0)
-        selected_map_pos = ttnn.stack(selected_map_pos, dim=0)
-        selected_padding_mask = ttnn.stack(selected_padding_mask, dim=0)
+        # On cold call, resolve whether every map vector's max-class score
+        # is below `map_thresh` (qnum=0 everywhere). The `.item()` host sync
+        # only fires once; warm calls reuse the cached bool and skip the
+        # original loop entirely.
+        if self._sap_pred_map_all_zero_cache is None:
+            self._sap_pred_map_all_zero_cache = int(ttnn.sum(map_idx).item()) == 0
+
+        if self._sap_pred_map_all_zero_cache and map_score.shape[0] == 1:
+            # Fast path: replicate the (B=1, batch_max_pnum=1, D) zero-output
+            # the original `else` branch in the per-batch loop produced when
+            # `valid_pnum == 0`, but entirely on device (no `.item()`, no
+            # to_torch / from_torch, no host loop). Trace-replay friendly.
+            dim = map_query.shape[-1]
+            selected_map_query = self._const_zeros((1, 1, dim), dtype=ttnn.bfloat16)
+            selected_map_pos = self._const_zeros((1, 1, 2), dtype=ttnn.bfloat16)
+            selected_padding_mask = self._const_ones((1, 1), dtype=ttnn.bfloat16)
+        else:
+            # --- original slow filter (retained as fallback for inputs that
+            # actually pass map_thresh) ---
+            batch_max_pnum = 0
+            for i in range(map_score.shape[0]):
+                pnum = int(ttnn.sum(map_idx[i]).item())
+                if pnum > batch_max_pnum:
+                    batch_max_pnum = pnum
+            batch_max_pnum = max(batch_max_pnum, 1)
+            selected_map_query, selected_map_pos, selected_padding_mask = [], [], []
+            for i in range(map_score.shape[0]):
+                dim = map_query.shape[-1]
+                valid_pnum = int(ttnn.sum(map_idx[i]).item())
+                map_query = ttnn.to_torch(map_query)
+                min_map_pos = ttnn.to_torch(min_map_pos)
+                map_idx = ttnn.to_torch(map_idx, dtype=torch.bool)
+                if valid_pnum > 0:
+                    valid_map_query = map_query[i, map_idx[i]]
+                    valid_map_pos = min_map_pos[i, map_idx[i]]
+                    valid_map_query = ttnn.from_torch(valid_map_query, dtype=ttnn.bfloat16, device=self.device)
+                    valid_map_pos = ttnn.from_torch(valid_map_pos, dtype=ttnn.bfloat16, device=self.device)
+                    pad_pnum = batch_max_pnum - valid_pnum
+                    padding_mask = torch.tensor([False], device="cpu")
+                    padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
+                    padding_mask = ttnn.repeat(padding_mask, [batch_max_pnum])
+                    if pad_pnum != 0:
+                        valid_map_query = ttnn.concat(
+                            [valid_map_query, ttnn.zeros((pad_pnum, dim), device=self.device)],
+                            dim=0,
+                            memory_config=ttnn.L1_MEMORY_CONFIG,
+                        )
+                        valid_map_pos = ttnn.concat(
+                            [valid_map_pos, ttnn.zeros((pad_pnum, 2), device=self.device)],
+                            dim=0,
+                            memory_config=ttnn.L1_MEMORY_CONFIG,
+                        )
+                        padding_mask[valid_pnum:] = True
+                else:
+                    valid_map_query = ttnn.zeros((batch_max_pnum, dim), device=self.device, dtype=ttnn.bfloat16)
+                    valid_map_pos = ttnn.zeros((batch_max_pnum, 2), device=self.device, dtype=ttnn.bfloat16)
+                    padding_mask = torch.ones(batch_max_pnum)
+                    padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
+                selected_map_query.append(valid_map_query)
+                selected_map_pos.append(valid_map_pos)
+                selected_padding_mask.append(padding_mask)
+
+            selected_map_query = ttnn.stack(selected_map_query, dim=0)
+            selected_map_pos = ttnn.stack(selected_map_pos, dim=0)
+            selected_padding_mask = ttnn.stack(selected_padding_mask, dim=0)
 
         # generate different pe for map vectors for each agent
         num_agent = motion_pos.shape[1]
@@ -936,6 +1036,15 @@ class TtVADHead:
             pad_lane_mask = ttnn.to_layout(pad_lane_mask, layout=ttnn.TILE_LAYOUT)
             selected_padding_mask = ttnn.concat([selected_padding_mask, pad_lane_mask], dim=1)
 
+        if self._sap_use_cache:
+            # Compile-warmup pass (outside trace capture): snapshot the output so
+            # later capture/replay calls can clone it without host syncs.
+            self._sap_sel_cache = (
+                ttnn.clone(selected_map_query),
+                ttnn.clone(selected_map_pos),
+                ttnn.clone(selected_padding_mask),
+            )
+
         return selected_map_query, selected_map_pos, selected_padding_mask
 
     def select_and_pad_query(self, query, query_pos, query_score, score_thresh=0.5, use_fix_pad=True):
@@ -947,6 +1056,26 @@ class TtVADHead:
         query_score = ttnn.max(query_score, dim=-1)[0]
         query_score = ttnn.unsqueeze(query_score, 0)
         query_idx = query_score > score_thresh
+
+        # Fast path: B=1 and score_thresh=0.0 — every query passes the
+        # filter (sigmoid output > 0 always, and one batch means
+        # batch_max_qnum == valid_qnum == num_query). The original
+        # filter/pad/stack pipeline below would produce exactly the
+        # input tensors plus an all-False mask, but pays for two
+        # `.item()` host syncs, three `ttnn.to_torch` round trips, two
+        # `from_torch` returns, and a `ttnn.stack` along the way. Skip
+        # all of that for the case VADv2 actually ships with
+        # (`query_thresh=0.0` is hardcoded at tt_vad.py:121 and B=1
+        # throughout the model). PCC is bit-equivalent in this case.
+        #
+        # If either condition is false (future model retrained with a
+        # non-zero threshold, or batched inference enabled), fall
+        # through to the original dynamic-shape filter so correctness
+        # is preserved at the cost of the host round trips.
+        if score_thresh == 0.0 and query_score.shape[0] == 1:
+            return query, query_pos, query_idx == False
+
+        # --- original dynamic-shape filter (retained for non-default configs) ---
         batch_max_qnum = 0
         for i in range(query_score.shape[0]):
             qnum = int(ttnn.sum(query_idx[i]).item())
@@ -992,6 +1121,4 @@ class TtVADHead:
         selected_query_pos = ttnn.stack(selected_query_pos, dim=0)
         selected_padding_mask = ttnn.stack(selected_padding_mask, dim=0)
 
-        num_batch = selected_padding_mask.shape[0]
-        feat_dim = selected_query.shape[-1]
         return selected_query, selected_query_pos, selected_padding_mask

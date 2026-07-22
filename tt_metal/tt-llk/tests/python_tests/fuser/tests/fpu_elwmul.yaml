@@ -1,0 +1,25 @@
+# Element-wise multiplication of two inputs (A * B).
+
+operands:
+  - name: "input_A"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "elwmul_out"
+    dims: [256, 256]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "HiFi2"
+    block_size: [64, 128]
+    pack:
+      - output: "elwmul_out"
+        packer: "Packer"

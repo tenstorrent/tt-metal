@@ -44,8 +44,7 @@ using namespace ckernel::packer;
 
 // Program the REPLAY buffer and MOP for block-contiguous packing.
 template <bool zero_output = false>
-inline void _llk_pack_block_contiguous_mop_config_(
-    [[maybe_unused]] const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
     constexpr std::uint32_t ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
 
@@ -182,9 +181,6 @@ inline void _llk_pack_block_contiguous_mop_config_(
 // tile_index: starting tile in DEST (sets W counter)
 // address: L1 destination address for the contiguous output block
 // num_tiles: number of tiles to pack (1-8, runtime parameter)
-//
-// The outer loop count is patched via mop_cfg[0] before each MOP run,
-// matching the pattern used by _llk_pack_set_mop_outer_loop_().
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_block_contiguous_(const std::uint32_t tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
 {

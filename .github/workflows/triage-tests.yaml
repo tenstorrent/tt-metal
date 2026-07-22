@@ -1,0 +1,88 @@
+name: "(Debug) Triage Tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      wormhole:
+        description: "Run on Wormhole (wh_n150_civ2)"
+        required: false
+        type: boolean
+        default: true
+      blackhole:
+        description: "Run on Blackhole (bh_p150b_civ2_viommu)"
+        required: false
+        type: boolean
+        default: true
+      enable-watcher:
+        description: "Enable watcher"
+        required: false
+        type: boolean
+        default: false
+      enable-lightweight-kernel-asserts:
+        description: "Enable lightweight kernel asserts"
+        required: false
+        type: boolean
+        default: false
+      enable-llk-asserts:
+        description: "Enable LLK asserts"
+        required: false
+        type: boolean
+        default: false
+      run-hang-report-test:
+        description: "Run ONLY the hang report test (test-category unit). Default runs core triage tests (test-category merge_gate)."
+        required: false
+        type: boolean
+        default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+  build-artifact:
+    needs: check-harbor
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+
+  triage-tests:
+    needs: [check-harbor, build-artifact]
+    uses: ./.github/workflows/triage-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: >-
+        ${{ format('{0}{1}',
+          inputs.wormhole && 'wh_n150_civ2' || '',
+          inputs.blackhole && format('{0}bh_p150b_civ2_viommu', inputs.wormhole && ',' || '') || '')
+        }}
+      enable-watcher: ${{ inputs.enable-watcher }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+      test-category: ${{ inputs.run-hang-report-test && 'unit' || 'merge_gate' }}

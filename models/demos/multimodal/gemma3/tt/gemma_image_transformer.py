@@ -25,13 +25,11 @@ class TtGemmaImageTransformer(LightweightModule):
         configuration,
         layers,
         block_key="resblocks",
-        gated=False,
     ):
         super().__init__()
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
-        self.gated = gated
 
         self.resblocks = [
             TtGemmaImageTransformerBlock(
@@ -42,25 +40,14 @@ class TtGemmaImageTransformer(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 dtype=dtype,
                 configuration=configuration,
-                gated=gated,
             )
             for i in tqdm(range(layers), desc=f"Loading vision transformer layers")
         ]
 
-    def forward(self, x, return_intermediate=None, mask=None):
-        """
-        Different from reference impl in that if return_intermediates, it returns
-        a list of intermediate tensors rather than a stack of intermediates.
-        Outer code will have to be aware and handle this correctly.
-        """
+    def forward(self, x, mask=None):
         seq_len = x.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
 
-        out = []
-        for idx, r in enumerate(self.resblocks):
-            if return_intermediate is not None and idx in return_intermediate:
-                out.append(x)
+        for r in self.resblocks:
             x = r(x, mask=mask)
-        if return_intermediate is not None:
-            return x, out
         return x

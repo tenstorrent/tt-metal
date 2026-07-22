@@ -234,7 +234,7 @@ FORCE_INLINE
 void eth_send_payload_complete_signal_over_channel(uint32_t channel, uint32_t num_bytes) {
     erisc_info->channels[channel].bytes_sent = num_bytes;
     erisc_info->channels[channel].receiver_ack = 0;
-    uint32_t addr = ((uint32_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4;
+    uint32_t addr = ((uint32_t)(uintptr_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4;
     internal_::eth_send_packet(0, addr, addr, 1);
 }
 
@@ -255,7 +255,7 @@ void eth_send_bytes_over_channel(
     }
     erisc_info->channels[channel].bytes_sent = num_bytes;
     erisc_info->channels[channel].receiver_ack = 0;
-    uint32_t addr = ((uint32_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4;
+    uint32_t addr = ((uint32_t)(uintptr_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4;
     internal_::eth_send_packet(0, addr, addr, 1);
 }
 
@@ -290,8 +290,8 @@ void eth_wait_for_receiver_done(uint32_t wait_min = 0) {
     internal_::eth_send_packet(
         0,
 
-        ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
-        ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
+        ((uint32_t)(uintptr_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
+        ((uint32_t)(uintptr_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
         1);
     uint32_t count = 0;
     while (erisc_info->channels[0].bytes_sent != 0) {
@@ -499,8 +499,8 @@ void eth_receiver_done() {
     erisc_info->channels[0].bytes_sent = 0;
     internal_::eth_send_packet(
         0,
-        ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
-        ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
+        ((uint32_t)(uintptr_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
+        ((uint32_t)(uintptr_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
         1);
 }
 
@@ -524,7 +524,10 @@ void send_eth_receiver_channel_done(volatile eth_channel_sync_t* channel_sync) {
     channel_sync->bytes_sent = 0;
     channel_sync->receiver_ack = 0;
     internal_::eth_send_packet(
-        0, ((uint32_t)(&(channel_sync->bytes_sent))) >> 4, ((uint32_t)(&(channel_sync->bytes_sent))) >> 4, 1);
+        0,
+        ((uint32_t)(uintptr_t)(&(channel_sync->bytes_sent))) >> 4,
+        ((uint32_t)(uintptr_t)(&(channel_sync->bytes_sent))) >> 4,
+        1);
 }
 
 FORCE_INLINE
@@ -577,9 +580,13 @@ void eth_receiver_channel_ack(uint32_t channel, uint32_t eth_transaction_ack_wor
     ASSERT(reinterpret_cast<volatile uint32_t*>(eth_transaction_ack_word_addr)[0] == 1);
     reinterpret_cast<volatile uint32_t*>(eth_transaction_ack_word_addr)[1] = 1;
     // Make sure we don't alias the erisc_info eth_channel_sync_t
-    ASSERT(eth_transaction_ack_word_addr != ((uint32_t)(&(erisc_info->channels[channel].receiver_ack))) >> 4);
+    ASSERT(
+        eth_transaction_ack_word_addr != ((uint32_t)(uintptr_t)(&(erisc_info->channels[channel].receiver_ack))) >> 4);
     internal_::eth_send_packet(
-        0, eth_transaction_ack_word_addr >> 4, ((uint32_t)(&(erisc_info->channels[channel].receiver_ack))) >> 4, 1);
+        0,
+        eth_transaction_ack_word_addr >> 4,
+        ((uint32_t)(uintptr_t)(&(erisc_info->channels[channel].receiver_ack))) >> 4,
+        1);
 }
 
 /*
@@ -596,8 +603,8 @@ void eth_receiver_acknowledge(uint8_t channel = 0) {
     erisc_info->channels[channel].bytes_sent = 1;
     internal_::eth_send_packet(
         0,
-        ((uint32_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4,
-        ((uint32_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4,
+        ((uint32_t)(uintptr_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4,
+        ((uint32_t)(uintptr_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4,
         1);
 }
 

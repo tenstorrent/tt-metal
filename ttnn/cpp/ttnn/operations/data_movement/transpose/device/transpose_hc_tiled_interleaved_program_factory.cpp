@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_hc_tiled_interleaved_program_factory.hpp"
+#include "transpose_utils.hpp"
 
 #include "ttnn/operations/math.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -21,13 +23,15 @@ namespace ttnn::prim {
 
 namespace {
 
-void set_runtime_args_hc_tiled_interleaved(
-    Program& program,
-    KernelHandle reader_kernel_id,
-    KernelHandle writer_kernel_id,
+// Per-core runtime args for the reader + writer kernels. The work split uses
+// two parallel partitions (unpadded vs padded tile counts) so each core needs a
+// (start, end) pair from both. Writer also tracks the padded range; reader only
+// the unpadded count.
+void emit_runtime_args_hc_tiled_interleaved(
+    KernelDescriptor& reader_desc,
+    KernelDescriptor& writer_desc,
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    bool is_create,
     const CoreRange& total_cores) {
     auto* input_buffer = input_tensor.buffer();
     auto* output_buffer = output_tensor.buffer();
@@ -38,9 +42,6 @@ void set_runtime_args_hc_tiled_interleaved(
     uint32_t num_output_tiles = output_tensor.physical_volume() / tile_hw;
     uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.padded_shape()[2] /
                                                            tile_shape[0]);  // only last row of Ct should have padding
-
-    auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
-    auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
 
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -82,21 +83,10 @@ void set_runtime_args_hc_tiled_interleaved(
 
         uint32_t end_idx = start_idx + num_tiles_per_core;
         uint32_t padded_end_idx = padded_start_idx + padded_tiles_per_core;
-        if (is_create) {
-            SetRuntimeArgs(program, reader_kernel_id, core, {input_buffer->address(), num_tiles_per_core, start_idx});
 
-            SetRuntimeArgs(
-                program,
-                writer_kernel_id,
-                core,
-                {output_buffer->address(), start_idx, end_idx, padded_start_idx, padded_end_idx});
-        } else {
-            auto& reader_args = cached_reader_args.at(core.x).at(core.y);
-            auto& writer_args = cached_writer_args.at(core.x).at(core.y);
+        reader_desc.emplace_runtime_args(core, {input_buffer, num_tiles_per_core, start_idx});
+        writer_desc.emplace_runtime_args(core, {output_buffer, start_idx, end_idx, padded_start_idx, padded_end_idx});
 
-            reader_args[0] = input_buffer->address();
-            writer_args[0] = output_buffer->address();
-        }
         start_idx = end_idx;
         padded_start_idx = padded_end_idx;
     }
@@ -104,7 +94,7 @@ void set_runtime_args_hc_tiled_interleaved(
 
 }  // namespace
 
-TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInterleavedProgramFactory::create(
+tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::create_descriptor(
     const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
     // pad_value is always defined at API level; padding is decided purely by shape
@@ -113,7 +103,7 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
-    Program program = Program();
+    ProgramDescriptor desc;
     auto tile = input_tensor.tensor_spec().tile();
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();
@@ -131,15 +121,27 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t padding_cb_index = tt::CBIndex::c_1;
 
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(2 * single_tile_size, {{src0_cb_index, cb_data_format}})
-                                              .set_page_size(src0_cb_index, single_tile_size);
-    CreateCircularBuffer(program, total_cores, cb_src0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2 * single_tile_size,
+        .core_ranges = total_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
+
     auto max_padding_write = face_shape[0] * face_shape[1];
     if (needs_padding) {
-        CircularBufferConfig cb_src1_config =
-            CircularBufferConfig(max_padding_write * input_tensor.element_size(), {{padding_cb_index, cb_data_format}})
-                .set_page_size(padding_cb_index, max_padding_write * input_tensor.element_size());
-        CreateCircularBuffer(program, total_cores, cb_src1_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = max_padding_write * input_tensor.element_size(),
+            .core_ranges = total_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(padding_cb_index),
+                .data_format = cb_data_format,
+                .page_size = max_padding_write * input_tensor.element_size(),
+            }}},
+        });
     }
 
     Buffer* src_buffer = input_tensor.buffer();
@@ -152,7 +154,7 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = max_padding_write / num_packed_values;
         switch (input_tensor.dtype()) {
-            case DataType::INT32:
+            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
             case DataType::UINT32: padding_val_packed = pad_value; break;
             case DataType::BFLOAT16:
                 padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
@@ -172,7 +174,8 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
     }
 
     std::vector<uint32_t> reader_compile_time_args = {};
-    std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
+    std::vector<uint32_t> reader_common_runtime_args;
+    KernelDescriptor::NamedCompileTimeArgs reader_named_compile_time_args = {
         {"num_writes", num_writes},
         {"padding_val_packed", padding_val_packed},
         {"needs_padding", needs_padding},
@@ -183,14 +186,19 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
         {"tile_height", 1u},
         {"tile_width", 1u},
     };
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(reader_compile_time_args, reader_common_runtime_args);
 
-    KernelHandle reader_kernel_id = CreateKernel(
-        program,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-        "reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
-        total_cores,
-        ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
+        "reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = total_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.named_compile_time_args = std::move(reader_named_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+    reader_desc.common_runtime_args = std::move(reader_common_runtime_args);
 
     Buffer* dst_buffer = output_tensor.buffer();
     std::vector<uint32_t> writer_compile_time_args = {
@@ -204,41 +212,26 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
         face_shape[0],
         face_shape[1],
         static_cast<uint32_t>(needs_padding)};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    std::vector<uint32_t> writer_common_runtime_args;
+    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(writer_compile_time_args, writer_common_runtime_args);
 
-    KernelHandle writer_kernel_id = CreateKernel(
-        program,
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-        "writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
-        total_cores,
-        WriterDataMovementConfig(writer_compile_time_args));
+        "writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = total_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
 
-    set_runtime_args_hc_tiled_interleaved(
-        program, reader_kernel_id, writer_kernel_id, input_tensor, output_tensor, true, total_cores);
+    emit_runtime_args_hc_tiled_interleaved(reader_desc, writer_desc, input_tensor, output_tensor, total_cores);
 
-    return {std::move(program), {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void TransposeHCTiledInterleavedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const TransposeParams& /*operation_attributes*/,
-    const TransposeInputs& tensor_args,
-    Tensor& output_tensor) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-    auto compute_with_storage_grid_size = tensor_args.input.device()->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-
-    set_runtime_args_hc_tiled_interleaved(
-        program,
-        shared_variables.reader_kernel_id,
-        shared_variables.writer_kernel_id,
-        tensor_args.input,
-        output_tensor,
-        false,
-        total_cores);
+    return desc;
 }
 
 }  // namespace ttnn::prim

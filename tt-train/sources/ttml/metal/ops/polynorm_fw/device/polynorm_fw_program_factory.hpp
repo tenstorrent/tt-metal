@@ -26,16 +26,15 @@ struct PolyNorm3ForwardProgramFactory {
 
     // Build and cache kernels/circular buffers for a given input shape/layout.
     static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const PolyNorm3FWAttributes& operation_attributes,
+        const PolyNorm3FWTensorArgs& tensor_args,
+        PolyNorm3FWTensorReturn& tensor_return_value);
 
-    // Update runtime arguments without rebuilding the cached program.
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const PolyNorm3FWAttributes& operation_attributes,
+        const PolyNorm3FWTensorArgs& tensor_args,
+        PolyNorm3FWTensorReturn& tensor_return_value);
 };
 
 }  // namespace ttml::metal::ops::polynorm3_fw::device

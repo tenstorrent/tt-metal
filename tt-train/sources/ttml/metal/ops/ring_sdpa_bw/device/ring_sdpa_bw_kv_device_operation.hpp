@@ -29,8 +29,6 @@ struct RingSDPABwKVDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttml::metal::ops::ring_sdpa_bw::kv
@@ -39,7 +37,7 @@ namespace ttnn::prim {
 
 ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVDeviceOperation::tensor_return_value_t ttml_ring_sdpa_bw_kv(
     const ttnn::Tensor& grad_output,
-    const ttnn::Tensor& attn_output,
+    const ttnn::Tensor& u_scaler,
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
     const ttnn::Tensor& value,

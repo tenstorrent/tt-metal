@@ -8,7 +8,7 @@ import math
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import is_unsupported_case
+from tests.nightly.t3000.ccl.test_all_gather import is_unsupported_case
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
@@ -150,7 +150,7 @@ def run_all_gather_impl(
     )
 
     if use_bias:
-        bias_tensor = torch.randn([1, matmul_output_dim * num_devices]).float()
+        bias_tensor = torch.randn([1, matmul_output_dim * num_devices]).bfloat16()
         bias_tensor_padded = bias_tensor.unsqueeze(0).unsqueeze(0)
         bias_tt = ttnn.from_torch(
             bias_tensor_padded,

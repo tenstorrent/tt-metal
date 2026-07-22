@@ -16,10 +16,12 @@ Owner:
 """
 
 from collections import defaultdict
+from typing import Any
 import json
 import os
 import subprocess
 
+import utils
 from triage import ScriptConfig, log_warning, run_script, log_check_location
 from triage_session import get_triage_session
 from ttexalens.umd_device import TimeoutDeviceRegisterError
@@ -59,7 +61,9 @@ def get_firmware_text_address(
     """Get the firmware text section address for a given RISC core."""
     dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
     firmware_elf = elfs_cache[dispatcher_core_data.firmware_path]
-    firmware_text_address = firmware_elf.elf.get_section_by_name(".text")["sh_addr"]
+    text_section = firmware_elf.get_section_by_name(".text")
+    assert text_section is not None, "Could not find .text section in firmware ELF"
+    firmware_text_address = text_section.address
     # Make sure that l1 address we are using is in the first 1MiB of the L1 cache (required for reading groups)
     assert firmware_text_address < 0x100000
     return firmware_text_address
@@ -69,9 +73,10 @@ def collect_debug_bus_signals(
     location: OnChipCoordinate, failed_riscs: list[str], dispatcher_data: DispatcherData, elfs_cache: ElfsCache
 ) -> dict | None:
     """Collect debug bus signals for a block with known broken RISC cores."""
-    noc_block = location._device.get_block(location)
+    noc_block = location.device.get_block(location)
 
     debug_bus = noc_block.debug_bus
+    assert debug_bus is not None, "Block does not have a debug bus"
     all_groups = debug_bus.group_names
 
     # We are using first 16 bytes of the firmware text section to collect debug bus signals
@@ -111,7 +116,7 @@ def run(args, context: Context):
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
 
-    all_debug_bus_data = defaultdict(dict)
+    all_debug_bus_data: defaultdict[str, Any] = defaultdict(dict)
     session = get_triage_session()
 
     def check_block(location: OnChipCoordinate) -> None:
@@ -141,7 +146,8 @@ def run(args, context: Context):
 
     if all_debug_bus_data:
         all_debug_bus_data["git_commit"] = _get_git_commit_hash()
-        output_path = args["--path"] if args["--path"] else "debug_bus_signal_groups.json"
+        output_path = utils.safe_path(args["--path"] if args["--path"] else "debug_bus_signal_groups.json")
+        assert output_path is not None
         with open(output_path, "w") as f:
             json.dump(all_debug_bus_data, f, indent=2)
         log_warning(f"Some riscs are broken. Generated JSON file with debug bus signals at {output_path}")

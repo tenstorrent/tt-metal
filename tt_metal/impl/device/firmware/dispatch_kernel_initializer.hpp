@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "dispatch/dispatch_mem_map.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch/topology.hpp"
 #include "firmware_initializer.hpp"
@@ -51,7 +50,6 @@ private:
     std::vector<Device*> devices_;
     bool initialized_ = false;
     std::unique_ptr<tt::tt_metal::DispatchTopology> dispatch_topology_;
-    std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     dispatch_core_manager& dispatch_core_manager_;
     DeviceManager* device_manager_ = nullptr;
     GetControlPlaneFn get_control_plane_;

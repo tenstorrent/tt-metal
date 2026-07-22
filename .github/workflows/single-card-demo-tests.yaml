@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       requested-models:
-        description: "List of requested models as JSON array, for example: [\"resnet\", \"sdxl\"]. Default is 'all'"
+        description: 'List of requested models as JSON array, for example: ["resnet", "sdxl"]. Default is ''all'''
         default: "all"
         type: string
       run-perf-tests:
@@ -50,19 +50,25 @@ run-name: >-
   && ' (with perf runs)' || ' (no perf)' }}${{
   inputs.enable-ops-recording && ' [ops-recording]' || '' }}
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: ${{ inputs.enable-ops-recording || false }}
   single-card-demo-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     with:

@@ -165,6 +165,7 @@ class LlamaForCausalLM(Generator):
     model_capabilities = {
         "supports_async_decode": True,
         "supports_prefix_caching": True,
+        "supports_sample_on_device": True,
     }
 
     def __init__(self, *args, **kwargs):
@@ -212,6 +213,11 @@ class LlamaForCausalLM(Generator):
 
 # @INPUT_REGISTRY.register_input_processor(input_processor_for_qwen_text)
 class QwenForCausalLM(Generator):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_sample_on_device": True,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

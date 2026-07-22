@@ -129,6 +129,7 @@ void bind_conv_transpose2d(nb::module_& mod) {
         nb::arg("kernel_size"),
         nb::arg("stride"),
         nb::arg("padding"),
+        nb::arg("output_padding") = nb::cast(std::array<uint32_t, 2>{0, 0}),
         nb::arg("dilation"),
         nb::arg("has_bias"),
         nb::arg("groups"),

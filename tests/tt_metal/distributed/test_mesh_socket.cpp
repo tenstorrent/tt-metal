@@ -266,7 +266,7 @@ void test_single_device_socket_with_workers(
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
-    tt::stl::Span<SocketCoreMapping> socket_core_mappings,
+    ttsl::Span<SocketCoreMapping> socket_core_mappings,
     bool final_ack) {
     CoreRangeSet used_cores;
     uint32_t num_used_cores = 0;

@@ -18,7 +18,7 @@ namespace ttnn::experimental::prim {
 struct MinimalMatmulSplitDeviceOperation {
     using operation_attributes_t = MinimalMatmulSplitParams;
     using tensor_args_t = MinimalMatmulSplitInputs;
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<MinimalMatmulSplitProgramFactory>;

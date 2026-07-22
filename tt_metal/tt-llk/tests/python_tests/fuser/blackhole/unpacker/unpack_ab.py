@@ -6,7 +6,7 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
-from fuser.compute_node import ComputeNode
+from fuser.fpu_node import FpuNode
 from fuser.fused_loop import FusedLoop, LoopTileByTile
 from fuser.fused_operation import FusedOperation
 from fuser.fused_unpacker import Unpacker
@@ -35,46 +35,57 @@ class UnpackerAB(Unpacker):
         tensor_b: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         t_matrix = get_golden_generator(TransposeGolden)
         if compute_unit.broadcast_type != BroadcastType.None_:
+            src_b_tile_dims = (
+                compute_unit.src_b.tile_shape.total_row_dim(),
+                compute_unit.src_b.tile_shape.total_col_dim(),
+            )
+            src_b_num_faces = compute_unit.src_b.tile_shape.total_num_faces()
             tilized_b = tilize_block(
-                tensor_b, operation.src_b.dimensions, operation.src_b.data_format
+                tensor_b,
+                compute_unit.src_b.dimensions,
+                compute_unit.src_b.data_format,
+                num_faces=src_b_num_faces,
+                tile_dimensions=src_b_tile_dims,
             )
             broadcast_golden = get_golden_generator(BroadcastGolden)
             broadcast_result = broadcast_golden(
                 compute_unit.broadcast_type,
                 tilized_b,
-                operation.src_b.data_format,
-                operation.num_faces,
-                operation.src_b.tile_count,
-                operation.face_r_dim,
+                compute_unit.src_b.data_format,
+                compute_unit.src_a.tile_shape.total_num_faces(),
+                compute_unit.src_b.tile_count,
+                compute_unit.src_a.tile_shape.face_r_dim,
             )
             tensor_b = untilize_block(
                 broadcast_result,
-                operation.src_b.data_format,
-                operation.src_b.dimensions,
+                compute_unit.src_b.data_format,
+                compute_unit.src_b.dimensions,
+                tile_dimensions=src_b_tile_dims,
+                num_faces=src_b_num_faces,
             )
 
         if compute_unit.unpack_transpose_faces == Transpose.Yes:
             tensor_a = t_matrix.transpose_faces_multi_tile(
                 tensor_a,
-                operation.src_a.data_format,
-                operation.src_a.tile_count,
+                compute_unit.src_a.data_format,
+                compute_unit.src_a.tile_count,
                 tilize=True,
                 untilize=True,
-                input_dimensions=operation.src_a.dimensions,
+                input_dimensions=compute_unit.src_a.dimensions,
             )
 
         if compute_unit.unpack_transpose_within_face == Transpose.Yes:
             tensor_a = t_matrix.transpose_within_faces_multi_tile(
                 tensor_a,
-                operation.src_a.data_format,
-                operation.src_a.tile_count,
+                compute_unit.src_a.data_format,
+                compute_unit.src_a.tile_count,
                 tilize=True,
                 untilize=True,
-                input_dimensions=operation.src_a.dimensions,
+                input_dimensions=compute_unit.src_a.dimensions,
             )
 
         return tensor_a.flatten(), tensor_b.flatten()
@@ -83,10 +94,10 @@ class UnpackerAB(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        num_faces = operation.num_faces
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
         if compute_unit.broadcast_type == BroadcastType.Scalar:
             return (
                 f"_perf_unpack_loop_set_valid<false, true>(1);\n"
@@ -106,10 +117,10 @@ class UnpackerAB(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        num_faces = operation.num_faces
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
         if compute_unit.broadcast_type == BroadcastType.Scalar:
             return (
                 f"_perf_math_loop_clear_valid<false, true>(1);\n"
@@ -129,13 +140,24 @@ class UnpackerAB(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
 
-        tile_shape = operation.src_a.tile_shape
-        transpose_value = "1" if compute_unit.unpack_transpose_faces.value else "0"
+        tile_shape = compute_unit.src_a.tile_shape
+        if compute_unit.unpack_transpose_faces.value:
+            transpose_value = (
+                "ckernel::Transpose::Both"
+                if compute_unit.unpack_transpose_within_face.value
+                else "ckernel::Transpose::InterFace"
+            )
+        else:
+            transpose_value = (
+                "ckernel::Transpose::IntraFace"
+                if compute_unit.unpack_transpose_within_face.value
+                else "ckernel::Transpose::None"
+            )
         shape_var = f"tensor_shape_stage_{operation.stage_id}"
         return (
             f"const ckernel::TensorShape {shape_var} = "
@@ -147,9 +169,19 @@ class UnpackerAB(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
+        buffer_a = compute_unit.src_a.cpp_name
+        buffer_b = compute_unit.src_b.cpp_name
         broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
-        return f"_llk_unpack_AB_<{broadcast_type}>(L1_ADDRESS(buffer_A{stage}[{block.tile_id_global}]), L1_ADDRESS(buffer_B{stage}[{block.tile_id_global}]));\n"
+        return f"_llk_unpack_AB_<{broadcast_type}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"
+
+    def uninit(
+        self,
+        operation: FusedOperation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        return f"_llk_unpack_AB_uninit_();\n"

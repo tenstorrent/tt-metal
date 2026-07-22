@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import glob
+import inspect
 import os
 
 import pytest
@@ -10,11 +11,16 @@ import torch
 import transformers
 from datasets import load_dataset, load_from_disk
 from loguru import logger
-from transformers import AutoFeatureExtractor, EncoderDecoderCache, WhisperConfig, WhisperModel
+from transformers import AutoFeatureExtractor, WhisperConfig, WhisperModel
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_blackhole, torch_random
+from models.common.utility_functions import (
+    hf_cache_layer_kv,
+    hf_empty_encoder_decoder_cache,
+    is_blackhole,
+    torch_random,
+)
 from models.demos.audio.whisper.tt import ttnn_optimized_functional_whisper
 from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
 from models.demos.audio.whisper.tt.whisper_generator import EncoderTraceState, run_encoder_traced_or_eager
@@ -119,7 +125,7 @@ def test_whisper_attention(
 
     past_key_values = None
     if use_kv_cache:
-        past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
+        past_key_values = hf_empty_encoder_decoder_cache()
         kv_cache, _ = init_kv_cache(
             config,
             mesh_device,
@@ -156,11 +162,15 @@ def test_whisper_attention(
         )
 
         # WhisperAttention.forward returns (attn_output, attn_weights); KV is updated in-place on past_key_values.
+        # transformers 5.x renamed the cache kwarg past_key_value -> past_key_values.
+        cache_kw = (
+            "past_key_values" if "past_key_values" in inspect.signature(model.forward).parameters else "past_key_value"
+        )
         hf_attn_out = model(
             torch_hidden_states,
             attention_mask=torch_attention_mask,
             key_value_states=torch_encoder_states,
-            past_key_value=past_key_values,
+            **{cache_kw: past_key_values},
         )
         if isinstance(hf_attn_out, tuple):
             if len(hf_attn_out) == 2:
@@ -174,8 +184,8 @@ def test_whisper_attention(
 
         if use_kv_cache:
             layer_cache = past_key_values.self_attention_cache
-            past_k_hf = layer_cache.key_cache[0]
-            past_v_hf = layer_cache.value_cache[0]
+            past_k_hf = hf_cache_layer_kv(layer_cache, 0)[0]
+            past_v_hf = hf_cache_layer_kv(layer_cache, 0)[1]
         else:
             past_k_hf = past_v_hf = None
 
@@ -241,7 +251,10 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_devic
     embed_dim = config.d_model
     torch_hidden_states = torch_random((batch_size, sequence_size, embed_dim), -0.1, 0.1, dtype=torch.float32)
 
-    torch_output = model(torch_hidden_states, attention_mask=None, layer_head_mask=None)[0]
+    # transformers 5.x WhisperEncoderLayer.forward returns a Tensor (4.x returned a tuple);
+    # unwrap only when it's a tuple so `[0]` doesn't index a tensor dimension.
+    _enc_out = model(torch_hidden_states, attention_mask=None, layer_head_mask=None)
+    torch_output = _enc_out[0] if isinstance(_enc_out, tuple) else _enc_out
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -389,7 +402,10 @@ def test_decoder_layer(
         (batch_size, 1, decoder_sequence_size, decoder_sequence_size), -0.1, 0.1, dtype=torch.float32
     )
 
-    torch_output = model(torch_hidden_states, attention_mask, torch_encoder_hidden_states)[0]
+    # transformers 5.x WhisperDecoderLayer.forward returns a Tensor (4.x returned a tuple);
+    # unwrap only when it's a tuple so `[0]` doesn't index a tensor dimension.
+    _dec_out = model(torch_hidden_states, attention_mask, torch_encoder_hidden_states)
+    torch_output = _dec_out[0] if isinstance(_dec_out, tuple) else _dec_out
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -594,7 +610,9 @@ def test_ttnn_whisper(
     input_features = input_features.repeat(batch_size, 1, 1)
     decoder_input_ids = torch.ones(batch_size, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
     attention_mask = None
-    model = WhisperModel.from_pretrained(model_name, attn_implementation="eager").eval()
+    # .float(): transformers 5.x from_pretrained honors the checkpoint's dtype (distil-large-v3 is fp16),
+    # which mismatches the float32 conv input ("Input type (float) and bias type (c10::Half)").
+    model = WhisperModel.from_pretrained(model_name, attn_implementation="eager").eval().float()
     _ensure_hf_whisper_attn_eager(model)
 
     expected_last_hidden_state = model(
@@ -703,7 +721,7 @@ def test_traced_decoder_executor(
     # Create HF reference model
     hf_model = transformers.models.whisper.modeling_whisper.WhisperDecoder(config).eval()
     _ensure_hf_whisper_attn_eager(hf_model)
-    hf_past_key_values = EncoderDecoderCache.from_legacy_cache(None)
+    hf_past_key_values = hf_empty_encoder_decoder_cache()
 
     # Preprocess model parameters for TTNN
     ttnn_parameters = preprocess_model_parameters(

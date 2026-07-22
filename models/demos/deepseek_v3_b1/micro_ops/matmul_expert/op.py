@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op i
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import _CB_ADDR_SHIFT
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreCompileTimeDescriptor, UnifiedKernelDescriptor
+from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 _KERNEL_SOURCE = "models/demos/deepseek_v3_b1/micro_ops/matmul_expert/kernels/matmul_expert_kernel.cpp"
 
@@ -90,78 +91,92 @@ def _compute_expert_subblock_metadata(
     return block_sizes, tile_infos
 
 
-def upload_per_core_uint32_tensor(device, all_cores, per_core_data, entries_per_core):
-    """Create one single-core HEIGHT_SHARDED L1 tensor per core from uint32 data.
+def upload_lockstep_meta_tensors_multi_device(
+    mesh_device,
+    all_cores,
+    per_device_offset_data,
+    per_device_block_size_data,
+    offset_entries_per_core,
+    block_size_entries_per_core,
+):
+    """Create two LOCKSTEP ShardTensor2dMesh tensors holding per-(device, core) expert metadata.
+
+    Replaces the per-(device, core) upload_per_core_uint32/uint16_tensor pattern used in
+    create_dram_expert_metadata.  The mesh allocator picks ONE L1 base address valid on
+    every device → a single CT-arg value works on all 8 devices, removing the BSPM-SRAM
+    frontier divergence that broke per_core_allocation tensors allocated post-SRAM.
 
     Args:
-        all_cores: flat list of CoreCoord, index-aligned with per_core_data keys.
-        per_core_data: dict {core_idx: list[int]} of uint32 values per core.
-        entries_per_core: number of uint32 entries per core.
+        mesh_device: MeshDevice.
+        all_cores: list[CoreCoord] in HEIGHT_SHARDED ROW_MAJOR order
+            (use ttnn.corerange_to_cores(grid, row_wise=True)).
+        per_device_offset_data: {MeshCoordinate: {core_idx: list[uint32]}}.
+        per_device_block_size_data: {MeshCoordinate: {core_idx: list[uint16]}}.
+        offset_entries_per_core / block_size_entries_per_core: entries per core (= num experts
+            etc.); determines aligned shard size.
+
     Returns:
-        dict {core_idx: ttnn.Tensor}: per-core device tensors.
+        (offset_tensor, block_size_tensor, offset_l1_addr, block_size_l1_addr).
+        Each l1_addr is a single int — the same address on every (device, core).
     """
-    raw_size = entries_per_core * 4
+    num_cores = len(all_cores)
     dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
-    aligned_size = _align(max(raw_size, dram_alignment), dram_alignment)
-    tensors = {}
-    for core_idx, core in enumerate(all_cores):
-        data_np = np.array(per_core_data[core_idx], dtype=np.uint32).view(np.uint8)
-        pad = aligned_size - raw_size
-        if pad > 0:
-            data_np = np.concatenate([data_np, np.zeros(pad, dtype=np.uint8)])
-        core_torch = torch.from_numpy(data_np.copy()).reshape(1, aligned_size)
-        core_shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]),
-            [1, aligned_size],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        core_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            core_shard_spec,
-        )
-        core_mem_config.experimental_set_per_core_allocation(True)
-        tensors[core_idx] = ttnn.from_torch(
-            core_torch,
-            dtype=ttnn.uint8,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=core_mem_config,
-        )
-    return tensors
 
+    offset_raw_bytes = offset_entries_per_core * 4
+    offset_aligned = _align(max(offset_raw_bytes, dram_alignment), dram_alignment)
 
-def upload_per_core_uint16_tensor(device, all_cores, per_core_data, entries_per_core):
-    """Create one single-core HEIGHT_SHARDED L1 tensor per core from uint16 data."""
-    raw_size = entries_per_core * 2
-    dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
-    aligned_size = _align(max(raw_size, dram_alignment), dram_alignment)
-    tensors = {}
-    for core_idx, core in enumerate(all_cores):
-        data_np = np.array(per_core_data[core_idx], dtype=np.uint16).view(np.uint8)
-        pad = aligned_size - raw_size
-        if pad > 0:
-            data_np = np.concatenate([data_np, np.zeros(pad, dtype=np.uint8)])
-        core_torch = torch.from_numpy(data_np.copy()).reshape(1, aligned_size)
-        core_shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]),
-            [1, aligned_size],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        core_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            core_shard_spec,
-        )
-        core_mem_config.experimental_set_per_core_allocation(True)
-        tensors[core_idx] = ttnn.from_torch(
-            core_torch,
-            dtype=ttnn.uint8,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=core_mem_config,
-        )
-    return tensors
+    bs_raw_bytes = block_size_entries_per_core * 2
+    bs_aligned = _align(max(bs_raw_bytes, dram_alignment), dram_alignment)
+
+    mesh_shape = mesh_device.shape
+    mesh_rows, mesh_cols = int(mesh_shape[0]), int(mesh_shape[1])
+
+    offset_data = torch.zeros((mesh_rows, mesh_cols, num_cores, offset_aligned), dtype=torch.uint8)
+    bs_data = torch.zeros((mesh_rows, mesh_cols, num_cores, bs_aligned), dtype=torch.uint8)
+    for row in range(mesh_rows):
+        for col in range(mesh_cols):
+            coord = ttnn.MeshCoordinate(row, col)
+            off_per_core = per_device_offset_data[coord]
+            bs_per_core = per_device_block_size_data[coord]
+            for core_idx in range(num_cores):
+                off_np = np.array(off_per_core[core_idx], dtype=np.uint32).view(np.uint8)
+                bs_np = np.array(bs_per_core[core_idx], dtype=np.uint16).view(np.uint8)
+                if len(off_np) > 0:
+                    offset_data[row, col, core_idx, : len(off_np)] = torch.from_numpy(off_np.copy())
+                if len(bs_np) > 0:
+                    bs_data[row, col, core_idx, : len(bs_np)] = torch.from_numpy(bs_np.copy())
+
+    offset_2d = offset_data.permute(0, 2, 1, 3).reshape(mesh_rows * num_cores, mesh_cols * offset_aligned).contiguous()
+    bs_2d = bs_data.permute(0, 2, 1, 3).reshape(mesh_rows * num_cores, mesh_cols * bs_aligned).contiguous()
+
+    core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in all_cores])
+
+    offset_shard = ttnn.ShardSpec(core_range_set, [1, offset_aligned], ttnn.ShardOrientation.ROW_MAJOR)
+    offset_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, offset_shard)
+
+    bs_shard = ttnn.ShardSpec(core_range_set, [1, bs_aligned], ttnn.ShardOrientation.ROW_MAJOR)
+    bs_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, bs_shard)
+
+    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(mesh_rows, mesh_cols), dims=(0, 1))
+
+    offset_tensor = ttnn.from_torch(
+        offset_2d,
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=offset_mem,
+        mesh_mapper=mesh_mapper,
+    )
+    bs_tensor = ttnn.from_torch(
+        bs_2d,
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=bs_mem,
+        mesh_mapper=mesh_mapper,
+    )
+
+    return (offset_tensor, bs_tensor, offset_tensor.buffer_address(), bs_tensor.buffer_address())
 
 
 def _pack_tile_metadata(
@@ -207,11 +222,23 @@ def _pack_tile_metadata(
 
 
 def create_expert_fmt_tensors(cts: list, mesh_device, core_grid, num_tiles_k: int, out_w: int):
-    """Create per-device per-core format metadata and base address tensors.
+    """Create per-(device, core) format metadata and base address tables.
 
-    Returns two L1 tables per core:
-      - fmt_tensors: packed 3-bit metadata [num_experts * meta_words] uint32s
-      - base_addr_tensors: [num_experts] uint32s (weight base byte addr per expert)
+    Builds TWO mesh tensors (one for fmt metadata, one for per-expert base
+    addresses), each HEIGHT_SHARDED on ``core_grid`` (1 row per core) and
+    distributed across the mesh via ``ShardTensor2dMesh``.  Under lockstep
+    allocation (no per_core_allocation), the L1 base address is uniform
+    across the mesh — each device's tensor lands at the same L1 offset,
+    and within a device every core gets ``base + core_idx * row_size``.
+
+    This is the safe pattern for post-BSPM-SRAM L1 allocations: any
+    divergence in per-(device, core) L1 frontier (from BSPM-compressed SRAM
+    CTs above) is absorbed by the lockstep allocator picking a uniform
+    address that fits on every device.  The tensor CONTENT still varies
+    per (device, core) — that comes from the ShardTensor2dMesh per-device
+    slice — but the ADDRESS is identical, removing the need for per-(device,
+    core) CT-arg routing (the addresses become uniform per-core CT-arg
+    values valid on every device).
 
     Args:
         cts: List of CompressedTensor, one per SRAM expert.
@@ -221,19 +248,41 @@ def create_expert_fmt_tensors(cts: list, mesh_device, core_grid, num_tiles_k: in
         out_w: N tiles per core per expert.
 
     Returns:
-        (fmt_dict, base_addr_dict) where each is {MeshCoordinate: {core_idx: ttnn.Tensor}}
+        ``(fmt_tensor, base_tensor, fmt_l1_addrs, base_l1_addrs)``:
+          - ``fmt_tensor``, ``base_tensor``: kept-alive mesh tensors (the
+            caller stashes them so they aren't garbage-collected).
+          - ``fmt_l1_addrs``, ``base_l1_addrs``: ``list[int]`` of per-core
+            L1 addresses, indexed by ``corerange_to_cores(core_grid)`` order.
+            Uniform across all devices in the mesh.
     """
     mesh_shape = mesh_device.shape
-    all_cores = ttnn.corerange_to_cores(core_grid)
+    mesh_rows, mesh_cols = int(mesh_shape[0]), int(mesh_shape[1])
+    # row_wise=True so the core-iteration order matches HEIGHT_SHARDED
+    # ROW_MAJOR's shard-to-core assignment (= core_idx i ↔ i-th core when
+    # iterating the CoreRangeSet row-by-row).  Critical: source[r, c, i, :]
+    # in the ShardTensor2dMesh layout must correspond to the same `cores[i]`
+    # that the kernel runs on.
+    all_cores = ttnn.corerange_to_cores(core_grid, row_wise=True)
+    num_cores = len(all_cores)
+    num_experts = len(cts)
     dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
 
-    fmt_result = {}
-    base_result = {}
-    for row in range(mesh_shape[0]):
-        for col in range(mesh_shape[1]):
+    # Compute aligned per-core row sizes.  meta_words_per_expert × num_experts ×
+    # 4 bytes/uint32 = fmt raw bytes per core.  num_experts × 4 = base raw.
+    meta_words_per_expert = _meta_words_for_tiles(num_tiles_k * out_w)
+    fmt_raw_bytes = num_experts * meta_words_per_expert * 4
+    fmt_aligned = _align(max(fmt_raw_bytes, dram_alignment), dram_alignment)
+    base_raw_bytes = num_experts * 4
+    base_aligned = _align(max(base_raw_bytes, dram_alignment), dram_alignment)
+
+    # Build per-(device, core) content tensors.  Each (device, core) slot gets
+    # the actual BSPM-derived metadata + base addresses for that core on that
+    # device.
+    fmt_data = torch.zeros((mesh_rows, mesh_cols, num_cores, fmt_aligned), dtype=torch.uint8)
+    base_data = torch.zeros((mesh_rows, mesh_cols, num_cores, base_aligned), dtype=torch.uint8)
+    for row in range(mesh_rows):
+        for col in range(mesh_cols):
             coord = ttnn.MeshCoordinate(row, col)
-            fmt_tensors = {}
-            base_tensors = {}
             for core_idx, core_coord in enumerate(all_cores):
                 all_meta = []
                 base_addrs = []
@@ -242,52 +291,55 @@ def create_expert_fmt_tensors(cts: list, mesh_device, core_grid, num_tiles_k: in
                     shard_assignment = ct.get_assignment_per_shard(core_coord, device_coord=coord)
                     words, _ = _pack_tile_metadata(shard_assignment, out_w)
                     all_meta.extend(words)
-
-                # Upload fmt metadata.
                 fmt_np = np.array(all_meta, dtype=np.uint32).view(np.uint8)
-                fmt_raw = len(fmt_np)
-                fmt_aligned = _align(max(fmt_raw, dram_alignment), dram_alignment)
-                if fmt_aligned > fmt_raw:
-                    fmt_np = np.concatenate([fmt_np, np.zeros(fmt_aligned - fmt_raw, dtype=np.uint8)])
-                fmt_torch = torch.from_numpy(fmt_np.copy()).reshape(1, fmt_aligned)
-                fmt_shard = ttnn.ShardSpec(
-                    ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord)]),
-                    [1, fmt_aligned],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                )
-                fmt_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fmt_shard)
-                fmt_mem.experimental_set_per_core_allocation(True)
-                fmt_tensors[core_idx] = ttnn._ttnn.tensor.experimental_to_single_device(
-                    ttnn.from_torch(fmt_torch, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT),
-                    mesh_device,
-                    coord,
-                    fmt_mem,
-                )
-
-                # Upload base addresses.
                 base_np = np.array(base_addrs, dtype=np.uint32).view(np.uint8)
-                base_raw = len(base_np)
-                base_aligned = _align(max(base_raw, dram_alignment), dram_alignment)
-                if base_aligned > base_raw:
-                    base_np = np.concatenate([base_np, np.zeros(base_aligned - base_raw, dtype=np.uint8)])
-                base_torch = torch.from_numpy(base_np.copy()).reshape(1, base_aligned)
-                base_shard = ttnn.ShardSpec(
-                    ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord)]),
-                    [1, base_aligned],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                )
-                base_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, base_shard)
-                base_mem.experimental_set_per_core_allocation(True)
-                base_tensors[core_idx] = ttnn._ttnn.tensor.experimental_to_single_device(
-                    ttnn.from_torch(base_torch, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT),
-                    mesh_device,
-                    coord,
-                    base_mem,
-                )
+                if len(fmt_np) > 0:
+                    fmt_data[row, col, core_idx, : len(fmt_np)] = torch.from_numpy(fmt_np.copy())
+                if len(base_np) > 0:
+                    base_data[row, col, core_idx, : len(base_np)] = torch.from_numpy(base_np.copy())
 
-            fmt_result[coord] = fmt_tensors
-            base_result[coord] = base_tensors
-    return fmt_result, base_result
+    # Reshape to (mesh_rows*num_cores, mesh_cols*row_size) for ShardTensor2dMesh
+    # dims=(0, 1) — splits dim 0 by mesh_rows, dim 1 by mesh_cols.  Each device
+    # ends up with (num_cores, row_size) sharded HEIGHT_SHARDED on core_grid.
+    fmt_2d = fmt_data.permute(0, 2, 1, 3).reshape(mesh_rows * num_cores, mesh_cols * fmt_aligned).contiguous()
+    base_2d = base_data.permute(0, 2, 1, 3).reshape(mesh_rows * num_cores, mesh_cols * base_aligned).contiguous()
+
+    fmt_shard = ttnn.ShardSpec(core_grid, [1, fmt_aligned], ttnn.ShardOrientation.ROW_MAJOR)
+    fmt_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fmt_shard)
+
+    base_shard = ttnn.ShardSpec(core_grid, [1, base_aligned], ttnn.ShardOrientation.ROW_MAJOR)
+    base_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, base_shard)
+
+    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(mesh_rows, mesh_cols), dims=(0, 1))
+
+    fmt_tensor = ttnn.from_torch(
+        fmt_2d,
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=fmt_mem,
+        mesh_mapper=mesh_mapper,
+    )
+    base_tensor = ttnn.from_torch(
+        base_2d,
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=base_mem,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Per-core L1 addresses.  Under HEIGHT_SHARDED + lockstep, every core in
+    # the shard grid has its own row at THE SAME L1 base address (the
+    # ShardTensor2dMesh content is laid out so each core sees its OWN row at
+    # the shared address — different physical L1 bytes, same logical address).
+    # So fmt_l1_addrs[i] == fmt_base_l1 for every core; ditto for base.
+    fmt_base_l1 = fmt_tensor.buffer_address()
+    base_base_l1 = base_tensor.buffer_address()
+    fmt_l1_addrs = [fmt_base_l1] * num_cores
+    base_l1_addrs = [base_base_l1] * num_cores
+
+    return fmt_tensor, base_tensor, fmt_l1_addrs, base_l1_addrs
 
 
 def _build_program_for_device(
@@ -327,6 +379,8 @@ def _build_program_for_device(
     partial_sem_addr: int = 0,
     pipeline_sem_addr: int = 0,
     num_loop_iters: int = 1,
+    primary_at_last_offset: bool = False,
+    gather_sync_sem_addr: int = 0,
 ) -> ttnn.ProgramDescriptor:
     """Build a ProgramDescriptor for one device — handles SRAM-only, DRAM-only, and hybrid.
 
@@ -357,13 +411,20 @@ def _build_program_for_device(
     # [num_active_experts * dram_per_core_n, tile_w] so the silu post-pass can
     # treat all expert outputs as ONE tile (single copy_tile / silu / pack_tile).
     cb_out_silu = 7
+    # cb_internal_acc: aliases cb_out's L1 region. The kernel routes per-expert
+    # cb_reserve_back/cb_push_back/cb_wait_front/cb_pop_front through this CB so
+    # the wraparound bookkeeping doesn't update cb_out's metadata. Consumers of
+    # cb_out (eltwise_add downstream) only see a single cb_push_back at the very
+    # end (after the gather sync) and so cannot observe transient state.
+    cb_internal_acc = 8
 
     # CB descriptors.
     cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_tensor)
     cb1_descs = sram_cts[0].cb_descriptor_from_compressed_tensor(cb_in1, device_coord=coord) if sram_cts else []
     cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, out_tensor)
     cb3_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_index, index_tensor)
-    cbs = [cb0_desc, *cb1_descs, cb2_desc, cb3_desc]
+    cb_internal_acc_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_internal_acc, out_tensor)
+    cbs = [cb0_desc, *cb1_descs, cb2_desc, cb3_desc, cb_internal_acc_desc]
     if sram_out_tensor is not None:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(cb_out_sram, sram_out_tensor))
 
@@ -496,6 +557,18 @@ def _build_program_for_device(
         # Ops also drain their own cb_out pushes via a pop_out template flag.
         ("num_loop_iters", num_loop_iters),
         ("cb_in1_dram_buf_addr", in1_backing_tensor.buffer_address()),
+        # primary_at_last_offset (accum mode only): when 1, sender NOC-writes its accum
+        # result onto the next core in the bank so the bank's full N output ends
+        # up on the receiver (last core in bank). Output tensor's per-core shard
+        # must be sized cores_per_dram_bank * per_core_n when this is enabled.
+        ("primary_at_last_offset", 1 if primary_at_last_offset else 0),
+        # Global L1 sem for sender TRISC → NCRISC sync (gather mode only).
+        # TRISC inc(1) once after the per-expert accum loop, NCRISC spins on
+        # load >= 1 then dec(1). See kernel hpp for full rationale.
+        ("gather_sync_sem_addr", gather_sync_sem_addr),
+        # cb_internal_acc: aliases cb_out's L1; per-expert push/pop bookkeeping
+        # routes through it so cb_out's metadata only updates once at the end.
+        ("cb_internal_acc", cb_internal_acc),
     ]
 
     # Per-core descriptors.
@@ -605,9 +678,16 @@ def create_dram_expert_metadata(
       fmt_words_per_expert = num_iterations × meta_words_per_block (packed 3-bit format)
       Slot offset = (global_expert_id × num_iterations) % num_buffers.
 
+    Returns RAW per-core data (no tensor upload).  Caller is responsible for
+    aggregating across the mesh and uploading via
+    :func:`upload_lockstep_meta_tensors_multi_device` (lockstep ShardTensor2dMesh
+    — avoids the per_core_allocation address divergence triggered by BSPM SRAM).
+
     Returns:
-        ((offset_tensors, block_size_tensors), per_core_fmt,
-         (expert_offsets_l1_addrs, block_sizes_l1_addrs), per_core_values)
+        (per_core_expert_offsets, per_core_block_sizes, block_size_entries_per_core,
+         per_core_fmt, per_core_values)
+        where per_core_expert_offsets / per_core_block_sizes are dicts
+        ``{core_idx: list[int]}``.
     """
     num_experts = num_total_experts
     num_banks = len(primary_worker_cores)
@@ -735,26 +815,12 @@ def create_dram_expert_metadata(
             next_core_noc_x_core_values.append((core, next_noc.x))
             next_core_noc_y_core_values.append((core, next_noc.y))
 
-    # Upload expert offsets (uint32) and block sizes (uint16) as separate L1 tensors.
-    offset_tensors = upload_per_core_uint32_tensor(device, compute_cores_list, per_core_expert_offsets, num_experts)
-    block_size_tensors = upload_per_core_uint16_tensor(
-        device, compute_cores_list, per_core_block_sizes, num_experts * num_iterations_local
-    )
-
-    expert_offsets_l1_addr_core_values = [
-        (
-            compute_cores_list[i],
-            offset_tensors[i].experimental_per_core_buffer_address(compute_cores_list[i]),
-        )
-        for i in range(num_total_cores)
-    ]
-    block_sizes_l1_addr_core_values = [
-        (
-            compute_cores_list[i],
-            block_size_tensors[i].experimental_per_core_buffer_address(compute_cores_list[i]),
-        )
-        for i in range(num_total_cores)
-    ]
+    # NOTE: We no longer upload per-core tensors here.  Caller aggregates per-device
+    # data and uploads a single LOCKSTEP ShardTensor2dMesh tensor pair (see
+    # upload_lockstep_meta_tensors_multi_device).  This is required to avoid the
+    # BSPM-SRAM frontier-divergence bug that breaks per_core_allocation tensors
+    # allocated post-SRAM.
+    block_size_entries_per_core = num_experts * num_iterations_local
 
     per_core_values = {
         "bank_id": bank_id_core_values,
@@ -766,9 +832,10 @@ def create_dram_expert_metadata(
     }
 
     return (
-        (offset_tensors, block_size_tensors),
+        per_core_expert_offsets,
+        per_core_block_sizes,
+        block_size_entries_per_core,
         per_core_fmt,
-        (expert_offsets_l1_addr_core_values, block_sizes_l1_addr_core_values),
         per_core_values,
     )
 
@@ -852,6 +919,8 @@ def _assemble_dram_results(
     pipeline_sem_addr,
     partial_sem,
     pipeline_sem,
+    gather_sync_sem_addr,
+    gather_sync_sem,
 ):
     """Phase 3: assemble per-device result tuples.
 
@@ -884,6 +953,8 @@ def _assemble_dram_results(
                 pipeline_sem_addr,
                 partial_sem,
                 pipeline_sem,
+                gather_sync_sem_addr,
+                gather_sync_sem,
             )
     logger.info("  All device metadata created")
     return result
@@ -901,11 +972,26 @@ def create_dram_expert_tensors_multi_device(
     num_in1_buffers: int = 3,
     subblock_n: int = 1,
     k_parallel_per_bank: int = 1,
+    allocate_in1_backing: bool = True,
+    primary_worker_cores=None,
+    primary_at_last_offset: bool = False,
 ) -> dict:
     """Create per-device tensors for ExpertKernel.mesh_op.
 
     Calls create_dram_expert_metadata once per device in the mesh.
     Assumes homogeneous DRAM bank topology across all devices.
+    ``primary_worker_cores`` can override the canonical bank-worker order; callers
+    that pass per-core bank IDs must use the same order here.
+
+    ``primary_at_last_offset``: when True, place the primary core at the LAST in-bank
+    offset of compute_cores_list so it gets ``core_in_bank_idx = cores_per_bank-1``
+    and matches the kernel's ``is_in_bank_primary`` derivation. The bank's
+    gathered N output then lands on the primary's L1 — invisible to downstream
+    consumers, which still see ``primary_cores_list`` unchanged.
+
+    When ``allocate_in1_backing=False`` the L1 backing tensor for cb_in1 is NOT
+    allocated (caller provides their own — e.g. the fused MoE kernel overlays
+    cb_in1 on the SDPA KV buffer). The returned tuple has ``in1_backing=None``.
 
     Returns:
         {MeshCoordinate: (in1_backing, meta_tensors, fmt_tensors,
@@ -917,11 +1003,21 @@ def create_dram_expert_tensors_multi_device(
     logger.info(
         f"create_dram_expert_tensors_multi_device: {num_devices} devices, {num_total_experts} total experts, {len(cts)} DRAM CTs"
     )
-    primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    if primary_worker_cores is None:
+        primary_cores_list = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
+    else:
+        primary_cores_list = list(primary_worker_cores)
+    expected_num_banks = mesh_device.dram_grid_size().x * mesh_device.dram_grid_size().y
+    assert len(primary_cores_list) == expected_num_banks, (
+        f"primary_worker_cores length ({len(primary_cores_list)}) must match " f"DRAM bank count ({expected_num_banks})"
+    )
     compute_cores_list = []
     for primary_core in primary_cores_list:
         for offset in range(cores_per_dram_bank):
-            compute_cores_list.append(ttnn.CoreCoord(primary_core.x + offset, primary_core.y))
+            # primary_at_last_offset: reverse the in-bank offset so the primary lands at
+            # the LAST position (= core_in_bank_idx cores_per_bank-1 = receiver).
+            x_offset = (cores_per_dram_bank - 1) - offset if primary_at_last_offset else offset
+            compute_cores_list.append(ttnn.CoreCoord(primary_core.x + x_offset, primary_core.y))
     compute_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores_list]
     )
@@ -950,19 +1046,27 @@ def create_dram_expert_tensors_multi_device(
     fmt_region_bytes = 2 * cb_fmt_dram_page_size
 
     total_shard_bytes = in1_region_bytes + fmt_region_bytes
-    backing_shard_spec = ttnn.ShardSpec(compute_core_grid, [1, total_shard_bytes], ttnn.ShardOrientation.ROW_MAJOR)
-    backing_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, backing_shard_spec
-    )
-    dram_backing_tensor = ttnn.from_torch(
-        torch.zeros((num_cores, total_shard_bytes), dtype=torch.uint8),
-        dtype=ttnn.uint8,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        memory_config=backing_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    cb_in1_base_shifted = (dram_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
+    # When allocate_in1_backing=False (caller overlays cb_in1 + cb_fmt on its own
+    # buffer like the SDPA KV in MoE), skip this private L1 region — the helper-side
+    # allocation is invisible to the CB allocator and can be silently stomped when
+    # external CBs are placed nearby. Caller must override fmt_cb_l1_addr post-hoc.
+    if allocate_in1_backing:
+        backing_shard_spec = ttnn.ShardSpec(compute_core_grid, [1, total_shard_bytes], ttnn.ShardOrientation.ROW_MAJOR)
+        backing_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, backing_shard_spec
+        )
+        dram_backing_tensor = ttnn.from_torch(
+            torch.zeros((num_cores, total_shard_bytes), dtype=torch.uint8),
+            dtype=ttnn.uint8,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=backing_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        cb_in1_base_shifted = (dram_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
+    else:
+        dram_backing_tensor = None
+        cb_in1_base_shifted = 0
     max_subblock_bytes_shifted = (subblock_k * subblock_n * max_tile_size) >> _CB_ADDR_SHIFT
 
     # fmt metadata sync: 2 global sems as atomic counters (0..2).
@@ -980,13 +1084,22 @@ def create_dram_expert_tensors_multi_device(
     # Pipeline ring sem (per-core, cores_per_bank > 1) — global so we pass L1 addr.
     pipeline_sem = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
     pipeline_sem_addr = ttnn.get_global_semaphore_address(pipeline_sem)
+    # Gather TRISC → NCRISC sync (sender side, primary_at_last_offset mode only). Replaces
+    # the 1-page cb_gather_sync; same protocol shape but a raw L1 sem.
+    gather_sync_sem = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
+    gather_sync_sem_addr = ttnn.get_global_semaphore_address(gather_sync_sem)
     ttnn.synchronize_device(mesh_device)
-    fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes
-
-    logger.info(
-        f"  dram_backing created, addr={dram_backing_tensor.buffer_address()}, "
-        f"in1={in1_region_bytes}B, fmt_offset={in1_region_bytes}, fmt={fmt_region_bytes}B"
-    )
+    if dram_backing_tensor is not None:
+        fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes
+        logger.info(
+            f"  dram_backing created, addr={dram_backing_tensor.buffer_address()}, "
+            f"in1={in1_region_bytes}B, fmt_offset={in1_region_bytes}, fmt={fmt_region_bytes}B"
+        )
+    else:
+        fmt_cb_l1_addr = 0  # placeholder; caller overlays cb_fmt on its own buffer
+        logger.info(
+            f"  dram_backing SKIPPED (caller will overlay); " f"in1={in1_region_bytes}B, fmt={fmt_region_bytes}B"
+        )
 
     # --- Phase 1: compute per-device metadata and pack fmt bank data ---
     # K-split: each core's fmt describes only its K-slice's blocks.
@@ -999,14 +1112,24 @@ def create_dram_expert_tensors_multi_device(
     fmt_bytes_per_bank = cores_per_dram_bank * fmt_bytes_per_core
     num_banks = len(primary_cores_list)
 
-    per_device_results = {}
+    # Phase 1a: gather raw per-device data from create_dram_expert_metadata (no upload).
+    per_device_offset_data = {}
+    per_device_block_size_data = {}
+    per_device_per_core_values = {}
     per_device_fmt_bank_data = {}
+    block_size_entries_per_core = None
 
     for row in range(mesh_shape[0]):
         for col in range(mesh_shape[1]):
             coord = ttnn.MeshCoordinate(row, col)
-            logger.info(f"  Creating metadata for device ({row},{col})...")
-            meta_tensors, per_core_fmt, l1_addrs, per_core_values = create_dram_expert_metadata(
+            logger.info(f"  Computing metadata for device ({row},{col})...")
+            (
+                per_core_expert_offsets,
+                per_core_block_sizes,
+                bs_entries,
+                per_core_fmt,
+                per_core_values,
+            ) = create_dram_expert_metadata(
                 mesh_device,
                 cts,
                 compute_cores_list,
@@ -1025,7 +1148,11 @@ def create_dram_expert_tensors_multi_device(
                 device_coord=coord,
                 k_parallel_per_bank=k_parallel_per_bank,
             )
-            per_device_results[coord] = (meta_tensors, l1_addrs, per_core_values)
+            per_device_offset_data[coord] = per_core_expert_offsets
+            per_device_block_size_data[coord] = per_core_block_sizes
+            per_device_per_core_values[coord] = per_core_values
+            if block_size_entries_per_core is None:
+                block_size_entries_per_core = bs_entries
 
             per_device_fmt_bank_data[coord] = _pack_fmt_bank_data(
                 per_core_fmt,
@@ -1035,6 +1162,37 @@ def create_dram_expert_tensors_multi_device(
                 fmt_words_per_expert,
                 fmt_bytes_per_expert,
             )
+
+    # Phase 1b: upload metadata as a SINGLE lockstep ShardTensor2dMesh tensor pair
+    # (one for offsets, one for block sizes).  The mesh allocator picks ONE L1
+    # base address valid on every device — uniform CT-arg values across all 8
+    # devices, immune to BSPM-SRAM frontier divergence.
+    (
+        offset_tensor_shared,
+        block_size_tensor_shared,
+        offset_l1_addr_shared,
+        block_size_l1_addr_shared,
+    ) = upload_lockstep_meta_tensors_multi_device(
+        mesh_device,
+        compute_cores_list,
+        per_device_offset_data,
+        per_device_block_size_data,
+        offset_entries_per_core=num_total_experts,
+        block_size_entries_per_core=block_size_entries_per_core,
+    )
+
+    # Build per-device results.  Tensor refs are SHARED (same mesh tensor on every
+    # device); l1_addr is the same value for every core (lockstep buffer_address).
+    per_device_results = {}
+    for row in range(mesh_shape[0]):
+        for col in range(mesh_shape[1]):
+            coord = ttnn.MeshCoordinate(row, col)
+            l1_addrs = (
+                [(c, offset_l1_addr_shared) for c in compute_cores_list],
+                [(c, block_size_l1_addr_shared) for c in compute_cores_list],
+            )
+            meta_tensors = (offset_tensor_shared, block_size_tensor_shared)
+            per_device_results[coord] = (meta_tensors, l1_addrs, per_device_per_core_values[coord])
 
     fmt_sizes = dict(
         fmt_bytes_per_expert=fmt_bytes_per_expert,
@@ -1065,6 +1223,8 @@ def create_dram_expert_tensors_multi_device(
         pipeline_sem_addr,
         partial_sem,
         pipeline_sem,
+        gather_sync_sem_addr,
+        gather_sync_sem,
     )
 
 
@@ -1128,8 +1288,13 @@ class ExpertKernel:
         sram_per_core_n: int = 0,
         sram_k_per_core: int = 0,
         sram_core_grid=None,  # CoreRangeSet for SRAM cores, or None if no SRAM.
-        sram_fmt_tensors: dict = None,  # from create_expert_fmt_tensors(), keyed by MeshCoordinate.
-        sram_base_addr_tensors: dict = None,  # from create_expert_fmt_tensors(), keyed by MeshCoordinate.
+        # Lockstep mesh tensors from create_expert_fmt_tensors() — single tensor each
+        # (ShardTensor2dMesh across the mesh, HEIGHT_SHARDED on core_grid).  Uniform
+        # L1 base address across mesh; per-core content varies via per-device slab.
+        sram_fmt_tensor: ttnn.Tensor = None,
+        sram_base_addr_tensor: ttnn.Tensor = None,
+        sram_fmt_l1_addrs: list = None,  # list[int] per-core L1 addrs, uniform across mesh.
+        sram_base_addrs_l1_addrs: list = None,
         sram_k_offsets: list = None,  # [(CoreCoord, k_offset_tiles), ...] for K-sliced SRAM.
         n_parallel_per_bank: int = 1,
         k_parallel_per_bank: int = 1,
@@ -1139,6 +1304,7 @@ class ExpertKernel:
         tp_expert: bool = True,
         subblock_n: int = 1,
         num_loop_iters: int = 1,
+        primary_at_last_offset: bool = False,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -1168,7 +1334,10 @@ class ExpertKernel:
             assert sram_per_core_n > 0, "sram_per_core_n must be set when has_sram=True"
             assert sram_k_per_core > 0, "sram_k_per_core must be set when has_sram=True"
             assert sram_core_grid is not None, "sram_core_grid must be set when has_sram=True"
-            assert sram_fmt_tensors is not None, "sram_fmt_tensors must be set when has_sram=True"
+            assert sram_fmt_tensor is not None, "sram_fmt_tensor must be set when has_sram=True"
+            assert sram_base_addr_tensor is not None, "sram_base_addr_tensor must be set when has_sram=True"
+            assert sram_fmt_l1_addrs is not None, "sram_fmt_l1_addrs must be set when has_sram=True"
+            assert sram_base_addrs_l1_addrs is not None, "sram_base_addrs_l1_addrs must be set when has_sram=True"
             assert sram_output_tensor is not None, "sram_output_tensor must be set when has_sram=True"
 
         if not tp_expert:
@@ -1198,28 +1367,17 @@ class ExpertKernel:
                 sram_out_dev = sram_out_per_device[dev_idx]
                 idx_dev = index_per_device[dev_idx]
 
-                # SRAM fmt + base addrs for this device.
+                # SRAM fmt + base addrs for this device.  Lockstep tensors give
+                # uniform L1 addrs across the mesh, so we pair the pre-computed
+                # per-core address lists with cores in row-major order (matches
+                # create_expert_fmt_tensors's row_wise=True iteration).
                 sram_fmt_l1 = []
                 sram_base_addrs_l1 = []
-                sram_fmt_tensors_dev = {}
-                sram_base_addr_tensors_dev = {}
                 if has_sram:
-                    sram_fmt_tensors_dev = sram_fmt_tensors[coord]
-                    sram_base_addr_tensors_dev = sram_base_addr_tensors[coord]
-                    sram_cores_list = ttnn.corerange_to_cores(sram_core_grid)
-                    sram_fmt_l1 = [
-                        (
-                            sram_cores_list[i],
-                            sram_fmt_tensors_dev[i].experimental_per_core_buffer_address(sram_cores_list[i]),
-                        )
-                        for i in range(len(sram_cores_list))
-                    ]
+                    sram_cores_list = ttnn.corerange_to_cores(sram_core_grid, row_wise=True)
+                    sram_fmt_l1 = [(sram_cores_list[i], sram_fmt_l1_addrs[i]) for i in range(len(sram_cores_list))]
                     sram_base_addrs_l1 = [
-                        (
-                            sram_cores_list[i],
-                            sram_base_addr_tensors_dev[i].experimental_per_core_buffer_address(sram_cores_list[i]),
-                        )
-                        for i in range(len(sram_cores_list))
+                        (sram_cores_list[i], sram_base_addrs_l1_addrs[i]) for i in range(len(sram_cores_list))
                     ]
 
                 # DRAM for this device. _partial_sem / _pipeline_sem are carried
@@ -1241,6 +1399,8 @@ class ExpertKernel:
                     pipeline_sem_addr,
                     _partial_sem,
                     _pipeline_sem,
+                    gather_sync_sem_addr,
+                    _gather_sync_sem,
                 ) = dram_meta_tensors[coord]
                 # Per-core active flags — each core runs only the path it belongs to.
                 all_cores_dev = ttnn.corerange_to_cores(a_dev.memory_config().shard_spec.grid)
@@ -1283,16 +1443,29 @@ class ExpertKernel:
                     partial_sem_addr=partial_sem_addr,
                     pipeline_sem_addr=pipeline_sem_addr,
                     num_loop_iters=num_loop_iters,
+                    primary_at_last_offset=primary_at_last_offset,
+                    gather_sync_sem_addr=gather_sync_sem_addr,
                 )
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
 
         # --- Collect all live tensors ---
+        # Lockstep mesh tensors: one tensor each across the whole mesh.  Keep
+        # them alive via a single reference (not per-device per-core).
         all_ct_data = [t for ct in (sram_cts + dram_cts) for t in ct.get_data_tensors()]
-        all_sram_fmt = [t for per_dev in sram_fmt_tensors.values() for t in per_dev.values()]
-        all_sram_base = [t for per_dev in (sram_base_addr_tensors or {}).values() for t in per_dev.values()]
+        all_sram_fmt = [sram_fmt_tensor] if sram_fmt_tensor is not None else []
+        all_sram_base = [sram_base_addr_tensor] if sram_base_addr_tensor is not None else []
         per_device_dram = []
+        # offset_t / bsize_t are single mesh tensors (post-lockstep refactor), the
+        # SAME object for every coord under the lockstep design.  Dedup by id() so
+        # we keep each unique tensor alive exactly once.
+        _seen_meta = set()
         for in1_backing, (offset_t, bsize_t), fmt_info, *_ in dram_meta_tensors.values():
-            per_device_dram.extend([in1_backing, *offset_t.values(), *bsize_t.values(), fmt_info["fmt_dram_tensor"]])
+            per_device_dram.append(in1_backing)
+            for t in (offset_t, bsize_t):
+                if id(t) not in _seen_meta:
+                    _seen_meta.add(id(t))
+                    per_device_dram.append(t)
+            per_device_dram.append(fmt_info["fmt_dram_tensor"])
         io_tensors = [
             a_tensor,
             *all_ct_data,

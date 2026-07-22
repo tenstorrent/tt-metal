@@ -35,7 +35,7 @@ void kernel_main() {
 
         // Write tile to DRAM at the appropriate offset
         uint32_t dram_tile_id = tile_offset + tile_idx;
-        noc_async_write_tile(dram_tile_id, dst_addr_gen, l1_read_addr);
+        noc_async_write_page(dram_tile_id, dst_addr_gen, l1_read_addr);
         noc_async_write_barrier();
 
         // Free the CB slot for next tile

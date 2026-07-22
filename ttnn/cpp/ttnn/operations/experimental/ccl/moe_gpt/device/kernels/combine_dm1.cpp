@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "moe_gpt_ring_common.h"
 
 //
@@ -20,11 +21,10 @@ void kernel_main() {
     uint32_t argidx = 0;
     const auto semaphore_id = get_arg_val<uint32_t>(argidx++);
 
-    uint32_t semaphore_addr = get_semaphore(semaphore_id);
-    volatile tt_l1_ptr uint32_t* semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
-    *semaphore_ptr = 0;
+    Semaphore<> sem(semaphore_id);
+    sem.set(0);
 
     constexpr uint32_t num_sources = moe_gpt_ring::RING_CORES_PER_COMBINE_COL;  // 4
 
-    noc_semaphore_wait_min(semaphore_ptr, num_sources);
+    sem.wait_min(num_sources);
 }

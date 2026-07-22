@@ -38,9 +38,9 @@ ttnn::Tensor perform_transpose(
 
 ttnn::Tensor transform_to_4d_tensor(const ttnn::Tensor& input_tensor, bool is_rank_le_4d);
 
-ttnn::SmallVector<int> generate_reduce_dim(
+ttsl::SmallVector<int> generate_reduce_dim(
     const ttnn::Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, int64_t, ttnn::SmallVector<int>>>& dim_arg);
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg);
 
 constexpr float get_zero_volume_fill_value(const ReduceType type) {
     switch (type) {
@@ -66,7 +66,7 @@ constexpr float get_zero_volume_fill_value(const ReduceType type) {
 template <ReduceType reduce_type>
 ttnn::Tensor zero_volume_reduce(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int>& dim,
+    const ttsl::SmallVector<int>& dim,
     const bool keepdim,
     const ttnn::MemoryConfig& memory_config) {
     auto input_shape = input_tensor.logical_shape();
@@ -83,7 +83,7 @@ ttnn::Tensor zero_volume_reduce(
         }
     }
 
-    ttnn::SmallVector<uint32_t> output_shape;
+    ttsl::SmallVector<uint32_t> output_shape;
 
     const int rank = static_cast<int>(input_shape.rank());
     // Iterate over the input shape and adjust the output shape for keepdim

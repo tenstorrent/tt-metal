@@ -32,6 +32,7 @@ class TorchDispatchModule(torch.nn.Module):
         num_experts_per_tok: int,
         metadata_len: int,
         max_dispatched_tokens_per_expert: int,
+        max_dispatch_buffer_token_size: int,
         seq_len_per_chip: int,
         emb_dim: int = 7 * 1024,
         num_dispatch_groups: int = 1,
@@ -44,8 +45,11 @@ class TorchDispatchModule(torch.nn.Module):
             dispatch_group_size: Number of chips in each dispatch group
             experts_per_chip: Number of experts per chip
             num_routed_experts: Total number of routed experts across all chips
-            metadata_len: Length of metadata per token (stores: chip, token, topk_idx, routed_expert, weight)
-            max_dispatched_tokens_per_expert: Maximum number of tokens that can be dispatched to each expert
+            metadata_len: Length of metadata per token (3 fields: chip, token, topk_idx)
+            max_dispatched_tokens_per_expert: Per-expert theoretical upper bound on the number of tokens any
+                single expert may receive (full sequence length of the dispatch group).
+            max_dispatch_buffer_token_size: Total token capacity of the flat dispatch buffer per chip
+                (shared across all local experts via dynamic offsets).
             expert_dispatch_table: Optional dispatch table of shape (num_dispatch_groups, num_routed_experts)
                 Maps expert ID to logical chip ID in dispatch axis, -1 if not present
         """
@@ -56,28 +60,25 @@ class TorchDispatchModule(torch.nn.Module):
         self.num_experts_per_tok = num_experts_per_tok
         self.metadata_len = metadata_len
         self.max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert
+        self.max_dispatch_buffer_token_size = max_dispatch_buffer_token_size
         self.seq_len_per_chip = seq_len_per_chip
         self.num_dispatch_groups = num_dispatch_groups
         self.expert_dispatch_table = expert_dispatch_table
 
-        # Oversized buffer (max_dispatched_tokens_per_expert) to simplify dispatch logic
+        # Flat per-chip dispatch buffer of total capacity max_dispatch_buffer_token_size
+        # (shared across all local experts via dynamic TILE_SIZE-aligned offsets).
         self.dispatched_shape = (
             num_dispatch_groups,
             dispatch_group_size,
-            self.experts_per_chip,
-            self.max_dispatched_tokens_per_expert,
+            self.max_dispatch_buffer_token_size,
             emb_dim,
         )
         self.dispatched_metadata_shape = (
             num_dispatch_groups,
             dispatch_group_size,
-            self.experts_per_chip,
-            self.max_dispatched_tokens_per_expert,
+            self.max_dispatch_buffer_token_size,
             self.metadata_len,
         )
-
-        self.dispatched_buffer = torch.zeros(self.dispatched_shape, dtype=torch.float32)
-        self.dispatched_metadata = torch.ones(self.dispatched_metadata_shape, dtype=torch.int32) * -1
 
     def forward(
         self,
@@ -85,6 +86,7 @@ class TorchDispatchModule(torch.nn.Module):
         weights: torch.Tensor,
         indices: torch.Tensor,
         expert_offsets: torch.Tensor,
+        scales: torch.Tensor = None,
     ):
         """
         Route tokens from their original positions to expert-specific buffers distributed across chips.
@@ -99,6 +101,10 @@ class TorchDispatchModule(torch.nn.Module):
             indices: Expert indices of shape (dispatch_group_size, seq_len, num_experts_per_tok)
             expert_offsets: Base offset for each expert from each chip (sparse per group)
                 Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts) - from get_gate_outputs()
+            scales: Optional per-token fp8 scales of shape (dispatch_group_size, seq_len, emb_dim/128),
+                fp32. When provided, each dispatched token's scales are written (bit-for-bit as int32)
+                into metadata fields 3.. (matching the fp8 dispatch path); requires metadata_len ==
+                3 + scales.shape[-1]. None leaves the metadata tail zero-padded.
 
         Returns:
             If num_dispatch_groups == 1:
@@ -131,6 +137,12 @@ class TorchDispatchModule(torch.nn.Module):
             self.num_experts_per_tok == indices.shape[-1]
         ), f"Last dimension of indices must match num_experts_per_tok {self.num_experts_per_tok}, got {indices.shape[-1]}"
 
+        if scales is not None:
+            assert self.metadata_len == 3 + scales.shape[-1], (
+                f"metadata_len ({self.metadata_len}) must equal 3 + scales.shape[-1] "
+                f"({3 + scales.shape[-1]}) when scales are provided"
+            )
+
         dispatched_buffer = torch.zeros(self.dispatched_shape, dtype=torch.float32)
         dispatched_metadata = torch.ones(self.dispatched_metadata_shape, dtype=torch.int32) * -1
 
@@ -154,25 +166,21 @@ class TorchDispatchModule(torch.nn.Module):
                                 False
                             ), "Dispatch table must be provided in multi-group configuration to determine expert chip mapping"
 
-                        expert_index_within_chip = routed_expert % self.experts_per_chip
                         dst_index = offset_copy[chip, routed_expert]
 
-                        dispatched_buffer[group, expert_chip, expert_index_within_chip, dst_index] = x[chip, token]
+                        dispatched_buffer[group, expert_chip, dst_index] = x[chip, token]
                         # Compute linearized mesh coord for combine module
                         linearized_coord = ExpertMapping.compute_linearized_mesh_coord(
                             chip, group, self.num_dispatch_groups
                         )
-                        dispatched_metadata[group, expert_chip, expert_index_within_chip, dst_index] = torch.tensor(
-                            [
-                                linearized_coord,
-                                token,
-                                topk_idx,
-                                routed_expert,
-                                torch.tensor(weights[chip, token, topk_idx].item(), dtype=torch.bfloat16)
-                                .view(torch.int16)
-                                .item(),
-                            ]
-                            + [0] * (self.metadata_len - 5),
+                        # Metadata tail: zero-padded by default, or the token's per-128-block fp32
+                        # scales (bit-cast to int32) when fp8 scales are dispatched alongside.
+                        if scales is not None:
+                            scale_tail = scales[chip, token].to(torch.float32).view(torch.int32).tolist()
+                        else:
+                            scale_tail = [0] * (self.metadata_len - 3)
+                        dispatched_metadata[group, expert_chip, dst_index] = torch.tensor(
+                            [linearized_coord, token, topk_idx] + scale_tail,
                             dtype=dispatched_metadata.dtype,
                         )
                         offset_copy[chip, routed_expert] += 1

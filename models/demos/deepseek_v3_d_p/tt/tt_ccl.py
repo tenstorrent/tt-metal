@@ -3,6 +3,8 @@
 
 from typing import Optional
 
+from loguru import logger
+
 import ttnn
 
 # NOTE: This file is forked from models/common/modules/tt_ccl.py
@@ -75,23 +77,9 @@ class TT_CCL:
         )
 
         self.ring_attention_ccl_core_grid_offset = (full_compute_grid.x - 1, 0)
-        ccl_sub_device_crs = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
-        )
-        self.worker_sub_device = ttnn.SubDevice(
-            [
-                ccl_sub_device_crs,
-            ]
-        )
-        self.worker_sub_device_id = ttnn.SubDeviceId(0)
-        self.sub_device_stall_group = [self.worker_sub_device_id]
-
-        self.sub_device_manager = self.mesh_device.create_sub_device_manager([self.worker_sub_device], 0)
-        self.mesh_device.load_sub_device_manager(self.sub_device_manager)
-        self.mesh_device.set_sub_device_stall_group(self.sub_device_stall_group)
 
         # create global semaphore handles
-        self.ring_attention_ccl_semaphore_handles = create_global_semaphores(mesh_device, ccl_sub_device_crs, 0)
+        self.ring_attention_ccl_semaphore_handles = create_global_semaphores(mesh_device, self.sub_device_crs, 0)
 
         self.barrier_semaphore_idx = [0, 0, 0]
         self.barrier_semaphore_handles = [[], [], []]
@@ -117,6 +105,146 @@ class TT_CCL:
                 self.rs_semaphore_handles[i].append(
                     [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
                 )
+
+        # Single, stable-address reduce_scatter INTERMEDIATE accumulator, shared by ALL layers'
+        # shared experts. Giving the shared-expert reduce_scatter a persistent, fixed-address
+        # intermediate (a) keeps it alive across the shared-expert||dispatch sub-device overlap so
+        # the concurrent dispatch can't reuse its freed slot mid-flight, and (b) fixes the DRAM
+        # layout every iteration so the op's fabric reduction order is identical -> bit-exact
+        # determinism. One buffer for the whole model (layers share the shape and run sequentially)
+        # keeps the memory cost flat. See TtSharedExpert.forward.
+        self.shared_rs_intermediate = None
+
+        # Keepalive for the shared-expert reduce_scatter INPUT (output_full). The overlapped
+        # dispatch must not reuse this buffer's DRAM slot mid-flight, so it is held until the next
+        # shared-expert forward. Stored here (one slot, shared across all layers that run
+        # sequentially) rather than on each per-layer TtSharedExpert instance — a per-instance
+        # reference would never be released (every layer object stays alive for the whole model),
+        # leaking one RS input per layer. See set_shared_rs_input_keepalive / TtSharedExpert.forward.
+        self.shared_rs_input_keepalive = None
+
+        # Persistent ring-attention buffers shared by every layer's MLA, keyed by their shape
+        # signature. One set for the whole model. See get_mla_ring_attention_buffers.
+        self.mla_ring_attention_buffers: dict[tuple, dict] = {}
+
+        # Persistent chunked-prefill (ring_mla) gathered-KV scratch buffers shared by every layer's
+        # MLA, keyed by shape signature. See get_mla_chunked_kv_buffer.
+        self.mla_chunked_kv_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
+    def get_mla_ring_attention_buffers(
+        self,
+        *,
+        seq_len,
+        kv_lora_rank,
+        qk_rope_head_dim,
+        qk_head_dim,
+        v_head_dim,
+        num_heads,
+        tp_axis,
+        dtype=ttnn.bfloat8_b,
+    ):
+        """Lazily allocate (once per mesh) and return the persistent ring-attention buffers shared by
+        every layer's MLA: the all-gather K/V output buffers plus the dummy joint_q/kv/v placeholders
+        (seq_len=0) that ring_joint_scaled_dot_product_attention requires. All MLA layers share one
+        config + seq_len + mesh, so a single set is reused at a stable address across layers -- layers
+        run sequentially (no in-flight overlap), and the fixed address also keeps the op's fabric
+        reduction order identical for bit-exact determinism. Cached by shape signature so distinct
+        configs/seq_lens on the same mesh get their own set. Returns a dict of ttnn.Tensor."""
+        import torch
+
+        key = (seq_len, kv_lora_rank, qk_rope_head_dim, qk_head_dim, v_head_dim, num_heads, tp_axis, dtype)
+        if key in self.mla_ring_attention_buffers:
+            return self.mla_ring_attention_buffers[key]
+
+        mesh_shape = tuple(self.mesh_device.shape)
+        num_heads_local = num_heads // self.mesh_device.shape[tp_axis]
+        v_shard_dims = [None, None]
+        v_shard_dims[tp_axis] = 1  # TP heads
+        k_shard_dims = [None, None]  # replicated across the mesh
+        joint_shard_dims = [None, None]
+        joint_shard_dims[tp_axis] = 1  # shard on head dimension
+
+        def _alloc(tensor, *, shard_dims=None, replicate=False):
+            mapper = (
+                ttnn.ReplicateTensorToMesh(self.mesh_device)
+                if replicate
+                else ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=mesh_shape, dims=shard_dims)
+            )
+            return ttnn.from_torch(
+                tensor,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+
+        assert num_heads_local * self.mesh_device.shape[tp_axis] == num_heads
+        buffers = {
+            "persistent_k_output_buffer": _alloc(
+                torch.zeros(1, 1, seq_len, kv_lora_rank + qk_rope_head_dim), shard_dims=k_shard_dims
+            ),
+            "persistent_v_output_buffer": _alloc(
+                torch.zeros(1, num_heads, seq_len, v_head_dim), shard_dims=v_shard_dims
+            ),
+            "joint_q": _alloc(torch.zeros(1, num_heads, 0, qk_head_dim), shard_dims=joint_shard_dims),
+            "joint_kv": _alloc(torch.zeros(1, 1, 0, kv_lora_rank + qk_rope_head_dim), replicate=True),
+            "joint_v": _alloc(torch.zeros(1, num_heads, 0, v_head_dim), shard_dims=joint_shard_dims),
+        }
+        self.mla_ring_attention_buffers[key] = buffers
+        return buffers
+
+    def get_mla_chunked_kv_buffer(self, *, cache_batch, seq_len, kvpe_dim, dtype=ttnn.bfloat8_b):
+        """Lazily allocate (once per mesh) and return the combined gathered-KV scratch buffer used by
+        the chunked-prefill ring_mla op (persistent_output_buffer_kv). It's scratch -- each layer's
+        gather overwrites it, it holds no per-layer state -- and uniform across layers (cache_batch =
+        slot_num*layer_num, seq_len, mesh are all fixed for a model), so one buffer is shared by every
+        layer's MLA instead of re-allocating a full slot_num*layer_num buffer per layer. Replicated
+        across the mesh ([None, None]); cached by shape signature."""
+        import torch
+
+        key = (cache_batch, seq_len, kvpe_dim, dtype)
+        if key not in self.mla_chunked_kv_buffers:
+            self.mla_chunked_kv_buffers[key] = ttnn.from_torch(
+                torch.zeros(cache_batch, 1, seq_len, kvpe_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, None]
+                ),
+            )
+        return self.mla_chunked_kv_buffers[key]
+
+    def get_shared_rs_intermediate(self, input_tensor):
+        """Lazily allocate (once per mesh) and return the shared reduce_scatter intermediate
+        accumulator. Line (Linear) topology needs a double-sized leading dim for the
+        forward/backward halves: shape = [2, *input_shape]. Interleaved DRAM, input dtype/layout,
+        replicated across the mesh. A single buffer is reused at a stable address by every
+        shared-expert reduce_scatter — all layers share the same shape and run sequentially, so one
+        buffer for the whole model is safe."""
+        import torch
+
+        if self.shared_rs_intermediate is None:
+            self.shared_rs_intermediate = ttnn.from_torch(
+                torch.zeros([2] + list(input_tensor.shape)),
+                device=self.mesh_device,
+                layout=input_tensor.layout,
+                dtype=input_tensor.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self.shared_rs_intermediate
+
+    def set_shared_rs_input_keepalive(self, input_tensor):
+        """Hold the shared-expert reduce_scatter INPUT alive until the next shared-expert forward,
+        so the concurrent (overlapped) dispatch cannot reuse its DRAM slot mid-flight. A single slot
+        shared across all sequentially-run layers: each layer's forward overwrites it, releasing the
+        previous layer's input (its refcount drops to zero and the DRAM is freed). This must live on
+        tt_ccl (one instance for the whole model), NOT on the per-layer TtSharedExpert object — the
+        latter would pin one RS input per layer for the model's lifetime, leaking DRAM every layer."""
+        self.shared_rs_input_keepalive = input_tensor
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
         semaphore_index = 2 if cluster_axis is None else cluster_axis
@@ -160,6 +288,50 @@ def default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
         # NOTE: this should be a fallback when the ring is not available
         return ttnn.Topology.Linear
     return None
+
+
+# Per-axis CCL topology. Mesh dim 0 = rows = "Y" = sp_axis; dim 1 = cols = "X" = tp_axis.
+# A torus fabric physically wraps a given axis; Ring is only valid on a wrapped axis (otherwise the
+# collective hangs forever on a wrap link the fabric does not service — get_usable_topology() keeps
+# Ring because the coords span the axis). Reading the *active* fabric config keeps the returned
+# topology consistent with whatever was opened, so a (descriptor, fabric, topology) mismatch can't
+# silently ask Ring on an unwrapped axis.
+_FABRIC_PER_AXIS_TOPOLOGY = {
+    # fabric_config: (sp_topology [dim 0 / Y], tp_topology [dim 1 / X])
+    ttnn.FabricConfig.FABRIC_2D_TORUS_X: (ttnn.Topology.Linear, ttnn.Topology.Ring),
+    ttnn.FabricConfig.FABRIC_2D_TORUS_Y: (ttnn.Topology.Ring, ttnn.Topology.Linear),
+    ttnn.FabricConfig.FABRIC_2D_TORUS_XY: (ttnn.Topology.Ring, ttnn.Topology.Ring),
+    ttnn.FabricConfig.FABRIC_1D_RING: (ttnn.Topology.Ring, ttnn.Topology.Linear),
+}
+
+
+def per_axis_topology(
+    fabric_config: Optional[ttnn.FabricConfig] = None,
+) -> tuple[ttnn.Topology, ttnn.Topology]:
+    """Return the per-axis CCL topology ``(sp_topology, tp_topology)`` for the fabric.
+
+    ``sp_topology`` drives cluster_axis=0 (rows / Y) collectives, ``tp_topology`` drives
+    cluster_axis=1 (cols / X). Ring is returned only for an axis the fabric physically wraps; every
+    other axis is Linear. When ``fabric_config`` is None the currently-active fabric is queried so
+    the result always matches the opened fabric.
+    """
+    if fabric_config is None:
+        fabric_config = ttnn.get_fabric_config()
+    mapped = _FABRIC_PER_AXIS_TOPOLOGY.get(fabric_config)
+    if mapped is not None:
+        return mapped
+    # Unknown fabric → all-Linear. If the fabric name looks ring/torus-capable, this means a wrap-
+    # capable fabric was opened but has no per-axis mapping here: collectives would silently run
+    # all-Linear (correct but no ring speedup, and a likely sign the mapping needs updating). Warn
+    # loudly rather than degrade silently.
+    name = getattr(fabric_config, "name", str(fabric_config))
+    if "TORUS" in name.upper() or "RING" in name.upper():
+        logger.warning(
+            f"per_axis_topology: fabric {name} is ring/torus-capable but has no entry in "
+            "_FABRIC_PER_AXIS_TOPOLOGY; defaulting to (Linear, Linear) so no axis will ring. "
+            "Add it to the mapping if a ring topology is intended."
+        )
+    return (ttnn.Topology.Linear, ttnn.Topology.Linear)
 
 
 # =============================================================================

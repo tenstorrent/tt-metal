@@ -11,16 +11,11 @@ import copy
 
 
 def inverse_sigmoid(x, eps: float = 1e-5):
+    # See ttnn_utils.inverse_sigmoid: ttnn.ones inside trace counts as a Write.
     x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
     x = ttnn.clamp(x, min=0, max=1)
     x1 = ttnn.clamp(x, min=eps)
-    if len(x.shape) == 3:
-        x_temp = ttnn.ones(shape=[x.shape[0], x.shape[1], x.shape[2]], layout=ttnn.TILE_LAYOUT, device=x.device())
-    else:
-        x_temp = ttnn.ones(
-            shape=[x.shape[0], x.shape[1], x.shape[2], x.shape[3]], layout=ttnn.TILE_LAYOUT, device=x.device()
-        )
-    x_temp = x_temp - x
+    x_temp = ttnn.rsub(x, 1.0)
     x2 = ttnn.clamp(x_temp, min=eps)
     return ttnn.log(ttnn.div(x1, x2))
 
@@ -307,15 +302,13 @@ class TtDeformableDetrTransformerDecoder:
                 else:
                     assert reference_points.shape[-1] == 2
                     inv = inverse_sigmoid(reference_points)
-                    new_reference_points = tmp
-
-                    new_reference_points = ttnn.to_torch(new_reference_points)
-                    tmp = ttnn.to_torch(tmp)
-                    inv = ttnn.to_torch(inv)
-                    new_reference_points[..., :2] = tmp[..., :2] + inv
-                    new_reference_points = ttnn.from_torch(
-                        new_reference_points, device=self.device, layout=ttnn.TILE_LAYOUT
-                    )
+                    # Pure-ttnn slice + add + concat replaces the
+                    # to_torch / Python slice / from_torch round-trip.
+                    # Same pattern as TtPansegformerHead.forward and
+                    # ttnn_decoder.py's reg_branches reference update.
+                    tmp_first2 = ttnn.add(tmp[..., :2], inv)
+                    tmp_rest = tmp[..., 2:]
+                    new_reference_points = ttnn.concat([tmp_first2, tmp_rest], dim=-1)
                     new_reference_points = ttnn.sigmoid(new_reference_points)
                 reference_points = new_reference_points
 

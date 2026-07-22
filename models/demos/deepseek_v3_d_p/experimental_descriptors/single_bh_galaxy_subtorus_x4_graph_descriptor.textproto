@@ -1,0 +1,23 @@
+# Single Blackhole galaxy carved to a 4x4 sub-torus: Ring-4 on the X axis.
+#
+# device_topology [4,4] [LINE,RING]: dim 0 (rows / Y / SP) is a line; dim 1 (cols / X / TP) is a
+# closed ring of 4. Uses 16 of the galaxy's 32 chips; the dim-1 wrap closes on the physical
+# horizontal ring cables. The chip_id -> physical mapping is chosen by the placement solver (any
+# valid 16-chip embedding).
+#
+# Usage: select with TT_MESH_GRAPH_DESC_PATH, pair with FabricConfig.FABRIC_2D_TORUS_X, open a (4,4)
+# mesh_device, run Topology.Ring on cluster_axis=1 (the TP/X collectives) and Topology.Linear on
+# cluster_axis=0 (the SP-axis MoE dispatch/combine, which stay a line). Restrict TT_VISIBLE_DEVICES
+# to the 16 chips whose wiring forms the ring (ASICs 3, 4, 7, 8 of trays 1-4). Single host / single
+# rank. RELAXED tolerates the 16-chip slice mapping onto a partial 32-chip UBB board.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

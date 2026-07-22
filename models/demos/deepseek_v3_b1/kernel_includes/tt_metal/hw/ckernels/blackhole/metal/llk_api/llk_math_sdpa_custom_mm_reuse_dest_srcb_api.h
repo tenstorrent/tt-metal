@@ -41,7 +41,11 @@ inline void llk_math_sdpa_custom_mm_reuse_dest_srcb_init(
 // Runtime parameter signal_output:
 //   false (default): Full sdpa_custom_mm_reuse_dest_srcb - MVMULs + finalization
 //   true: Partial K accumulation - MVMULs only, no finalization (for intermediate K subblocks)
-template <MathFidelity math_fidelity>
+//
+// Compile-time parameter output_granularity:
+//   Number of output tiles produced between successive FPU->SFPU semaphore posts when
+//   signal_output is true. nt_dim must be divisible by output_granularity.
+template <MathFidelity math_fidelity, std::uint32_t output_granularity>
 inline void llk_math_sdpa_custom_mm_reuse_dest_srcb(
     const uint src_index,
     const uint dst_index,
@@ -49,5 +53,6 @@ inline void llk_math_sdpa_custom_mm_reuse_dest_srcb(
     const std::uint32_t kt_dim = 1,
     const std::uint32_t nt_dim = 1,
     bool signal_output = false) {
-    _llk_math_sdpa_custom_mm_reuse_dest_srcb_(src_index, dst_index, transpose, kt_dim, nt_dim, signal_output);
+    _llk_math_sdpa_custom_mm_reuse_dest_srcb_<output_granularity>(
+        src_index, dst_index, transpose, kt_dim, nt_dim, signal_output);
 }

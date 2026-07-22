@@ -4,25 +4,14 @@
 
 #pragma once
 
-#include "ttnn/device_operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "tilize_device_operation_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {
 
 struct TilizeMultiCoreDefaultProgramFactory {
-    using shared_variables_t = ttnn::prim::MultiCoreSharedVariables::shared_variables_t;
-    using cached_program_t =
-        ttnn::device_operation::CachedProgram<ttnn::prim::MultiCoreSharedVariables::shared_variables_t>;
-
-    static cached_program_t create(
-        const ttnn::prim::TilizeParams& operation_attributes,
-        const ttnn::prim::TilizeInputs& tensor_args,
-        const Tensor& output_tensor);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const ttnn::prim::TilizeParams& operation_attributes,
-        const ttnn::prim::TilizeInputs& tensor_args,
-        const Tensor& output_tensor);
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const TilizeParams& operation_attributes, const TilizeInputs& tensor_args, Tensor& tensor_return_value);
 };
 }  // namespace ttnn::prim

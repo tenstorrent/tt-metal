@@ -3,38 +3,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <utility>
+#include <vector>
+#include <tt-metalium/program_descriptors.hpp>
 #include "update_cache_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::prim {
 
+// Descriptor-based factory: builds a ProgramDescriptor declaratively. The framework owns
+// program construction, caching, dynamic CB address patching (via CBDescriptor::buffer)
+// and runtime arg copy on cache hits, so this struct no longer needs shared_variables_t,
+// cached_program_t, create() or override_runtime_arguments().
 struct FillCacheMultiCoreProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-        tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-        tt::tt_metal::CBHandle cb_src0{};
-        std::vector<CoreCoord> cores;
-        uint32_t g1_numcores = 0;
-        CoreRangeSet core_group_1;
-        uint32_t num_blocks_per_core_group_1 = 0;
-        CoreRangeSet core_group_2;
-        uint32_t num_blocks_per_core_group_2 = 0;
-        uint32_t Wt = 0;
-        uint32_t input_Ht = 0;
-        uint32_t cache_HtWt = 0;
-        uint32_t cache_CHtWt = 0;
-    };
-
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args, Tensor& output_tensor);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const KvCacheParams& operation_attributes,
-        const KvCacheInputs& tensor_args,
-        Tensor& output_tensor);
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args, Tensor& tensor_return_value);
 };
+
+// Per-core writer cache_start_id, in the SAME core order create_descriptor emits runtime args.
+// cache_start_id derives from operation_attributes (batch_idx, update_idx) which
+// UpdateKVCacheOperation::compute_program_hash deliberately EXCLUDES from the program-cache key
+// (so two fills that differ only in those cache-hit), yet it is baked into a writer runtime arg —
+// so it must be re-patched on every cache hit via UpdateKVCacheOperation::get_dynamic_runtime_args.
+// This helper is the single source of truth for the work-split + formula: both create_descriptor
+// (cache miss) and get_dynamic_runtime_args (cache hit) call it, so the two paths cannot drift.
+std::vector<std::pair<tt::tt_metal::CoreCoord, uint32_t>> compute_fill_cache_start_ids(
+    const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args);
 
 }  // namespace ttnn::prim

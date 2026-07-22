@@ -6,6 +6,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <algorithm>
@@ -15,14 +16,14 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-TransposeWHShardedRMProgramFactory::cached_program_t TransposeWHShardedRMProgramFactory::create(
+tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descriptor(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
-    Program program = CreateProgram();
+    ProgramDescriptor desc;
 
     tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
@@ -81,62 +82,88 @@ TransposeWHShardedRMProgramFactory::cached_program_t TransposeWHShardedRMProgram
 
     auto& all_cores = shard_spec.grid;
     [[maybe_unused]] uint32_t num_cores = shard_spec.num_cores();
-    auto bbox = shard_spec.grid.bounding_box();
-    CoreCoord grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y + 1};
-    uint32_t num_cores_x = grid_size.x;
-    uint32_t num_cores_y = grid_size.y;
 
     log_debug(tt::LogOp, "all_cores: {}", all_cores);
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
 
-    // sharded cb
+    // sharded cb (input): .buffer triggers UpdateDynamicCircularBufferAddress on cache hit.
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(shard_height * stick_size_bytes, {{src0_cb_index, src0_cb_data_format}})
-            .set_page_size(src0_cb_index, stick_size_bytes)
-            .set_globally_allocated_address(*input_tensor.buffer());
-    auto cb_src0 = CreateCircularBuffer(program, all_cores, cb_src0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = shard_height * stick_size_bytes,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = src0_cb_data_format,
+            .page_size = stick_size_bytes,
+        }}},
+        .buffer = input_tensor.buffer(),
+    });
 
-    // sharded cb
+    // sharded cb (output): .buffer triggers UpdateDynamicCircularBufferAddress on cache hit.
     uint32_t output_cb_index = tt::CBIndex::c_16;
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(stick_size_bytes * shard_height, {{output_cb_index, dst_cb_data_format}})
-            .set_page_size(output_cb_index, output_page_size)
-            .set_globally_allocated_address(*output_tensor.buffer());
-    auto cb_output = CreateCircularBuffer(program, all_cores, cb_output_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = stick_size_bytes * shard_height,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = dst_cb_data_format,
+            .page_size = output_page_size,
+        }}},
+        .buffer = output_tensor.buffer(),
+    });
 
-    // cb_in
+    // cb_in (double-buffered intermediate)
     uint32_t in_cb_index = tt::CBIndex::c_24;
     uint32_t num_in_tiles = wt * 2;  // double buffer
-    CircularBufferConfig cb_in_config =
-        CircularBufferConfig(num_in_tiles * src0_single_tile_size, {{in_cb_index, src0_cb_data_format}})
-            .set_page_size(in_cb_index, src0_single_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_in_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_in_tiles * src0_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(in_cb_index),
+            .data_format = src0_cb_data_format,
+            .page_size = src0_single_tile_size,
+        }}},
+    });
 
     // tilize cb
     uint32_t im_cb_index = tt::CBIndex::c_25;
     uint32_t num_im_tiles = ht * wt;
-    CircularBufferConfig cb_im_config =
-        CircularBufferConfig(num_im_tiles * src0_single_tile_size, {{im_cb_index, src0_cb_data_format}})
-            .set_page_size(im_cb_index, src0_single_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_im_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_im_tiles * src0_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(im_cb_index),
+            .data_format = src0_cb_data_format,
+            .page_size = src0_single_tile_size,
+        }}},
+    });
 
-    // untilize cb
+    // untilize cb (only when ht > 8) + matching output staging CB
     if (ht > 8) {
         uint32_t im2_cb_index = tt::CBIndex::c_26;
         uint32_t num_im2_tiles = ht;
-        CircularBufferConfig cb_im2_config =
-            CircularBufferConfig(num_im2_tiles * dst_single_tile_size, {{im2_cb_index, dst_cb_data_format}})
-                .set_page_size(im2_cb_index, dst_single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_im2_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_im2_tiles * dst_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(im2_cb_index),
+                .data_format = dst_cb_data_format,
+                .page_size = dst_single_tile_size,
+            }}},
+        });
 
         // compute_output_cb
         uint32_t out_cb_index = tt::CBIndex::c_27;
         uint32_t num_out_tiles = ht * 2;  // double buffer
-        CircularBufferConfig cb_out_config =
-            CircularBufferConfig(num_out_tiles * dst_single_tile_size, {{out_cb_index, dst_cb_data_format}})
-                .set_page_size(out_cb_index, dst_single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_out_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_out_tiles * dst_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(out_cb_index),
+                .data_format = dst_cb_data_format,
+                .page_size = dst_single_tile_size,
+            }}},
+        });
     }
 
     std::vector<uint32_t> reader_compile_time_args = {
@@ -151,12 +178,14 @@ TransposeWHShardedRMProgramFactory::cached_program_t TransposeWHShardedRMProgram
     reader_compile_time_args.push_back(H > TILE_HEIGHT ? TILE_HEIGHT : H % TILE_HEIGHT);
     reader_compile_time_args.push_back(H % TILE_HEIGHT == 0 ? TILE_HEIGHT : H % TILE_HEIGHT);
 
-    KernelHandle reader_kernel_id = CreateKernel(
-        program,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-        "reader_unary_transpose_wh_sharded_rm.cpp",
-        all_cores,
-        ReaderDataMovementConfig(reader_compile_time_args));
+        "reader_unary_transpose_wh_sharded_rm.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)num_hw_blocks_per_core,
@@ -168,12 +197,14 @@ TransposeWHShardedRMProgramFactory::cached_program_t TransposeWHShardedRMProgram
         (std::uint32_t)ht * output_tensor.element_size() * TILE_HEIGHT,
     };
 
-    CreateKernel(
-        program,
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-        "writer_unary_transpose_wh_sharded_rm.cpp",
-        all_cores,
-        WriterDataMovementConfig(writer_compile_time_args));
+        "writer_unary_transpose_wh_sharded_rm.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     std::vector<uint32_t> compute_compile_time_args = {
         (std::uint32_t)ht,
@@ -187,47 +218,42 @@ TransposeWHShardedRMProgramFactory::cached_program_t TransposeWHShardedRMProgram
         (std::uint32_t)pack_num_pages_last_row_col,
     };
 
-    std::map<std::string, std::string> compute_defines;
-    compute_defines["SHARDED"] = "1";
+    KernelDescriptor::Defines compute_defines;
+    compute_defines.emplace_back("SHARDED", "1");
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (src0_cb_data_format == tt::DataFormat::Float32) {
+        // Keep both the tilize input (c_24) and its output (c_25, which feeds
+        // the transpose) in full Float32 on the unpack-to-dest path; otherwise
+        // the unpacker falls back to tf32 and drops the low mantissa bits.
+        unpack_to_dest_mode[in_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[im_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_rm.cpp",
-        all_cores,
-        ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = compute_defines});
 
-    return {
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id,
-         .cb_src0 = cb_src0,
-         .cb_output = cb_output,
-         .num_cores_x = num_cores_x,
-         .num_cores_y = num_cores_y}};
-}
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_rm.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = std::move(compute_compile_time_args);
+    compute_desc.defines = std::move(compute_defines);
+    compute_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+    };
 
-void TransposeWHShardedRMProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const TransposeParams& /*operation_attributes*/,
-    const TransposeInputs& tensor_args,
-    Tensor& output_tensor) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
+    // #48928: this reader uses compile-time args only; emit one placeholder rt-arg per core so
+    // get_dynamic_runtime_args has a slot to re-apply, opting this CB-bound factory into the fast-path.
+    for (const auto& core : corerange_to_cores(all_cores)) {
+        reader_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{0u});
+    }
 
-    const auto& src_tensor = tensor_args.input;
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-    auto* const src_buffer = src_tensor.buffer();
-    auto* const dst_buffer = output_tensor.buffer();
-
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src0, *src_buffer);
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
+    return desc;
 }
 
 }  // namespace ttnn::prim

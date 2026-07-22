@@ -122,6 +122,11 @@ Transformer::Transformer(const TransformerConfig &config) {
 }
 
 ttml::autograd::TensorPtr Transformer::operator()(
+    const ttml::autograd::TensorPtr &x, const ttml::autograd::TensorPtr &mask) {
+    return (*this)(x, std::optional<ttml::autograd::TensorPtr>(mask));
+}
+
+ttml::autograd::TensorPtr Transformer::operator()(
     const ttml::autograd::TensorPtr &x, const std::optional<ttml::autograd::TensorPtr> &mask) {
     auto tok_emb_out = (*tok_emb)(x);
     auto out = (*pos_emb)(tok_emb_out);
@@ -158,7 +163,7 @@ TransformerConfig read_config(const YAML::Node &config) {
     transformer_config.embedding_dim = config["embedding_dim"].as<uint32_t>();
     transformer_config.dropout_prob = config["dropout_prob"].as<float>();
     transformer_config.num_blocks = config["num_blocks"].as<uint32_t>();
-    transformer_config.vocab_size = config["vocab_size"].as<uint32_t>();
+    transformer_config.vocab_size = config["vocab_size"].as<uint32_t>(0U);
     transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
     transformer_config.positional_embedding_type = read_positional_embedding_type(config);
     transformer_config.runner_type = common::transformer::read_runner_type(config);

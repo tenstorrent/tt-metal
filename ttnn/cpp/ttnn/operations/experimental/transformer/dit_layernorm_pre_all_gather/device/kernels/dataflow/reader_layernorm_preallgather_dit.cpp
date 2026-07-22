@@ -10,7 +10,6 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 
 void kernel_main() {
@@ -30,8 +29,7 @@ void kernel_main() {
         cb_reduce,
         ckernel::PoolType::SUM,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-        /*compute_uses_reduce_tile=*/true>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
     const auto src_a = TensorAccessor(src_args, src_addr);
 
@@ -42,7 +40,7 @@ void kernel_main() {
             cb_reserve_back(cb_inp, input_block_size);
             uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
             for (uint32_t r = 0; r < input_block_size && wt + r < Wt; r++) {
-                noc_async_read_tile(inp_tile_idx, src_a, inp_wr_ptr);
+                noc_async_read_page(inp_tile_idx, src_a, inp_wr_ptr);
                 inp_wr_ptr += src0_tile_bytes;
                 inp_tile_idx++;
             }

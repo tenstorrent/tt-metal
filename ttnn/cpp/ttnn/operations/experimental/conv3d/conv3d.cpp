@@ -7,7 +7,9 @@
 #include "ttnn/operations/experimental/conv3d/prepare_conv3d_weights.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/common/constants.hpp"
+#include <numeric>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::tt_metal;
@@ -54,8 +56,14 @@ ttnn::Tensor conv3d(
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    // If no config provided, use conservative default blocking:
-    // minimal spatial blocks (1,1,1), smallest valid channel blocks (TILE_WIDTH) to minimize L1 pressure
+    // Default blocking: minimal spatial blocks, smallest valid C_in_block. The same
+    // default is used by prepare_conv3d_weights, so the prepared weight's K-row
+    // blocking always matches the conv compute -- no near-zero-PCC mismatch (#47316) --
+    // and the minimal block keeps large kernels within L1 (#42146). This holds for both
+    // a rank-5 (prepared here) and a rank-2 (pre-prepared with the same default) weight.
+    const uint32_t default_c_in_block = ttnn::operations::experimental::conv3d::default_c_in_block(
+        kernel_size_[0] * kernel_size_[1] * kernel_size_[2]);
+
     auto config = config_opt.value_or(ttnn::experimental::prim::Conv3dConfig(
         tt::tt_metal::DataType::BFLOAT16,                        // weights_dtype
         tt::tt_metal::Layout::ROW_MAJOR,                         // output_layout
@@ -63,11 +71,19 @@ ttnn::Tensor conv3d(
         1,                                                       // W_out_block
         1,                                                       // H_out_block
         tt::constants::TILE_WIDTH,                               // C_out_block (one tile width)
-        tt::constants::TILE_WIDTH,                               // C_in_block (one tile width, min L1)
+        default_c_in_block,                                      // C_in_block (match weight blocking)
         dilation_,                                               // dilation (match the op's dilation)
         32,                                                      // alignment
         input_tensor.device()->compute_with_storage_grid_size()  // use full device grid
         ));
+
+    // An explicitly-provided config may still carry C_in_block == 0 ("auto"). Resolve it to the
+    // same default so prepare_conv3d_weights and the conv compute use one identical, non-zero
+    // block -- otherwise the internal prepare and the device op disagree on the K-row blocking
+    // (near-zero PCC, #47316). This mirrors prepare_conv3d_weights' own 0 handling.
+    if (config.C_in_block == 0) {
+        config.C_in_block = default_c_in_block;
+    }
 
     Tensor prepared_weight_tensor = prepare_and_check_weight_tensor(weight_tensor, groups_, config, device);
     return ttnn::prim::conv3d(

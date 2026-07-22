@@ -23,7 +23,7 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
         return {false, "Operands to shard need to be allocated in buffers on device!"};
     }
 
-    // Reject dtype/layout combinations that would hard-fail during TensorSpec construction in compute_output_specs().
+    // Reject dtype/layout combinations that would hard-fail during tt::tt_metal::TensorSpec construction in compute_output_specs().
     // These low-precision packed formats require tiled layout.
     const bool output_dtype_requires_tile =
         output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B;
@@ -31,7 +31,7 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
         return {false, "Output dtype BFLOAT8_B/BFLOAT4_B requires TILE layout, but input tensor layout is ROW_MAJOR"};
     }
 
-    // TensorSpec construction normalizes ND shard specs to equivalent 2D layouts when possible.
+    // tt::tt_metal::TensorSpec construction normalizes ND shard specs to equivalent 2D layouts when possible.
     // Use the normalized memory config for validation so that convertible ND specs are accepted.
     auto resolved_output_mem_config = output_mem_config;
     if (output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
@@ -119,7 +119,7 @@ InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDev
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             operation_attributes.output_dtype,

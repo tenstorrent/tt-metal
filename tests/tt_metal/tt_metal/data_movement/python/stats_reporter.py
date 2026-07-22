@@ -194,7 +194,7 @@ class StatsReporter:
                             # Standard metadata fields in specific order
                             standard_fields = ["architecture", "mechanism", "memory_type", "pattern"]
                             for field in standard_fields:
-                                if field in test_metadata:
+                                if field in test_metadata and field != "architecture":
                                     row.append(test_metadata[field])
 
                             # Add any additional optional fields in alphabetical order

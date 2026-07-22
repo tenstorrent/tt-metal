@@ -6,7 +6,7 @@ import os
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoModelForVision2Seq
+from transformers import AutoConfig, AutoModelForImageTextToText
 from transformers.models.mllama.modeling_mllama import MllamaVisionAttention
 
 import ttnn
@@ -57,7 +57,7 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
     reference_model = MllamaVisionAttention(config.vision_config)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
     partial_state_dict = load_partial_weights(
-        AutoModelForVision2Seq, model_repo_name, "model.vision_model.transformer.layers.0.self_attn."
+        AutoModelForImageTextToText, model_repo_name, "model.vision_model.transformer.layers.0.self_attn."
     )
     reference_model.load_state_dict(partial_state_dict)
 

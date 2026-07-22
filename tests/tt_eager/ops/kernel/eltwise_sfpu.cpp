@@ -17,7 +17,7 @@ void kernel_main() {
     uint32_t block_index = 0;
     cb_reserve_back(tt::CBIndex::c_16, per_core_block_dim);
     uint32_t tile_index = 0;
-    acquire_dst();
+    tile_regs_acquire();
 
     // Pop tile after tile, copy to DST and pack
     cb_wait_front(tt::CBIndex::c_0, 1);
@@ -29,11 +29,15 @@ void kernel_main() {
         SFPU_OP_CHAIN_0
 #endif
     }
+
+    tile_regs_commit();
+    tile_regs_wait();
+
     pack_tile(0, tt::CBIndex::c_16);
 
     cb_pop_front(tt::CBIndex::c_0, 1);
 
-    release_dst();
+    tile_regs_release();
 
     cb_push_back(tt::CBIndex::c_16, per_core_block_dim);
 }

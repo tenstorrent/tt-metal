@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "dataflow_utils.hpp"
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
 
@@ -121,12 +122,15 @@ struct Gather {
             uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(s.receiver_data_addr + offset);
             uint64_t dst_semaphore_noc_addr = dst_noc_coord | (uint64_t)s.receiver_semaphore_addr;
 
+            uint32_t input_data_addr = get_read_ptr(s.src_cb);
+            unified_kernels::noc_async_write_preprogram_all_state<true>(
+                input_data_addr, dst_data_noc_addr, s.data_size_bytes, s.noc);
+            unified_kernels::noc_async_atomic_inc_preprogram_all_state<false>(dst_semaphore_noc_addr, 1, 31, s.noc);
             cb_wait_front(s.src_cb, s.src_num_pages);
 
-            uint32_t input_data_addr = get_read_ptr(s.src_cb);
-            noc_async_write_one_packet<true, true>(input_data_addr, dst_data_noc_addr, s.data_size_bytes, s.noc);
+            unified_kernels::noc_async_write_issue_txn<true>(s.noc);
             // BH does not support posted atomics due to a bug
-            noc_semaphore_inc(dst_semaphore_noc_addr, 1, s.noc);
+            unified_kernels::noc_async_atomic_inc_issue_txn<false>(s.noc);
 
             if constexpr (pop_src) {
                 noc_async_posted_writes_flushed(s.noc);

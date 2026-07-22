@@ -36,7 +36,7 @@ Refer to the `Baby RISC-V <https://github.com/tenstorrent/tt-isa-documentation/b
         cb_wait_front(tt::CBIndex::c_16, 1);
         uint32_t cb_addr = get_write_ptr(tt::CBIndex::c_16);
         // Treating it as address because the address is in shared SRAM
-        // DEVICE_PRINT("Value at circular buffer: {}\n", ((uint32_t*)cb_addr)[0]);
+        // DPRINT("Value at circular buffer: {}\n", ((uint32_t*)cb_addr)[0]);
 
         // `dram_addr` is a DRAM address, however the address is not mapped in the RISC-V address space
         // and the content must be explicitly fetched from DRAM using NoC APIs and requesting a transfer
@@ -229,7 +229,7 @@ As interleaved memory is the most common allocation scheme. Instead of manually 
     for (uint32_t i = 0; i < n_tiles; i++) {
         cb_reserve_back(cb_in0, 1);
         uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-        noc_async_read_tile(i, in0, cb_in0_addr); // read the i-th tile from the interleaved buffer
+        noc_async_read_page(i, in0, cb_in0_addr); // read the i-th tile from the interleaved buffer
 
         noc_async_read_barrier();
         cb_push_back(cb_in0, 1);
@@ -271,7 +271,7 @@ As allocation type and scheme is known at compile time. The same ``TensorAccesso
     for (uint32_t i = 0; i < n_tiles; i++) {
         cb_reserve_back(cb_in0, 1);
         uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-        noc_async_read_tile(i, in0, cb_in0_addr);
+        noc_async_read_page(i, in0, cb_in0_addr);
 
         noc_async_read_barrier();
         cb_push_back(cb_in0, 1);

@@ -91,100 +91,42 @@ inline std::vector<uint32_t> GenerateInputTileWithOffset(tt::DataFormat data_for
     return u32_vec;
 }
 
-inline std::string GenerateExpectedData(
-    tt::DataFormat data_format, std::vector<uint32_t>& input_tile, bool device_print = false) {
-    std::string data;
-    if (data_format == tt::DataFormat::Float32) {
-        for (uint32_t col = 0; col < 32; col += 8) {
-            data += fmt::format(
-                fmt::runtime(device_print ? "\n{} {} {} {}" : "\n{:.6} {:.6} {:.6} {:.6}"),
-                *reinterpret_cast<float*>(&input_tile[(col * 32) + 0]),
-                *reinterpret_cast<float*>(&input_tile[(col * 32) + 8]),
-                *reinterpret_cast<float*>(&input_tile[(col * 32) + 16]),
-                *reinterpret_cast<float*>(&input_tile[(col * 32) + 24]));
-        }
-    } else if (data_format == tt::DataFormat::Float16_b) {
-        std::vector<bfloat16> fp16b_vec = unpack_uint32_vec_into_bfloat16_vec(input_tile);
-        for (uint32_t col = 0; col < 32; col += 8) {
-            data += fmt::format(
-                fmt::runtime(device_print ? "\n{} {} {} {}" : "\n{:.6} {:.6} {:.6} {:.6}"),
-                static_cast<float>(fp16b_vec[(col * 32) + 0]),
-                static_cast<float>(fp16b_vec[(col * 32) + 8]),
-                static_cast<float>(fp16b_vec[(col * 32) + 16]),
-                static_cast<float>(fp16b_vec[(col * 32) + 24]));
-        }
-    } else if (data_format == tt::DataFormat::Bfp8_b) {
-        std::vector<float> float_vec = unpack_bfp8_tiles_into_float_vec(input_tile, true, false);
-        for (uint32_t col = 0; col < 32; col += 8) {
-            data += fmt::format(
-                fmt::runtime(device_print ? "\n{} {} {} {}" : "\n{:.6} {:.6} {:.6} {:.6}"),
-                *reinterpret_cast<float*>(&float_vec[(col * 32) + 0]),
-                *reinterpret_cast<float*>(&float_vec[(col * 32) + 8]),
-                *reinterpret_cast<float*>(&float_vec[(col * 32) + 16]),
-                *reinterpret_cast<float*>(&float_vec[(col * 32) + 24]));
-        }
-    } else if (data_format == tt::DataFormat::Bfp4_b) {
-        std::vector<float> float_vec = unpack_bfp4_tiles_into_float_vec(input_tile, true, false);
-        for (uint32_t col = 0; col < 32; col += 8) {
-            data += fmt::format(
-                fmt::runtime(device_print ? "\n{} {} {} {}" : "\n{:.6} {:.6} {:.6} {:.6}"),
-                *reinterpret_cast<float*>(&float_vec[(col * 32) + 0]),
-                *reinterpret_cast<float*>(&float_vec[(col * 32) + 8]),
-                *reinterpret_cast<float*>(&float_vec[(col * 32) + 16]),
-                *reinterpret_cast<float*>(&float_vec[(col * 32) + 24]));
-        }
-    } else if (data_format == tt::DataFormat::Int8) {
-        int8_t* int8_ptr = reinterpret_cast<int8_t*>(input_tile.data());
-        for (uint32_t col = 0; col < 32; col += 8) {
-            data += fmt::format(
-                "\n{} {} {} {}",
-                int8_ptr[(col * 32) + 0],
-                int8_ptr[(col * 32) + 8],
-                int8_ptr[(col * 32) + 16],
-                int8_ptr[(col * 32) + 24]);
-        }
-    } else if (data_format == tt::DataFormat::UInt8) {
-        uint8_t* uint8_ptr = reinterpret_cast<uint8_t*>(input_tile.data());
-        for (uint32_t col = 0; col < 32; col += 8) {
-            data += fmt::format(
-                "\n{} {} {} {}",
-                uint8_ptr[(col * 32) + 0],
-                uint8_ptr[(col * 32) + 8],
-                uint8_ptr[(col * 32) + 16],
-                uint8_ptr[(col * 32) + 24]);
-        }
-    } else if (data_format == tt::DataFormat::UInt16) {
-        uint16_t* uint16_ptr = reinterpret_cast<uint16_t*>(input_tile.data());
-        for (uint32_t col = 0; col < 32; col += 8) {
-            data += fmt::format(
-                "\n{} {} {} {}",
-                uint16_ptr[(col * 32) + 0],
-                uint16_ptr[(col * 32) + 8],
-                uint16_ptr[(col * 32) + 16],
-                uint16_ptr[(col * 32) + 24]);
-        }
-    } else if (data_format == tt::DataFormat::Int32) {
-        int32_t* int32_ptr = reinterpret_cast<int32_t*>(input_tile.data());
-        for (uint32_t col = 0; col < 32; col += 8) {
-            data += fmt::format(
-                "\n{} {} {} {}",
-                int32_ptr[(col * 32) + 0],
-                int32_ptr[(col * 32) + 8],
-                int32_ptr[(col * 32) + 16],
-                int32_ptr[(col * 32) + 24]);
-        }
-    } else if (data_format == tt::DataFormat::UInt32) {
-        uint32_t* uint32_ptr = reinterpret_cast<uint32_t*>(input_tile.data());
-        for (uint32_t col = 0; col < 32; col += 8) {
-            data += fmt::format(
-                "\n{} {} {} {}",
-                uint32_ptr[(col * 32) + 0],
-                uint32_ptr[(col * 32) + 8],
-                uint32_ptr[(col * 32) + 16],
-                uint32_ptr[(col * 32) + 24]);
-        }
+template <typename T>
+inline std::string FormatTileData(const T* data) {
+    std::string out;
+    for (uint32_t col = 0; col < 32; col += 8) {
+        out += fmt::format(
+            "\n{} {} {} {}", data[(col * 32) + 0], data[(col * 32) + 8], data[(col * 32) + 16], data[(col * 32) + 24]);
     }
-    return data;
+    return out;
+}
+
+inline std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
+    switch (data_format) {
+        case tt::DataFormat::Float32: return FormatTileData(reinterpret_cast<const float*>(input_tile.data()));
+        case tt::DataFormat::Float16_b: {
+            std::vector<bfloat16> fp16b_vec = unpack_uint32_vec_into_bfloat16_vec(input_tile);
+            std::vector<float> float_vec(fp16b_vec.size());
+            for (size_t i = 0; i < fp16b_vec.size(); ++i) {
+                float_vec[i] = static_cast<float>(fp16b_vec[i]);
+            }
+            return FormatTileData(float_vec.data());
+        }
+        case tt::DataFormat::Bfp8_b: {
+            std::vector<float> float_vec = unpack_bfp8_tiles_into_float_vec(input_tile, true, false);
+            return FormatTileData(float_vec.data());
+        }
+        case tt::DataFormat::Bfp4_b: {
+            std::vector<float> float_vec = unpack_bfp4_tiles_into_float_vec(input_tile, true, false);
+            return FormatTileData(float_vec.data());
+        }
+        case tt::DataFormat::Int8: return FormatTileData(reinterpret_cast<const int8_t*>(input_tile.data()));
+        case tt::DataFormat::UInt8: return FormatTileData(reinterpret_cast<const uint8_t*>(input_tile.data()));
+        case tt::DataFormat::UInt16: return FormatTileData(reinterpret_cast<const uint16_t*>(input_tile.data()));
+        case tt::DataFormat::Int32: return FormatTileData(reinterpret_cast<const int32_t*>(input_tile.data()));
+        case tt::DataFormat::UInt32: return FormatTileData(reinterpret_cast<const uint32_t*>(input_tile.data()));
+        default: return {};
+    }
 }
 
 }  // namespace tt::tt_metal::test::dprint

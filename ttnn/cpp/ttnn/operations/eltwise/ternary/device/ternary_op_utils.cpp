@@ -11,11 +11,11 @@
 
 namespace ttnn::operations::ternary {
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec) {
     return tensor_spec.memory_config().shard_spec();
 }
 
-bool is_uneven(const TensorSpec& t) {
+bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (not t.memory_config().is_sharded()) {
         return false;
     }
@@ -30,7 +30,8 @@ bool is_uneven(const TensorSpec& t) {
 }
 
 // Check based on input specs and output memory config (two tensors, same shape and memory config).
-static bool is_native_L1_sharding(const TensorSpec& a, const TensorSpec& b, const tt::tt_metal::MemoryConfig& c) {
+static bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const tt::tt_metal::MemoryConfig& c) {
     using namespace tt::tt_metal;
     if (a.logical_shape() != b.logical_shape() || a.memory_config() != b.memory_config()) {
         return false;
@@ -67,9 +68,9 @@ static bool is_native_L1_sharding(const TensorSpec& a, const TensorSpec& b, cons
 }
 
 bool is_native_L1_sharding(
-    const TensorSpec& predicate_spec,
-    const std::optional<TensorSpec>& true_spec,
-    const std::optional<TensorSpec>& false_spec,
+    const tt::tt_metal::TensorSpec& predicate_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& true_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& false_spec,
     const tt::tt_metal::MemoryConfig& output_memory_config) {
     using namespace tt::tt_metal;
     if (!output_memory_config.is_sharded()) {
@@ -256,6 +257,14 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
     {{TernaryOpType::ADDCDIV, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
      {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
 
+    // TTT configurations for SNAKE_BETA (reader handles H/outer bcast; compute is always NoBcast).
+    {{TernaryOpType::SNAKE_BETA, TernaryVariant::TTT, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::SNAKE_BETA, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::SNAKE_BETA, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+
     // TTS configurations for LERP
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
@@ -349,9 +358,31 @@ std::string override_addcmul_compute_kernel(KernelName kernel_name) {
     }
 }
 
+std::map<std::string, std::string> get_addcmul_int_kernel_defines(DataType dtype) {
+    TT_FATAL(
+        dtype == DataType::INT32 || dtype == DataType::UINT32,
+        "get_addcmul_int_kernel_defines: expected INT32 or UINT32, got {}",
+        dtype);
+    std::string fmt = (dtype == DataType::UINT32) ? "DataFormat::UInt32" : "DataFormat::Int32";
+    return {{"ADDCMUL_DATA_FORMAT", fmt}};
+}
+
 inline uint32_t pack_scalar_runtime_arg_float(const float scalar, const DataType dtype) {
     if (dtype == DataType::INT32) {
+        // float → int32 (truncate towards zero) → reinterpret bits as uint32.
+        // bit_cast preserves the two's complement bit-pattern without any value conversion.
+        //   6.0f  → static_cast<int32_t> →  6         → bit_cast → 0x00000006
+        //  -6.0f  → static_cast<int32_t> → -6         → bit_cast → 0xFFFFFFFA
         return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
+    }
+    if (dtype == DataType::UINT32) {
+        // float → int64 → uint32 (mod 2^32).
+        // A direct float → uint32 cast is UB in C++ for negative values, so we route
+        // through int64 (which can represent all float values in the int32 range) and
+        // then narrow to uint32 (C++ guarantees this is mod 2^32, always well-defined).
+        //   6.0f  → static_cast<int64_t> →  6LL → static_cast<uint32_t> → 0x00000006
+        //  -6.0f  → static_cast<int64_t> → -6LL → static_cast<uint32_t> → 0xFFFFFFFA
+        return static_cast<uint32_t>(static_cast<int64_t>(scalar));
     }
     return std::bit_cast<uint32_t>(scalar);
 }
@@ -477,6 +508,11 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
             defines["TERNARY_SFPU_OP_INIT"] = "addcdiv_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "addcdiv_tile<DataFormat::Float32>"
                                                                            : "addcdiv_tile<DataFormat::Float16_b>";
+            break;
+        case TernaryOpType::SNAKE_BETA:
+            defines["TERNARY_SFPU_OP_INIT"] = "snake_beta_tile_init";
+            defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "snake_beta_tile<DataFormat::Float32>"
+                                                                           : "snake_beta_tile<DataFormat::Float16_b>";
             break;
         default: TT_FATAL(false, "Unsupported ternary operation type");
     }

@@ -8,19 +8,22 @@
 
 #include "ckernel_trisc_common.h"
 #include "cpack_common.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 using namespace ckernel::trisc;
 
 /**
- * @brief Programs packer input data format (THCON) for the selected packer
- * @tparam PACK_SEL: p_pacr::PACK0 (math dest → L1) or p_pacr::PACK1 (SrcS → L1).
- * Actual PACK1 instructions require autoloop setup: use _llk_pack_srcs_config_ /
- * _llk_pack_srcs_ in llk_srcs_tdma.h — do not drive Packer 1 via llk_pack.h MOP APIs.
- * @param tdma_desc: Contains destination register format
+ * @brief Programs the packer input data format (THCON) for the selected packer.
+ *
+ * PACK1 instructions require autoloop setup: use _llk_pack_srcs_config_ / _llk_pack_srcs_ in
+ * llk_srcs.h — do not drive Packer 1 via the llk_pack.h MOP APIs.
+ *
+ * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1> (PACK0 = math dest -> L1, PACK1 = SrcS -> L1)
+ * @param tdma_desc: Contains destination register format.
  */
-
 template <std::uint32_t PACK_SEL>
 inline void _llk_pack_hw_configure_(const tdma_descriptor_t& tdma_desc)
 {
@@ -39,18 +42,48 @@ inline void _llk_pack_hw_configure_(const tdma_descriptor_t& tdma_desc)
 }
 
 /**
- * @brief Clears the data valid for destination register after Packer 0 is done packing
- * and zeroes out the dest bank(s) used by packer 0
- * @tparam DST: Destination register buffering mode, values = [DstSync::SyncHalf, DstSync::SyncFull]
- * @tparam EN_32BIT_DEST: flag to show if math destination register is set to 32bit mode
+ * Quasar pack dynamic input format: reprograms only THCON `PACKER*_REG0_IN_DATA_FORMAT`.
+ * L1 output encoding stays in the buffer descriptor; `pack_dst_format` is the BD/L1 DataFormat
+ * and is not written to packer config here.
  *
- * IMPORTANT NOTE:
- * 1) Uses ADDR_MOD_0 from math thread, but ZEROACC here only does CLR_HALF or CLR_ALL mode, addr_mod should not matter
- * It is the duty of the math operation to clear the counters set by addrmods before using the cleared bank
- * 2) Do not mix this function with the packer semaphore synchronization functions such as _llk_pack_dest_semaphore_section_done_
- * This function uses the dest data valid client synchronization scheme and updates dest register address offset accordingly, Only 1 type of sync scheme
- * can be used at a time: data valids or semaphores
- **/
+ * @tparam PACK_SEL           Packer to update (p_pacr::PACK0 or p_pacr::PACK1).
+ * @param pack_src_format     IN_DATA_FORMAT register value to program (packer gasket input).
+ * @param pack_dst_format     BD/L1 output DataFormat (used only for the conversion check).
+ */
+template <std::uint32_t PACK_SEL>
+inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format)
+{
+    static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
+
+    LLK_ASSERT(
+        ckernel::pack::is_quasar_pack_reconfig_pair_supported(pack_src_format, pack_dst_format),
+        "Unsupported Quasar packer IN_DATA_FORMAT for this dest register and L1 format.");
+
+    const auto in_fmt = static_cast<std::uint8_t>(pack_src_format);
+
+    // No STALLWAIT needed: THCON_PACKER<N>_REG0_IN_DATA_FORMAT is a shadow register on Quasar.
+    if constexpr (PACK_SEL == p_pacr::PACK0)
+    {
+        cfg_rmw(THCON_PACKER0_REG0_IN_DATA_FORMAT_RMW, in_fmt);
+    }
+    else
+    {
+        cfg_rmw(THCON_PACKER1_REG0_IN_DATA_FORMAT_RMW, in_fmt);
+    }
+}
+
+/**
+ * @brief Clears the dest register data valid after Packer 0 finishes packing and zeroes the dest bank(s) it used.
+ *
+ * Uses ADDR_MOD_0 from the math thread, but since ZEROACC here only does CLR_HALF or CLR_ALL mode the
+ * addr_mod should not matter; it is the duty of the math operation to clear the counters set by addrmods
+ * before using the cleared bank. This function uses the dest data-valid client synchronization scheme and
+ * updates the dest register address offset accordingly. Only one sync scheme may be used at a time (data
+ * valids or semaphores), so do not mix this with the semaphore variant @ref _llk_pack_dest_semaphore_section_done_.
+ *
+ * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
+ * @tparam EN_32BIT_DEST: True if the math destination register is set to 32-bit mode, values = <true/false>
+ */
 template <DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_pack_dest_dvalid_section_done_()
 {
@@ -80,56 +113,62 @@ inline void _llk_pack_dest_dvalid_section_done_()
 }
 
 /**
- * @brief Configure packer edge mask programming for packer 0 with reduce operations
- * @tparam REDUCE_DIMENSION: The reduce op dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
- **/
+ * @brief Configures Packer 0 edge-mask programming for reduce operations.
+ *
+ * @tparam REDUCE_DIMENSION: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc.
+ * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the math thread, pair with @ref _llk_math_reduce_init_ (T1).
+ * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
+ */
 template <ReduceDim REDUCE_DIMENSION>
-inline void _llk_pack_reduce_mask_config_()
+inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
 {
     // Wait for packer to finish to avoid breaking its current configuration
     TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
 
-    // This register specifies edge masking mode.
-    //  0x0 -> mask to 0
-    //  0x1 -> mask to -inf
+    cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK_MODE_RMW, ckernel::pack::EDGE_MASK_MODE_ZERO);
 
+    // This register specifies which datums will not have the mask applied
+    // The register is 16 bits, each bit corresponds to a datum in the 1x16 row in dest
+    cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_ALL);
     // TODO: (RT) Clean this up using pack edge struct to match addresses
     //  Make it unified
     if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW)
     {
-        // This register specifies which datums will not have the mask applied
-        // The register is 16 bits, each bit corresponds to a datum in the 1x16 row in dest
-        // 0xFFFE below means datum[0] preserves its values, datums[1:15] = 0
-        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0xFFFE);
+        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_EXCEPT_0);
 
         // The registers below are 32 bits each, each 2 bits correspond to a row in a face
         // each 2 bits specify the mask that will be applied (there are 4 masks possible)
-        // the registers below will have mask 01 applied to every row in the face
-        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x55555555);
-        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x55555555);
-    }
-    else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
-    {
-        // The below mask mean all datums in a row preserve their value
-        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0x0000);
-        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, 0xFFFF);
-
-        // For face 0 & face 1, only row 0 will have mask1 applied
-        // Mask1 is configured to keep all datums in a row
-        // rows[1-16] will have all of their datums masked to 0
-        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x1);
-        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x1);
+        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_1);
+        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_1);
+        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_1);
+        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_1);
     }
     else
     {
-        // 0xFFFE below means datum[0] preserves its values, datums[1:15] = 0
-        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, 0xFFFF);
-        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0xFFFE);
+        if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
+        {
+            cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_NONE);
+        }
+        else
+        {
+            cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_EXCEPT_0);
+        }
 
-        // For face 0, only row 0 will have mask1 applied
-        // Mask1 is configured to only have datum[0] preserved
-        // rows[1-16] will have all of their datums masked to 0
-        cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x1);
+        if (tensor_shape.face_r_dim < FACE_R_DIM)
+        {
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_ROW8_MASK_1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_ROW8_MASK_1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_ROW8_MASK_1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_ROW8_MASK_1);
+        }
+        else
+        {
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_MASK_1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_MASK_1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_MASK_1);
+            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_MASK_1);
+        }
     }
 
     // Stall until all config instructions are done
@@ -137,32 +176,34 @@ inline void _llk_pack_reduce_mask_config_()
 }
 
 /**
- * @brief Configure packer edge mask programming for packer 0 with reduce operations
- **/
+ * @brief Restores the default Packer 0 edge masks (pass-through) after a reduce operation.
+ *
+ * @note Pairs with @ref _llk_pack_reduce_mask_config_.
+ */
 inline void _llk_pack_reduce_mask_clear_()
 {
     // Wait for packer to finish to avoid breaking its current configuration
     TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
 
     // Edge mask mode is disabled
-    // Mask0 is cleared to preserve values of all datums in a row
-    cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, 0x0000);
+    cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_NONE);
 
     // All packer faces are set to point to Mask0, which preserves all datums
-    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x0);
-    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x0);
-    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x0);
-    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, 0x0);
+    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
+    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
+    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
+    cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
 
     // Stall until all config instructions are done
     TTI_STALLWAIT(p_stall::PACK0, 0, 0, p_stall::TRISC_CFG);
 }
 
 /**
- * @brief: Configure packer to enable or disable l1 accumulation
- * @tparam PACK_SEL: Sets which packer to configure. values = p_pacr::PACK0/PACK1
- * @param l1_acc_en: if false -> l1 acc is disabled, true -> l1 acc enabled
- **/
+ * @brief Enables or disables packer L1 accumulation for the selected packer.
+ *
+ * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1>
+ * @param l1_acc_en: True to enable L1 accumulation, false to disable.
+ */
 template <std::uint32_t PACK_SEL>
 inline void _llk_pack_set_l1_acc_(const bool l1_acc_en)
 {
@@ -177,17 +218,17 @@ inline void _llk_pack_set_l1_acc_(const bool l1_acc_en)
 }
 
 /**
- * @brief Configure packer ReLU for the selected packer only (PACK_SEL = p_pacr::PACK0 or p_pacr::PACK1).
- * @details Programs RELU_MODE and RELU_THRESHOLD via THCON_PACKER*_REG3_*_RMW (cfg_defines.h).
+ * @brief Configures packer ReLU (mode and threshold) for the selected packer only.
  *
+ * Programs RELU_MODE and RELU_THRESHOLD via THCON_PACKER*_REG3_*_RMW (cfg_defines.h).
  * Quasar layout (see tests/hw_specific/quasar/inc/cfg_defines.h):
  *   - RELU_MODE: NO_RELU, ZERO_RELU, MIN_THRESHOLD_RELU, MAX_THRESHOLD_RELU.
  *   - RELU_THRESHOLD: separate 32-bit register. Format depends on pack input: FP16 path expects 16-bit
  *     threshold in low 16 bits; FP32 path expects BF16/FP16 threshold in high 16 bits.
  *
- * @tparam PACK_SEL Which packer to configure (p_pacr::PACK0 or p_pacr::PACK1).
- * @tparam EN_32BIT_DEST Set to true when datums in dst register are 32-bit
- * @param relu_config ReLU config (mode + threshold). Default ReluConfig::none() = no ReLU.
+ * @tparam PACK_SEL: Which packer to configure, values = <p_pacr::PACK0/PACK1>
+ * @tparam EN_32BIT_DEST: Set to true when datums in the dst register are 32-bit, values = <true/false>
+ * @param relu_config: ReLU config (mode + threshold). Default ReluConfig::none() = no ReLU.
  */
 template <std::uint8_t PACK_SEL, bool EN_32BIT_DEST>
 inline void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config = ckernel::ReluConfig::none())
@@ -227,13 +268,19 @@ inline void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config = cker
  * The following functions should be removed once the above issue is resolved
  */
 
-// wait until math is done and has produced something to pack
+/**
+ * @brief Stalls the packer until the math thread has produced data to pack.
+ */
 inline void _llk_packer_wait_for_math_done_()
 {
     TTI_SEMWAIT(p_stall::STALL_TDMA, p_stall::STALL_ON_ZERO, 0, semaphore::t6_sem(semaphore::MATH_PACK));
 }
 
-// Tell math that it can write again
+/**
+ * @brief Signals the MATH_PACK semaphore (decrements it via SEMGET) to release the math thread to write again.
+ *
+ * @tparam WaitRes: p_stall resource mask to stall on before signalling; default p_stall::NOTHING issues no stall.
+ */
 template <std::uint32_t WaitRes = p_stall::NOTHING>
 inline void _llk_packer_set_math_semaphore_()
 {
@@ -241,10 +288,13 @@ inline void _llk_packer_set_math_semaphore_()
 }
 
 /**
- * @brief Clear dest section after packer is done reading, signal to math dest section is ready to use
- * @tparam PACK_SEL: Sets which packer to configure. values = p_pacr::PACK0/PACK1
- * @tparam DST: Destination register buffering mode, values = [DstSync::SyncHalf, DstSync::SyncFull]
- * @tparam EN_32BIT_DEST: flag to show if math destination register is set to 32bit mode
+ * @brief Finishes a dest section: waits for pack, clears the dest section, and signals math it is ready to reuse.
+ *
+ * Uses the semaphore math <-> pack synchronization scheme (the alternative to @ref _llk_pack_dest_dvalid_section_done_).
+ *
+ * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1>
+ * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
+ * @tparam EN_32BIT_DEST: True if the math destination register is set to 32-bit mode, values = <true/false>
  */
 template <std::uint32_t PACK_SEL, DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_pack_dest_semaphore_section_done_()
@@ -278,4 +328,18 @@ inline void _llk_pack_dest_semaphore_section_done_()
         _update_dest_register_offset_<EN_32BIT_DEST>();
         _set_packer_dest_registers_<PACK_SEL, DST>();
     }
+}
+
+/**
+ * @brief Reset the pack thread's dest-bank tracking to bank 0 at the start of a program.
+ *
+ * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1>
+ * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
+ * @note Pair with @ref _llk_math_pack_sync_init_ (T1); call once per program before the first pack.
+ */
+template <std::uint32_t PACK_SEL, DstSync DST>
+inline void _llk_pack_dest_init_()
+{
+    _reset_dest_register_offset_();
+    _set_packer_dest_registers_<PACK_SEL, DST>();
 }

@@ -12,12 +12,12 @@
 using namespace ttml;
 
 class AutogradTensorTest : public ::testing::Test {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
     }
 
-    void TearDown() override {
+    static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
     }
 };

@@ -95,6 +95,7 @@ We’ll use a config file for flexibility:
     "enable_logging": true,
     "report_name": "ttnn_visualizer_tutorial",
     "enable_graph_report": false,
+    "enable_graph_python_stack_traces": true,
     "enable_detailed_buffer_report": true,
     "enable_detailed_tensor_report": false,
     "enable_comparison_mode": false
@@ -106,6 +107,7 @@ Each configuration option has a specific purpose:
 * **enable_fast_runtime_mode** - Must be disabled to enable logging.
 * **enable_logging** - Synchronizes main thread after every operation and logs the operation.
 * **report_name** (*optional*) - Name of the report used by TT-NN Visualizer. If not provided, no data will be dumped to disk.
+* **enable_graph_python_stack_traces** (*optional*) - When true, outermost Python `begin_graph_capture` records Python call stacks. `ttnn.graph.full_graph_capture` always records Python stacks regardless of this flag.
 * **enable_detailed_buffer_report** (if *report_name* is set) - Enable to visualize the detailed buffer report after every operation.
 * **enable_graph_report** (if *report_name* is set) - Enable to visualize the graph after every operation.
 * **enable_detailed_tensor_report** (if *report_name* is set) - Enable to visualize the values of input and output tensors of every operation.
@@ -136,7 +138,7 @@ At the start of execution, you should see logs similar to the following sample o
 2025-08-01 09:20:51.664 | DEBUG    | ttnn:<module>:73 - Loading ttnn configuration from /root/tt-metal/vis.setup
 2025-08-01 09:20:51.665 | DEBUG    | ttnn:<module>:83 - Initial ttnn.CONFIG:
 Config{cache_path=/root/.cache/ttnn,model_cache_path=/root/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false, \
-   enable_fast_runtime_mode=false,throw_exception_on_fallback=false,enable_logging=true,enable_graph_report=false,enable_detailed_buffer_report=true, \
+   enable_fast_runtime_mode=false,throw_exception_on_fallback=false,enable_logging=true,enable_graph_report=false,enable_graph_python_stack_traces=true,enable_detailed_buffer_report=true, \
    enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false, \
    comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=ttnn_visualizer_tutorial,4042956046390500517}
 2025-08-01 09:20:51.754 | info     |   SiliconDriver | Opened PCI device 4; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:197)
@@ -156,14 +158,14 @@ Config{...root_report_path=generated/ttnn/reports,report_name=ttnn_visualizer_tu
 
 The final number (`4042956046390500517`) indicates the memory report output directory. Once execution completes, navigate to `generated/ttnn/reports/4042956046390500517/` which will contain:
 
-* `config.json`
+* `config.json` (single-process; distributed runs use `config_<rank>_of_<world_size>.json` when world_size > 1)
 * `db.sqlite`
-* `cluster_descriptor.yaml`
-* `physical_chip_mesh_coordinate_mapping_1_of_1.yaml`
+* `cluster_descriptor.yaml` (single-process; distributed runs add `cluster_descriptor_<rank>_of_<world_size>.yaml`)
+* `physical_chip_mesh_coordinate_mapping.yaml` (single-process; distributed runs add `physical_chip_mesh_coordinate_mapping_<rank>_of_<world_size>.yaml`)
 
 Upload this entire directory to TT-NN Visualizer under the **Memory reports** section.
 
-For the `physical_chip_mesh_coordinate_mapping_1_of_1.yaml` file to be generated, you have have `TT_METAL_HOME` set. On multi-host systems, there will be multiple `physical_chip_mesh_coordinate_mapping_x_of_y.yaml` files in the report.
+For the mesh coordinate mapping YAML to be generated, you must have `TT_METAL_HOME` set.
 
 ---
 

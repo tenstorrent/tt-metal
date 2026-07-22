@@ -4,8 +4,8 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 
 // No-issue flow: wait for writer to finish first batch (no lock) -> lock -> signal locked -> unlock -> signal unlocked
 void kernel_main() {
@@ -16,10 +16,10 @@ void kernel_main() {
     uint32_t other_noc_x = get_arg_val<uint32_t>(4);
     uint32_t other_noc_y = get_arg_val<uint32_t>(5);
 
-    experimental::Semaphore my_sem(my_sem_id);
-    experimental::Semaphore other_sem(other_sem_id);
-    experimental::Noc noc;
-    experimental::CoreLocalMem<uint32_t> buffer(l1_buffer_addr);
+    Semaphore my_sem(my_sem_id);
+    Semaphore other_sem(other_sem_id);
+    Noc noc;
+    CoreLocalMem<uint32_t> buffer(l1_buffer_addr);
 
     // Wait for writer to complete first batch of writes (while buffer was not locked)
     my_sem.down(1);

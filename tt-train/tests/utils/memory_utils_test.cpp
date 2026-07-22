@@ -50,18 +50,18 @@ TEST_F(DISABLED_MemoryUtilsTest, DRAMUsageMatmulInScope) {
         auto shape1 = ttnn::Shape({64, 128});
         auto shape2 = ttnn::Shape({128, 64});
 
-        ttnn::TensorSpec spec1(
+        tt::tt_metal::TensorSpec spec1(
             shape1,
-            ttnn::TensorLayout(
+            tt::tt_metal::TensorLayout(
                 ttnn::DataType::BFLOAT16,
                 ttnn::PageConfig(ttnn::Layout::TILE),
-                ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
-        ttnn::TensorSpec spec2(
+                ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+        tt::tt_metal::TensorSpec spec2(
             shape2,
-            ttnn::TensorLayout(
+            tt::tt_metal::TensorLayout(
                 ttnn::DataType::BFLOAT16,
                 ttnn::PageConfig(ttnn::Layout::TILE),
-                ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+                ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
         auto tensor1 = ttnn::Tensor::from_vector(data1, spec1, device);
         auto tensor2 = ttnn::Tensor::from_vector(data2, spec2, device);
 
@@ -134,30 +134,30 @@ TEST_F(DISABLED_MemoryUtilsTest, DRAMUsageMultipleOperations) {
 
     std::vector<float> data_kqv(1 * 6 * 256 * 64, 4.0F);
 
-    ttnn::TensorSpec spec1(
+    tt::tt_metal::TensorSpec spec1(
         shape1,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
-    ttnn::TensorSpec spec2(
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+    tt::tt_metal::TensorSpec spec2(
         shape2,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
-    ttnn::TensorSpec spec3(
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+    tt::tt_metal::TensorSpec spec3(
         shape3,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
-    ttnn::TensorSpec spec_kqv(
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+    tt::tt_metal::TensorSpec spec_kqv(
         shape_kqv,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
     auto tensor1 = ttnn::Tensor::from_vector(data1, spec1, device);
     auto tensor2 = ttnn::Tensor::from_vector(data2, spec2, device);
     auto tensor3 = ttnn::Tensor::from_vector(data3, spec3, device);
@@ -218,18 +218,18 @@ TEST_F(DISABLED_MemoryUtilsTest, L1Usage) {
         std::vector<float> data(256 * 256, 1.0F);
 
         // Create tensors in DRAM first, then move to L1
-        ttnn::TensorSpec spec1(
+        tt::tt_metal::TensorSpec spec1(
             shape,
-            ttnn::TensorLayout(
+            tt::tt_metal::TensorLayout(
                 ttnn::DataType::BFLOAT16,
                 ttnn::PageConfig(ttnn::Layout::TILE),
-                ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
-        ttnn::TensorSpec spec2(
+                ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+        tt::tt_metal::TensorSpec spec2(
             shape,
-            ttnn::TensorLayout(
+            tt::tt_metal::TensorLayout(
                 ttnn::DataType::BFLOAT16,
                 ttnn::PageConfig(ttnn::Layout::TILE),
-                ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+                ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
         auto tensor1_dram = ttnn::Tensor::from_vector(data, spec1, device);
         auto tensor2_dram = ttnn::Tensor::from_vector(data, spec2, device);
         auto tensor1 = ttnn::to_memory_config(tensor1_dram, ttnn::L1_MEMORY_CONFIG);
@@ -274,7 +274,7 @@ TEST_F(DISABLED_MemoryUtilsTest, L1Usage) {
         // Shard shape: each core gets 4 tiles height x 1 tile width = 128x32 elements
         auto shard_spec = tt::tt_metal::ShardSpec(core_range, {128, 32}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
         auto sharded_memory_config =
-            ttnn::MemoryConfig{ttnn::TensorMemoryLayout::WIDTH_SHARDED, ttnn::BufferType::L1, shard_spec};
+            ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, ttnn::BufferType::L1, shard_spec};
 
         // Create tensors in DRAM first, then move to L1 with width sharding
         auto tensor1_dram = ttml::core::from_vector(data, shape, device, ttnn::TILE_LAYOUT);
@@ -325,12 +325,12 @@ TEST_F(DISABLED_MemoryUtilsTest, SnapshotFeature) {
 
     // Snapshot 1: Simple add operation with small DRAM tensors
     auto shape1 = ttnn::Shape({64, 64});
-    ttnn::TensorSpec spec1(
+    tt::tt_metal::TensorSpec spec1(
         shape1,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
 
     auto tensor1 = ttnn::Tensor::from_vector(data_small, spec1, device);
     auto tensor2 = ttnn::Tensor::from_vector(data_small, spec1, device);
@@ -342,18 +342,18 @@ TEST_F(DISABLED_MemoryUtilsTest, SnapshotFeature) {
     auto shape2a = ttnn::Shape({128, 64});
     auto shape2b = ttnn::Shape({64, 128});
 
-    ttnn::TensorSpec spec2a(
+    tt::tt_metal::TensorSpec spec2a(
         shape2a,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
-    ttnn::TensorSpec spec2b(
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+    tt::tt_metal::TensorSpec spec2b(
         shape2b,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
 
     auto tensor3 = ttnn::Tensor::from_vector(data_medium, spec2a, device);
     auto tensor4 = ttnn::Tensor::from_vector(data_medium, spec2b, device);
@@ -363,12 +363,12 @@ TEST_F(DISABLED_MemoryUtilsTest, SnapshotFeature) {
 
     // Snapshot 3: L1 operation
     auto shape3 = ttnn::Shape({256, 256});
-    ttnn::TensorSpec spec3(
+    tt::tt_metal::TensorSpec spec3(
         shape3,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
 
     auto tensor5_dram = ttnn::Tensor::from_vector(data_large, spec3, device);
     auto tensor6_dram = ttnn::Tensor::from_vector(data_large, spec3, device);

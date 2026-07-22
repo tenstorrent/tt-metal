@@ -143,6 +143,7 @@ struct Conv2dWeightsBiasPrepConfig {
         bool enable_kernel_stride_folding_ = false,
         bool full_inner_dim_ = false,
         bool enable_activation_reuse_ = false,
+        bool coalesce_1d_depthwise_kw_reads_ = false,
         std::array<uint32_t, 2> stride_ = {1, 1}) :
         input_channels_alignment(input_channels_alignment_),
         weights_bias_dtype(weights_bias_dtype_),
@@ -158,6 +159,7 @@ struct Conv2dWeightsBiasPrepConfig {
         enable_kernel_stride_folding(enable_kernel_stride_folding_),
         full_inner_dim(full_inner_dim_),
         enable_activation_reuse(enable_activation_reuse_),
+        coalesce_1d_depthwise_kw_reads(coalesce_1d_depthwise_kw_reads_),
         stride(stride_),
         interleaved_mm_conv(interleaved_mm_conv),
         out_channels(out_channels_) {}
@@ -180,6 +182,7 @@ struct Conv2dWeightsBiasPrepConfig {
     const bool enable_kernel_stride_folding;
     const bool full_inner_dim;
     const bool enable_activation_reuse;
+    const bool coalesce_1d_depthwise_kw_reads;
 
     // Kernel stride folding parameter
     const std::array<uint32_t, 2> stride;
@@ -203,6 +206,7 @@ struct Conv2dWeightsBiasPrepConfig {
         "enable_kernel_stride_folding",
         "full_inner_dim",
         "enable_activation_reuse",
+        "coalesce_1d_depthwise_kw_reads",
         "stride",
         "interleaved_mm_conv",
         "out_channels");
@@ -222,6 +226,7 @@ struct Conv2dWeightsBiasPrepConfig {
             std::cref(this->enable_kernel_stride_folding),
             std::cref(this->full_inner_dim),
             std::cref(this->enable_activation_reuse),
+            std::cref(this->coalesce_1d_depthwise_kw_reads),
             std::cref(this->stride),
             std::cref(this->interleaved_mm_conv),
             std::cref(this->out_channels));

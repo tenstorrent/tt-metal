@@ -9,7 +9,7 @@
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 namespace tt::tt_metal {
 
@@ -18,12 +18,8 @@ using namespace tt::test_utils;
 
 namespace unit_tests::dm::quasar_cache {
 
-// Skip test if not running on Quasar with simulator
+// Skip test if simulator is not available (arch check is handled by fixture)
 bool should_skip_test() {
-    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    if (arch != tt::ARCH::QUASAR) {
-        return true;
-    }
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
     return env_var == nullptr;
 }
@@ -46,6 +42,7 @@ bool run_l2_flush_test(
 
     IDevice* device = mesh_device->get_devices()[0];
     constexpr CoreCoord core = {0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     // For invalidate tests, pre-populate with known "old" values
     // that should persist after invalidation (since invalidate doesn't write back)
@@ -53,20 +50,42 @@ bool run_l2_flush_test(
     std::vector<uint32_t> init_data(config.num_words, config.expect_new_values ? 0 : old_value);
     tt_metal::detail::WriteToDeviceL1(device, core, config.base_addr, init_data);
 
-    // Create program with Quasar DM kernel
-    Program program = CreateProgram();
+    const experimental::KernelSpecName DM_KERNEL{"l2_flush"};
 
-    KernelHandle kernel = experimental::quasar::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l2_flush_test.cpp",
-        core,
-        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+    experimental::KernelSpec dm_kernel_spec{
+        .unique_id = DM_KERNEL,
+        .source = "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l2_flush_test.cpp",
+        .num_threads = 1,
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"base_addr", "test_mode"},
+                .common_runtime_arg_names = {"value", "num_words"},
+            },
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
 
-    // Set runtime args
-    SetRuntimeArgs(program, kernel, core, {config.base_addr, config.test_mode});
-    SetCommonRuntimeArgs(program, kernel, {config.value, config.num_words});
+    experimental::WorkUnitSpec main_wu{
+        .name = "main",
+        .kernels = {DM_KERNEL},
+        .target_nodes = node,
+    };
 
-    // Execute
+    experimental::ProgramSpec spec{
+        .name = "l2_flush",
+        .kernels = {dm_kernel_spec},
+        .work_units = {main_wu},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DM_KERNEL,
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}),
+        .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
+    }};
+    experimental::SetProgramRunArgs(program, params);
+
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     workload.add_program(device_range, std::move(program));
@@ -110,6 +129,7 @@ bool run_l1_dcache_test(
 
     IDevice* device = mesh_device->get_devices()[0];
     constexpr CoreCoord core = {0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     // For invalidate tests, we need to pre-populate with known "old" values
     // that should persist after invalidation (since invalidate doesn't write back)
@@ -117,20 +137,42 @@ bool run_l1_dcache_test(
     std::vector<uint32_t> init_data(config.num_words, old_value);
     tt_metal::detail::WriteToDeviceL1(device, core, config.base_addr, init_data);
 
-    // Create program with Quasar DM kernel
-    Program program = CreateProgram();
+    const experimental::KernelSpecName DM_KERNEL{"l1_dcache"};
 
-    KernelHandle kernel = experimental::quasar::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l1_dcache_test.cpp",
-        core,
-        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+    experimental::KernelSpec dm_kernel_spec{
+        .unique_id = DM_KERNEL,
+        .source = "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l1_dcache_test.cpp",
+        .num_threads = 1,
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"base_addr", "test_mode"},
+                .common_runtime_arg_names = {"value", "num_words"},
+            },
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
 
-    // Set runtime args
-    SetRuntimeArgs(program, kernel, core, {config.base_addr, config.test_mode});
-    SetCommonRuntimeArgs(program, kernel, {config.value, config.num_words});
+    experimental::WorkUnitSpec main_wu{
+        .name = "main",
+        .kernels = {DM_KERNEL},
+        .target_nodes = node,
+    };
 
-    // Execute
+    experimental::ProgramSpec spec{
+        .name = "l1_dcache",
+        .kernels = {dm_kernel_spec},
+        .work_units = {main_wu},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DM_KERNEL,
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}),
+        .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
+    }};
+    experimental::SetProgramRunArgs(program, params);
+
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     workload.add_program(device_range, std::move(program));
@@ -162,7 +204,7 @@ bool run_l1_dcache_test(
 // Test Suite: L2 Cache Operations
 // =============================================================================
 
-class QuasarL2CacheOps : public MeshDeviceSingleCardFixture {};
+class QuasarL2CacheOps : public QuasarMeshDeviceSingleCardFixture {};
 
 TEST_F(QuasarL2CacheOps, FlushLine) {
     if (unit_tests::dm::quasar_cache::should_skip_test()) {
@@ -242,7 +284,7 @@ TEST_F(QuasarL2CacheOps, InvalidateFreshRead) {
 // Test Suite: L1 Data Cache Operations
 // =============================================================================
 
-class QuasarL1DCacheOps : public MeshDeviceSingleCardFixture {};
+class QuasarL1DCacheOps : public QuasarMeshDeviceSingleCardFixture {};
 
 TEST_F(QuasarL1DCacheOps, FlushLine) {
     if (unit_tests::dm::quasar_cache::should_skip_test()) {

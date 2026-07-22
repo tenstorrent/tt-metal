@@ -5,7 +5,7 @@
 #pragma once
 #include "llk_unpack_matmul.h"
 #include "llk_unpack_common_api.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK UNPACK AB MATMUL

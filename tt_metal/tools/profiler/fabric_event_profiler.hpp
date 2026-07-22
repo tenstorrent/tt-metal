@@ -131,14 +131,14 @@ FORCE_INLINE void recordRoutingFields2D(
     routing_fields_2d.ns_hops = total_hops;
 
     // compute e/w hops and check for e/w line mcast
-    while (route_buffer[total_hops] != tt::tt_fabric::MeshRoutingFields::NOOP) {
+    while (route_buffer[total_hops] != MeshRoutingFields::NOOP) {
         total_hops++;
     }
 
     // Look at last entry in buffer to check if west branch exists
     // If west branch exists, compute west hops and east hops as remaining
     // Otherwise, we only have east hops (which is trivially to 0 if we have no e/w hops at all)
-    if (route_buffer[total_hops - 1] == tt::tt_fabric::MeshRoutingFields::FORWARD_EAST) {
+    if (route_buffer[total_hops - 1] == MeshRoutingFields::FORWARD_EAST) {
         routing_fields_2d.w_hops = total_hops - routing_fields.branch_west_offset;
         routing_fields_2d.e_hops = routing_fields.branch_west_offset - routing_fields_2d.ns_hops;
     } else {

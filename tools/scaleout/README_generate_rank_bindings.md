@@ -117,7 +117,7 @@ These matter for discovery, PGD lookup, and optional phase-2 mapping:
 | `TT_METAL_HOME` | Base for repo-relative PGD search paths; defaults to `.` if unset. |
 | `TT_METAL_MOCK_CLUSTER_DESC_PATH` | If set per rank, rank 0 can gather paths and emit **`phase2_mock_mapping.yaml`**; rankfile behavior may use a single local hostname for placement in mock scenarios. |
 
-Implementation: `find_and_load_pgd` in `tools/scaleout/src/generate_rank_bindings.cpp`.
+Implementation: `find_and_load_physical_grouping_descriptor` in `tt_metal/fabric/fabric_host_utils.cpp` (shared with ControlPlane / TopologyMapper).
 
 ---
 
@@ -133,8 +133,9 @@ If you do **not** pass `--physical-grouping-descriptor`, the tool picks a PGD fi
 
 3. **Architecture / cluster-type candidate** under the repo tree — **MetalContext** (discovered cluster type and architecture) picks a **first** filename to try at
    `<TT_METAL_HOME>/tests/tt_metal/tt_fabric/physical_groupings/<filename>`:
-   - Galaxy + Wormhole B0 → `wh_galaxy_physical_grouping_descriptor.textproto`
-   - Blackhole Galaxy + Blackhole → `bh_galaxy_physical_grouping_descriptor.textproto`
+   - Galaxy + Wormhole B0 → `wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto`
+   - Blackhole Galaxy + Blackhole Rev C → `wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto`
+   - Blackhole Galaxy + Blackhole Rev A/B → `bh_galaxy_rev_ab_physical_grouping_descriptor.textproto`
    - T3K + Wormhole B0 → `wh_t3k_physical_grouping_descriptor.textproto`
    - Any other combination → `default_physical_grouping_descriptor.textproto` (only this path is attempted for step 3; there is no separate “specialized then default” for this case).
 

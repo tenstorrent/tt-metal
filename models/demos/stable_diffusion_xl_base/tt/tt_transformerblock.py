@@ -104,7 +104,7 @@ class TtBasicTransformerBlock(LightweightModule):
         )
 
         attn_hidden_states = self.attn1(attn_hidden_states, attention_mask, None)
-        hidden_states = ttnn.add(input_tensor, attn_hidden_states, use_legacy=False)
+        hidden_states = ttnn.add(input_tensor, attn_hidden_states)
         ttnn.deallocate(input_tensor)
 
         attn_hidden_states = ttnn.layer_norm(
@@ -121,11 +121,9 @@ class TtBasicTransformerBlock(LightweightModule):
 
         if self.is_refiner and ("down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path):
             # Use interleaved memory layout as LayerNorm will output a tensor with interleaved layout
-            hidden_states = ttnn.add(
-                hidden_states, attn_hidden_states, use_legacy=False, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
+            hidden_states = ttnn.add(hidden_states, attn_hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
-            hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
+            hidden_states = ttnn.add(hidden_states, attn_hidden_states)
 
         attn_hidden_states = ttnn.layer_norm(
             hidden_states,
@@ -142,6 +140,6 @@ class TtBasicTransformerBlock(LightweightModule):
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         attn_hidden_states = self.ff(attn_hidden_states)
-        hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
+        hidden_states = ttnn.add(hidden_states, attn_hidden_states)
 
         return hidden_states

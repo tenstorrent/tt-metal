@@ -489,7 +489,7 @@ void MinimalMatmulFusedOpSignaler::init_all_gather(
     uint32_t input_tensor_Wt,
     tt::tt_fabric::Topology topology,
     bool read_local_slice_from_input,
-    const std::optional<const tt::tt_metal::Tensor>& ag_input) {
+    const std::optional<const ttnn::Tensor>& ag_input) {
     this->ring_size = ring_size;
     this->start_ring_index = start_ring_index;
     this->input_tensor_Wt = input_tensor_Wt;

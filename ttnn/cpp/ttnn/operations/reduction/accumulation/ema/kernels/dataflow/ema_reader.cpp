@@ -5,9 +5,9 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "../../../device/kernels/accumulation_common.hpp"
 
 void kernel_main() {
@@ -33,8 +33,8 @@ void kernel_main() {
     // ---------------
     const auto src_accessor = TensorAccessor(src_args, src_base_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_src(src_cb_idx);
+    Noc noc;
+    CircularBuffer cb_src(src_cb_idx);
 
     //-------------------------------------------------------------------------
     // Main loop - pull pages from src and push to src_cb

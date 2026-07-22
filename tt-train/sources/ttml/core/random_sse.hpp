@@ -26,6 +26,7 @@
 #include <thread>
 #include <vector>
 
+#include "random_parallel.hpp"
 #include "tt-metalium/bfloat16.hpp"
 
 namespace ttml::core::sse {
@@ -48,13 +49,6 @@ inline constexpr uint32_t float_exponent_bias = 0x3f800000;
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-// Convert float to bfloat16 by truncating to upper 16 bits
-inline bfloat16 float_to_bfloat16(float value) noexcept {
-    uint32_t float_bits = std::bit_cast<uint32_t>(value);
-    uint16_t bf16_bits = static_cast<uint16_t>(float_bits >> 16);
-    return std::bit_cast<bfloat16>(bf16_bits);
-}
 
 // Calculate cache-aligned chunk size for parallel processing
 template <typename T>
@@ -79,11 +73,6 @@ inline auto create_chunks(std::span<T> output, size_t num_threads, size_t chunk_
                return output.subspan(offset, size);
            }) |
            std::views::take_while([](auto chunk) { return !chunk.empty(); });
-}
-
-// Calculate thread-specific seed
-inline uint64_t calculate_thread_seed(uint32_t base_seed, size_t thread_id) noexcept {
-    return static_cast<uint64_t>(base_seed) + (static_cast<uint64_t>(thread_id) << thread_seed_shift_bits);
 }
 
 // ============================================================================
@@ -204,12 +193,18 @@ inline __m128 _mm_log_ps(__m128 x) noexcept {
     mantissa = _mm_or_si128(mantissa, _mm_set1_epi32(0x3F000000));
     x = _mm_castsi128_ps(mantissa);
 
-    // Polynomial approximation for ln(x)
-    __m128 x_minus_one = _mm_sub_ps(x, one);
-    __m128 x2 = _mm_mul_ps(x_minus_one, x_minus_one);
-    __m128 ln_x = _mm_add_ps(x_minus_one, _mm_mul_ps(x2, _mm_set1_ps(-0.5f)));
+    // 4th-order Taylor polynomial: ln(1+t) ≈ t - t²/2 + t³/3 - t⁴/4, t = x-1 ∈ [-0.5, 0)
+    // 2nd-order leaves ~1.5% systematic variance bias in Box-Muller; 4th-order reduces it to ~0.1%.
+    __m128 t = _mm_sub_ps(x, one);
+    __m128 t2 = _mm_mul_ps(t, t);
+    __m128 t3 = _mm_mul_ps(t2, t);
+    __m128 t4 = _mm_mul_ps(t3, t);
+    __m128 ln_x = _mm_add_ps(
+        _mm_add_ps(t, _mm_mul_ps(t2, _mm_set1_ps(-0.5f))),
+        _mm_add_ps(_mm_mul_ps(t3, _mm_set1_ps(1.0f / 3.0f)), _mm_mul_ps(t4, _mm_set1_ps(-0.25f))));
 
-    return _mm_add_ps(_mm_mul_ps(e_f, ln2), _mm_mul_ps(ln_x, ln2));
+    // ln(x) = (e_f + 1)*ln2 + ln(x_new), where x_new ∈ [0.5, 1.0) (exponent set to 126 = -1 unbiased)
+    return _mm_add_ps(_mm_add_ps(_mm_mul_ps(e_f, ln2), ln2), ln_x);
 }
 
 // Portable SIMD square root
@@ -274,7 +269,7 @@ inline void fill_remainder_simd(
                 __m128 rand = rng.generate_float_x4();
                 float val = _mm_cvtss_f32(rand);
                 float scaled = min + val * range;
-                output[i] = float_to_bfloat16(scaled);
+                output[i] = bfloat16(scaled);
             }
         } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
             const float mean = params.mean();
@@ -293,7 +288,7 @@ inline void fill_remainder_simd(
                 float theta = two_pi * u2_val;
                 float z = r * std::cos(theta);
                 float result = z * stddev + mean;
-                output[i] = float_to_bfloat16(result);
+                output[i] = bfloat16(result);
             }
         }
     }
@@ -329,30 +324,6 @@ void generate_uniform_simd(std::span<float> output, uint32_t seed, auto dist_fac
 
     // Process remainder with SIMD
     fill_remainder_simd(output, num_batches * simd_float_batch_size, seed, dist_factory);
-}
-
-// Parallel SIMD generation for uniform_real_distribution<float>
-template <typename DistFactory>
-void generate_uniform_simd_parallel(
-    std::span<float> output, DistFactory dist_factory, uint32_t seed, size_t num_threads) {
-    if (output.size() < parallel_min_size) [[unlikely]] {
-        generate_uniform_simd(output, seed, dist_factory);
-        return;
-    }
-
-    size_t chunk_size = calculate_aligned_chunk_size<float>(output.size(), num_threads, simd_float_batch_size);
-    auto chunks = create_chunks(output, num_threads, chunk_size);
-
-    std::vector<std::jthread> threads;
-    threads.reserve(num_threads);
-
-    size_t thread_id = 0;
-    for (auto chunk : chunks) {
-        uint64_t thread_seed = calculate_thread_seed(seed, thread_id++);
-        threads.emplace_back([chunk, thread_seed, dist_factory]() {
-            generate_uniform_simd(chunk, static_cast<uint32_t>(thread_seed), dist_factory);
-        });
-    }
 }
 
 // ============================================================================
@@ -424,27 +395,12 @@ void generate_normal_simd(std::span<float> output, uint32_t seed, auto dist_fact
     fill_remainder_simd(output, i, seed, dist_factory);
 }
 
-// Parallel SIMD generation for normal_distribution<float>
-template <typename DistFactory>
-void generate_normal_simd_parallel(
-    std::span<float> output, DistFactory dist_factory, uint32_t seed, size_t num_threads) {
-    if (output.size() < parallel_min_size) [[unlikely]] {
-        generate_normal_simd(output, seed, dist_factory);
-        return;
-    }
+void generate_normal_simd_bfloat16(std::span<bfloat16> output, uint32_t seed, auto dist_factory) {
+    std::vector<float> temp(output.size());
+    generate_normal_simd(std::span<float>{temp}, seed, dist_factory);
 
-    size_t chunk_size = calculate_aligned_chunk_size<float>(output.size(), num_threads, simd_float_batch_size);
-    auto chunks = create_chunks(output, num_threads, chunk_size);
-
-    std::vector<std::jthread> threads;
-    threads.reserve(num_threads);
-
-    size_t thread_id = 0;
-    for (auto chunk : chunks) {
-        uint64_t thread_seed = calculate_thread_seed(seed, thread_id++);
-        threads.emplace_back([chunk, thread_seed, dist_factory]() {
-            generate_normal_simd(chunk, static_cast<uint32_t>(thread_seed), dist_factory);
-        });
+    for (size_t i = 0; i < output.size(); ++i) {
+        output[i] = bfloat16(temp[i]);
     }
 }
 
@@ -490,28 +446,6 @@ void generate_uniform_simd_bfloat16(std::span<bfloat16> output, uint32_t seed, a
     fill_remainder_simd(output, num_batches * simd_bf16_batch_size, seed, dist_factory);
 }
 
-void generate_uniform_simd_parallel_bfloat16(
-    std::span<bfloat16> output, uint32_t seed, auto dist_factory, size_t num_threads) {
-    if (output.size() < parallel_min_size) [[unlikely]] {
-        generate_uniform_simd_bfloat16(output, seed, dist_factory);
-        return;
-    }
-
-    size_t chunk_size = calculate_aligned_chunk_size<bfloat16>(output.size(), num_threads, simd_bf16_batch_size);
-    auto chunks = create_chunks(output, num_threads, chunk_size);
-
-    std::vector<std::jthread> threads;
-    threads.reserve(num_threads);
-
-    size_t thread_id = 0;
-    for (auto chunk : chunks) {
-        uint64_t thread_seed = calculate_thread_seed(seed, thread_id++);
-        threads.emplace_back([chunk, thread_seed, dist_factory]() {
-            generate_uniform_simd_bfloat16(chunk, static_cast<uint32_t>(thread_seed), dist_factory);
-        });
-    }
-}
-
 // ============================================================================
 // Drop-in Replacement API
 // ============================================================================
@@ -538,7 +472,7 @@ inline void sequential_generate(std::span<T> seq, DistGenFunc dist_factory, uint
             std::vector<float> temp(seq.size());
             generate_normal_simd(std::span<float>{temp}, seed, dist_factory);
             for (size_t i = 0; i < seq.size(); ++i) {
-                seq[i] = float_to_bfloat16(temp[i]);
+                seq[i] = bfloat16(temp[i]);
             }
         }
     }
@@ -555,23 +489,38 @@ inline void parallel_generate(
     if constexpr (std::same_as<T, float>) {
         using Dist = decltype(dist_factory());
         if constexpr (std::same_as<Dist, std::uniform_real_distribution<float>>) {
-            generate_uniform_simd_parallel(seq, dist_factory, seed, max_threads);
+            ttml::core::rng::generate_parallel_chunks(
+                seq,
+                [dist_factory](std::span<float> s, uint32_t s_seed) { generate_uniform_simd(s, s_seed, dist_factory); },
+                seed,
+                max_threads);
         } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
-            generate_normal_simd_parallel(seq, dist_factory, seed, max_threads);
+            ttml::core::rng::generate_parallel_chunks(
+                seq,
+                [dist_factory](std::span<float> s, uint32_t s_seed) { generate_normal_simd(s, s_seed, dist_factory); },
+                seed,
+                max_threads);
         }
-    }
-    // SIMD fast path for bfloat16 distributions
-    else if constexpr (std::same_as<T, bfloat16>) {
+        // SIMD fast path for bfloat16 distributions
+    } else if constexpr (std::same_as<T, bfloat16>) {
         using Dist = decltype(dist_factory());
         if constexpr (std::same_as<Dist, std::uniform_real_distribution<float>>) {
-            generate_uniform_simd_parallel_bfloat16(seq, seed, dist_factory, max_threads);
+            ttml::core::rng::generate_parallel_chunks(
+                seq,
+                [dist_factory](std::span<bfloat16> s, uint32_t s_seed) {
+                    generate_uniform_simd_bfloat16(s, s_seed, dist_factory);
+                },
+                seed,
+                max_threads);
         } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
             // For normal distribution with bfloat16, generate as float then convert
-            std::vector<float> temp(seq.size());
-            generate_normal_simd_parallel(std::span<float>{temp}, dist_factory, seed, max_threads);
-            for (size_t i = 0; i < seq.size(); ++i) {
-                seq[i] = float_to_bfloat16(temp[i]);
-            }
+            ttml::core::rng::generate_parallel_chunks(
+                seq,
+                [dist_factory](std::span<bfloat16> s, uint32_t s_seed) {
+                    generate_normal_simd_bfloat16(s, s_seed, dist_factory);
+                },
+                seed,
+                max_threads);
         }
     }
 }

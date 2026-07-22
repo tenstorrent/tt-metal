@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_cnn OBJECT)
 add_library(TTNN::Ops::Experimental::CNN ALIAS ttnn_op_experimental_cnn)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_cnn TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_cnn TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_cnn)
 
 set_target_properties(
@@ -13,8 +15,8 @@ set_target_properties(
 
 file(
     GLOB_RECURSE kernels
-    convert_to_chw/device/kernels/*
-    convert_to_hwc/device/kernels/*
+    convert_to_chw/device/kernels/*.cpp
+    convert_to_hwc/device/kernels/*.cpp
 )
 
 target_sources(
@@ -23,28 +25,16 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_EXPERIMENTAL_CNN_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        convert_to_chw/convert_to_chw.cpp
-        convert_to_chw/device/convert_to_chw_device_operation.cpp
-        convert_to_chw/device/convert_to_chw_program_factory.cpp
-        convert_to_hwc/convert_to_hwc.cpp
-        convert_to_hwc/device/convert_to_hwc_device_operation.cpp
-        convert_to_hwc/device/convert_to_hwc_program_factory.cpp
-        convert_to_hwc/device/gather.cpp
+        ${TTNN_OP_EXPERIMENTAL_CNN_SRCS}
 )
 
-target_include_directories(ttnn_op_experimental_cnn PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_cnn
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_cnn PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -55,4 +45,20 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_cnn LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_experimental_cnn FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_EXPERIMENTAL_CNN_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_CNN_NANOBIND_SRCS})
+endif()

@@ -12,10 +12,10 @@ from typing import Dict, List, Optional
 import numpy as np
 
 
-def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
+def find_step_summaries(content: str) -> List[Dict[str, int | float | None]]:
     """Parse tt-train log content and extract step number, loss, and step time per step.
 
-    Uses regex to find "Step: N", "Loss: X.Y", and "Full step time X.Y ms" in order.
+    Uses regex to find "Step: N", "Loss: X.Y", and "Time: X.Y ms" in order.
     All three match lists must have the same length (one entry per step).
 
     Args:
@@ -29,30 +29,47 @@ def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
     """
     step_pattern = r"Step:\s*(\d+)"
     loss_pattern = r"Loss:\s*([\d.]+)"
-    step_time_pattern = r"Full step time\s+([\d.]+)\s*ms"
+    step_time_pattern = r"Time:\s+([\d.]+)\s*ms"
+    mfu_pattern = r"MFU:\s+([\d.]+)\s*%"
+    tps_pattern = r"TPS:\s+([\d.]+)"
 
     step_matches = re.findall(step_pattern, content, re.DOTALL)
     loss_matches = re.findall(loss_pattern, content, re.DOTALL)
     step_time_matches = re.findall(step_time_pattern, content, re.DOTALL)
+    mfu_matches = re.findall(mfu_pattern, content, re.DOTALL)
+    tps_matches = re.findall(tps_pattern, content, re.DOTALL)
 
-    step_len, loss_len, step_time_len = (
+    step_len, loss_len, step_time_len, mfu_len, tps_len = (
         len(step_matches),
         len(loss_matches),
         len(step_time_matches),
+        len(mfu_matches),
+        len(tps_matches),
     )
-    if not (step_len == loss_len == step_time_len):
+    # Make MFU and TPS optional for now
+    if not mfu_len:
+        mfu_matches = step_len * [None]
+        mfu_len = len(mfu_matches)
+    if not tps_len:
+        tps_matches = step_len * [None]
+        tps_len = len(tps_matches)
+    if not (step_len == loss_len == step_time_len == mfu_len == tps_len):
         raise ValueError(
-            f"Length of pattern matches not equal. step: {step_len}, loss: {loss_len}, step_time: {step_time_len}"
+            f"Length of pattern matches not equal. step: {step_len}, loss: {loss_len}, step_time: {step_time_len}, mfu: {mfu_len}, tps: {tps_len}"
         )
 
     step_summary = []
-    for step, loss, step_time in zip(step_matches, loss_matches, step_time_matches):
-        step_summary.append({"step": int(step), "loss": float(loss), "step_time": float(step_time)})
+    for step, loss, step_time, mfu, tps in zip(step_matches, loss_matches, step_time_matches, mfu_matches, tps_matches):
+        mfu = float(mfu) if mfu is not None else None
+        tps = float(tps) if tps is not None else None
+        step_summary.append(
+            {"step": int(step), "loss": float(loss), "step_time": float(step_time), "mfu": mfu, "tps": tps}
+        )
 
     return step_summary
 
 
-def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, float]:
+def analyze_step_summary(summary: List[Dict[str, int | float | None]]) -> Dict[str, float | None]:
     """Compute and print step metrics from a list of step records.
 
     Metrics: last loss, and average step time (excluding the first two steps
@@ -97,6 +114,14 @@ def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, flo
     step_time_p95 = np.percentile(step_times, 95)
     step_time_p99 = np.percentile(step_times, 99)
 
+    # Get last MFU value
+    mfu = summary[-1]["mfu"]
+    mfu_fmt = str(f"{mfu:,.2f}%") if mfu is not None else str("None")
+
+    # Get last TPS value
+    tps = summary[-1]["tps"]
+    tps_fmt = int(tps) if tps is not None else str("None")
+
     print("\n--- Step Information ---")
     print(f"  Total steps:   {num_steps}")
     print(f"  {last_loss_msg}:   {last_loss:,.2f}")
@@ -105,6 +130,8 @@ def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, flo
     print(f"  Median step time:   {step_time_p50:,.2f} ms")
     print(f"  Step time at P95:   {step_time_p95:,.2f} ms")
     print(f"  Step time at P99:   {step_time_p99:,.2f} ms")
+    print(f"  MFU:                {mfu_fmt}")
+    print(f"  TPS:                {tps_fmt}")
 
     breakdown = {
         "last_loss": last_loss,
@@ -114,6 +141,8 @@ def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, flo
         "step_time_p50": step_time_p50,
         "step_time_p95": step_time_p95,
         "step_time_p99": step_time_p99,
+        "mfu": mfu,
+        "tps": tps,
     }
 
     return breakdown

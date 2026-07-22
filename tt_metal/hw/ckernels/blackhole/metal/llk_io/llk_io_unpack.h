@@ -18,6 +18,7 @@ using namespace ckernel;
 inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
     std::uint32_t input = operand;
+
     volatile tt_l1_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
 
@@ -34,6 +35,7 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 inline void llk_pop_tiles(
     const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t block_c_dim = 0) {
     std::uint32_t input = operand;
+
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr =
         (volatile std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
     std::uint32_t num_words = num_tiles * get_local_cb_interface(operand).fifo_page_size;
@@ -42,14 +44,18 @@ inline void llk_pop_tiles(
     TT_SETDMAREG(0, get_local_cb_interface(input).tiles_acked, 0, LO_16(4));
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     TT_STOREREG(4, (std::uint32_t)&tiles_acked_ptr[0]);
-    get_local_cb_interface(input).fifo_rd_ptr += num_words;
+    auto& cb = get_local_cb_interface(input);
 
-    LLK_ASSERT(
-        get_local_cb_interface(input).fifo_rd_ptr <= get_local_cb_interface(input).fifo_limit,
-        "CB pop_front: fifo_rd_ptr exceeds fifo_limit");
+    LLK_ASSERT(cb.fifo_rd_ptr < cb.fifo_limit, "CB pop_front: fifo_rd_ptr already at or past fifo_limit");
 
-    if (get_local_cb_interface(input).fifo_rd_ptr >= get_local_cb_interface(input).fifo_limit) {
-        get_local_cb_interface(input).fifo_rd_ptr -= get_local_cb_interface(input).fifo_size;
+    std::uint32_t remaining = cb.fifo_limit - cb.fifo_rd_ptr;
+
+    LLK_ASSERT(remaining >= num_words, "CB pop_front: fifo_rd_ptr would exceed fifo_limit");
+
+    cb.fifo_rd_ptr += num_words;
+
+    if (cb.fifo_rd_ptr >= cb.fifo_limit) {
+        cb.fifo_rd_ptr -= cb.fifo_size;
     }
 }
 

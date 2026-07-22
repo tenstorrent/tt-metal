@@ -67,8 +67,8 @@ extern "C" {
 #else
 
 #define NOC_STREAM_WRITE_REG(stream_id, reg_id, val) \
-    ((*((volatile uint32_t*)(STREAM_REG_ADDR(stream_id, reg_id)))) = (val))
-#define NOC_STREAM_READ_REG(stream_id, reg_id) (*((volatile uint32_t*)(STREAM_REG_ADDR(stream_id, reg_id))))
+    ((*((volatile uint32_t*)(uintptr_t)(STREAM_REG_ADDR(stream_id, reg_id)))) = (val))
+#define NOC_STREAM_READ_REG(stream_id, reg_id) (*((volatile uint32_t*)(uintptr_t)(STREAM_REG_ADDR(stream_id, reg_id))))
 
 #define NOC_STREAM_WRITE_REG_FIELD(stream_id, reg_id, field, val)                 \
     (NOC_STREAM_WRITE_REG(                                                        \
@@ -79,8 +79,8 @@ extern "C" {
 #define NOC_STREAM_READ_REG_FIELD(stream_id, reg_id, field) \
     ((NOC_STREAM_READ_REG(stream_id, reg_id) >> (field)) & ((1 << field##_WIDTH) - 1))
 
-#define NOC_WRITE_REG(addr, val) ((*((volatile uint32_t*)(addr)))) = (val)
-#define NOC_READ_REG(addr) (*((volatile uint32_t*)(addr)))
+#define NOC_WRITE_REG(addr, val) ((*((volatile uint32_t*)(uintptr_t)(addr)))) = (val)
+#define NOC_READ_REG(addr) (*((volatile uint32_t*)(uintptr_t)(addr)))
 
 #endif
 

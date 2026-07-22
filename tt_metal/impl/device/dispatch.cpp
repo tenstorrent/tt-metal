@@ -87,7 +87,8 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
             tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-            dispatch_params.expected_num_workers_completed[offset_index]);
+            dispatch_params.expected_num_workers_completed[offset_index],
+            dispatch_params.cq_id);
     }
 
     command_sequence.add_dispatch_write_linear<true, true>(
@@ -102,17 +103,19 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
 }
 
-void write_to_core(
+namespace {
+// Shared body of write_to_core / write_to_core_unchecked: chunk the write across the max
+// prefetch payload size and issue a command sequence per chunk. `address` is used verbatim
+// as the full device destination (no bank/channel translation).
+void write_to_core_impl(
     IDevice* device,
     const CoreCoord& virtual_core,
     const void* src,
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    validate_core_read_write_bounds(device, virtual_core, address, size_bytes);
-
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
     while (size_bytes > 0) {
         const CoreType dispatch_core_type =
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
@@ -135,6 +138,36 @@ void write_to_core(
         address += size_bytes_to_write;
         src = (uint8_t*)src + size_bytes_to_write;
     }
+}
+}  // namespace
+
+void write_to_core(
+    IDevice* device,
+    const CoreCoord& virtual_core,
+    const void* src,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    uint32_t cq_id,
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
+    validate_core_read_write_bounds(device, virtual_core, address, size_bytes);
+    write_to_core_impl(
+        device, virtual_core, src, address, size_bytes, cq_id, expected_num_workers_completed, sub_device_ids);
+}
+
+void write_to_core_unchecked(
+    IDevice* device,
+    const CoreCoord& virtual_core,
+    const void* src,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    uint32_t cq_id,
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
+    // Same as write_to_core, minus validate_core_read_write_bounds: the DRAM-banked bounds
+    // check would reject programmable DRAM-core (DRISC) L1.
+    write_to_core_impl(
+        device, virtual_core, src, address, size_bytes, cq_id, expected_num_workers_completed, sub_device_ids);
 }
 
 void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params) {
@@ -160,14 +193,16 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
             tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-            dispatch_params.expected_num_workers_completed[offset_index]);
+            dispatch_params.expected_num_workers_completed[offset_index],
+            dispatch_params.cq_id);
     }
     const uint8_t offset_index = *dispatch_params.sub_device_ids[last_index];
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,
         tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-        dispatch_params.expected_num_workers_completed[offset_index]);
+        dispatch_params.expected_num_workers_completed[offset_index],
+        dispatch_params.cq_id);
 
     command_sequence.add_dispatch_write_host(false, dispatch_params.size_bytes, false, 0);
 

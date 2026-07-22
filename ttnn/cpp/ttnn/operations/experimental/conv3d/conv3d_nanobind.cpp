@@ -72,7 +72,10 @@ void bind_conv3d(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("weight_tensor"),
         nb::arg("groups") = 1u,
-        nb::arg("C_in_block") = tt::constants::TILE_WIDTH,
+        // 0 == use the default minimal valid block (default_c_in_block), the same value conv3d
+        // defaults to, so the prepared weight and the conv compute agree on K-row blocking and
+        // stay within L1. A mismatch silently reorders rows (issues #42146, #47316).
+        nb::arg("C_in_block") = 0u,
         nb::arg("alignment") = 32u,
         nb::arg("device") = nb::none());
 

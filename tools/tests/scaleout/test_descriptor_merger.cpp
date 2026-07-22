@@ -388,8 +388,7 @@ TEST_F(DescriptorMergerTest, RejectNonexistentFile) {
 // Torus Merge Tests: Torus-specific inter_board_connections merging
 // ============================================================================
 
-// TODO: Disabled due to #36811
-TEST_F(DescriptorMergerTest, DISABLED_MergeXTorusAndYTorusIntoXYTorus) {
+TEST_F(DescriptorMergerTest, MergeXTorusAndYTorusIntoXYTorus) {
     // Test that X_TORUS and Y_TORUS node types can merge into a combined XY_TORUS configuration
     // Both X and Y torus have the same Wormhole architecture and compatible topology
     // Their inter_board_connections should merge successfully to form an XY_TORUS
@@ -413,8 +412,7 @@ TEST_F(DescriptorMergerTest, DISABLED_MergeXTorusAndYTorusIntoXYTorus) {
     EXPECT_EQ(merged_gen, xy_gen) << "X torus + Y torus should equal XY torus";
 }
 
-// TODO: Disabled due to #36811
-TEST_F(DescriptorMergerTest, DISABLED_MergeBHXTorusAndBHYTorusIntoXYTorus) {
+TEST_F(DescriptorMergerTest, MergeBHXTorusAndBHYTorusIntoXYTorus) {
     // Test that BH (Blackhole) X_TORUS and Y_TORUS can merge into XY_TORUS
     // Validates torus merging works for Blackhole architecture, not just Wormhole
     const std::string test_dir = create_test_dir("bh_xy_torus_merge");
@@ -437,8 +435,7 @@ TEST_F(DescriptorMergerTest, DISABLED_MergeBHXTorusAndBHYTorusIntoXYTorus) {
     EXPECT_EQ(merged_gen, xy_gen) << "BH X torus + Y torus should equal BH XY torus";
 }
 
-// TODO: Disabled due to #36811
-TEST_F(DescriptorMergerTest, DISABLED_MergeTwoIdenticalXTorusDescriptors) {
+TEST_F(DescriptorMergerTest, MergeTwoIdenticalXTorusDescriptors) {
     // Test merging two identical X_TORUS descriptors
     // Both have the same torus type and architecture - should merge successfully
     // (duplicate connections will be deduplicated during merge)
@@ -462,8 +459,7 @@ TEST_F(DescriptorMergerTest, DISABLED_MergeTwoIdenticalXTorusDescriptors) {
     EXPECT_EQ(merged_gen, x_gen) << "Two identical X torus should merge into single X torus";
 }
 
-// TODO: Disabled due to #36811
-TEST_F(DescriptorMergerTest, DISABLED_MergeXYTorusWithXTorusDescriptors) {
+TEST_F(DescriptorMergerTest, MergeXYTorusWithXTorusDescriptors) {
     // Test merging XY_TORUS with X_TORUS descriptors
     // XY_TORUS already contains X-direction connections, X_TORUS adds more
     // Both are torus types with the same architecture (Wormhole) - should merge to XY_TORUS
@@ -491,8 +487,7 @@ TEST_F(DescriptorMergerTest, DISABLED_MergeXYTorusWithXTorusDescriptors) {
 // Split/Merge Tests: End-to-end split and merge workflows for all topologies
 // ============================================================================
 
-// TODO: Disabled due to #36811
-TEST_F(DescriptorMergerTest, DISABLED_SplitAndMerge8x16WhGalaxyXyTorusSuperpod) {
+TEST_F(DescriptorMergerTest, SplitAndMerge8x16WhGalaxyXyTorusSuperpod) {
     // Test splitting the 8x16 WH_GALAXY_XY_TORUS superpod descriptor and merging it back
     const std::string source_path =
         "tools/tests/scaleout/cabling_descriptors/8x16_wh_galaxy_xy_torus_superpod.textproto";
@@ -527,8 +522,7 @@ TEST_F(DescriptorMergerTest, DISABLED_SplitAndMerge8x16WhGalaxyXyTorusSuperpod) 
     }
 }
 
-// TODO: Disabled due to #36811
-TEST_F(DescriptorMergerTest, DISABLED_SplitAndMerge5WhGalaxyYTorusSuperpod) {
+TEST_F(DescriptorMergerTest, SplitAndMerge5WhGalaxyYTorusSuperpod) {
     // Test splitting the 5 WH_GALAXY_Y_TORUS superpod descriptor and merging it back
     const std::string source_path = "tools/tests/scaleout/cabling_descriptors/5_wh_galaxy_y_torus_superpod.textproto";
 
@@ -561,8 +555,7 @@ TEST_F(DescriptorMergerTest, DISABLED_SplitAndMerge5WhGalaxyYTorusSuperpod) {
     }
 }
 
-// TODO: Disabled due to #36811
-TEST_F(DescriptorMergerTest, DISABLED_SplitAndMerge16N300Cluster) {
+TEST_F(DescriptorMergerTest, SplitAndMerge16N300Cluster) {
     // Test splitting and merging the 16 N300 cluster descriptor
     // This validates split/merge works for N300 architecture (not just WH/BH)
     const std::string source_path = "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto";
@@ -651,7 +644,11 @@ TEST_F(DescriptorMergerTest, RejectWHAndBHMesh) {
     }
 }
 
-// TODO: Disabled due to #36811
+// DISABLED: This test asserts that merging graph_templates with different children is rejected,
+// but commit 085eff70e87 (#36418, "Universal Cluster Configuration for Combined 8x16 Topologies")
+// intentionally removed that enforcement to allow adding new nodes/subgraphs from source to target
+// (e.g. combining 4x32 + 8x16 Exabox clusters). Re-enabling this test would require re-adding a
+// check that regresses that feature, so it stays disabled until the intended semantics are settled.
 TEST_F(DescriptorMergerTest, DISABLED_RejectGraphTemplatesWithDifferentChildren_ForwardPass) {
     // Test forward pass: source has nodes that target doesn't have
     // File 1 has {node_a, node_b}, File 2 has {node_c, node_d} - completely different sets
@@ -746,8 +743,7 @@ root_instance {
         << "Should reject graph_templates with different children (backward pass: target has extra nodes)";
 }
 
-// TODO: Disabled due to #36811
-TEST_F(DescriptorMergerTest, DISABLED_AllowCrossDescriptorConnectionsOnDifferentPorts) {
+TEST_F(DescriptorMergerTest, AllowCrossDescriptorConnectionsOnDifferentPorts) {
     // Test that the same node can connect to different nodes across multiple descriptors
     // as long as different ports are used. This is valid because:
     // 1. Each port is only used once (no duplicate connections within a descriptor)
@@ -1109,8 +1105,7 @@ TEST_F(DescriptorMergerTest, LoadAllAvailableDescriptors) {
     }
 }
 
-// TODO: Disabled due to #36811
-TEST_F(DescriptorMergerTest, DISABLED_MergeExistingBHTorusDescriptors) {
+TEST_F(DescriptorMergerTest, MergeExistingBHTorusDescriptors) {
     // Test merging existing bh_galaxy_x_torus.textproto and bh_galaxy_y_torus.textproto
     // This demonstrates using actual existing descriptor files from the cabling_descriptors directory
     const std::string test_dir = create_test_dir("merge_existing_bh_torus");

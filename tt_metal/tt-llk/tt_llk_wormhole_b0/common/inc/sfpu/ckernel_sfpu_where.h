@@ -26,7 +26,7 @@ inline void _calculate_where_(
     int offset1 = (dst_index_in1 * 32) << 1;
     int offset2 = (dst_index_in2 * 32) << 1;
 
-    constexpr std::uint32_t mod0 = data_format == DataFormat::Float16_b ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+    constexpr InstrModLoadStore mod0 = data_format == DataFormat::Float16_b ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
 
 #ifdef DISABLE_SFPLOADMACRO
     int offset3 = (dst_index_out * 32) << 1;

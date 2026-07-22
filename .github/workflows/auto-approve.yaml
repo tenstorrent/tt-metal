@@ -5,13 +5,14 @@ name: Auto-approve dependency bumps
 #
 # Currently covers:
 #   - SFPI:  @nathan-TT bumping tt_metal/sfpi-version
-#   - ttsim: @mcraigheadTT bumping .github/workflows/ttsim.yaml
+#   - ttsim: @mcraigheadTT bumping tt_metal/ttsim-version
+#   - UMD:   tenstorrent/umd-admins members bumping tt_metal/third_party/umd
 #
 # To add a new component: add a new job following the same pattern.
 #
 # Security note: pull_request_target runs with write access to the base repo
 # even for fork PRs. We mitigate this by:
-#   1. Gating on a known author per job
+#   1. Gating on a known author per job (or org team membership for UMD)
 #   2. Verifying the PR touches ONLY the allowlisted files via API — no checkout
 #   3. Never executing any code from the PR branch
 
@@ -29,7 +30,7 @@ jobs:
   # ---------------------------------------------------------------------------
   auto-approve-sfpi:
     name: Auto-approve SFPI bump
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # Fast-exit: only run for nathan-TT non-draft PRs
     if: |
       github.event.pull_request.user.login == 'nathan-TT' &&
@@ -99,11 +100,11 @@ jobs:
             | python3 -c "import sys,json; d=json.load(sys.stdin); print('Approved, review ID:', d[chr(105)+chr(100)]) if chr(105)+chr(100) in d else print('Error:', d)"
 
   # ---------------------------------------------------------------------------
-  # ttsim — @mcraigheadTT bumping .github/workflows/ttsim.yaml
+  # ttsim — @mcraigheadTT bumping tt_metal/ttsim-version
   # ---------------------------------------------------------------------------
   auto-approve-ttsim:
     name: Auto-approve ttsim bump
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # Fast-exit: only run for mcraigheadTT non-draft PRs
     if: |
       github.event.pull_request.user.login == 'mcraigheadTT' &&
@@ -123,10 +124,10 @@ jobs:
           echo "$FILES"
 
           # Allowed files for ttsim version bumps.
-          # ttsim.yaml holds the version string; the skip list is updated
+          # tt_metal/ttsim-version holds the version string; the skip list is updated
           # alongside new versions to suppress newly-failing tests.
           ALLOWED=(
-            ".github/workflows/ttsim.yaml"
+            "tt_metal/ttsim-version"
             "tests/pipeline_reorg/ttsim-skip-list.yaml"
           )
 
@@ -168,4 +169,94 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/tenstorrent/tt-metal/pulls/${PR_NUMBER}/reviews" \
             -d '{"event":"APPROVE","body":"🤖 Auto-approved: ttsim version bump from @mcraigheadTT (component author)."}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print('Approved, review ID:', d[chr(105)+chr(100)]) if chr(105)+chr(100) in d else print('Error:', d)"
+
+  # ---------------------------------------------------------------------------
+  # UMD — tenstorrent/umd-admins members bumping tt_metal/third_party/umd
+  # ---------------------------------------------------------------------------
+  auto-approve-umd:
+    name: Auto-approve UMD bump
+    runs-on: ubuntu-slim
+    # Fast-exit: skip draft PRs (author check is done via team membership below)
+    if: "!github.event.pull_request.draft"
+    steps:
+      - name: Check umd-admins team membership
+        id: team-check
+        env:
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          # Check if the PR author is a member of tenstorrent/umd-admins.
+          # Uses the PAT (which has org:read scope) to query team membership.
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/orgs/tenstorrent/teams/umd-admins/members/${PR_AUTHOR}")
+
+          if [[ "$HTTP_CODE" == "204" ]]; then
+            echo "@${PR_AUTHOR} is a member of tenstorrent/umd-admins"
+            echo "is_member=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "@${PR_AUTHOR} is NOT a member of tenstorrent/umd-admins (HTTP ${HTTP_CODE}) — skipping"
+            echo "is_member=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify only UMD submodule is changed
+        if: steps.team-check.outputs.is_member == 'true'
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Fetch changed files via API (no code checkout needed)
+          FILES=$(gh api "repos/tenstorrent/tt-metal/pulls/${PR_NUMBER}/files" \
+            --jq '.[].filename')
+
+          echo "Changed files in PR #${PR_NUMBER}:"
+          echo "$FILES"
+
+          # Allowed files for UMD submodule bumps.
+          # The submodule pointer is the only file that should change.
+          ALLOWED=(
+            "tt_metal/third_party/umd"
+          )
+
+          SAFE=true
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            match=false
+            for allowed in "${ALLOWED[@]}"; do
+              if [[ "$file" == "$allowed" ]]; then
+                match=true
+                break
+              fi
+            done
+            if [[ "$match" == "false" ]]; then
+              echo "FAIL: Unexpected file not in UMD allowlist: $file"
+              SAFE=false
+            fi
+          done <<< "$FILES"
+
+          if [[ "$SAFE" == "true" ]]; then
+            echo "All changed files are in the UMD allowlist — safe to auto-approve."
+            echo "safe=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "PR contains files outside the UMD allowlist — skipping auto-approve."
+            echo "safe=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Approve PR
+        if: steps.team-check.outputs.is_member == 'true' && steps.verify.outputs.safe == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          curl -s -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/tenstorrent/tt-metal/pulls/${PR_NUMBER}/reviews" \
+            -d "{\"event\":\"APPROVE\",\"body\":\"🤖 Auto-approved: UMD submodule bump from @${PR_AUTHOR} (tenstorrent/umd-admins member). Only tt_metal/third_party/umd was modified.\"}" \
             | python3 -c "import sys,json; d=json.load(sys.stdin); print('Approved, review ID:', d[chr(105)+chr(100)]) if chr(105)+chr(100) in d else print('Error:', d)"

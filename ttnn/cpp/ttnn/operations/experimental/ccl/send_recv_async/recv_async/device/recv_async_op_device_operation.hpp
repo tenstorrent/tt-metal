@@ -12,7 +12,7 @@ namespace ttnn::experimental::prim {
 struct RecvAsyncDeviceOperation {
     using operation_attributes_t = RecvAsyncParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<RecvAsyncMeshWorkloadFactory>;
 

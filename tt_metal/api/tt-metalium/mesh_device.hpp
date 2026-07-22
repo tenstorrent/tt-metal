@@ -116,7 +116,23 @@ public:
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const override;
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(
         const std::vector<CoreCoord>& logical_cores) const override;
+    // Deprecated: returns the assignment of the mesh's reference (front) device only. On a mesh with
+    // heterogeneous harvesting the optimal placement differs per device, so this silently returns the
+    // wrong cores for every device but the reference one. Use the MeshCoordinate overload below to get
+    // the assignment for a specific device.
+    [[deprecated(
+        "Returns only the reference device's assignment, which is incorrect on heterogeneously-harvested "
+        "meshes. Use get_optimal_dram_bank_to_logical_worker_assignment(noc, coord) instead.")]]
     std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
+
+    // Returns the optimal DRAM-bank-to-logical-worker assignment for the device at `coord` as a map from
+    // DRAM bank id to the logical worker core that should service it. The assignment is a device-local
+    // physical property (it depends on that device's harvesting and DRAM configuration), so it may differ
+    // per device on a heterogeneous mesh. If `coord` maps to a remote device, this falls back to an
+    // arbitrary local device's assignment (best-effort, exact only on homogeneous meshes); it throws only
+    // when the mesh has no local device to fall back to.
+    std::unordered_map<uint32_t, CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(
+        NOC noc, const MeshCoordinate& coord);
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
@@ -128,7 +144,6 @@ public:
     std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
-    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
     CoreCoord compute_with_storage_grid_size() const override;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
@@ -175,9 +190,6 @@ public:
     std::size_t num_program_cache_entries() override;
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
-    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const override;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(

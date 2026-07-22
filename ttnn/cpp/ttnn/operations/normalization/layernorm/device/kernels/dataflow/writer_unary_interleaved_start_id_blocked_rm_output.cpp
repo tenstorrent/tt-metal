@@ -31,9 +31,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "layernorm_dataflow_utils.h"
 
@@ -58,8 +58,8 @@ void kernel_main() {
 
     const auto dst_a = TensorAccessor(dst_args, dst_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_out_rm(cb_id_out_rm);
+    Noc noc;
+    CircularBuffer cb_out_rm(cb_id_out_rm);
 
     constexpr uint32_t block_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
     constexpr uint32_t tile_width_bytes = TILE_W * elem_size_bytes;

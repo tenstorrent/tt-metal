@@ -35,7 +35,16 @@ from models.demos.deepseek_v3_b1.weights.transforms.moe import fuse_gate_up
         pytest.param(
             1024, 32, ttnn.bfloat8_b, marks=pytest.mark.skip_post_commit
         ),  # Small: K_gate=1024, K_down=256, N=3584
-        (7168, 64, ttnn.bfloat4_b),  # bfloat4 weights
+        # TODO(#43065): Root-cause this exact Blackhole BFLOAT4 shared-expert hang and remove the temporary skip.
+        pytest.param(
+            7168,
+            64,
+            ttnn.bfloat4_b,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: test_shared_expert[7168-64-DataType.BFLOAT4_B] appears to hang on "
+                "Blackhole after 'Running shared expert ...'. Issue: #43065"
+            ),
+        ),  # bfloat4 weights
     ],
 )
 @pytest.mark.requires_grid_size((13, 10))

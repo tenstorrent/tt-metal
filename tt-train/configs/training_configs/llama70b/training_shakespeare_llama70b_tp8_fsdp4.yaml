@@ -1,0 +1,54 @@
+# Llama 70B on a 4x8 Blackhole galaxy: TP=8, FSDP=4 (32 devices total).
+#
+# Memory budget per device (bf16, AdamW, ~70B params):
+#   weights      ~4.4 GB   (per shard after TP*FSDP=32-way split)
+#   m, v         ~8.8 GB   (AdamW first/second moments)
+#   activations  ~few GB   (per-block, with memory_efficient runner)
+#   total        ~20 GB    (fits in 32 GB DRAM with headroom)
+#
+# Lazy + FSDP path (lazy_parameter_init=true, enable_fsdp=true): each lazy
+# parameter is allocated *already* FSDP-sharded — the full unsharded weight is
+# never present on device. This is required at this scale; the eager FSDP
+# code path would OOM during the host→device round-trip.
+#
+# Mesh axis assignment (build_mesh: dp -> fsdp -> tp): with enable_fsdp +
+# enable_tp, mesh_shape [4, 8] -> axis 0 = "fsdp" (size 4), axis 1 = "tp"
+# (size 8). Use the matching MGD: configs/mgd/bh_galaxy_4_8_line_line.textproto.
+
+training_config:
+  project_name: tt_train_llama70b
+  seed: 5489
+  model_save_interval: 10000
+  batch_size: 4
+  num_epochs: 1
+  max_steps: 100
+  optimizer:
+    type: AdamW
+    lr: 1.0e-4
+    beta1: 0.9
+    beta2: 0.95
+    epsilon: 1.0e-8
+    weight_decay: 0.1
+  use_clip_grad_norm: false
+  clip_grad_norm_max_norm: 1.0
+  tokenizer_type: bpe
+  data_path: data/tokenized_shakespeare_llama70b.yaml
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama70b.yaml"
+  scheduler_type: warmup_linear
+  gradient_accumulation_steps: 1
+  # Required at 70B scale: lets fully_shard rewrite each lazy param's mapper
+  # to include the FSDP shard placement, so materialize_module allocates
+  # weights already-sharded. Without this, the eager FSDP path host-roundtrips
+  # the *full* tensor and OOMs.
+  lazy_parameter_init: true
+
+device_config:
+  enable_fsdp: true
+  enable_tp: true
+  mesh_shape: [4, 8]
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0

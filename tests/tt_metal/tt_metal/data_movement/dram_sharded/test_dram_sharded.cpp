@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -11,7 +12,11 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
@@ -32,7 +37,6 @@ struct DramShardedConfig {
     CoreRangeSet cores;
     bool use_trid = false;
     uint32_t num_of_trids = 0;
-    bool use_2_0 = false;
 };
 
 /// @brief Reads from Sharded DRAM to L1 using stateful API
@@ -42,9 +46,6 @@ struct DramShardedConfig {
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramShardedConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->impl().get_device(0);
-
-    // Program
-    Program program = CreateProgram();
 
     uint32_t num_pages = test_config.num_banks * test_config.pages_per_bank;
     const size_t total_size_bytes = num_pages * test_config.page_size_bytes;
@@ -84,49 +85,71 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     vector<uint32_t> packed_golden = packed_input;
 
     // Compile-time arguments for kernel
-    vector<uint32_t> reader_compile_args = {
-        (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.num_banks,
-        (uint32_t)test_config.pages_per_bank,
-        (uint32_t)test_config.page_size_bytes,
-        (uint32_t)test_config.test_id};
+    std::unordered_map<std::string, uint32_t> reader_compile_args = {
+        {"num_transactions", (uint32_t)test_config.num_of_transactions},
+        {"num_banks", (uint32_t)test_config.num_banks},
+        {"pages_per_bank", (uint32_t)test_config.pages_per_bank},
+        {"page_size", (uint32_t)test_config.page_size_bytes},
+        {"test_id", (uint32_t)test_config.test_id}};
 
     string kernel_path = "tests/tt_metal/tt_metal/data_movement/dram_sharded/kernels/dram_sharded_read";
     if (test_config.use_trid) {
         kernel_path += "_trid";
-        reader_compile_args.push_back((uint32_t)test_config.num_of_trids);
+        reader_compile_args["num_trids"] = (uint32_t)test_config.num_of_trids;
     }
-    if (test_config.use_2_0) {
-        kernel_path += "_2_0";
-        reader_compile_args.push_back((uint32_t)test_config.num_of_trids);
-    }
-    kernel_path += ".cpp";
-
-    // Create kernel on reader cores - branch by architecture
-    KernelHandle reader_kernel;
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        // Quasar path: Use experimental API
-        reader_kernel = experimental::quasar::CreateKernel(
-            program,
-            kernel_path,
-            test_config.cores,
-            experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = reader_compile_args});
-    } else {
-        // WH/BH path: Use legacy API
-        reader_kernel = CreateKernel(
-            program,
-            kernel_path,
-            test_config.cores,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = reader_compile_args});
-    }
+    kernel_path += "_2_0.cpp";
 
     uint32_t l1_addr = get_l1_address_and_size(mesh_device, corerange_to_cores(test_config.cores)[0]).base_address;
-    std::vector<uint32_t> reader_run_time_args = {input_buffer_address, l1_addr};
-    tt::tt_metal::SetRuntimeArgs(program, reader_kernel, test_config.cores, reader_run_time_args);
+
+    using namespace tt::tt_metal::experimental;
+
+    KernelSpec::CompileTimeArgs cta_bindings(reader_compile_args);
+
+    std::vector<std::string> named_rtas = {"src_addr", "l1_addr"};
+
+    DataMovementHardwareConfig reader_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = DataMovementGen2Config{};
+    } else {
+        reader_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+        };
+    }
+    KernelSpec reader_spec{
+        .unique_id = KernelSpecName{"reader"},
+        .source = kernel_path,
+        .num_threads = 1,
+        .compile_time_args = cta_bindings,
+        .runtime_arg_schema = {.runtime_arg_names = named_rtas},
+        .hw_config = reader_hw_config,
+    };
+
+    ProgramSpec spec{
+        .name = "dram_sharded_test",
+        .kernels = {reader_spec},
+        .work_units = {WorkUnitSpec{
+            .name = "work_unit",
+            .kernels = {reader_spec.unique_id},
+            .target_nodes = test_config.cores,
+        }},
+    };
+
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+    ProgramRunArgs run_params;
+    ProgramRunArgs::KernelRunArgs reader_run_params{.kernel = reader_spec.unique_id};
+    for (auto& core : corerange_to_cores(test_config.cores)) {
+        AddRuntimeArgsForNode(
+            reader_run_params.runtime_arg_values,
+            core,
+            {
+                {"src_addr", input_buffer_address},
+                {"l1_addr", l1_addr},
+            });
+    }
+    run_params.kernel_run_args.push_back(reader_run_params);
+    SetProgramRunArgs(program, run_params);
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -168,6 +191,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
 /* ========== Directed Ideal Test Case; Test id = 84 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadDirectedIdeal) {
     auto mesh_device = get_mesh_device();
+    const uint32_t test_id = 84;
 
     // Parameters
     DataFormat l1_data_format = DataFormat::Float16_b;
@@ -180,7 +204,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadDirectedIdeal)
 
     // Test config
     unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
-        .test_id = 84,
+        .test_id = test_id,
         .num_of_transactions = num_of_transactions,
         .num_banks = mesh_device->num_dram_channels(),
         .pages_per_bank = 32,
@@ -287,6 +311,31 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedId
     EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadDirectedIdeal2_0) {
+    auto mesh_device = get_mesh_device();
+
+    DataFormat l1_data_format = DataFormat::Float16_b;
+    uint32_t page_size_bytes = tt::tile_size(l1_data_format);
+
+    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
+    uint32_t num_of_transactions = is_quasar ? 16u : 256u;
+
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
+        .test_id = 94,
+        .num_of_transactions = num_of_transactions,
+        .num_banks = mesh_device->num_dram_channels(),
+        .pages_per_bank = 32,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = l1_data_format,
+        .cores = core_range_set,
+    };
+
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
+}
+
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers2_0) {
     auto mesh_device = get_mesh_device();
 
@@ -294,8 +343,11 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers2_0
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
     uint32_t num_banks = mesh_device->num_dram_channels();
-    uint32_t max_num_pages = 32;
-    uint32_t max_transactions = 256;
+
+    // Cap sweep on Quasar emulator to avoid timeouts.
+    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
+    uint32_t max_num_pages = is_quasar ? 8u : 32u;
+    uint32_t max_transactions = is_quasar ? 16u : 256u;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -305,16 +357,47 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers2_0
         for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 2) {
             // Test config
             unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
-                .test_id = 88,
+                .test_id = 95,
                 .num_of_transactions = num_of_transactions,
                 .num_banks = num_banks,
                 .pages_per_bank = num_pages,
                 .page_size_bytes = page_size_bytes,
                 .l1_data_format = l1_data_format,
                 .cores = core_range_set,
-                .use_2_0 = true};
+            };
 
             // Run
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBankNumbers2_0) {
+    auto mesh_device = get_mesh_device();
+
+    DataFormat l1_data_format = DataFormat::Float16_b;
+    uint32_t page_size_bytes = tt::tile_size(l1_data_format);
+    uint32_t max_num_banks = mesh_device->num_dram_channels();
+    uint32_t num_pages = 32;
+
+    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
+    uint32_t max_transactions = is_quasar ? 16u : 256u;
+
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
+        for (uint32_t num_banks = 1; num_banks <= max_num_banks; num_banks++) {
+            unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
+                .test_id = 96,
+                .num_of_transactions = num_of_transactions,
+                .num_banks = num_banks,
+                .pages_per_bank = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = l1_data_format,
+                .cores = core_range_set,
+            };
+
             EXPECT_TRUE(run_dm(mesh_device, test_config));
         }
     }
@@ -334,7 +417,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedId
 
     // Test config
     unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
-        .test_id = 89,
+        .test_id = 97,
         .num_of_transactions = num_of_transactions,
         .num_banks = mesh_device->num_dram_channels(),
         .pages_per_bank = 32,
@@ -343,7 +426,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedId
         .cores = core_range_set,
         .use_trid = true,
         .num_of_trids = 16,
-        .use_2_0 = true};
+    };
 
     // Run
     EXPECT_TRUE(run_dm(mesh_device, test_config));

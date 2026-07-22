@@ -17,6 +17,7 @@ Key Features:
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -349,9 +350,10 @@ def compute_pcc_host(impl, ref):
         if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(calculated)):
             return 0.0
 
-        # One tensor is all zero, the other is not
+        # One tensor is all zero, the other is not — also a zero-variance case.
         if torch.any(golden.bool()) != torch.any(calculated.bool()):
-            return 0.0
+            logger.warning("One tensor is all zero. PCC undefined; falling back to allclose.")
+            return float(torch.allclose(golden, calculated, rtol=1e-05, atol=1e-04))
 
         # Mask all infs and nans
         golden = golden.clone()
@@ -376,26 +378,25 @@ def compute_pcc_host(impl, ref):
             golden = golden.type(torch.float32)
             calculated = calculated.type(torch.float32)
 
-        # Single element case
+        # Single element or constant tensor: PCC is undefined.
         if golden.numel() == 1:
-            return float(torch.equal(golden, calculated))
+            return float(torch.allclose(golden, calculated, rtol=1e-05, atol=1e-04))
 
-        # If both tensors are constant
-        if torch.max(golden) == torch.min(golden) and torch.max(calculated) == torch.min(calculated):
-            return torch.isclose(torch.max(golden), torch.max(calculated)).item()
+        if torch.max(golden) == torch.min(golden) or torch.max(calculated) == torch.min(calculated):
+            logger.warning("One or both tensors are constant (zero std dev). PCC undefined; falling back to allclose.")
+            return float(torch.allclose(golden, calculated, rtol=1e-05, atol=1e-04))
 
         # Compute PCC using numpy's corrcoef
         cal_pcc = np.ma.corrcoef(
             np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
             np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
         )
-        # Remove correlation coefficient with self (typically always 1.0)
-        mask = np.ones(cal_pcc.shape, dtype=bool)
-        np.fill_diagonal(mask, 0)
-        cal_pcc = np.min(cal_pcc[mask])
+        # Read off-diagonal directly to avoid diagonal contamination.
+        cal_pcc = cal_pcc[0, 1]
 
-        if isinstance(cal_pcc, np.ma.core.MaskedConstant):
-            return 1.0
+        if isinstance(cal_pcc, np.ma.core.MaskedConstant) or np.isnan(float(cal_pcc)):
+            logger.warning("PCC returned NaN/masked. Falling back to allclose.")
+            return float(torch.allclose(golden, calculated, rtol=1e-05, atol=1e-04))
 
         return float(cal_pcc)
     except Exception:

@@ -42,6 +42,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_b1.circular_buffer_utils import cb_descriptor_from_overlapped_tensor
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.config import resolve_sdpa_reduce_config
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
@@ -51,10 +52,6 @@ from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     KVB12_PROJ_SingleDeviceOverlapSpec,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
 )
-
-
-def _round_up(value: int, alignment: int) -> int:
-    return ((value + alignment - 1) // alignment) * alignment
 
 
 def _get_element_size_bytes(dtype):
@@ -341,41 +338,37 @@ class PostSDPA:
             sdpa_tile = sdpa_input_l_sample.tile
             sdpa_tile_height, sdpa_tile_width = sdpa_tile.tile_shape
             sdpa_element_size_bytes = _get_element_size_bytes(sdpa_input_l_sample.dtype)
-            sdpa_input_page_size_bytes = sdpa_element_size_bytes * sdpa_tile_height * sdpa_tile_width
             sdpa_l1_alignment = 16  # L1 alignment for SDPA (matches original op)
-
-            # Get shard spec to calculate tile counts (matches original op)
             sdpa_shard_spec = sdpa_input_l_sample.memory_config().shard_spec
-            sdpa_input_l_num_pages = (sdpa_shard_spec.shape[0] // sdpa_tile_height) * (
-                sdpa_shard_spec.shape[1] // sdpa_tile_width
+
+            # SDPA forwarder parameters (using Type A/B worker split like original op)
+            sdpa_num_workers = 8
+            sdpa_num_forwarders = 2
+            sdpa_config = resolve_sdpa_reduce_config(
+                batch_size=sdpa_shard_spec.shape[0],
+                l_width=sdpa_shard_spec.shape[1],
+                num_cores=sdpa_num_workers,
+                tile_height=sdpa_tile_height,
+                tile_width=sdpa_tile_width,
+                bytes_per_element=sdpa_element_size_bytes,
+                num_links=sdpa_num_forwarders,
+                packet_header_size_bytes=ttnn.get_tt_fabric_packet_header_size_bytes(),
+                l1_alignment=sdpa_l1_alignment,
+                max_payload_size_bytes=ttnn.get_tt_fabric_max_payload_size_bytes(),
             )
-
-            # Calculate out_tiles using same formula as original op
-            PNH = 8
-            DH = sdpa_input_l_num_pages * sdpa_tile_width
-            DHt = DH // sdpa_tile_width
-            PNHt = PNH // sdpa_tile_height
-            Sq_chunk_t = PNHt
-            sdpa_out_tiles = Sq_chunk_t * DHt
-
-            # Chunking formula (identical to original op)
-            sdpa_max_tiles_per_chunk = 8
-            sdpa_min_num_l_chunks = (sdpa_out_tiles + sdpa_max_tiles_per_chunk - 1) // sdpa_max_tiles_per_chunk
-            sdpa_num_l_chunks = max(sdpa_min_num_l_chunks, 4)
-            if sdpa_out_tiles % sdpa_num_l_chunks != 0:
-                raise ValueError(
-                    f"sdpa_out_tiles ({sdpa_out_tiles}) must be divisible by sdpa_num_l_chunks ({sdpa_num_l_chunks})"
-                )
-
-            sdpa_tiles_per_l_chunk = sdpa_out_tiles // sdpa_num_l_chunks
-            sdpa_l_chunk_size_bytes = sdpa_tiles_per_l_chunk * sdpa_input_page_size_bytes
+            sdpa_input_page_size_bytes = sdpa_config.input_page_size_bytes
+            sdpa_out_tiles = sdpa_config.out_tiles
+            sdpa_num_l_chunks = sdpa_config.num_l_chunks
+            sdpa_tiles_per_l_chunk = sdpa_config.tiles_per_l_chunk
+            sdpa_l_chunk_size_bytes = sdpa_config.l_chunk_size_bytes
+            sdpa_compute_block_size = sdpa_config.compute_block_size
 
             # Alias for backward compatibility with CB descriptor code
             sdpa_l_tiles_per_worker = sdpa_out_tiles
 
             # SDPA tile sizes (get from actual tensor, not hardcoded)
             sdpa_l_tile_size = sdpa_input_page_size_bytes  # Actual tile size from input
-            sdpa_ms_tile_size = _round_up(sdpa_input_page_size_bytes, sdpa_l1_alignment)  # Aligned for MS
+            sdpa_ms_tile_size = sdpa_config.ms_tile_size_bytes
 
             # SDPA scatter parameters (scatter output to matmul4 cores)
             # Each SDPA worker scatters rows to matmul4 cores (one row per tile when using 8x32 tiles)
@@ -398,17 +391,10 @@ class PostSDPA:
             sdpa_cb_r1_result_ms = 19
             sdpa_cb_l_out = 20
 
-            # SDPA forwarder parameters (using Type A/B worker split like original op)
-            sdpa_num_workers = 8
-            sdpa_num_forwarders = 2
-            sdpa_workers_per_forwarder = sdpa_num_workers // sdpa_num_forwarders  # 4
-            sdpa_workers_per_type = sdpa_workers_per_forwarder // 2  # 2 (Type A and Type B alternate)
-            sdpa_slots_per_worker = 1 + sdpa_num_l_chunks  # MS + L chunks = 5 slots
-            sdpa_fwd_slots_per_round = sdpa_workers_per_type * sdpa_slots_per_worker  # 2 * 5 = 10 slots per direction
-            sdpa_fwd_slot_size = (
-                ttnn.get_tt_fabric_packet_header_size_bytes() + sdpa_l_chunk_size_bytes
-            )  # Header + max payload
-            sdpa_fwd_r2_buffer_offset = sdpa_fwd_slots_per_round * sdpa_fwd_slot_size
+            sdpa_slots_per_worker = sdpa_config.slots_per_worker
+            sdpa_fwd_slots_per_round = sdpa_config.slots_per_round
+            sdpa_fwd_slot_size = sdpa_config.slot_size
+            sdpa_fwd_r2_buffer_offset = sdpa_config.r2_buffer_offset
 
             # SDPA semaphore ID for scatter arrival (new semaphore)
             scatter_arrival_semaphore_id = 7  # After existing semaphores 0-5
@@ -732,6 +718,7 @@ class PostSDPA:
                             ("sdpa_scale_fp32", sdpa_scale_fp32_bits),
                             ("sdpa_tiles_per_l_chunk", sdpa_tiles_per_l_chunk),
                             ("sdpa_num_l_chunks", sdpa_num_l_chunks),
+                            ("sdpa_compute_block_size", sdpa_compute_block_size),
                             # SDPA position
                             ("sdpa_position_enabled", 1 if sdpa_position_enabled else 0),
                             ("sdpa_per_device_chunk_size", sdpa_per_device_chunk_size),

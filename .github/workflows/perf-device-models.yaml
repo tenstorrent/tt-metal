@@ -9,7 +9,7 @@ on:
         type: string
         default: '["blackhole", "wormhole_b0"]'
       requested-models:
-        description: "List of requested models as JSON array, for example: [\"resnet50\", \"vit\"]. Default is 'all'"
+        description: 'List of requested models as JSON array, for example: ["resnet50", "vit"]. Default is ''all'''
         default: "all"
         type: string
       platform:
@@ -46,7 +46,7 @@ on:
         type: string
         default: '["blackhole", "wormhole_b0"]'
       requested-models:
-        description: "List of requested models as JSON array, for example: [\"resnet50\", \"vit\"]. Default is 'all'"
+        description: 'List of requested models as JSON array, for example: ["resnet50", "vit"]. Default is ''all'''
         required: false
         type: string
         default: "all"
@@ -68,19 +68,25 @@ on:
 
 run-name: "(Single-card) Device perf regressions"
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact-profiler:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   device-perf:
-    needs: build-artifact-profiler
+    needs: [check-harbor, build-artifact-profiler]
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
     with:

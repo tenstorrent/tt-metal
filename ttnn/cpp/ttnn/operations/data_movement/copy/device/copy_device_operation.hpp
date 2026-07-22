@@ -5,25 +5,43 @@
 #pragma once
 
 #include <optional>
-#include "ttnn/tensor/tensor.hpp"
+#include <variant>
+
 #include "copy_device_operation_types.hpp"
-#include "copy_same_memory_config_program_factory.hpp"
-#include "copy_default_row_major_program_factory.hpp"
-#include "copy_default_tilized_program_factory.hpp"
-#include "ttnn/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
 struct CopyDeviceOperation {
     using operation_attributes_t = ttnn::prim::CopyParams;
     using tensor_args_t = ttnn::prim::CopyInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<
-        CopySameMemoryConfigProgramFactory,
-        CopyDefaultRowMajorProgramFactory,
-        CopyDefaultTilizedProgramFactory>;
+
+    struct SameMemoryConfig {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    struct DefaultRowMajor {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    struct DefaultTilized {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    using program_factory_t = std::variant<SameMemoryConfig, DefaultRowMajor, DefaultTilized>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

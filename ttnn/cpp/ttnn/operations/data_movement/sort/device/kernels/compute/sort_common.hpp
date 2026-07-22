@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "api/dataflow/dataflow_buffer.h"
+
 /**
  * @brief Sorts Wt tiles from row-major order into a bitonic sequence using local sorting and transposition.
  *
@@ -12,10 +14,10 @@
  * and transposed tiles into output buffers. The sorting direction can be switched
  * between pairs to facilitate bitonic merge sort.
  *
- * @param input_cb_index Index of the input circular buffer containing value tiles.
- * @param index_cb_index Index of the input circular buffer containing index tiles.
- * @param input_transposed_cb_index Index of the output circular buffer for transposed value tiles.
- * @param index_transposed_cb_index Index of the output circular buffer for transposed index tiles.
+ * @param input_dfb Input circular buffer containing value tiles.
+ * @param index_dfb Input circular buffer containing index tiles.
+ * @param input_transposed_dfb Output circular buffer for transposed value tiles.
+ * @param index_transposed_dfb Output circular buffer for transposed index tiles.
  * @param Wt Number of tiles to process (should be even).
  * @param switch_dir If true, alternates the sorting direction for each tile pair to build a bitonic sequence.
  * @param ascending Initial sorting direction: true for ascending, false for descending.
@@ -25,35 +27,36 @@
  * and that Wt is a multiple of 2. It reserves space in the output buffers, processes
  * tiles in pairs, and pushes the results to the output buffers upon completion.
  */
+FORCE_INLINE
 void sort_Wt_tiles_row_to_bitonic_sequence(
-    const uint32_t input_cb_index,
-    const uint32_t index_cb_index,
-    const uint32_t input_transposed_cb_index,
-    const uint32_t index_transposed_cb_index,
+    DataflowBuffer& input_dfb,
+    DataflowBuffer& index_dfb,
+    DataflowBuffer& input_transposed_dfb,
+    DataflowBuffer& index_transposed_dfb,
     const uint32_t Wt,
     const bool switch_dir,
     const bool ascending,
     const int end_phase) {
-    cb_reserve_back(input_transposed_cb_index, Wt);
-    cb_reserve_back(index_transposed_cb_index, Wt);
+    input_transposed_dfb.reserve_back(Wt);
+    index_transposed_dfb.reserve_back(Wt);
 
     bool ascending_local = ascending;
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         tile_regs_acquire();
 
-        cb_wait_front(input_cb_index, 2);
-        cb_wait_front(index_cb_index, 2);
+        input_dfb.wait_front(2);
+        index_dfb.wait_front(2);
 
         // topk_local_sort sorts by columns - transpose input tiles for sorting
-        reconfig_data_format_srca(input_cb_index);
-        transpose_wh_init_short(input_cb_index);
-        transpose_wh_tile(input_cb_index, 0, 0);
-        transpose_wh_tile(input_cb_index, 1, 1);
+        reconfig_data_format_srca(input_dfb.get_id());
+        transpose_init(input_dfb.get_id());
+        transpose_tile(input_dfb.get_id(), 0, 0);
+        transpose_tile(input_dfb.get_id(), 1, 1);
 
-        reconfig_data_format_srca(index_cb_index);
-        transpose_wh_init_short(index_cb_index);
-        transpose_wh_tile(index_cb_index, 0, 2);
-        transpose_wh_tile(index_cb_index, 1, 3);
+        reconfig_data_format_srca(index_dfb.get_id());
+        transpose_init(index_dfb.get_id());
+        transpose_tile(index_dfb.get_id(), 0, 2);
+        transpose_tile(index_dfb.get_id(), 1, 3);
 
         // llk_topk_sort -> inplace
         ckernel::topk_local_sort(0, (int)ascending_local, end_phase);
@@ -62,16 +65,16 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
         tile_regs_wait();
 
         // pack value tiles into transposed buffer
-        pack_reconfig_data_format(input_transposed_cb_index);
-        pack_tile(0, input_transposed_cb_index);
-        pack_tile(1, input_transposed_cb_index);
+        pack_reconfig_data_format(input_transposed_dfb.get_id());
+        pack_tile(0, input_transposed_dfb.get_id());
+        pack_tile(1, input_transposed_dfb.get_id());
 
         // pack index tiles into index transposed buffer
-        pack_reconfig_data_format(index_transposed_cb_index);
-        pack_tile(2, index_transposed_cb_index);
-        pack_tile(3, index_transposed_cb_index);
-        cb_pop_front(input_cb_index, 2);
-        cb_pop_front(index_cb_index, 2);
+        pack_reconfig_data_format(index_transposed_dfb.get_id());
+        pack_tile(2, index_transposed_dfb.get_id());
+        pack_tile(3, index_transposed_dfb.get_id());
+        input_dfb.pop_front(2);
+        index_dfb.pop_front(2);
 
         tile_regs_release();
 
@@ -79,8 +82,8 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
         ascending_local = switch_dir ? !ascending_local : ascending_local;
     }
 
-    cb_push_back(input_transposed_cb_index, Wt);
-    cb_push_back(index_transposed_cb_index, Wt);
+    input_transposed_dfb.push_back(Wt);
+    index_transposed_dfb.push_back(Wt);
 }
 
 /**
@@ -99,37 +102,38 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
  *    - Pushing the packed tile to the destination buffer.
  * 5. After processing all tiles, waits for the source buffer and pops the processed tiles.
  *
- * @param transposed_cb_index Index of the source circular buffer containing tiles to be transposed.
- * @param dest_cb_index Index of the destination circular buffer where packed tiles will be stored.
+ * @param transposed_dfb Source circular buffer containing tiles to be transposed.
+ * @param dest_dfb Destination circular buffer where packed tiles will be stored.
  * @param Wt Number of tiles to process (width in tiles).
  */
-void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, uint32_t Wt) {
+FORCE_INLINE
+void transpose_and_pack(DataflowBuffer& transposed_dfb, DataflowBuffer& dest_dfb, uint32_t Wt) {
     constexpr uint32_t one_tile = 1;
 
     // Transpose from sorting by column to right structure
-    reconfig_data_format_srca(transposed_cb_index);
-    transpose_wh_init_short(transposed_cb_index);
-    pack_reconfig_data_format(dest_cb_index);
+    reconfig_data_format_srca(transposed_dfb.get_id());
+    transpose_init(transposed_dfb.get_id());
+    pack_reconfig_data_format(dest_dfb.get_id());
 
-    cb_wait_front(transposed_cb_index, Wt);
+    transposed_dfb.wait_front(Wt);
 
     for (uint32_t i = 0; i < Wt; ++i) {
         tile_regs_acquire();
 
-        cb_reserve_back(dest_cb_index, one_tile);
-        transpose_wh_tile(transposed_cb_index, i, 0);
+        dest_dfb.reserve_back(one_tile);
+        transpose_tile(transposed_dfb.get_id(), i, 0);
 
         tile_regs_commit();
         tile_regs_wait();
 
-        pack_tile(0, dest_cb_index);
-        cb_push_back(dest_cb_index, one_tile);
+        pack_tile(0, dest_dfb.get_id());
+        dest_dfb.push_back(one_tile);
 
         tile_regs_release();
     }
 
-    cb_wait_front(transposed_cb_index, Wt);
-    cb_pop_front(transposed_cb_index, Wt);
+    transposed_dfb.wait_front(Wt);
+    transposed_dfb.pop_front(Wt);
 }
 
 /**
@@ -171,20 +175,20 @@ constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
  * operation has not yet finished but the packer from the next operation has already started.
  * Using this synchronization prevents data hazards and ensures correct ordering of operations.
  *
- * @param packer_unpacker_sync_cb_index The index of the circular buffer used for synchronization.
+ * @param packer_unpacker_sync_dfb The circular buffer used for synchronization.
  */
 FORCE_INLINE
-void sync_packer_unpacker(uint32_t packer_unpacker_sync_cb_index) {
+void sync_packer_unpacker(DataflowBuffer& packer_unpacker_sync_dfb) {
     constexpr uint32_t ONE_TILE = 1;
 
     // This double sequence forces both the packer and the unpacker to wait for the other.
     // If we had a single sequence:
     //
-    // If packer_unpacker_sync_cb_index is empty
+    // If packer_unpacker_sync_dfb is empty
     // - if packer is first, then it will push a tile and continue (it does not wait for the unpacker)
     // - if unpacker is first, then it will wait for packer
     //
-    // If packer_unpacker_sync_cb_index is full
+    // If packer_unpacker_sync_dfb is full
     // - if packer is first, then it will wait for unpacker
     // - if unpacker is first, then it will pop a tile and continue (it does not wait for the packer)
     //
@@ -195,17 +199,17 @@ void sync_packer_unpacker(uint32_t packer_unpacker_sync_cb_index) {
     // - if unpacker is first and CB is full, then it will pop a tile and continue until second sequence where it
     // will wait because CB will be empty (it will wait for packer to push tile).
 
-    cb_reserve_back(packer_unpacker_sync_cb_index, ONE_TILE);
-    cb_push_back(packer_unpacker_sync_cb_index, ONE_TILE);
+    packer_unpacker_sync_dfb.reserve_back(ONE_TILE);
+    packer_unpacker_sync_dfb.push_back(ONE_TILE);
 
-    cb_wait_front(packer_unpacker_sync_cb_index, ONE_TILE);
-    cb_pop_front(packer_unpacker_sync_cb_index, ONE_TILE);
+    packer_unpacker_sync_dfb.wait_front(ONE_TILE);
+    packer_unpacker_sync_dfb.pop_front(ONE_TILE);
 
-    cb_reserve_back(packer_unpacker_sync_cb_index, ONE_TILE);
-    cb_push_back(packer_unpacker_sync_cb_index, ONE_TILE);
+    packer_unpacker_sync_dfb.reserve_back(ONE_TILE);
+    packer_unpacker_sync_dfb.push_back(ONE_TILE);
 
-    cb_wait_front(packer_unpacker_sync_cb_index, ONE_TILE);
-    cb_pop_front(packer_unpacker_sync_cb_index, ONE_TILE);
+    packer_unpacker_sync_dfb.wait_front(ONE_TILE);
+    packer_unpacker_sync_dfb.pop_front(ONE_TILE);
 }
 
 /**
@@ -217,16 +221,17 @@ void sync_packer_unpacker(uint32_t packer_unpacker_sync_cb_index) {
  * for the destination CB and releases the tile registers after the operation.
  *
  * @param last_used_cb_index Last used global circular buffer index.
- * @param src_cb_index Index of the source circular buffer from which tile will be copied.
+ * @param src_dfb Source circular buffer from which tile will be copied.
  * @param src_tile_id Index of the tile in the circular buffer.
- * @param dst_cb_index Index of the destination circular buffer to which tile will be copied.
+ * @param dst_dfb Destination circular buffer to which tile will be copied.
  * @param dst_tile_id Index of the tile in the destination circular buffer.
  */
+FORCE_INLINE
 void copy_tile_between_cbs(
     uint32_t& last_used_cb_index,
-    uint32_t src_cb_index,
+    DataflowBuffer& src_dfb,
     uint32_t src_tile_id,
-    uint32_t dst_cb_index,
+    DataflowBuffer& dst_dfb,
     uint32_t dst_tile_id = 0) {
     // Constants
     constexpr uint32_t dest_idx = 0;
@@ -236,18 +241,18 @@ void copy_tile_between_cbs(
     tile_regs_acquire();
 
     // Copy tile to DST register
-    copy_tile_to_dst_init_with_cb_update(src_cb_index, last_used_cb_index);
-    copy_tile(src_cb_index, src_tile_id, dest_idx);
+    copy_tile_to_dst_init_with_cb_update(src_dfb.get_id(), last_used_cb_index);
+    copy_tile(src_dfb.get_id(), src_tile_id, dest_idx);
 
     tile_regs_commit();
     tile_regs_wait();
 
     // Pack the tile into the destination circular buffer
-    pack_reconfig_data_format(dst_cb_index);
+    pack_reconfig_data_format(dst_dfb.get_id());
     if (dst_tile_id != 0) {
-        pack_tile<true>(dest_idx, dst_cb_index, dst_tile_id);
+        pack_tile<true>(dest_idx, dst_dfb.get_id(), dst_tile_id);
     } else {
-        pack_tile(dest_idx, dst_cb_index, 0);  // Append to the end of the CB
+        pack_tile(dest_idx, dst_dfb.get_id(), 0);  // Append to the end of the CB
     }
 
     // Release tile registers

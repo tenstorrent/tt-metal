@@ -1657,7 +1657,6 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
         batch_size=total_tokens,  # total ring tokens (128); tokens_per_device = 128/4 = 32
         seq_size=1,
         select_experts_k=selected_experts_k,
-        experts=global_experts,  # 128 → experts_per_device = 128/32 = 4 = E
         cluster_axis=cluster_axis,
         topology=ttnn.Topology.Ring,
         num_links=4,
@@ -2184,7 +2183,6 @@ def run_test_moe_gpt_e2e(
         batch_size=M_ring,  # 128; tokens_per_device = 128/4 = 32
         seq_size=1,
         select_experts_k=selected_experts_k,
-        experts=global_experts,
         cluster_axis=cluster_axis,
         topology=ttnn.Topology.Ring,
         num_links=4,
@@ -2244,7 +2242,6 @@ def run_test_moe_gpt_e2e(
                 batch_size=M_ring,  # total ring tokens (128); tokens_per_device = 128/4 = 32
                 seq_size=1,
                 select_experts_k=selected_experts_k,
-                experts=global_experts,  # 128 = experts_total * mesh_cols
                 cluster_axis=cluster_axis,
                 topology=ttnn.Topology.Ring,
                 num_links=4,
@@ -2734,7 +2731,6 @@ def run_test_combine_isolation(mesh_device, tokens_global, hidden_size, selected
             batch_size=total_tokens,
             seq_size=1,
             select_experts_k=selected_experts_k,
-            experts=experts_total,
             cluster_axis=cluster_axis,
             topology=ttnn.Topology.Ring,
             num_links=4,
@@ -3039,7 +3035,6 @@ def run_test_full_pipeline_multi_iter(
             batch_size=total_tokens,
             seq_size=1,
             select_experts_k=selected_experts_k,
-            experts=experts_total,
             cluster_axis=cluster_axis,
             topology=ttnn.Topology.Ring,
             num_links=4,

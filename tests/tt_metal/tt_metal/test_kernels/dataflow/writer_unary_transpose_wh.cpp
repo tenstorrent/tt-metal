@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -26,8 +26,8 @@ void kernel_main() {
 
     uint32_t dst_addrN = dst_addr;
 
-    experimental::CircularBuffer cb(cb_id_out0);
-    experimental::Noc noc;
+    CircularBuffer cb(cb_id_out0);
+    Noc noc;
 
     // this writer will write a NWH tensor in NHW order
     for (uint32_t n = 0; n < N; n++) {
@@ -37,7 +37,7 @@ void kernel_main() {
                 cb.wait_front(ublock_size_tiles);
                 noc.async_write(
                     cb,
-                    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+                    AllocatorBank<AllocatorBankType::DRAM>{},
                     ublock_size_bytes,
                     {},
                     {.bank_id = dst_dram_bank_id, .addr = dst_addr});

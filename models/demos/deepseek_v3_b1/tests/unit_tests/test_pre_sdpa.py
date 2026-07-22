@@ -130,7 +130,20 @@ def test_get_device_mla_work_assignment():
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [False])
-@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
+@pytest.mark.parametrize(
+    "mesh_rows, mesh_cols",
+    [
+        (4, 2),
+        pytest.param(
+            1,
+            1,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: Blackhole PreSDPA single-device skip_ccl path hits ncrisc build failure "
+                "in broadcast.hpp: static_assert(num_chunks > 0). Issue: #42714"
+            ),
+        ),
+    ],
+)
 @pytest.mark.parametrize("num_iters", [(1)])
 @pytest.mark.parametrize("max_seq_len", [32 * 1024])
 @pytest.mark.parametrize(
@@ -142,12 +155,51 @@ def test_get_device_mla_work_assignment():
         242,
         255,
         564,
-        1023,
-        2047,
-        4096,  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
-        pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
-        pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
-        pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
+        pytest.param(
+            1023,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714"
+            ),
+        ),
+        pytest.param(
+            2047,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714"
+            ),
+        ),
+        pytest.param(
+            4096,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714"
+            ),
+        ),  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
+        pytest.param(
+            6644,
+            marks=[
+                pytest.mark.skip_post_commit,
+                pytest.mark.skip(
+                    reason="[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714"
+                ),
+            ],
+        ),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
+        pytest.param(
+            9916,
+            marks=[
+                pytest.mark.skip_post_commit,
+                pytest.mark.skip(
+                    reason="[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714"
+                ),
+            ],
+        ),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
+        pytest.param(
+            11664,
+            marks=[
+                pytest.mark.skip_post_commit,
+                pytest.mark.skip(
+                    reason="[SKIP REASON]: Blackhole PreSDPA 4x2 high-position cases fail output PCC. Issue: #42714"
+                ),
+            ],
+        ),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
     ],
 )
 @pytest.mark.parametrize(

@@ -56,7 +56,16 @@ void append_sharded_args(
         args.push_back(rank);
     }
     if (add_num_banks) {
-        args.push_back(n_banks);
+        // The num_banks word (compile-time or runtime) carries the shard-contiguous flag in its top bit, so the
+        // distribution strategy needs no extra arg/slot and no ArgConfig bit. pack/unpack (arg_config.hpp) are the
+        // single source of truth for this layout.
+        const bool pack_shard_contiguous =
+            buffer_distribution_spec.shard_distribution_strategy() == ShardDistributionStrategy::CONTIGUOUS_1D;
+        TT_FATAL(
+            n_banks < tensor_accessor::ShardContiguousBit,
+            "num_banks {} is too large to pack the shard-contiguous flag",
+            n_banks);
+        args.push_back(tensor_accessor::pack_num_banks(static_cast<uint32_t>(n_banks), pack_shard_contiguous));
     }
     if (add_tensor_shape) {
         args.insert(args.end(), tensor_shape.cbegin(), tensor_shape.cend());
@@ -116,6 +125,15 @@ TensorAccessorArgs::TensorAccessorArgs(const distributed::MeshBuffer* buffer, te
 TensorAccessorArgs::TensorAccessorArgs(
     const std::shared_ptr<distributed::MeshBuffer>& buffer, tensor_accessor::ArgsConfig args_config) :
     TensorAccessorArgs(buffer.get(), args_config) {}
+
+TensorAccessorArgs::TensorAccessorArgs(const MeshTensor& tensor, tensor_accessor::ArgsConfig args_config) :
+    TensorAccessorArgs(tensor.mesh_buffer(), args_config) {}
+
+TensorAccessorArgs::TensorAccessorArgs(
+    ttsl::optional_reference<const MeshTensor> tensor, tensor_accessor::ArgsConfig args_config) :
+    buffer_(tensor ? tensor->mesh_buffer().get_reference_buffer() : nullptr), args_config_(args_config) {
+    update_args_config();
+}
 
 TensorAccessorArgs TensorAccessorArgs::create_dram_interleaved() {
     TensorAccessorArgs args;

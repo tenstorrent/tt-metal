@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -54,8 +57,8 @@ void kernel_main() {
     uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
-    const uint32_t concat_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t concat_semaphore_send_addr2 = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    Semaphore<> concat_sem(get_arg_val<uint32_t>(arg_idx++));
+    Semaphore<> concat_sem2(get_arg_val<uint32_t>(arg_idx++));
 
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
@@ -77,16 +80,20 @@ void kernel_main() {
         FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
             arg_idx);
 
+    Noc noc_obj;
+    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
+    CircularBuffer cb0(cb0_id);
+
     // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_forward = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_backward = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_seminc = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -109,8 +116,8 @@ void kernel_main() {
     while (tiles_read < num_tiles_to_read) {
         uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
         num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
-        cb_wait_front(cb0_id, num_tiles_to_read_this_core);
-        size_t l1_read_addr = get_read_ptr(cb0_id);
+        cb0.wait_front(num_tiles_to_read_this_core);
+        size_t l1_read_addr = cb0.get_read_ptr();
 
         uint64_t noc0_dest_noc_addr = get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0);
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
@@ -126,7 +133,7 @@ void kernel_main() {
             // Alternate the packet header distance for better balancing
             std::swap(pkt_hdr_forward, pkt_hdr_backward);
         }
-        cb_pop_front(cb0_id, num_tiles_to_read_this_core);
+        cb0.pop_front(num_tiles_to_read_this_core);
 
         tiles_read += num_tiles_to_read_this_core;
         shard_tile_id += num_tiles_to_read_this_core;
@@ -171,19 +178,8 @@ void kernel_main() {
 
     // Set up for mcasting to concat workers
     if (wait_output_semaphore) {
-        volatile tt_l1_ptr uint32_t* concat_semaphore_send_addr_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_semaphore_send_addr);
-        volatile tt_l1_ptr uint32_t* concat_semaphore_send_addr_ptr2 =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_semaphore_send_addr2);
-
-        noc_semaphore_set(concat_semaphore_send_addr_ptr, 1);
-        noc_semaphore_set(concat_semaphore_send_addr_ptr2, 1);
-        if (concat_semaphore_send_addr_ptr[0] != 1) {
-            noc_semaphore_set(concat_semaphore_send_addr_ptr, 1);
-        }
-        if (concat_semaphore_send_addr_ptr2[0] != 1) {
-            noc_semaphore_set(concat_semaphore_send_addr_ptr2, 1);
-        }
+        concat_sem.set(1);
+        concat_sem2.set(1);
     }
 
     if (wait_output_semaphore) {
@@ -194,30 +190,20 @@ void kernel_main() {
             } else if (i == 2) {
                 mcast_dest_num = 8;
             }
-            const uint64_t concat_sem_rcv_addr = get_noc_multicast_addr(
+            concat_sem.set_multicast(
+                noc_obj,
                 mcast_dest_noc_start_x[i],
                 mcast_dest_noc_start_y[i],
                 mcast_dest_noc_end_x[i],
                 mcast_dest_noc_end_y[i],
-                concat_semaphore_send_addr);
-            noc_semaphore_set_multicast(
-                concat_semaphore_send_addr,
-                concat_sem_rcv_addr,
-                mcast_dest_num,
-                false);  // linked = false
-
-            const uint64_t concat_sem_rcv_addr2 = get_noc_multicast_addr(
+                mcast_dest_num);
+            concat_sem2.set_multicast(
+                noc_obj,
                 mcast_dest_noc_start_x[i],
                 mcast_dest_noc_start_y[i],
                 mcast_dest_noc_end_x[i],
                 mcast_dest_noc_end_y[i],
-                concat_semaphore_send_addr2);
-
-            noc_semaphore_set_multicast(
-                concat_semaphore_send_addr2,
-                concat_sem_rcv_addr2,
-                mcast_dest_num,
-                false);  // linked = false
+                mcast_dest_num);
         }
     }
 
@@ -233,5 +219,5 @@ void kernel_main() {
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close_finish();
     }
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

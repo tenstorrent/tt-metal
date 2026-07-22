@@ -4,19 +4,29 @@
 #pragma once
 
 #include "argmax_device_operation_types.hpp"
-#include "argmax_multi_core_program_factory.hpp"
-#include "argmax_single_core_program_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <optional>
+#include <variant>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 
+struct ArgMaxSingleCoreProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
+};
+
+struct ArgMaxMultiCoreProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
+};
+
 struct ArgMaxDeviceOperation {
     using operation_attributes_t = ArgmaxParams;
     using tensor_args_t = ArgmaxInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<ArgMaxSingleCoreProgramFactory, ArgMaxMultiCoreProgramFactory>;
 
@@ -35,7 +45,6 @@ ttnn::Tensor argmax(
     std::optional<int> dim,
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool use_multicore,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt);
 

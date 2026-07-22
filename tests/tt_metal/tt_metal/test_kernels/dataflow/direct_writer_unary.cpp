@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     const uint32_t cb_id = get_compile_time_arg_val(0);
@@ -13,13 +13,13 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
 
 #if INTERFACE_WITH_L1 == 1
-    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::L1;
+    constexpr AllocatorBankType bank_type = AllocatorBankType::L1;
 #else
-    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::DRAM;
+    constexpr AllocatorBankType bank_type = AllocatorBankType::DRAM;
 #endif
 
-    experimental::Noc noc(noc_index);
-    experimental::CircularBuffer cb(cb_id);
+    Noc noc(noc_index);
+    CircularBuffer cb(cb_id);
     // single-tile ublocks
     uint32_t ublock_size_bytes = cb.get_tile_size();
     uint32_t ublock_size_tiles = 1;
@@ -28,7 +28,7 @@ void kernel_main() {
         cb.wait_front(ublock_size_tiles);
         noc.async_write(
             cb,
-            experimental::AllocatorBank<bank_type>(),
+            AllocatorBank<bank_type>(),
             ublock_size_bytes,
             {},
             {.bank_id = bank_id, .addr = dst_addr});

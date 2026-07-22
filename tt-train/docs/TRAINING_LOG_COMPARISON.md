@@ -47,19 +47,17 @@ Use this when you've made changes to kernels (e.g., fusing operations) and want 
 
 ## Log Format
 
-The script expects log files from tt-train's main training binary (e.g., `nano_gpt`). The logs should contain lines in the following format:
+The script expects log files from tt-train's main training binary (e.g., `nano_gpt`) or `train_nanogpt.py`. The logs should contain lines in the following format:
 
 ```
-Step: 1, Loss: 11.0234375
-Full step time 703.141 ms
-Step: 2, Loss: 10.8765432
-Full step time 698.234 ms
+Step: 1, Loss: 11.0234375, Time: 703.14 ms, ...
+Step: 2, Loss: 10.8765432, Time: 698.23 ms, ...
 ...
 ```
 
-The script extracts:
-- **Loss values**: From lines matching `Step: \d+, Loss: ([\d.]+)`
-- **Step times**: From lines matching `Full step time ([\d.]+) ms`
+The script extracts loss and step time from the same line:
+- **Loss**: group 1 of `Step: \d+, Loss: ([\d.]+), Time: ([\d.]+) ms`
+- **Step time**: group 2 of the same pattern
 
 ---
 

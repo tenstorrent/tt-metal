@@ -147,10 +147,11 @@ def test_reduce_sfpu_unary(config):
 
     # --------------------- Generate input stimuli -------------------------
     input_dimensions = [32, 32]
-    src_A, src_B, tile_cnt = generate_stimuli(
-        fmt.input_format,
-        fmt.input_format,
-        input_dimensions=input_dimensions,
+    src_A, tile_cnt, src_B, _ = generate_stimuli(
+        stimuli_format_A=fmt.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=fmt.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     # For Reduce-sum we don't need src_B but unpack_AB expects two operands –

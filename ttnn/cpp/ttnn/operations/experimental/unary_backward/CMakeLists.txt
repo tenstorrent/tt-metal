@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_unary_backward ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::UnaryBackward ALIAS ttnn_op_experimental_unary_backward)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_unary_backward TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_unary_backward TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_unary_backward)
 
 set_target_properties(
@@ -11,7 +13,7 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels gelu_backward/device/kernels/*)
+file(GLOB_RECURSE kernels gelu_backward/device/kernels/*.cpp)
 
 target_sources(
     ttnn_op_experimental_unary_backward
@@ -19,15 +21,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES gelu_backward/gelu_backward.hpp
+        FILES ${TTNN_OP_EXPERIMENTAL_UNARY_BACKWARD_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        gelu_backward/device/gelu_backward_device_operation.cpp
-        gelu_backward/device/gelu_backward_program_factory.cpp
-        gelu_backward/gelu_backward.cpp
+        ${TTNN_OP_EXPERIMENTAL_UNARY_BACKWARD_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_unary_backward PRIVATE ${FixmeOpIncDirs})
@@ -46,3 +46,19 @@ install(
 )
 
 install(TARGETS ttnn_op_experimental_unary_backward LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_EXPERIMENTAL_UNARY_BACKWARD_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_UNARY_BACKWARD_NANOBIND_SRCS})
+endif()

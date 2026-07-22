@@ -12,7 +12,7 @@ namespace ttnn::experimental::prim {
 struct NeighborPadAsyncDeviceOperation {
     using operation_attributes_t = NeighborPadAsyncParams;
     using tensor_args_t = NeighborPadAsyncInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<NeighborPadAsyncMeshWorkloadFactory>;
 
@@ -22,8 +22,6 @@ struct NeighborPadAsyncDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -48,6 +46,8 @@ Tensor neighbor_pad_async(
     uint32_t pad2_right = 0,
     std::optional<uint32_t> pad2_cluster_axis = std::nullopt,
     std::optional<size_t> pad2_num_links = std::nullopt,
-    const std::optional<Tensor>& persistent_output_buffer = std::nullopt);
+    const std::optional<Tensor>& persistent_output_buffer = std::nullopt,
+    uint32_t logical_h = 0,
+    uint32_t t_front_pad = 0);
 
 }  // namespace ttnn::prim

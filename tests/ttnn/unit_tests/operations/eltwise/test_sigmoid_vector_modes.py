@@ -9,10 +9,16 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 
-def run_unary_test_sharded(device, hw, out_channels, vector_mode, approx_mode, ttnn_function, pcc=0.9999):
+def run_unary_test_sharded(device, hw, out_channels, vector_mode, approx_mode, ttnn_function, ulp=2, approx_pcc=0.999):
+    """Sharded unary op on random bf16 inputs in [-1, 1).
+
+    Default ``ulp=2`` covers up to ~1 ULP kernel error plus the additional ULP from bf16 input
+    rounding. The ``FastApproximate`` path is intentionally not ULP-equivalent to the accurate
+    kernel; for that mode this helper falls back to ``assert_with_pcc(approx_pcc)`` instead.
+    """
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((hw, out_channels), dtype=torch.bfloat16)
@@ -24,7 +30,10 @@ def run_unary_test_sharded(device, hw, out_channels, vector_mode, approx_mode, t
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    if approx_mode == ttnn.SigmoidMode.FastApproximate:
+        assert_with_pcc(torch_output_tensor, output_tensor, approx_pcc)
+    else:
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp)
 
 
 @pytest.mark.parametrize("h", [2048])
@@ -34,4 +43,4 @@ def run_unary_test_sharded(device, hw, out_channels, vector_mode, approx_mode, t
 @pytest.mark.parametrize("approx_mode", [ttnn.SigmoidMode.Accurate, ttnn.SigmoidMode.FastApproximate])
 def test_sigmoid_two_out_channels(device, h, w, out_channels, vector_mode, approx_mode):
     torch.manual_seed(0)
-    run_unary_test_sharded(device, h * w, out_channels, vector_mode, approx_mode, ttnn.sigmoid, pcc=0.991)
+    run_unary_test_sharded(device, h * w, out_channels, vector_mode, approx_mode, ttnn.sigmoid, ulp=1, approx_pcc=0.991)

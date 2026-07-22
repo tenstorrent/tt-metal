@@ -83,7 +83,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("k_parallel_per_bank"),
         get_named_compile_time_arg_val("k_slice_idx"),
         get_named_compile_time_arg_val("num_subblocks_k_local"),
-        get_named_compile_time_arg_val("partial_sem_addr")>;
+        get_named_compile_time_arg_val("partial_sem_addr"),
+        get_named_compile_time_arg_val("primary_at_last_offset"),
+        get_named_compile_time_arg_val("gather_sync_sem_addr"),
+        get_named_compile_time_arg_val("cb_internal_acc")>;
 
 #elif defined(COMPILE_FOR_BRISC)
     using SRAMArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::WriterCTArgs;
@@ -138,7 +141,12 @@ void kernel_main() {
         get_named_compile_time_arg_val("num_subblocks_k_local"),
         get_named_compile_time_arg_val("partial_sem_addr"),
         get_named_compile_time_arg_val("cb_out_silu"),
-        get_named_compile_time_arg_val("silu_tile_h")>;
+        get_named_compile_time_arg_val("silu_tile_h"),
+        get_named_compile_time_arg_val("cores_per_dram_bank"),
+        get_named_compile_time_arg_val("core_in_bank_idx"),
+        get_named_compile_time_arg_val("primary_at_last_offset"),
+        get_named_compile_time_arg_val("gather_sync_sem_addr"),
+        get_named_compile_time_arg_val("cb_internal_acc")>;
 #endif
 
     constexpr bool sram_active = get_named_compile_time_arg_val("sram_active") != 0;

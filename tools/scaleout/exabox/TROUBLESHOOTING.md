@@ -8,6 +8,7 @@ Real issues encountered and their solutions.
 - [General Debugging Tips](#general-debugging-tips)
 - [Setup & Access](#setup--access)
   - [SSH Agent Forwarding for MPI](#ssh-agent-forwarding-for-mpi)
+  - [MPI Interface Validation Fails ("cannot be used for MPI communication")](#mpi-interface-validation-fails-cannot-be-used-for-mpi-communication)
   - [Tests Fail with "Permission denied" on tt-metal-cache](#tests-fail-with-permission-denied-on-tt-metal-cache)
   - [Recovery Script Fails with "could not access or execute an executable"](#recovery-script-fails-with-could-not-access-or-execute-an-executable)
 - [SLURM Issues](#slurm-issues)
@@ -202,6 +203,80 @@ For detailed SSH setup instructions, see the [SSH Setup section in the README](.
 
 ---
 
+### MPI Interface Validation Fails ("cannot be used for MPI communication")
+
+**Symptom**: `run_validation.sh` (or `run_fabric_tests.sh`) rejects a network interface that is clearly up:
+
+```text
+Error: Specified MPI interface 'ens5f0np0' exists but cannot be used for MPI communication
+
+This usually means the interface is down or misconfigured.
+Check interface status with: ip link show ens5f0np0
+
+Attempting to find a working alternative interface...
+No working MPI interface found on this system.
+```
+
+But `ip link show ens5f0np0` shows `state UP` (and `ip addr` shows a valid IP).
+
+**Cause**: The error message is misleading. The interface check in `utils/mpi_if_selection.sh` does **not** test whether the link is up — it runs a real MPI probe against the **first host** in `--hosts` and checks the exit code:
+
+```bash
+timeout 3 mpirun --host "$FIRST_HOST" \
+    --mca oob_tcp_if_include "$interface" \
+    --mca btl_tcp_if_include "$interface" \
+    -np 1 hostname &>/dev/null
+```
+
+`mpirun` launches the remote process over **SSH**. If SSH to the first host fails (or just hangs), `orted` never starts, the probe times out, and the script reports "cannot be used for MPI communication." The key tell is that it **also fails to find any alternative interface** — the probe is failing universally, so it is not interface-specific.
+
+The most common trigger is **stale or missing SSH host keys**, which is very common right after nodes are **recovered / re-imaged** (their host keys change). With `BatchMode`, a changed/unknown key can't be accepted interactively, so it fails outright:
+
+```text
+ssh -o BatchMode=yes bh-glx-120-c07u02 hostname  → Host key verification failed.   (exit 255)
+mpirun --host bh-glx-120-c07u02 -np 1 hostname   → hangs, exit 124 (timeout)
+```
+
+**Diagnosis** — isolate the remote launch (use the *first* host from your `$HOSTS`, which is the one the probe targets):
+
+```bash
+FIRST_HOST="${HOSTS%%,*}"
+
+# Does plain remote mpirun work without the interface restriction?
+timeout 30 mpirun --host "$FIRST_HOST" -np 1 hostname; echo "exit=$?"
+
+# Is passwordless SSH actually working?
+timeout 10 ssh -o BatchMode=yes "$FIRST_HOST" hostname; echo "ssh_exit=$?"
+```
+
+- `Host key verification failed` / `ssh_exit=255` → stale or missing host key (see fix below)
+- `mpirun` exit `124` → the probe is hanging (almost always the SSH failure above)
+
+**Solution** — refresh the SSH host keys for all hosts in your run:
+
+```bash
+for h in bh-glx-120-c07u02 bh-glx-120-c07u08 bh-glx-120-c07u14 bh-glx-120-c07u20; do
+  ssh-keygen -R "$h"
+done
+
+ssh-keyscan -H bh-glx-120-c07u02 bh-glx-120-c07u08 bh-glx-120-c07u14 bh-glx-120-c07u20 \
+  >> ~/.ssh/known_hosts
+```
+
+Then verify SSH and the remote launch both succeed before re-running validation:
+
+```bash
+ssh -o BatchMode=yes bh-glx-120-c07u02 hostname                              # prints hostname
+timeout 30 mpirun --host bh-glx-120-c07u02 -np 1 hostname; echo "exit=$?"    # exit=0
+```
+
+**Other things to check if SSH is fine but the probe still fails**:
+
+- **Wrong `mpirun` on PATH**: `which mpirun` should ideally be the ULFM build (`/opt/openmpi-v5.0.7-ulfm/bin/mpirun`). Prepend it to PATH if a different OpenMPI is picked up.
+- **Subnet/routing mismatch**: if the hostname resolves to an address *outside* your MPI interface's subnet (e.g. host resolves to `10.32.28.1` but `ens5f0np0` is `10.32.28.33/27`), forcing OOB/BTL onto that interface can break the `orted` callback. SSH launch still works over the management net, but you may hit an OOB/BTL connectivity error mid-run. Compare `getent hosts <host>` against `ip addr show <interface>`.
+
+---
+
 ### Tests Fail with "Permission denied" on tt-metal-cache
 
 **Symptom**: Running tests with your personal account fails with:
@@ -235,14 +310,15 @@ Node: bh-glx-d01u08
 while attempting to start process rank 0.
 ```
 
-**Cause**: The `recover_*.sh` scripts run binaries directly on the host (not via Docker) and require a local build of tt-metal. Unlike the Docker-based scripts (`run_validation.sh`, `run_fabric_tests.sh`), they don't use containers.
+**Cause**: The `recover_*.sh` scripts run binaries directly on the host (not via Docker), so a local tt-metal build has to exist. This error means you ran from a checkout that hasn't been built. Unlike the Docker-based scripts (`run_validation.sh`, `run_fabric_tests.sh`), they don't use containers.
 
-**Solution**:
+**Solution** (simplest first):
 
-- **Build tt-metal first** - See [Quick Health Check](./README.md#quick-health-check-for-developers) for build instructions
-- **Or use Docker-based validation** - Run `./run_validation.sh --hosts <hosts> --image <docker-image>` which doesn't require a build
+- **On Exabox, run from the vetted pre-built path** - `cd /data/local-syseng-manual/tt-metal-recover` and run `recover.sh` from there. It's already built, so there's nothing to compile. This is the recommended path for a quick health check.
+- **Build tt-metal yourself** - only needed if you're running from your own checkout or on a site without the vetted path. See [Quick Health Check](./README.md#quick-health-check-for-developers) for build instructions.
+- **Or use Docker-based validation** - run `./run_validation.sh --hosts <hosts> --image <docker-image>`, which doesn't require a build.
 
-**Common confusion**: People often confuse the `recover_*.sh` scripts (developer tools, require build) with the `run_validation.sh` script (operator tool, uses Docker). For hardware qualification, use the Docker-based scripts.
+**Common confusion**: People often confuse the `recover_*.sh` scripts (run a local build directly on the host) with the `run_validation.sh` script (operator tool, uses Docker). For hardware qualification, use the Docker-based scripts.
 
 ---
 

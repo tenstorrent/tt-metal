@@ -16,6 +16,7 @@
 
 #include "tt_metal.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/command_queue_common.hpp"
 
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
@@ -60,13 +61,25 @@ struct one_core_data_t {
     std::vector<uint32_t> data;
 };
 
+struct CoreDataKey {
+    tt::CoreType core_type{tt::CoreType::WORKER};
+    CoreCoord core;
+    bool operator==(const CoreDataKey& other) const { return core_type == other.core_type && core == other.core; }
+};
+
+struct CoreDataKeyHash {
+    size_t operator()(const CoreDataKey& key) const {
+        return std::hash<CoreCoord>{}(key.core) ^ (std::hash<int>{}(static_cast<int>(key.core_type)) << 1);
+    }
+};
+
 class DeviceData {
 private:
     int amt_written{0};
     // 10 is a hack...bigger than any core_type
     uint64_t base_data_addr[static_cast<size_t>(tt::CoreType::COUNT)]{};
     uint64_t base_result_data_addr[static_cast<size_t>(tt::CoreType::COUNT)]{};
-    std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>> all_data;
+    std::unordered_map<CoreDataKey, std::unordered_map<uint32_t, one_core_data_t>, CoreDataKeyHash> all_data;
     CoreCoord host_core;
     size_t host_data_index = 0;
 
@@ -97,12 +110,12 @@ public:
         const DispatchTestConfig& cfg);
 
     // Add expected data to a core
-    void push_one(CoreCoord core, int bank, uint32_t datum);
-    void push_one(CoreCoord core, uint32_t datum);
+    void push_one(CoreCoord core, int bank, uint32_t datum, tt::CoreType core_type = tt::CoreType::WORKER);
+    void push_one(CoreCoord core, uint32_t datum, tt::CoreType core_type = tt::CoreType::WORKER);
     void push_range(const CoreRange& cores, uint32_t datum, bool is_mcast);
 
     // Add invalid data
-    void pad(CoreCoord core, int bank, uint32_t alignment);
+    void pad(CoreCoord core, int bank, uint32_t alignment, tt::CoreType core_type = tt::CoreType::WORKER);
 
     // Some tests write to the same address across multiple cores
     // This takes those core types and pads any that are "behind" with invalid data
@@ -112,21 +125,27 @@ public:
     // Clear data between tests
     void reset();
     uint32_t get_base_result_addr(tt::CoreType core_type);
-    uint32_t get_result_data_addr(CoreCoord core, int bank_id = 0);
+    uint32_t get_result_data_addr(CoreCoord core, int bank_id = 0, tt::CoreType core_type = tt::CoreType::WORKER);
 
     bool validate(distributed::MeshDevice::IDevice* device);
     void overflow_check(distributed::MeshDevice::IDevice* device);
 
     int size() const { return amt_written; }
-    int size(CoreCoord core, int bank_id = 0) { return this->all_data[core][bank_id].data.size(); }
+    int size(CoreCoord core, int bank_id = 0, tt::CoreType core_type = tt::CoreType::WORKER) {
+        return this->all_data[{core_type, core}][bank_id].data.size();
+    }
 
-    std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>>& get_data() { return this->all_data; }
+    std::unordered_map<CoreDataKey, std::unordered_map<uint32_t, one_core_data_t>, CoreDataKeyHash>& get_data() {
+        return this->all_data;
+    }
 
-    tt::CoreType get_core_type(CoreCoord core) { return this->all_data[core][0].core_type; }
-    uint32_t size_at(CoreCoord core, int bank_id);
-    uint32_t at(CoreCoord core, int bank_id, uint32_t offset);
+    tt::CoreType get_core_type(CoreCoord core, tt::CoreType core_type = tt::CoreType::WORKER) {
+        return this->all_data[{core_type, core}][0].core_type;
+    }
+    uint32_t size_at(CoreCoord core, int bank_id, tt::CoreType core_type = tt::CoreType::WORKER);
+    uint32_t at(CoreCoord core, int bank_id, uint32_t offset, tt::CoreType core_type = tt::CoreType::WORKER);
     CoreCoord get_host_core() { return this->host_core; }
-    bool core_and_bank_present(CoreCoord core, uint32_t bank);
+    bool core_and_bank_present(CoreCoord core, uint32_t bank, tt::CoreType core_type = tt::CoreType::WORKER);
 };
 
 inline DeviceData::DeviceData(
@@ -147,32 +166,31 @@ inline DeviceData::DeviceData(
     this->base_result_data_addr[static_cast<int>(tt::CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_result_data_addr[static_cast<int>(tt::CoreType::DRAM)] = dram_data_addr;
 
-    // TODO: make this all work w/ phys coords
-    // this is really annoying
-    // the PCIE phys core conflicts w/ worker logical cores
-    // so we hack the physical core for tracking, blech
-    // no simple way to handle this, need to use phys cores
+    // Host (PCIE) data is tracked at an arbitrary reserved coordinate; the core type in the key keeps
+    // it distinct from any worker entry.
     CoreCoord core = {100, 100};
-    this->all_data[core][0] = one_core_data_t();
-    this->all_data[core][0].logical_core = core;
-    this->all_data[core][0].phys_core = core;
-    this->all_data[core][0].core_type = tt::CoreType::PCIE;
-    this->all_data[core][0].bank_id = 20;
-    this->all_data[core][0].bank_offset = 0;
+    one_core_data_t& host_entry = this->all_data[{tt::CoreType::PCIE, core}][0];
+    host_entry = one_core_data_t();
+    host_entry.logical_core = core;
+    host_entry.phys_core = core;
+    host_entry.core_type = tt::CoreType::PCIE;
+    host_entry.bank_id = 20;
+    host_entry.bank_offset = 0;
     this->host_core = core;
 
     // Always populate DRAM
     auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
         auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
-        CoreCoord phys_core = device->logical_core_from_dram_channel(dram_channel);
+        CoreCoord dram_core = device->logical_core_from_dram_channel(dram_channel);
         int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
-        this->all_data[phys_core][bank_id] = one_core_data_t();
-        this->all_data[phys_core][bank_id].logical_core = phys_core;
-        this->all_data[phys_core][bank_id].phys_core = phys_core;
-        this->all_data[phys_core][bank_id].core_type = tt::CoreType::DRAM;
-        this->all_data[phys_core][bank_id].bank_id = bank_id;
-        this->all_data[phys_core][bank_id].bank_offset = bank_offset;
+        one_core_data_t& entry = this->all_data[{tt::CoreType::DRAM, dram_core}][bank_id];
+        entry = one_core_data_t();
+        entry.logical_core = dram_core;
+        entry.phys_core = dram_core;
+        entry.core_type = tt::CoreType::DRAM;
+        entry.bank_id = bank_id;
+        entry.bank_offset = bank_offset;
     }
 
     // TODO: make banked L1 tests play nicely w/ non-banked L1 tests
@@ -182,24 +200,26 @@ inline DeviceData::DeviceData(
             CoreCoord core = device->allocator()->get_logical_core_from_bank_id(bank_id);
             CoreCoord phys_core = device->worker_core_from_logical_core(core);
             int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::L1, bank_id);
-            this->all_data[core][bank_id] = one_core_data_t();
-            this->all_data[core][bank_id].logical_core = core;
-            this->all_data[core][bank_id].phys_core = phys_core;
-            this->all_data[core][bank_id].core_type = tt::CoreType::WORKER;
-            this->all_data[core][bank_id].bank_id = bank_id;
-            this->all_data[core][bank_id].bank_offset = bank_offset;
+            one_core_data_t& entry = this->all_data[{tt::CoreType::WORKER, core}][bank_id];
+            entry = one_core_data_t();
+            entry.logical_core = core;
+            entry.phys_core = phys_core;
+            entry.core_type = tt::CoreType::WORKER;
+            entry.bank_id = bank_id;
+            entry.bank_offset = bank_offset;
         }
     } else {
         for (uint32_t y = workers.start_coord.y; y <= workers.end_coord.y; y++) {
             for (uint32_t x = workers.start_coord.x; x <= workers.end_coord.x; x++) {
                 CoreCoord core = {x, y};
                 CoreCoord phys_core = device->worker_core_from_logical_core(core);
-                this->all_data[core][0] = one_core_data_t();
-                this->all_data[core][0].logical_core = core;
-                this->all_data[core][0].phys_core = phys_core;
-                this->all_data[core][0].core_type = tt::CoreType::WORKER;
-                this->all_data[core][0].bank_id = 0;
-                this->all_data[core][0].bank_offset = 0;
+                one_core_data_t& entry = this->all_data[{tt::CoreType::WORKER, core}][0];
+                entry = one_core_data_t();
+                entry.logical_core = core;
+                entry.phys_core = phys_core;
+                entry.core_type = tt::CoreType::WORKER;
+                entry.bank_id = 0;
+                entry.bank_offset = 0;
             }
         }
     }
@@ -215,7 +235,7 @@ inline void DeviceData::prepopulate_dram(distributed::MeshDevice::IDevice* devic
         [[maybe_unused]] auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
         auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
         auto bank_core = device->logical_core_from_dram_channel(dram_channel);
-        one_core_data_t& data = this->all_data[bank_core][bank_id];
+        one_core_data_t& data = this->all_data[{tt::CoreType::DRAM, bank_core}][bank_id];
 
         // Generate random or coherent data per bank of specific size.
         for (uint32_t i = 0; i < size_words; i++) {
@@ -247,29 +267,26 @@ inline void DeviceData::prepopulate_dram(distributed::MeshDevice::IDevice* devic
     }
 }
 
-inline bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank) {
-    if (this->all_data.contains(core)) {
-        std::unordered_map<uint32_t, one_core_data_t>& core_data = this->all_data.find(core)->second;
-        if (core_data.contains(bank)) {
-            return true;
-        }
-    }
-    return false;
+inline bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank, tt::CoreType core_type) {
+    const auto core_it = this->all_data.find(CoreDataKey{core_type, core});
+    return core_it != this->all_data.end() && core_it->second.contains(bank);
 }
 
-inline void DeviceData::push_one(CoreCoord core, int bank, uint32_t datum) {
-    if (core_and_bank_present(core, bank)) {
+inline void DeviceData::push_one(CoreCoord core, int bank, uint32_t datum, tt::CoreType core_type) {
+    if (core_and_bank_present(core, bank, core_type)) {
         this->amt_written++;
-        this->all_data[core][bank].data.push_back(datum);
-        this->all_data[core][bank].valid.push_back(true);
+        one_core_data_t& entry = this->all_data[{core_type, core}][bank];
+        entry.data.push_back(datum);
+        entry.valid.push_back(true);
     }
 }
 
-inline void DeviceData::push_one(CoreCoord core, uint32_t datum) {
-    if (core_and_bank_present(core, 0)) {
+inline void DeviceData::push_one(CoreCoord core, uint32_t datum, tt::CoreType core_type) {
+    if (core_and_bank_present(core, 0, core_type)) {
         this->amt_written++;
-        this->all_data[core][0].data.push_back(datum);
-        this->all_data[core][0].valid.push_back(true);
+        one_core_data_t& entry = this->all_data[{core_type, core}][0];
+        entry.data.push_back(datum);
+        entry.valid.push_back(true);
     }
 }
 
@@ -278,15 +295,17 @@ inline void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool 
     for (auto y = cores.start_coord.y; y <= cores.end_coord.y; y++) {
         for (auto x = cores.start_coord.x; x <= cores.end_coord.x; x++) {
             CoreCoord core = {x, y};
-            if (core_and_bank_present(core, 0)) {
+            const CoreDataKey key{tt::CoreType::WORKER, core};
+            if (core_and_bank_present(core, 0, tt::CoreType::WORKER)) {
                 if (not counted || not is_mcast) {
                     this->amt_written++;
                     counted = true;
                 }
 
-                TT_FATAL(this->all_data.contains(core), "Core {} not found in all_data", core);
-                this->all_data[core][0].data.push_back(datum);
-                this->all_data[core][0].valid.push_back(true);
+                TT_FATAL(this->all_data.contains(key), "Core {} not found in all_data", core);
+                one_core_data_t& entry = this->all_data[key][0];
+                entry.data.push_back(datum);
+                entry.valid.push_back(true);
             }
         }
     }
@@ -296,11 +315,12 @@ inline uint32_t padded_size(uint32_t size, uint32_t alignment) {
     return (size + alignment - 1) / alignment * alignment;
 }
 
-inline void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment) {
-    if (core_and_bank_present(core, bank)) {
-        uint32_t padded = padded_size(this->all_data[core][bank].data.size(), alignment / sizeof(uint32_t));
-        this->all_data[core][bank].data.resize(padded);
-        this->all_data[core][bank].valid.resize(padded);  // pushes false
+inline void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment, tt::CoreType core_type) {
+    if (core_and_bank_present(core, bank, core_type)) {
+        one_core_data_t& entry = this->all_data[{core_type, core}][bank];
+        uint32_t padded = padded_size(entry.data.size(), alignment / sizeof(uint32_t));
+        entry.data.resize(padded);
+        entry.valid.resize(padded);  // pushes false
     }
 }
 
@@ -331,16 +351,17 @@ inline void DeviceData::relevel(CoreRange range) {
     constexpr uint32_t bank = 0;
     for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
         for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
-            CoreCoord core = {x, y};
-            max = std::max(this->all_data[core][bank].data.size(), max);
+            const CoreDataKey key{tt::CoreType::WORKER, CoreCoord{x, y}};
+            max = std::max(this->all_data[key][bank].data.size(), max);
         }
     }
 
     for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
         for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
-            CoreCoord core = {x, y};
-            this->all_data[core][bank].data.resize(max);
-            this->all_data[core][bank].valid.resize(max);
+            const CoreDataKey key{tt::CoreType::WORKER, CoreCoord{x, y}};
+            one_core_data_t& entry = this->all_data[key][bank];
+            entry.data.resize(max);
+            entry.valid.resize(max);
         }
     }
 }
@@ -364,15 +385,18 @@ inline uint32_t DeviceData::get_base_result_addr(tt::CoreType core_type) {
     return this->base_result_data_addr[static_cast<int>(core_type)];
 }
 
-inline uint32_t DeviceData::get_result_data_addr(CoreCoord core, int bank_id) {
-    uint32_t base_addr = this->base_result_data_addr[static_cast<int>(this->all_data[core][bank_id].core_type)];
-    return base_addr + (this->all_data[core][bank_id].data.size() * sizeof(uint32_t));
+inline uint32_t DeviceData::get_result_data_addr(CoreCoord core, int bank_id, tt::CoreType core_type) {
+    const one_core_data_t& entry = this->all_data[{core_type, core}][bank_id];
+    uint32_t base_addr = this->base_result_data_addr[static_cast<int>(entry.core_type)];
+    return base_addr + (entry.data.size() * sizeof(uint32_t));
 }
 
-inline uint32_t DeviceData::size_at(CoreCoord core, int bank_id) { return this->all_data[core][bank_id].data.size(); }
+inline uint32_t DeviceData::size_at(CoreCoord core, int bank_id, tt::CoreType core_type) {
+    return this->all_data[{core_type, core}][bank_id].data.size();
+}
 
-inline uint32_t DeviceData::at(CoreCoord core, int bank_id, uint32_t offset) {
-    return this->all_data[core][bank_id].data[offset];
+inline uint32_t DeviceData::at(CoreCoord core, int bank_id, uint32_t offset, tt::CoreType core_type) {
+    return this->all_data[{core_type, core}][bank_id].data[offset];
 }
 
 inline bool DeviceData::validate_one_core(
@@ -589,11 +613,12 @@ inline void update_paged_write(
     DeviceData& device_data,
     const CoreCoord& bank_core,
     uint32_t bank_id,
-    uint32_t page_alignment) {
+    uint32_t page_alignment,
+    tt::CoreType core_type) {
     for (const uint32_t datum : payload) {
-        device_data.push_one(bank_core, bank_id, datum);
+        device_data.push_one(bank_core, bank_id, datum, core_type);
     }
-    device_data.pad(bank_core, bank_id, page_alignment);
+    device_data.pad(bank_core, bank_id, page_alignment, core_type);
 }
 
 // Update DeviceData for packed write
@@ -921,6 +946,50 @@ inline uint32_t clamp_to_max_fetch(
 }
 }  // namespace PackedWriteUtils
 
+// SD (slow dispatch) dispatch-buffer constants — consumed by execute_generated_commands.
+// Sizes that vary per-arch (dispatch_size, prefetch_q_entries, prefetch_scratch_db_size) are
+// read directly from memmap.settings at call sites; only the truly constexpr knobs live here.
+static constexpr uint32_t SD_DISPATCH_BUFFER_PAGE_SIZE = 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
+static constexpr uint32_t SD_PREFETCHER_PAGE_BATCH_SIZE = 1;
+// spoof_prefetch loop uses (cmd_cb_pages-1)/page_batch_size with no remainder handling
+static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
+
+static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
+static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
+inline constexpr CoreCoord sd_prefetch_core = {0, 0};  // combined prefetch_hd
+
+// Quasar simulator exposes only 64 MB as physical DRAM memory; addresses above this alias back into the same physical
+// space even though the bank is configured as 1 GB. Code that places data in DRAM on Quasar must keep it within this 64
+// MB window to avoid aliasing collisions.
+static constexpr uint32_t QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE = 1u << 26;  // 64 MB
+
+// DRAM addresses and sizes for the command queue on the Quasar simulator. Issue queue (8 MB) and completion queue (8
+// MB) sit at [48, 56) and [56, 64) MB respectively, exactly reaching the physical DRAM window size limit.
+static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_BASE = 0x3000000u;  // 48 MB
+static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_SIZE = 0x800000;    // 8 MB
+static constexpr uint32_t QUASAR_SIMULATION_COMPLETION_QUEUE_BASE =
+    QUASAR_SIMULATION_ISSUE_QUEUE_BASE + QUASAR_SIMULATION_ISSUE_QUEUE_SIZE;   // 56 MB
+static constexpr uint32_t QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE = 0x800000;  // 8 MB
+static_assert(
+    QUASAR_SIMULATION_COMPLETION_QUEUE_BASE + QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE <=
+        QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE,
+    "CQ overruns Quasar simulator physical DRAM window");
+
+inline bool is_quasar_sim() {
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    return rtoptions.get_simulator_enabled() &&
+           tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
+}
+
+// Wrapper template that marks any base fixture as the Quasar-simulator-only variant; the constructor
+// sets quasar_simulator_variant_ before gtest's SetUp() reads it.
+template <class FDFixture>
+class QuasarSimulatorVariant : public FDFixture {
+public:
+    QuasarSimulatorVariant() { this->quasar_simulator_variant_ = true; }
+};
+
 // BaseTestFixture forms the basis for prefetch and dispatcher tests.
 // Inherits from GenericMeshDeviceFixture which determines the mesh device type automatically
 class BaseTestFixture : public tt_metal::GenericMeshDeviceFixture {
@@ -948,6 +1017,10 @@ protected:
     // Knobs
     uint32_t dispatch_buffer_page_size_ = 0;
     bool send_to_all_ = false;
+    // Set to true by QuasarSimulatorVariant<> subclasses. The gate in SetUp skips this fixture
+    // when is_quasar_sim() != quasar_simulator_variant_, so the Quasar simulator runs only its
+    // variant and WH/BH run only the default fixture.
+    bool quasar_simulator_variant_ = false;
 
     // Test Config defaults
     DispatchTestConfig cfg_;
@@ -987,19 +1060,57 @@ protected:
         // Initialize common HW properties
         host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
         max_fetch_bytes_ = tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+
+        // Arch selection gate: on Quasar only the QuasarSimulatorVariant runs; on WH/BH only the default fixture runs.
+        if (Common::is_quasar_sim() != quasar_simulator_variant_) {
+            GTEST_SKIP()
+                << (quasar_simulator_variant_ ? "Quasar-only variant; skipped on non-Quasar"
+                                              : "FD default variant; skipped on Quasar (use QuasarSimulatorVariant)");
+        }
     }
 
     bool validate_dispatch_mode() {
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
+        if (!tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             return false;
         }
         return true;
     }
 
+    CoreCoord worker_start() const {
+        if (!Common::is_quasar_sim()) {
+            return default_worker_start;
+        }
+        const bool fast_dispatch = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
+        return fast_dispatch ? CoreCoord{0, 0} : CoreCoord{1, 0};
+    }
+
+    CoreRange worker_range(const CoreCoord& first_worker, bool multi_core = true) const {
+        if (Common::is_quasar_sim()) {
+            return CoreRange{first_worker, first_worker};
+        }
+        const CoreCoord last_worker = multi_core ? CoreCoord{first_worker.x + 1, first_worker.y + 1} : first_worker;
+        return CoreRange{first_worker, last_worker};
+    }
+
+    // SD (slow dispatch) issue + completion queue sizes. Must fit in one device's hugepage slot
+    // (MAX_DEV_CHANNEL_SIZE = 256 MB) on WH/BH; an even 50/50 split gives 128 MB each. On Quasar simulation host
+    // hugepages are not available, so command queues must be stored in DRAM, and only 64 MB of physical DRAM space
+    // (QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE) is available even though the bank size is 1 GB. The remaining addresses
+    // alias this physical space. The SD command queue must therefore fit in a single 64-MB window, so each half is
+    // capped at 8 MB on the Quasar simulator.
+    uint32_t sd_issue_queue_size() const {
+        return Common::is_quasar_sim() ? QUASAR_SIMULATION_ISSUE_QUEUE_SIZE
+                                       : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
+    }
+    uint32_t sd_completion_queue_size() const {
+        return Common::is_quasar_sim() ? QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE
+                                       : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
+    }
+
     // Helper function that polls completion queue until expected data is written into by dispatcher
     // Without this, we can fail validation as there can a be an occasional race condition
+    // Timeout check is disabled if timeout_ms=0 or if running on the Quasar simulator
     // TODO: Alternatively, could we use tt_driver_atomics::mfence before validation?
     void wait_for_completion_queue_bytes(uint32_t total_expected_cq_payload, uint32_t timeout_ms = 0) {
         std::atomic<bool> exit_condition{false};
@@ -1022,16 +1133,19 @@ protected:
                 avail = (limit - completion_q_read_ptr) + completion_q_write_ptr;
             }
 
-            const auto elapsed =
-                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-            if (elapsed > timeout_ms) {
-                exit_condition.store(true);
-                TT_FATAL(
-                    false,
-                    "CQ wait timed out after {} ms (needed {} bytes, had {})",
-                    elapsed,
-                    total_expected_cq_payload,
-                    avail);
+            if (timeout_ms > 0 && !Common::is_quasar_sim()) {
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                        .count();
+                if (elapsed > timeout_ms) {
+                    exit_condition.store(true);
+                    TT_FATAL(
+                        false,
+                        "CQ wait timed out after {} ms (needed {} bytes, had {})",
+                        elapsed,
+                        total_expected_cq_payload,
+                        avail);
+                }
             }
         }
 
@@ -1057,6 +1171,13 @@ protected:
             num_iterations,
             num_cores_to_log);
     }
+
+    // Called after the dispatcher has written host completion data and before device_data.validate().
+    // On the Quasar simulator host hugepages are unavailable, so the completion queue lives in DRAM and
+    // the host pointer is a staging mirror that must be re-synced from DRAM before validation. Default
+    // no-op (WH/BH completion queue is PCIe-mapped host memory, already visible; non-host tests don't
+    // validate completion data).
+    virtual void refresh_completion_data() {}
 
     // Helper function to execute generated commands
     // Orchestrates the command buffer reservation, writing, and submission
@@ -1117,7 +1238,7 @@ protected:
         // between test fixtures possibly because the previously issued commands
         // are not completed before next firmware launch
         HostMemDeviceCommand cmd(cmd_calc.write_offset_bytes());
-        cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+        cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
         dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
         entry_sizes.push_back(cmd.size_bytes());
 
@@ -1151,6 +1272,9 @@ protected:
         const std::chrono::duration<double> elapsed = end - start;
         log_info(tt::LogTest, "Ran in {:f} ms (for {} iterations)", elapsed.count() * 1000.0, num_iterations);
 
+        // On the Quasar simulator the completion queue is DRAM-backed; sync the host staging mirror before validating.
+        this->refresh_completion_data();
+
         // Validate results
         const bool pass = device_data.validate(device_);
         EXPECT_TRUE(pass) << "Dispatcher test failed validation";
@@ -1161,4 +1285,248 @@ protected:
         }
     }
 };
+
+// Fixed core layout used by the SD spoof-prefetch execution path
+inline constexpr CoreCoord sd_spoof_prefetch_core = {0, 0};
+
+inline CoreCoord dispatch_core(const tt_metal::IDevice* device) {
+    return (device->arch() == tt::ARCH::QUASAR) ? CoreCoord{0, 0} : CoreCoord{4, 0};
+}
+
+// Builds the compile-time defines required by cq_dispatch.cpp for the SD (spoof-prefetch) path.
+// SD drives only the core dispatch fields; all fabric-mux, multi-CQ, go-signal, and downstream
+// fields are zeroed since the spoof path never uses them.
+//
+// completion_queue_{base,size} default to 0 for SD dispatcher tests (no host-test writeback).
+// SD prefetcher tests that exercise host writeback must pass real values - cq_dispatch.cpp
+// computes the host PCIe destination from COMPLETION_QUEUE_BASE_ADDR.
+//
+// KEEP IN SYNC WITH: tt_metal/impl/dispatch/kernel_config/dispatch.cpp (the defines block starting
+// around "Add all the dispatch-specific defines"). If a new define is added or removed there,
+// update this map to match - the failure mode is a kernel compile error.
+inline std::map<std::string, std::string> make_sd_dispatch_defines(
+    tt_metal::IDevice* device_,
+    uint32_t dispatch_buffer_pages,
+    uint32_t dispatch_core_sem_id,
+    uint32_t spoof_prefetch_sem_id,
+    uint32_t prefetch_sync_sem,
+    const CoreCoord& phys_spoof,
+    const CoreCoord& phys_disp,
+    const tt_metal::DispatchMemMap& memmap,
+    uint32_t dispatch_cb_base,
+    uint32_t completion_queue_base = 0,
+    uint32_t completion_queue_size = 0) {
+    const uint32_t num_compute_cores =
+        device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
+    const auto my_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_disp);
+    const tt_metal::NOC upstream_noc =
+        (device_->arch() == tt::ARCH::QUASAR) ? tt_metal::NOC::NOC_0 : tt_metal::NOC::NOC_1;
+    const auto upstream_virtual = device_->virtual_noc0_coordinate(upstream_noc, phys_spoof);
+    const auto downstream_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, CoreCoord{0, 0});
+
+    return {
+        {"IS_CQ_DRAM_BACKED", Common::is_quasar_sim() ? "1" : "0"},
+        {"DRAM_BACKED_CQ_BANK_ID", "0"},
+        {"DISPATCH_CB_BASE", std::to_string(dispatch_cb_base)},
+        {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
+        {"DISPATCH_CB_PAGES", std::to_string(dispatch_buffer_pages)},
+        {"MY_DISPATCH_CB_SEM_ID", std::to_string(dispatch_core_sem_id)},
+        // spoof_prefetch_sem_id is the upstream credit pool; dispatch releases credits back into it.
+        {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(spoof_prefetch_sem_id)},
+        {"DISPATCH_CB_BLOCKS", std::to_string(DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS)},
+        {"UPSTREAM_SYNC_SEM", std::to_string(prefetch_sync_sem)},
+        {"DISPATCH_D_SHUTDOWN_SEM_ID", "0"},  // no dispatch_s in SD; disables dispatch_s_enabled path
+        {"COMMAND_QUEUE_BASE_ADDR", "0"},
+        {"COMPLETION_QUEUE_BASE_ADDR", std::to_string(completion_queue_base)},
+        {"COMPLETION_QUEUE_SIZE", std::to_string(completion_queue_size)},
+        {"DOWNSTREAM_CB_BASE", "0"},
+        {"DOWNSTREAM_CB_SIZE", "0"},
+        {"MY_DOWNSTREAM_CB_SEM_ID", "0"},
+        {"DOWNSTREAM_CB_SEM_ID", "0"},
+        {"SPLIT_PREFETCH", "0"},
+        {"PREFETCH_H_NOC_XY", "0"},
+        {"PREFETCH_H_LOCAL_DOWNSTREAM_SEM_ADDR", "0"},
+        {"PREFETCH_H_MAX_CREDITS", "0"},
+        {"PACKED_WRITE_MAX_UNICAST_SUB_CMDS", std::to_string(num_compute_cores)},
+        {"DISPATCH_S_SYNC_SEM_BASE_ADDR", "0"},
+        {"MAX_NUM_WORKER_SEMS", std::to_string(DispatchSettings::DISPATCH_MESSAGE_ENTRIES)},
+        {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES", std::to_string(DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES)},
+        {"MCAST_GO_SIGNAL_ADDR", "0"},
+        {"UNICAST_GO_SIGNAL_ADDR", "0"},
+        {"DISTRIBUTED_DISPATCHER", "0"},
+        {"HOST_COMPLETION_Q_WR_PTR",
+         std::to_string(memmap.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR))},
+        {"DEV_COMPLETION_Q_WR_PTR",
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR, /*cq_id=*/0))},
+        {"DEV_COMPLETION_Q_RD_PTR",
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, /*cq_id=*/0))},
+        {"DEV_DISPATCH_PROGRESS_PTR",
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS, /*cq_id=*/0))},
+        {"REALTIME_PROFILER_MSG_ADDR",
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG, /*cq_id=*/0))},
+        {"DISPATCH_TELEMETRY_ADDR",
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0))},
+        {"DISPATCH_TELEMETRY_CONTROL_ADDR",
+         std::to_string(memmap.get_device_command_queue_addr(
+             CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL, /*cq_id=*/0))},
+        {"DISPATCH_TELEMETRY_DISABLED", "1"},
+        {"FIRST_STREAM_USED", std::to_string(memmap.get_dispatch_stream_index(0))},
+        {"COMPLETION_COUNTER_OFFSET", "0"},
+        {"VIRTUALIZE_UNICAST_CORES", "0"},
+        {"NUM_VIRTUAL_UNICAST_CORES", "0"},
+        {"NUM_PHYSICAL_UNICAST_CORES", "0"},
+        {"FABRIC_HEADER_RB_BASE", "0"},
+        {"FABRIC_HEADER_RB_ENTRIES", "0"},
+        {"MY_FABRIC_SYNC_STATUS_ADDR", "0"},
+        {"FABRIC_MUX_X", "0"},
+        {"FABRIC_MUX_Y", "0"},
+        {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL", "0"},
+        {"FABRIC_MUX_CHANNEL_BUFFER_SIZE_BYTES", "0"},
+        {"FABRIC_MUX_CHANNEL_BASE_ADDRESS", "0"},
+        {"FABRIC_MUX_CONNECTION_INFO_ADDRESS", "0"},
+        {"FABRIC_MUX_CONNECTION_HANDSHAKE_ADDRESS", "0"},
+        {"FABRIC_MUX_FLOW_CONTROL_ADDRESS", "0"},
+        {"FABRIC_MUX_BUFFER_INDEX_ADDRESS", "0"},
+        {"FABRIC_MUX_STATUS_ADDRESS", "0"},
+        {"FABRIC_MUX_TERMINATION_SIGNAL_ADDRESS", "0"},
+        {"WORKER_CREDITS_STREAM_ID", "0"},
+        {"FABRIC_WORKER_FLOW_CONTROL_SEM", "0"},
+        {"FABRIC_WORKER_TEARDOWN_SEM", "0"},
+        {"FABRIC_WORKER_BUFFER_INDEX_SEM", "0"},
+        {"NUM_HOPS", "0"},
+        {"EW_DIM", "0"},
+        {"TO_MESH_ID", "0"},
+        {"FABRIC_2D", "0"},
+        {"WORKER_MCAST_GRID", "0"},
+        {"NUM_WORKER_CORES_TO_MCAST", "0"},
+        {"OFFSETOF_MY_DEV_ID", "0"},
+        {"OFFSETOF_TO_DEV_ID", "1"},
+        {"OFFSETOF_ROUTER_DIRECTION", "2"},
+        {"DISPATCH_KERNEL", "1"},
+        {"MY_NOC_X", std::to_string(my_virtual.x)},
+        {"MY_NOC_Y", std::to_string(my_virtual.y)},
+        {"UPSTREAM_NOC_INDEX", std::to_string(static_cast<uint32_t>(upstream_noc))},
+        {"UPSTREAM_NOC_X", std::to_string(upstream_virtual.x)},
+        {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual.y)},
+        {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
+        {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
+        {"FD_CORE_TYPE", "0"},
+        {"IS_D_VARIANT", "1"},
+        {"IS_H_VARIANT", "1"},
+    };
+}
+
+// Builds compile-time defines for cq_prefetch.cpp in SD combined IS_H_VARIANT+IS_D_VARIANT mode.
+// The kernel runs as a full prefetch_hd on one core: the H side reads commands from the PCIe
+// hugepage via the FetchQ, the D side processes them and relays to dispatch.
+// FABRIC_RELAY is intentionally omitted - leaving it undefined disables the fabric code path.
+//
+// KEEP IN SYNC WITH: tt_metal/impl/dispatch/kernel_config/prefetch.cpp (CreateKernel defines block).
+inline std::map<std::string, std::string> make_sd_prefetch_defines(
+    tt_metal::IDevice* device,
+    uint32_t pcie_base,
+    uint32_t pcie_size,
+    uint32_t prefetch_q_base,
+    uint32_t prefetch_q_size,
+    uint32_t prefetch_q_rd_ptr_addr,
+    uint32_t prefetch_q_pcie_rd_ptr_addr,
+    uint32_t cmddat_q_base,
+    uint32_t cmddat_q_pages,
+    uint32_t scratch_db_base,
+    uint32_t scratch_db_size,
+    uint32_t dispatch_cb_base,
+    uint32_t dispatch_cb_pages,
+    uint32_t dispatch_cb_sem_id,
+    uint32_t downstream_cb_sem_id,
+    uint32_t downstream_sync_sem_id,
+    uint32_t entry_size,
+    uint32_t dispatch_telemetry_addr,
+    const CoreCoord& phys_prefetch,
+    const CoreCoord& phys_dispatch) {
+    const auto my_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_prefetch);
+    const auto downstream_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_dispatch);
+    return {
+        {"MY_NOC_X", std::to_string(my_virtual.x)},
+        {"MY_NOC_Y", std::to_string(my_virtual.y)},
+        {"UPSTREAM_NOC_INDEX", std::to_string(static_cast<uint32_t>(tt_metal::NOC::NOC_0))},
+        {"UPSTREAM_NOC_X", std::to_string(my_virtual.x)},
+        {"UPSTREAM_NOC_Y", std::to_string(my_virtual.y)},
+        {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
+        {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
+        {"DOWNSTREAM_CB_BASE", std::to_string(dispatch_cb_base)},
+        {"DOWNSTREAM_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
+        {"DOWNSTREAM_CB_PAGES", std::to_string(dispatch_cb_pages)},
+        // MY_DOWNSTREAM_CB_SEM_ID: prefetch's own downstream credit pool (waited on locally).
+        // DOWNSTREAM_CB_SEM_ID: the dispatcher's received-pages sem the prefetcher signals. On WH/BH
+        // these share a slot id; on Quasar (prefetch+dispatch same core) they are distinct slots.
+        {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(dispatch_cb_sem_id)},
+        {"DOWNSTREAM_CB_SEM_ID", std::to_string(downstream_cb_sem_id)},
+        {"IS_CQ_DRAM_BACKED", Common::is_quasar_sim() ? "1" : "0"},
+        {"DRAM_BACKED_CQ_BANK_ID", "0"},
+        {"PCIE_BASE", std::to_string(pcie_base)},
+        {"PCIE_SIZE", std::to_string(pcie_size)},
+        {"PREFETCH_Q_BASE", std::to_string(prefetch_q_base)},
+        {"PREFETCH_Q_SIZE", std::to_string(prefetch_q_size)},
+        {"PREFETCH_Q_RD_PTR_ADDR", std::to_string(prefetch_q_rd_ptr_addr)},
+        {"PREFETCH_Q_PCIE_RD_PTR_ADDR", std::to_string(prefetch_q_pcie_rd_ptr_addr)},
+        {"CMDDAT_Q_BASE", std::to_string(cmddat_q_base)},
+        {"CMDDAT_Q_SIZE", std::to_string(cmddat_q_pages * SD_PREFETCH_CMDDAT_PAGE_SIZE)},
+        {"SCRATCH_DB_BASE", std::to_string(scratch_db_base)},
+        {"SCRATCH_DB_SIZE", std::to_string(scratch_db_size)},
+        {"DOWNSTREAM_SYNC_SEM_ID", std::to_string(downstream_sync_sem_id)},
+        {"CMDDAT_Q_PAGES", std::to_string(cmddat_q_pages)},
+        {"MY_UPSTREAM_CB_SEM_ID", "0"},  // not used when IS_H_VARIANT=1
+        {"UPSTREAM_CB_SEM_ID", "0"},
+        {"CMDDAT_Q_LOG_PAGE_SIZE", std::to_string(SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE)},
+        {"CMDDAT_Q_BLOCKS", std::to_string(SD_PREFETCH_CMDDAT_BLOCKS)},
+        {"DISPATCH_S_BUFFER_BASE", "0"},
+        {"MY_DISPATCH_S_CB_SEM_ID", "0"},
+        {"DOWNSTREAM_DISPATCH_S_CB_SEM_ID", "0"},
+        {"DISPATCH_S_BUFFER_SIZE", "0"},
+        {"DISPATCH_S_CB_LOG_PAGE_SIZE", "0"},
+        {"RINGBUFFER_SIZE", std::to_string(scratch_db_size)},
+        {"FABRIC_HEADER_RB_BASE", "0"},
+        {"FABRIC_HEADER_RB_ENTRIES", "0"},
+        {"MY_FABRIC_SYNC_STATUS_ADDR", "0"},
+        {"DISPATCH_TELEMETRY_ADDR", std::to_string(dispatch_telemetry_addr)},
+        {"DISPATCH_TELEMETRY_DISABLED", "1"},
+        {"FABRIC_MUX_X", "0"},
+        {"FABRIC_MUX_Y", "0"},
+        {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL", "0"},
+        {"FABRIC_MUX_CHANNEL_BUFFER_SIZE_BYTES", "0"},
+        {"FABRIC_MUX_CHANNEL_BASE_ADDRESS", "0"},
+        {"FABRIC_MUX_CONNECTION_INFO_ADDRESS", "0"},
+        {"FABRIC_MUX_CONNECTION_HANDSHAKE_ADDRESS", "0"},
+        {"FABRIC_MUX_FLOW_CONTROL_ADDRESS", "0"},
+        {"FABRIC_MUX_BUFFER_INDEX_ADDRESS", "0"},
+        {"FABRIC_MUX_STATUS_ADDRESS", "0"},
+        {"FABRIC_MUX_TERMINATION_SIGNAL_ADDRESS", "0"},
+        {"WORKER_CREDITS_STREAM_ID", "0"},
+        {"FABRIC_WORKER_FLOW_CONTROL_SEM", "0"},
+        {"FABRIC_WORKER_TEARDOWN_SEM", "0"},
+        {"FABRIC_WORKER_BUFFER_INDEX_SEM", "0"},
+        {"NUM_HOPS", "0"},
+        {"EW_DIM", "0"},
+        {"TO_MESH_ID", "0"},
+        {"FABRIC_2D", "0"},
+        {"IS_D_VARIANT", "1"},
+        {"IS_H_VARIANT", "1"},
+        {"OFFSETOF_MY_DEV_ID", "0"},
+        {"OFFSETOF_TO_DEV_ID", "1"},
+        {"OFFSETOF_ROUTER_DIRECTION", "2"},
+        {"FD_CORE_TYPE", "0"},
+        {"PREFETCH_Q_ENTRY_BITS", std::to_string(entry_size * 8)},
+        // FABRIC_RELAY intentionally omitted - must be undefined for #if defined(FABRIC_RELAY) to be false
+    };
+}
+
 }  // namespace tt::tt_metal::tt_dispatch_tests::Common

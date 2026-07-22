@@ -9,11 +9,27 @@
 
 #include "ckernel.h"
 
+// === L1 layout for perf tests ===
+//
+// Stimuli generator buffers and the perf-counter region are kept in this header
+// so that the disjoint ranges are visible side-by-side and any future allocation
+// has to be reconciled against both. The perf-counter macros are only defined in
+// the WC build (counter machinery in counters.h is gated by the same flag).
+
 // FIXME: this shouldn't be statically allocated
 constexpr std::uint32_t PERF_INPUT_A = 0x21000;
 constexpr std::uint32_t PERF_INPUT_B = PERF_INPUT_A + 16 * 4096;
 constexpr std::uint32_t PERF_INPUT_C = PERF_INPUT_B + 16 * 4096;
 constexpr std::uint32_t PERF_OUTPUT  = PERF_INPUT_C + 16 * 4096;
+
+#ifdef PERF_COUNTERS_COMPILED
+// Perf-counter shared config + per-zone data. Must stay below the profiler epoch word at 0x16AFF0
+// (asserted in counters.h) and must not overlap the stimuli buffers above.
+#define PERF_COUNTERS_BASE_ADDR         0x169000
+#define PERF_COUNTERS_CONFIG_WORDS      200
+#define PERF_COUNTERS_DATA_WORDS        200
+#define PERF_COUNTERS_BANK_CYCLES_WORDS 5
+#endif // PERF_COUNTERS_COMPILED
 
 constexpr std::uint32_t PERF_ADDRESS(std::uint32_t buffer, std::uint32_t tile)
 {
@@ -146,11 +162,11 @@ inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt
             }
 #endif
 
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
 
             /*
-             * BLACKHOLE SCHEME:
-             * Utilizes only one source register bank because bandwidth is better on BH
+             * BLACKHOLE/QUASAR SCHEME:
+             * Utilizes only one source register bank.
              * IF CT_DIM >= RT_DIM ->
              *   SRCB, SRCA * CT_DIM, SRCB, SRCA * CT_DIM, ...
              * ELSE ->
@@ -173,8 +189,6 @@ inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt
 
 inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim)
 {
-    // fixme: add quasar support
-
     for (std::uint32_t loop = 0; loop < loop_factor; loop++)
     {
         for (std::uint32_t j = 0; j < kt_dim; j++)
@@ -215,11 +229,11 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
             }
 #endif
 
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
 
             /*
-             * BLACKHOLE SCHEME:
-             * Utilizes only one source register bank because bandwidth is better on BH
+             * BLACKHOLE/QUASAR SCHEME:
+             * Utilizes only one source register bank.
              * IF CT_DIM >= RT_DIM ->
              *  SRCA * CT_DIM, SRCB, SRCA * CT_DIM, SRCB, ...
              * ELSE ->

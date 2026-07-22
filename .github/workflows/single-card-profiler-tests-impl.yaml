@@ -1,0 +1,158 @@
+name: "[internal] Single-card profiler tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      enabled-skus:
+        required: false
+        type: string
+      test-selection:
+        required: false
+        type: string
+        default: "all"
+      ref:
+        required: false
+        type: string
+        default: ""
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+      enable-lightweight-kernel-asserts:
+        required: false
+        type: boolean
+        default: false
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/single_card_profiler_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        # "profiler" subheading is temporary while team / test-framework
+        # assignment is being settled, see
+        # https://github.com/tenstorrent/tt-metal/issues/44285
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "profiler"
+      - name: Build test matrix
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+
+  single-card-profiler-tests:
+    needs: load-test-matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        # Derive arch from SKU prefix — bh_* runs on blackhole, anything else
+        # is wormhole_b0. Avoids carrying an arch field on every matrix entry.
+        ARCH_NAME: ${{ startsWith(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
+        LOGURU_LEVEL: INFO
+        PROFILER_SCRIPTS_ROOT: /work/tools/tracy
+        PROFILER_TEST_SCRIPTS_ROOT: /work/tests/tt_metal/tools/profiler
+        PROFILER_ARTIFACTS_DIR: /work/generated/profiler
+        PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
+        DONT_USE_VIRTUAL_ENVIRONMENT: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          submodules: recursive
+          path: docker-job
+      - name: Mark repository as safe directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          MODE_FLAG: ${{ inputs.test-selection == 'post-commit' && '--post-commit' || '--full' }}
+        run: |
+          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+            --backend sysfs \
+            --out /work/power_report.json \
+            -- bash tests/scripts/single_card/run_single_card_profiler_tests.sh "$MODE_FLAG" ${{ matrix.test-group.cmd }}
+      - name: Upload power report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: power-report-profiler-${{ matrix.test-group.cmd }}-${{ matrix.test-group.sku }}
+          # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
+          # The sidecar writes --out /work/power_report.json inside the container;
+          # this host path is what the upload-artifact action reads.
+          path: ${{ github.workspace }}/docker-job/power_report.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: 📊 CCache Report
+        if: ${{ !cancelled() }}
+        run: |
+          echo "::group::CCache Statistics"
+          ccache --show-stats || echo "ccache stats not available"
+          echo "::endgroup::"
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

@@ -223,9 +223,14 @@ def _simulate_bfp_quantization(x, man_bits):
     return result.view(torch.float32).reshape(orig_shape).to(torch.bfloat16)
 
 
+def _float_to_uint16_clamp(x):
+    # Device float_to_uint16 converts to float32 before std::round; match in float32.
+    return torch.clamp(torch.floor(x.float() + 0.5).to(torch.int32), min=0, max=65535)
+
+
 def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
     if tt_input_dtype == ttnn.bfloat16 and tt_output_dtype == ttnn.uint16:
-        return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
+        return _float_to_uint16_clamp(x)
     elif tt_input_dtype == ttnn.uint16 and tt_output_dtype == ttnn.bfloat16:
         return x.to(torch.bfloat16)
     elif tt_input_dtype == ttnn.int32 and tt_output_dtype == ttnn.bfloat16:
@@ -237,7 +242,7 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
     elif tt_input_dtype == ttnn.float32 and tt_output_dtype == ttnn.bfloat16:
         return x.to(torch.bfloat16)
     elif tt_input_dtype == ttnn.float32 and tt_output_dtype == ttnn.uint16:
-        return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
+        return _float_to_uint16_clamp(x)
     elif tt_input_dtype == ttnn.uint16 and tt_output_dtype == ttnn.float32:
         return x.to(torch.float32)
     elif tt_input_dtype == ttnn.float32 and tt_output_dtype == ttnn.int32:

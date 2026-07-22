@@ -3,29 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/endpoints.h"
+#include "experimental/kernel_args.h"
+#include "api/dataflow/endpoints.h"
 #include "api/debug/dprint.h"
 
 // L1 to L1 request
 void kernel_main() {
-    constexpr uint32_t l1_local_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(1);
-    constexpr uint32_t transaction_size_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t test_id = get_compile_time_arg_val(3);
-    constexpr uint32_t num_virtual_channels = get_compile_time_arg_val(4);
+    // True compile-time constants
+    constexpr uint32_t l1_local_addr = get_arg(args::l1_addr);
+    constexpr uint32_t test_id = get_arg(args::test_id);
+    constexpr uint32_t num_virtual_channels = get_arg(args::num_vc);
 
-    uint32_t responder_x_coord = get_arg_val<uint32_t>(0);
-    uint32_t responder_y_coord = get_arg_val<uint32_t>(1);
+    // Runtime varargs (sweep params + per-call runtime coords).
+    //   [0] num_of_transactions, [1] transaction_size_bytes, [2] responder_x, [3] responder_y
+    uint32_t num_of_transactions = get_arg(args::num_of_transactions);
+    uint32_t transaction_size_bytes = get_arg(args::transaction_size_bytes);
+    uint32_t responder_x_coord = get_arg(args::responder_x);
+    uint32_t responder_y_coord = get_arg(args::responder_y);
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
 
     {
         DeviceZoneScopedN("RISCV1");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
             // Cycle through virtual channels 0 to (num_virtual_channels - 1)
             uint32_t current_virtual_channel = i % num_virtual_channels;
-            noc.async_read(
+            noc.async_read<NocOptions::CUSTOM_VC>(
                 unicast_endpoint,
                 unicast_endpoint,
                 transaction_size_bytes,
@@ -37,7 +41,7 @@ void kernel_main() {
                 {
                     .addr = l1_local_addr,
                 },
-                current_virtual_channel);
+                NocOptVals{.vc = current_virtual_channel});
         }
         noc.async_read_barrier();
     }

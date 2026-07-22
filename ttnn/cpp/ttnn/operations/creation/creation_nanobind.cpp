@@ -502,6 +502,8 @@ Tensor from_buffer_impl(
     MeshDevice* device,
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config) {
+    // bind_function releases the GIL across the C++ body; nb::cast requires it, so re-acquire GIL.
+    nb::gil_scoped_acquire acquire;
     switch (dtype) {
         case DataType::UINT8: {
             auto cpp_buffer = nb::cast<std::vector<uint8_t>>(buffer);
@@ -527,6 +529,10 @@ Tensor from_buffer_impl(
             auto cpp_buffer = nb::cast<std::vector<::bfloat16>>(buffer);
             return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
         }
+        case DataType::FP8_E4M3:
+            TT_THROW(
+                "from_buffer: FP8_E4M3 is an output-only dtype, used exclusively by the DeepSeek V3 "
+                "prefill ops for now; host-side construction via from_buffer is not supported.");
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
         case DataType::INVALID: {

@@ -8,6 +8,47 @@ import ttnn
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
 
 
+def test_clamp_bw_tensor_both_bounds_in_range_gradient(device):
+    """Regression test for inverted ge/le in the tensor both-bounds branch of clamp_bw.
+
+    With controlled inputs we can verify analytically:
+      input  = [-5, -1, 0, 1, 5] (32-element tile padded)
+      min    = [-2, -2, -2, -2, -2]
+      max    = [ 2,  2,  2,  2,  2]
+      grad   = [ 1,  1,  1,  1,  1]
+    Expected: gradient passes through only where min <= input <= max (positions 1,2,3),
+    zeros at positions 0 and 4 (out of range). Bug produced all-zero result instead.
+    """
+    shape = torch.Size([1, 1, 32, 32])
+    # Build a flat pattern repeated to fill the tile
+    base_input = torch.tensor([-5.0, -1.0, 0.0, 1.0, 5.0] * (32 * 32 // 5) + [-5.0] * ((32 * 32) % 5))
+    base_min = torch.full((32 * 32,), -2.0)
+    base_max = torch.full((32 * 32,), 2.0)
+    base_grad = torch.ones(32 * 32)
+
+    input_torch = base_input.reshape(shape).bfloat16()
+    min_torch = base_min.reshape(shape).bfloat16()
+    max_torch = base_max.reshape(shape).bfloat16()
+    grad_torch = base_grad.reshape(shape).bfloat16()
+
+    # Golden: gradient only where min <= input <= max
+    in_range = (input_torch >= min_torch) & (input_torch <= max_torch)
+    expected = grad_torch * in_range.bfloat16()
+
+    # Device tensors
+    input_tt = ttnn.from_torch(input_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    min_tt = ttnn.from_torch(min_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    max_tt = ttnn.from_torch(max_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grad_tt = ttnn.from_torch(grad_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result_tt = ttnn.clamp_bw(grad_tt, input_tt, min_tt, max_tt)
+    result_torch = ttnn.to_torch(result_tt[0])
+
+    assert torch.allclose(
+        result_torch.float(), expected.float(), atol=1e-2
+    ), f"clamp_bw tensor both-bounds: got\n{result_torch}\nexpected\n{expected}"
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (

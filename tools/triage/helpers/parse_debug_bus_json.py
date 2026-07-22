@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections.abc import Collection
 from pathlib import Path
 
 from docopt import docopt
@@ -39,10 +40,14 @@ from ttexalens.hardware.wormhole.functional_worker_block import WormholeFunction
 from ttexalens.hardware.blackhole.eth_block import BlackholeEthBlock
 from ttexalens.hardware.blackhole.functional_worker_block import BlackholeFunctionalWorkerBlock
 
-from tools.triage.utils import ERROR, INFO, WARN
+# This helper lives in tools/triage/helpers; add the parent triage directory to the path so the
+# shared `utils` module (imported as a flat top-level module by all triage scripts) can be found.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from utils import ERROR, INFO, WARN
 
 
-def _get_selected_devices(devices_arg: str | None, device_keys: set[str]) -> list[str]:
+def _get_selected_devices(devices_arg: str | None, device_keys: Collection[str]) -> list[str]:
     """Return set of device keys to include (e.g. {'Device 0', 'Device 1'})."""
     if devices_arg is None:
         return list(device_keys)
@@ -54,7 +59,7 @@ def _get_selected_devices(devices_arg: str | None, device_keys: set[str]) -> lis
     return selected
 
 
-def _get_selected_block_types(block_types_arg: str | None, block_types: set[str]) -> list[str]:
+def _get_selected_block_types(block_types_arg: str | None, block_types: Collection[str]) -> list[str]:
     """Return set of block types to include (e.g. {'tensix', 'idle_eth'})."""
     if block_types_arg is None:
         return list(block_types)
@@ -155,7 +160,7 @@ def create_noc_block(device_arch: str, block_type: str, location: OnChipCoordina
 
 
 def main() -> None:
-    args = docopt(__doc__, argv=sys.argv[1:])
+    args = docopt(__doc__ or "", argv=sys.argv[1:])
 
     json_path = Path(args["<json_path>"])
     if not json_path.is_file():
@@ -236,7 +241,7 @@ def main() -> None:
                 if not selected_groups:
                     continue
                 printed_any = True
-                INFO(f"\n[{device_key}] {block_type} — {loc_key}")
+                INFO(f"\n[{device_key}] {block_type} - {loc_key}")
                 WARN(f"Failed RISCs: {loc_data['failed_riscs']}")
                 _print_groups_for_location(selected_groups, debug_bus, groups_data)
 

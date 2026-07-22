@@ -55,7 +55,7 @@ tt::tt_metal::distributed::MeshShape from_flatbuffer(const flatbuffer::MeshShape
 
 tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
     uint64_t size_bytes,
-    const TensorSpec& spec,
+    const tt::tt_metal::TensorSpec& spec,
     ttsl::Span<std::byte> data,
     const tt::tt_metal::MemoryPin& memory_pin) {
     switch (spec.data_type()) {
@@ -69,6 +69,8 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
             ttsl::Span<int32_t> typed_span(reinterpret_cast<int32_t*>(data.data()), size_bytes / sizeof(int32_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
+        case tt::tt_metal::DataType::FP8_E4M3:
+            TT_THROW("Flatbuffer load for DataType::FP8_E4M3 is not supported during tensor deserialization.");
         case tt::tt_metal::DataType::UINT8: {
             ttsl::Span<uint8_t> typed_span(reinterpret_cast<uint8_t*>(data.data()), size_bytes / sizeof(uint8_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
@@ -123,10 +125,10 @@ flatbuffers::Offset<ttnn::flatbuffer::TensorTopology> to_flatbuffer(
 }
 
 tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopology* fb_topology) {
-    TT_FATAL(fb_topology != nullptr, "TensorTopology flatbuffer pointer must not be null");
+    TT_FATAL(fb_topology != nullptr, "tt::tt_metal::TensorTopology flatbuffer pointer must not be null");
 
     const auto* fb_dist_shape = fb_topology->distribution_shape();
-    TT_FATAL(fb_dist_shape != nullptr, "distribution_shape is required in TensorTopology");
+    TT_FATAL(fb_dist_shape != nullptr, "distribution_shape is required in tt::tt_metal::TensorTopology");
     auto dist_shape = from_flatbuffer(fb_dist_shape);
 
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements;
@@ -284,7 +286,7 @@ Tensor from_flatbuffer(
         fb_topology != nullptr ? from_flatbuffer(fb_topology)
                                : tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(ttnn_mesh_shape);
 
-    return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), spec, std::move(topology)));
+    return Tensor(tt::tt_metal::HostTensor::from_buffer(std::move(distributed_buffer), spec, std::move(topology)));
 }
 
 }  // namespace ttnn

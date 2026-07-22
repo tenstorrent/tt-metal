@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_reduction ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Reduction ALIAS ttnn_op_experimental_reduction)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_reduction TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_reduction TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_reduction)
 
 set_target_properties(
@@ -13,10 +15,12 @@ set_target_properties(
 
 file(
     GLOB_RECURSE kernels
-    deepseek_grouped_gate/device/kernels/*
-    deepseek_moe_fast_reduce_nc/device/kernels/*
-    fast_reduce_nc/device/kernels/*
-    integral_image/device/kernels/*
+    deepseek_grouped_gate/device/kernels/*.cpp
+    deepseek_moe_fast_reduce_nc/device/kernels/*.cpp
+    deepseek_moe_fast_reduce_nc_fused/device/kernels/*.cpp
+    fast_reduce_nc/device/kernels/*.cpp
+    integral_image/device/kernels/*.cpp
+    integral_image/device/kernels/*.hpp
 )
 
 target_sources(
@@ -25,32 +29,23 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_EXPERIMENTAL_REDUCTION_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        fast_reduce_nc/device/fast_reduce_nc_device_operation.cpp
-        fast_reduce_nc/device/fast_reduce_nc_program_factory.cpp
-        fast_reduce_nc/fast_reduce_nc.cpp
-        deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_device_operation.cpp
-        deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_program_factory.cpp
-        deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.cpp
-        integral_image/device/intimg_device_operation.cpp
-        integral_image/device/intimg_program_factory.cpp
-        integral_image/intimg.cpp
-        deepseek_grouped_gate/deepseek_grouped_gate.cpp
-        deepseek_grouped_gate/device/deepseek_grouped_gate_device_operation.cpp
-        deepseek_grouped_gate/device/deepseek_grouped_gate_program_factory.cpp
+        ${TTNN_OP_EXPERIMENTAL_REDUCTION_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_reduction PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
     ttnn_op_experimental_reduction
+    PUBLIC
+        TTNN::Core
     PRIVATE
         TT::Metalium
-        TTNN::Core
+        TTNN::Ops::Reduction
 )
 
 install(
@@ -62,4 +57,20 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_reduction LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_experimental_reduction FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_EXPERIMENTAL_REDUCTION_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_REDUCTION_NANOBIND_SRCS})
+endif()

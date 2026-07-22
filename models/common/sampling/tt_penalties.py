@@ -14,6 +14,9 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.sampling._utils import compact_debug_list as _compact_debug_list
+from models.common.sampling._utils import is_llama33_70b_model
+from models.common.sampling._utils import log_sampling_debug as _log_sampling_debug
 
 
 @dataclass
@@ -27,6 +30,29 @@ class PenaltyContext:
     repetition_penalties: ttnn.Tensor
     inverse_repetition_penalties: ttnn.Tensor
     sub_core_grids: Any | None = None
+
+
+def _tokens_debug_summary(tokens: torch.Tensor) -> dict[str, Any]:
+    valid = tokens >= 0
+    row_lengths = valid.sum(dim=1).tolist()
+    flat_valid = tokens[valid]
+    if flat_valid.numel() == 0:
+        unique_count = 0
+        duplicate_count = 0
+        head = []
+    else:
+        unique_count = int(torch.unique(flat_valid).numel())
+        duplicate_count = int(flat_valid.numel() - unique_count)
+        head = flat_valid[:16].tolist()
+    return {
+        "shape": list(tokens.shape),
+        "dtype": str(tokens.dtype),
+        "valid_tokens": int(valid.sum().item()),
+        "unique_tokens": unique_count,
+        "duplicate_tokens": duplicate_count,
+        "row_lengths": _compact_debug_list(row_lengths),
+        "head_tokens": head,
+    }
 
 
 def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> ttnn.Tensor:
@@ -83,6 +109,7 @@ class TTPenalties(LightweightModule):
     def __init__(self, mesh_device, args):
         super().__init__()
         self.mesh_device = mesh_device
+        self._sampling_debug_enabled = is_llama33_70b_model(args)
         self.cluster_shape = mesh_device.shape
         # Floor at 32 so that ROW_MAJOR [batch, vocab] buffers passed to
         # ttnn.tilize always have physical_volume divisible by TILE_HW
@@ -140,6 +167,7 @@ class TTPenalties(LightweightModule):
         self.output_mask = self._alloc_int_buffer(shard_dims=shard_dims)
         self.output_counts_gathered = self._alloc_int_buffer(shard_dims=shard_dims_gathered)
         self.output_counts = self._alloc_int_buffer(shard_dims=shard_dims)
+        self._shard_dims_mask = shard_dims
         self.decode_src = self._alloc_int_buffer(
             host=torch.ones(self._total_batch, 1), shard_dims=shard_dims_gathered, layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -207,6 +235,18 @@ class TTPenalties(LightweightModule):
             src_tt = ttnn.from_torch(src, dtype=dst.dtype, layout=ttnn.TILE_LAYOUT, device=None)
         ttnn.copy_host_to_device_tensor(src_tt, dst)
 
+    def _copy_int_host_to_device(self, dst: ttnn.Tensor, src: torch.Tensor, shard_dims):
+        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=shard_dims, mesh_shape=self.cluster_shape)
+        src_tt = ttnn.from_torch(src, dtype=dst.dtype, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=mapper)
+        ttnn.copy_host_to_device_tensor(src_tt, dst)
+
+    def _token_counts_host(self, tokens_2d: torch.Tensor) -> torch.Tensor:
+        valid = (tokens_2d >= 0) & (tokens_2d < self.vocab_size)
+        token_ids = torch.where(valid, tokens_2d, torch.zeros_like(tokens_2d)).to(torch.int64)
+        counts = torch.zeros((self._total_batch, self.vocab_size), dtype=torch.int32)
+        counts.scatter_add_(1, token_ids, valid.to(torch.int32))
+        return counts
+
     def reset_params(self, presence: List[float], frequency: List[float], repetition: List[float]):
         presence_tensor = self._pad_params(presence)
         frequency_tensor = self._pad_params(frequency)
@@ -241,24 +281,19 @@ class TTPenalties(LightweightModule):
         return tokens_2d
 
     def reset_prompt_tokens(self, prompt_tokens: torch.Tensor):
-        # Mask out padding positions (-1) instead of inventing a fake token id by expanding vocab_size.
         prompt_tokens_2d = prompt_tokens.reshape(-1, prompt_tokens.shape[-1])
         prompt_tokens_2d = self._pad_batch_to_max(prompt_tokens_2d, pad_value=-1)
-
-        src_host = (prompt_tokens_2d != -1).to(torch.int32)
-        idx_host = torch.where(prompt_tokens_2d == -1, torch.zeros_like(prompt_tokens_2d), prompt_tokens_2d)
-
-        prompt_tokens_tt = self._alloc_int_buffer(
-            host=idx_host,
-            shard_dims=self._shard_dims_gathered,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "TTPenalties reset prompt tokens",
+            tokens=_tokens_debug_summary(prompt_tokens_2d),
         )
-        src_tt = self._alloc_int_buffer(
-            host=src_host,
-            shard_dims=self._shard_dims_gathered,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        self.token_bin_counts_and_mask(new_tokens=prompt_tokens_tt, src=src_tt, mask=self.prompt_mask)
+
+        # Build reset masks on host to avoid device scatter_add races on
+        # duplicate prompt token ids (common in penalty tests/prompts).
+        prompt_counts = self._token_counts_host(prompt_tokens_2d)
+        prompt_mask = (prompt_counts > 0).to(torch.int32)
+        self._copy_int_host_to_device(self.prompt_mask, prompt_mask, self._shard_dims_mask)
 
     def reset_output_tokens(self, tokens=None):
         # ALWAYS reset output buffers to zero first (this is the core accuracy fix from issue #35731)
@@ -271,40 +306,20 @@ class TTPenalties(LightweightModule):
 
         # THEN optionally repopulate if tokens are provided
         if tokens is not None:
-            # Mask out padding positions (-1) instead of inventing a fake token id by expanding vocab_size.
             tokens_2d = tokens.reshape(-1, tokens.shape[-1])
             tokens_2d = self._pad_batch_to_max(tokens_2d, pad_value=-1)
-            src_host = (tokens_2d != -1).to(torch.int32)
-            idx_host = torch.where(tokens_2d == -1, torch.zeros_like(tokens_2d), tokens_2d)
-
-            mapper = (
-                ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._shard_dims_gathered, mesh_shape=self.cluster_shape)
-                if self._sampling_dp > 1
-                else None
+            _log_sampling_debug(
+                self._sampling_debug_enabled,
+                "TTPenalties reset output tokens",
+                tokens=_tokens_debug_summary(tokens_2d),
             )
-            tokens_tt = ttnn.from_torch(
-                idx_host,
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mapper,
-            )
-            src_tt = ttnn.from_torch(
-                src_host,
-                device=self.mesh_device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mapper,
-            )
-            self.token_bin_counts_and_mask(
-                new_tokens=tokens_tt,
-                counts=self.output_counts_gathered,
-                src=src_tt,
-                counts_sliced=self.output_counts,
-                mask=self.output_mask,
-            )
-            tokens_tt.deallocate()
-            src_tt.deallocate()
+            output_counts = self._token_counts_host(tokens_2d)
+            output_mask = (output_counts > 0).to(torch.int32)
+            self._copy_int_host_to_device(self.output_counts_gathered, output_counts, self._shard_dims_gathered)
+            self._copy_int_host_to_device(self.output_counts, output_counts, self._shard_dims_mask)
+            self._copy_int_host_to_device(self.output_mask, output_mask, self._shard_dims_mask)
+        else:
+            _log_sampling_debug(self._sampling_debug_enabled, "TTPenalties reset output tokens", tokens=None)
 
     def update_output_tokens(self, new_tokens):
         # Reshape decode token to [batch, 1] for scatter_add.

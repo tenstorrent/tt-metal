@@ -42,14 +42,17 @@ void PrintTo(const ParityCase& pc, std::ostream* os) {
 }
 
 class SGDParityTest : public ::testing::TestWithParam<ParityCase> {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
     }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
 
+protected:
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
-        ttml::autograd::ctx().close_device();
     }
 };
 

@@ -3,17 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fill_rm_program_factory.hpp"
-#include <tt-metalium/tilize_utils.hpp>
+
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::prim {
 
-FillRMProgramFactory::cached_program_t FillRMProgramFactory::create(
-    const FillRmParams& operation_attributes, const FillRmInputs& tensor_args, Tensor& tensor_return_value) {
-    using namespace tt::tt_metal;
+using namespace tt::tt_metal;
 
+ProgramDescriptor FillRMProgramFactory::create_descriptor(
+    const FillRmParams& operation_attributes, const FillRmInputs& tensor_args, Tensor& tensor_return_value) {
     const Tensor& input = tensor_args.input;
     Tensor& output = tensor_return_value;
     const uint32_t N = operation_attributes.N;
@@ -25,8 +28,7 @@ FillRMProgramFactory::cached_program_t FillRMProgramFactory::create(
     const float val_hi = operation_attributes.val_hi;
     const float val_lo = operation_attributes.val_lo;
 
-    Program program = CreateProgram();
-    const CoreRange core({0, 0}, {0, 0});
+    const CoreRangeSet core_ranges{CoreRange{{0, 0}, {0, 0}}};
 
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -42,28 +44,44 @@ FillRMProgramFactory::cached_program_t FillRMProgramFactory::create(
         W,
         num_cb_tiles);
 
-    const CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(num_cb_tiles * single_tile_size, {{0, cb_data_format}}).set_page_size(0, single_tile_size);
-    CreateCircularBuffer(program, core, cb_src0_config);
+    ProgramDescriptor desc;
 
-    const CircularBufferConfig cb_src1_config =
-        CircularBufferConfig(num_cb_tiles * single_tile_size, {{1, cb_data_format}}).set_page_size(1, single_tile_size);
-    CreateCircularBuffer(program, core, cb_src1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_cb_tiles * single_tile_size,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = 0,
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_cb_tiles * single_tile_size,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = 1,
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(*dst_buffer).append_to(reader_compile_time_args);
 
-    const KernelHandle reader_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/fill_rm/device/kernels/dataflow/fill_rm_interleaved.cpp",
-        core,
-        ReaderDataMovementConfig(reader_compile_time_args));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/fill_rm/device/kernels/dataflow/fill_rm_interleaved.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_ranges;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    SetRuntimeArgs(
-        program,
-        reader_kernel_id,
-        core,
-        {dst_buffer->address(),
+    // Buffer* triggers a binding entry for dst_buffer at arg slot 0; the framework
+    // patches its address on cache hits without rebuilding the descriptor.
+    reader_desc.emplace_runtime_args(
+        CoreCoord{0, 0},
+        {dst_buffer,
          uint32_t(N * C),
          uint32_t(H),
          uint32_t(W),
@@ -72,25 +90,9 @@ FillRMProgramFactory::cached_program_t FillRMProgramFactory::create(
          uint32_t(std::bit_cast<uint16_t>(bfloat16(val_hi))),
          uint32_t(std::bit_cast<uint16_t>(bfloat16(val_lo)))});
 
-    return cached_program_t{std::move(program), shared_variables_t{.kernel_id = reader_kernel_id}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
 
-void FillRMProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const FillRmParams& /*operation_attributes*/,
-    const FillRmInputs& /*tensor_args*/,
-    Tensor& tensor_return_value) {
-    using namespace tt::tt_metal;
-
-    Buffer* dst_buffer = tensor_return_value.buffer();
-
-    Program& program = cached_program.program;
-    const KernelHandle kernel_id = cached_program.shared_variables.kernel_id;
-
-    const CoreCoord core = {0, 0};
-
-    auto& runtime_args = GetRuntimeArgs(program, kernel_id, core);
-    runtime_args[0] = dst_buffer->address();
+    return desc;
 }
 
 }  // namespace ttnn::prim

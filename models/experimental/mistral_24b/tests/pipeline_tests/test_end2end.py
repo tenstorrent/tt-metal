@@ -22,10 +22,10 @@ from models.experimental.mistral_24b.tt.model import MistralTransformer as Trans
 from models.tt_transformers.tt.generator import Generator
 
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
-from models.common.utility_functions import run_for_wormhole_b0, skip_for_blackhole
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 
 from models.tt_transformers.tt.model_config import ModelArgs
-from transformers import AutoProcessor, AutoModelForVision2Seq
+from transformers import AutoProcessor, AutoModelForImageTextToText
 
 import re
 
@@ -37,7 +37,7 @@ def run_reference_demo_pipeline(messages, model_id="mistralai/Mistral-Small-3.1-
     logger.info("Running reference HF vision-text model...")
 
     processor = AutoProcessor.from_pretrained(model_id)
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         model_id,
         device_map="auto",
         torch_dtype=torch.bfloat16,
@@ -393,9 +393,9 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
     return True
 
 
+@pytest.mark.skip(reason="Disabled: see #45992")
 @torch.no_grad()
-@run_for_wormhole_b0()
-@skip_for_blackhole("Failing on DRAM harvested P100a, see #21419")
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

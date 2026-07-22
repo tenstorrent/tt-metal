@@ -109,8 +109,10 @@ DistributedTransformer::DistributedTransformer(const TransformerConfig& config) 
             embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
     }
     ln_fc = std::make_shared<ttml::modules::LayerNormLayer>(embedding_dim, use_composite_layernorm);
+    // LM head keeps its output vocab-sharded ([B,1,S,V/tp_size] per device); pair it
+    // with ttml::ops::distributed::vocab_parallel_cross_entropy_loss.
     fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-        embedding_dim, vocab_size, /* bias */ false, /* gather_output */ true);
+        embedding_dim, vocab_size, /* bias */ false, /* gather_output */ false);
 
     create_name("transformer");
     register_module(tok_emb, "tok_emb");

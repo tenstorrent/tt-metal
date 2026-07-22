@@ -1176,6 +1176,32 @@ def run_reduce_scatter_impl(
             ),
             id="experimental_strided_128x16_8_cores_2_N_blocks_6_workers",
         ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # bfloat8_b variant: each device has 2 x 2 tiles with a single mm block.
+                # Exercises the bfloat8_b data packing path (smaller page_size = 1088 bytes,
+                # so num_tiles_to_write_per_packet = 3 instead of 2 for bfloat16).
+                rs_input_shape=[8, 1, 64, 512],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat8_b,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=False,
+                mm_cores_y=1,
+                mm_block_ht=2,
+                mm_block_wt=2,
+                mm_N_full_block_wt=2,
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="experimental_strided_minimal_2x2_bfloat8_b",
+        ),
     ],
 )
 @pytest.mark.parametrize(

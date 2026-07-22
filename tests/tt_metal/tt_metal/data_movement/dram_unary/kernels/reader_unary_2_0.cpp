@@ -3,32 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc_semaphore.h"
+#include "experimental/kernel_args.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
 
 // DRAM to L1 read
 void kernel_main() {
-    constexpr uint32_t test_id = get_compile_time_arg_val(0);
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(1);
-    constexpr uint32_t pages_per_transaction = get_compile_time_arg_val(2);
-    constexpr uint32_t bytes_per_page = get_compile_time_arg_val(3);
-    constexpr uint32_t dram_addr = get_compile_time_arg_val(4);
-    constexpr uint32_t dram_channel = get_compile_time_arg_val(5);
-    constexpr uint32_t local_l1_addr = get_compile_time_arg_val(6);
-    constexpr uint32_t sem_id = get_compile_time_arg_val(7);
+    // True compile-time constants
+    constexpr uint32_t test_id = get_arg(args::test_id);
+    constexpr uint32_t bytes_per_page = get_arg(args::bytes_per_page);
+    constexpr uint32_t dram_addr = get_arg(args::dram_addr);
+    constexpr uint32_t dram_channel = get_arg(args::dram_channel);
+    constexpr uint32_t local_l1_addr = get_arg(args::l1_addr);
 
-    constexpr uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
+    uint32_t num_of_transactions = get_arg(args::num_of_transactions);
+    uint32_t pages_per_transaction = get_arg(args::pages_per_transaction);
+    uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
-    experimental::Semaphore semaphore(sem_id);
-    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::DRAM;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
+    Semaphore semaphore(sem::dram_sync);
+    constexpr AllocatorBankType bank_type = AllocatorBankType::DRAM;
 
     {
         DeviceZoneScopedN("RISCV1");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
             noc.async_read(
-                experimental::AllocatorBank<bank_type>(),
+                AllocatorBank<bank_type>(),
                 unicast_endpoint,
                 bytes_per_transaction,
                 {

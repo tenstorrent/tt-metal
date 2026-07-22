@@ -5,20 +5,17 @@
 from typing import Dict, List
 
 import pandas as pd
+from loguru import logger
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
 
+from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .test_config import TestConfig
 
-# Derive all constants from TestConfig (single source of truth)
-COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS  # 86 config slots
-COUNTER_DATA_WORD_COUNT = (
-    TestConfig._PERF_COUNTERS_DATA_WORDS
-)  # 172 data words (86 * 2)
-PERF_COUNTERS_STARTER_MASK = 0x3  # 2 bits for thread ID 0-3
-PERF_COUNTERS_STOPPER_MASK = 0x3
+# Constants and Configuration (derived from TestConfig).
 
-# Single shared buffer addresses (all threads use the same location)
-# These are already computed in TestConfig - use them directly
+COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS
+COUNTER_DATA_WORD_COUNT = TestConfig._PERF_COUNTERS_DATA_WORDS
+
 PERF_COUNTERS_CONFIG_ADDR = TestConfig.PERF_COUNTERS_CONFIG_ADDR
 PERF_COUNTERS_DATA_ADDR = TestConfig.PERF_COUNTERS_DATA_ADDR
 PERF_COUNTERS_SYNC_CTRL_ADDR = TestConfig.PERF_COUNTERS_SYNC_CTRL_ADDR
@@ -32,9 +29,6 @@ PERF_COUNTERS_STOP_ELECT_ADDR = PERF_COUNTERS_STOP_COUNTER_ADDR + (
     PERF_COUNTERS_THREAD_COUNT * 4
 )
 
-# TRISC id -> name. BH uses ids 0–2; Quasar uses 0–3. Same mapping for missing-thread errors and starter/stopper.
-PERF_COUNTER_TRISC_NAMES = {0: "UNPACK", 1: "MATH", 2: "PACK", 3: "SFPU"}
-
 COUNTER_BANK_NAMES = {
     0: "INSTRN_THREAD",
     1: "FPU",
@@ -46,118 +40,365 @@ COUNTER_BANK_NAMES = {
 # Reverse lookup: bank name -> bank id (computed once at module load)
 _BANK_NAME_TO_ID = {v: k for k, v in COUNTER_BANK_NAMES.items()}
 
-COUNTER_NAMES = {
-    "INSTRN_THREAD": {
-        # Instruction availability counters (per-thread)
-        0: "CFG_INSTRN_AVAILABLE_0",
-        1: "CFG_INSTRN_AVAILABLE_1",
-        2: "CFG_INSTRN_AVAILABLE_2",
-        3: "SYNC_INSTRN_AVAILABLE_0",
-        4: "SYNC_INSTRN_AVAILABLE_1",
-        5: "SYNC_INSTRN_AVAILABLE_2",
-        6: "THCON_INSTRN_AVAILABLE_0",
-        7: "THCON_INSTRN_AVAILABLE_1",
-        8: "THCON_INSTRN_AVAILABLE_2",
-        9: "XSEARCH_INSTRN_AVAILABLE_0",
-        10: "XSEARCH_INSTRN_AVAILABLE_1",
-        11: "XSEARCH_INSTRN_AVAILABLE_2",
-        12: "MOVE_INSTRN_AVAILABLE_0",
-        13: "MOVE_INSTRN_AVAILABLE_1",
-        14: "MOVE_INSTRN_AVAILABLE_2",
-        15: "FPU_INSTRN_AVAILABLE_0",
-        16: "FPU_INSTRN_AVAILABLE_1",
-        17: "FPU_INSTRN_AVAILABLE_2",
-        18: "UNPACK_INSTRN_AVAILABLE_0",
-        19: "UNPACK_INSTRN_AVAILABLE_1",
-        20: "UNPACK_INSTRN_AVAILABLE_2",
-        21: "PACK_INSTRN_AVAILABLE_0",
-        22: "PACK_INSTRN_AVAILABLE_1",
-        23: "PACK_INSTRN_AVAILABLE_2",
-        # Thread stalls
-        24: "THREAD_STALLS_0",
-        25: "THREAD_STALLS_1",
-        26: "THREAD_STALLS_2",
-        # Wait counters (shared across threads)
-        27: "WAITING_FOR_SRCA_CLEAR",
-        28: "WAITING_FOR_SRCB_CLEAR",
-        29: "WAITING_FOR_SRCA_VALID",
-        30: "WAITING_FOR_SRCB_VALID",
-        # Per-thread wait counters
-        31: "WAITING_FOR_THCON_IDLE_0",
-        32: "WAITING_FOR_THCON_IDLE_1",
-        33: "WAITING_FOR_THCON_IDLE_2",
-        34: "WAITING_FOR_UNPACK_IDLE_0",
-        35: "WAITING_FOR_UNPACK_IDLE_1",
-        36: "WAITING_FOR_UNPACK_IDLE_2",
-        37: "WAITING_FOR_PACK_IDLE_0",
-        38: "WAITING_FOR_PACK_IDLE_1",
-        39: "WAITING_FOR_PACK_IDLE_2",
-        40: "WAITING_FOR_MATH_IDLE_0",
-        41: "WAITING_FOR_MATH_IDLE_1",
-        42: "WAITING_FOR_MATH_IDLE_2",
-        43: "WAITING_FOR_NONZERO_SEM_0",
-        44: "WAITING_FOR_NONZERO_SEM_1",
-        45: "WAITING_FOR_NONZERO_SEM_2",
-        46: "WAITING_FOR_NONFULL_SEM_0",
-        47: "WAITING_FOR_NONFULL_SEM_1",
-        48: "WAITING_FOR_NONFULL_SEM_2",
-        49: "WAITING_FOR_MOVE_IDLE_0",
-        50: "WAITING_FOR_MOVE_IDLE_1",
-        51: "WAITING_FOR_MOVE_IDLE_2",
-        52: "WAITING_FOR_MMIO_IDLE_0",
-        53: "WAITING_FOR_MMIO_IDLE_1",
-        54: "WAITING_FOR_MMIO_IDLE_2",
-        55: "WAITING_FOR_SFPU_IDLE_0",
-        56: "WAITING_FOR_SFPU_IDLE_1",
-        57: "WAITING_FOR_SFPU_IDLE_2",
-        # Thread instruction counts (bit 8 set = ID 256+n)
-        256: "THREAD_INSTRUCTIONS_0",
-        257: "THREAD_INSTRUCTIONS_1",
-        258: "THREAD_INSTRUCTIONS_2",
-    },
-    "FPU": {
-        0: "FPU_INSTRUCTION",
-        1: "SFPU_INSTRUCTION",
-        257: "FPU_OR_SFPU_INSTRN",  # Combined FPU/SFPU
-    },
-    "TDMA_UNPACK": {
-        1: "DATA_HAZARD_STALLS_MOVD2A",
-        3: "MATH_INSTRN_STARTED",
-        4: "MATH_INSTRN_AVAILABLE",
-        5: "SRCB_WRITE_AVAILABLE",
-        6: "SRCA_WRITE_AVAILABLE",
-        7: "UNPACK0_BUSY_THREAD0",
-        8: "UNPACK1_BUSY_THREAD0",
-        9: "UNPACK0_BUSY_THREAD1",
-        10: "UNPACK1_BUSY_THREAD1",
-        259: "SRCB_WRITE",  # Bit 8 set
-        261: "SRCA_WRITE",  # Bit 8 set
-    },
-    "L1": {
-        # Format: (counter_id, l1_mux) -> name
-        (0, 0): "NOC_RING0_INCOMING_1",
-        (1, 0): "NOC_RING0_INCOMING_0",
-        (2, 0): "NOC_RING0_OUTGOING_1",
-        (3, 0): "NOC_RING0_OUTGOING_0",
-        (4, 0): "L1_ARB_TDMA_BUNDLE_1",
-        (5, 0): "L1_ARB_TDMA_BUNDLE_0",
-        (6, 0): "L1_ARB_UNPACKER",
-        (7, 0): "L1_NO_ARB_UNPACKER",
-        (0, 1): "NOC_RING1_INCOMING_1",
-        (1, 1): "NOC_RING1_INCOMING_0",
-        (2, 1): "NOC_RING1_OUTGOING_1",
-        (3, 1): "NOC_RING1_OUTGOING_0",
-        (4, 1): "TDMA_BUNDLE_1_ARB",
-        (5, 1): "TDMA_BUNDLE_0_ARB",
-        (6, 1): "TDMA_EXT_UNPACK_9_10",
-        (7, 1): "TDMA_PACKER_2_WR",
-    },
-    "TDMA_PACK": {
-        11: "PACKER_DEST_READ_AVAILABLE",
-        18: "PACKER_BUSY",
-        272: "AVAILABLE_MATH",  # Bit 8 set
-    },
+# Config word layout (must match counters.h:
+# PERF_CFG_VALID_BIT / PERF_CFG_L1_MUX_SHIFT / PERF_CFG_COUNTER_SHIFT / PERF_CFG_BANK_MASK).
+PERF_CFG_VALID_BIT = 1 << 31
+PERF_CFG_L1_MUX_SHIFT = 17
+PERF_CFG_L1_MUX_MASK = 0x7
+PERF_CFG_COUNTER_SHIFT = 8
+PERF_CFG_COUNTER_MASK = 0x1FF
+PERF_CFG_BANK_MASK = 0xFF
+
+# Per-arch counter inventories. WH/BH differ in TDMA_PACK count, L1 mux width, INSTRN_THREAD wait layout.
+
+# Banks shared between WH and BH (identical IDs).
+_FPU_COUNTERS = {
+    0: "FPU_COUNTER",
+    1: "SFPU_COUNTER",
+    257: "MATH_COUNTER",
 }
+
+_TDMA_UNPACK_COUNTERS = {
+    0: "MATH_SRC_DATA_READY",
+    1: "DATA_HAZARD_STALLS_MOVD2A",
+    2: "MATH_FIDELITY_STALL",
+    3: "MATH_INSTRN_STARTED",
+    4: "MATH_INSTRN_AVAILABLE",
+    5: "SRCB_WRITE_AVAILABLE",
+    6: "SRCA_WRITE_AVAILABLE",
+    7: "UNPACK0_BUSY_THREAD0",
+    8: "UNPACK1_BUSY_THREAD0",
+    9: "UNPACK0_BUSY_THREAD1",
+    10: "UNPACK1_BUSY_THREAD1",
+    256: "MATH_INSTRN_HF_4_CYCLE",
+    257: "MATH_INSTRN_HF_2_CYCLE",
+    258: "MATH_INSTRN_HF_1_CYCLE",
+    259: "SRCB_WRITE_ACTUAL",
+    260: "SRCB_WRITE_NOT_BLOCKED_PORT",
+    261: "SRCA_WRITE_NOT_BLOCKED_OVR",
+    262: "SRCA_WRITE_ACTUAL",
+    263: "SRCA_WRITE_THREAD0",
+    264: "SRCB_WRITE_THREAD0",
+    265: "SRCA_WRITE_THREAD1",
+    266: "SRCB_WRITE_THREAD1",
+}
+
+# Wormhole-specific tables ===================================================
+# Source: tt_metal/hw/inc/internal/tt-1xx/wormhole/hw_counters.h
+
+_WH_TDMA_PACK_COUNTERS = {
+    11: "PACKER_DEST_READ_AVAILABLE",
+    12: "PACKER_DEST_READ_1",
+    13: "PACKER_DEST_READ_2",
+    14: "PACKER_DEST_READ_3",
+    15: "PACKER_BUSY_0",
+    16: "PACKER_BUSY_1",
+    17: "PACKER_BUSY_2",
+    18: "PACKER_BUSY",
+    267: "DEST_READ_GRANTED_0",
+    268: "DEST_READ_GRANTED_1",
+    269: "DEST_READ_GRANTED_2",
+    270: "DEST_READ_GRANTED_3",
+    271: "MATH_NOT_STALLED_DEST_WR_PORT",
+    272: "AVAILABLE_MATH",
+}
+
+# WH INSTRN_THREAD: gap IDs at 9-11 and replicated stall conditions at 27/30/33/36.
+_WH_INSTRN_COUNTERS = {
+    0: "CFG_INSTRN_AVAILABLE_0",
+    1: "CFG_INSTRN_AVAILABLE_1",
+    2: "CFG_INSTRN_AVAILABLE_2",
+    3: "SYNC_INSTRN_AVAILABLE_0",
+    4: "SYNC_INSTRN_AVAILABLE_1",
+    5: "SYNC_INSTRN_AVAILABLE_2",
+    6: "THCON_INSTRN_AVAILABLE_0",
+    7: "THCON_INSTRN_AVAILABLE_1",
+    8: "THCON_INSTRN_AVAILABLE_2",
+    12: "MOVE_INSTRN_AVAILABLE_0",
+    13: "MOVE_INSTRN_AVAILABLE_1",
+    14: "MOVE_INSTRN_AVAILABLE_2",
+    15: "FPU_INSTRN_AVAILABLE_0",
+    16: "FPU_INSTRN_AVAILABLE_1",
+    17: "FPU_INSTRN_AVAILABLE_2",
+    18: "UNPACK_INSTRN_AVAILABLE_0",
+    19: "UNPACK_INSTRN_AVAILABLE_1",
+    20: "UNPACK_INSTRN_AVAILABLE_2",
+    21: "PACK_INSTRN_AVAILABLE_0",
+    22: "PACK_INSTRN_AVAILABLE_1",
+    23: "PACK_INSTRN_AVAILABLE_2",
+    24: "THREAD_STALLS_0",
+    25: "THREAD_STALLS_1",
+    26: "THREAD_STALLS_2",
+    27: "WAITING_FOR_SRCA_CLEAR",
+    30: "WAITING_FOR_SRCB_CLEAR",
+    33: "WAITING_FOR_SRCA_VALID",
+    36: "WAITING_FOR_SRCB_VALID",
+    39: "WAITING_FOR_THCON_IDLE_0",
+    40: "WAITING_FOR_UNPACK_IDLE_0",
+    41: "WAITING_FOR_PACK_IDLE_0",
+    42: "WAITING_FOR_MATH_IDLE_0",
+    43: "WAITING_FOR_NONZERO_SEM_0",
+    44: "WAITING_FOR_NONFULL_SEM_0",
+    45: "WAITING_FOR_MOVE_IDLE_0",
+    46: "WAITING_FOR_MMIO_IDLE_0",
+    47: "WAITING_FOR_SFPU_IDLE_0",
+    48: "WAITING_FOR_THCON_IDLE_1",
+    49: "WAITING_FOR_UNPACK_IDLE_1",
+    50: "WAITING_FOR_PACK_IDLE_1",
+    51: "WAITING_FOR_MATH_IDLE_1",
+    52: "WAITING_FOR_NONZERO_SEM_1",
+    53: "WAITING_FOR_NONFULL_SEM_1",
+    54: "WAITING_FOR_MOVE_IDLE_1",
+    55: "WAITING_FOR_MMIO_IDLE_1",
+    56: "WAITING_FOR_SFPU_IDLE_1",
+    57: "WAITING_FOR_THCON_IDLE_2",
+    58: "WAITING_FOR_UNPACK_IDLE_2",
+    59: "WAITING_FOR_PACK_IDLE_2",
+    60: "WAITING_FOR_MATH_IDLE_2",
+    61: "WAITING_FOR_NONZERO_SEM_2",
+    62: "WAITING_FOR_NONFULL_SEM_2",
+    63: "WAITING_FOR_MOVE_IDLE_2",
+    64: "WAITING_FOR_MMIO_IDLE_2",
+    65: "WAITING_FOR_SFPU_IDLE_2",
+    256: "THREAD_INSTRUCTIONS_0",
+    264: "THREAD_INSTRUCTIONS_1",
+    272: "THREAD_INSTRUCTIONS_2",
+    283: "ANY_THREAD_STALL",
+}
+
+# WH L1: 2 banks (1-bit mux). bank 0 = port 1 ECC/Pack1, bank 1 = TDMA Packer 2.
+_WH_L1_COUNTERS = {
+    (0, 0): "L1_0_UNPACKER_0",
+    (1, 0): "L1_0_UNPACKER_1_ECC_PACK1",
+    (2, 0): "L1_0_TDMA_BUNDLE_0_RISC",
+    (3, 0): "L1_0_TDMA_BUNDLE_1_TRISC",
+    (4, 0): "L1_0_NOC_RING0_OUTGOING_0",
+    (5, 0): "L1_0_NOC_RING0_OUTGOING_1",
+    (6, 0): "L1_0_NOC_RING0_INCOMING_0",
+    (7, 0): "L1_0_NOC_RING0_INCOMING_1",
+    (256, 0): "L1_0_UNPACKER_0_GRANT",
+    (257, 0): "L1_0_PORT1_GRANT",
+    (258, 0): "L1_0_TDMA_BUNDLE_0_GRANT",
+    (259, 0): "L1_0_TDMA_BUNDLE_1_GRANT",
+    (260, 0): "L1_0_NOC_RING0_OUTGOING_0_GRANT",
+    (261, 0): "L1_0_NOC_RING0_OUTGOING_1_GRANT",
+    (262, 0): "L1_0_NOC_RING0_INCOMING_0_GRANT",
+    (263, 0): "L1_0_NOC_RING0_INCOMING_1_GRANT",
+    (0, 1): "L1_1_TDMA_PACKER_2",
+    (1, 1): "L1_1_EXT_UNPACKER_1",
+    (2, 1): "L1_1_EXT_UNPACKER_2",
+    (3, 1): "L1_1_EXT_UNPACKER_3",
+    (4, 1): "L1_1_NOC_RING1_OUTGOING_0",
+    (5, 1): "L1_1_NOC_RING1_OUTGOING_1",
+    (6, 1): "L1_1_NOC_RING1_INCOMING_0",
+    (7, 1): "L1_1_NOC_RING1_INCOMING_1",
+    (256, 1): "L1_1_PORT8_GRANT",
+    (257, 1): "L1_1_EXT_UNPACKER_1_GRANT",
+    (258, 1): "L1_1_EXT_UNPACKER_2_GRANT",
+    (259, 1): "L1_1_EXT_UNPACKER_3_GRANT",
+    (260, 1): "L1_1_NOC_RING1_OUTGOING_0_GRANT",
+    (261, 1): "L1_1_NOC_RING1_OUTGOING_1_GRANT",
+    (262, 1): "L1_1_NOC_RING1_INCOMING_0_GRANT",
+    (263, 1): "L1_1_NOC_RING1_INCOMING_1_GRANT",
+}
+
+_WORMHOLE_COUNTER_NAMES = {
+    "INSTRN_THREAD": _WH_INSTRN_COUNTERS,
+    "FPU": _FPU_COUNTERS,
+    "TDMA_UNPACK": _TDMA_UNPACK_COUNTERS,
+    "TDMA_PACK": _WH_TDMA_PACK_COUNTERS,
+    "L1": _WH_L1_COUNTERS,
+}
+
+# Blackhole-specific tables ==================================================
+# Source: tt_metal/hw/inc/internal/tt-1xx/blackhole/hw_counters.h
+
+# BH: only 1 packer engine.
+_BH_TDMA_PACK_COUNTERS = {
+    11: "PACKER_DEST_READ_AVAILABLE",
+    18: "PACKER_BUSY",
+    267: "DEST_READ_GRANTED_0",
+    271: "MATH_NOT_STALLED_DEST_WR_PORT",
+    272: "AVAILABLE_MATH",
+}
+
+# BH INSTRN_THREAD: gap IDs at 9-11 only (kick tied to 0), then contiguous 27..57.
+_BH_INSTRN_COUNTERS = {
+    0: "CFG_INSTRN_AVAILABLE_0",
+    1: "CFG_INSTRN_AVAILABLE_1",
+    2: "CFG_INSTRN_AVAILABLE_2",
+    3: "SYNC_INSTRN_AVAILABLE_0",
+    4: "SYNC_INSTRN_AVAILABLE_1",
+    5: "SYNC_INSTRN_AVAILABLE_2",
+    6: "THCON_INSTRN_AVAILABLE_0",
+    7: "THCON_INSTRN_AVAILABLE_1",
+    8: "THCON_INSTRN_AVAILABLE_2",
+    12: "MOVE_INSTRN_AVAILABLE_0",
+    13: "MOVE_INSTRN_AVAILABLE_1",
+    14: "MOVE_INSTRN_AVAILABLE_2",
+    15: "FPU_INSTRN_AVAILABLE_0",
+    16: "FPU_INSTRN_AVAILABLE_1",
+    17: "FPU_INSTRN_AVAILABLE_2",
+    18: "UNPACK_INSTRN_AVAILABLE_0",
+    19: "UNPACK_INSTRN_AVAILABLE_1",
+    20: "UNPACK_INSTRN_AVAILABLE_2",
+    21: "PACK_INSTRN_AVAILABLE_0",
+    22: "PACK_INSTRN_AVAILABLE_1",
+    23: "PACK_INSTRN_AVAILABLE_2",
+    24: "THREAD_STALLS_0",
+    25: "THREAD_STALLS_1",
+    26: "THREAD_STALLS_2",
+    27: "WAITING_FOR_SRCA_CLEAR",
+    28: "WAITING_FOR_SRCB_CLEAR",
+    29: "WAITING_FOR_SRCA_VALID",
+    30: "WAITING_FOR_SRCB_VALID",
+    31: "WAITING_FOR_THCON_IDLE_0",
+    32: "WAITING_FOR_UNPACK_IDLE_0",
+    33: "WAITING_FOR_PACK_IDLE_0",
+    34: "WAITING_FOR_MATH_IDLE_0",
+    35: "WAITING_FOR_NONZERO_SEM_0",
+    36: "WAITING_FOR_NONFULL_SEM_0",
+    37: "WAITING_FOR_MOVE_IDLE_0",
+    38: "WAITING_FOR_MMIO_IDLE_0",
+    39: "WAITING_FOR_SFPU_IDLE_0",
+    40: "WAITING_FOR_THCON_IDLE_1",
+    41: "WAITING_FOR_UNPACK_IDLE_1",
+    42: "WAITING_FOR_PACK_IDLE_1",
+    43: "WAITING_FOR_MATH_IDLE_1",
+    44: "WAITING_FOR_NONZERO_SEM_1",
+    45: "WAITING_FOR_NONFULL_SEM_1",
+    46: "WAITING_FOR_MOVE_IDLE_1",
+    47: "WAITING_FOR_MMIO_IDLE_1",
+    48: "WAITING_FOR_SFPU_IDLE_1",
+    49: "WAITING_FOR_THCON_IDLE_2",
+    50: "WAITING_FOR_UNPACK_IDLE_2",
+    51: "WAITING_FOR_PACK_IDLE_2",
+    52: "WAITING_FOR_MATH_IDLE_2",
+    53: "WAITING_FOR_NONZERO_SEM_2",
+    54: "WAITING_FOR_NONFULL_SEM_2",
+    55: "WAITING_FOR_MOVE_IDLE_2",
+    56: "WAITING_FOR_MMIO_IDLE_2",
+    57: "WAITING_FOR_SFPU_IDLE_2",
+    256: "THREAD_INSTRUCTIONS_0",
+    264: "THREAD_INSTRUCTIONS_1",
+    272: "THREAD_INSTRUCTIONS_2",
+    283: "ANY_THREAD_STALL",
+}
+
+# BH L1: 5 banks (3-bit mux 0..4). bank 0 = unified packer, bank 1 = RISC core,
+# banks 2/3 = NOC Ring 2/3 ports, bank 4 = misc ports.
+_BH_L1_COUNTERS = {
+    # Bank 0 (mux=0): unpacker, TDMA bundles, NOC Ring 0
+    (0, 0): "L1_0_UNPACKER_0",
+    (1, 0): "L1_0_UNIFIED_PACKER",
+    (2, 0): "L1_0_TDMA_BUNDLE_0_RISC",
+    (3, 0): "L1_0_TDMA_BUNDLE_1_TRISC",
+    (4, 0): "L1_0_NOC_RING0_OUTGOING_0",
+    (5, 0): "L1_0_NOC_RING0_OUTGOING_1",
+    (6, 0): "L1_0_NOC_RING0_INCOMING_0",
+    (7, 0): "L1_0_NOC_RING0_INCOMING_1",
+    (256, 0): "L1_0_UNPACKER_0_GRANT",
+    (257, 0): "L1_0_PORT1_GRANT",
+    (258, 0): "L1_0_TDMA_BUNDLE_0_GRANT",
+    (259, 0): "L1_0_TDMA_BUNDLE_1_GRANT",
+    (260, 0): "L1_0_NOC_RING0_OUTGOING_0_GRANT",
+    (261, 0): "L1_0_NOC_RING0_OUTGOING_1_GRANT",
+    (262, 0): "L1_0_NOC_RING0_INCOMING_0_GRANT",
+    (263, 0): "L1_0_NOC_RING0_INCOMING_1_GRANT",
+    # Bank 1 (mux=1): RISC core, ext unpacker, NOC Ring 1
+    (0, 1): "L1_1_RISC_CORE",
+    (1, 1): "L1_1_EXT_UNPACKER_1",
+    (2, 1): "L1_1_EXT_UNPACKER_2",
+    (3, 1): "L1_1_EXT_UNPACKER_3",
+    (4, 1): "L1_1_NOC_RING1_OUTGOING_0",
+    (5, 1): "L1_1_NOC_RING1_OUTGOING_1",
+    (6, 1): "L1_1_NOC_RING1_INCOMING_0",
+    (7, 1): "L1_1_NOC_RING1_INCOMING_1",
+    (256, 1): "L1_1_PORT8_GRANT",
+    (257, 1): "L1_1_EXT_UNPACKER_1_GRANT",
+    (258, 1): "L1_1_EXT_UNPACKER_2_GRANT",
+    (259, 1): "L1_1_EXT_UNPACKER_3_GRANT",
+    (260, 1): "L1_1_NOC_RING1_OUTGOING_0_GRANT",
+    (261, 1): "L1_1_NOC_RING1_OUTGOING_1_GRANT",
+    (262, 1): "L1_1_NOC_RING1_INCOMING_0_GRANT",
+    (263, 1): "L1_1_NOC_RING1_INCOMING_1_GRANT",
+    # Bank 2 (mux=2): NOC Ring 2 ports 16-23 (BH-only)
+    (0, 2): "L1_2_NOC_RING2_PORT_0",
+    (1, 2): "L1_2_NOC_RING2_PORT_1",
+    (2, 2): "L1_2_NOC_RING2_PORT_2",
+    (3, 2): "L1_2_NOC_RING2_PORT_3",
+    (4, 2): "L1_2_NOC_RING2_PORT_4",
+    (5, 2): "L1_2_NOC_RING2_PORT_5",
+    (6, 2): "L1_2_NOC_RING2_PORT_6",
+    (7, 2): "L1_2_NOC_RING2_PORT_7",
+    (256, 2): "L1_2_NOC_RING2_PORT_0_GRANT",
+    (257, 2): "L1_2_NOC_RING2_PORT_1_GRANT",
+    (258, 2): "L1_2_NOC_RING2_PORT_2_GRANT",
+    (259, 2): "L1_2_NOC_RING2_PORT_3_GRANT",
+    (260, 2): "L1_2_NOC_RING2_PORT_4_GRANT",
+    (261, 2): "L1_2_NOC_RING2_PORT_5_GRANT",
+    (262, 2): "L1_2_NOC_RING2_PORT_6_GRANT",
+    (263, 2): "L1_2_NOC_RING2_PORT_7_GRANT",
+    # Bank 3 (mux=3): NOC Ring 3 ports 24-31 (BH-only)
+    (0, 3): "L1_3_NOC_RING3_PORT_0",
+    (1, 3): "L1_3_NOC_RING3_PORT_1",
+    (2, 3): "L1_3_NOC_RING3_PORT_2",
+    (3, 3): "L1_3_NOC_RING3_PORT_3",
+    (4, 3): "L1_3_NOC_RING3_PORT_4",
+    (5, 3): "L1_3_NOC_RING3_PORT_5",
+    (6, 3): "L1_3_NOC_RING3_PORT_6",
+    (7, 3): "L1_3_NOC_RING3_PORT_7",
+    (256, 3): "L1_3_NOC_RING3_PORT_0_GRANT",
+    (257, 3): "L1_3_NOC_RING3_PORT_1_GRANT",
+    (258, 3): "L1_3_NOC_RING3_PORT_2_GRANT",
+    (259, 3): "L1_3_NOC_RING3_PORT_3_GRANT",
+    (260, 3): "L1_3_NOC_RING3_PORT_4_GRANT",
+    (261, 3): "L1_3_NOC_RING3_PORT_5_GRANT",
+    (262, 3): "L1_3_NOC_RING3_PORT_6_GRANT",
+    (263, 3): "L1_3_NOC_RING3_PORT_7_GRANT",
+    # Bank 4 (mux=4): misc ports 32-39 (BH-only)
+    (0, 4): "L1_4_MISC_PORT_0",
+    (1, 4): "L1_4_MISC_PORT_1",
+    (2, 4): "L1_4_MISC_PORT_2",
+    (3, 4): "L1_4_MISC_PORT_3",
+    (4, 4): "L1_4_MISC_PORT_4",
+    (5, 4): "L1_4_MISC_PORT_5",
+    (6, 4): "L1_4_MISC_PORT_6",
+    (7, 4): "L1_4_MISC_PORT_7",
+    (256, 4): "L1_4_MISC_PORT_0_GRANT",
+    (257, 4): "L1_4_MISC_PORT_1_GRANT",
+    (258, 4): "L1_4_MISC_PORT_2_GRANT",
+    (259, 4): "L1_4_MISC_PORT_3_GRANT",
+    (260, 4): "L1_4_MISC_PORT_4_GRANT",
+    (261, 4): "L1_4_MISC_PORT_5_GRANT",
+    (262, 4): "L1_4_MISC_PORT_6_GRANT",
+    (263, 4): "L1_4_MISC_PORT_7_GRANT",
+}
+
+_BLACKHOLE_COUNTER_NAMES = {
+    "INSTRN_THREAD": _BH_INSTRN_COUNTERS,
+    "FPU": _FPU_COUNTERS,
+    "TDMA_UNPACK": _TDMA_UNPACK_COUNTERS,
+    "TDMA_PACK": _BH_TDMA_PACK_COUNTERS,
+    "L1": _BH_L1_COUNTERS,
+}
+
+# Quasar inventory is empty for now — counter layout not yet finalized.
+_QUASAR_COUNTER_NAMES = {
+    "INSTRN_THREAD": {},
+    "FPU": {},
+    "TDMA_UNPACK": {},
+    "TDMA_PACK": {},
+    "L1": {},
+}
+
+_arch = get_chip_architecture()
+if _arch == ChipArchitecture.WORMHOLE:
+    COUNTER_NAMES = _WORMHOLE_COUNTER_NAMES
+elif _arch == ChipArchitecture.BLACKHOLE:
+    COUNTER_NAMES = _BLACKHOLE_COUNTER_NAMES
+else:
+    COUNTER_NAMES = _QUASAR_COUNTER_NAMES
 
 # Reverse lookups for O(1) counter name -> id resolution (computed once at module load)
 _L1_NAME_TO_ID = {(name, mux): cid for (cid, mux), name in COUNTER_NAMES["L1"].items()}
@@ -170,76 +411,58 @@ _COUNTER_NAME_TO_ID = {
 
 
 def _build_all_counters() -> List[Dict]:
-    """Build the complete list of performance counters across all banks."""
+    """Build the complete list of performance counters for the active arch.
+
+    L1 entries span multiple mux banks: WH uses mux 0..1, BH mux 0..4. Iterates
+    L1 in mux-ascending order so configure_counters writes consecutive mux
+    groups together (helps the HW readback path keep the mux setting stable).
+    """
     counters = []
 
-    # INSTRN_THREAD bank (61 counters)
     for counter_id in COUNTER_NAMES["INSTRN_THREAD"].keys():
         counters.append({"bank": "INSTRN_THREAD", "counter_id": counter_id})
 
-    # FPU bank (3 counters)
     for counter_id in COUNTER_NAMES["FPU"].keys():
         counters.append({"bank": "FPU", "counter_id": counter_id})
 
-    # TDMA_UNPACK bank (11 counters)
     for counter_id in COUNTER_NAMES["TDMA_UNPACK"].keys():
         counters.append({"bank": "TDMA_UNPACK", "counter_id": counter_id})
 
-    # TDMA_PACK bank (3 counters)
     for counter_id in COUNTER_NAMES["TDMA_PACK"].keys():
         counters.append({"bank": "TDMA_PACK", "counter_id": counter_id})
 
-    # L1 bank with l1_mux=0 (8 counters)
-    for (counter_id, l1_mux), name in COUNTER_NAMES["L1"].items():
-        if l1_mux == 0:
-            counters.append({"bank": "L1", "counter_id": counter_id, "l1_mux": 0})
-
-    # L1 bank with l1_mux=1 (8 counters)
-    for (counter_id, l1_mux), name in COUNTER_NAMES["L1"].items():
-        if l1_mux == 1:
-            counters.append({"bank": "L1", "counter_id": counter_id, "l1_mux": 1})
+    # L1: iterate mux groups in ascending order (0, 1, [2, 3, 4 on BH]).
+    l1_muxes = sorted({mux for (_, mux) in COUNTER_NAMES["L1"].keys()})
+    for mux in l1_muxes:
+        for (counter_id, l1_mux), _ in COUNTER_NAMES["L1"].items():
+            if l1_mux == mux:
+                counters.append({"bank": "L1", "counter_id": counter_id, "l1_mux": mux})
 
     return counters
 
 
-# Pre-built list of all counters (computed once at module load)
-# Total: 94 counters (61 INSTRN_THREAD + 3 FPU + 11 TDMA_UNPACK + 3 TDMA_PACK + 16 L1)
-# Note: L1 has 8 counter IDs × 2 mux settings = 16 entries, but only 8 L1 counters
-# can be active at once (determined by mux setting), so maximum concurrent counters = 86
+# Pre-built list of all counters (WH=130, BH=169).
 ALL_COUNTERS = _build_all_counters()
 
 
 def configure_counters(location: str = "0,0") -> None:
-    """
-    Configure performance counters in the shared buffer for all threads (UNPACK, MATH, PACK, and in Quasar, isolated SFPU).
-
-    Writes counter configuration to L1 memory that all threads access. Configures all 94
-    counter definitions (61 INSTRN_THREAD + 3 FPU + 11 TDMA_UNPACK + 3 TDMA_PACK + 16 L1).
-    Note: Only 86 slots are available in hardware; L1 counters (16 defs, 8 active at once)
-    require mux configuration before measurement starts.
-
-    The counters are started/stopped by all threads via start_perf_counters()/stop_perf_counters(),
-    but only the last thread to finish (last stopper) reads the hardware and writes results.
-
-    Args:
-        location: Tensix core coordinates (e.g., "0,0").
-    """
-    # Encode counter configurations
+    """Write the per-arch counter inventory into the shared L1 config buffer."""
     config_words = []
     for counter in ALL_COUNTERS:
-        bank_id = _BANK_NAME_TO_ID[counter["bank"]]
-        l1_mux = counter.get("l1_mux", 0)
-        counter_id = counter["counter_id"]
-        # Config word format: [valid(31), l1_mux(17), counter_sel(8-16), bank_id(0-7)]
-        config_word = (
-            (1 << 31) | (l1_mux << 17) | (counter_id << 8) | bank_id  # Valid bit
+        l1_mux = counter.get("l1_mux", 0) & PERF_CFG_L1_MUX_MASK
+        l1_mux_shifted = l1_mux << PERF_CFG_L1_MUX_SHIFT
+        counter_id_shifted = (
+            counter["counter_id"] & PERF_CFG_COUNTER_MASK
+        ) << PERF_CFG_COUNTER_SHIFT
+        bank_id = _BANK_NAME_TO_ID[counter["bank"]] & PERF_CFG_BANK_MASK
+        config_words.append(
+            PERF_CFG_VALID_BIT | l1_mux_shifted | counter_id_shifted | bank_id
         )
-        config_words.append(config_word)
 
     # Pad config words to full slot count
     config_words.extend([0] * (COUNTER_SLOT_COUNT - len(config_words)))
 
-    # Write config to shared buffer
+    # Write config to the single shared buffer (all threads share one location)
     write_words_to_device(
         location=location, addr=PERF_COUNTERS_CONFIG_ADDR, data=config_words
     )
@@ -260,147 +483,98 @@ def configure_counters(location: str = "0,0") -> None:
     )
 
 
-def read_counters(location: str = "0,0") -> pd.DataFrame:
-    """
-    Read performance counter results from the shared buffer.
+def _zone_config_addr(zone: int) -> int:
+    """Config is shared across all zones (single buffer at base addr)."""
+    _ = zone
+    return TestConfig.PERF_COUNTERS_CONFIG_ADDR
 
-    In the shared buffer architecture, whichever thread finishes last (the "last stopper")
-    reads the hardware counters and writes them to the shared buffer. This function returns
-    a single thread's snapshot - the results captured by the last stopper.
 
-    Args:
-        location: Tensix core coordinates (e.g., "0,0").
-
-    Returns:
-        DataFrame containing counter results, with columns:
-        starter_thread, stopper_thread, bank, counter_name, counter_id, cycles, count, l1_mux
-    """
-    all_results = []
-
-    # Read from the single shared buffer (last stopper wrote here)
-    sync_ctrl = read_words_from_device(
-        location=location, addr=PERF_COUNTERS_SYNC_CTRL_ADDR, word_count=3
+def _zone_data_addr(zone: int) -> int:
+    """Per-zone data block start: bank cycles (5 words) then counter counts."""
+    return (
+        TestConfig.PERF_COUNTERS_ZONES_BASE + zone * TestConfig.PERF_COUNTERS_ZONE_SIZE
     )
+
+
+def _zone_sync_ctrl_addr(zone: int) -> int:
+    """Sync word lives at end of per-zone data block."""
+    return _zone_data_addr(zone) + TestConfig._PERF_COUNTERS_ZONE_DATA_BYTES
+
+
+# Lightweight sync: SYNC_ZONE_COMPLETE marker (matches counters.h)
+_SYNC_ZONE_COMPLETE = 0xFF
+
+
+def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
+    """
+    Read performance counter results for a single zone from L1.
+
+    Returns list of result dicts, or empty list if zone was not used.
+    """
+    sync_addr = _zone_sync_ctrl_addr(zone)
+    sync_ctrl = read_words_from_device(location=location, addr=sync_addr, word_count=1)
     if not sync_ctrl:
-        raise RuntimeError(
-            "Perf counter sync control word not readable; counters may not have been stopped."
-        )
+        return []
 
     sync_word = sync_ctrl[0]
+    logger.debug(
+        f"Zone {zone} ({zone_name}): sync_word=0x{sync_word:08x} at addr=0x{sync_addr:06x}"
+    )
 
-    # Sync control word bit layout (matches counters.h); layout differs for 3 vs 4 TRISCs.
-    thread_count = len(TestConfig.KERNEL_COMPONENTS)
-    SYNC_START_MASK = (1 << thread_count) - 1
-    SYNC_STOP_BIT_SHIFT = thread_count
-    SYNC_STOP_MASK = SYNC_START_MASK << SYNC_STOP_BIT_SHIFT
-    SYNC_STARTED_FLAG = 1 << (2 * thread_count)
-    SYNC_STOPPED_FLAG = 1 << (2 * thread_count + 1)
-    SYNC_STARTER_SHIFT = 2 * thread_count + 2
-    SYNC_STOPPER_SHIFT = SYNC_STARTER_SHIFT + 2
-
+    # Zone was never used (BRISC clears sync to 0 before each run)
     if sync_word == 0:
-        raise RuntimeError(
-            "Perf counter sync word is zero - counters were never started. "
-            "Ensure start_perf_counters() is called in all threads."
+        logger.debug(f"Zone {zone}: sync_word is 0, skipping (zone not used)")
+        return []
+
+    # Lightweight stop writes only SYNC_ZONE_COMPLETE (0xFF); the high bytes are
+    # unused under the current protocol. Any other low-byte value signals
+    # corrupted or partially-written sync state.
+    if (sync_word & 0xFF) != _SYNC_ZONE_COMPLETE:
+        logger.warning(
+            f"Zone {zone}: unexpected sync word 0x{sync_word:08x} "
+            f"(expected SYNC_ZONE_COMPLETE=0xFF in low byte)"
         )
+        return []
 
-    if not (sync_word & SYNC_STARTED_FLAG):
-        raise RuntimeError(
-            f"Perf counters were never started (global started bit not set); sync_ctrl=0x{sync_word:08x}"
-        )
-
-    # Validate that all threads set their start bits.
-    start_bits = sync_word & SYNC_START_MASK
-    if start_bits != SYNC_START_MASK:
-        missing_threads = []
-        for i in range(thread_count):
-            if not (start_bits & (1 << i)):
-                missing_threads.append(PERF_COUNTER_TRISC_NAMES[i])
-
-        raise RuntimeError(
-            f"Not all threads set their start bit in sync_ctrl. "
-            f"Missing start from: {', '.join(missing_threads)}. "
-            f"sync_ctrl=0x{sync_word:08x}"
-        )
-
-    if not (sync_word & SYNC_STOPPED_FLAG):
-        stop_bits = (sync_word >> SYNC_STOP_BIT_SHIFT) & SYNC_START_MASK
-        missing_threads = []
-        for i in range(thread_count):
-            if not (stop_bits & (1 << i)):
-                missing_threads.append(PERF_COUNTER_TRISC_NAMES[i])
-
-        raise RuntimeError(
-            f"Perf counters were not stopped properly (global stopped bit not set). "
-            f"Missing stop_perf_counters() call from: {', '.join(missing_threads)}. "
-            f"sync_ctrl=0x{sync_word:08x}"
-        )
-
-    # Check that all threads set their stop bits
-    stop_bits = (sync_word >> SYNC_STOP_BIT_SHIFT) & SYNC_START_MASK
-    if stop_bits != SYNC_START_MASK:
-        missing_threads = []
-        for i in range(thread_count):
-            if not (stop_bits & (1 << i)):
-                missing_threads.append(PERF_COUNTER_TRISC_NAMES[i])
-
-        raise RuntimeError(
-            f"Not all threads called stop_perf_counters(). "
-            f"Missing stop from: {', '.join(missing_threads)}. "
-            f"sync_ctrl=0x{sync_word:08x}"
-        )
-
-    starter_id = (sync_word >> SYNC_STARTER_SHIFT) & PERF_COUNTERS_STARTER_MASK
-    stopper_id = (sync_word >> SYNC_STOPPER_SHIFT) & PERF_COUNTERS_STOPPER_MASK
-
-    if starter_id not in PERF_COUNTER_TRISC_NAMES:
-        raise RuntimeError(
-            f"Invalid starter id {starter_id}; sync_ctrl=0x{sync_word:08x}"
-        )
-    if stopper_id not in PERF_COUNTER_TRISC_NAMES:
-        raise RuntimeError(
-            f"Invalid stopper id {stopper_id}; sync_ctrl=0x{sync_word:08x}"
-        )
-
-    starter_thread = PERF_COUNTER_TRISC_NAMES[starter_id]
-    stopper_thread = PERF_COUNTER_TRISC_NAMES[stopper_id]
-
-    # Read metadata from shared buffer
+    # Shared config (same for all zones) — read once metadata layout.
+    config_addr = _zone_config_addr(zone)
     metadata = read_words_from_device(
-        location=location, addr=PERF_COUNTERS_CONFIG_ADDR, word_count=COUNTER_SLOT_COUNT
+        location=location, addr=config_addr, word_count=COUNTER_SLOT_COUNT
     )
-
     if not metadata:
-        return pd.DataFrame(all_results)
+        return []
 
-    # Count valid configs (check bit 31)
-    valid_count = sum(1 for m in metadata if (m & 0x80000000) != 0)
-
+    valid_count = sum(1 for m in metadata if (m & PERF_CFG_VALID_BIT) != 0)
     if valid_count == 0:
-        return pd.DataFrame(all_results)
+        return []
 
-    # Read ONLY data for valid counters from shared buffer
+    # Per-zone data: 5 bank-cycle words (one OUT_L per bank) + N counter counts.
+    data_addr = _zone_data_addr(zone)
+    bank_cycles_words = TestConfig._PERF_COUNTERS_BANK_CYCLES_WORDS
     data = read_words_from_device(
-        location=location, addr=PERF_COUNTERS_DATA_ADDR, word_count=valid_count * 2
+        location=location, addr=data_addr, word_count=bank_cycles_words + valid_count
     )
+    if len(data) < bank_cycles_words + valid_count:
+        return []
 
-    if not data or len(data) < valid_count * 2:
-        return pd.DataFrame(all_results)
+    # Bank cycles are the first 5 words: indexed by bank_id (0..4).
+    # Order matches counter_bank enum (see counters.h): INSTRN, FPU, TDMA_UNPACK, L1, TDMA_PACK
+    bank_cycles = data[:bank_cycles_words]
+    counter_counts = data[bank_cycles_words:]
 
-    data_idx = 0
+    results = []
+    count_idx = 0
     for i in range(COUNTER_SLOT_COUNT):
         config_word = metadata[i]
-        if (config_word & 0x80000000) == 0:  # Check valid bit
-            continue  # Unused slot
+        if (config_word & PERF_CFG_VALID_BIT) == 0:
+            continue
 
-        # Decode metadata: [valid(31), l1_mux(17), counter_id(8-16), bank(0-7)]
-        bank_id = config_word & 0xFF
-        counter_id = (config_word >> 8) & 0x1FF  # 9 bits for counter_id
-        l1_mux = (config_word >> 17) & 0x1
+        bank_id = config_word & PERF_CFG_BANK_MASK
+        counter_id = (config_word >> PERF_CFG_COUNTER_SHIFT) & PERF_CFG_COUNTER_MASK
+        l1_mux = (config_word >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK
 
         bank_name = COUNTER_BANK_NAMES.get(bank_id, f"UNKNOWN_{bank_id}")
 
-        # Get counter name
         if bank_name == "L1":
             counter_name = COUNTER_NAMES["L1"].get(
                 (counter_id, l1_mux), f"L1_UNKNOWN_{counter_id}_{l1_mux}"
@@ -410,15 +584,13 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
                 counter_id, f"{bank_name}_UNKNOWN_{counter_id}"
             )
 
-        # Extract results using data_idx
-        cycles = data[data_idx * 2]
-        count = data[data_idx * 2 + 1]
-        data_idx += 1
+        cycles = bank_cycles[bank_id] if bank_id < bank_cycles_words else 0
+        count = counter_counts[count_idx]
+        count_idx += 1
 
-        all_results.append(
+        results.append(
             {
-                "starter_thread": starter_thread,
-                "stopper_thread": stopper_thread,
+                "zone": zone_name,
                 "bank": bank_name,
                 "counter_name": counter_name,
                 "counter_id": counter_id,
@@ -428,32 +600,58 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
             }
         )
 
+    return results
+
+
+def read_counters(location: str = "0,0") -> pd.DataFrame:
+    """
+    Read performance counter results from all zones.
+
+    Iterates zones 0..MAX_ZONES-1; zones with sync_word=0 (never used) are
+    skipped silently. MAX_ZONES is set by counters.h (currently 8).
+
+    Args:
+        location: Tensix core coordinates (e.g., "0,0").
+
+    Returns:
+        DataFrame with columns:
+        zone, bank, counter_name, counter_id, cycles, count, l1_mux
+    """
+    all_results = []
+
+    for zone_idx in range(TestConfig.PERF_COUNTERS_MAX_ZONES):
+        zone_name = f"ZONE_{zone_idx}"
+        zone_results = _read_zone_counters(location, zone_idx, zone_name)
+        all_results.extend(zone_results)
+
     return pd.DataFrame(all_results)
 
 
 def print_counters(results: pd.DataFrame) -> None:
     """
-    Print all counter results to console in a readable format.
+    Log all counter results in a readable format.
 
     Args:
         results: DataFrame with counter results (from read_counters).
     """
     if results.empty:
-        print("No counter results to display.")
+        logger.info("No counter results to display.")
         return
 
-    print("\n" + "=" * 100)
-    print("PERFORMANCE COUNTER RESULTS")
-    print("=" * 100)
+    if "zone" in results.columns:
+        zones = results["zone"].unique()
+        for zone in zones:
+            zone_results = results[results["zone"] == zone]
+            logger.info("\n{}\nZONE: {}\n{}", "═" * 100, zone, "═" * 100)
+            _print_zone_counters(zone_results)
+    else:
+        logger.info("\n{}\nPERFORMANCE COUNTER RESULTS\n{}", "=" * 100, "=" * 100)
+        _print_zone_counters(results)
 
-    # Get starter and stopper from first row (same for all)
-    if not results.empty:
-        starter = results["starter_thread"].iloc[0]
-        stopper = results["stopper_thread"].iloc[0]
-        print(f"\n{'─' * 100}")
-        print(f"  Hardware started by: {starter} thread")
-        print(f"  Hardware stopped by: {stopper} thread")
-        print(f"{'─' * 100}")
+
+def _print_zone_counters(results: pd.DataFrame) -> None:
+    """Helper to log counters for a single zone."""
+    lines = []
 
     for bank in ["INSTRN_THREAD", "FPU", "TDMA_UNPACK", "L1", "TDMA_PACK"]:
         bank_df = results[results["bank"] == bank]
@@ -462,22 +660,22 @@ def print_counters(results: pd.DataFrame) -> None:
 
         cycles = bank_df["cycles"].iloc[0] if len(bank_df) > 0 else 0
 
-        print(f"\n  ┌─ {bank} (cycles: {cycles:,})")
-        print(f"  │ {'Counter Name':<40} {'Count':>15} {'Rate':>12}")
-        print(f"  │ {'─' * 40} {'─' * 15} {'─' * 12}")
+        lines.append(f"\n  ┌─ {bank} (cycles: {cycles:,})")
+        lines.append(f"  │ {'Counter Name':<40} {'Count':>15} {'Rate':>12}")
+        lines.append(f"  │ {'─' * 40} {'─' * 15} {'─' * 12}")
 
         for _, row in bank_df.iterrows():
             name = row["counter_name"]
-            # Add mux info for L1 counters
             if pd.notna(row["l1_mux"]):
                 name = f"{name} (mux{int(row['l1_mux'])})"
             count = row["count"]
             rate = (count / cycles) if cycles else 0.0
-            print(f"  │ {name:<40} {count:>15,} {rate:>12.4f}")
+            lines.append(f"  │ {name:<40} {count:>15,} {rate:>12.4f}")
 
-        print(f"  └{'─' * 70}")
+        lines.append(f"  └{'─' * 70}")
 
-    print("\n" + "=" * 100 + "\n")
+    if lines:
+        logger.info("\n".join(lines))
 
 
 def export_counters(

@@ -24,6 +24,27 @@
 //
 // NOTE: Currently, only uint32_t args are supported. However, named kernel arguments via
 // get_arg() will later be extended to support arbitrary POD types.
+//
+// DEPENDENCY NOTE:
+// This header requires the following to be visible at the point of inclusion:
+//  - `get_arg_addr`
+//  - `get_common_arg_addr`
+//  - `get_arg_val<T>`
+//  - `get_common_arg_val<T>`
+//  - `FORCE_INLINE` macros
+//  - `tt_l1_ptr` macros
+// On the DM path, those come from `api/dataflow/dataflow_api.h`, which the firmware wrapper
+// (brisck.cc, ncrisck.cc, etc.) includes before <kernel_includes.hpp>.
+// On the TRISC path, those come from `api/compute/common.h`, but nothing pulls that in before
+// <kernel_includes.hpp>. We need to manually include here.
+#ifdef COMPILE_FOR_TRISC
+#include "api/compute/common.h"
+#endif
+
+// TT_KERNEL: marks the named-arg entry point; the JIT generates kernel_main() from its signature.
+// `static` gives the entry internal linkage (it is private to the kernel TU — only the generated
+// kernel_main() shim, in the same TU, ever calls it); FORCE_INLINE folds it into that shim.
+#define TT_KERNEL static FORCE_INLINE
 
 namespace experimental {
 

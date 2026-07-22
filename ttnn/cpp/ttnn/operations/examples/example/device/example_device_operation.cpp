@@ -22,7 +22,7 @@ void ExampleDeviceOperation::validate_on_program_cache_miss(
 ExampleDeviceOperation::spec_return_value_t ExampleDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), MemoryConfig{}));

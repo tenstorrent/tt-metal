@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_ccl ${LIB_TYPE})
 add_library(TTNN::Ops::CCL ALIAS ttnn_op_ccl)
 
-tt_reuse_precompile_headers(ttnn_op_ccl TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_ccl TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_ccl)
 
 set_target_properties(
@@ -13,13 +15,17 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    broadcast/device/kernels/*
-    common/kernels/*
-    kernel_common/*
-    kernels/*
-    all_to_all_combine/device/kernels/*
-    all_to_all_dispatch/device/kernels/*
-    reduce_to_root/device/kernels/*
+    all_gather/device/kernels/*.cpp
+    all_gather/device/kernels/*.hpp
+    broadcast/device/kernels/*.cpp
+    common/kernels/*.cpp
+    common/kernels/*.hpp
+    kernel_common/*.hpp
+    kernels/*.cpp
+    kernels/*.hpp
+    all_to_all_combine/device/kernels/*.cpp
+    all_to_all_dispatch/device/kernels/*.cpp
+    reduce_to_root/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_ccl
@@ -27,23 +33,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            all_gather/all_gather.hpp
-            all_reduce/all_reduce.hpp
-            reduce_scatter/reduce_scatter.hpp
-            all_broadcast/device/all_broadcast_device_operation_types.hpp
-            all_broadcast/device/all_broadcast_device_operation.hpp # seems odd to have some of this file, but it's needed for tt-train to consume
-            all_broadcast/device/all_broadcast_program_factory.hpp
-            ccl_common.hpp
-            ccl_host_datastructures.hpp
-            ccl_host_types.hpp
-            ccl_op_fusion.hpp
-            common/host/ccl_command_stream_builders.hpp
-            common/host/moe_utils.hpp
-            common/types/ccl_types.hpp
-            common/uops/ccl_command.hpp
-            mesh_partition/mesh_partition.hpp
-            shared_with_host/hetergeneous_data_structs.hpp
+        FILES ${TTNN_OP_CCL_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -87,6 +77,9 @@ target_sources(
             all_gather/all_gather.hpp
             all_gather/all_gather_nanobind.hpp
             all_gather/device/all_gather_device_operation.hpp
+            all_gather/device/all_gather_device_operation_types.hpp
+            all_gather/device/all_gather_multicast_factory.hpp
+            all_gather/device/all_gather_unicast_factory.hpp
             # all_reduce/
             all_reduce/all_reduce.hpp
             all_reduce/all_reduce_nanobind.hpp
@@ -117,44 +110,7 @@ target_sources(
             reduce_to_root/reduce_to_root_nanobind.hpp
             reduce_to_root/device/reduce_to_root_op.hpp
     PRIVATE
-        # Common
-        ccl_op_fusion.cpp
-        ccl_common.cpp
-        ccl_host_datastructures.cpp
-        common/types/ccl_types_args_emitters.cpp
-        common/host/command_backend_runtime_args_overrider.cpp
-        common/uops/ccl_command.cpp
-        common/uops/command_lowering.cpp
-        common/uops/ccl_host_commands.cpp
-        common/host/ccl_worker_builder.cpp
-        common/host/ccl_command_stream_builders.cpp
-        common/host/moe_utils.cpp
-        # Ops
-        all_broadcast/all_broadcast.cpp
-        all_broadcast/device/all_broadcast_device_operation.cpp
-        all_broadcast/device/all_broadcast_program_factory.cpp
-        all_gather/all_gather.cpp
-        all_gather/device/all_gather_device_operation.cpp
-        all_gather/device/all_gather_program_factory.cpp
-        all_reduce/all_reduce.cpp
-        all_to_all_combine/all_to_all_combine.cpp
-        all_to_all_combine/device/all_to_all_combine_device_operation.cpp
-        all_to_all_combine/device/all_to_all_combine_program_factory.cpp
-        all_to_all_dispatch/all_to_all_dispatch.cpp
-        all_to_all_dispatch/device/all_to_all_dispatch_device_operation.cpp
-        all_to_all_dispatch/device/all_to_all_dispatch_program_factory.cpp
-        reduce_to_root/reduce_to_root.cpp
-        reduce_to_root/device/reduce_to_root_op.cpp
-        reduce_to_root/device/reduce_to_root_program.cpp
-        reduce_scatter/reduce_scatter.cpp
-        reduce_scatter/device/reduce_scatter_device_operation.cpp
-        reduce_scatter/device/reduce_scatter_program_factory.cpp
-        mesh_partition/mesh_partition.cpp
-        mesh_partition/device/mesh_partition_device_operation.cpp
-        mesh_partition/device/mesh_partition_program_factory.cpp
-        broadcast/broadcast.cpp
-        broadcast/device/broadcast_device_operation.cpp
-        broadcast/device/broadcast_program_factory.cpp
+        ${TTNN_OP_CCL_SRCS}
 )
 
 target_include_directories(ttnn_op_ccl PRIVATE ${FixmeOpIncDirs})
@@ -173,3 +129,19 @@ install(
 )
 
 install(TARGETS ttnn_op_ccl LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's own
+# registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_CCL_NANOBIND_SRCS) lives in sources.cmake,
+# not here: this file carries metalium-developers-infra as a required
+# co-owner (so infra can land sweeping build-system changes), and routine
+# add/remove/rename of a nanobind source shouldn't need to go through infra.
+# This wiring line itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_CCL_NANOBIND_SRCS})
+endif()

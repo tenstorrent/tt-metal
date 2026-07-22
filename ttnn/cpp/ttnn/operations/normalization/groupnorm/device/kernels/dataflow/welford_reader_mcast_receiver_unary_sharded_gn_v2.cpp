@@ -6,11 +6,11 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
@@ -39,15 +39,15 @@ void kernel_main() {
     constexpr uint32_t cb_repack_out_id = tt::CBIndex::c_12;
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
 
-    experimental::Noc noc;
-    experimental::Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    experimental::Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
-    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    experimental::CircularBuffer cb_ex_global(cb_ex_global_id);
-    experimental::CircularBuffer cb_in0(cb_in0_id);
-    experimental::CircularBuffer cb_repack(cb_repack_id);
-    experimental::CircularBuffer cb_repack_out(cb_repack_out_id);
-    experimental::CircularBuffer cb_out0(cb_out0_id);
+    Noc noc;
+    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
+    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
+    CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    CircularBuffer cb_ex_global(cb_ex_global_id);
+    CircularBuffer cb_in0(cb_in0_id);
+    CircularBuffer cb_repack(cb_repack_id);
+    CircularBuffer cb_repack_out(cb_repack_out_id);
+    CircularBuffer cb_out0(cb_out0_id);
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
 
@@ -59,14 +59,14 @@ void kernel_main() {
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
     uint32_t src_addr_in0 = in0_l1_read_addr;
-    experimental::UnicastEndpoint self_ep;
+    UnicastEndpoint self_ep;
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_repack.reserve_back(per_core_N);
         uint32_t l1_write_addr_repack = cb_repack.get_write_ptr();
         for (uint32_t i = 0; i < tile_height; ++i) {
             noc.async_read(
                 self_ep,
-                experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                CoreLocalMem<uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
                 {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
                 {});
@@ -125,11 +125,11 @@ void kernel_main() {
         cb_repack_out.wait_front(per_core_N);
         uint32_t in0_l1_read_addr = cb_repack_out.get_read_ptr();
         uint32_t src_addr_in0 = in0_l1_read_addr;
-        experimental::UnicastEndpoint self_ep;
+        UnicastEndpoint self_ep;
         for (uint32_t i = 0; i < tile_height; ++i) {
             noc.async_read(
                 self_ep,
-                experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                CoreLocalMem<uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
                 {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
                 {});

@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -24,7 +25,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/arch.hpp>
 #include "impl/kernels/kernel.hpp"
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher waypoints.
@@ -55,9 +56,6 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = Program();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
     auto* device = mesh_device->get_devices()[0];
     const auto& hal = MetalContext::instance().hal();
     const bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
@@ -65,7 +63,9 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     if (fixture->IsSlowDispatch() && !is_quasar && device->get_inactive_ethernet_cores().empty()) {
         GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
     }
-    const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp";
+    // TENSIX cores use the Metal 2.0 variant; ETH cores stay on the legacy kernel/API.
+    const std::string kernel_path_metal2 = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints_2_0.cpp";
+    const std::string kernel_path_legacy = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp";
     CoreCoord xy_start = {0, 0};
     CoreCoord xy_end = is_quasar ? CoreCoord{0, 0} : CoreCoord{4, 4};
 
@@ -89,80 +89,140 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     uint32_t delay_cycles = clk_mhz * 3000000;  // 3 seconds - enough for watcher to capture waypoint
     const std::vector<uint32_t> active_eth_args = {delay_cycles};
 
-    // Create kernels for TENSIX cores
-    if (is_quasar) {
-        auto num_dms = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
-        auto dm_kid = tt::tt_metal::experimental::quasar::CreateKernel(
-            program_,
-            kernel_path,
-            CoreRange(xy_start, xy_end),
-            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = num_dms});
-        auto compute_kid = tt::tt_metal::experimental::quasar::CreateKernel(
-            program_,
-            kernel_path,
-            CoreRange(xy_start, xy_end),
-            tt::tt_metal::experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 4});
-        SetCommonRuntimeArgs(program_, dm_kid, tensix_args);
-        SetCommonRuntimeArgs(program_, compute_kid, tensix_args);
-    } else {
-        auto brisc_kid = CreateKernel(
-            program_,
-            kernel_path,
-            CoreRange(xy_start, xy_end),
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-        auto ncrisc_kid = CreateKernel(
-            program_,
-            kernel_path,
-            CoreRange(xy_start, xy_end),
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-        auto trisc_kid = CreateKernel(program_, kernel_path, CoreRange(xy_start, xy_end), ComputeConfig{});
-        SetCommonRuntimeArgs(program_, brisc_kid, tensix_args);
-        SetCommonRuntimeArgs(program_, ncrisc_kid, tensix_args);
-        SetCommonRuntimeArgs(program_, trisc_kid, tensix_args);
-    }
-
-    // Create kernels for ethernet cores
     bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
     bool has_idle_eth_cores = fixture->IsSlowDispatch() && !device->get_inactive_ethernet_cores().empty();
 
-    if (has_eth_cores) {
-        std::set<CoreRange> ranges;
-        for (const auto& core : device->get_active_ethernet_cores(true)) {
-            ranges.insert(CoreRange(core, core));
-        }
-        // Active ERISC: pass delay_cycles for timed wait (can't block forever due to tunneling)
-        auto kid = CreateKernel(program_, kernel_path, ranges, tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
-        SetCommonRuntimeArgs(program_, kid, active_eth_args);
-    }
+    // TENSIX kernels are launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
+    // On Quasar a single DM KernelSpec with num_threads = 6 covers DM2..DM7.
+    // On WH/BH each DM processor (BRISC, NCRISC) requires its own KernelSpec.
+    std::vector<experimental::KernelSpec> kernel_specs;
+    std::vector<experimental::KernelSpecName> kernel_names;
+    experimental::ProgramRunArgs params;
+    auto add_dm_kernel =
+        [&](const char* name, uint32_t num_threads, std::optional<tt::tt_metal::DataMovementProcessor> gen1_processor) {
+            // Always provide both gen1 and gen2 configs; the runtime picks the one matching the
+            // current arch. The unused config is ignored on the other arch.
+            auto gen1_proc = gen1_processor.value_or(tt::tt_metal::DataMovementProcessor::RISCV_0);
+            auto gen1_noc = (gen1_proc == tt::tt_metal::DataMovementProcessor::RISCV_1)
+                                ? tt::tt_metal::NOC::RISCV_1_default
+                                : tt::tt_metal::NOC::RISCV_0_default;
+            experimental::DataMovementHardwareConfig dm_cfg;
+            if (is_quasar) {
+                dm_cfg = experimental::DataMovementGen2Config{};
+            } else {
+                dm_cfg = experimental::DataMovementGen1Config{.processor = gen1_proc, .noc = gen1_noc};
+            }
+            kernel_specs.push_back(experimental::KernelSpec{
+                .unique_id = experimental::KernelSpecName{name},
+                .source = kernel_path_metal2,
+                .num_threads = num_threads,
+                .runtime_arg_schema = {.common_runtime_arg_names = {"sync_flag_addr"}},
+                .hw_config = dm_cfg,
+            });
+            kernel_names.emplace_back(name);
+            params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+                .kernel = experimental::KernelSpecName{name},
+                .common_runtime_arg_values = {{"sync_flag_addr", tensix_sync_addr}},
+            });
+        };
 
-    if (has_idle_eth_cores) {
-        std::set<CoreRange> ranges;
-        const std::vector<uint32_t> idle_eth_args = {idle_eth_sync_addr};
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
-            ranges.insert(CoreRange(core, core));
-            tt::tt_metal::detail::WriteToDeviceL1(device, core, idle_eth_sync_addr, zero_data, CoreType::ETH);
-        }
-        // Create kernel for each idle ETH processor (use HAL to get count)
-        uint32_t num_idle_eth_processors = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
-        for (uint32_t proc_id = 0; proc_id < num_idle_eth_processors; proc_id++) {
-            auto processor = (proc_id == 0) ? DataMovementProcessor::RISCV_0 : DataMovementProcessor::RISCV_1;
+    const experimental::KernelSpecName COMPUTE_KERNEL_NAME{"wp_compute"};
+    experimental::ComputeHardwareConfig compute_config;
+    if (is_quasar) {
+        constexpr uint32_t kQuasarUserDmCores = 6;
+        add_dm_kernel("wp_dm", kQuasarUserDmCores, std::nullopt);
+        compute_config = experimental::ComputeGen2Config{};
+    } else {
+        add_dm_kernel("wp_brisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_0);
+        add_dm_kernel("wp_ncrisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_1);
+        compute_config = experimental::ComputeGen1Config{};
+    }
+    kernel_specs.push_back(experimental::KernelSpec{
+        .unique_id = COMPUTE_KERNEL_NAME,
+        .source = kernel_path_metal2,
+        // Quasar Tensix has 4 Neos so the compute kernel fans out across all of them; WH/BH has 1 TRISC group.
+        .num_threads = is_quasar ? 4u : 1u,
+        .runtime_arg_schema = {.common_runtime_arg_names = {"sync_flag_addr"}},
+        .hw_config = compute_config,
+    });
+    kernel_names.emplace_back(COMPUTE_KERNEL_NAME);
+    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = COMPUTE_KERNEL_NAME,
+        .common_runtime_arg_values = {{"sync_flag_addr", tensix_sync_addr}},
+    });
+
+    experimental::WorkUnitSpec wu{
+        .name = "main",
+        .kernels = kernel_names,
+        .target_nodes = experimental::NodeRange{CoreRange(xy_start, xy_end)},
+    };
+    experimental::ProgramSpec spec{
+        .name = "watcher_waypoints",
+        .kernels = kernel_specs,
+        .work_units = {wu},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::SetProgramRunArgs(program, params);
+
+    // ETH cores: invoke the original (legacy) kernel via the legacy host API.
+    if (!is_quasar) {
+        if (has_eth_cores) {
+            std::set<CoreRange> ranges;
+            for (const auto& core : device->get_active_ethernet_cores(true)) {
+                ranges.insert(CoreRange(core, core));
+            }
+            // Active ERISC: pass delay_cycles for timed wait (can't block forever due to tunneling)
             auto kid = CreateKernel(
-                program_,
-                kernel_path,
-                ranges,
-                tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = processor});
-            SetCommonRuntimeArgs(program_, kid, idle_eth_args);
+                program, kernel_path_legacy, ranges, tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+            SetCommonRuntimeArgs(program, kid, active_eth_args);
+        }
+
+        if (has_idle_eth_cores) {
+            std::set<CoreRange> ranges;
+            const std::vector<uint32_t> idle_eth_args = {idle_eth_sync_addr};
+            for (const auto& core : device->get_inactive_ethernet_cores()) {
+                ranges.insert(CoreRange(core, core));
+                tt::tt_metal::detail::WriteToDeviceL1(device, core, idle_eth_sync_addr, zero_data, CoreType::ETH);
+            }
+            // Create kernel for each idle ETH processor (use HAL to get count)
+            uint32_t num_idle_eth_processors = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
+            for (uint32_t proc_id = 0; proc_id < num_idle_eth_processors; proc_id++) {
+                auto processor = (proc_id == 0) ? DataMovementProcessor::RISCV_0 : DataMovementProcessor::RISCV_1;
+                auto kid = CreateKernel(
+                    program,
+                    kernel_path_legacy,
+                    ranges,
+                    tt_metal::EthernetConfig{
+                        .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = processor});
+                SetCommonRuntimeArgs(program, kid, idle_eth_args);
+            }
         }
     }
+    workload.add_program(device_range, std::move(program));
 
     // Dispatch non-blocking: kernels post waypoint then spin on sync flag
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
-    // Build poll patterns and wait for waypoints to appear
+    // Get processor counts from HAL and build expected waypoint strings.
+    uint32_t num_tensix = hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);
+    // On Quasar, DM0/DM1 are reserved for internal use and don't post a user waypoint,
+    // so the expected per-tensix waypoint count drops by 2.
+    if (is_quasar) {
+        num_tensix -= 2;
+    }
+    const uint32_t num_idle_eth = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
+    std::string tensix_waypoints = build_waypoint_string(num_tensix);
+    std::string idle_eth_waypoints = build_waypoint_string(num_idle_eth);
+
+    // Build poll patterns and wait for waypoints to appear.
+    // On Quasar, slots 0/1 (reserved DM0/DM1) post a non-AAAA status (e.g. " NTW,  W1,") before
+    // the first user AAAA. Glob between ": " and the waypoint absorbs that prefix; it matches
+    // empty on non-Quasar where AAAA is the very first status field.
     std::vector<std::string> poll_strings;
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            poll_strings.push_back(fmt::format("worker core(x={:2},y={:2})*: {}", x, y, waypoint));
+            poll_strings.push_back(fmt::format("worker core(x={:2},y={:2})*: *{}", x, y, tensix_waypoints));
         }
     }
     if (has_eth_cores) {
@@ -172,7 +232,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
     if (has_idle_eth_cores) {
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            poll_strings.push_back(fmt::format("idleth core(x={:2},y={:2})*: {}", core.x, core.y, waypoint));
+            poll_strings.push_back(fmt::format("idleth core(x={:2},y={:2})*: {}", core.x, core.y, idle_eth_waypoints));
         }
     }
 
@@ -202,27 +262,27 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
     distributed::Finish(mesh_device->mesh_command_queue());
 
-    // Get processor counts from HAL and build expected waypoint strings
-    uint32_t num_tensix = hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);
-    uint32_t num_idle_eth = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
-    std::string tensix_waypoints = build_waypoint_string(num_tensix);
-    std::string idle_eth_waypoints = build_waypoint_string(num_idle_eth);
-
     log_info(tt::LogTest, "Verifying: {} waypoints/TENSIX, 1/active ETH, {}/idle ETH", num_tensix, num_idle_eth);
 
-    // Verify waypoints with device ID and virtual coordinates
+    // Verify waypoints with device ID and virtual coordinates.
+    // On Quasar, the first two 4-wide status fields belong to the reserved DM0/DM1 (e.g. " NTW",
+    // "  W1") and do not show the AAAA waypoint. Use four '?' wildcards per reserved slot to
+    // skip them and anchor the literal AAAA waypoints right after.
+    const std::string tensix_status_prefix = is_quasar ? "????,????," : "";
     auto check_core = [&](const CoreCoord& logical_core,
                           const CoreCoord& virtual_core,
                           const std::string& type,
-                          const std::string& wp) {
+                          const std::string& wp,
+                          const std::string& status_prefix) {
         std::string expected = fmt::format(
-            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {}*rmsg:*",
+            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {}{}*rmsg:*",
             device->id(),
             type,
             logical_core.x,
             logical_core.y,
             virtual_core.x,
             virtual_core.y,
+            status_prefix,
             wp);
         bool found = FileContainsAllStringsInOrder(fixture->log_file_name, {expected});
         EXPECT_TRUE(found) << "Missing waypoint log for " << type << " core (" << logical_core.x << ","
@@ -233,19 +293,19 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             CoreCoord logical_core = {x, y};
             CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
-            check_core(logical_core, virtual_core, "worker", tensix_waypoints);
+            check_core(logical_core, virtual_core, "worker", tensix_waypoints, tensix_status_prefix);
         }
     }
     if (has_eth_cores) {
         for (const auto& core : device->get_active_ethernet_cores(true)) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
-            check_core(core, virtual_core, "acteth", waypoint);
+            check_core(core, virtual_core, "acteth", waypoint, "");
         }
     }
     if (has_idle_eth_cores) {
         for (const auto& core : device->get_inactive_ethernet_cores()) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
-            check_core(core, virtual_core, "idleth", idle_eth_waypoints);
+            check_core(core, virtual_core, "idleth", idle_eth_waypoints, "");
         }
     }
 }

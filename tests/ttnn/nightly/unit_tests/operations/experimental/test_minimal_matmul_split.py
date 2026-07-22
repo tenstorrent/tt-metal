@@ -8,6 +8,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc
+from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
@@ -127,6 +128,70 @@ def run_test_linear_split(
     }
 
 
+@pytest.mark.parametrize("chunks", [1, 2, 3])
+@pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "bias"])
+def test_linear_split_swiglu(device, chunks, use_bias):
+    """FUSE_SWIGLU + chunked split: each chunk is silu(gate)*up of its output slice."""
+    M, K = 256, 256
+    out_N = 192 * chunks  # output width; weight width is 2*out_N
+    two_N = 2 * out_N
+    torch_dtype = torch.float32
+
+    torch_input = torch.randn((M, K), dtype=torch_dtype)
+    weight_input = torch.randn((K, two_N), dtype=torch_dtype)  # cols [first(out_N) | second(out_N)]
+    bias_input = torch.randn((1, two_N), dtype=torch_dtype) if use_bias else None
+
+    with torch.no_grad():
+        full = torch_input @ weight_input
+        if bias_input is not None:
+            full = full + bias_input
+        first, second = torch.chunk(full, 2, dim=-1)
+        golden = first * torch.nn.functional.silu(second)  # [M, out_N]
+        golden_chunks = torch.chunk(golden, chunks, dim=-1)
+
+    weight_il = prepare_for_fused_swiglu(weight_input, ndev=1)  # weight is already [K, 2N]
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_il, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_bias = None
+    if use_bias:
+        bias_il = prepare_for_fused_swiglu(bias_input, ndev=1)
+        tt_bias = ttnn.from_torch(bias_il, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+    )
+
+    tt_chunks = ttnn.experimental.minimal_matmul_split(
+        tt_input,
+        tt_weight,
+        chunks=chunks,
+        dim=-1,
+        bias_tensor=tt_bias,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+        fuse_swiglu=True,
+    )
+
+    assert len(tt_chunks) == chunks
+    for i in range(chunks):
+        tt_out_i = ttnn.to_torch(tt_chunks[i])
+        res = assert_quality(golden_chunks[i], tt_out_i)
+        logger.info(f"swiglu chunk {i}: PCC={res['pcc']:.7f}")
+        assert res["pcc"] > 0.9999, f"chunk {i} PCC {res['pcc']}"
+
+
 def test_linear_split_bias(device):
     M, K, N = 64, 256, 96 * 3
     M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 1, 1, 1, 1, 1
@@ -199,9 +264,9 @@ def test_linear_split_core_grid(device, core_grid):
 
 
 # Constraint validation tests
-def test_invalid_chunks(device):
+def test_invalid_chunks(device, expect_error):
     """Should fail: chunks < 1"""
-    with pytest.raises((RuntimeError, ValueError)):
+    with expect_error((RuntimeError, ValueError), "minimal_matmul_split requires chunks >= 1"):
         M, K, N = 256, 256, 512
         torch_input = torch.randn((M, K), dtype=torch.float32)
         weight_input = torch.randn((K, N), dtype=torch.float32)
@@ -210,9 +275,9 @@ def test_invalid_chunks(device):
         ttnn.experimental.minimal_matmul_split(tt_input, tt_weight, chunks=0, dim=-1)
 
 
-def test_invalid_dim(device):
+def test_invalid_dim(device, expect_error):
     """Should fail: dim != -1"""
-    with pytest.raises((RuntimeError, ValueError)):
+    with expect_error((RuntimeError, ValueError), "minimal_matmul_split currently only supports dim=-1"):
         M, K, N = 256, 256, 768
         torch_input = torch.randn((M, K), dtype=torch.float32)
         weight_input = torch.randn((K, N), dtype=torch.float32)
@@ -221,9 +286,9 @@ def test_invalid_dim(device):
         ttnn.experimental.minimal_matmul_split(tt_input, tt_weight, chunks=3, dim=0)
 
 
-def test_non_divisible_n(device):
+def test_non_divisible_n(device, expect_error):
     """Should fail: N not divisible by 3"""
-    with pytest.raises((RuntimeError, ValueError)):
+    with expect_error((RuntimeError, ValueError), "must be divisible by chunks"):
         M, K, N = 256, 256, 256  # 256 not divisible by 3
         torch_input = torch.randn((M, K), dtype=torch.float32)
         weight_input = torch.randn((K, N), dtype=torch.float32)
@@ -232,9 +297,9 @@ def test_non_divisible_n(device):
         ttnn.experimental.minimal_matmul_split(tt_input, tt_weight, chunks=3, dim=-1)
 
 
-def test_non_tile_aligned_chunk(device):
+def test_non_tile_aligned_chunk(device, expect_error):
     """Should fail: N/chunks not tile-aligned"""
-    with pytest.raises((RuntimeError, ValueError)):
+    with expect_error((RuntimeError, ValueError), "must be a multiple of TILE_WIDTH"):
         M, K, N = 256, 256, 99  # 99/3 = 33, not tile-aligned (not multiple of 32)
         torch_input = torch.randn((M, K), dtype=torch.float32)
         weight_input = torch.randn((K, N), dtype=torch.float32)

@@ -33,7 +33,7 @@ ttnn::Shape parse_shape(std::string_view shape_string) {
     std::string_view shape_values = shape_string.substr(start, end - start);
 
     // Vector to hold the parsed shape values
-    SmallVector<uint32_t> shape;
+    ttsl::SmallVector<uint32_t> shape;
     const char* str = shape_values.data();
     const char* end_str = str + shape_values.size();
 
@@ -265,62 +265,43 @@ std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace) {
     return output;
 }
 
-namespace detail {
-// This function computes the worst-case memory allocation per core for a given total size, page size, and number of
-// cores.
-size_t worst_case_per_core_allocation(size_t total_size, size_t page_size, size_t num_of_cores) {
-    size_t pages = std::ceil(float(total_size) / page_size);
-    size_t pages_per_core = std::ceil(float(pages) / num_of_cores);
-    return pages_per_core * page_size;
-}
-}  // namespace detail
-
-uint32_t extract_l1_output_buffer_allocation_size_per_core(
-    const Tensor& output_tensor, size_t interleaved_storage_cores) {
+uint32_t extract_l1_output_buffer_allocation_size_per_core(const Tensor& output_tensor) {
     tt::tt_metal::Buffer* buffer = output_tensor.buffer();
     if (buffer->is_dram()) {
         TT_THROW("No L1 allocation. Tensor is in DRAM");
     }
 
-    uint32_t output_buffer_allocate_total_size = buffer->size();
-    uint32_t page_size = buffer->page_size();
-    uint32_t num_cores = buffer->num_cores().value_or(interleaved_storage_cores);
-
-    return detail::worst_case_per_core_allocation(output_buffer_allocate_total_size, page_size, num_cores);
+    // aligned_size_per_bank() returns the actual padded per-bank allocation,
+    // matching what the runtime allocator reserves. buffer->size() is the
+    // unpadded logical tensor size, which underestimates sharded buffers whose
+    // shard rows are padded to tile boundaries.
+    return buffer->aligned_size_per_bank();
 }
 
-uint32_t extract_l1_buffer_allocation_peak_size_per_core(
-    const nlohmann::json& trace, size_t interleaved_storage_cores) {
+uint32_t extract_l1_buffer_allocation_peak_size_per_core(const nlohmann::json& trace) {
     const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
-        extract_resource_usage_per_core(trace, interleaved_storage_cores);
+        extract_resource_usage_per_core(trace);
     return l1_buffers_peak_per_core;
 }
 
 uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace) {
     const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
-        extract_resource_usage_per_core(trace, 1);
+        extract_resource_usage_per_core(trace);
     return cb_peak_size_per_core;
 }
 
 // calculate the size of buffer allocated/deallocated on each core
-static uint32_t calculate_buffer_allocation_size(const nlohmann::json& node, size_t interleaved_storage_cores) {
-    uint32_t page_size = json_to_int(node.at(kParams).at(kPageSize));
-    uint32_t num_of_cores = json_to_int(node.at(kParams).at(kNumCores));
-    if (num_of_cores == 0) {
-        num_of_cores = interleaved_storage_cores;
-    }
-
-    uint32_t total_size = json_to_int(node.at(kParams).at(kSize));
-    return detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
+static uint32_t calculate_buffer_allocation_size(const nlohmann::json& node) {
+    return json_to_int(node.at(kParams).at(kMaxSizePerBank));
 }
 
-uint32_t extract_peak_memory_usage(const nlohmann::json& trace, size_t interleaved_storage_cores) {
+uint32_t extract_peak_memory_usage(const nlohmann::json& trace) {
     const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
-        extract_resource_usage_per_core(trace, interleaved_storage_cores);
+        extract_resource_usage_per_core(trace);
     return peak_memory_usage_per_core;
 }
 
-PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& trace, size_t interleaved_storage_cores) {
+PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& trace) {
     size_t current_cb = 0, peak_cb = 0;
     size_t current_l1 = 0, peak_l1 = 0;
     size_t current_total = 0, peak_total = 0;
@@ -350,7 +331,7 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
             if (node.at(kParams).at(kType) == "DRAM") {
                 continue;
             }
-            size_t alloc_size = calculate_buffer_allocation_size(node, interleaved_storage_cores);
+            size_t alloc_size = calculate_buffer_allocation_size(node);
             if (node.at(kNodeType) == kNodeBufferAllocate) {
                 current_l1 += alloc_size;
                 peak_l1 = std::max(peak_l1, current_l1);

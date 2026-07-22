@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
 #ifdef TILIZE_IN
@@ -25,19 +26,19 @@
  */
 template <typename Block>
 ALWI void tilize_row_major_block(
-    const uint32_t cb_in_rm, const uint32_t cb_in, const uint32_t block_size, const Block& block) {
-    reconfig_data_format(cb_in_rm, cb_in_rm);
-    pack_reconfig_data_format(cb_in);
+    CircularBuffer& cb_in_rm, CircularBuffer& cb_in, const uint32_t block_size, const Block& block) {
+    reconfig_data_format(cb_in_rm.get_cb_id(), cb_in_rm.get_cb_id());
+    pack_reconfig_data_format(cb_in.get_cb_id());
 
-    tilize_init(cb_in_rm, block_size, cb_in);
-    cb_wait_front(cb_in_rm, block.full_block_size());
-    cb_reserve_back(cb_in, block.full_block_size());
+    tilize_init(cb_in_rm.get_cb_id(), block_size, cb_in.get_cb_id());
+    cb_in_rm.wait_front(block.full_block_size());
+    cb_in.reserve_back(block.full_block_size());
 
-    tilize_block(cb_in_rm, block.full_block_size(), cb_in);
-    cb_push_back(cb_in, block.full_block_size());
-    cb_pop_front(cb_in_rm, block.full_block_size());
+    tilize_block(cb_in_rm.get_cb_id(), block.full_block_size(), cb_in.get_cb_id());
+    cb_in.push_back(block.full_block_size());
+    cb_in_rm.pop_front(block.full_block_size());
 
-    tilize_uninit(cb_in_rm, cb_in);
+    tilize_uninit(cb_in_rm.get_cb_id(), cb_in.get_cb_id());
 }
 
 /*
@@ -47,18 +48,18 @@ ALWI void tilize_row_major_block(
  * since tilize_uninit reconfigures the hardware state.
  */
 template <uint32_t block_size>
-ALWI void tilize_all_blocks_to_cb(const uint32_t cb_in_rm, const uint32_t cb_in, const uint32_t Wt) {
-    reconfig_data_format(cb_in_rm, cb_in_rm);
-    pack_reconfig_data_format(cb_in);
-    tilize_init(cb_in_rm, block_size, cb_in);
+ALWI void tilize_all_blocks_to_cb(CircularBuffer& cb_in_rm, CircularBuffer& cb_in, const uint32_t Wt) {
+    reconfig_data_format(cb_in_rm.get_cb_id(), cb_in_rm.get_cb_id());
+    pack_reconfig_data_format(cb_in.get_cb_id());
+    tilize_init(cb_in_rm.get_cb_id(), block_size, cb_in.get_cb_id());
     for (auto block : norm::kernel_util::generic::blocks(Wt, block_size)) {
-        cb_wait_front(cb_in_rm, block.full_block_size());
-        cb_reserve_back(cb_in, block.full_block_size());
-        tilize_block(cb_in_rm, block.full_block_size(), cb_in);
-        cb_push_back(cb_in, block.full_block_size());
-        cb_pop_front(cb_in_rm, block.full_block_size());
+        cb_in_rm.wait_front(block.full_block_size());
+        cb_in.reserve_back(block.full_block_size());
+        tilize_block(cb_in_rm.get_cb_id(), block.full_block_size(), cb_in.get_cb_id());
+        cb_in.push_back(block.full_block_size());
+        cb_in_rm.pop_front(block.full_block_size());
     }
-    tilize_uninit(cb_in_rm, cb_in);
+    tilize_uninit(cb_in_rm.get_cb_id(), cb_in.get_cb_id());
 }
 #endif
 
@@ -68,34 +69,34 @@ ALWI void tilize_all_blocks_to_cb(const uint32_t cb_in_rm, const uint32_t cb_in,
  * Read 1 tiled block from cb_out, pack it and write to cb_out_rm as row-major block
  */
 template <typename Block, uint32_t block_size>
-ALWI void untilize_row_major_block(const uint32_t cb_out, const uint32_t cb_out_rm, const Block& block) {
-    reconfig_data_format(cb_out, cb_out);  // Handle fp32_dest_acc_en=True cases
+ALWI void untilize_row_major_block(CircularBuffer& cb_out, CircularBuffer& cb_out_rm, const Block& block) {
+    reconfig_data_format(cb_out.get_cb_id(), cb_out.get_cb_id());  // Handle fp32_dest_acc_en=True cases
 
-    pack_untilize_init<block_size, block_size>(cb_out, cb_out_rm);
-    cb_wait_front(cb_out, block.full_block_size());
-    cb_reserve_back(cb_out_rm, block.full_block_size());
-    pack_untilize_block<block_size, block_size>(cb_out, 1, cb_out_rm);
-    cb_push_back(cb_out_rm, block.full_block_size());
-    cb_pop_front(cb_out, block.full_block_size());
-    pack_untilize_uninit(cb_out_rm);
+    pack_untilize_init<block_size, block_size>(cb_out.get_cb_id(), cb_out_rm.get_cb_id());
+    cb_out.wait_front(block.full_block_size());
+    cb_out_rm.reserve_back(block.full_block_size());
+    pack_untilize_block<block_size, block_size>(cb_out.get_cb_id(), 1, cb_out_rm.get_cb_id());
+    cb_out_rm.push_back(block.full_block_size());
+    cb_out.pop_front(block.full_block_size());
+    pack_untilize_uninit(cb_out_rm.get_cb_id());
 }
 
 /*
  * Pack-untilize all blocks from cb_out into cb_out_rm as row-major.
  */
 template <uint32_t block_size>
-ALWI void untilize_all_blocks_from_cb(const uint32_t cb_out, const uint32_t cb_out_rm, const uint32_t Wt) {
+ALWI void untilize_all_blocks_from_cb(CircularBuffer& cb_out, CircularBuffer& cb_out_rm, const uint32_t Wt) {
     // If fp32_dest_acc_en=True and dtype == bfloat16, then intermediate cb were set to float32 while output is set to
     // bfloat16. To prevent data corruption, we reconfig data format
-    reconfig_data_format(cb_out, cb_out);
-    pack_untilize_init<block_size, block_size>(cb_out, cb_out_rm);
+    reconfig_data_format(cb_out.get_cb_id(), cb_out.get_cb_id());
+    pack_untilize_init<block_size, block_size>(cb_out.get_cb_id(), cb_out_rm.get_cb_id());
     for (auto block : norm::kernel_util::generic::blocks(Wt, block_size)) {
-        cb_wait_front(cb_out, block.full_block_size());
-        cb_reserve_back(cb_out_rm, block.full_block_size());
-        pack_untilize_block<block_size, block_size>(cb_out, 1, cb_out_rm);
-        cb_push_back(cb_out_rm, block.full_block_size());
-        cb_pop_front(cb_out, block.full_block_size());
+        cb_out.wait_front(block.full_block_size());
+        cb_out_rm.reserve_back(block.full_block_size());
+        pack_untilize_block<block_size, block_size>(cb_out.get_cb_id(), 1, cb_out_rm.get_cb_id());
+        cb_out_rm.push_back(block.full_block_size());
+        cb_out.pop_front(block.full_block_size());
     }
-    pack_untilize_uninit(cb_out_rm);
+    pack_untilize_uninit(cb_out_rm.get_cb_id());
 }
 #endif

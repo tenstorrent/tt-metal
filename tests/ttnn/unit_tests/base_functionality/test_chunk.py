@@ -7,7 +7,7 @@ import pytest
 import torch
 import ttnn
 import math
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 @pytest.mark.parametrize(
@@ -46,4 +46,4 @@ def test_chunking(device, shape, num_chunks, dim):
     ttnn_chunks = ttnn.chunk(ttnn_tensor, num_chunks, dim)
 
     ttnn_chunks_torch = [ttnn.to_torch(chunk) for chunk in ttnn_chunks]
-    assert_with_pcc(torch.cat(torch_chunks, dim=-1), torch.cat(ttnn_chunks_torch, dim=-1))
+    assert_equal(torch.cat(torch_chunks, dim=-1), torch.cat(ttnn_chunks_torch, dim=-1))

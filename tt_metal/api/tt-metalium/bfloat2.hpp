@@ -23,7 +23,7 @@
  */
 template <typename T>
 std::vector<uint32_t> pack_as_bfp2_tiles(
-    tt::stl::Span<const T> data,
+    ttsl::Span<const T> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
@@ -38,7 +38,7 @@ std::vector<uint32_t> pack_as_bfp2_tiles(
  * @return Decoded values as float.
  */
 std::vector<float> unpack_bfp2_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> bfp_tiles,
+    ttsl::Span<const uint32_t> bfp_tiles,
     bool row_major_output,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
@@ -47,7 +47,7 @@ namespace tt::tt_metal {
 
 template <typename T>
 std::vector<uint32_t> pack_as_bfp2_tiles(
-    tt::stl::Span<const T> data,
+    ttsl::Span<const T> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
@@ -55,7 +55,7 @@ std::vector<uint32_t> pack_as_bfp2_tiles(
 }
 
 inline std::vector<float> unpack_bfp2_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> bfp_tiles,
+    ttsl::Span<const uint32_t> bfp_tiles,
     bool row_major_output,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {

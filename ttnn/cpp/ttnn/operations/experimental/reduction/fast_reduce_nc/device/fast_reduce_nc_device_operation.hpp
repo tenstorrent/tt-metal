@@ -16,7 +16,7 @@ namespace ttnn::experimental::prim {
 struct FastReduceNCDeviceOperation {
     using operation_attributes_t = FastReduceNCParams;
     using tensor_args_t = FastReduceNCInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<FastReduceNCProgramFactory>;
 
@@ -36,6 +36,7 @@ Tensor fast_reduce_nc(
     const std::optional<const Tensor>& output,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<DataType>& output_dtype = std::nullopt);
 
 }  // namespace ttnn::prim

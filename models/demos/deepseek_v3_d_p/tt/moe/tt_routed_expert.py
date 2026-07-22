@@ -21,7 +21,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
@@ -155,6 +155,57 @@ class TtRoutedExpert(LightweightModule):
         return (gate_tensors, up_tensors, down_tensors) if device else None
 
     @staticmethod
+    def _convert_expert_biases(
+        torch_biases: list[dict],
+        experts_per_chip: int,
+        mesh_device: ttnn.MeshDevice,
+        bias_dtype=ttnn.bfloat16,
+    ):
+        """Convert per-expert gate/up/down biases to mesh-distributed ttnn tensors.
+
+        Each torch bias dict has keys gate_proj_bias/up_proj_bias/down_proj_bias (1D,
+        length = projection N). Returns (gate, up, down) lists of one (1, N) TILE tensor
+        per local expert, distributed across the mesh exactly like the routed weights
+        (reusing the weight gather + mesh mapper by remapping the bias keys).
+        """
+        mesh_rows, mesh_cols = mesh_device.shape
+        mapper = ExpertMapping.get_weights_mesh_mapper(mesh_device)
+        # Remap bias keys so the weight-distribution gather can be reused verbatim.
+        as_weights = [
+            {
+                "gate_proj": d["gate_proj_bias"],
+                "up_proj": d["up_proj_bias"],
+                "down_proj": d["down_proj_bias"],
+            }
+            for d in torch_biases
+        ]
+
+        def _to_tt(per_pos_biases):
+            # each entry is 1D (N,) -> (1, N); stack per mesh position -> (rows, cols, 1, N)
+            stacked = torch.stack([b.reshape(1, -1) for b in per_pos_biases], dim=0)
+            n = stacked.shape[-1]
+            stacked = stacked.reshape(mesh_rows, mesh_cols, 1, n)
+            tt = ttnn.as_tensor(
+                stacked,
+                mesh_mapper=mapper,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                dtype=bias_dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            return ttnn.squeeze(ttnn.squeeze(tt, dim=0), dim=0)  # per device: (1, N)
+
+        gate_biases, up_biases, down_biases = [], [], []
+        for local_expert_idx in range(experts_per_chip):
+            gb, ub, db = ExpertMapping.gather_weights_for_mesh_distribution(
+                as_weights, local_expert_idx, mesh_rows, mesh_cols, experts_per_chip
+            )
+            gate_biases.append(_to_tt(gb))
+            up_biases.append(_to_tt(ub))
+            down_biases.append(_to_tt(db))
+        return gate_biases, up_biases, down_biases
+
+    @staticmethod
     def build_ttnn_cache(
         torch_weights: list[dict],
         experts_per_chip: int,
@@ -191,15 +242,19 @@ class TtRoutedExpert(LightweightModule):
         self,
         mesh_device,
         experts_per_chip: int,
+        global_expert_idx_table: ttnn.Tensor,
         emb_dim: int = 7 * 1024,
         hidden_dim: int = 2 * 1024,
         max_tokens: int = 1600,
         torch_weights: list[dict] = None,
+        torch_biases: list[dict] = None,
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        *,
+        activation: "ttnn.RoutedExpertActivation",
     ):
         """
         Initialize TtRoutedExpert module.
@@ -218,6 +273,15 @@ class TtRoutedExpert(LightweightModule):
             activations_dtype: Data type for activations (default: bfloat8_b)
             weights_dtype: Data type for weights (default: bfloat4_b)
             compute_kernel_config: Compute kernel configuration
+            global_expert_idx_table: TTNN tensor mapping local expert slots to global expert ids.
+                          Produced by sharding ExpertMapping.create_global_expert_idx_table via
+                          get_ep_mesh_mapper, so each device holds (1, 1, experts_per_chip) of
+                          global ids. Required.
+            activation: Required ttnn.RoutedExpertActivation selecting the fused kernel's
+                          activation. Pass RoutedExpertActivation.Silu for the DeepSeek path
+                          (byte-identical) or RoutedExpertActivation.SwiGluOai for the
+                          MiniMax-M3 / gpt-oss clamped swigluoai activation. Keyword-only and
+                          without a default so the caller must choose explicitly.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -231,6 +295,24 @@ class TtRoutedExpert(LightweightModule):
         self.compute_kernel_config = compute_kernel_config
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
+        self.global_expert_idx_table = global_expert_idx_table
+        # Activation variant for the fused unified_routed_expert_moe kernel.
+        # Required RoutedExpertActivation, chosen explicitly by the caller (no
+        # silent default): pass ttnn.RoutedExpertActivation.Silu for the DeepSeek
+        # path (byte-identical) or .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
+        # swigluoai activation. Enforcing presence avoids silently running the
+        # wrong activation when a caller forgets to set it.
+        if activation is None:
+            raise ValueError(
+                "TtRoutedExpert requires an explicit `activation` (ttnn.RoutedExpertActivation.Silu or .SwiGluOai)"
+            )
+        self.activation = activation
+
+        # Optional per-expert projection biases (gpt-oss). Only supported with
+        # SwiGluOai (the kernel adds gate/up bias before the clamp and down bias
+        # after the down matmul). Converted + distributed like the weights below.
+        if torch_biases is not None and activation != ttnn.RoutedExpertActivation.SwiGluOai:
+            raise ValueError("TtRoutedExpert expert biases are only supported with RoutedExpertActivation.SwiGluOai")
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -295,7 +377,56 @@ class TtRoutedExpert(LightweightModule):
                 None,
                 device=self.mesh_device,
             )
+
+        assert result is not None, "Expected weight tensors to be returned when device is provided"
         self.gate_projs, self.up_projs, self.down_projs = result
+
+        # Convert + distribute optional per-expert biases (gpt-oss), one (1, N)
+        # tensor per local expert, mesh-distributed like the weights.
+        self.gate_biases = None
+        self.up_biases = None
+        self.down_biases = None
+        if torch_biases is not None:
+            assert (
+                len(torch_biases) == total_experts
+            ), f"Expected {total_experts} expert biases, got {len(torch_biases)}"
+            self.gate_biases, self.up_biases, self.down_biases = self._convert_expert_biases(
+                torch_biases, experts_per_chip, self.mesh_device
+            )
+
+    @staticmethod
+    def shard_expert_token_counts(
+        mesh_device: ttnn.MeshDevice,
+        expert_token_counts: torch.Tensor,
+    ) -> ttnn.Tensor:
+        """
+        Convert and shard the expert token counts tensor across mesh devices.
+
+        Args:
+            mesh_device: The mesh device to place the tensor on
+            expert_token_counts: Total tokens per expert (sparse per group, replicated across dispatch_group_size)
+                Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts) - from get_gate_outputs()
+
+        Returns:
+            TTNN tensor sharded across mesh devices.
+            Per-device shape: (1, num_routed_experts)
+        """
+        logger.debug(f"[shard_expert_token_counts] INPUT: expert_token_counts.shape={expert_token_counts.shape}")
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=(1, 0),
+        )
+        result = ttnn.from_torch(
+            expert_token_counts,
+            mesh_mapper=mesh_mapper,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+        )
+        result = ttnn.squeeze(result, 0)
+        logger.debug(f"[shard_expert_token_counts] OUTPUT: result.shape={result.shape}")
+        return result
 
     def _cache_name(self, name: str) -> Optional[str]:
         if self.weight_cache_path is None or self.cache_name_prefix is None:
@@ -325,186 +456,108 @@ class TtRoutedExpert(LightweightModule):
 
         return tt_weight
 
-    def _expert_ffn(
-        self,
-        x: ttnn.Tensor,
-        gate_proj: ttnn.Tensor,
-        up_proj: ttnn.Tensor,
-        down_proj: ttnn.Tensor,
-        out: Optional[ttnn.Tensor] = None,
-    ) -> ttnn.Tensor:
-        """
-        Single expert FFN computation.
-
-        Args:
-            x: Input tensor. Shape is (1, tokens, emb_dim) for the Blackhole path
-                (after ttnn.narrow) or (tokens, emb_dim) for the Wormhole path
-                (after tensor indexing).
-            gate_proj: Gate projection weight (emb_dim, hidden_dim)
-            up_proj: Up projection weight (emb_dim, hidden_dim)
-            down_proj: Down projection weight (hidden_dim, emb_dim)
-            out: Optional pre-allocated output tensor for in-place matmul result.
-                When provided, the final matmul writes directly into this buffer.
-                When None, a new tensor is allocated for the output.
-
-        Returns:
-            Output tensor matching the shape of ``x``.
-        """
-
-        return ttnn.experimental.deepseek_prefill.routed_expert_ffn(
-            x,
-            gate_proj,
-            up_proj,
-            down_proj,
-            compute_kernel_config=self.compute_kernel_config,
-            output=out,
-        )
-
-    def _bh_forward_impl(
-        self,
-        dispatched_buffer: ttnn.Tensor,
-        expert_token_counts: ttnn.Tensor = None,  # Unused for now, can reduce compute
-    ) -> ttnn.Tensor:
-        """
-        Blackhole forward implementation using narrow and in-place writes.
-
-        Pre-allocates the output tensor with empty_like and uses narrow to extract
-        per-expert slices and write FFN results directly into the output buffer,
-        avoiding extra allocations from unsqueeze/concat.
-
-        Args:
-            dispatched_buffer: Dispatched tokens
-                shape: (experts_per_chip, max_tokens, emb_dim)
-            expert_token_counts: Optional token counts per expert per chip
-                If provided, only processes tokens up to the count (currently unused,
-                all tokens are processed for simplicity)
-
-        Returns:
-            expert_outputs: Expert output tensor, same shape as dispatched_buffer
-        """
-        logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
-
-        # Convert input to activations dtype if needed
-        if dispatched_buffer.dtype != self.activations_dtype:
-            logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
-            dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
-
-        # Process each local expert
-        # dispatched_buffer: (experts_per_chip, max_tokens, emb_dim)
-        # We process expert by expert and reassemble
-
-        expert_outputs = ttnn.empty_like(dispatched_buffer)
-        for local_expert in range(self.experts_per_chip):
-            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
-
-            # Extract tokens for this expert
-            # Shape: (1, max_tokens, emb_dim)
-            tokens = ttnn.narrow(dispatched_buffer, dim=0, start=local_expert, length=1)
-            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
-
-            # Run FFN
-            output = self._expert_ffn(
-                tokens,
-                self.gate_projs[local_expert],
-                self.up_projs[local_expert],
-                self.down_projs[local_expert],
-                out=ttnn.narrow(expert_outputs, dim=0, start=local_expert, length=1),
-            )
-            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
-
-        # Shape: (experts_per_chip, max_tokens, emb_dim)
-        logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
-
-        return expert_outputs
-
-    def _wh_forward_impl(
-        self,
-        dispatched_buffer: ttnn.Tensor,
-        expert_token_counts: ttnn.Tensor = None,  # Unused for now, can reduce compute
-    ) -> ttnn.Tensor:
-        """
-        Wormhole forward implementation using indexing, unsqueeze, and concat.
-
-        Extracts per-expert tokens via tensor indexing, runs the FFN, then
-        reassembles the output by unsqueezing and concatenating along the expert
-        dimension.
-
-        Args:
-            dispatched_buffer: Dispatched tokens
-                shape: (experts_per_chip, max_tokens, emb_dim)
-            expert_token_counts: Optional token counts per expert per chip
-                If provided, only processes tokens up to the count (currently unused,
-                all tokens are processed for simplicity)
-
-        Returns:
-            expert_outputs: Expert output tensor, same shape as dispatched_buffer
-        """
-        logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
-
-        # Convert input to activations dtype if needed
-        if dispatched_buffer.dtype != self.activations_dtype:
-            logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
-            dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
-
-        # Process each local expert
-        # dispatched_buffer: (experts_per_chip, max_tokens, emb_dim)
-        # We process expert by expert and reassemble
-
-        expert_outputs_list = []
-        for local_expert in range(self.experts_per_chip):
-            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
-
-            # Extract tokens for this expert
-            # Shape: (max_tokens, emb_dim)
-            tokens = dispatched_buffer[local_expert, :, :]
-            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
-
-            # Run FFN
-            output = self._expert_ffn(
-                tokens,
-                self.gate_projs[local_expert],
-                self.up_projs[local_expert],
-                self.down_projs[local_expert],
-                out=None,  # Let the FFN allocate output since we will concatenate later
-            )
-            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
-
-            # Add expert dimension back
-            # Shape: (1, max_tokens, emb_dim)
-            output = ttnn.unsqueeze(output, dim=0)
-            expert_outputs_list.append(output)
-
-        # Concatenate along expert dimension
-        # Shape: (experts_per_chip, max_tokens, emb_dim)
-        expert_outputs = ttnn.concat(expert_outputs_list, dim=0)
-        logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
-
-        return expert_outputs
-
     def forward(
         self,
         dispatched_buffer: ttnn.Tensor,
-        expert_token_counts: ttnn.Tensor = None,  # Unused for now, can reduce compute
+        expert_token_counts: ttnn.Tensor,
+        expert_region_offsets: ttnn.Tensor,
     ) -> ttnn.Tensor:
         """
-        Process dispatched tokens through local experts.
-
-        Dispatches to the architecture-specific implementation based on the
-        current device type (Wormhole or Blackhole).
+        On Blackhole, delegates the per-local-expert work to the
+        `unified_routed_expert_moe` C++ composite (no Python per-expert loop,
+        no host-device count sync). On non-Blackhole archs (Wormhole), falls
+        back to the per-expert Python loop with extract → routed_expert_ffn
+        → insert.
 
         Args:
             dispatched_buffer: Dispatched tokens
-                shape: (experts_per_chip, max_tokens, emb_dim)
-            expert_token_counts: Optional token counts per expert per chip
-                If provided, only processes tokens up to the count (currently unused,
-                all tokens are processed for simplicity)
+                shape: (max_dispatch_buffer_token_size, emb_dim)
+            expert_token_counts: Token counts per expert per chip
+                Shape per device: (1, num_routed_experts).
+            expert_region_offsets: Expert region start offsets per expert
+                (shared across source devices in a dispatch group). Produced by
+                offset_cumsum. Shape per device: (1, num_routed_experts).
 
         Returns:
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
         """
-        if is_wormhole_b0():
-            return self._wh_forward_impl(dispatched_buffer, expert_token_counts)
-        elif is_blackhole():
-            return self._bh_forward_impl(dispatched_buffer, expert_token_counts)
+        logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
+
+        if is_blackhole():
+            # Fused path. The composite op selects its strategy from the input
+            # layout: a ROW_MAJOR bf16 buffer is consumed directly (x tilized and
+            # bf8-packed internally, fresh output); a TILE buffer takes the
+            # non-fused read path and is written in place. TILE mode requires x to
+            # be bf8, so cast a mismatched TILE input; the ROW_MAJOR fast path is
+            # left untouched.
+            if dispatched_buffer.layout == ttnn.TILE_LAYOUT and dispatched_buffer.dtype != self.activations_dtype:
+                logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
+                dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
+            signpost(header="UnifiedRoutedExpertMoe")
+            expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+                dispatched_buffer,
+                expert_region_offsets,
+                expert_token_counts,
+                self.global_expert_idx_table,
+                self.gate_projs,
+                self.up_projs,
+                self.down_projs,
+                max_dispatched_tokens_per_expert=self.max_tokens,
+                compute_kernel_config=self.compute_kernel_config,
+                activation=self.activation,
+                gate_biases=self.gate_biases,
+                up_biases=self.up_biases,
+                down_biases=self.down_biases,
+            )
+            logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+            return expert_outputs
+
+        if self.gate_biases is not None:
+            raise NotImplementedError("Expert bias is only supported on the Blackhole fused path")
+
+        # Wormhole fallback: the per-expert extract → FFN → insert loop needs a
+        # TILE activations_dtype buffer. A ROW_MAJOR input is tilized and cast in
+        # one to_layout; an already-TILE input only needs the dtype cast (to_layout
+        # would not cast a TILE→TILE tensor). expert_outputs aliases this buffer;
+        # the insert writes each expert's result back in place.
+        if dispatched_buffer.layout == ttnn.TILE_LAYOUT:
+            if dispatched_buffer.dtype != self.activations_dtype:
+                logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
+                dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
         else:
-            raise ValueError("Unsupported device architecture")
+            dispatched_buffer = ttnn.to_layout(dispatched_buffer, ttnn.TILE_LAYOUT, dtype=self.activations_dtype)
+        expert_outputs = dispatched_buffer
+        for local_expert in range(self.experts_per_chip):
+            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
+
+            tokens = ttnn.experimental.deepseek_prefill.extract(
+                dispatched_buffer,
+                expert_region_offsets,
+                expert_token_counts,
+                self.global_expert_idx_table,
+                local_expert_id=local_expert,
+                max_dispatched_tokens_per_expert=self.max_tokens,
+            )
+            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
+
+            output = ttnn.experimental.deepseek_prefill.routed_expert_ffn(
+                tokens,
+                self.gate_projs[local_expert],
+                self.up_projs[local_expert],
+                self.down_projs[local_expert],
+                compute_kernel_config=self.compute_kernel_config,
+                output=None,
+            )
+            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
+
+            expert_outputs = ttnn.experimental.deepseek_prefill.insert(
+                expert_outputs,
+                output,
+                expert_region_offsets,
+                expert_token_counts,
+                self.global_expert_idx_table,
+                local_expert_id=local_expert,
+            )
+
+        logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+        return expert_outputs

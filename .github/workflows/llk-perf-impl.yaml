@@ -1,0 +1,149 @@
+name: "LLK perf impl"
+# Entry points: workflow_call only. Schedule / workflow_dispatch live in llk-perf.yaml.
+
+on:
+  workflow_call:
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  build-images:
+    name: "Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    needs: [build-images]
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_perf_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "perf"
+      - name: Build test matrix
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "ALL_SKUS_IN_TESTS" \
+            ./.github/sku_config.yaml
+
+  llk-perf-exec:
+    needs: [load-test-matrix, build-images]
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          cd tests
+          ./setup_testing_env.sh
+          cd ..
+      - name: Set CHIP_ARCH for logs and artifacts
+        shell: bash
+        env:
+          RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
+        run: |
+          RUN_LABEL="${RUN_ON_LABELS%% *}"
+          if [[ "$RUN_LABEL" =~ N150 ]]; then
+            echo "CHIP_ARCH=wormhole" >> "$GITHUB_ENV"
+          elif [[ "$RUN_LABEL" =~ P150 ]]; then
+            echo "CHIP_ARCH=blackhole" >> "$GITHUB_ENV"
+          else
+            echo "CHIP_ARCH=unknown" >> "$GITHUB_ENV"
+          fi
+      - name: Run tests
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          ${{ matrix.test-group.cmd }}
+
+      - name: Zip performance data
+        if: always() && hashFiles('tt_metal/tt-llk/perf_data/**') != ''
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip perf_data/
+          echo "Performance data zipped successfully"
+
+      - name: Upload performance data
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always() && hashFiles(format('tt_metal/tt-llk/perf_data-{0}-{1}.zip', env.CHIP_ARCH, matrix.test-group.split_group)) != ''
+        with:
+          name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: ${{ env.LLK_PATH }}/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip
+
+      - name: Upload test logs on failure
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: failure()
+        with:
+          name: test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
+            ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
+
+      - name: Upload JUnit report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          # Match the merged report, the compile report, the BH per-slice
+          # `-<tname>-run` reports, and the WH `-run` report so that per-test
+          # reports are still uploaded even when a timeout prevents the merge.
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-run.xml
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-compile.xml
+
+      - name: Publish Test Results
+        uses: mikepenz/action-junit-report@v5
+        if: always()
+        with:
+          # Read the per-phase / per-slice result reports directly (compile +
+          # run for WH, per-slice run for BH) rather than only the merged
+          # report, so results are still published if a shard times out before
+          # the merge step. The three patterns are disjoint and exclude the
+          # merged report, so no test is counted twice.
+          report_paths: |
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-compile.xml
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-run.xml
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
+          include_passed: true
+          annotate_only: true

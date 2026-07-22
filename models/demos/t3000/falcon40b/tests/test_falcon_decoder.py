@@ -10,7 +10,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.t3000.falcon40b.tests.test_utils import load_falcon_reference_model
 from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
@@ -53,13 +53,7 @@ def run_test_FalconDecoder_inference(
     model_config,
     tt_cache_path,
 ):
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(
-        model_version,
-        local_files_only=os.getenv("CI") == "true",
-        low_cpu_mem_usage=True,
-        num_hidden_layers=layer_num + 1,
-    )
-    hugging_face_reference_model.eval()
+    hugging_face_reference_model = load_falcon_reference_model(model_version, num_hidden_layers=layer_num + 1)
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
 
@@ -354,7 +348,17 @@ def run_test_FalconDecoder_inference(
     ids=["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM", "BFLOAT16-DRAM"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    # Falcon-40B requires 8 chips. On a >8-chip machine (e.g. WH LLMBox with 16),
+    # force a (1, 8) submesh via `export MESH_DEVICE=T3K`. Defaults to (1, 8).
+    [
+        {
+            "T3K": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), (1, 8))
+    ],
+    indirect=True,
+)
 def test_FalconDecoder_inference(
     num_devices,
     model_version,

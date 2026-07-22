@@ -7,8 +7,9 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "hal.hpp"
 #include "llrt/rtoptions.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -19,143 +20,29 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelSemaphores) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     // Skip if simulator is not available
-    if (!MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
+    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
     auto mesh_device = devices_[0];
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
-    constexpr CoreCoord core = {0, 0};
+    const experimental::NodeCoord node{0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // Prepare a workload and a device coordinate range that spans the mesh.
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
-
-    constexpr uint32_t base_src_l1_address = 1000 * 1024;
-    constexpr uint32_t base_dst_l1_address = 1025 * 1024;
-    std::vector<uint32_t> expected_values{0x0123, 0x4567, 0x89AB, 0xCDEF};
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], core, base_src_l1_address, expected_values);
-
-    uint32_t sem_id = CreateSemaphore(program, core, 0);
-
-    const KernelHandle kernel_handle = experimental::quasar::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_l1_read_write.cpp",
-        core,
-        experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 4, .compile_args = {sem_id, 0}});
-    SetRuntimeArgs(program, kernel_handle, core, {base_src_l1_address, base_dst_l1_address});
-
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
-
-    std::vector<uint32_t> actual_values(4, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], core, base_dst_l1_address, 4 * sizeof(uint32_t), actual_values);
-
-    ASSERT_EQ(actual_values, expected_values);
-}
-
-// This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, QuasarDmAndComputeKernelSemaphores) {
-    // Skip if simulator is not available
-    if (!MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
-    }
-
-    auto mesh_device = devices_[0];
-
-    // We are going to use the first device (0) and the first core (0, 0) on the device.
-    constexpr CoreCoord core = {0, 0};
-    // Command queue lets us submit work (execute programs and read/write buffers) to the device.
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    // Prepare a workload and a device coordinate range that spans the mesh.
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
-
-    const uint32_t sem_id = CreateSemaphore(program, core, 0);
-
-    uint32_t l1_address = 1000 * 1024;
-    std::vector<uint32_t> expected_values{0x0123, 0x4567, 0x89AB, 0xCDEF};
-    uint32_t dram_address = 30000 * 1024;
-    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_address, expected_values);
-
-    std::vector<KernelHandle> dm_dram_to_l1_kernels;
-    std::vector<KernelHandle> dm_l1_to_dram_kernels;
-    dm_dram_to_l1_kernels.reserve(2);
-    dm_l1_to_dram_kernels.reserve(2);
-    for (uint32_t i = 0; i < 2; i++) {
-        dm_dram_to_l1_kernels.push_back(experimental::quasar::CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
-            core,
-            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = {sem_id}}));
-
-        dm_l1_to_dram_kernels.push_back(experimental::quasar::CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
-            core,
-            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = {sem_id}}));
-    }
-
-    SetRuntimeArgs(program, dm_dram_to_l1_kernels[0], core, {dram_address, l1_address, 4 * sizeof(uint32_t), 0, 0});
-    SetRuntimeArgs(program, dm_l1_to_dram_kernels[0], core, {dram_address, l1_address, 4 * sizeof(uint32_t), 0, 1});
-    l1_address += 4 * sizeof(uint32_t);
-    SetRuntimeArgs(program, dm_dram_to_l1_kernels[1], core, {dram_address, l1_address, 4 * sizeof(uint32_t), 0, 2});
-
-    const KernelHandle kernel_handle = experimental::quasar::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_l1_read_write.cpp",
-        core,
-        experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 4, .compile_args = {sem_id, 3}});
-    const uint32_t base_src_l1_address = l1_address;
-    const uint32_t base_dst_l1_address = l1_address + 4 * sizeof(uint32_t);
-    SetRuntimeArgs(program, kernel_handle, core, {base_src_l1_address, base_dst_l1_address});
-
-    l1_address += 4 * sizeof(uint32_t);
-    SetRuntimeArgs(program, dm_l1_to_dram_kernels[1], core, {dram_address, l1_address, 4 * sizeof(uint32_t), 0, 7});
-
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
-
-    std::vector<uint32_t> actual_values(4, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], core, l1_address, 4 * sizeof(uint32_t), actual_values);
-
-    ASSERT_EQ(actual_values, expected_values);
-}
-
-// This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
-    // Skip if simulator is not available
-    if (!MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
-    }
-
-    auto mesh_device = devices_[0];
-
-    // We are going to use the first device (0) and the first core (0, 0) on the device.
-    constexpr CoreCoord core = {0, 0};
-    // Command queue lets us submit work (execute programs and read/write buffers) to the device.
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    // Prepare a workload and a device coordinate range that spans the mesh.
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
-
-    const uint32_t sem0 = CreateSemaphore(program, core, 0);
-    const uint32_t sem1 = CreateSemaphore(program, core, 0);
 
     constexpr uint32_t num_elements = 10;
-    constexpr uint32_t buf_a_addr = 1000 * 1024;
-    constexpr uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
-    constexpr uint32_t dram_src_addr = 29000 * 1024;
-    constexpr uint32_t dram_dst_addr = 30000 * 1024;
+    const uint32_t buf_a_addr = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
+    const uint32_t dram_src_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint32_t dram_dst_addr = dram_src_addr + (1000 * 1024);
 
     std::vector<uint32_t> initial_data(num_elements, 0);
     for (uint32_t i = 0; i < num_elements; i++) {
@@ -163,29 +50,107 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     }
     tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_src_addr, initial_data);
 
-    auto dm_reader = experimental::quasar::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp",
-        core,
-        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = {sem0}});
-    SetRuntimeArgs(program, dm_reader, core, {dram_src_addr, buf_a_addr, num_elements, 0});
+    const experimental::KernelSpecName DM_READER{"dm_reader"};
+    const experimental::KernelSpecName DM_TRANSFORM{"dm_transform"};
+    const experimental::KernelSpecName DM_WRITER{"dm_writer"};
 
-    auto compute = experimental::quasar::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/transform_pipeline.cpp",
-        core,
-        experimental::quasar::QuasarComputeConfig{
-            .num_threads_per_cluster = 1,
-            .compile_args = {num_elements, sem0, sem1},
-            .defines = {{"OUTGOING_SEM", "1"}, {"INCOMING_SEM", "1"}}});
-    SetRuntimeArgs(program, compute, core, {buf_a_addr, buf_b_addr});
+    experimental::SemaphoreSpec sem0_spec{
+        .unique_id = experimental::SemaphoreSpecName{"sem0"},
+        .target_nodes = node,
+    };
+    experimental::SemaphoreSpec sem1_spec{
+        .unique_id = experimental::SemaphoreSpecName{"sem1"},
+        .target_nodes = node,
+    };
 
-    auto dm_writer = experimental::quasar::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
-        core,
-        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = {sem1}});
-    SetRuntimeArgs(program, dm_writer, core, {dram_dst_addr, buf_b_addr, num_elements, 0});
+    experimental::KernelSpec dm_reader_spec{
+        .unique_id = DM_READER,
+        .source =
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp",
+        .num_threads = 1,
+        .semaphore_bindings =
+            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0"}, .accessor_name = "sem"}},
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+            },
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+
+    experimental::KernelSpec dm_transform_spec{
+        .unique_id = DM_TRANSFORM,
+        .source =
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/transform_pipeline.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = {{"OUTGOING_SEM", "1"}, {"INCOMING_SEM", "1"}}},
+        .semaphore_bindings =
+            {
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0"}, .accessor_name = "sem_in"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1"}, .accessor_name = "sem_out"},
+            },
+        .compile_time_args =
+            {
+                {"num_elements", num_elements},
+                {"buf_a", buf_a_addr},
+                {"buf_b", buf_b_addr},
+            },
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+
+    experimental::KernelSpec dm_writer_spec{
+        .unique_id = DM_WRITER,
+        .source =
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
+        .num_threads = 1,
+        .semaphore_bindings =
+            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1"}, .accessor_name = "sem"}},
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+            },
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+
+    experimental::WorkUnitSpec main_wu{
+        .name = "main",
+        .kernels = {DM_READER, DM_TRANSFORM, DM_WRITER},
+        .target_nodes = node,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "multi_semaphore_pipeline",
+        .kernels = {dm_reader_spec, dm_transform_spec, dm_writer_spec},
+        .semaphores = {sem0_spec, sem1_spec},
+        .work_units = {main_wu},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = DM_READER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dram_addr", dram_src_addr},
+                 {"l1_addr", buf_a_addr},
+                 {"num_elements", num_elements},
+                 {"dram_bank_id", 0u}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = DM_WRITER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dram_addr", dram_dst_addr},
+                 {"l1_addr", buf_b_addr},
+                 {"num_elements", num_elements},
+                 {"dram_bank_id", 0u}}),
+        },
+    };
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -200,89 +165,212 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
 }
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline) {
     // Skip if simulator is not available
-    if (!MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
+    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
     auto mesh_device = devices_[0];
 
-    constexpr CoreCoord core_0 = {0, 0};
-    constexpr CoreCoord core_1 = {1, 0};
+    if (mesh_device->compute_with_storage_grid_size().x < 2) {
+        GTEST_SKIP() << "This test requires at least 2 worker nodes.";
+    }
+
+    const experimental::NodeCoord node_0{0, 0};
+    const experimental::NodeCoord node_1{1, 0};
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
-
-    const uint32_t sem_core_0 = CreateSemaphore(program, core_0, 0);
-    const uint32_t sem_cross = CreateSemaphore(program, CoreRange(core_0, core_1), 0);
-    const uint32_t sem0_core_1 = CreateSemaphore(program, core_1, 0);
-    const uint32_t sem1_core_1 = CreateSemaphore(program, core_1, 0);
 
     constexpr uint32_t num_elements = 10;
-    constexpr uint32_t buf_a_addr = 1000 * 1024;
-    constexpr uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
-    const uint32_t dram_mid_addr = 31000 * 1024;
-    const uint32_t dram_dst_addr = 32000 * 1024;
+    const uint32_t buf_a_addr = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
+    const uint32_t dram_mid_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint32_t dram_dst_addr = dram_mid_addr + (1000 * 1024);
 
     std::vector<uint32_t> initial_data(num_elements, 0);
     for (uint32_t i = 0; i < num_elements; i++) {
         initial_data[i] = i;
     }
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], core_0, buf_a_addr, initial_data);
+    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node_0, buf_a_addr, initial_data);
 
-    const CoreCoord core_1_virtual = mesh_device->worker_core_from_logical_core(core_1);
+    const CoreCoord core_1_virtual = mesh_device->worker_core_from_logical_core(node_1);
 
-    auto compute_0 = experimental::quasar::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/transform_pipeline.cpp",
-        core_0,
-        experimental::quasar::QuasarComputeConfig{
-            .num_threads_per_cluster = 1,
-            .compile_args = {num_elements, sem_core_0},
-            .defines = {{"OUTGOING_SEM", "1"}}});
-    SetRuntimeArgs(program, compute_0, core_0, {buf_a_addr, buf_b_addr});
+    experimental::SemaphoreSpec sem_core_0_spec{
+        .unique_id = experimental::SemaphoreSpecName{"sem_core_0"},
+        .target_nodes = node_0,
+    };
+    experimental::SemaphoreSpec sem_cross_spec{
+        .unique_id = experimental::SemaphoreSpecName{"sem_cross"},
+        .target_nodes = experimental::NodeRange{node_0, node_1},
+    };
+    experimental::SemaphoreSpec sem0_core_1_spec{
+        .unique_id = experimental::SemaphoreSpecName{"sem0_core_1"},
+        .target_nodes = node_1,
+    };
+    experimental::SemaphoreSpec sem1_core_1_spec{
+        .unique_id = experimental::SemaphoreSpecName{"sem1_core_1"},
+        .target_nodes = node_1,
+    };
 
-    auto dm_writer_0 = experimental::quasar::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
-        core_0,
-        experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 1,
-            .compile_args = {sem_core_0, sem_cross},
-            .defines = {{"INCREMENT_REMOTE_SEM", "1"}}});
-    SetRuntimeArgs(
-        program, dm_writer_0, core_0, {dram_mid_addr, buf_b_addr, num_elements, 0, core_1_virtual.x, core_1_virtual.y});
+    const experimental::KernelSpecName DM_TRANSFORM_0{"dm_transform_0"};
+    const experimental::KernelSpecName DM_WRITER_0{"dm_writer_0"};
+    const experimental::KernelSpecName DM_READER_1{"dm_reader_1"};
+    const experimental::KernelSpecName DM_TRANSFORM_1{"dm_transform_1"};
+    const experimental::KernelSpecName DM_WRITER_1{"dm_writer_1"};
 
-    auto dm_reader_1 = experimental::quasar::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp",
-        core_1,
-        experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 1,
-            .compile_args = {sem0_core_1, sem_cross},
-            .defines = {{"WAIT_FOR_REMOTE_SEM", "1"}}});
-    SetRuntimeArgs(program, dm_reader_1, core_1, {dram_mid_addr, buf_a_addr, num_elements, 0});
+    experimental::KernelSpec dm_transform_0_spec{
+        .unique_id = DM_TRANSFORM_0,
+        .source =
 
-    auto compute_1 = experimental::quasar::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/transform_pipeline.cpp",
-        core_1,
-        experimental::quasar::QuasarComputeConfig{
-            .num_threads_per_cluster = 1,
-            .compile_args = {num_elements, sem0_core_1, sem1_core_1},
-            .defines = {{"INCOMING_SEM", "1"}, {"OUTGOING_SEM", "1"}}});
-    SetRuntimeArgs(program, compute_1, core_1, {buf_a_addr, buf_b_addr});
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/transform_pipeline.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = {{"OUTGOING_SEM", "1"}}},
+        .semaphore_bindings =
+            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_core_0"}, .accessor_name = "sem_out"}},
+        .compile_time_args =
+            {
+                {"num_elements", num_elements},
+                {"buf_a", buf_a_addr},
+                {"buf_b", buf_b_addr},
+            },
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
 
-    auto dm_writer_1 = experimental::quasar::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
-        core_1,
-        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = {sem1_core_1}});
-    SetRuntimeArgs(program, dm_writer_1, core_1, {dram_dst_addr, buf_b_addr, num_elements, 0});
+    experimental::KernelSpec dm_writer_0_spec{
+        .unique_id = DM_WRITER_0,
+        .source =
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = {{"INCREMENT_REMOTE_SEM", "1"}}},
+        .semaphore_bindings =
+            {
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_core_0"}, .accessor_name = "sem"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_cross"}, .accessor_name = "remote_sem"},
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names =
+                    {"dram_addr", "l1_addr", "num_elements", "dram_bank_id", "remote_noc_x", "remote_noc_y"},
+            },
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+
+    experimental::KernelSpec dm_reader_1_spec{
+        .unique_id = DM_READER_1,
+        .source =
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = {{"WAIT_FOR_REMOTE_SEM", "1"}}},
+        .semaphore_bindings =
+            {
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0_core_1"}, .accessor_name = "sem"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_cross"}, .accessor_name = "remote_sem"},
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+            },
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+
+    experimental::KernelSpec dm_transform_1_spec{
+        .unique_id = DM_TRANSFORM_1,
+        .source =
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/transform_pipeline.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = {{"INCOMING_SEM", "1"}, {"OUTGOING_SEM", "1"}}},
+        .semaphore_bindings =
+            {
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0_core_1"}, .accessor_name = "sem_in"},
+                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1_core_1"}, .accessor_name = "sem_out"},
+            },
+        .compile_time_args =
+            {
+                {"num_elements", num_elements},
+                {"buf_a", buf_a_addr},
+                {"buf_b", buf_b_addr},
+            },
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+
+    experimental::KernelSpec dm_writer_1_spec{
+        .unique_id = DM_WRITER_1,
+        .source =
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
+        .num_threads = 1,
+        .semaphore_bindings =
+            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1_core_1"}, .accessor_name = "sem"}},
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
+            },
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+
+    experimental::WorkUnitSpec wu_core_0{
+        .name = "wu_core_0",
+        .kernels = {DM_TRANSFORM_0, DM_WRITER_0},
+        .target_nodes = node_0,
+    };
+    experimental::WorkUnitSpec wu_core_1{
+        .name = "wu_core_1",
+        .kernels = {DM_READER_1, DM_TRANSFORM_1, DM_WRITER_1},
+        .target_nodes = node_1,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "multi_cluster_multi_semaphore_pipeline",
+        .kernels = {dm_transform_0_spec, dm_writer_0_spec, dm_reader_1_spec, dm_transform_1_spec, dm_writer_1_spec},
+        .semaphores = {sem_core_0_spec, sem_cross_spec, sem0_core_1_spec, sem1_core_1_spec},
+        .work_units = {wu_core_0, wu_core_1},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM_0},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM_1},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = DM_WRITER_0,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node_0,
+                {{"dram_addr", dram_mid_addr},
+                 {"l1_addr", buf_b_addr},
+                 {"num_elements", num_elements},
+                 {"dram_bank_id", 0u},
+                 {"remote_noc_x", static_cast<uint32_t>(core_1_virtual.x)},
+                 {"remote_noc_y", static_cast<uint32_t>(core_1_virtual.y)}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = DM_READER_1,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node_1,
+                {{"dram_addr", dram_mid_addr},
+                 {"l1_addr", buf_a_addr},
+                 {"num_elements", num_elements},
+                 {"dram_bank_id", 0u}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = DM_WRITER_1,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node_1,
+                {{"dram_addr", dram_dst_addr},
+                 {"l1_addr", buf_b_addr},
+                 {"num_elements", num_elements},
+                 {"dram_bank_id", 0u}}),
+        },
+    };
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

@@ -4,102 +4,65 @@
 
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 
+#include "host_tensor_impl.hpp"
+
 namespace tt::tt_metal {
 
-class HostTensorImpl {
-public:
-    HostTensorImpl(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) :
-        buffer_(std::move(buffer)), spec_(std::move(spec)), topology_(std::move(topology)) {}
-
-    HostTensorImpl(const HostTensorImpl& other) = default;
-    HostTensorImpl(HostTensorImpl&& other) noexcept = default;
-    HostTensorImpl& operator=(const HostTensorImpl& other) = default;
-    HostTensorImpl& operator=(HostTensorImpl&& other) noexcept = default;
-    ~HostTensorImpl() = default;
-
-    // Two step construction for HostTensor,
-    // for transiet purpose.
-    HostTensorImpl(HostTensorImpl&& other, TensorSpec spec, TensorTopology topology) :
-        buffer_(std::move(other.buffer_)), spec_(std::move(spec)), topology_(std::move(topology)) {}
-
-    const DistributedHostBuffer& buffer() const& { return buffer_; }
-    DistributedHostBuffer& buffer() & { return buffer_; }
-    DistributedHostBuffer buffer() const&& { return buffer_; }
-    const TensorSpec& spec() const { return spec_; }
-    const TensorTopology& topology() const { return topology_; }
-    void update_topology(TensorTopology topology) { topology_ = std::move(topology); }
-
-private:
-    DistributedHostBuffer buffer_;
-    TensorSpec spec_;
-    TensorTopology topology_;
-};
-
-HostTensor::HostTensor() = default;
 
 HostTensor::HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) :
-    impl(std::make_unique<HostTensorImpl>(std::move(buffer), std::move(spec), std::move(topology))) {}
+    impl_(std::make_unique<HostTensorImpl>(std::move(buffer), std::move(spec), std::move(topology))) {}
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-DistributedHostBuffer create_unit_distributed_host_buffer(HostBuffer buffer) {
-    auto distributed_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
-    return distributed_buffer;
+HostTensor HostTensor::from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) {
+    return HostTensor(std::move(buffer), std::move(spec), std::move(topology));
 }
-};  // namespace CMAKE_UNIQUE_NAMESPACE
-};  // namespace
 
-HostTensor::HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology) :
-    impl(std::make_unique<HostTensorImpl>(
-        CMAKE_UNIQUE_NAMESPACE::create_unit_distributed_host_buffer(std::move(buffer)),
-        std::move(spec),
-        std::move(topology))) {}
-
-HostTensor::HostTensor(HostTensor&& other, TensorSpec spec, TensorTopology topology) {
-    TT_FATAL(other.impl != nullptr, "Cannot move from a default-constructed or moved-from HostTensor.");
-    impl = std::make_unique<HostTensorImpl>(std::move(*other.impl), std::move(spec), std::move(topology));
+HostTensor HostTensor::from_buffer(HostBuffer buffer, TensorSpec spec, TensorTopology topology) {
+    auto distributed_buffer = DistributedHostBuffer::create(
+        distributed::MeshShape(1, 1),
+        distributed::MeshShape(1, 1),
+        distributed::MeshCoordinate(0, 0),
+        /*context=*/nullptr);
+    distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
+    return HostTensor(std::move(distributed_buffer), std::move(spec), std::move(topology));
 }
 
 HostTensor::HostTensor(const HostTensor& other) :
-    impl(other.impl ? std::make_unique<HostTensorImpl>(*other.impl) : nullptr) {}
+    impl_(other.impl_ ? std::make_unique<HostTensorImpl>(*other.impl_) : nullptr) {}
 
 HostTensor& HostTensor::operator=(const HostTensor& other) {
     if (this == &other) {
         return *this;
     }
-    impl = other.impl ? std::make_unique<HostTensorImpl>(*other.impl) : nullptr;
+    impl_ = other.impl_ ? std::make_unique<HostTensorImpl>(*other.impl_) : nullptr;
     return *this;
 }
 
-HostTensor::HostTensor(HostTensor&& other) noexcept : impl(std::move(other.impl)) {}
+HostTensor::HostTensor(HostTensor&& other) noexcept : impl_(std::move(other.impl_)) {}
 
 HostTensor& HostTensor::operator=(HostTensor&& other) noexcept {
-    impl = std::move(other.impl);
+    impl_ = std::move(other.impl_);
     return *this;
 }
 
 HostTensor::~HostTensor() = default;
 
-const TensorSpec& HostTensor::tensor_spec() const {
-    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state.");
-    return impl->spec();
+HostTensorImpl& HostTensor::impl() {
+    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
+    return *impl_;
 }
 
-const TensorTopology& HostTensor::tensor_topology() const {
-    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state.");
-    return impl->topology();
+const HostTensorImpl& HostTensor::impl() const {
+    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
+    return *impl_;
 }
 
-const DistributedHostBuffer& HostTensor::buffer() const {
-    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state.");
-    return impl->buffer();
-}
+const TensorSpec& HostTensor::tensor_spec() const { return impl().spec(); }
 
-DistributedHostBuffer& HostTensor::buffer() {
-    TT_FATAL(impl != nullptr, "HostTensor is in default constructed state.");
-    return impl->buffer();
-}
+const TensorTopology& HostTensor::tensor_topology() const { return impl().topology(); }
+
+bool HostTensor::is_valueless_after_move() const { return impl_ == nullptr; }
+
+const DistributedHostBuffer& HostTensor::buffer() const { return impl().buffer(); }
 
 DataType HostTensor::dtype() const { return tensor_spec().tensor_layout().get_data_type(); }
 
@@ -144,8 +107,7 @@ HostTensor HostTensor::transform(const std::function<HostBuffer(const HostBuffer
 }
 
 void HostTensor::update_tensor_topology(TensorTopology tensor_topology) {
-    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state.");
-    impl->update_topology(std::move(tensor_topology));
+    impl().update_topology(std::move(tensor_topology));
 }
 
 }  // namespace tt::tt_metal

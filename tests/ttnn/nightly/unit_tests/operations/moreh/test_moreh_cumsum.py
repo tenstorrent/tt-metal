@@ -76,14 +76,7 @@ def test_moreh_cumsum_dim(input_shape, dim, device):
 
     torch_output = torch.cumsum(torch_input, dim)
 
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_output_cpu = (
-        ttnn.operations.moreh.cumsum(tt_input, dim, output=tt_output)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(output_shape)
-        .to_torch()
-    )
+    tt_output_cpu = ttnn.to_torch(ttnn.operations.moreh.cumsum(tt_input, dim, output=tt_output))
 
     # test for equivalance
     rtol = atol = 0.1
@@ -119,6 +112,18 @@ def test_moreh_cumsum_dim(input_shape, dim, device):
     ids=["0", "1"],
 )
 def test_moreh_cumsum_backward(input_shape, dim, device):
+    if (
+        input_shape
+        in (
+            [1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1],
+            [4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1],
+        )
+        and dim == 0
+    ):
+        pytest.skip(
+            reason="Disabled by issue #44858: moreh cumsum backward TT_FATAL on nightly dim-0 tile-misaligned shapes"
+        )
+
     output_shape = input_shape.copy()
 
     (_, _, torch_input) = get_tensors(input_shape, output_shape, device)
@@ -127,13 +132,12 @@ def test_moreh_cumsum_backward(input_shape, dim, device):
     torch_output = torch.cumsum(torch_input, dim)
     torch_output.backward(torch_output_grad)
 
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_input_grad_cpu = (
+    # Same fix pattern as #44283 applied to test_moreh_cumsum_dim: the legacy
+    # .cpu().to(ROW_MAJOR).unpad_from_tile(shape).to_torch() chain trips the
+    # hardened unpad_from_tile precondition (#43568) when input_shape's last
+    # two dims aren't tile-aligned — ttnn.to_torch handles padding correctly.
+    tt_input_grad_cpu = ttnn.to_torch(
         ttnn.operations.moreh.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(input_shape)
-        .to_torch()
     )
 
     # test for equivalance
@@ -224,6 +228,18 @@ def test_moreh_cumsum_callback(input_shape, dim, device):
     ids=["0", "1"],
 )
 def test_moreh_cumsum_backward(input_shape, dim, device):
+    if (
+        input_shape
+        in (
+            [1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1],
+            [4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1],
+        )
+        and dim == 0
+    ):
+        pytest.skip(
+            reason="Disabled by issue #44858: moreh cumsum backward TT_FATAL on nightly dim-0 tile-misaligned shapes"
+        )
+
     output_shape = input_shape.copy()
 
     (_, _, torch_input) = get_tensors(input_shape, output_shape, device)
@@ -232,13 +248,12 @@ def test_moreh_cumsum_backward(input_shape, dim, device):
     torch_output = torch.cumsum(torch_input, dim)
     torch_output.backward(torch_output_grad)
 
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_input_grad_cpu = (
+    # Same fix pattern as #44283 applied to test_moreh_cumsum_dim: the legacy
+    # .cpu().to(ROW_MAJOR).unpad_from_tile(shape).to_torch() chain trips the
+    # hardened unpad_from_tile precondition (#43568) when input_shape's last
+    # two dims aren't tile-aligned — ttnn.to_torch handles padding correctly.
+    tt_input_grad_cpu = ttnn.to_torch(
         ttnn.operations.moreh.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(input_shape)
-        .to_torch()
     )
 
     # test for equivalance

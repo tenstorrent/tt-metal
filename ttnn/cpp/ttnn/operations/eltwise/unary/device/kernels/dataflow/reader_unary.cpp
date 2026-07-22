@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -14,12 +14,12 @@ void kernel_main() {
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_src(cb_id_src);
+    Noc noc;
+    DataflowBuffer dfb_src(cb_id_src);
 
 #if SRC_SHARDED
-    cb_src.reserve_back(num_pages);
-    cb_src.push_back(num_pages);
+    dfb_src.reserve_back(num_pages);
+    dfb_src.push_back(num_pages);
 #else
     constexpr uint32_t onepage = 1;
     constexpr auto src_args = TensorAccessorArgs<0, 0>();
@@ -40,26 +40,26 @@ void kernel_main() {
 
         for (uint32_t j = 0; j < chunks_per_row; ++j) {
             uint32_t bytes = (j == chunks_per_row - 1) ? last_chunk_size : chunk_size;
-            cb_src.reserve_back(onepage);
+            dfb_src.reserve_back(onepage);
             for (uint32_t r = 0; r < actual_rows; ++r) {
                 noc.async_read(
                     src,
-                    cb_src,
+                    dfb_src,
                     bytes,
                     {.page_id = base_page + r, .offset_bytes = j * chunk_size},
                     {.offset_bytes = r * bytes});
             }
             noc.async_read_barrier();
-            cb_src.push_back(onepage);
+            dfb_src.push_back(onepage);
         }
     }
 #else
     const uint32_t page_bytes = get_local_cb_interface(cb_id_src).fifo_page_size;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_src.reserve_back(onepage);
-        noc.async_read(src, cb_src, page_bytes, {.page_id = i}, {.offset_bytes = 0});
+        dfb_src.reserve_back(onepage);
+        noc.async_read(src, dfb_src, page_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_src.push_back(onepage);
+        dfb_src.push_back(onepage);
     }
 #endif
 #endif

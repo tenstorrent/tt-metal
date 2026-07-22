@@ -7,6 +7,8 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -22,9 +24,13 @@ void kernel_main() {
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_r2c_w = tt::CBIndex::c_0;
-    constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_out = tt::CBIndex::c_2;
+    constexpr auto cb_r2c_w_id = tt::CBIndex::c_0;
+    constexpr auto cb_s2c_in_id = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_out_id = tt::CBIndex::c_2;
+
+    CircularBuffer cb_r2c_w(cb_r2c_w_id);
+    CircularBuffer cb_s2c_in(cb_s2c_in_id);
+    CircularBuffer cb_c2w_out(cb_c2w_out_id);
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
@@ -47,16 +53,17 @@ void kernel_main() {
     // Compute
     //-------------------------------------------------------------------------
     // Pack is always configured to Float16_b
-    pack_reconfig_data_format(cb_c2w_out);
+    pack_reconfig_data_format(cb_c2w_out_id);
 
     // Unpacker B is for input/activation and eltiwse inputs, so Float16_b
-    reconfig_data_format_srcb(cb_s2c_in);
+    reconfig_data_format_srcb(cb_s2c_in_id);
 
     // Unpacker A is for W, so Bf8_b
-    reconfig_data_format_srca(cb_r2c_w);
+    reconfig_data_format_srca(cb_r2c_w_id);
 
     // Initialize matmul
-    mm_block_init(cb_s2c_in, cb_r2c_w, cb_c2w_out, /*transpose=*/false, /*ct_dim=*/7, /*rt_dim=*/1, /*kt_dim=*/1);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in_id, cb_r2c_w_id, cb_c2w_out_id);
+    matmul_block_init(cb_s2c_in_id, cb_r2c_w_id, /*transpose=*/false, /*ct_dim=*/7, /*rt_dim=*/1, /*kt_dim=*/1);
 
     //---------------------------------------------------------------------
     // Compute in @ W
@@ -73,12 +80,12 @@ void kernel_main() {
 
         tile_regs_acquire();
         for (uint32_t block_id = 0; block_id < num_blocks_per_iter; ++block_id) {
-            cb_wait_front(cb_r2c_w, w_tiles_per_block);
+            cb_r2c_w.wait_front(w_tiles_per_block);
 
             for (uint32_t k = 0; k < w_tiles_per_block; k += 7) {
                 matmul_block(
-                    cb_s2c_in,
-                    cb_r2c_w,
+                    cb_s2c_in_id,
+                    cb_r2c_w_id,
                     in0_index++,
                     /*in1_tile_index=*/k,
                     /*idst=*/0,
@@ -87,19 +94,19 @@ void kernel_main() {
                     /*rt_dim=*/1,
                     /*kt_dim=*/1);
             }
-            cb_pop_front(cb_r2c_w, w_tiles_per_block);
+            cb_r2c_w.pop_front(w_tiles_per_block);
         }
 
         tile_regs_commit();
         tile_regs_wait();
 
-        cb_reserve_back(cb_c2w_out, num_n_tiles_per_iter);
-        pack_tile_block(0, cb_c2w_out, num_n_tiles_per_iter);
-        cb_push_back(cb_c2w_out, num_n_tiles_per_iter);
+        cb_c2w_out.reserve_back(num_n_tiles_per_iter);
+        pack_tile_block(0, cb_c2w_out_id, num_n_tiles_per_iter);
+        cb_c2w_out.push_back(num_n_tiles_per_iter);
         tile_regs_release();
     }
 
     // Drain the pipeline - the last dummy push
-    cb_wait_front(cb_r2c_w, w_tiles_per_block);
-    cb_pop_front(cb_r2c_w, w_tiles_per_block);
+    cb_r2c_w.wait_front(w_tiles_per_block);
+    cb_r2c_w.pop_front(w_tiles_per_block);
 }

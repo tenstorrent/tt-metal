@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: 'Select model to test'
+        description: "Select model to test"
         required: false
-        default: 'all'
+        default: "all"
         type: choice
         options:
           - all
@@ -75,9 +75,14 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -86,7 +91,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-perf:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     uses: ./.github/workflows/perf-models-impl.yaml
     secrets: inherit
     with:

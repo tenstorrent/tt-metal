@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_eltwise_binary ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Binary ALIAS ttnn_op_eltwise_binary)
 
-tt_reuse_precompile_headers(ttnn_op_eltwise_binary TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_eltwise_binary TTNN::PCHLean)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary)
 set_target_properties(
     ttnn_op_eltwise_binary
@@ -11,35 +13,20 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels device/kernels/*)
+file(GLOB_RECURSE kernels device/kernels/*.cpp)
 target_sources(
     ttnn_op_eltwise_binary
     PUBLIC
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            binary.hpp
-            binary_composite.hpp
-            common/binary_op_types.hpp
-            common/binary_op_utils.hpp
-            device/binary_device_operation.hpp
+        FILES ${TTNN_OP_ELTWISE_BINARY_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        binary.cpp
-        common/binary_op_utils.cpp
-        device/binary_composite_op.cpp
-        device/binary_device_operation.cpp
-        device/broadcast_height_and_width_multi_core_program_factory.cpp
-        device/broadcast_height_multi_core_program_factory.cpp
-        device/broadcast_width_multi_core_program_factory.cpp
-        device/element_wise_multi_core_program_factory.cpp
-        device/element_wise_multi_core_sfpu_pgm_factory.cpp
-        device/broadcast_height_multi_core_sharded_optimized_program_factory.cpp
-        device/broadcast_height_multi_core_sharded_program_factory.cpp
+        ${TTNN_OP_ELTWISE_BINARY_SRCS}
 )
 
 target_include_directories(ttnn_op_eltwise_binary PRIVATE ${FixmeOpIncDirs})
@@ -58,3 +45,19 @@ install(
 )
 
 install(TARGETS ttnn_op_eltwise_binary LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_ELTWISE_BINARY_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_ELTWISE_BINARY_NANOBIND_SRCS})
+endif()

@@ -167,19 +167,19 @@
 //     CoreCoord worker = {0, 0};
 //     auto reader_kernel = CreateKernel(
 //         program,
-//         "tt_metal/kernels/dataflow/reader_unary.cpp",
+//         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
 //         worker,
 //         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
 //     auto writer_kernel = CreateKernel(
 //         program,
-//         "tt_metal/kernels/dataflow/writer_unary.cpp",
+//         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
 //         worker,
 //         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
 //     CreateKernel(
 //         program,
-//         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+//         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
 //         worker,
 //         ComputeConfig{
 //             .math_approx_mode = true,

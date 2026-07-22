@@ -102,14 +102,14 @@ void RunDelayTestOnCore(
 
     auto binary_reader_kernel = tt_metal::CreateKernel(
         program_,
-        "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_diff_lengths.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program_,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -120,7 +120,7 @@ void RunDelayTestOnCore(
         {"ELTWISE_OP", "add_tiles"}, {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"}};
     auto eltwise_binary_kernel = tt_metal::CreateKernel(
         program_,
-        "tt_metal/kernels/compute/eltwise_binary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 
@@ -173,6 +173,9 @@ void RunDelayTestOnCore(
 
 TEST_F(MeshWatcherDelayFixture, TensixTestWatcherSanitizeInsertDelays) {
     if (this->slow_dispatch_) {
+        GTEST_SKIP();
+    }
+    if (tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
         GTEST_SKIP();
     }
 

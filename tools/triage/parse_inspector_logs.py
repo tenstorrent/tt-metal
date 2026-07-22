@@ -88,6 +88,7 @@ class MeshWorkloadRuntimeEntry:
     runtimeId: int
     operationName: str = ""
     operationParameters: str = ""
+    traceId: int = 0xFFFFFFFF
 
 
 @dataclass
@@ -139,10 +140,11 @@ def fast_parse_yaml_log_file(log_file: str):
         yield yaml.safe_load(log_entry)
 
 
-def read_yaml(yaml_path: str):
+def read_yaml(yaml_path: str) -> list:
     if not os.path.exists(yaml_path):
         utils.WARN(f"  {yaml_path} file does not exist.")
         return []
+    data: object
     try:
         # Try to use ryml for faster parsing if available
         import ryml
@@ -158,7 +160,7 @@ def read_yaml(yaml_path: str):
             data = yaml.safe_load(f)
     if data is None:
         return []
-    return data
+    return data  # type: ignore[return-value]  # yaml/ryml return untyped data; callers iterate as a list
 
 
 @dataclass
@@ -213,6 +215,7 @@ def get_startup_data(log_directory: str) -> StartupData:
 def get_programs(log_directory: str, verbose: bool = False) -> dict[int, ProgramData]:
     yaml_path = os.path.join(log_directory, "programs_log.yaml")
     data = read_yaml(yaml_path)
+    startup: StartupData | None = None
     if verbose:
         print("Programs log:")
         startup = get_startup_data(log_directory)
@@ -225,19 +228,19 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
             programs[program_id] = ProgramData(
                 id=program_id, compiled=False, watcherKernelIds=[], binary_status_per_device={}, kernels=[]
             )
-            if verbose:
+            if startup is not None:
                 startup.print_log(int(info.get("timestamp_ns")), f"Program {program_id} created")
         elif "program_destroyed" in entry:
             info = entry["program_destroyed"]
             program_id = int(info.get("id"))
             if program_id in programs:
                 del programs[program_id]
-            if verbose:
+            if startup is not None:
                 startup.print_log(int(info.get("timestamp_ns")), f"Program {program_id} destroyed")
         elif "program_compile_started" in entry:
             info = entry["program_compile_started"]
             program_id = int(info.get("id"))
-            if verbose:
+            if startup is not None:
                 startup.print_log(int(info.get("timestamp_ns")), f"Program {program_id} compile started")
         elif "program_kernel_compile_finished" in entry:
             info = entry["program_kernel_compile_finished"]
@@ -245,7 +248,7 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
             watcher_kernel_id = int(info.get("watcher_kernel_id"))
             if program_id in programs:
                 programs[program_id].watcherKernelIds.append(watcher_kernel_id)
-            if verbose:
+            if startup is not None:
                 startup.print_log(
                     int(info.get("timestamp_ns")),
                     f"Program {program_id} kernel {watcher_kernel_id} compile finished in {info.get('duration_ns')/1000000} ms",
@@ -255,7 +258,7 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
             program_id = int(info.get("id"))
             if program_id in programs:
                 programs[program_id].compiled = True
-            if verbose:
+            if startup is not None:
                 startup.print_log(
                     int(info.get("timestamp_ns")),
                     f"Program {program_id} compile finished in {info.get('duration_ns')/1000000} ms",
@@ -265,7 +268,7 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
             program_id = int(info.get("id"))
             if program_id in programs:
                 programs[program_id].compiled = True
-            if verbose:
+            if startup is not None:
                 startup.print_log(int(info.get("timestamp_ns")), f"Program {program_id} compile already exists")
         elif "program_binary_status_change" in entry:
             info = entry["program_binary_status_change"]
@@ -273,7 +276,7 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
             device_id = int(info.get("device_id"))
             if program_id in programs:
                 programs[program_id].binary_status_per_device[device_id] = info.get("status")
-            if verbose:
+            if startup is not None:
                 startup.print_log(
                     int(info.get("timestamp_ns")), f"Program {program_id} binary status changed to {info.get('status')}"
                 )
@@ -285,6 +288,7 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
 def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, MeshDeviceData]:
     yaml_path = os.path.join(log_directory, "mesh_devices_log.yaml")
     data = read_yaml(yaml_path)
+    startup: StartupData | None = None
     if verbose:
         print("Mesh devices log:")
         startup = get_startup_data(log_directory)
@@ -301,7 +305,7 @@ def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, Mes
                 parentMeshId=int(info.get("parent_mesh_id")) if info.get("parent_mesh_id") is not None else None,
             )
             mesh_devices[mesh_id] = mesh_device
-            if verbose:
+            if startup is not None:
                 startup.print_log(
                     int(info.get("timestamp_ns")),
                     f"Mesh device {mesh_id} created. Devices: {mesh_device.devices}, Shape: {mesh_device.shape}, Parent: {mesh_device.parentMeshId}",
@@ -311,14 +315,14 @@ def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, Mes
             mesh_id = int(info.get("mesh_id"))
             if mesh_id in mesh_devices:
                 del mesh_devices[mesh_id]
-            if verbose:
+            if startup is not None:
                 startup.print_log(int(info.get("timestamp_ns")), f"Mesh device {mesh_id} destroyed")
         elif "mesh_device_initialized" in entry:
             info = entry["mesh_device_initialized"]
             mesh_id = int(info.get("mesh_id"))
             if mesh_id in mesh_devices:
                 mesh_devices[mesh_id].initialized = True
-            if verbose:
+            if startup is not None:
                 startup.print_log(int(info.get("timestamp_ns")), f"Mesh device {mesh_id} initialized")
     if verbose:
         print()
@@ -328,6 +332,7 @@ def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, Mes
 def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, MeshWorkloadData]:
     yaml_path = os.path.join(log_directory, "mesh_workloads_log.yaml")
     data = read_yaml(yaml_path)
+    startup: StartupData | None = None
     if verbose:
         print("Mesh workloads log:")
         startup = get_startup_data(log_directory)
@@ -342,14 +347,14 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, M
                 programs=[],
                 binary_status_per_mesh_device={},
             )
-            if verbose:
+            if startup is not None:
                 startup.print_log(int(info.get("timestamp_ns")), f"Mesh workload {mesh_workload_id} created")
         elif "mesh_workload_destroyed" in entry:
             info = entry["mesh_workload_destroyed"]
             mesh_workload_id = int(info.get("mesh_workload_id"))
             if mesh_workload_id in mesh_workloads:
                 del mesh_workloads[mesh_workload_id]
-            if verbose:
+            if startup is not None:
                 startup.print_log(int(info.get("timestamp_ns")), f"Mesh workload {mesh_workload_id} destroyed")
         elif "mesh_workload_add_program" in entry:
             info = entry["mesh_workload_add_program"]
@@ -362,7 +367,7 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, M
                 mesh_workloads[mesh_workload_id].programs.append(
                     MeshWorkloadProgramData(programId=program_id, coordinates=coordinates)
                 )
-            if verbose:
+            if startup is not None:
                 startup.print_log(
                     int(info.get("timestamp_ns")),
                     f"Program {program_id} added to mesh workload {mesh_workload_id} with coordinates {coordinates}",
@@ -373,7 +378,7 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, M
             mesh_id = int(info.get("mesh_id"))
             if mesh_workload_id in mesh_workloads:
                 mesh_workloads[mesh_workload_id].binary_status_per_mesh_device[mesh_id] = info.get("status")
-            if verbose:
+            if startup is not None:
                 startup.print_log(
                     int(info.get("timestamp_ns")),
                     f"Mesh workload {mesh_workload_id} binary status changed to {info.get('status')}",
@@ -391,7 +396,9 @@ def update_programs_with_mesh_workloads(
     mesh_devices_map = {device.meshId: device for device in mesh_devices}
     for mesh_workload in mesh_workloads:
         for mesh_id, binary_status in mesh_workload.binary_status_per_mesh_device.items():
-            if binary_status != "NotSet":
+            # Values originate from untyped yaml, so the "NotSet" sentinel is possible at runtime
+            # even though it is outside the declared BinaryStatus literal.
+            if str(binary_status) != "NotSet":
                 for program_data in mesh_workload.programs:
                     program_id = program_data.programId
                     if program_id not in programs:
@@ -417,7 +424,7 @@ def get_log_directory(log_directory: str | None = None) -> str:
     if log_directory:
         return log_directory
     elif "TT_METAL_LOGS_PATH" in os.environ:
-        return os.path.join(os.environ.get("TT_METAL_LOGS_PATH"), "generated", "inspector")
+        return os.path.join(os.environ["TT_METAL_LOGS_PATH"], "generated", "inspector")
     else:
         import tempfile
 
@@ -462,16 +469,19 @@ class InspectorLogsData:
                 info = entry["runtime_entry"]
                 wid = int(info.get("mesh_workload_id"))
                 rid = int(info.get("runtime_id"))
+                trace_id = int(info["trace_id"])
                 existing = entry_map.get((wid, rid))
                 if existing is not None:
                     existing.operationName = info.get("name", "")
                     existing.operationParameters = info.get("parameters", "")
+                    existing.traceId = trace_id
                 else:
                     re = MeshWorkloadRuntimeEntry(
                         workloadId=wid,
                         runtimeId=rid,
                         operationName=info.get("name", ""),
                         operationParameters=info.get("parameters", ""),
+                        traceId=trace_id,
                     )
                     runtime_entries.append(re)
                     entry_map[(wid, rid)] = re
@@ -518,6 +528,7 @@ def get_data(log_directory: str | None = None) -> InspectorLogsData:
 
 
 def main():
+    assert __doc__ is not None
     args = docopt(__doc__, argv=sys.argv[1:])
     log_directory = get_log_directory(args["<log-directory>"])
     if not os.path.exists(log_directory):
@@ -553,8 +564,8 @@ def main():
     for mesh_workload in mesh_workloads.values():
         print(f"  Mesh Workload ID {mesh_workload.meshWorkloadId}")
         print(f"    Programs:")
-        for program in mesh_workload.programs:
-            print(f"      {program.programId}: {program.coordinates}")
+        for workload_program in mesh_workload.programs:
+            print(f"      {workload_program.programId}: {workload_program.coordinates}")
         print(f"    Binary status per mesh device: {mesh_workload.binary_status_per_mesh_device}")
     print()
 

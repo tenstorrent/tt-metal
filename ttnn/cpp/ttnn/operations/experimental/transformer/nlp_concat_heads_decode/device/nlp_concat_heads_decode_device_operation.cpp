@@ -25,7 +25,7 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
     const auto& input_shape = input_tensor.padded_shape();
 
     // input tensor and shape
-    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to TM need to be on device!");
+    TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
@@ -37,7 +37,7 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
         input_tensor.layout());
     TT_FATAL(input_shape[0] == 1, "seqlen=1 for decode");
     TT_FATAL(input_shape[1] <= 32, "currently only support less than 32 users");
-    TT_FATAL(input_shape[2] == 32, "currently only support 32 padded heads");
+    TT_FATAL(input_shape[2] % 32 == 0, "padded heads must be a multiple of TILE_HEIGHT (32), got {}", input_shape[2]);
     TT_FATAL(input_shape[2] >= args.num_heads, "head_dim must be multiple of TILE_WIDTH");
 
     // input tensor shard spec
@@ -69,7 +69,7 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -106,7 +106,7 @@ TensorSpec NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
     auto mem_config = tt::tt_metal::MemoryConfig{
         tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape, tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::Layout::TILE, mem_config));
 }
 

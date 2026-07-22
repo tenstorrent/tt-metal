@@ -2,14 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 import ttnn
+
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
-    data_gen_with_range,
-    data_gen_with_range_dtype,
     compare_pcc,
-    compare_equal,
+    data_gen_with_range,
 )
 from tests.ttnn.utils_for_testing import assert_with_ulp
 
@@ -45,7 +44,7 @@ pytestmark = pytest.mark.use_module_device
         ("tensor", "tensor"),
     ],
 )
-def test_unary_composite_clamp_ttnn(input_shapes, min_val, max_val, device):
+def test_unary_composite_clamp_ttnn(input_shapes, min_val, max_val, device, expect_error):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
     if min_val == "tensor":
@@ -63,7 +62,7 @@ def test_unary_composite_clamp_ttnn(input_shapes, min_val, max_val, device):
         max, max_tensor = max_val, max_val
 
     if min is None and max is None:
-        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+        with expect_error(RuntimeError, "Only one of 'min' or 'max' can be None. Please provide one value"):
             ttnn.clamp(input_tensor1, min_tensor, max_tensor)
     else:
         output_tensor = ttnn.clamp(input_tensor1, min_tensor, max_tensor)
@@ -102,7 +101,7 @@ def test_unary_composite_clamp_ttnn(input_shapes, min_val, max_val, device):
         ("tensor", "tensor"),
     ],
 )
-def test_unary_composite_clip_ttnn(input_shapes, min_val, max_val, device):
+def test_unary_composite_clip_ttnn(input_shapes, min_val, max_val, device, expect_error):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
     if min_val == "tensor":
@@ -120,7 +119,7 @@ def test_unary_composite_clip_ttnn(input_shapes, min_val, max_val, device):
         max, max_tensor = max_val, max_val
 
     if min is None and max is None:
-        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+        with expect_error(RuntimeError, "Only one of 'min' or 'max' can be None. Please provide one value"):
             ttnn.clip(input_tensor1, min_tensor, max_tensor)
     else:
         output_tensor = ttnn.clip(input_tensor1, min_tensor, max_tensor)
@@ -242,6 +241,30 @@ def test_unary_polygamma_ttnn(input_shapes, k, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=1)
+
+
+# Locks in accuracy at the lower domain boundary (x ~ 0.5), where the exact-summation
+# cutoff (NUM_TERMS) places the Euler-Maclaurin tail closest to its asymptotic limit.
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("k", [1, 2, 5, 10])
+def test_unary_polygamma_boundary_ttnn(input_shapes, k, device):
+    torch.manual_seed(213919)
+    # Sample the boundary region x in [0.5, 1.0].
+    torch_input = torch.rand(input_shapes, dtype=torch.bfloat16) * 0.5 + 0.5
+    golden_function = ttnn.get_golden_function(ttnn.polygamma)
+    golden_tensor = golden_function(torch_input, k)
+
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.polygamma(input_tensor, k)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -399,7 +422,7 @@ def test_unary_swiglu_ttnn(input_shapes, dim, device):
         (0, 1),
     ],
 )
-def test_unary_composite_clamp_int_ttnn(input_shapes, min_val, max_val, device):
+def test_unary_composite_clamp_int_ttnn(input_shapes, min_val, max_val, device, expect_error):
     in_data1 = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     if min_val is None:
@@ -413,7 +436,7 @@ def test_unary_composite_clamp_int_ttnn(input_shapes, min_val, max_val, device):
         max, max_tensor = max_val, max_val
 
     if min is None and max is None:
-        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+        with expect_error(RuntimeError, "Only one of 'min' or 'max' can be None. Please provide one value"):
             ttnn.clamp(input_tensor1, min_tensor, max_tensor)
     else:
         output_tensor = ttnn.clamp(input_tensor1, min_tensor, max_tensor)

@@ -21,6 +21,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <unordered_map>
@@ -107,8 +108,8 @@ std::string get_cluster_descriptor_content() {
     return buffer.str();
 }
 
-// Get mesh coordinate mapping from generated/fabric/ directory
-// This matches the old behavior of save_mesh_descriptor() which copied these YAML files
+// Get mesh coordinate mapping from generated/fabric/ directory for the current rank.
+// Matches control_plane naming: physical_chip_mesh_coordinate_mapping_<rank+1>_of_<world_size>.yaml
 // Note: Only called during report generation (offline), not on hot path
 std::string get_mesh_coordinate_mapping_content() {
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
@@ -122,27 +123,27 @@ std::string get_mesh_coordinate_mapping_content() {
         return "";
     }
 
-    // Collect all physical_chip_mesh_coordinate_mapping*.yaml files
-    std::string combined_content;
-    for (const auto& entry : std::filesystem::directory_iterator(fabric_dir)) {
-        if (entry.is_regular_file()) {
-            std::string filename = entry.path().filename().string();
-            if (filename.find("physical_chip_mesh_coordinate_mapping") != std::string::npos &&
-                filename.find(".yaml") != std::string::npos) {
-                std::ifstream file(entry.path());
-                if (file.is_open()) {
-                    if (!combined_content.empty()) {
-                        combined_content += "\n---\n";  // YAML document separator
-                    }
-                    combined_content += "# " + filename + "\n";
-                    std::stringstream buffer;
-                    buffer << file.rdbuf();
-                    combined_content += buffer.str();
-                }
-            }
-        }
+    const auto& world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const int rank = *world_ctx->rank();
+    const int world_size = *world_ctx->size();
+
+    std::filesystem::path mapping_file =
+        fabric_dir / ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) + "_of_" +
+                      std::to_string(world_size) + ".yaml");
+    if (world_size == 1 && !std::filesystem::exists(mapping_file)) {
+        mapping_file = fabric_dir / "physical_chip_mesh_coordinate_mapping.yaml";
     }
-    return combined_content;
+    if (!std::filesystem::exists(mapping_file)) {
+        return "";
+    }
+
+    std::ifstream file(mapping_file);
+    if (!file.is_open()) {
+        return "";
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
 }
 
 }  // namespace
@@ -231,23 +232,7 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     node_id counter = graph.size();
     int stacking_level = static_cast<int>(current_op_id.size()) - 1;
 
-    // Compute max_size_per_bank: the maximum allocation footprint per bank for this
-    // buffer.  For interleaved layouts we use the real bank count from the allocator
-    // (important for L1_SMALL which has fewer banks than L1).  For sharded layouts
-    // we use the per-core page spread which matches the allocator's distribution for
-    // all standard shard specs.
-    uint32_t num_pages = buffer->num_pages();
-    uint32_t page_sz = buffer->page_size();
-    uint32_t max_size_per_bank;
-    if (tt::tt_metal::is_sharded(buffer->buffer_layout())) {
-        uint32_t nc = buffer->num_cores().value_or(1);
-        uint32_t pages_per_core = nc > 0 ? (num_pages + nc - 1) / nc : num_pages;
-        max_size_per_bank = pages_per_core * page_sz;
-    } else {
-        uint32_t num_banks = buffer->device()->allocator()->get_num_banks(buffer->buffer_type());
-        uint32_t pages_per_bank = num_banks > 0 ? (num_pages + num_banks - 1) / num_banks : num_pages;
-        max_size_per_bank = pages_per_bank * page_sz;
-    }
+    uint32_t max_size_per_bank = buffer->aligned_size_per_bank();
 
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(buffer->size())},
@@ -305,7 +290,8 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
         {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
         {kPageSize, std::to_string(buffer->page_size())},
         {kNumCores, std::to_string(buffer->num_cores().value_or(0))},  // use 0 for interleaved
-        {kDeviceId, std::to_string(buffer->device()->id())}};
+        {kDeviceId, std::to_string(buffer->device()->id())},
+        {kMaxSizePerBank, std::to_string(buffer->aligned_size_per_bank())}};
     {
         graph.push_back(Vertex{
             .counter = counter,
@@ -318,7 +304,7 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
 }
 
 void GraphProcessor::track_allocate_cb(
-    const CoreRangeSet& core_range_set,
+    const tt::tt_metal::CoreRangeSet& core_range_set,
     uint64_t addr,
     uint64_t size,
     bool is_globally_allocated,
@@ -553,8 +539,17 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         // buffer.
         buffer = mesh_buffer.get_backing_buffer();
 
-        // For multi-device tensors, capture per-device addresses and mesh device IDs
+        // For multi-device tensors, capture per-device addresses and mesh device IDs.
+        // In multi-host (SPMD) runs the tensor's coords span the full global mesh, but this
+        // process only owns a local subset of the chips. MeshBuffer::get_device_buffer(coord)
+        // dereferences a MaybeRemote and throws "Attempted to access remote device..." for a
+        // coord owned by another host, so skip non-local coords. Each rank records only its
+        // local shards.
+        auto* const tensor_mesh_device = mesh_buffer.device();
         for (const auto& coord : t.device_storage().get_coords()) {
+            if (tensor_mesh_device != nullptr && !tensor_mesh_device->is_local(coord)) {
+                continue;
+            }
             auto* device_buffer = mesh_buffer.get_device_buffer(coord);
             if (device_buffer != nullptr) {
                 device_tensors_json.push_back(
@@ -766,6 +761,10 @@ nlohmann::json GraphProcessor::get_report() const {
         metadata[kReportTotalDurationNs] = graph.back().duration_ns;
     }
 
+    // Add distributed context metadata
+    const auto& world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    metadata[kReportRank] = *world_ctx->rank();
+    metadata[kReportWorldSize] = *world_ctx->size();
     report[kReportMetadata] = metadata;
 
     // Cluster descriptor (YAML content) - always try, returns empty if unavailable
@@ -774,7 +773,7 @@ nlohmann::json GraphProcessor::get_report() const {
         report["cluster_descriptor"] = cluster_desc;
     }
 
-    // Mesh coordinate mapping (from generated/fabric/*.yaml) - matches old behavior
+    // Mesh coordinate mapping (from generated/fabric/, current rank only)
     std::string mesh_mapping = get_mesh_coordinate_mapping_content();
     if (!mesh_mapping.empty()) {
         report["mesh_coordinate_mapping"] = mesh_mapping;

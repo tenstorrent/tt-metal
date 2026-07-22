@@ -13,7 +13,7 @@ namespace ttnn::prim {
 struct InterleavedToShardedPartialDeviceOperation {
     using operation_attributes_t = InterleavedToShardedPartialParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<InterleavedToShardedPartialProgramFactory>;
     static void validate_on_program_cache_miss(

@@ -3,14 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// Compiler hint that a branch is unlikely to be taken
-#define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
-#define TT_ALWAYS_INLINE    inline __attribute__((always_inline))
-#define tt_l1_ptr           __attribute__((rvtt_l1_ptr))
-#define tt_reg_ptr          __attribute__((rvtt_reg_ptr))
+#define TT_ALWAYS_INLINE inline __attribute__((always_inline))
+#define NOINLINE         __attribute__((noinline))
+#define NOCLONE          __attribute__((noclone))
+#define tt_l1_ptr        __attribute__((rvtt_l1_ptr))
+#define tt_reg_ptr       __attribute__((rvtt_reg_ptr))
 #include <cstdint>
 
 #include "ckernel_addrmod.h"
+#include "ckernel_fence.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 // #include "fw_debug.h"
@@ -36,14 +37,10 @@ constexpr std::uint8_t TENSIX_PERF_SEMAPHORE = p_stall::SEMAPHORE_2;
 constexpr std::uint8_t MATH_SEMAPHORE        = 1;
 constexpr std::uint8_t PC_BUF_SEMAPHORE_BASE = 32; // base address for semaphores in PC buffer. FIXME: must be kept in sync with SEM_COUNT parameter... ugly...
 constexpr std::uint8_t STREAM_SEMAPHORE      = 5;  // semaphore used by unpack thread to sync between trisc and unpacker
-constexpr std::uint8_t TENSIX_STREAM_SEMAPHORE                = p_stall::SEMAPHORE_5; // semaphore used by unpack thread to sync between trisc and unpacker
-constexpr std::uint8_t PARAM_ITERATIONS                       = 0;
-constexpr std::uint8_t TENSIX_UNPACK_TO_DEST_UNPACK_SEMAPHORE = p_stall::SEMAPHORE_4;
-constexpr std::uint8_t UNPACK_TO_DEST_UNPACK_SEMAPHORE        = 4;
-constexpr std::uint8_t TENSIX_PACK_STREAM_SEMAPHORE           = p_stall::SEMAPHORE_6;
-constexpr std::uint8_t PACK_STREAM_SEMAPHORE                  = 6;
-constexpr std::uint8_t TENSIX_UNPACK_TO_DEST_PACK_SEMAPHORE   = p_stall::SEMAPHORE_7;
-constexpr std::uint8_t UNPACK_TO_DEST_PACK_SEMAPHORE          = 7;
+constexpr std::uint8_t TENSIX_STREAM_SEMAPHORE      = p_stall::SEMAPHORE_5; // semaphore used by unpack thread to sync between trisc and unpacker
+constexpr std::uint8_t PARAM_ITERATIONS             = 0;
+constexpr std::uint8_t TENSIX_PACK_STREAM_SEMAPHORE = p_stall::SEMAPHORE_6;
+constexpr std::uint8_t PACK_STREAM_SEMAPHORE        = 6;
 
 volatile std::uint32_t *const reg_base        = (volatile std::uint32_t *)0xFFB10000;
 volatile std::uint32_t *const pc_buf_base     = (volatile std::uint32_t *)PC_BUF_BASE;
@@ -101,6 +98,14 @@ inline void reg_write(std::uint32_t addr, std::uint32_t data)
     p_reg[0]                                 = data;
 }
 
+inline std::uint64_t read_wall_clock()
+{
+    volatile t6_debug_regs_t *t6dbg = RISCV_DEBUG_REGS;
+    std::uint32_t timestamp_low     = t6dbg->WALL_CLOCK_0;
+    std::uint32_t timestamp_high    = t6dbg->WALL_CLOCK_1_AT;
+    return (static_cast<std::uint64_t>(timestamp_high) << 32) | timestamp_low;
+}
+
 //
 //
 // inline void wait_math_semaphores()
@@ -154,6 +159,11 @@ inline void tensix_sync()
 
     // Now read -- this read will block until we're idle
     *fooptr = pc_buf_base[1];
+}
+
+inline void invalidate_data_cache()
+{
+    asm volatile("fence" ::: "memory");
 }
 
 inline void mop_sync()
@@ -296,7 +306,7 @@ template <std::uint32_t bitmask>
 inline void set_ttsync_enables(std::uint32_t thread_id = 0xdeadface)
 {
     static_assert((bitmask & ~TRACK_ALL) == 0, "The given bitmask targets bits outside the allowable range");
-    auto t6dbg = RISCV_DEBUG_REGS;
+    volatile t6_debug_regs_t *t6dbg = RISCV_DEBUG_REGS;
 
     if (thread_id > 3)
     {
@@ -750,51 +760,14 @@ void set_up_dest_dvalid_per_thread(dest_dvalid_client const (&clients)[N])
 
 // d e e p e s t l o r e
 __attribute__((always_inline)) inline void rv_wrcfg(
-    std::uint32_t const &wrdata_hi,
-    std::uint32_t const &wrdata_lo,
-    std::uint32_t const &cfg_addr,
-    std::uint32_t const write_64b = 0,
-    std::uint32_t const byte_mask = 0xFF)
+    std::uint32_t wrdata_hi, std::uint32_t wrdata_lo, std::uint32_t cfg_addr, std::uint32_t write_64b = 0, std::uint32_t byte_mask = 0xFF)
 {
-    std::uint32_t const base_instrn = TRISC_OP_SWIZZLE(TT_OP_RV_WRCFG(byte_mask, write_64b, 0, 0, 0));
     asm volatile(
-        ".equ reg_lut_zero, 0\n"
-        ".equ reg_lut_ra, 1\n"
-        ".equ reg_lut_sp, 2\n"
-        ".equ reg_lut_gp, 3\n"
-        ".equ reg_lut_tp, 4\n"
-        ".equ reg_lut_t0, 5\n"
-        ".equ reg_lut_t1, 6\n"
-        ".equ reg_lut_t2, 7\n"
-        ".equ reg_lut_s0, 8\n"
-        ".equ reg_lut_fp, 8\n"
-        ".equ reg_lut_s1, 9\n"
-        ".equ reg_lut_a0, 10\n"
-        ".equ reg_lut_a1, 11\n"
-        ".equ reg_lut_a2, 12\n"
-        ".equ reg_lut_a3, 13\n"
-        ".equ reg_lut_a4, 14\n"
-        ".equ reg_lut_a5, 15\n"
-        ".equ reg_lut_a6, 16\n"
-        ".equ reg_lut_a7, 17\n"
-        ".equ reg_lut_s2, 18\n"
-        ".equ reg_lut_s3, 19\n"
-        ".equ reg_lut_s4, 20\n"
-        ".equ reg_lut_s5, 21\n"
-        ".equ reg_lut_s6, 22\n"
-        ".equ reg_lut_s7, 23\n"
-        ".equ reg_lut_s8, 24\n"
-        ".equ reg_lut_s9, 25\n"
-        ".equ reg_lut_s10, 26\n"
-        ".equ reg_lut_s11, 27\n"
-        ".equ reg_lut_t3, 28\n"
-        ".equ reg_lut_t4, 29\n"
-        ".equ reg_lut_t5, 30\n"
-        ".equ reg_lut_t6, 31\n"
-        ".word %[base_instrn] + (reg_lut_%[reg0] << 2) + (reg_lut_%[reg1] << 7) + (reg_lut_%[reg2] << 12)"
-        :
-        : [base_instrn] "i"(base_instrn), [reg2] "r"(wrdata_lo), [reg1] "r"(wrdata_hi), [reg0] "r"(cfg_addr)
-        :);
+        "ttrv_wrcfg %[addr],%[hi],%[lo],%[mask],%[wr64b]" ::[addr] "r"(cfg_addr),
+        [hi] "r"(wrdata_hi),
+        [lo] "r"(wrdata_lo),
+        [mask] "n"(byte_mask),
+        [wr64b] "n"(write_64b));
 }
 
 // Refer to the comments about the Ports for RISC memory-mapped access near

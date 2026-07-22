@@ -5,6 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include "debug_tools.hpp"
 
+#include <fmt/ranges.h>
 #include <cstdint>
 #include <cstdlib>
 #include <algorithm>
@@ -235,6 +236,19 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
                 cq_file << fmt::format(" (num_worker_sems={})", val(cmd->set_num_worker_sems.num_worker_sems));
                 break;
+            case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS: {
+                uint32_t num_sub_devices = val(cmd->set_sub_device_worker_counts.num_sub_devices);
+                uint32_t* workers_per_sub_device =
+                    reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(cmd) + sizeof(CQDispatchCmd));
+                cq_file << fmt::format(
+                    " (num_sub_devices={}, workers_per_sub_device=[{}])",
+                    num_sub_devices,
+                    fmt::join(workers_per_sub_device, workers_per_sub_device + num_sub_devices, ", "));
+                stride += num_sub_devices * sizeof(uint32_t);
+                const uint32_t alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+                stride = ((stride + alignment - 1) / alignment) * alignment;
+                break;
+            }
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA:
                 cq_file << fmt::format(" (num_words={})", val(cmd->set_go_signal_noc_data.num_words));
                 break;
@@ -245,6 +259,7 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
             case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
             case CQ_DISPATCH_CMD_TERMINATE:
+            case CQ_DISPATCH_CMD_RT_PROFILER_FLUSH:
             case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
             default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;
         }

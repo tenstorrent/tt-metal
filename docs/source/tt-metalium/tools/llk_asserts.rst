@@ -48,6 +48,96 @@ This causes the kernel to hang.
 If Watcher is used, the assertion message will be printed to stderr and the watcher log file.
 If Lightweight Kernel Asserts are used or LLK Asserts only are used, use ``tt-triage`` to analyze the failure state.
 
+.. _quick-start-llk-asserts:
+
+Quick-start: Running a Test with LLK Asserts
+---------------------------------------------
+
+The easiest way to run a test with LLK asserts enabled — together with the device-print and
+on-timeout triage hooks needed to actually capture the failure — is to source the helper script
+``tools/setup_llk_assert_env.sh``. It exports every environment variable needed for a
+fully-instrumented debug run in a single line.
+
+**Usage**
+
+The script *must be sourced* (not executed) so the exported variables persist in your shell.
+It takes **two required positional parameters** (no defaults):
+
+.. code-block:: bash
+
+   source tools/setup_llk_assert_env.sh <assert_output_path> <dprint_output_path>
+
+- ``<assert_output_path>`` — file where the on-timeout triage hook writes the lightweight-assert
+  dump (callstacks, template parameters, runtime args, locals).
+- ``<dprint_output_path>`` — file where ``DPRINT`` output from all cores is written
+  (``TT_METAL_DPRINT_FILE``).
+
+The script also requires ``TT_METAL_HOME`` to be set — activating the tt-metal Python
+environment is enough.
+
+**Example**
+
+.. code-block:: bash
+
+   cd $TT_METAL_HOME
+   source python_env/bin/activate
+   source tools/setup_llk_assert_env.sh assert.txt /tmp/tt_dprint.log
+   TT_METAL_LLK_ASSERTS=1 pytest [CONCRETE_TEST] > test_output.txt
+
+After the run completes, three artifacts are available for analysis:
+
+- ``test_output.txt`` — pytest stdout/stderr, including the host-side ``RuntimeError`` and stack trace.
+- ``assert.txt`` — the lightweight-assert dump from the device when the hang was detected.
+- ``/tmp/tt_dprint.log`` — ``DPRINT`` output (e.g. ``expected: …, actual: …`` values
+  emitted near a failing ``LLK_ASSERT``).
+
+**How the script is designed to work**
+
+A failing ``LLK_ASSERT`` executes ``ebreak`` on a TRISC, which silently hangs that core. The host
+keeps waiting on a command-queue completion that will never arrive. The script wires up
+six environment variables that turn this otherwise-mysterious hang into a precise,
+self-triaged failure:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
+
+   * - Variable
+     - Purpose
+   * - ``TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE``
+     - Shell command run by the host when a dispatch timeout is detected. The script sets it to
+       ``$TT_METAL_HOME/tools/tt-triage.py --run=dump_lightweight_asserts > <assert_output_path> && tt-smi -r``
+       — first dump the lightweight asserts (callstack, template params, runtime args, locals)
+       to the file you specified, then reset the device with ``tt-smi -r`` so the next run
+       starts from a clean state.
+   * - ``TT_METAL_OPERATION_TIMEOUT_SECONDS=5.0``
+     - Short host-side completion timeout. Without it, the host would wait the full default
+       timeout (minutes) before declaring the hang and firing the triage command.
+   * - ``TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1``
+     - Allows the triage scripts (including ``dump_lightweight_asserts``) to execute even
+       when running under CI-like conditions where they are otherwise gated off.
+   * - ``TT_METAL_DPRINT_CORES=all``
+     - Subscribes the host dprint server to every core. Without this, ``DPRINT``
+       statements on TRISCs would not be captured.
+   * - ``TT_METAL_DPRINT_FILE=<dprint_output_path>``
+     - Redirects all ``DPRINT`` output to the file you specified instead of stdout,
+       making it easy to grep/diff after the run.
+
+The end-to-end flow is:
+
+1. ``LLK_ASSERT`` condition fails on a TRISC → ``ebreak`` → core hangs.
+2. After ``TT_METAL_OPERATION_TIMEOUT_SECONDS=5.0`` seconds, the host detects no completion and
+   raises a dispatch timeout.
+3. The host runs ``TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE`` → ``tt-triage.py`` walks the
+   device, finds the asserting TRISC, recovers callstack, template params, runtime args, and
+   locals, and writes them to ``<assert_output_path>``.
+4. ``tt-smi -r`` resets the device so the next test run is clean.
+5. Pytest reports a ``RuntimeError`` to ``test_output.txt``; ``DPRINT`` lines emitted
+   before the ``ebreak`` are in ``<dprint_output_path>``.
+
+Together, these three files normally pinpoint the failing kernel, the failing line, and the
+exact mismatched values within a single test run — no rebuild required.
+
 LLK_ASSERT Macro
 ----------------
 
@@ -175,20 +265,17 @@ LLK asserts are fully integrated into the tt-metal CI/CD system through the ``en
 
 The following key workflow files accept the ``enable-llk-asserts`` boolean input and can be triggered manually via ``workflow_dispatch`` with the checkbox enabled:
 
-- ``sanity-tests.yaml`` — broad sanity suite (fast dispatch, models, ops, TTNN, profiler)
+- ``sanity-tests.yaml`` — broad sanity suite (fast dispatch, ops, TTNN, profiler)
 - ``sanity-tests-debug.yaml`` — nightly debug run (also the scheduled nightly LLK assert run)
-- ``blackhole-post-commit.yaml`` — Blackhole-specific test matrix (models, ops, TTNN, UMD, multi-card)
 
-Other workflows also accept this parameter (e.g. ``ttnn-post-commit.yaml``, ``ops-post-commit.yaml``, ``models-post-commit.yaml``, ``tt-metal-l2-nightly.yaml``, and others), but the three above are the most useful entry points for validating new asserts.
+Other workflows also accept this parameter (e.g. ``ttnn-post-commit.yaml``, ``ops-post-commit.yaml``, ``tt-metal-l2-nightly.yaml``, and others), but the two above are the most useful entry points for validating new asserts.
 
 **Nightly Runs with LLK Asserts**
 
-The ``sanity-tests-debug.yaml`` workflow runs automatically every night **at 2:00 AM UTC** with LLK asserts enabled. It spawns four test jobs — Wormhole and Blackhole on both Ubuntu 22.04 and Ubuntu 24.04:
+The ``sanity-tests-debug.yaml`` workflow runs automatically every night **at 2:00 AM UTC** with LLK asserts enabled. It spawns Wormhole test jobs on both Ubuntu 22.04 and Ubuntu 24.04:
 
 - ``wormhole-nightly-debug-ubuntu-22`` — runs ``sanity-tests.yaml`` with ``enable-llk-asserts: true``
-- ``blackhole-nightly-debug-ubuntu-22`` — runs ``blackhole-post-commit.yaml`` with ``enable-llk-asserts: true``
 - ``wormhole-nightly-debug-ubuntu-24`` — runs ``sanity-tests.yaml`` with ``enable-llk-asserts: true``
-- ``blackhole-nightly-debug-ubuntu-24`` — runs ``blackhole-post-commit.yaml`` with ``enable-llk-asserts: true``
 
 The same workflow can also be triggered on demand via ``workflow_dispatch`` with the ``enable-llk-asserts`` checkbox.
 
@@ -199,10 +286,9 @@ After adding a new ``LLK_ASSERT`` to the codebase, you must validate it does not
 
 1. **Run CI with LLK asserts enabled**
 
-   Trigger either (or both) of these workflows manually via ``workflow_dispatch`` with the ``enable-llk-asserts`` checkbox enabled:
+   Trigger this workflow manually via ``workflow_dispatch`` with the ``enable-llk-asserts`` checkbox enabled:
 
    - `Sanity tests <https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/sanity-tests.yaml>`_ — exercises a broad set of configurations including fast dispatch, models, ops, TTNN, and profiler regression.
-   - `Blackhole post-commit <https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/blackhole-post-commit.yaml>`_ — validates Blackhole-specific code paths (models, ops, TTNN, UMD, multi-card).
 
 2. **For each test failure, choose one of two resolutions:**
 
@@ -245,6 +331,13 @@ When an LLK assert fails:
 2. Run ``tt-triage`` to analyze the device state
 3. If Lightweight Kernel Asserts are enabled or LLK Asserts only are enabled, use ``tools/triage/dump_lightweight_asserts.py`` to see call stacks and local variables
 4. Check the assertion message to understand what constraint was violated
+
+.. tip::
+
+   Use the ``tools/setup_llk_assert_env.sh`` helper (see
+   :ref:`Quick-start: Running a Test with LLK Asserts <quick-start-llk-asserts>`)
+   to automate the timeout / triage / device-print wiring so a single test run produces
+   ``assert.txt``, the dprint log, and ``test_output.txt`` with no manual ``export`` setup.
 
 .. note::
 

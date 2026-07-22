@@ -1,0 +1,64 @@
+# Llama-3.2-1B GRPO + pure DDP config (32-way).
+#
+# Replicates meta-llama/Llama-3.2-1B-Instruct (the pure-Python ttml Llama, with
+# a KV-cache decode) on all 32 Blackhole cards of a galaxy and data-parallels
+# the batch across them. Uses the existing `llama-1b` completer path
+# (LlamaGRPOCompleter), which already initialises the DDP parallelism context
+# and synchronises gradients with ttml.core.distributed.synchronize_gradients.
+#
+# Run:
+#   python3 boolq_training_example.py --model llama-1b \
+#     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_llama_1b_ddp.yaml
+#
+# Notes:
+#   - model_config drives the Llama architecture + RoPE scaling (vocab_size is
+#     overridden from the real tokenizer inside the completer).
+#   - For DDP the whole model is replicated per device; only the batch is
+#     sharded along dim 0. per_device_train_batch_size is the number of
+#     completions on a single device per micro-batch, so the across-mesh
+#     micro-batch holds per_device_train_batch_size * num_devices (= 32 here)
+#     completions and shards evenly across the DDP size by construction.
+#   - The per micro-batch prompt count is derived as
+#     per_device_train_batch_size * num_devices / num_generations, so it must
+#     divide evenly; with per_device_train_batch_size=1, num_devices=32 and
+#     num_generations=8 this yields 4 prompts per micro-batch.
+#   - gradient_accumulation_steps sets how many micro-batches make up one
+#     generation (effective) batch: each batch generates grad_accum * 4 = 4
+#     prompts (with grad_accum=1) and the trainer accumulates gradients over
+#     grad_accum micro-batches before each optimizer step. Bumping grad_accum
+#     to e.g. 3 generates 3x the completions per batch and trains over 3
+#     micro-batches per step. Advantages are computed on the host (group means
+#     included) and uploaded per micro-batch with the same host-order axis-0
+#     sharding as the log-probs, so GRPO groups are free to straddle devices.
+#   - checkpointing is disabled to mirror the FSDP validation config.
+
+training_config:
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama3_2_1B.yaml"
+
+  optimizer:
+    type: MorehAdamW
+    lr: 5.0e-6
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    kahan_summation: false
+
+  grpo_config:
+    epsilon: 0.2
+    per_device_train_batch_size: 2
+    num_iterations: 1
+    gradient_accumulation_steps: 8
+    logging_steps: 1
+    checkpointing: false
+    checkpoint_interval: 5
+    prompts_to_train: 1600
+    temperature: 1.5
+    max_completion_length: 1024
+    num_generations: 8
+    warmup_steps: 0
+
+device_config:
+  enable_ddp: true
+  mesh_shape: [32, 1]

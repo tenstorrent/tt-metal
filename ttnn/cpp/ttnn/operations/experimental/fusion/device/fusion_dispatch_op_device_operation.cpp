@@ -44,6 +44,33 @@ ttsl::hash::hash_t FusionDispatchOpDeviceOperation::compute_program_hash(
     return hash;
 }
 
+ProgramDescriptor FusionDispatchOpDeviceOperation::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/) {
+    // Python pre-patches the descriptor's runtime args and CB buffers in-place
+    // before invoking the primitive, so we can return the (single) descriptor
+    // as-is.  In practice mesh_programs always carries exactly one entry that
+    // spans the full mesh; if more than one is present the first is used and
+    // the rest are currently ignored (matching the assumption baked into the
+    // Python entry points in fusion_dispatch_op_nanobind.cpp).
+    const auto& mesh_programs = operation_attributes.mesh_programs;
+    TT_FATAL(!mesh_programs.empty(), "fusion_dispatch_op: mesh_programs must not be empty");
+    ProgramDescriptor desc = mesh_programs.front().second;
+
+    // Sub-op descriptors stitched into the fused program may carry framework BufferBindings (declared
+    // via emplace_runtime_args({buffer, ...}) in the source ops). The fusion renumbers runtime args
+    // when stitching and patches every IO address itself via its own address_slots mechanism (see
+    // compute_address_slots / apply_*), so those inherited bindings are both redundant and carry a
+    // now-stale arg_idx. Left in place, resolve_bindings would validate a binding against the wrong
+    // slot and TT_FATAL. Drop them; address_slots remains the sole (correct) addressing mechanism.
+    for (auto& kd : desc.kernels) {
+        kd.buffer_bindings.clear();
+        kd.common_buffer_bindings.clear();
+    }
+    return desc;
+}
+
 }  // namespace ttnn::operations::experimental::fusion
 
 namespace ttnn::prim {

@@ -77,7 +77,7 @@ ttnn::Tensor tilize_with_val_padding(
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
-        TensorSpec spec(
+        tt::tt_metal::TensorSpec spec(
             output_padded_shape,
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),
@@ -118,7 +118,7 @@ ttnn::Tensor tilize_with_val_padding(
 
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<uint32_t>& output_padded_shape,
+    const ttsl::SmallVector<uint32_t>& output_padded_shape,
     const tt::tt_metal::PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
@@ -127,7 +127,7 @@ ttnn::Tensor tilize_with_val_padding(
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
-        TensorSpec spec(
+        tt::tt_metal::TensorSpec spec(
             ttnn::Shape{output_padded_shape},
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),
@@ -155,8 +155,10 @@ ttnn::Tensor tilize_with_zero_padding(
     using namespace tt::constants;
     auto padded_shape = input_tensor.padded_shape();
 
-    uint32_t input_tile_width = input_tensor.tensor_spec().tile().get_width();
-    uint32_t input_tile_height = input_tensor.tensor_spec().tile().get_height();
+    tt::tt_metal::Tile tile =
+        (input_tensor.layout() == Layout::TILE) ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    uint32_t input_tile_width = tile.get_width();
+    uint32_t input_tile_height = tile.get_height();
 
     padded_shape[-2] = tt::round_up(padded_shape[-2], input_tile_height);
     padded_shape[-1] = tt::round_up(padded_shape[-1], input_tile_width);
@@ -164,7 +166,7 @@ ttnn::Tensor tilize_with_zero_padding(
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
-        TensorSpec spec(
+        tt::tt_metal::TensorSpec spec(
             padded_shape,
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),

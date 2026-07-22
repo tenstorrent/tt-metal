@@ -58,7 +58,7 @@ std::tuple<Program, KernelHandle, KernelHandle> create_program(
 
     auto writer_kernel = CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         all_cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 

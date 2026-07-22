@@ -13,6 +13,7 @@
 #include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_sfpu_common.h"
 #include "llk_sfpu_types.h"
 
 using namespace ckernel;
@@ -44,7 +45,9 @@ inline void eltwise_unary_sfpu_configure_addrmod()
 
     if constexpr (
         sfpu_op == SfpuType::typecast || sfpu_op == SfpuType::unary_max || sfpu_op == SfpuType::unary_min || sfpu_op == SfpuType::unary_max_int32 ||
-        sfpu_op == SfpuType::unary_min_int32 || sfpu_op == SfpuType::unary_max_uint32 || sfpu_op == SfpuType::unary_min_uint32 || sfpu_op == SfpuType::signbit)
+        sfpu_op == SfpuType::unary_min_int32 || sfpu_op == SfpuType::unary_max_uint32 || sfpu_op == SfpuType::unary_min_uint32 ||
+        sfpu_op == SfpuType::signbit || sfpu_op == SfpuType::not_equal_zero || sfpu_op == SfpuType::equal_zero || sfpu_op == SfpuType::less_than_zero ||
+        sfpu_op == SfpuType::greater_than_equal_zero || sfpu_op == SfpuType::greater_than_zero || sfpu_op == SfpuType::less_than_equal_zero)
     {
         addr_mod_t {
             .srca = {.incr = 0},
@@ -55,30 +58,6 @@ inline void eltwise_unary_sfpu_configure_addrmod()
     }
 }
 
-inline void eltwise_unary_sfpu_configure_mop();
-
-template <DstSync Dst>
-inline void _llk_math_eltwise_unary_sfpu_start_(const std::uint32_t dst_index)
-{
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    math::set_addr_mod_base();
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-}
-
-inline void _llk_math_eltwise_unary_sfpu_done_()
-{
-    math::clear_dst_reg_addr();
-
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
-    math::clear_addr_mod_base();
-}
-
-inline void _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_()
-{
-    math::inc_dst_addr<8>();
-    math::inc_dst_addr<8>();
-}
-
 template <SfpuType sfpu_op>
 inline void _llk_math_eltwise_unary_sfpu_init_()
 {
@@ -87,7 +66,23 @@ inline void _llk_math_eltwise_unary_sfpu_init_()
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-inline void _llk_math_eltwise_unary_sfpu_uninit_()
+// Kernel-invariant SFPU init. Runs the parts of the per-op init that are identical for every SFPU op and
+// therefore only need to run once per kernel: the SFPU config register (SFPCONFIG(0, 0xF, 1)) and the
+// invariant ADDR_MOD_7 = {srca:0, srcb:0, dest:0}. Hoisted out of the per-op path so that the self-contained
+// per-op init (ckernel::sfpu::_init_<op>_) does not re-run these on every op init. Metal wires this into every
+// "full init" entry point (compute_kernel_hw_startup, init_sfpu, unary_op_init_common, binary_op_init_common),
+// and the tt-llk standalone SFPU test harness wires it into its init prelude.
+inline void _llk_math_eltwise_unary_sfpu_init_once_()
 {
-    // No state to restore - all states are transient or default
+    sfpu::_init_sfpu_config_reg();
+
+    // NOTE: this kernel is typically used in conjunction with
+    //       A2D, which is using ADDR_MOD_0 and ADDR_MOD_2, so use one
+    //       that doesn't conflict!
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_7);
 }

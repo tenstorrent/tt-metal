@@ -239,7 +239,7 @@ To support work distribution, the kernel is updated so that each core processes 
             cb_wait_front(cb_id_out, 1);
             uint32_t l1_read_addr = get_read_ptr(cb_id_out);
             // Write to the correct offset based on start_id
-            noc_async_write_tile(i + start_id, c, l1_read_addr);
+            noc_async_write_page(i + start_id, c, l1_read_addr);
             noc_async_write_barrier();
             cb_pop_front(cb_id_out, 1);
         }
@@ -325,7 +325,7 @@ The reader kernel is responsible for reading the input data from the DRAM buffer
                 {
                     cb_reserve_back(cb_id_in0, 1);
                     uint32_t l1_write_addr_in0     = get_write_ptr(cb_id_in0);
-                    noc_async_read_tile(tile_A, a, l1_write_addr_in0);
+                    noc_async_read_page(tile_A, a, l1_write_addr_in0);
                     noc_async_read_barrier();
                     cb_push_back(cb_id_in0, 1);
                 }
@@ -334,7 +334,7 @@ The reader kernel is responsible for reading the input data from the DRAM buffer
                 {
                     cb_reserve_back(cb_id_in1, 1);
                     uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                    noc_async_read_tile(tile_B, b, l1_write_addr_in1);
+                    noc_async_read_page(tile_B, b, l1_write_addr_in1);
                     noc_async_read_barrier();
                     cb_push_back(cb_id_in1, 1);
                 }

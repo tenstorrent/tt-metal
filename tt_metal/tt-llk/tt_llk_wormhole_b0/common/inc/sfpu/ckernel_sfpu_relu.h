@@ -21,16 +21,17 @@ constexpr bool is_supported_relu_type_v = std::is_same_v<T, float> || std::is_sa
 template <bool APPROXIMATION_MODE>
 inline void _calculate_lrelu_(const int iterations, std::uint32_t slope)
 {
-    TT_SFPLOADI(p_sfpu::LREG2, 10, slope & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG2, 8, slope >> 16);
+    const sfpi::vFloat slope_v = Converter::as_float(slope);
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);        // load from dest into lreg[0]
-        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, 0);                                         // condition - if value in LREG0 is negative //will set cc result reg
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0); // Multiply LREG0 * LREG2 (x * slope)
-        TTI_SFPENCC(0, 0, 0, 0);                                                      // clear cc result reg
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);       // store from lreg0 into dest register
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        v_if (v < 0.0f)
+        {
+            v = v * slope_v;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
     }
 }
@@ -103,7 +104,7 @@ inline void _relu_max_(T threshold)
 }
 
 template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_min_impl_(const int iterations, [[maybe_unused]] VecType threshold, int sfpload_instr_mod)
+inline void _relu_min_impl_(const int iterations, [[maybe_unused]] VecType threshold, InstrModLoadStore sfpload_instr_mod)
 {
     for (int d = 0; d < iterations; d++)
     {
@@ -133,7 +134,7 @@ inline void _relu_min_(T threshold)
         int res = 0x80000000 | (scalar & 0x7FFFFFFF);
         scalar  = res;
     }
-    int sfpload_instr_mod = DEFAULT;
+    InstrModLoadStore sfpload_instr_mod = InstrModLoadStore::DEFAULT;
     if constexpr (std::is_same_v<T, float>)
     {
         v_threshold = threshold;
@@ -143,7 +144,7 @@ inline void _relu_min_(T threshold)
         if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
         {
             _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
-            sfpload_instr_mod = INT32_2S_COMP;
+            sfpload_instr_mod = InstrModLoadStore::INT32_2S_COMP;
         }
         else
         {

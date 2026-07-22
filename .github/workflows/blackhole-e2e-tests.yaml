@@ -3,41 +3,17 @@ name: "(Blackhole) e2e tests"
 on:
   workflow_dispatch:
     inputs:
-      run_bh_multi_card_unit_tests:
-        description: 'Run Blackhole multi card unit tests'
-        required: false
-        type: boolean
-        default: true
-      bh_multi_card_system_type:
-        description: 'Select system type to test (for multi-card unit tests only)'
+      system-type:
+        description: 'Select system type to test'
         required: false
         default: "all"
         type: choice
         options:
           - all
-          - Quietbox (4xP150)
-          - DeskBox (2xP150)
+          - P150 CIv2 (1xP150)
           - LoudBox (8xP150)
           - P300 (1xP300)
           - QuietBox 2 (2xP300)
-      run_grid_override_tests:
-        description: 'Run Blackhole grid override tests (20 cores/110 cores tests on 1xP150b)'
-        required: false
-        type: boolean
-        default: false
-      run_bh_ttnn_stress_tests:
-        description: 'Run Blackhole ttnn stress tests'
-        required: false
-        type: boolean
-        default: false
-      model:
-        description: 'Filter multi-card tests by model name'
-        required: false
-        default: "all"
-        type: choice
-        options:
-          - all
-          - deepseek_prefill
       platform:
         required: false
         type: choice
@@ -46,6 +22,21 @@ on:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
         description: "Platform to build and test"
+      model:
+        description: 'Select model to test (filters rows strictly by model-name in tests/pipeline_reorg/blackhole_e2e_tests.yaml; use "all" to run every row including untagged)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - deepseek_prefill
+      test-selection:
+        description: 'Select e2e tests to run: all tests, or one test id'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
       build-type:
         required: false
         type: choice
@@ -64,31 +55,21 @@ on:
         description: "Enable Link Time Optimization (LTO)"
   workflow_call:
     inputs:
-      run_bh_multi_card_unit_tests:
-        description: 'Run Blackhole multi card unit tests'
-        required: false
-        type: boolean
-        default: true
-      bh_multi_card_system_type:
-        description: 'Select system type to test (for multi-card unit tests only)'
+      system-type:
+        description: 'Select system type to test'
         required: false
         default: "all"
         type: string
-      run_grid_override_tests:
-        description: 'Run Blackhole grid override tests (20 cores/110 cores tests on 1xP150b)'
-        required: false
-        type: boolean
-        default: false
-      run_bh_ttnn_stress_tests:
-        description: 'Run Blackhole ttnn stress tests'
-        required: false
-        type: boolean
-        default: false
       model:
-        description: 'Filter multi-card tests by model name'
         required: false
         type: string
-        default: "all"
+        default: 'all'
+        description: "Select model to test (filters rows by model-name; untagged rows always run)"
+      test-selection:
+        required: false
+        type: string
+        default: 'all'
+        description: "Select all tests, or one test id from tests/pipeline_reorg/blackhole_e2e_tests.yaml"
       platform:
         required: false
         type: string
@@ -108,19 +89,10 @@ on:
     - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
 
 jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
-      tracy: true
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto || false }}
-  blackhole-multi-card-tests-matrix:
-    runs-on: ubuntu-latest
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+  generate-card-matrix:
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -128,71 +100,127 @@ jobs:
         id: set-matrix
         run: |
           all_systems='[
-            {"name": "Quietbox (4xP150)", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "llmbox"},
-            {"name": "DeskBox (2xP150)", "runner-label": "BH-DeskBox", "extra-tag": "pipeline-functional", "num_devices": 2, "key": "deskbox"},
-            {"name": "LoudBox (8xP150)", "runner-label": "BH-LoudBox", "extra-tag": "pipeline-functional", "num_devices": 8, "key": "loudbox"},
-            {"name": "P300 (1xP300)", "runner-label": "P300-viommu", "extra-tag": "pipeline-yyz2-lfc", "num_devices": 2, "key": "p300"},
-            {"name": "QuietBox 2 (2xP300)", "runner-label": "BH-QB-GE", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "quietbox_2"}
+            {"name": "P150 CIv2 (1xP150)", "sku": "bh_p150b_civ2"},
+            {"name": "LoudBox (8xP150)", "sku": "bh_loudbox"},
+            {"name": "P300 (1xP300)", "sku": "bh_p300"},
+            {"name": "QuietBox 2 (2xP300)", "sku": "bh_quietbox_2"}
           ]'
-          # Schedule or "all": use all systems; otherwise filter by selected system name
-          selected_system_type="${{ inputs.bh_multi_card_system_type || 'all' }}"
+          selected_system_type="${{ inputs.system-type || 'all' }}"
           if [[ "${{ github.event_name }}" == "schedule" || "$selected_system_type" == "all" ]]; then
             matrix_output=$(echo "{\"test-group\": $all_systems}" | jq -c .)
           else
             filtered=$(echo "$all_systems" | jq -c --arg name "$selected_system_type" '[.[] | select(.name == $name)]')
             if [[ "$filtered" == "[]" ]]; then
-              echo "Error: No system found matching bh_multi_card_system_type=\"$selected_system_type\". Valid options: all, or one of the system names from the matrix." >&2
+              echo "Error: No system found matching system-type=\"$selected_system_type\". Valid options: all, or one of the system names from the matrix." >&2
               exit 1
             fi
             matrix_output=$(echo "{\"test-group\": $filtered}" | jq -c .)
           fi
           echo "Selected system type: $selected_system_type"
-          echo "Matrix output: $matrix_output"
           echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
-  blackhole-multi-card-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_unit_tests }}
-    needs: [build-artifact, blackhole-multi-card-tests-matrix]
+  build-artifact:
+    needs: check-harbor
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
     secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      tracy: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+  blackhole-e2e-tests:
+    needs: [check-harbor, build-artifact, generate-card-matrix]
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-e2e-tests-impl.yaml
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.blackhole-multi-card-tests-matrix.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.generate-card-matrix.outputs.matrix) }}
     with:
-      arch: blackhole
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      fast-only: false
+      enabled-skus: ${{ matrix.test-group.sku }}
       model: ${{ inputs.model || 'all' }}
-  blackhole-grid-override-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_grid_override_tests }}
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-grid-override-tests-impl.yaml
-    with:
-      arch_name: blackhole
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      runner-label: P150b
-  blackhole-ttnn-stress-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_bh_ttnn_stress_tests }}
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group:
-          - name: P150b ttnn stress tests
-            runner-label: P150b
-          - name: LLMBox ttnn stress tests
-            runner-label: BH-LLMBox
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group.runner-label }}
-      timeout: 45
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      test-selection: ${{ inputs.test-selection || 'all' }}
+
+  ai-run-summary:
+    name: "AI Run Summary"
+    # Single run-level summary across all SKU invocations of the impl.
+    # Each impl invocation uploads its already-computed leg matrix as
+    # test_matrix_<sku>; here we download + merge them to form
+    # expected-jobs, so the matrix script runs only once per SKU (in
+    # the impl) and there's no logic duplication across workflows.
+    needs: [build-artifact, generate-card-matrix, blackhole-e2e-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Download per-SKU matrices
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: test_matrix_*
+          path: matrices
+          merge-multiple: true
+        continue-on-error: true
+      - name: Merge matrices into expected-jobs union
+        id: merge
+        run: |
+          # Files land flat (merge-multiple) as test_matrix_<sku>.json.
+          # Default to [] when no artifacts arrived (e.g., every impl
+          # leg failed before upload).
+          if compgen -G "matrices/test_matrix_*.json" > /dev/null; then
+            merged=$(jq -cs 'add // []' matrices/test_matrix_*.json)
+          else
+            merged='[]'
+          fi
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$merged" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      - name: Aggregate upstream run result
+        id: run-result
+        env:
+          # Most-severe-wins so build/matrix failures aren't masked when
+          # blackhole-e2e-tests gets skipped because of an upstream fail.
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          RESULT=$(jq -rn --argjson n "$NEEDS" '
+            [$n[].result] as $r |
+            if   any($r[]; . == "failure")   then "failure"
+            elif any($r[]; . == "cancelled") then "cancelled"
+            elif any($r[]; . == "success")   then "success"
+            else                                  "skipped"
+            end')
+          echo "run-result=$RESULT" >> "$GITHUB_OUTPUT"
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ steps.merge.outputs.matrix }}
+          run-result: ${{ steps.run-result.outputs.run-result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi

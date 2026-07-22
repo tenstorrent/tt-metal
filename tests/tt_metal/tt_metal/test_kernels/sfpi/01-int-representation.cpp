@@ -27,7 +27,7 @@ void kernel_main() {
     {  // test loading 0x80000001 loads as expected
         vUInt value = vUInt(1) | vUInt(0x8000) << 16;
 
-        vUInt signOne = setsgn(vUInt(1), 1);
+        vUInt signOne = as<vUInt>(setsgn(vUInt(1), 1));
 
         vUInt notCorrect = value ^ signOne;
         FAIL_IF(notCorrect != 0);

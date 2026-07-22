@@ -4,6 +4,7 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -34,11 +35,11 @@ constexpr uint32_t cb_mean_idx = tt::CBIndex::c_7;    // mean (for backward pass
 constexpr uint32_t cb_rstd_idx = tt::CBIndex::c_8;    // rstd (for backward pass)
 
 // CBs with intermediate computations
-constexpr uint32_t cb_sum_idx = tt::CBIndex::c_9;                   // sum of inputs
-constexpr uint32_t cb_mean_bcast_idx = tt::CBIndex::c_10;           // broadcasted mean
-constexpr uint32_t cb_variance_sum_idx = tt::CBIndex::c_11;         // sum((x - mean)^2)
-constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_12;           // broadcasted rstd
-constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_13;                // normalized x_hat
+constexpr uint32_t cb_sum_idx = tt::CBIndex::c_9;            // sum of inputs
+constexpr uint32_t cb_mean_bcast_idx = tt::CBIndex::c_10;    // broadcasted mean
+constexpr uint32_t cb_variance_sum_idx = tt::CBIndex::c_11;  // sum((x - mean)^2)
+constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_12;    // broadcasted rstd
+constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_13;         // normalized x_hat
 
 constexpr uint32_t cb_output_intermediate_idx = tt::CBIndex::c_14;  // intermediate for x_hat * gamma
 
@@ -95,7 +96,7 @@ inline void compute_sum() {
     const uint32_t mean_register = 0U;
     tile_regs_acquire();
     cb_wait_front(cb_sum_idx, onetile);
-    mm_init_short(cb_sum_idx, cb_scaler_idx, 0);
+    matmul_init(cb_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_sum_idx,
         cb_scaler_idx,
@@ -152,7 +153,7 @@ inline void compute_sum() {
     const uint32_t mean_register = 0U;
     tile_regs_acquire();
     cb_wait_front(cb_sum_idx, onetile);
-    mm_init_short(cb_sum_idx, cb_scaler_idx, 0);
+    matmul_init(cb_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_sum_idx,
         cb_scaler_idx,
@@ -293,7 +294,7 @@ inline void compute_rstd() {
     tile_regs_acquire();
 
     // Reduce variance sum and scale by 1/N
-    mm_init_short(cb_variance_sum_idx, cb_scaler_idx, 0);
+    matmul_init(cb_variance_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_variance_sum_idx,
         cb_scaler_idx,
@@ -503,7 +504,8 @@ void kernel_main() {
 
     init_sfpu(cb_input_idx, cb_output_idx);
     binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_output_idx);
-    mm_init(cb_sum_idx, cb_scaler_idx, cb_mean_bcast_idx);
+    reconfig_data_format(cb_scaler_idx, cb_sum_idx);
+    matmul_init(cb_sum_idx, cb_scaler_idx);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
 #ifdef EVERYTHING_FITS_IN_L1

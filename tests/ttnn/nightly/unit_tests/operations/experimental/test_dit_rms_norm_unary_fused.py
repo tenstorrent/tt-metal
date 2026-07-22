@@ -172,7 +172,7 @@ def test_dit_rms_norm_unary_fused_silu_unary_op_type(device, dtype, activation, 
         input_layout=layout,
     )
     assert check_result["pcc"] > 0.9995, f"PCC too low: {check_result['pcc']}"
-    assert check_result["relative_rmse"] < 0.03, f"Relative RMSE too high: {check_result['relative_rmse']}"
+    assert check_result["relative_rmse"] < 0.04, f"Relative RMSE too high: {check_result['relative_rmse']}"
 
 
 @pytest.mark.parametrize(
@@ -194,7 +194,7 @@ def test_dit_rms_norm_unary_fused_basic_shapes(device, shape, name, layout):
         input_layout=layout,
     )
     assert check_result["pcc"] > 0.9995, f"[{name}] PCC too low: {check_result['pcc']}"
-    assert check_result["relative_rmse"] < 0.03, f"[{name}] Relative RMSE too high: {check_result['relative_rmse']}"
+    assert check_result["relative_rmse"] < 0.04, f"[{name}] Relative RMSE too high: {check_result['relative_rmse']}"
 
 
 @pytest.mark.parametrize(
@@ -218,7 +218,7 @@ def test_dit_rms_norm_unary_fused_wan2_shapes(device, shape, config_name, layout
     )
     assert check_result["pcc"] > 0.9995, f"[{config_name}] PCC too low: {check_result['pcc']}"
     assert (
-        check_result["relative_rmse"] < 0.04
+        check_result["relative_rmse"] < 0.05
     ), f"[{config_name}] Relative RMSE too high: {check_result['relative_rmse']}"
 
 

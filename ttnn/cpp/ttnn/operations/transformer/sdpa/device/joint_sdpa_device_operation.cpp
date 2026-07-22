@@ -6,13 +6,14 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include <cmath>
+
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operation.hpp"
 
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation_types.hpp"
-#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 
 using namespace tt::tt_metal;
@@ -158,9 +159,9 @@ JointSDPAResultSpec JointSDPADeviceOperation::compute_output_specs(
     const auto& input = tensor_args.input_q;
     const auto& joint_input = tensor_args.joint_q;
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), args.output_memory_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             joint_input.logical_shape(),
             TensorLayout(joint_input.dtype(), PageConfig(Layout::TILE), args.output_memory_config))};
 }

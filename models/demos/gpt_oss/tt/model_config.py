@@ -6,6 +6,8 @@
 GPT-OSS ModelArgs class that's compatible with tt_transformers interface
 """
 
+import gc
+import json
 import os
 from pathlib import Path
 
@@ -74,7 +76,10 @@ class ModelArgs:
         self.model_path = dir
         self.weights_path = dir
 
-        logger.info(f"Using GPT-OSS model from: {self.model_path}")
+        logger.info(
+            f"Using GPT-OSS model from: {self.model_path}"
+            f"{' (dummy weights — no checkpoint load)' if self.dummy_weights else ''}"
+        )
 
         if self.dummy_weights:
             # Skip loading HF config for testing - use default values
@@ -209,10 +214,38 @@ class ModelArgs:
                 chat.append({"role": "system", "content": system_prompt_text})
             if prompt_text:
                 chat.append({"role": "user", "content": prompt_text})
-            return self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+            encoded = self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
         else:
             # prompt_text is already a list of chat messages
-            return self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+            encoded = self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+
+        # Normalize whatever apply_chat_template(tokenize=True) returns into a flat List[int].
+        # Across tokenizer/transformers versions this may be a List[int], a tokenizers.Encoding,
+        # a list of Encodings, or a BatchEncoding/dict ({"input_ids": ...}). The GPT-OSS fast
+        # tokenizer in CI returns a non-list form, which made downstream torch.tensor(...) raise
+        # "Could not infer dtype of tokenizers.Encoding".
+        raw_type = type(encoded).__name__
+        # BatchEncoding / dict -> take input_ids
+        if isinstance(encoded, dict) or hasattr(encoded, "input_ids"):
+            encoded = encoded["input_ids"] if "input_ids" in encoded else getattr(encoded, "input_ids")
+
+        def _to_ids(obj):
+            if hasattr(obj, "ids"):  # tokenizers.Encoding
+                return list(obj.ids)
+            if isinstance(obj, (list, tuple)):
+                flat = []
+                for item in obj:
+                    flat.append(item) if isinstance(item, int) else flat.extend(_to_ids(item))
+                return flat
+            return obj
+
+        encoded = _to_ids(encoded)
+        if not (isinstance(encoded, list) and (len(encoded) == 0 or isinstance(encoded[0], int))):
+            logger.warning(
+                f"[gpt-oss encode_prompt] unexpected token container: raw={raw_type}, "
+                f"normalized={type(encoded).__name__}"
+            )
+        return encoded
 
     @staticmethod
     def load_state_dict(weights_path, dummy_weights=False, convert_to_meta_format=True):
@@ -228,22 +261,35 @@ class ModelArgs:
             # Return dummy state dict for testing
             return {}
         else:
-            # Load actual GPT-OSS weights directly from safetensors files
-            # Check if we have a cached torch_state_dict.pt file
+            # Load actual GPT-OSS weights directly from safetensors files.
+            #
+            # GPT-OSS ships MXFP4-quantized weights (see configs/*/config.json). On a CPU host
+            # (CI loads weights on host before pushing them to the Tenstorrent device) transformers
+            # dequantizes the MXFP4 experts during from_pretrained. With torch_dtype="auto" that
+            # dequant intermediate lands in fp32, ~doubling the resident host footprint AND forcing
+            # the bf16 conversion pass below to allocate a second full copy of the state dict --
+            # enough to OOM / hang the host for the 20B & 120B demos (#48509, #48508). Loading
+            # straight to bf16 makes dequant target bf16 and turns that pass into a no-op (the dict
+            # comprehension then rebinds references rather than copying tensors).
             model = AutoModelForCausalLM.from_pretrained(
                 weights_path,
-                torch_dtype="auto"
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
             )
+            head_dim = model.config.head_dim
             state_dict = model.state_dict()
+            # Drop the HF module graph/buffers now that we hold the weight tensors. state_dict shares
+            # storage with the params, so after this the peak host footprint is bounded by the bf16
+            # weights themselves rather than weights + a live HF model object.
+            del model
+            gc.collect()
             # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
             if convert_to_meta_format:
                 logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
-                state_dict = convert_hf_qkv_to_meta_format(state_dict, model.config.head_dim)
+                state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+            # Safety net: ensure bf16. With the bf16 load above this is a no-op for every tensor
+            # (references are reused); it only casts genuine fp32 stragglers.
             if state_dict["model.norm.weight"].dtype != torch.bfloat16:
-                # Convert to bfloat16 if needed
                 state_dict = {
                     k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
                     for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")
@@ -263,6 +309,67 @@ class ModelArgs:
 
         cache_path.mkdir(parents=True, exist_ok=True)
         return cache_path
+
+    # Name of the marker file dropped into a weight-cache directory once every weight
+    # for that (model, dtype, mesh shape) has been materialized to disk.
+    WEIGHT_CACHE_MARKER = ".weights_complete"
+    # Cache-format version embedded in the marker. Bump this whenever the set/naming/layout of
+    # cached weight tensors changes in a way that an existing cache would not satisfy (e.g. a
+    # weight tensor is added or renamed without changing the layer count). A marker written by an
+    # older format is then rejected -> the run cold-loads and regenerates the cache, rather than
+    # skipping the load and hard-failing in ttnn.as_tensor(None, ...) on a missing .tensorbin.
+    # (Mirrors DeepSeek's WEIGHT_CACHE_FORMAT_VERSION in deepseek_v3/utils/weight_config.py.)
+    WEIGHT_CACHE_FORMAT_VERSION = 1
+
+    def weight_cache_is_complete(self, dtype):
+        """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was
+        fully built by a previous run.
+
+        When True, ttnn.as_tensor loads every weight from its cached .tensorbin and the HF
+        state_dict is never read, so the caller can skip the expensive from_pretrained host
+        load entirely (the load that OOMs/hangs during prefill, #48509) without needing the
+        manual --skip-model-load flag. Set GPT_OSS_FORCE_MODEL_LOAD=1 to force a fresh load
+        (e.g. to regenerate the cache)."""
+        if os.getenv("GPT_OSS_FORCE_MODEL_LOAD") == "1":
+            return False
+        cache_path = self.weight_cache_path(dtype)
+        marker = cache_path / self.WEIGHT_CACHE_MARKER
+        if not marker.is_file():
+            return False
+        try:
+            meta = json.loads(marker.read_text())
+        except (ValueError, OSError):
+            return False
+        # Reject a stale marker: an older cache format, a different model, or a partial
+        # (num_layers-limited) build whose cache does not cover the full model we are about to
+        # construct. A rejected marker falls back to a cold load (which regenerates the cache)
+        # rather than skipping the load and crashing on a missing/renamed .tensorbin.
+        if meta.get("format_version") != self.WEIGHT_CACHE_FORMAT_VERSION:
+            return False
+        if meta.get("model_name") != self.model_name or meta.get("n_layers") != self.n_layers:
+            return False
+        # Belt-and-suspenders: the cache dir must still actually hold tensor files.
+        return any(cache_path.glob("*.tensorbin"))
+
+    def mark_weight_cache_complete(self, dtype):
+        """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
+        built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete)."""
+        cache_path = self.weight_cache_path(dtype)
+        marker = cache_path / self.WEIGHT_CACHE_MARKER
+        try:
+            marker.write_text(
+                json.dumps(
+                    {
+                        "format_version": self.WEIGHT_CACHE_FORMAT_VERSION,
+                        "model_name": self.model_name,
+                        "n_layers": self.n_layers,
+                        "dtype": str(dtype),
+                    }
+                )
+            )
+            logger.info(f"Marked ttnn weight cache complete: {marker}")
+        except OSError as e:
+            logger.warning(f"Could not write weight-cache completion marker {marker}: {e}")
 
     def get_model_config(self):
         """Return model configuration dict"""

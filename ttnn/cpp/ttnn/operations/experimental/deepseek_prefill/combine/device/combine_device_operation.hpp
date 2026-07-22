@@ -14,7 +14,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine {
 struct CombineDeviceOperation {
     using operation_attributes_t = CombineParams;
     using tensor_args_t = CombineInputs;
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
     using program_factory_t = std::variant<CombineProgramFactory>;
 
@@ -32,6 +32,7 @@ ttnn::Tensor prefill_combine(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& dispatched_metadata,
     const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& expert_region_offsets,
     uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
@@ -42,5 +43,6 @@ ttnn::Tensor prefill_combine(
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     bool init_zeros,
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = false,
+    bool use_fp8_combine = false);
 }  // namespace ttnn::prim

@@ -20,6 +20,7 @@ from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_simple
 
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 
@@ -664,8 +665,7 @@ def run_qwen_demo(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 12726272,
-            # "trace_region_size": 10459136,
+            TRACE_MODEL_KEY_PARAM: "qwen3-32b-galaxy-decode",
             "fabric_config": True,
         }
     ],
