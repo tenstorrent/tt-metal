@@ -576,3 +576,27 @@ bar decisively, so PRODUCTIONIZATION is now a live orchestrator decision. Produc
 shape confirmation (no regression on the 9/60-shape corpora), (b) generalizing beyond M_block==Pk / N_bpc==1
 (row-partition when M_block!=Pk, or fall back to chain), (c) fusion (bias/act/addcmul applied per owned shard),
 (d) picker/planner gating. Reported to the orchestrator; NOT flipped to default this session.
+
+### [Task 3b — DONE] in0 ring per-step sub-zones (Z_R_INJECT / Z_R_RECVWAIT / Z_R_FWD)
+Added the requested phase-1 ring per-step DIAG_ZONES sub-zones (own-shard DRAM read / wait-for-prev-forward /
+forward-write+signal) in the writer. Decomposition on the primary 256x2048x1024 cfg(1,4,2,2,4), mask 16,
+per-core medians (tools/mm_sweep/rscatter_ring_zones.py):
+| zone | med_us | (min..max) | meaning |
+|---|---|---|---|
+| Z_C_IN0WAIT | **0.01** | 0.01..0.54 | compute stall on progressive in0 delivery |
+| Z_R_INJECT | 3.92 | 1.80..5.08 | own-shard DRAM read (ring inject) |
+| Z_R_RECVWAIT | 0.73 | 0.03..1.31 | wait for prev's forwarded shard (ring hop) |
+| Z_R_FWD | 0.06 | 0.06..1.07 | forward write + signal |
+| Z_P2_RECVWAIT | **5.99** | 0.62..10.16 | split-K root reduction receive-wait |
+| Z_P2_OUTWAIT | 0.76 | | wait compute to produce reduced block |
+| Z_P2_OUTWRITE | 0.99 | (16 root cores) | root output DRAM write |
+
+**Findings (evidence, corrects the earlier claim):**
+1. At this config the **in0 ring is NOT exposed to compute — Z_C_IN0WAIT ~= 0.01us**, not the "4.9us in0-ring
+   compute-wait" the earlier deep-phase reported (that was whole-phase Z_RING ~11.5us duration, which OVERLAPS
+   compute/in1, not exposed wall). The ring INJECT (own DRAM read, 3.92us) dominates the ring internally but
+   is hidden. If the ring ever becomes exposed, the lever is the own-shard read, NOT forwarding (0.06us).
+2. The dominant EXPOSED tail is the split-K root reduction receive-wait **Z_P2_RECVWAIT ~6us** (up to 10us on
+   the slowest root) — precisely what ring reduce-scatter distributes across the Pk cores. This is measured
+   corroboration (not just plausibility) for the -9% reduce-scatter win: the chain's single-root tail was the
+   bottleneck; distributing it is the fix. (DIAG_ZONES perturbs ~1-2%; the RELATIVE breakdown is the signal.)
