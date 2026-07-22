@@ -27,13 +27,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT        = params.TILE_CNT;
-    const std::uint32_t num_faces       = params.num_faces;
-    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const Operand& buffer_A             = params.buffer_A;
-    const Operand& buffer_B             = params.buffer_B;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const std::uint32_t num_faces   = params.num_faces;
+    const Operand& buffer_A         = params.buffer_A;
+    const Operand& buffer_B         = params.buffer_B;
 #endif
     tdma_descriptor_t td_val_A;
     tdma_descriptor_t td_val_B;
@@ -229,12 +227,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT        = params.TILE_CNT;
-    const std::uint32_t num_faces       = params.num_faces;
-    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const Operand& buffer_Res           = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const Operand& buffer_Res       = params.buffer_Res;
 #endif
     const std::uint32_t buf_desc_id = 8;
     const auto tensor_shape_A       = tensor_shape_from_params(params);
