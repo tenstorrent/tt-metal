@@ -130,17 +130,26 @@ void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::
     // stack -> SEGV in tracy-capture). A never-opened lane's first END is a benign capture-start
     // straddle (its START predates the drain); an extra END after balanced traffic is a pairing bug.
     const uint64_t lane_key = (ContextKey(zone.chip_id, zone.core_noc0_x, zone.core_noc0_y) << 3) | (zone.risc & 0x7);
-    if (zone.is_start) {
-        lane_depth_[lane_key]++;
-    } else {
-        auto it = lane_depth_.find(lane_key);
-        const int32_t depth = (it == lane_depth_.end()) ? 0 : it->second;
-        if (depth <= 0) {
-            ++orphan_end_count_;
-            orphan_lanes_.insert(lane_key);
-            return;
+    // lane_depth_ / orphan_* are SHARED across the (multiple) socket-drain threads that call this. Guard the
+    // read-modify-write: without the lock, concurrent inserts from two drain threads rehash the map and
+    // corrupt an UNRELATED lane's depth, which then spuriously trips the orphan-END drop below and loses a
+    // burst of real ZONE_ENDs -> a deep unclosed-zone staircase on a random single lane (rare, intermittent).
+    // Release before the Tracy push so pushes stay concurrent (a lane is single-threaded, so push order is
+    // preserved regardless; Tracy's serial queue is itself thread-safe).
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (zone.is_start) {
+            lane_depth_[lane_key]++;
+        } else {
+            auto it = lane_depth_.find(lane_key);
+            const int32_t depth = (it == lane_depth_.end()) ? 0 : it->second;
+            if (depth <= 0) {
+                ++orphan_end_count_;
+                orphan_lanes_.insert(lane_key);
+                return;  // orphan END -> drop (lock_guard releases on return)
+            }
+            --it->second;
         }
-        --it->second;
     }
 
     if (zone.is_start) {
