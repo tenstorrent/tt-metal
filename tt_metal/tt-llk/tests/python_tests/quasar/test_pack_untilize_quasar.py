@@ -91,18 +91,6 @@ def generate_pack_untilize_combinations(
             return (DestAccumulation.Yes,)
         return (DestAccumulation.No, DestAccumulation.Yes)
 
-    dimensions_cache = (
-        None
-        if is_perf
-        else {
-            (dest_acc, dest_sync): tuple(
-                generate_unary_input_dimensions(dest_acc, dest_sync)
-            )
-            for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-            for dest_sync in (DestSync.Half, DestSync.Full)
-        }
-    )
-
     dest_sync_modes = pack_untilize_dest_sync_modes(is_perf=is_perf)
     perf_dimensions = pack_untilize_input_dimensions(is_perf=is_perf)
     combinations = []
