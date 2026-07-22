@@ -104,6 +104,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const std::uint32_t num_faces   = params.num_faces;
 #endif
+    DataFormat src_format         = static_cast<DataFormat>(formats.math);
+    DataFormat pack_src_format    = static_cast<DataFormat>(formats.pack_src);
+    const bool use_int32_dest_alu = is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32;
+    const bool is_int_fpu_en      = use_int32_dest_alu && (REDUCE_DIM == ReduceDim::REDUCE_ROW || REDUCE_DIM == ReduceDim::REDUCE_SCALAR);
+    const auto tensor_shape_A     = tensor_shape_from_params(params);
+
     {
         ZONE_SCOPED("INIT")
         // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
@@ -112,11 +118,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        DataFormat src_format     = static_cast<DataFormat>(formats.math);
-        const auto tensor_shape_A = tensor_shape_from_params(params);
+        if (use_int32_dest_alu)
+        {
+            _llk_math_srcAB_hw_configure_<false, false /* fp32 dest */, true /* int32 dest */>(src_format, src_format);
+        }
+        else
+        {
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* int32 dest */>(src_format, src_format);
+        }
 
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* int32 dest */>(src_format, src_format);
-        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY>(tensor_shape_A);
+        if (is_int_fpu_en)
+        {
+            // Int Scalar SUM is unsupported, see SFPU reduce.
+            if constexpr (!(REDUCE_DIM == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM))
+            {
+                _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY, true /* is_int_fpu_en */>(tensor_shape_A);
+            }
+        }
+        else
+        {
+            _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY, false /* is_int_fpu_en */>(tensor_shape_A);
+        }
         PROFILER_SYNC();
     }
     {
@@ -137,23 +159,56 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            if (is_int_fpu_en)
             {
-                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                if constexpr (!(REDUCE_DIM == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM))
                 {
-                    _llk_math_reduce_(i);
+                    for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                    {
+                        for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                        {
+                            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(i, tensor_shape_A);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                {
+                    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                    {
+                        _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(i, tensor_shape_A);
+                    }
                 }
             }
         }
         else
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            if (is_int_fpu_en)
             {
-                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                if constexpr (!(REDUCE_DIM == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM))
                 {
-                    _llk_math_reduce_(i);
+                    for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                    {
+                        for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                        {
+                            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(i, tensor_shape_A);
+                        }
+                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    }
                 }
-                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+            }
+            else
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                {
+                    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                    {
+                        _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(i, tensor_shape_A);
+                    }
+                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                }
             }
         }
         PROFILER_SYNC();

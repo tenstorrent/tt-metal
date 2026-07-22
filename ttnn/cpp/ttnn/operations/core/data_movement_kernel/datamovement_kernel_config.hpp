@@ -29,7 +29,7 @@ inline tt::tt_metal::experimental::DataMovementHardwareConfig create_reader_data
         return tt::tt_metal::experimental::DataMovementGen2Config{
             .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
     }
-    return tt::tt_metal::experimental::CreateReader1xxDataMovementConfig();
+    return tt::tt_metal::experimental::CreateReaderGen1DataMovementConfig();
 }
 
 inline tt::tt_metal::experimental::DataMovementHardwareConfig create_writer_datamovement_config(
@@ -38,7 +38,7 @@ inline tt::tt_metal::experimental::DataMovementHardwareConfig create_writer_data
         return tt::tt_metal::experimental::DataMovementGen2Config{
             .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
     }
-    return tt::tt_metal::experimental::CreateWriter1xxDataMovementConfig();
+    return tt::tt_metal::experimental::CreateWriterGen1DataMovementConfig();
 }
 
 }  // namespace ttnn

@@ -155,7 +155,7 @@ ttnn::Tensor outbound_socket_service_sync_impl(
 }
 
 ttnn::Tensor outbound_socket_service_sync(
-    const tt::tt_metal::D2DStreamServiceSender& service,
+    const ttnn::D2DStreamServiceSender& service,
     const ttnn::Tensor& input,
     const std::optional<ttnn::Tensor>& metadata) {
     return outbound_socket_service_sync_impl(service, input, metadata);

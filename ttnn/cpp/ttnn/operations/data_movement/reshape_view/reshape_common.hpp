@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-tt::tt_metal::Shape infer_dims_for_reshape(const tt::tt_metal::Tensor& tensor, ttsl::Span<const int32_t> shape);
+tt::tt_metal::Shape infer_dims_for_reshape(const ttnn::Tensor& tensor, ttsl::Span<const int32_t> shape);
 
 }  // namespace ttnn::operations::data_movement::detail
 

@@ -27,7 +27,7 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -125,24 +125,47 @@ def reduce_pool_type_and_math_fidelity_combinations(*, is_perf=False):
     return generate_pool_type_and_math_fidelity_combinations(is_perf=is_perf)
 
 
+def generate_int8_pool_type_and_math_fidelity_combinations():
+    # Int8 reduce is exact-integer accumulation: only LoFi
+    return [
+        (ReducePool.Max, MathFidelity.LoFi),
+        (ReducePool.Sum, MathFidelity.LoFi),
+    ]
+
+
 @pytest.mark.quasar
 @parametrize(
-    formats=REDUCE_FORMATS,
-    tile_dimensions=lambda formats: [
-        td
-        for td in SUPPORTED_TILE_SIZES
-        if not is_mx_unsupported_tile_dims(
-            formats.input_format, formats.output_format, td
-        )
-    ],
-    dest_acc=lambda: reduce_dest_acc_modes(is_perf=False),
+    formats=REDUCE_FORMATS + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
+    # Int8 reduce uses int32 dest accumulation
+    dest_acc=lambda formats: (
+        [DestAccumulation.Yes]
+        if formats.input_format == DataFormat.Int8
+        else reduce_dest_acc_modes(is_perf=False)
+    ),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(
-        is_perf=False
+    pool_type_and_math_fidelity=lambda formats: (
+        generate_int8_pool_type_and_math_fidelity_combinations()
+        if formats.input_format == DataFormat.Int8
+        else reduce_pool_type_and_math_fidelity_combinations(is_perf=False)
+    ),
+    # Int8→Int32 FPU reduce is 32x32-only for now (no tiny-tile int path yet).
+    tile_dimensions=lambda formats: (
+        [(32, 32)]
+        if formats.input_format == DataFormat.Int8
+        else [
+            td
+            for td in SUPPORTED_TILE_SIZES
+            if not is_mx_unsupported_tile_dims(
+                formats.input_format, formats.output_format, td
+            )
+        ]
     ),
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
-    implied_math_format=lambda formats: reduce_implied_math_formats(
-        formats, is_perf=False
+    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
+    implied_math_format=lambda formats: (
+        [ImpliedMathFormat.No]
+        if formats.input_format == DataFormat.Int8
+        else reduce_implied_math_formats(formats, is_perf=False)
     ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
@@ -164,6 +187,13 @@ def test_reduce_quasar(
 
     pool_type, math_fidelity = pool_type_and_math_fidelity
     tile_shape = construct_tile_shape(tile_dimensions)
+
+    if (
+        formats.input_format == DataFormat.Int8
+        and reduce_dim == ReduceDimension.Scalar
+        and pool_type in (ReducePool.Sum, ReducePool.Average)
+    ):
+        pytest.skip("Int8->Int32 scalar SUM/AVG reduce is not supported yet on Quasar ")
 
     if (
         formats.input_format == DataFormat.MxInt8
@@ -190,12 +220,18 @@ def test_reduce_quasar(
         else [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
     )
 
+    if formats.input_format == DataFormat.Int8:
+        stimuli_spec = StimuliSpec.uniform(low=-127, high=127)
+    else:
+        stimuli_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=tile_dimensions,
         tile_dimensions=tile_dimensions,
+        spec_A=stimuli_spec,
+        spec_B=stimuli_spec,
     )
 
     if pool_type in [

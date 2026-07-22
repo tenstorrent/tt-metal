@@ -97,6 +97,7 @@ public:
         std::mt19937& gen) const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_full_mcast_hops(
         const FabricNodeId& src_node_id) const = 0;
+    virtual uint32_t get_full_line_mcast_hops(RoutingDirection direction) const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_unidirectional_linear_mcast_hops(
         const FabricNodeId& src_node_id, uint32_t dim) const = 0;
     virtual std::vector<std::pair<FabricNodeId, FabricNodeId>> get_neighbor_exchange_pairs() const = 0;

@@ -11,13 +11,16 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ckernel.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes, const uint32_t val) {
     DataflowBuffer dfb(cb_id);
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
 
-    for (uint32_t i = 0; i < num_bytes / 2; ++i) {
+    // Round up so a non-4-byte-aligned tail stick is fully filled (the loop-back read consumes all num_bytes).
+    const uint32_t num_words = (num_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_words; ++i) {
         ptr[i] = val;
     }
 }
@@ -96,6 +99,14 @@ void kernel_main() {
     const uint32_t pad_align_addr = dfb_pad_align_exp.get_read_ptr();
 
     fill_pad_cb_with_val(cb_pad, stick_size_padded, packed_pad_value);
+    // The fill above is baby-RISCV stores; the per-stick loop below loop-back noc.async_read's cb_pad as
+    // its source. A baby-RISCV store can retire before its write-request lands in L1, and the RISCV core
+    // and NoC are different L1 clients with no program-order guarantee between them
+    // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). load_blocking the last filled word (blocking
+    // load + memory clobber) to force the fill to be processed before the first loop-back read is issued.
+    // One-time cost, outside the per-stick loop.
+    (void)ckernel::load_blocking(
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_val_addr) + (stick_size_padded / sizeof(uint32_t)) - 1);
 
     uint32_t i_page = start_page_id;
     uint32_t curr_c = start_dim_offset[2], curr_h = start_dim_offset[1], curr_n = start_dim_offset[3];

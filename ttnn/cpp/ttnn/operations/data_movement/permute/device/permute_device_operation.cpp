@@ -118,7 +118,7 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
         }
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), output_mem_config));
