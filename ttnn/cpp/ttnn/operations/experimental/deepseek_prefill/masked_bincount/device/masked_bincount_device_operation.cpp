@@ -23,6 +23,15 @@ void MaskedBincountDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "Input tensor must be interleaved!");
+    // The op splits the token rows across a fixed 8x8 (64-core) grid, so the token count must be
+    // divisible by 64 (which also keeps every core's row range tile-aligned in aggregate).
+    constexpr uint32_t kNumCores = 64;
+    const uint32_t tokens = input_tensor.logical_shape()[0];
+    TT_FATAL(
+        tokens % kNumCores == 0,
+        "Token count ({}) must be divisible by the {}-core grid used by masked_bincount",
+        tokens,
+        kNumCores);
     TT_FATAL(args.n_routed_experts > 0, "n_routed_experts must be > 0");
     // The logical width is the real topk (e.g. 8); the padded TILE width is 32. Check against logical.
     const uint32_t logical_topk = input_tensor.logical_shape()[input_tensor.logical_shape().size() - 1];
