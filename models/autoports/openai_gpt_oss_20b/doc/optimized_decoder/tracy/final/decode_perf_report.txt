@@ -1,0 +1,16 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_DECODE'.
+Using operations until 'PERF_DECODE_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/tracy/final/decode_perf_report.csv
+Overall DRAM roofline (modeled ops): 35.0% (179 GB/s)
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RotaryEmbeddingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SdpaDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ScatterDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/tracy/final/decode_summary.csv.csv
+Plotting PNG stacked report to models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/tracy/final/decode_summary.csv.png

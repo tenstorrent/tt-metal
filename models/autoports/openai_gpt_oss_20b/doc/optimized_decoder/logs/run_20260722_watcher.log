@@ -1,0 +1,200 @@
+2026-07-22 22:39:56.750 | DEBUG    | ttnn:<module>:76 - Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES
+2026-07-22 22:39:56.751 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=true,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 10 items / 6 deselected / 4 selected
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_layer_kind_prefill_and_decode[blackhole-1-12-9090] 2026-07-22 22:39:58.277 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-22 22:39:58.277 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-22 22:39:58.277 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-22 22:39:58.277 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-22 22:39:58.278 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-22 22:39:58.278 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-22 22:39:58.278 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-22 22:39:58.278 | warning  |             UMD | Board 0x46131931058 has 1 chips, but expected 2 chips for board type p300. (cluster_descriptor.cpp:1238)
+2026-07-22 22:39:58.333 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:168)
+2026-07-22 22:39:58.333 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-22 22:39:58.333 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-22 22:39:58.333 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-22 22:39:58.333 | warning  |          Device | Using CUSTOM cluster type for P300 board with 1 chips (tt_cluster.cpp:202)
+2026-07-22 22:39:58.333 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-22 22:39:58.387 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-22 22:39:58.445 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-22 22:39:58.445 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-22 22:39:58.445 | info     |     Distributed | Using custom mesh graph descriptor: tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto (metal_env.cpp:363)
+2026-07-22 22:39:58.446 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-22 22:39:58.446 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2342)
+2026-07-22 22:39:58.446 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2350)
+2026-07-22 22:39:58.462 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-22 22:39:58.463 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-22 22:39:58.463 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-07-22 22:39:58.463 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-22 22:39:58.505 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory' (shm_resource_tracker.cpp:282)
+2026-07-22 22:39:59.084 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349992 GHz, device_time_at_sync=13589164614144 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-22 22:39:59.100 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-22 22:40:08.472 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+layer12 prefill: 0.9902463468206006
+layer12 key: 0.9999179402139614
+layer12 value: 0.9999270296892049
+layer12 decode: 0.9957632869619136
+layer12 decode key: 0.999818707411708
+layer12 decode value: 0.9998030598368938
+PASSED
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_repeated_paged_decode_stress[blackhole-1] 2026-07-22 22:40:10.734 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-22 22:40:10.734 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-22 22:40:10.734 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-22 22:40:10.734 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-22 22:40:10.752 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-22 22:40:10.752 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-22 22:40:10.752 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-07-22 22:40:10.752 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-22 22:40:10.796 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+full key prefix pos=3: 0.9998686401858667
+full value prefix pos=3: 0.9998720304269412
+decode pos=3: 0.9994443401892634
+full key prefix pos=4: 0.9998426390597038
+full value prefix pos=4: 0.9998516894576638
+decode pos=4: 0.9993260437825673
+full key prefix pos=5: 0.99982618987637
+full value prefix pos=5: 0.9998384721322808
+decode pos=5: 0.999126650718173
+full key prefix pos=6: 0.9998240004131561
+full value prefix pos=6: 0.9998314738288271
+decode pos=6: 0.999180008388447
+full key prefix pos=7: 0.9998192617564662
+full value prefix pos=7: 0.9998293783560732
+decode pos=7: 0.9991239518966385
+full key prefix pos=8: 0.9998180580938346
+full value prefix pos=8: 0.9998276830901613
+decode pos=8: 0.9990950575622558
+full key prefix pos=9: 0.9998145500596708
+full value prefix pos=9: 0.9998270168372512
+decode pos=9: 0.9989427324445113
+full key prefix pos=10: 0.9998138587535395
+full value prefix pos=10: 0.999826648501508
+decode pos=10: 0.9989797439610146
+full key prefix pos=11: 0.9998144810362842
+full value prefix pos=11: 0.9998270365472544
+decode pos=11: 0.9989706663688784
+full key prefix pos=12: 0.9998134484738249
+full value prefix pos=12: 0.9998254495094826
+decode pos=12: 0.9989932521190239
+full key prefix pos=13: 0.9998132607102025
+full value prefix pos=13: 0.9998243103966326
+decode pos=13: 0.998922087455991
+full key prefix pos=14: 0.9998127806777463
+full value prefix pos=14: 0.9998231549711126
+decode pos=14: 0.9989340901176964
+full key prefix pos=15: 0.9998141945833614
+full value prefix pos=15: 0.999824146881566
+decode pos=15: 0.9990233366178523
+full key prefix pos=16: 0.9998146729137604
+full value prefix pos=16: 0.9998237005599429
+decode pos=16: 0.9989208020866042
+full key prefix pos=17: 0.9998150998725391
+full value prefix pos=17: 0.9998244081585588
+decode pos=17: 0.9988979129643352
+full key prefix pos=18: 0.999815115694061
+full value prefix pos=18: 0.9998242868207922
+decode pos=18: 0.9990355387474464
+PASSED
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_output_and_full_cache_integrity[blackhole-1-device_params0] 2026-07-22 22:40:18.845 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-22 22:40:18.845 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-22 22:40:18.845 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-22 22:40:18.845 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-22 22:40:18.864 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-22 22:40:18.864 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-22 22:40:18.864 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-07-22 22:40:18.864 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-22 22:40:18.909 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+traced optimized decode: 0.9994451429805361
+traced key prefix: 0.9999056449940569
+traced value prefix: 0.9999112731658281
+PASSED
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_layer_kind_prefill_and_decode[blackhole-1-13-9249] 2026-07-22 22:40:26.787 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-22 22:40:26.788 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-22 22:40:26.788 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-22 22:40:26.788 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-22 22:40:26.805 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-22 22:40:26.805 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-22 22:40:26.805 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-07-22 22:40:26.805 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-22 22:40:26.849 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-22 22:40:36.815 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+layer13 prefill: 0.9930811459239393
+layer13 key: 0.9999079398613069
+layer13 value: 0.9999270093442318
+layer13 decode: 0.9941924789561737
+layer13 decode key: 0.9998261889035733
+layer13 decode value: 0.9998107835070557
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/logs/run_20260722_watcher.junit.xml -
+============================== slowest durations ===============================
+11.30s call     models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_layer_kind_prefill_and_decode[blackhole-1-12-9090]
+11.16s call     models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_layer_kind_prefill_and_decode[blackhole-1-13-9249]
+7.70s call     models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_repeated_paged_decode_stress[blackhole-1]
+7.52s call     models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_output_and_full_cache_integrity[blackhole-1-device_params0]
+1.02s setup    models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_layer_kind_prefill_and_decode[blackhole-1-12-9090]
+0.29s setup    models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_layer_kind_prefill_and_decode[blackhole-1-13-9249]
+0.28s setup    models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_output_and_full_cache_integrity[blackhole-1-device_params0]
+0.27s setup    models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_repeated_paged_decode_stress[blackhole-1]
+0.13s teardown models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_output_and_full_cache_integrity[blackhole-1-device_params0]
+0.13s teardown models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_repeated_paged_decode_stress[blackhole-1]
+0.13s teardown models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_layer_kind_prefill_and_decode[blackhole-1-13-9249]
+0.12s teardown models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_layer_kind_prefill_and_decode[blackhole-1-12-9090]
+=========================== short test summary info ============================
+PASSED models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_layer_kind_prefill_and_decode[blackhole-1-12-9090]
+PASSED models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_repeated_paged_decode_stress[blackhole-1]
+PASSED models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_output_and_full_cache_integrity[blackhole-1-device_params0]
+PASSED models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_layer_kind_prefill_and_decode[blackhole-1-13-9249]
+======================= 4 passed, 6 deselected in 40.73s =======================
+nanobind: leaked 3 instances!
+ - leaked instance 0x70bd459c5ed8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x70bd45ada0b8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x70bd4524c108 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 35 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 305 functions!
+ - leaked function "get_max_worker_l1_unreserved_size"
+ - leaked function "get_submeshes"
+ - leaked function ""
+ - leaked function "device"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "deallocate_buffers"
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "terminate_fast_dispatch"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-22 22:40:39.850 | info     |    BuildKernels | JIT cache stats: 430/430 hits (100.0%) [430 cached, 1255 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-22 22:40:39.850 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-22 22:40:39.851 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-22 22:40:39.851 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-22 22:40:39.856 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-22 22:40:39.856 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-22 22:40:39.963 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-22 22:40:39.963 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-22 22:40:39.963 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

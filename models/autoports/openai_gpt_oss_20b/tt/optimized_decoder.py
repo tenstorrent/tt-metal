@@ -1,0 +1,1008 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""Optimized single-device GPT-OSS 20B decoder layer.
+
+The implementation keeps the fused decoder's packed attention and cache
+semantics, but replaces the dense all-expert MoE hot path with the repo-native
+routed GPT-OSS sparse-expert module.  Both public forwards are owned by this
+class so an optimized test cannot silently execute a functional forward.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, replace
+from typing import Mapping
+
+import torch
+
+import ttnn
+from models.autoports.openai_gpt_oss_20b.tt.functional_decoder import _expert_tensor, _state_tensor
+from models.autoports.openai_gpt_oss_20b.tt.fused_decoder import FusedDecoder
+from models.demos.deepseek_v3.utils.config_helpers import (
+    dram_sharded_weight_config,
+    get_activation_sharding_core_counts_for_dram_matmul,
+    get_dram_sharded_matmul_config,
+)
+from models.demos.gpt_oss.config import MeshConfig, ModeConfig
+from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
+from models.demos.gpt_oss.tt.experts import ExpertConfig, Experts
+
+
+@dataclass
+class OptimizedGPTOSSProgramConfig(GPTOSSProgramConfig):
+    """Sparse-matmul program builder used by this decoder's search matrix.
+
+    The shared builder's one-tile ``out_block_w`` is valid for the default
+    subblock, but not for wider output-subblock experiments.  Keep the
+    validation and adaptation local to this autoport.
+    """
+
+    def _build_matmul_config(
+        self,
+        cores: tuple[int, int],
+        m: int,
+        n: int,
+        in0_block_w: int = 1,
+        out_subblock_w: int = 1,
+        k: int | None = None,
+    ):
+        core_x, core_y = cores
+        core_count = core_x * core_y
+        per_core_n = math.ceil(math.ceil(n / ttnn.TILE_SIZE) / core_count)
+        if k is not None:
+            k_tiles = math.ceil(k / ttnn.TILE_SIZE)
+            if k_tiles % in0_block_w != 0:
+                divisors = [width for width in range(2, in0_block_w + 1) if k_tiles % width == 0]
+                in0_block_w = max(divisors) if divisors else k_tiles
+        if out_subblock_w <= 0 or per_core_n % out_subblock_w != 0:
+            raise ValueError(
+                f"out_subblock_w={out_subblock_w} must divide per_core_N={per_core_n} " f"for cores={cores}, n={n}"
+            )
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=out_subblock_w,
+            out_block_h=1,
+            out_block_w=out_subblock_w,
+            per_core_M=max(ttnn.TILE_SIZE, m) // ttnn.TILE_SIZE,
+            per_core_N=per_core_n,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+
+@dataclass(frozen=True)
+class OptimizationConfig:
+    """Cumulative optimized policy plus focused A/B controls."""
+
+    use_shard_advisor_attention_layouts: bool = True
+    use_shard_advisor_router_layouts: bool = True
+    use_shard_advisor_dense_moe_layouts: bool = False
+    use_dram_sharded_attention: bool = False
+    dram_attention_weight_dtype: str = "bfloat8_b"
+    dram_attention_core_limit: int = 110
+    attention_math_fidelity: str = "auto"
+    use_sparse_experts: bool = True
+    expert_weight_dtype: str = "bfloat8_b"
+    expert_gate_up_cores: tuple[int, int] = (9, 10)
+    expert_down_cores: tuple[int, int] = (9, 10)
+    expert_gate_up_in0_block_w: int = 45
+    expert_down_in0_block_w: int = 45
+    expert_gate_up_subblock_w: int = 1
+    expert_down_subblock_w: int = 1
+    expert_input_l1: bool = False
+    kv_cache_dtype: str = "bfloat8_b"
+    prefill_matmul_config: str = "2d_10x4"
+    explicit_sdpa_program_config: bool = True
+    sdpa_grid: tuple[int, int] = (8, 8)
+    sdpa_k_chunk_size: int = ttnn.TILE_SIZE
+
+    def with_changes(self, **changes) -> "OptimizationConfig":
+        return replace(self, **changes)
+
+
+class OptimizedDecoder(FusedDecoder):
+    """Fused-attention decoder with routed active-expert execution."""
+
+    def __init__(self, *, optimization_config: OptimizationConfig | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.optimization_config = optimization_config or OptimizationConfig()
+        self.experts = None
+        self._configure_shard_advisor_candidate()
+        self._configure_dram_attention_candidate()
+        self._configure_attention_program_candidates()
+
+    def _width_sharded_config(self, width: int, cores: int):
+        device_grid = self.mesh_device.compute_with_storage_grid_size()
+        core_grid = ttnn.num_cores_to_corerangeset(
+            cores,
+            ttnn.CoreCoord(device_grid.x, device_grid.y),
+            row_wise=True,
+        )
+        return ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, width // cores),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    def _configure_shard_advisor_candidate(self) -> None:
+        """Materialize the exact decode configs from the fresh final_ir.mlir."""
+
+        self.advisor_norm_memory_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.hidden_size),
+            core_grid=ttnn.CoreGrid(x=10, y=1),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        self.advisor_norm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[10, 1],
+            subblock_w=3,
+            block_h=1,
+            block_w=9,
+            inplace=False,
+        )
+        self.advisor_qkv_input_config = self._width_sharded_config(self.hidden_size, 45)
+        self.advisor_qkv_output_config = self._width_sharded_config(
+            (self.num_heads + 2 * self.num_kv_heads) * self.head_dim,
+            80,
+        )
+        self.advisor_residual_config = self._width_sharded_config(self.hidden_size, 90)
+        self.advisor_qkv_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(11, 8),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            out_block_h=1,
+            out_block_w=2,
+            per_core_M=1,
+            per_core_N=2,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        self.advisor_o_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(11, 9),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=1,
+            out_block_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        one_core = ttnn.CoreGrid(x=1, y=1)
+        self.advisor_router_input_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.hidden_size),
+            core_grid=one_core,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        self.advisor_router_output_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.num_experts),
+            core_grid=one_core,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        self.advisor_routing_weights_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.num_experts),
+            core_grid=one_core,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        self.advisor_router_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+            in0_block_w=90,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=1,
+            out_block_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
+        advisor_90_grid = ttnn.num_cores_to_corerangeset(
+            90,
+            ttnn.CoreCoord(
+                self.mesh_device.compute_with_storage_grid_size().x,
+                self.mesh_device.compute_with_storage_grid_size().y,
+            ),
+            row_wise=True,
+        )
+        self.advisor_expert_hidden_config = ttnn.create_sharded_memory_config(
+            shape=(self.num_experts * ttnn.TILE_SIZE, self.hidden_size // 90),
+            core_grid=advisor_90_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.advisor_expert_gate_up_config = ttnn.create_sharded_memory_config(
+            shape=(self.num_experts * ttnn.TILE_SIZE, 2 * self.intermediate_size // 90),
+            core_grid=advisor_90_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    def _configure_dram_attention_candidate(self) -> None:
+        """Build OPT-004 decode policies; weights are materialized on demand."""
+
+        device_grid = self.mesh_device.compute_with_storage_grid_size()
+        max_cores = min(
+            self.optimization_config.dram_attention_core_limit,
+            device_grid.x * device_grid.y,
+        )
+
+        def policy(k: int, n: int):
+            input_cores = max(get_activation_sharding_core_counts_for_dram_matmul(k, max_cores))
+            output_cores = max(get_activation_sharding_core_counts_for_dram_matmul(n, max_cores))
+            return (
+                get_dram_sharded_matmul_config(ttnn.TILE_SIZE, k, n, input_cores, output_cores),
+                self._width_sharded_config(k, input_cores),
+                self._width_sharded_config(n, output_cores),
+            )
+
+        qkv_width = (self.num_heads + 2 * self.num_kv_heads) * self.head_dim
+        self.dram_qkv_program_config, self.dram_qkv_input_config, self.dram_qkv_output_config = policy(
+            self.hidden_size,
+            qkv_width,
+        )
+        self.dram_o_program_config, self.dram_o_input_config, self.dram_o_output_config = policy(
+            self.num_heads * self.head_dim,
+            self.hidden_size,
+        )
+        fidelity = self.optimization_config.attention_math_fidelity
+        self.decode_compute_kernel_config = (
+            None
+            if fidelity == "auto"
+            else ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity={
+                    "lofi": ttnn.MathFidelity.LoFi,
+                    "hifi2": ttnn.MathFidelity.HiFi2,
+                    "hifi4": ttnn.MathFidelity.HiFi4,
+                }[fidelity],
+                math_approx_mode=fidelity == "lofi",
+                fp32_dest_acc_en=fidelity == "hifi4",
+                packer_l1_acc=True,
+            )
+        )
+        self.decode_qkv_weight = None
+        self.decode_o_weight = None
+
+    def _configure_attention_program_candidates(self) -> None:
+        """Build isolated SDPA and large-prefill A/B candidates."""
+
+        self.decode_sdpa_program_config = (
+            ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.optimization_config.sdpa_grid,
+                exp_approx_mode=False,
+                q_chunk_size=0,
+                k_chunk_size=self.optimization_config.sdpa_k_chunk_size,
+            )
+            if self.optimization_config.explicit_sdpa_program_config
+            else None
+        )
+        prefill_configs = {
+            "auto": (None, None),
+            "2d_8x4": (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(8, 4),
+                    in0_block_w=5,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    per_core_M=1,
+                    per_core_N=20,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(6, 4),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=3,
+                    per_core_M=1,
+                    per_core_N=15,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+            ),
+            "2d_10x4": (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(10, 4),
+                    in0_block_w=5,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    per_core_M=1,
+                    per_core_N=16,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(10, 4),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=3,
+                    per_core_M=1,
+                    per_core_N=9,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+            ),
+        }
+        try:
+            self.prefill_qkv_program_config, self.prefill_o_program_config = prefill_configs[
+                self.optimization_config.prefill_matmul_config
+            ]
+        except KeyError as error:
+            raise ValueError(
+                f"unknown prefill_matmul_config={self.optimization_config.prefill_matmul_config!r}; "
+                f"expected one of {tuple(prefill_configs)}"
+            ) from error
+
+    @classmethod
+    def from_state_dict(
+        cls,
+        state_dict: Mapping[str, torch.Tensor],
+        *,
+        optimization_config: OptimizationConfig | None = None,
+        **kwargs,
+    ) -> "OptimizedDecoder":
+        decoder = super().from_state_dict(state_dict, **kwargs)
+        decoder.optimization_config = optimization_config or OptimizationConfig()
+        decoder._configure_dram_attention_candidate()
+        decoder._configure_attention_program_candidates()
+        decoder.advisor_norm_weights = {}
+        for weight_name in ("input_norm", "post_attention_norm"):
+            tiled_weight = ttnn.to_layout(getattr(decoder, weight_name), ttnn.TILE_LAYOUT)
+            decoder.advisor_norm_weights[weight_name] = ttnn.to_memory_config(
+                ttnn.reshape(tiled_weight, [decoder.hidden_size]),
+                decoder.advisor_residual_config,
+            )
+        if decoder.optimization_config.use_dram_sharded_attention:
+            weight_dtype = {
+                "bfloat4_b": ttnn.bfloat4_b,
+                "bfloat8_b": ttnn.bfloat8_b,
+                "bfloat16": ttnn.bfloat16,
+            }[decoder.optimization_config.dram_attention_weight_dtype]
+            dram_grid = decoder.mesh_device.dram_grid_size()
+            qkv_width = (decoder.num_heads + 2 * decoder.num_kv_heads) * decoder.head_dim
+            decoder.decode_qkv_weight = ttnn.to_memory_config(
+                ttnn.typecast(decoder.qkv_weight, weight_dtype),
+                dram_sharded_weight_config(decoder.hidden_size, qkv_width, dram_grid),
+            )
+            decoder.decode_o_weight = ttnn.to_memory_config(
+                ttnn.typecast(decoder.output_weight, weight_dtype),
+                dram_sharded_weight_config(decoder.num_heads * decoder.head_dim, decoder.hidden_size, dram_grid),
+            )
+        if decoder.optimization_config.use_sparse_experts and decoder.batch == 1:
+            decoder._load_sparse_experts(state_dict)
+        return decoder
+
+    def _load_sparse_experts(self, state_dict: Mapping[str, torch.Tensor]) -> None:
+        weight_dtype = {
+            "bfloat4_b": ttnn.bfloat4_b,
+            "bfloat8_b": ttnn.bfloat8_b,
+            "bfloat16": ttnn.bfloat16,
+        }[self.optimization_config.expert_weight_dtype]
+        expert_state = {
+            "gate_up_proj": _expert_tensor(state_dict, self.layer_idx, "gate_up_proj"),
+            "gate_up_proj_bias": _state_tensor(state_dict, self.layer_idx, "mlp.experts.gate_up_proj_bias").to(
+                torch.bfloat16
+            ),
+            "down_proj": _expert_tensor(state_dict, self.layer_idx, "down_proj"),
+            "down_proj_bias": _state_tensor(state_dict, self.layer_idx, "mlp.experts.down_proj_bias").to(
+                torch.bfloat16
+            ),
+        }
+        mesh_config = MeshConfig(
+            tuple(self.mesh_device.shape),
+            decode=ModeConfig(tp=1, ep=1, sp=1),
+            prefill=ModeConfig(tp=1, ep=1, sp=1),
+        )
+        expert_config = ExpertConfig(
+            intermediate_size=self.intermediate_size,
+            num_experts=self.num_experts,
+            hidden_size=self.hidden_size,
+            num_experts_per_tok=self.experts_per_token,
+            swiglu_limit=self.swiglu_limit,
+            alpha=1.703125,
+        )
+        program_config = OptimizedGPTOSSProgramConfig(
+            decode_gate_up_cores=self.optimization_config.expert_gate_up_cores,
+            decode_down_cores=self.optimization_config.expert_down_cores,
+            prefill_gate_up_cores=self.optimization_config.expert_gate_up_cores,
+            prefill_down_cores=self.optimization_config.expert_down_cores,
+            decode_gate_up_in0_block_w=self.optimization_config.expert_gate_up_in0_block_w,
+            decode_down_in0_block_w=self.optimization_config.expert_down_in0_block_w,
+            prefill_gate_up_in0_block_w=self.optimization_config.expert_gate_up_in0_block_w,
+            prefill_down_in0_block_w=self.optimization_config.expert_down_in0_block_w,
+            decode_gate_up_subblock_w=self.optimization_config.expert_gate_up_subblock_w,
+            decode_down_subblock_w=self.optimization_config.expert_down_subblock_w,
+            prefill_gate_up_subblock_w=self.optimization_config.expert_gate_up_subblock_w,
+            prefill_down_subblock_w=self.optimization_config.expert_down_subblock_w,
+        )
+        self.experts = Experts(
+            mesh_device=self.mesh_device,
+            config=expert_config,
+            state_dict=expert_state,
+            ccl_manager=None,
+            mesh_config=mesh_config,
+            program_config=program_config,
+            weight_dtype=weight_dtype,
+        )
+
+        # The sparse module owns separate gate/up/down tensors.  Releasing the
+        # inherited dense copies both restores capacity and guarantees that the
+        # selected runtime cannot silently execute the dense expert path.
+        for name in (
+            "gate_weight",
+            "up_weight",
+            "gate_bias",
+            "up_bias",
+            "gate_up_weight",
+            "gate_up_bias",
+            "down_weight",
+            "down_bias",
+        ):
+            tensor = getattr(self, name)
+            tensor.deallocate(True)
+            setattr(self, name, None)
+
+    def _route(self, hidden_states, seq_len: int):
+        tokens = self.batch * seq_len
+        advisor_layouts = self.optimization_config.use_shard_advisor_router_layouts and seq_len == 1
+        advisor_dense = self.optimization_config.use_shard_advisor_dense_moe_layouts and seq_len == 1
+        token_states = ttnn.reshape(hidden_states, [tokens, self.hidden_size])
+        router_input = ttnn.typecast(
+            token_states,
+            ttnn.float32,
+            memory_config=self.advisor_norm_memory_config if advisor_dense else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if advisor_layouts:
+            router_input = ttnn.to_memory_config(router_input, self.advisor_router_input_config)
+        router_logits = ttnn.linear(
+            router_input,
+            self.router_weight,
+            bias=self.router_bias,
+            dtype=ttnn.float32,
+            memory_config=self.advisor_router_output_config if advisor_layouts else ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.advisor_router_program_config if advisor_layouts else None,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        router_logits = ttnn.typecast(
+            router_logits,
+            ttnn.bfloat16,
+            memory_config=self.advisor_router_output_config if advisor_layouts else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if advisor_layouts:
+            router_logits = ttnn.to_memory_config(router_logits, ttnn.L1_MEMORY_CONFIG)
+        top_values, top_indices = ttnn.topk(
+            router_logits,
+            self.experts_per_token,
+            1,
+            True,
+            True,
+            memory_config=ttnn.L1_MEMORY_CONFIG if advisor_layouts else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        top_weights = ttnn.softmax(
+            top_values,
+            1,
+            memory_config=self.advisor_routing_weights_config if advisor_layouts else ttnn.DRAM_MEMORY_CONFIG,
+            numeric_stable=True,
+        )
+        if advisor_layouts:
+            top_weights = ttnn.to_memory_config(top_weights, ttnn.L1_MEMORY_CONFIG)
+        routing_weights = ttnn.scatter(
+            input=ttnn.zeros_like(router_logits),
+            dim=1,
+            index=top_indices,
+            src=top_weights,
+            memory_config=self.advisor_routing_weights_config if advisor_layouts else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if advisor_layouts:
+            # final_ir changes the scatter result back to interleaved at the
+            # following reshape.  Make that boundary explicit because the
+            # shared sparse-expert module starts with TILE -> ROW_MAJOR.
+            routing_weights = ttnn.to_memory_config(routing_weights, ttnn.L1_MEMORY_CONFIG)
+        return routing_weights
+
+    def _optimized_moe_forward(self, hidden_states, seq_len: int):
+        residual = hidden_states
+        advisor_dense = (
+            self.experts is None and self.optimization_config.use_shard_advisor_dense_moe_layouts and seq_len == 1
+        )
+        if advisor_dense:
+            return self._advisor_dense_moe_forward(residual)
+        normalized = ttnn.rms_norm(
+            hidden_states,
+            epsilon=self.rms_norm_eps,
+            weight=self.post_attention_norm,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+        # The shared sparse expert module currently serves batch one. Preserve
+        # the inherited batch contract with the exact fused dense graph for
+        # larger batches; the primary measured batch-one path can only use the
+        # sparse module because its dense weights were released above.
+        if self.experts is None:
+            expert_output = FusedDecoder._moe_forward(self, normalized, seq_len)
+            return ttnn.add(
+                residual,
+                expert_output,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                output_tensor=expert_output,
+            )
+
+        routing_weights = self._route(normalized, seq_len)
+        padded_len = math.ceil(seq_len / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        expert_input = normalized
+        if seq_len > 1 and padded_len != seq_len:
+            expert_input = ttnn.pad(
+                expert_input,
+                [(0, 0), (0, 0), (0, padded_len - seq_len), (0, 0)],
+                value=0.0,
+            )
+            routing_weights = ttnn.pad(
+                routing_weights,
+                [(0, padded_len - seq_len), (0, 0)],
+                value=0.0,
+            )
+        if self.optimization_config.expert_input_l1:
+            expert_input = ttnn.to_memory_config(expert_input, ttnn.L1_MEMORY_CONFIG)
+            routing_weights = ttnn.to_memory_config(routing_weights, ttnn.L1_MEMORY_CONFIG)
+        expert_output = self.experts(
+            expert_input,
+            topk_expert_weights=routing_weights,
+            is_decode=seq_len == 1,
+        )
+        if padded_len != seq_len:
+            expert_output = ttnn.slice(
+                expert_output,
+                [0, 0, 0, 0],
+                [1, self.batch, seq_len, self.hidden_size],
+                [1, 1, 1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return ttnn.add(
+            residual,
+            expert_output,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _advisor_dense_moe_forward(self, hidden_states):
+        """Evaluate the complete dense-MoE L1 layout chain from final_ir.mlir."""
+
+        norm_input = ttnn.to_memory_config(hidden_states, self.advisor_norm_memory_config)
+        normalized = ttnn.rms_norm(
+            norm_input,
+            epsilon=self.rms_norm_eps,
+            weight=self.advisor_norm_weights["post_attention_norm"],
+            memory_config=self.advisor_norm_memory_config,
+            program_config=self.advisor_norm_program_config,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        routing_weights = self._route(normalized, 1)
+        flat = ttnn.reshape(normalized, [1, self.hidden_size])
+        expert_input = ttnn.reshape(flat, [1, 1, self.hidden_size])
+        expert_input = ttnn.repeat(expert_input, ttnn.Shape([self.num_experts, 1, 1]))
+        expert_input = ttnn.to_memory_config(expert_input, self.advisor_expert_hidden_config)
+        expert_input = ttnn.to_memory_config(expert_input, ttnn.L1_MEMORY_CONFIG)
+        gate_up = ttnn.linear(
+            expert_input,
+            self.gate_up_weight,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        gate_up = ttnn.to_memory_config(gate_up, self.advisor_expert_gate_up_config)
+        gate_up = ttnn.add(
+            gate_up,
+            self.gate_up_bias,
+            memory_config=self.advisor_expert_gate_up_config,
+        )
+        gate_up = ttnn.to_memory_config(gate_up, ttnn.L1_MEMORY_CONFIG)
+        up = ttnn.slice(
+            gate_up,
+            [0, 0, 1],
+            [self.num_experts, 1, 2 * self.intermediate_size],
+            [1, 1, 2],
+        )
+        gate = ttnn.slice(
+            gate_up,
+            [0, 0, 0],
+            [self.num_experts, 1, 2 * self.intermediate_size],
+            [1, 1, 2],
+        )
+        up = ttnn.clamp(
+            up,
+            -self.swiglu_limit,
+            self.swiglu_limit,
+            memory_config=self.advisor_expert_hidden_config,
+        )
+        gate = ttnn.clamp(
+            gate,
+            float("-inf"),
+            self.swiglu_limit,
+            memory_config=self.advisor_expert_hidden_config,
+        )
+        sigmoid = ttnn.multiply(
+            gate,
+            1.703125,
+            dtype=ttnn.bfloat16,
+            memory_config=self.advisor_expert_hidden_config,
+            activations=[ttnn.UnaryOpType.SIGMOID],
+        )
+        gated = ttnn.multiply(
+            gate,
+            sigmoid,
+            dtype=ttnn.bfloat16,
+            memory_config=self.advisor_expert_hidden_config,
+        )
+        activated = ttnn.multiply(
+            ttnn.add(up, 1.0, memory_config=self.advisor_expert_hidden_config),
+            gated,
+            dtype=ttnn.bfloat16,
+            memory_config=self.advisor_expert_hidden_config,
+        )
+        activated = ttnn.to_memory_config(activated, ttnn.L1_MEMORY_CONFIG)
+        expert_output = ttnn.linear(
+            activated,
+            self.down_weight,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        expert_output = ttnn.to_memory_config(expert_output, self.advisor_expert_hidden_config)
+        expert_output = ttnn.add(
+            expert_output,
+            self.down_bias,
+            memory_config=self.advisor_expert_hidden_config,
+        )
+        expert_output = ttnn.to_memory_config(expert_output, ttnn.L1_MEMORY_CONFIG)
+        routing_weights = ttnn.reshape(routing_weights, [self.num_experts, 1, 1])
+        routing_weights = ttnn.to_memory_config(routing_weights, ttnn.L1_MEMORY_CONFIG)
+        expert_output = ttnn.multiply(
+            expert_output,
+            routing_weights,
+            memory_config=self.advisor_expert_hidden_config,
+        )
+        expert_output = ttnn.to_memory_config(expert_output, ttnn.L1_MEMORY_CONFIG)
+        expert_output = ttnn.sum(
+            expert_output,
+            [0],
+            False,
+            memory_config=self.advisor_residual_config,
+        )
+        expert_output = ttnn.to_memory_config(expert_output, ttnn.L1_MEMORY_CONFIG)
+        expert_output = ttnn.reshape(expert_output, [1, self.batch, 1, self.hidden_size])
+        residual = ttnn.to_memory_config(hidden_states, self.advisor_residual_config)
+        output = ttnn.add(residual, expert_output, memory_config=self.advisor_residual_config)
+        return ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+
+    def _prefill_attention(self, hidden_states, key_cache, value_cache, seq_len: int):
+        residual = hidden_states
+        qkv_program_config = self.prefill_qkv_program_config if seq_len == 128 else None
+        o_program_config = self.prefill_o_program_config if seq_len == 128 else None
+        normed = ttnn.rms_norm(
+            hidden_states,
+            epsilon=self.rms_norm_eps,
+            weight=self.input_norm,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        fused_qkv = ttnn.linear(
+            normed,
+            self.qkv_weight,
+            bias=self.qkv_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=qkv_program_config,
+        )
+        fused_qkv = ttnn.reshape(
+            fused_qkv,
+            [self.batch, seq_len, (self.num_heads + 2 * self.num_kv_heads) * self.head_dim],
+        )
+        query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
+            fused_qkv,
+            None,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            transpose_key=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cos, sin = self._get_prefill_rotary_views(seq_len)
+        query = ttnn.experimental.rotary_embedding(query, cos, sin, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        key = ttnn.experimental.rotary_embedding(key, cos, sin, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        query = ttnn.slice(
+            query,
+            [0, 0, 0, 0],
+            [self.batch, self.num_heads, seq_len, self.head_dim],
+            [1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        key = ttnn.slice(
+            key,
+            [0, 0, 0, 0],
+            [self.batch, self.num_kv_heads, seq_len, self.head_dim],
+            [1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cache_key = key
+        cache_value = value
+        if self.optimization_config.kv_cache_dtype == "bfloat8_b":
+            # The current-token BF16 tensors remain inputs to prefill SDPA;
+            # quantize only the values written to persistent cache.
+            cache_key = ttnn.typecast(key, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            cache_value = ttnn.typecast(value, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self.batch == 1:
+            ttnn.fill_cache(key_cache, cache_key, 0)
+            ttnn.fill_cache(value_cache, cache_value, 0)
+        else:
+            for user_id in range(self.batch):
+                user_key = ttnn.slice(
+                    cache_key,
+                    [user_id, 0, 0, 0],
+                    [user_id + 1, self.num_kv_heads, seq_len, self.head_dim],
+                    [1, 1, 1, 1],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                user_value = ttnn.slice(
+                    cache_value,
+                    [user_id, 0, 0, 0],
+                    [user_id + 1, self.num_kv_heads, seq_len, self.head_dim],
+                    [1, 1, 1, 1],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.fill_cache(key_cache, user_key, user_id)
+                ttnn.fill_cache(value_cache, user_value, user_id)
+        attention = ttnn.transformer.scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            attn_mask=None,
+            is_causal=True,
+            scale=self.scale,
+            sliding_window_size=self.sliding_window,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+            attention_sink=self.prefill_sdpa_sink,
+        )
+        attention = ttnn.transformer.concatenate_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attention = ttnn.reshape(attention, [1, self.batch, seq_len, self.num_heads * self.head_dim])
+        attention = ttnn.linear(
+            attention,
+            self.output_weight,
+            bias=self.output_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=o_program_config,
+        )
+        return ttnn.add(
+            residual,
+            attention,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tensor=attention,
+        )
+
+    def _decode_attention(self, hidden_states, key_cache, value_cache, current_pos: int):
+        dram_attention = self.optimization_config.use_dram_sharded_attention
+        # The captured advisor graph is the emitted batch-one decode graph.
+        # Its one-row norm/residual shard is invalid once decode height grows
+        # with batch, so retain the fused interleaved attention contract there.
+        advisor_layouts = (
+            self.optimization_config.use_shard_advisor_attention_layouts and not dram_attention and self.batch == 1
+        )
+        residual = hidden_states
+        norm_input = (
+            ttnn.to_memory_config(hidden_states, self.advisor_norm_memory_config) if advisor_layouts else hidden_states
+        )
+        normed = ttnn.rms_norm(
+            norm_input,
+            epsilon=self.rms_norm_eps,
+            weight=self.advisor_norm_weights["input_norm"] if advisor_layouts else self.input_norm,
+            memory_config=self.advisor_norm_memory_config if advisor_layouts else ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.advisor_norm_program_config if advisor_layouts else None,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        if advisor_layouts:
+            normed = ttnn.to_memory_config(normed, self.advisor_qkv_input_config)
+        elif dram_attention:
+            normed = ttnn.to_memory_config(normed, self.dram_qkv_input_config)
+        fused_qkv = ttnn.linear(
+            normed,
+            self.decode_qkv_weight if dram_attention else self.qkv_weight,
+            # DRAM-sharded matmul cannot fuse an interleaved bias into its
+            # width-sharded output; follow Attention1D and add it separately.
+            bias=None if dram_attention else self.qkv_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=(
+                self.dram_qkv_output_config
+                if dram_attention
+                else self.advisor_qkv_output_config
+                if advisor_layouts
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
+            program_config=(
+                self.dram_qkv_program_config
+                if dram_attention
+                else self.advisor_qkv_program_config
+                if advisor_layouts
+                else None
+            ),
+            compute_kernel_config=self.decode_compute_kernel_config,
+        )
+        if dram_attention:
+            fused_qkv = ttnn.add(fused_qkv, self.qkv_bias, memory_config=self.dram_qkv_output_config)
+            fused_qkv = ttnn.to_memory_config(fused_qkv, ttnn.L1_MEMORY_CONFIG)
+        elif advisor_layouts:
+            # The head-split kernel uses global CBs and consumes interleaved L1.
+            fused_qkv = ttnn.to_memory_config(fused_qkv, ttnn.L1_MEMORY_CONFIG)
+        fused_qkv = ttnn.reshape(
+            fused_qkv,
+            [1, 1, self.batch, (self.num_heads + 2 * self.num_kv_heads) * self.head_dim],
+        )
+        query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
+            fused_qkv,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            memory_config=self.decode_heads_mem_config,
+        )
+        cos, sin, update_indices = self._get_decode_position_views(current_pos)
+        query = ttnn.experimental.rotary_embedding(
+            query,
+            cos,
+            sin,
+            0,
+            memory_config=self.decode_heads_mem_config,
+        )
+        key = ttnn.experimental.rotary_embedding(
+            key,
+            cos,
+            sin,
+            0,
+            memory_config=self.decode_heads_mem_config,
+        )
+        ttnn.experimental.paged_update_cache(
+            key_cache,
+            key,
+            update_idxs_tensor=update_indices,
+            share_cache=False,
+            page_table=None,
+        )
+        ttnn.experimental.paged_update_cache(
+            value_cache,
+            value,
+            update_idxs_tensor=update_indices,
+            share_cache=False,
+            page_table=None,
+        )
+        attention = ttnn.transformer.scaled_dot_product_attention_decode(
+            query,
+            key_cache,
+            value_cache,
+            is_causal=True,
+            attn_mask=None,
+            cur_pos_tensor=update_indices,
+            attention_sink=self.decode_attention_sinks,
+            scale=self.scale,
+            sliding_window_size=self.sliding_window,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.decode_sdpa_program_config,
+        )
+        attention = ttnn.to_memory_config(attention, self.decode_heads_mem_config)
+        attention = ttnn.experimental.nlp_concat_heads_decode(attention, num_heads=self.num_heads)
+        attention = ttnn.slice(
+            attention,
+            [0, 0, 0, 0],
+            [1, 1, self.batch, self.num_heads * self.head_dim],
+            [1, 1, 1, 1],
+        )
+        attention = ttnn.reshape(attention, [1, self.batch, 1, self.num_heads * self.head_dim])
+        if advisor_layouts:
+            attention = ttnn.to_memory_config(attention, ttnn.L1_MEMORY_CONFIG)
+        elif dram_attention:
+            attention = ttnn.to_memory_config(attention, self.dram_o_input_config)
+        attention = ttnn.linear(
+            attention,
+            self.decode_o_weight if dram_attention else self.output_weight,
+            bias=None if dram_attention else self.output_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=(
+                self.dram_o_output_config
+                if dram_attention
+                else self.advisor_residual_config
+                if advisor_layouts
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
+            program_config=(
+                self.dram_o_program_config
+                if dram_attention
+                else self.advisor_o_program_config
+                if advisor_layouts
+                else None
+            ),
+            compute_kernel_config=self.decode_compute_kernel_config,
+        )
+        if dram_attention:
+            attention = ttnn.to_memory_config(attention, ttnn.DRAM_MEMORY_CONFIG)
+            attention = ttnn.add(attention, self.output_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if advisor_layouts:
+            residual = ttnn.to_memory_config(residual, self.advisor_residual_config)
+            attention = ttnn.add(
+                residual,
+                attention,
+                dtype=ttnn.bfloat16,
+                memory_config=self.advisor_residual_config,
+            )
+            # The selected sparse expert module begins from a DRAM RMSNorm.
+            return ttnn.to_memory_config(attention, ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.add(
+            residual,
+            attention,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tensor=attention,
+        )
+
+    def create_kv_cache(self):
+        """Allocate a cache matching the selected persistent-cache policy."""
+
+        cache_dtype = {
+            "bfloat8_b": ttnn.bfloat8_b,
+            "bfloat16": ttnn.bfloat16,
+        }[self.optimization_config.kv_cache_dtype]
+        shape = (self.batch, self.num_kv_heads, self.max_cache_len, self.head_dim)
+        return (
+            ttnn.zeros(
+                shape,
+                dtype=cache_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            ttnn.zeros(
+                shape,
+                dtype=cache_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+        )
+
+    def prefill_forward(self, hidden_states, key_cache, value_cache):
+        """Run optimized prefill for any valid logical sequence length."""
+
+        seq_len = self._validate_hidden_states(hidden_states)
+        if seq_len <= 1:
+            raise ValueError("prefill_forward requires seq_len > 1; use decode_forward for one token")
+        self._validate_caches(key_cache, value_cache)
+        hidden_states = self._prefill_attention(hidden_states, key_cache, value_cache, seq_len)
+        return self._optimized_moe_forward(hidden_states, seq_len)
+
+    def decode_forward(self, hidden_states, key_cache, value_cache, *, current_pos: int):
+        """Run optimized paged decode for one logical token."""
+
+        self._validate_hidden_states(hidden_states, expected_seq_len=1)
+        self._validate_caches(key_cache, value_cache)
+        if current_pos < 0 or current_pos >= self.max_cache_len:
+            raise ValueError(f"current_pos must be in [0, {self.max_cache_len}), got {current_pos}")
+        hidden_states = self._decode_attention(hidden_states, key_cache, value_cache, current_pos)
+        return self._optimized_moe_forward(hidden_states, 1)
+
+
+__all__ = ["OptimizationConfig", "OptimizedDecoder", "OptimizedGPTOSSProgramConfig"]
