@@ -28,6 +28,9 @@ import ttnn
 #     (``_lm_prefill`` only). Use with ``python -m tracy …`` then
 #     ``tt-perf-report <csv> --start-signpost start --end-signpost stop``.
 #   VV_PROFILE_PREFILL_EXIT=1 — return from generate() right after LM prefill (no AR).
+#   VV_PROFILE_DIFFUSION=<n> — Tracy start/stop around the n-th eager diffusion call
+#     (``_run_speech_diffusion`` / sample_speech_latents only; VV_TRACE_SEGMENT=0).
+#   VV_PROFILE_DIFFUSION_EXIT=1 — return from generate() right after that diffusion call.
 
 
 def _vv_profile_enabled() -> bool:
@@ -364,6 +367,9 @@ class TTVibeVoiceGenerator:
         self._sf_neg_pos: Optional[ttnn.Tensor] = None
         self._sf_noise: Optional[ttnn.Tensor] = None
         self._sf_t_tensors: Optional[list] = None
+        # Schedule-constant timestep embeddings (embed_timestep(t) per DPM step).  Built once with
+        # `_sf_t_tensors` and reused every frame — byte-identical to per-step embed inside the head.
+        self._sf_t_embs: Optional[list] = None
         self._sf_audio_out: Optional[ttnn.Tensor] = None
         self._sf_logits_out: Optional[ttnn.Tensor] = None
         # Constrained-decode (split-capture path): subset lm_head + in-trace argmax → local index.
@@ -618,6 +624,27 @@ class TTVibeVoiceGenerator:
         embed_2d[mask[: embed_2d.shape[0]]] = speech_embeds[:n_slots].to(embed_2d.dtype)
         return _host_2d_to_embeds(embed_2d, self.device, dtype=torch.float32)
 
+    def _ensure_diffusion_t_embs(self) -> list:
+        """Build schedule-constant DPM timestep tensors + embeddings once (eager + traced)."""
+        if self._sf_t_embs is not None:
+            return self._sf_t_embs
+        dev = self.device
+        self.scheduler.set_timesteps(self.num_diffusion_steps)
+        if self._sf_t_tensors is None:
+            self._sf_t_tensors = [
+                ttnn.full(
+                    (2, 1, 1, 1),
+                    float(t),
+                    dtype=ttnn.bfloat16,
+                    device=dev,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for t in self.scheduler.timesteps
+            ]
+        self._sf_t_embs = [self.diffusion_head.embed_timestep(t) for t in self._sf_t_tensors]
+        return self._sf_t_embs
+
     def _run_speech_diffusion(
         self,
         condition: ttnn.Tensor,
@@ -657,6 +684,7 @@ class TTVibeVoiceGenerator:
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        t_embs = self._ensure_diffusion_t_embs()
         return sample_speech_latents(
             self.diffusion_head,
             condition,
@@ -666,6 +694,8 @@ class TTVibeVoiceGenerator:
             cfg_scale=self.cfg_scale,
             num_steps=self.num_diffusion_steps,
             head_runner=None,
+            t_tensors=self._sf_t_tensors,
+            t_embs=t_embs,
         )
 
     def _reset_segment_frame_trace(self) -> None:
@@ -806,6 +836,7 @@ class TTVibeVoiceGenerator:
                 num_steps=self.num_diffusion_steps,
                 head_runner=None,
                 t_tensors=self._sf_t_tensors,
+                t_embs=self._sf_t_embs,
             )
             fu, au = self._run_post_pipeline(latent)
             if self._sf_fused_out is None:
@@ -916,18 +947,8 @@ class TTVibeVoiceGenerator:
             self._sf_valid_ids_sorted = sorted(self.valid_token_ids)
             self._sf_lm_head_valid = lm.build_lm_head_subset(self._sf_valid_ids_sorted)
             self._sf_noise = _z([1, 1, 1, 64], ttnn.bfloat16, ttnn.TILE_LAYOUT)
-            self.scheduler.set_timesteps(self.num_diffusion_steps)
-            self._sf_t_tensors = [
-                ttnn.full(
-                    (2, 1, 1, 1),
-                    float(t),
-                    dtype=ttnn.bfloat16,
-                    device=dev,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                for t in self.scheduler.timesteps
-            ]
+            # Schedule-constant t scalars + embeddings (outside capture; reused every frame).
+            self._ensure_diffusion_t_embs()
 
         if seg_frame_idx == 0:
             # Capture the segment-start condition source ([1,1,1,H], last position of the
@@ -968,6 +989,7 @@ class TTVibeVoiceGenerator:
                 num_steps=self.num_diffusion_steps,
                 head_runner=None,
                 t_tensors=self._sf_t_tensors,
+                t_embs=self._sf_t_embs,
             )
             fused, audio = self._run_post_pipeline(latent)
             if self._sf_fp32_rope:
@@ -1016,6 +1038,7 @@ class TTVibeVoiceGenerator:
                     num_steps=self.num_diffusion_steps,
                     head_runner=None,
                     t_tensors=self._sf_t_tensors,
+                    t_embs=self._sf_t_embs,
                 )
                 fu, au = self._run_post_pipeline(latent)
                 if self._sf_fused_out is None:
@@ -1284,6 +1307,10 @@ class TTVibeVoiceGenerator:
         # Env-gated + eager-path only (VV_TRACE_SEGMENT=0), so the shipping trace path is untouched.
         _profile_sf = int(os.environ.get("VV_PROFILE_SPEECH_FRAME", "0"))
         _profile_sf_exit = os.environ.get("VV_PROFILE_SPEECH_FRAME_EXIT", "0") == "1"
+        # Diffusion-only window (VV_PROFILE_DIFFUSION=<n>): signposts around `_run_speech_diffusion`
+        # only (CFG×num_steps head + scheduler).  Eager-path only; EXIT returns after the call.
+        _profile_diff = int(os.environ.get("VV_PROFILE_DIFFUSION", "0"))
+        _profile_diff_exit = os.environ.get("VV_PROFILE_DIFFUSION_EXIT", "0") == "1"
 
         _vv_debug(
             f"generate() start: input_ids={tuple(input_ids.shape)} "
@@ -1510,9 +1537,24 @@ class TTVibeVoiceGenerator:
                     noise_2x = diffusion_noise[diffusion_frames - 1] if diffusion_noise is not None else None
                     if loopbreaker is not None and loopbreaker.active and noise_2x is not None:
                         noise_2x = loopbreaker.perturb(noise_2x, diffusion_frames)
+                    if _profile_diff and diffusion_frames == _profile_diff:
+                        import tracy
+
+                        ttnn.synchronize_device(device)
+                        tracy.signpost("start")
+                        _vv_debug(f"Tracy signpost start: eager diffusion {_profile_diff}")
                     speech_latent = self._run_speech_diffusion(
                         cond_pos, cond_neg, latent_size=64, noise_2x=noise_2x, rng=rng
                     )
+                    if _profile_diff and diffusion_frames == _profile_diff:
+                        import tracy
+
+                        ttnn.synchronize_device(device)
+                        tracy.signpost("stop")
+                        _vv_debug(f"Tracy signpost stop: eager diffusion {_profile_diff}")
+                        if _profile_diff_exit:
+                            _vv_debug("VV_PROFILE_DIFFUSION_EXIT=1 — ending generate after profiled diffusion")
+                            break
 
                 # On-device streaming: fused next-step embed + this frame's audio chunk.
                 with prof.section("post_diffusion (decode+sem_enc+conn)"):

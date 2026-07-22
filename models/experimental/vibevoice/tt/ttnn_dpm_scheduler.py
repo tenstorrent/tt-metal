@@ -280,6 +280,7 @@ def sample_speech_latents(
     num_steps: int = 10,
     head_runner=None,
     t_tensors=None,
+    t_embs=None,
 ) -> ttnn.Tensor:
     """Run the DPM multistep loop using TT diffusion head.
 
@@ -299,6 +300,10 @@ def sample_speech_latents(
                           ``diffusion_head``.  The per-step scheduler.step stays host-side
                           (its coefficients are per-step Python floats that would bake into
                           a trace), so only the head forward is replaced.
+        t_tensors:        optional pre-built per-step timestep tensors [2,1,1,1] (trace-safe)
+        t_embs:           optional pre-built per-step ``embed_timestep(t)`` outputs.  DPM
+                          timesteps are schedule-constant, so the generator builds these once
+                          and reuses every frame (byte-identical to per-step embed inside the head).
 
     Returns:
         final denoised latent [1, 1, 1, latent_size]
@@ -326,21 +331,26 @@ def sample_speech_latents(
         # Timestep tensor [2, 1, 1, 1].  Prefer pre-built tensors (t_tensors) when provided:
         # ttnn.full is a host->device write, illegal inside a trace capture, so the traced
         # (--trace) path passes tensors built once before capture; eager builds them here.
-        if t_tensors is not None:
-            t_tensor = t_tensors[step_idx]
+        # Skipped entirely when t_embs is provided (embed already baked; t_tensor unused).
+        t_emb = t_embs[step_idx] if t_embs is not None else None
+        if t_emb is None:
+            if t_tensors is not None:
+                t_tensor = t_tensors[step_idx]
+            else:
+                t_tensor = ttnn.full(
+                    (2, 1, 1, 1),
+                    float(t_val),
+                    dtype=ttnn.bfloat16,
+                    device=condition_tt.device(),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
         else:
-            t_tensor = ttnn.full(
-                (2, 1, 1, 1),
-                float(t_val),
-                dtype=ttnn.bfloat16,
-                device=condition_tt.device(),
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            t_tensor = None  # unused when t_emb is supplied
 
         # Run diffusion head on CFG batch (hoisted cond_proj when using the TTDiffusionHead)
         if _use_precond:
-            eps_combined = diffusion_head.forward_pre_cond(sample_expanded, t_tensor, cond_proj)
+            eps_combined = diffusion_head.forward_pre_cond(sample_expanded, t_tensor, cond_proj, t_emb=t_emb)
         else:
             eps_combined = head_runner(sample_expanded, t_tensor, cond_combined)
 
