@@ -27,13 +27,12 @@
     },
     {
       "id": "copy-eltwise-unary-legacy-inits",
-      "_comment": "PLACEHOLDER introduced_by_pr — set to the real PR number at PR creation; the deprecation reaper hard-fails repo-wide on a non-existent PR number. Safe as 0 while the entry lives only on a local branch (the reaper ignores unmerged PRs).",
       "description": "Legacy copy / eltwise-unary init API: copy_tile_init, copy_tile_to_dst_init_short, copy_tile_to_dst_init_short_with_dt in tt_metal/hw/inc/api/compute/tile_move_copy.h and unary_op_init_common, init_sfpu in tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h. Replaced by compute_kernel_hw_startup(icb, ocb) + copy_init(icb); data-format reconfiguration via reconfig_data_format_srca.",
       "files": [
         "tt_metal/hw/inc/api/compute/tile_move_copy.h",
         "tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h"
       ],
-      "introduced_by_pr": 0,
+      "introduced_by_pr": 49924,
       "grace": "30d",
       "owners": ["ncvetkovicTT"]
     }
