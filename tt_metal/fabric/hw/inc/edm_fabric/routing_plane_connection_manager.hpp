@@ -126,32 +126,38 @@ public:
         }
     }
 
-    template <bool SEND_CREDIT_ADDR = false>
+    template <bool SEND_CREDIT_ADDR = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     inline void open_start() {
-        for_each([&](Sender& s, uint32_t, uint32_t) { s.open_start<SEND_CREDIT_ADDR>(); });
+        for_each([&](Sender& s, uint32_t, uint32_t) {
+            s.template open_start<SEND_CREDIT_ADDR, false, WORKER_HANDSHAKE_NOC>();
+        });
     }
 
+    template <uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     inline void open_finish() {
-        for_each([&](Sender& s, uint32_t, uint32_t) { s.open_finish(); });
+        for_each([&](Sender& s, uint32_t, uint32_t) { s.template open_finish<false, WORKER_HANDSHAKE_NOC>(); });
     }
 
-    template <bool SEND_CREDIT_ADDR = false>
+    template <bool SEND_CREDIT_ADDR = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     inline void open() {
-        open_start<SEND_CREDIT_ADDR>();
-        open_finish();
+        open_start<SEND_CREDIT_ADDR, WORKER_HANDSHAKE_NOC>();
+        open_finish<WORKER_HANDSHAKE_NOC>();
     }
 
+    template <uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     inline void close_start() {
-        for_each([&](Sender& s, uint32_t, uint32_t) { s.close_start(); });
+        for_each([&](Sender& s, uint32_t, uint32_t) { s.template close_start<false, WORKER_HANDSHAKE_NOC>(); });
     }
 
+    template <uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     inline void close_finish() {
-        for_each([&](Sender& s, uint32_t, uint32_t) { s.close_finish(); });
+        for_each([&](Sender& s, uint32_t, uint32_t) { s.template close_finish<false, WORKER_HANDSHAKE_NOC>(); });
     }
 
+    template <uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     inline void close() {
-        close_start();
-        close_finish();
+        close_start<WORKER_HANDSHAKE_NOC>();
+        close_finish<WORKER_HANDSHAKE_NOC>();
     }
 
     inline uint32_t active_count() const { return num_active_; }
