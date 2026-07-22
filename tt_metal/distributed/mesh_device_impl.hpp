@@ -63,6 +63,7 @@ class SubDeviceManagerTracker;
 class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
+class PerfDebugProfiler;
 
 namespace distributed {
 
@@ -158,6 +159,11 @@ private:
     // handler). Constructed by init_realtime_profiler_socket() and torn down in close_impl()
     // before the rest of the mesh shutdown so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
+
+    // Owns the perf-debug (X280 device-zone) profiler. Constructed by init_perf_debug_profiler()
+    // (gated by TT_METAL_PERF_DEBUG_PROFILER) and torn down in close_impl(). Independent of the RT
+    // profiler above.
+    std::unique_ptr<PerfDebugProfiler> perf_debug_profiler_;
 
     // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.
     // Constructed eagerly in initialize_impl() when the HAL exposes programmable
@@ -302,6 +308,7 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
+    void init_perf_debug_profiler(const std::shared_ptr<MeshDevice>& mesh_device);
     void trigger_realtime_profiler_sync_check();
     RealtimeProfilerManager* get_realtime_profiler() const;
 

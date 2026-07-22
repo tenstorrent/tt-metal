@@ -125,6 +125,7 @@ target_include_directories(
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/api>"
     PRIVATE
         api/tt-metalium # FIXME: Re-home the tests and remove this
+        ${PROJECT_SOURCE_DIR}/tools/x280_bm/include # prof_packet.h: X280<->host wire contract (perf_debug profiler)
 )
 target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
 

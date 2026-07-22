@@ -162,6 +162,8 @@ set(TT_METAL_SOURCES
     impl/experimental/offline_compile/offline_kernel_compile.cpp
     impl/graph/graph_tracking.cpp
     hal.cpp
+    tools/profiler/perf_debug_profiler.cpp
+    tools/profiler/perf_debug_profiler_tracy_handler.cpp
 )
 
 set(JITAPI_FILES
