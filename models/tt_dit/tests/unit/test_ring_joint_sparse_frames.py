@@ -519,6 +519,7 @@ class TestSparseFramesRing:
     @pytest.mark.parametrize(
         ("q_chunk_div", "k_chunk_div"),
         [
+            pytest.param(1, 1, id="chunk_full_fsl"),  # baseline: chunk == frame_seqlen
             pytest.param(2, 2, id="chunk_half_fsl"),
             pytest.param(4, 4, id="chunk_quarter_fsl"),
             pytest.param(1, 4, id="asym_qfull_kquarter"),
