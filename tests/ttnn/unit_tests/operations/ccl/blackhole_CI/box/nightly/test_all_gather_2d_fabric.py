@@ -11,9 +11,13 @@ from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_
 
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
-@pytest.mark.parametrize("ag_output_shape", [[1, 1, 256, 256]])
-@pytest.mark.parametrize("dim", [3])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, layout",
+    [
+        ([1, 1, 256, 256], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 4096], 3, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+)
 @pytest.mark.parametrize("ag_input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
@@ -58,5 +62,5 @@ def test_all_gather_2d_fabric(
         mem_config_ag,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        allowed_pcc=0.9999,
+        allowed_pcc=1.0,
     )
