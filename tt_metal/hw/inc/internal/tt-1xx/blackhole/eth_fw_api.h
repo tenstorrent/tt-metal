@@ -521,19 +521,24 @@ constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_PKTMODE = 0x5E5EDA07;    // [7] a
 inline void fabric_dbg_ringbuf_push_pktmode_snapshot([[maybe_unused]] uint32_t codeword) {
 #if defined(COMPILE_FOR_AERISC)
     WATCHER_RING_BUFFER_PUSH(codeword);
-    WATCHER_RING_BUFFER_PUSH(
-        (fabric_dbg_rd_reg(0xFFB90000) & 0xFFFF) | ((fabric_dbg_rd_reg(0xFFB91000) & 0xFFFF) << 16));  // [1] TXQ CTRL
-    WATCHER_RING_BUFFER_PUSH(
-        (fabric_dbg_rd_reg(0xFFB94000) & 0xFFFF) | ((fabric_dbg_rd_reg(0xFFB95000) & 0xFFFF) << 16));  // [2] RXQ CTRL
-    WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(0xFFB98154));  // [3] MAC_RX_ADDR_ROUTING
-    WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(0xFFB98150));  // [4] MAC_RX_ROUTING
-    WATCHER_RING_BUFFER_PUSH(
-        (fabric_dbg_rd_reg(0xFFB90080) & 0xFFFF) |
-        ((fabric_dbg_rd_reg(0xFFB91080) & 0xFFFF) << 16));  // [5] TXPKT_CFG_SEL_SW
-    WATCHER_RING_BUFFER_PUSH(
-        (fabric_dbg_rd_reg(0xFFB90084) & 0xFFFF) |
-        ((fabric_dbg_rd_reg(0xFFB91084) & 0xFFFF) << 16));    // [6] TXPKT_CFG_SEL_HW
-    WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(0xFFB9829C));  // [7] TXQ1 dest MAC HI
+    // [TWO-REG MODE] snapshot reduced to TWO registers (codeword + 2 words = 3 ring entries) so all 7
+    // stage probes can be active at once and coexist in the 32-entry ring (7 x 3 = 21). Keeping
+    // DEST_MAC_LO [8] and ACCEPT_AHEAD [9]; re-enable the others to go back to the full 9-register snapshot.
+    // WATCHER_RING_BUFFER_PUSH(
+    //     (fabric_dbg_rd_reg(0xFFB90000) & 0xFFFF) | ((fabric_dbg_rd_reg(0xFFB91000) & 0xFFFF) << 16));  // [1] TXQ
+    //     CTRL
+    // WATCHER_RING_BUFFER_PUSH(
+    //     (fabric_dbg_rd_reg(0xFFB94000) & 0xFFFF) | ((fabric_dbg_rd_reg(0xFFB95000) & 0xFFFF) << 16));  // [2] RXQ
+    //     CTRL
+    // WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(0xFFB98154));  // [3] MAC_RX_ADDR_ROUTING
+    // WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(0xFFB98150));  // [4] MAC_RX_ROUTING
+    // WATCHER_RING_BUFFER_PUSH(
+    //     (fabric_dbg_rd_reg(0xFFB90080) & 0xFFFF) |
+    //     ((fabric_dbg_rd_reg(0xFFB91080) & 0xFFFF) << 16));  // [5] TXPKT_CFG_SEL_SW
+    // WATCHER_RING_BUFFER_PUSH(
+    //     (fabric_dbg_rd_reg(0xFFB90084) & 0xFFFF) |
+    //     ((fabric_dbg_rd_reg(0xFFB91084) & 0xFFFF) << 16));    // [6] TXPKT_CFG_SEL_HW
+    // WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(0xFFB9829C));  // [7] TXQ1 dest MAC HI
     WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(0xFFB98298));  // [8] TXQ1 dest MAC LO
     WATCHER_RING_BUFFER_PUSH(
         (fabric_dbg_rd_reg(0xFFB9006C) & 0xFFFF) |
@@ -580,10 +585,10 @@ static void recover_eth_link_if_down() {
     // [PROBE 3 - RUNTIME] One-shot config snapshot during steady-state traffic: once ~100k packets have
     // gone out and the link is up (i.e. a normal running test, before any injected link drop), capture the
     // live config once. Static flag so it fires exactly once per core for the whole run.
-    // [PHASE 2: DISABLED] only probes 4-6 active this phase.
     static bool eth_runtime_snap_done = false;
     if (!eth_runtime_snap_done && pcs_link_up() &&
         *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR) > 100000u) {
+        // [TXRX MODE] probe disabled.
         // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_RUNTIME);
         eth_runtime_snap_done = true;
     }
@@ -605,7 +610,7 @@ static void recover_eth_link_if_down() {
         eth_link_was_down = true;
         // [PROBE 4 - DROP] Config as it stands the moment the link-down edge is first detected (before the
         // FW recovery/retrain touches anything). Edge-gated by eth_link_was_down, so one snapshot per drop.
-        // [PHASE 3: DISABLED] only probes 5-7 active this phase.
+        // [TXRX MODE] probe disabled.
         // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_DROP);
     }
 
@@ -624,25 +629,22 @@ static void recover_eth_link_if_down() {
     // over the freshly-retrained link under the corrupted config (the lost-in-flight window). Edge-
     // triggered via eth_link_was_down (cleared here), so it fires exactly ONCE per retrain.
     //
-    // Before restoring config: wait 1s, run the FW link-status check, then run the FW link-recovery entry
-    // point a SECOND time. The first recovery (block [#1] above) brought the link up; this tests whether a
-    // status-check + second recovery pass, after a full settle, cleans up whatever state leaves residual
-    // tail-stalls / lost-in-flight packets.
+    // Restore sequence: wait 1s, run the FW link-status check, run the FW link-recovery entry point a
+    // SECOND time, then re-apply the eth-queue config (eth_enable_packet_mode + ACCEPT_AHEAD). This is the
+    // "replicating context switch" restore, now WITH the ACCEPT_AHEAD write included.
     if (eth_link_was_down && pcs_link_up()) {
         eth_link_was_down = false;
         // [PROBE 5 - RETRAIN] Config the instant the link is back up (retrain succeeded), BEFORE the restore
         // sequence below. Diffing this against PROBE 4 (DROP) shows exactly what the retrain corrupted.
-        fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_RETRAIN);
-        // 1s settle. Also guarantees the update_boot_results_eth_link_status_check() debounce
-        // (ETH_UPDATE_LINK_STATUS_INTERVAL_MS = 1000ms) has elapsed since the last check, so the FW
-        // link-status check below actually runs instead of no-oping inside the debounce window. Inside the
-        // context switch (before the main loop resumes), so it does not reopen the lost-in-flight window.
+        // [TXRX MODE] probe disabled.
+        // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_RETRAIN);
+        // 1s settle. Also clears the update_boot_results_eth_link_status_check() 1000ms debounce so the FW
+        // link-status check below actually runs. Inside the context switch (before the main loop resumes).
         eth_wait_cycles(1000 * ETH_CLOCK_CYCLE_1MS);  // 1s (ETH_CLOCK_CYCLE_1MS = 1e6 cycles = 1ms)
         // FW link-status check -- now past its 1s debounce (the wait above), so this actually invokes it.
         update_boot_results_eth_link_status_check();
-        // [PROBE 6 - STATUSCHK] Config after the (2nd) FW link-status check -- did the status check itself
-        // change any config register?
-        fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_STATUSCHK);
+        // [PROBE 6 - STATUSCHK] disabled in TXRX mode.
+        // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_STATUSCHK);
         // Second link-recovery pass (same entry point as [#1]). Null-guarded identically.
         if (eth_link_recovery_ptr != 0) {
             fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_ENTER);
@@ -652,9 +654,20 @@ static void recover_eth_link_if_down() {
         // receiver_txq_id == 1 in the fabric router (see static_assert in kernel_main). Hardcoded 1
         // because receiver_txq_id is a kernel-TU constant not visible in this base header.
         eth_enable_packet_mode(1);
-        // [PROBE 7 - PKTMODE] Config after eth_enable_packet_mode() re-applied it -- should match the INIT
-        // baseline (PROBE 2) if the restore is complete.
-        fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_PKTMODE);
+        // [ACCEPT_AHEAD RESTORE] eth_enable_packet_mode() does NOT touch ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD.
+        // The retrain resets it from the configured depth (32) to the power-on default (8) on the
+        // downed/retrained end, and nothing else in the recovery path restores it -- leaving the TXQ with a
+        // 4x-shallower accept-ahead depth that throttles TX pipelining for the rest of the run (the residual
+        // tail-stall / lost-in-flight source). Re-write both TXQs here, mirroring the init path in
+        // initialize_state_for_txq1_active_mode(). Value hardcoded to 32 (= DEFAULT_NUM_ETH_TXQ_DATA_PACKET_
+        // ACCEPT_AHEAD, a kernel-TU constant not visible in this base header -- same reason receiver_txq_id is
+        // hardcoded to 1 above).
+        eth_txq_reg_write(0, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, 32);
+        eth_txq_reg_write(1, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, 32);
+        // [PROBE 7 - PKTMODE] Config after eth_enable_packet_mode() + ACCEPT_AHEAD restore -- should now match
+        // the INIT baseline (PROBE 2) on ALL registers incl. ACCEPT_AHEAD (32/32) if the restore is complete.
+        // [TXRX MODE] probe disabled.
+        // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_PKTMODE);
         if (was_retrained == 0) {
             was_retrained = 1;  // edge-triggered freeze/debug flag; one-shot, matches WAS_RETRAINED gate
         }

@@ -64,10 +64,10 @@ inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync(
     // its shadow counters after. (TEST-ONLY: this makes the "without_noc_sync" path do a full sync.)
     update_boot_results_eth_link_status_check();
     recover_eth_link_if_down();
-    // [PKTMODE-PROBE] TX/RX counter push DISABLED -- the ring buffer is used for the 7-point config-register
-    // snapshots instead (they would be flooded/evicted by a per-context-switch TX/RX push). Re-enable this
-    // (and disable the snapshots) to go back to live TX/RX counter tracking.
-    // fabric_dbg_ringbuf_push_txrx_counts();
+    // [TXRX MODE] Live TX/RX counter tracking re-enabled. The 7-point config-register snapshot probes are
+    // disabled (they would be flooded/evicted by this per-context-switch push), so the ring buffer is a
+    // TX/RX time series again. Flip both back to re-enable the config-register probes.
+    fabric_dbg_ringbuf_push_txrx_counts();
 #endif
 #endif
 }
