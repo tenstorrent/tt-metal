@@ -30,7 +30,7 @@ void kernel_main() {
     constexpr auto cb_add = tt::CBIndex::c_27;
     DataflowBuffer dfb_add_obj(cb_add);
 
-    binary_op_init_common(cb_y, cb_bcast_scaler, cb_dx);
+    compute_kernel_hw_startup(cb_y, cb_bcast_scaler, cb_dx);
 
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);

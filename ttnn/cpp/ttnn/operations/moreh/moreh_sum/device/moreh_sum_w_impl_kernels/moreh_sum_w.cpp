@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr uint32_t TILE_W = 32;
     constexpr bool do_mask_w = (origin_W % TILE_W) != 0;
 
-    binary_op_init_common(cb_input, cb_scaler, cb_out);
+    compute_kernel_hw_startup(cb_input, cb_scaler, cb_out);
 
     dfb_scaler_obj.wait_front(1);  // scaler tile from the reader
 

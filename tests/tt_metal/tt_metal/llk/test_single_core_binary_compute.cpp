@@ -241,7 +241,10 @@ static std::map<std::string, std::string> build_binary_defines(const SingleCoreB
             defines["LOAD_BUF2_DATA"] = "1";
             defines["ACC_TO_DEST"] = "1";
         }
-        defines["ELTWISE_OP_INIT"] = defines["ELTWISE_OP"] + "_init";
+        // The op function keeps the "_tiles" token (e.g. add_tiles), but the short init drops it
+        // (add_tiles -> add_init), so derive the init name from the op kernel with "_tiles" stripped.
+        const std::string& op_kernel = defines["ELTWISE_OP"];
+        defines["ELTWISE_OP_INIT"] = op_kernel.substr(0, op_kernel.find("_tiles")) + "_init";
         if (test_config.binary_op == "mul") {
             defines["MUL_TILES_WITH_DST_ACCUM"] = "1";
         }

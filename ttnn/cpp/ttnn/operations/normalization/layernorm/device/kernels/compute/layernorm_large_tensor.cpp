@@ -156,8 +156,7 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             cb_inb.wait_front(block.full_block_size());
             reconfig_data_format_srca(cb_in_id, cb_inb_id);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                cb_inb_id);
+            add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb_id, cb_inb_id);
             for (auto i : block.local()) {
                 binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                     cb_inb_id, i, i);
@@ -232,7 +231,7 @@ void kernel_main() {
         reconfig_data_format(cb_ex2_id, cb_eps_id);
         tile_regs_acquire();
 
-        add_tiles_init(cb_ex2_id, cb_eps_id);
+        add_init(cb_ex2_id, cb_eps_id);
         add_tiles(cb_ex2_id, cb_eps_id, 0, 0, dst0);
 
         rsqrt_tile_init<LEGACY_RSQRT>();
@@ -306,8 +305,7 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             cb_inb.wait_front(block.full_block_size());
             reconfig_data_format_srca(cb_inb_id);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                cb_inb_id);
+            add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb_id, cb_inb_id);
             for (auto i : block.local()) {
                 binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                     cb_inb_id, i, i);
@@ -333,7 +331,7 @@ void kernel_main() {
             reconfig_data_format(cb_xmm_id, cb_ex2pe_id);
             tile_regs_acquire();
 
-            mul_tiles_init(cb_xmm_id, cb_ex2pe_id);
+            mul_init(cb_xmm_id, cb_ex2pe_id);
             for (auto i : block.local()) {
                 mul_tiles(cb_xmm_id, cb_ex2pe_id, i, 0, i);
 #ifdef SFPU_OP_INIT_ACTIVATION

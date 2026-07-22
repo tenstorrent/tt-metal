@@ -109,7 +109,7 @@ void kernel_main() {
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(6) == 1;
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced_id);
+    compute_kernel_hw_startup(cb_inp, cb_inp, cb_stats_reduced_id);
 
     CircularBuffer cb_eps(cb_eps_id);
     CircularBuffer cb_stats(cb_stats_id);
@@ -139,7 +139,7 @@ void kernel_main() {
         reconfig_data_format(cb_stats_reduced_id, cb_eps_id);
         pack_reconfig_data_format(cb_recip_sqrt_var_id);
 
-        add_tiles_init(cb_stats_reduced_id, cb_eps_id);
+        add_init(cb_stats_reduced_id, cb_eps_id);
         tile_regs_acquire();
         tile_regs_wait();
         add_tiles(cb_stats_reduced_id, cb_eps_id, 1, 0, 0);

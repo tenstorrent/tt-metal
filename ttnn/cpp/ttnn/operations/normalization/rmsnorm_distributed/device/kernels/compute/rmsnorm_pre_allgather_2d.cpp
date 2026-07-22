@@ -57,7 +57,7 @@ void kernel_main() {
          */
         reconfig_data_format(cb_inp_idx, cb_inp_idx);
         pack_reconfig_data_format(cb_x2_idx);
-        mul_tiles_init(cb_inp_idx, cb_inp_idx);
+        mul_init(cb_inp_idx, cb_inp_idx);
 
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_inp.wait_front(wt + blk);  // cumulative wait
@@ -110,7 +110,7 @@ void kernel_main() {
         binary_op_init_common(cb_x2_merge_idx, cb_zero_idx, cb_out_final_idx);
         reconfig_data_format(cb_x2_merge_idx, cb_zero_idx);
         pack_reconfig_data_format(cb_out_final_idx);
-        add_tiles_init(cb_x2_merge_idx, cb_zero_idx, true);
+        add_init(cb_x2_merge_idx, cb_zero_idx, true);
 
         // Acquire registers
         ACQ();

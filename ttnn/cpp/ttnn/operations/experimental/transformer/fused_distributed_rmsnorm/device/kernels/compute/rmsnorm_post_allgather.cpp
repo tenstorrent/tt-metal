@@ -46,7 +46,7 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
     matmul_init(intermediate_cb, transformation_mat_cb);
 
-    binary_op_init_common(input_cb, input_cb, input_cb);
+    compute_kernel_hw_startup(input_cb, input_cb, input_cb);
 
     cb_wait_front(reduce_scalar_cb, 1);  // comes from the reader
     cb_wait_front(epsilon_cb, 1);        // comes from the reader
@@ -83,7 +83,7 @@ void kernel_main() {
         reconfig_data_format(reduce_result_cb, epsilon_cb);
         pack_reconfig_data_format(reduce_result_cb);
 
-        add_tiles_init(reduce_result_cb, epsilon_cb);
+        add_init(reduce_result_cb, epsilon_cb);
         tile_regs_acquire();
         add_tiles(reduce_result_cb, epsilon_cb, 0, 0, 0);
         rsqrt_tile_init<use_legacy_rsqrt>();
@@ -188,7 +188,7 @@ void kernel_main() {
                  */
                 reconfig_data_format(intermediate_cb, rope_cos_cb);
                 pack_reconfig_data_format(intermediate_cb);
-                mul_tiles_init(intermediate_cb, rope_cos_cb);
+                mul_init(intermediate_cb, rope_cos_cb);
                 cb_wait_front(rope_cos_cb, head_dim_tiles);
 
                 tile_regs_acquire();
@@ -216,7 +216,7 @@ void kernel_main() {
                  */
                 reconfig_data_format(rotated_input_cb, rope_sin_cb);
                 pack_reconfig_data_format(rotated_input_cb);
-                mul_tiles_init(rotated_input_cb, rope_sin_cb);
+                mul_init(rotated_input_cb, rope_sin_cb);
                 cb_wait_front(rope_sin_cb, head_dim_tiles);
                 cb_wait_front(rotated_input_cb, block_size);
 
@@ -245,7 +245,7 @@ void kernel_main() {
                  */
                 reconfig_data_format(intermediate_cb, rotated_input_cb);
                 pack_reconfig_data_format(output_cb);
-                add_tiles_init(intermediate_cb, rotated_input_cb);
+                add_init(intermediate_cb, rotated_input_cb);
                 cb_wait_front(intermediate_cb, block_size);
                 cb_wait_front(rotated_input_cb, block_size);
                 cb_reserve_back(output_cb, block_size);

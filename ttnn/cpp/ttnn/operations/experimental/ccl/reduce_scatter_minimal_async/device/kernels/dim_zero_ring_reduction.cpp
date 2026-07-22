@@ -20,8 +20,8 @@ void kernel_main() {
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
 
     // Initialize binary operations - use the same constants consistently
-    binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
-    add_tiles_init(input_cb_id, intermediate_cb, false);
+    compute_kernel_hw_startup(input_cb_id, intermediate_cb, output_cb);
+    add_init(input_cb_id, intermediate_cb, false);
 
     // Don't reduce on the first slice
     for (uint32_t i = 0; i < ring_size - 1; i++) {

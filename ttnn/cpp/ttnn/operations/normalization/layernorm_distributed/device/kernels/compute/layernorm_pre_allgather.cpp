@@ -57,7 +57,7 @@ void kernel_main() {
          */
         reconfig_data_format(cb_inp_id, cb_inp_id);
         pack_reconfig_data_format(cb_x2_id);
-        mul_tiles_init(cb_inp_id, cb_inp_id);
+        mul_init(cb_inp_id, cb_inp_id);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_inp.wait_front(wt + blk);  // cumulative wait
 

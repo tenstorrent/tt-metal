@@ -82,8 +82,8 @@ void kernel_main() {
         CircularBuffer cb_intermediate_slice(intermediate_slice_cb_id);
         CircularBuffer cb_compute(compute_cb_id);
 
-        binary_op_init_common(input_slice_cb_id, intermediate_slice_cb_id, compute_cb_id);
-        add_tiles_init(input_slice_cb_id, intermediate_slice_cb_id, false);
+        compute_kernel_hw_startup(input_slice_cb_id, intermediate_slice_cb_id, compute_cb_id);
+        add_init(input_slice_cb_id, intermediate_slice_cb_id, false);
 
         uint32_t tiles_read = start_tiles_read;
         uint32_t tiles_to_read = start_tiles_to_read;

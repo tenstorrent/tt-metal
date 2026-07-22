@@ -30,7 +30,7 @@ void kernel_main() {
     CircularBuffer cb_momentum_obj(cb_momentum);
     CircularBuffer cb_one_obj(cb_one);
 
-    binary_op_init_common(cb_batch_mean, cb_batch_var, cb_out0);
+    compute_kernel_hw_startup(cb_batch_mean, cb_batch_var, cb_out0);
     constexpr uint32_t onetile = 1;
 
     cb_one_obj.wait_front(1);

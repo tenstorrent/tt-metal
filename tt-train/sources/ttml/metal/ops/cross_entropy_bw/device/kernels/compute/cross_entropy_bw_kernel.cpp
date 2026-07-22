@@ -369,7 +369,7 @@ void kernel_main() {
     cb_wait_front(cb_reduction_scaler, onetile);
 
     init_sfpu(cb_input, cb_output);
-    binary_op_init_common(cb_input, cb_input, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_input, cb_output);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         find_max_value_in_row();  // find max value in each row

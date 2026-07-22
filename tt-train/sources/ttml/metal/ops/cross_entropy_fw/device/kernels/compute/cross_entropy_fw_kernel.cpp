@@ -346,7 +346,7 @@ void kernel_main() {
     cb_wait_front(cb_scaler, onetile);
 
     init_sfpu(cb_input, cb_output);
-    binary_op_init_common(cb_input, cb_target_logits, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_target_logits, cb_output);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         find_max_value_in_row();  // find max value in each row
@@ -370,7 +370,7 @@ void kernel_main() {
         negative_tile(result_register);
 
         reconfig_data_format(cb_max_value_after_reduction, cb_exp_sum_after_reduction);
-        add_tiles_init(cb_max_value_after_reduction, cb_exp_sum_after_reduction, /* acc_to_dest */ true);
+        add_init(cb_max_value_after_reduction, cb_exp_sum_after_reduction, /* acc_to_dest */ true);
         add_tiles(
             cb_max_value_after_reduction,
             cb_exp_sum_after_reduction,

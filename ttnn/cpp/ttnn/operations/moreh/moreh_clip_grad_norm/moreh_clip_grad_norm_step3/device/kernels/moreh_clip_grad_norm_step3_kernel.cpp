@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
-    binary_op_init_common(cb_x, cb_clip_coef_clamped, cb_y);
+    compute_kernel_hw_startup(cb_x, cb_clip_coef_clamped, cb_y);
 
     dfb_clip_coef_clamped_obj.wait_front(onetile);  // comes from the reader
 

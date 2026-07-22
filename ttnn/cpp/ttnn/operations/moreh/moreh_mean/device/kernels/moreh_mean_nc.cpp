@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t first_tile = 0;
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
     dfb_in1_obj.wait_front(onetile);
     dfb_scalar_obj.wait_front(1);  // scalar tile from the reader

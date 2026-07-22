@@ -256,7 +256,7 @@ void add_bias_and_addcmul_block(
     } else {
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
 #ifndef TERNARY_B_IS_FLOAT32
-        mul_tiles_init(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
+        mul_init(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
 #endif
         binop_with_scalar_tile_init();
         reconfig_data_format(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
@@ -302,7 +302,7 @@ void add_bias_and_addcmul_block(
 
     intermediate_cb.wait_front(out_block_num_tiles);
 
-    add_tiles_init(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id());
+    add_init(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id());
     reconfig_data_format(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id());
     pack_reconfig_data_format(out_cb.get_cb_id());
 

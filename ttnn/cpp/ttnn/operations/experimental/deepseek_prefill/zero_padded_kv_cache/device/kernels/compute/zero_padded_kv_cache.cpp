@@ -26,8 +26,8 @@ void kernel_main() {
     CircularBuffer mask(mask_cb);
     CircularBuffer out(out_cb);
 
-    binary_op_init_common(src_cb, mask_cb, out_cb);
-    mul_tiles_init(src_cb, mask_cb);
+    compute_kernel_hw_startup(src_cb, mask_cb, out_cb);
+    mul_init(src_cb, mask_cb);
 
     mask.wait_front(1);
     src.wait_front(w.Wt);

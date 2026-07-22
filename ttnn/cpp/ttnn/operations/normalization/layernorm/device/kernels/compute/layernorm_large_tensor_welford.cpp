@@ -89,7 +89,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     for (auto block : generic::blocks(Wt, blk)) {
         // Fused pre-add
         reconfig_data_format(cb_in, cb_inb);
-        add_tiles_init(cb_in, cb_inb);
+        add_init(cb_in, cb_inb);
         cb_in_obj.wait_front(block.full_block_size());
         cb_inb_obj.wait_front(block.full_block_size());
         tile_regs_acquire();
@@ -374,7 +374,7 @@ void kernel_main() {
     // that will be done
     if constexpr (fuse_pre_add) {
         // Init for x = in + b
-        binary_op_init_common(cb_in, cb_inb, cb_interm_pre_add);
+        compute_kernel_hw_startup(cb_in, cb_inb, cb_interm_pre_add);
     } else {
         // Init for transpose
         constexpr auto first_out_cb = cb_ex;
@@ -467,7 +467,7 @@ void kernel_main() {
         // Calculate 1/(√(Var(X) + ε))
         // =====================================
         reconfig_data_format(cb_ex2, cb_eps);
-        add_tiles_init(cb_ex2, cb_eps);
+        add_init(cb_ex2, cb_eps);
 
         cb_ex2_obj.wait_front(onetile);
         tile_regs_acquire();
@@ -541,8 +541,7 @@ void kernel_main() {
             if constexpr (fuse_pre_add) {
                 // Fuse in = in + b
                 reconfig_data_format_srca(cb_in, cb_inb);
-                binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    cb_inb);
+                add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, cb_inb);
                 cb_inb_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {
                     binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
@@ -605,8 +604,7 @@ void kernel_main() {
                 tile_regs_commit();
             } else {
                 reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
-                binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    cb_ex2pe);
+                mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, cb_ex2pe);
                 for (auto i : block.local()) {
                     binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                         cb_ex2pe, 0, i);

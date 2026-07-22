@@ -21,7 +21,7 @@ void kernel_main() {
     CircularBuffer cb_in0_obj(cb_in0);
     CircularBuffer cb_out0_obj(cb_out0);
 
-    binary_op_init_common(cb_in0, cb_in0, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_in0, cb_out0);
     pack_reconfig_data_format(cb_out0);
 
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
@@ -35,7 +35,7 @@ void kernel_main() {
         copy_tile(cb_in0, 0, dst0);
         cb_in0_obj.pop_front(onetile);
 
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_in0);
+        mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_in0, cb_in0);
         for (uint32_t j = 1; j < num_input_tiles; ++j) {
             cb_in0_obj.wait_front(onetile);
             binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(

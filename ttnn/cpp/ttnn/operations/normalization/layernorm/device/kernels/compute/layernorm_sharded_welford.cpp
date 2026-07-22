@@ -299,7 +299,7 @@ void kernel_main() {
     // Op initialization
     // ---------------------------------------------------------------------------
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(cb_in0, cb_in1, cb_in_id);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_in_id);
 #else
     unary_op_init_common(cb_in_id, cb_ex_partial_id);
 #endif
@@ -309,7 +309,7 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
 #ifdef FUSE_PRE_ADD
     reconfig_data_format_srcb(cb_in0, cb_in1);
-    add_tiles_init(cb_in0, cb_in1);
+    add_init(cb_in0, cb_in1);
     cb_in.reserve_back(num_tiles_per_block);
     if constexpr (welford_fp32_alias) {
         // Must be done in the compute kernel: on the fused path compute is the producer of cb_in_id

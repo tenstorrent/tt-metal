@@ -468,7 +468,7 @@ void kernel_main() {
                 if constexpr (row_broadcast_bias) {
                     add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
                 } else {
-                    add_tiles_init(mm_partials_cb_id, bias_cb_id);
+                    add_init(mm_partials_cb_id, bias_cb_id);
                 }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the CB for reuse across bh/batch iterations.

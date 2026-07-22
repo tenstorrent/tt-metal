@@ -26,7 +26,7 @@ ALWI void one_row(CircularBuffer& cb_in0, CircularBuffer& cb_res, CircularBuffer
     }
     reconfig_data_format(cb_in0.get_cb_id(), cb_res.get_cb_id());
     pack_reconfig_data_format(cb_inp.get_cb_id());
-    add_tiles_init(cb_in0.get_cb_id(), cb_res.get_cb_id());
+    add_init(cb_in0.get_cb_id(), cb_res.get_cb_id());
     for (uint32_t wt = 0; wt < Wt; wt += blk) {
         cb_in0.wait_front(blk);
         cb_res.wait_front(blk);

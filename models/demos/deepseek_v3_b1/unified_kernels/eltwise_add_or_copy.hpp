@@ -122,7 +122,7 @@ struct EltwiseAddOrCopy {
                 cb_wait_front(cb_in0_wait, cb_in0_wait_tiles);
                 reconfig_data_format<false, true>(cb_in0, cb_in1);
                 pack_reconfig_data_format<true>(cb_out);
-                add_tiles_init(cb_in0, cb_in1);
+                add_init(cb_in0, cb_in1);
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < num_tiles; i++) {
                     add_tiles(cb_in0, cb_in1, i, i, i);

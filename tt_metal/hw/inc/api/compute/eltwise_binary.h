@@ -314,7 +314,7 @@ ALWI void binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uin
 // clang-format on
 [[deprecated(
     "Use compute_kernel_hw_startup(icb0, icb1, ocb) once at kernel start, then add_init/sub_init/mul_init(icb0, "
-    "icb1).")]] ALWI void
+    "icb1). This will be removed after 31-08-2026.")]] ALWI void
 binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure(icb0, icb1, ocb, call_line);
@@ -351,7 +351,7 @@ binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-[[deprecated("Renamed to mul_init().")]] ALWI void mul_tiles_init(
+[[deprecated("Renamed to mul_init(). This will be removed after 31-08-2026.")]] ALWI void mul_tiles_init(
     uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     // acc_to_dest is unused for WH/BH and accumulation is default behaviour.
     // For back compatibility with Quasar, acc_to_dest=true in this API for all ops.
@@ -369,7 +369,7 @@ binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-[[deprecated("Renamed to mul_init().")]] ALWI void mul_tiles_init(
+[[deprecated("Renamed to mul_init(). This will be removed after 31-08-2026.")]] ALWI void mul_tiles_init(
     uint32_t icb0, uint32_t icb1, uint32_t acc_to_dest, uint32_t call_line = __builtin_LINE()) {
     mul_init(icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
 }
@@ -385,7 +385,7 @@ binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_
  * | acc_to_dest    | If true, operation = A + B + dst_tile_idx of add_tiles        | bool     | 0,1         | False    |
  */
 // clang-format on
-[[deprecated("Renamed to add_init().")]] ALWI void add_tiles_init(
+[[deprecated("Renamed to add_init(). This will be removed after 31-08-2026.")]] ALWI void add_tiles_init(
     uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
     add_init(icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
 }
@@ -401,7 +401,7 @@ binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_
  * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles        | bool     | 0,1         | False    |
  */
 // clang-format on
-[[deprecated("Renamed to sub_init().")]] ALWI void sub_tiles_init(
+[[deprecated("Renamed to sub_init(). This will be removed after 31-08-2026.")]] ALWI void sub_tiles_init(
     uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
     sub_init(icb0, icb1, acc_to_dest /* acc_to_dest */, call_line);
 }
@@ -421,7 +421,7 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 [[deprecated(
     "Use add_init/sub_init/mul_init with the binary_reuse_dest template param, e.g. "
-    "add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, in_cb).")]] ALWI void
+    "add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, in_cb). This will be removed after 31-08-2026.")]] ALWI void
 binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
     // This is the single-operand dest-reuse init path that the per-op *_init<binary_reuse_dest != NONE>
     // functions now fold in. Kept as a shim so existing callers (and the degenerate binary_reuse_dest

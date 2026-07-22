@@ -18,8 +18,8 @@ void kernel_main() {
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
-    binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
-    add_tiles_init(input_cb_id, intermediate_cb, false);
+    compute_kernel_hw_startup(input_cb_id, intermediate_cb, output_cb);
+    add_init(input_cb_id, intermediate_cb, false);
 
     for (uint32_t i = 0; i < num_total_reduction_steps; i++) {  // Don't reduce on the first slice
         for (uint32_t b = 0; b < slice_B; ++b) {

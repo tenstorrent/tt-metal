@@ -23,7 +23,7 @@ void kernel_main() {
     constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(9) == 1;
     constexpr bool is_groupnorm = get_compile_time_arg_val(10) == 1;
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
     constexpr auto cb_x = tt::CBIndex::c_0;
     DataflowBuffer dfb_x_obj(cb_x);  // input

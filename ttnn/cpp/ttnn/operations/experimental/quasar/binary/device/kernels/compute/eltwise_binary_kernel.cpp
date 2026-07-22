@@ -30,7 +30,7 @@ void kernel_main() {
     DataflowBuffer cb_inp1 = cb_in1;
 #endif
 
-    binary_op_init_common(cb_inp0.get_id(), cb_inp1.get_id(), cb_out0.get_id());
+    compute_kernel_hw_startup(cb_inp0.get_id(), cb_inp1.get_id(), cb_out0.get_id());
 
 #if not PRE_SCALE
     binary_tiles_init<false, ELTWISE_OP_TYPE>(cb_inp0.get_id(), cb_inp1.get_id());

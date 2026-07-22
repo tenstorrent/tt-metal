@@ -30,7 +30,7 @@ void kernel_main() {
     constexpr auto cb_tmp = tt::CBIndex::c_28;
     DataflowBuffer dfb_tmp_obj(cb_tmp);
 
-    binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_max_scaler, cb_out0);
 
     constexpr int dst0 = 0;
     constexpr int dst1 = 1;

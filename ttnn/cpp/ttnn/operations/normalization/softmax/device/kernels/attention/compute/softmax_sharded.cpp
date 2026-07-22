@@ -72,7 +72,7 @@ void kernel_main() {
     constexpr uint32_t subblock_w = get_compile_time_arg_val(2);
     constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(3);
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_6);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_6);
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_max_scaler = tt::CBIndex::c_1;
@@ -144,7 +144,7 @@ void kernel_main() {
         index_subblock_w_offset = 0;
 
 #ifdef CAUSAL_MASK
-        add_tiles_init(cb_scale_mask, cb_fused_attn);
+        add_init(cb_scale_mask, cb_fused_attn);
 #else
         add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
 #endif

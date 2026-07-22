@@ -71,7 +71,7 @@ void kernel_main() {
     constexpr uint32_t HtWt = Ht * Wt;
 
     constexpr auto cb_out_init = gamma_grad_has_value ? cb_dgamma : cb_dbeta;
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, cb_out_init);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, cb_out_init);
 
     dfb_scaler_obj.wait_front(onetile);  // comes from the reader
 

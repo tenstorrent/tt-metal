@@ -32,7 +32,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_ctrl = get_compile_time_arg_val(7);
     constexpr uint32_t tile_row_blocks_per_chunk = 1U;
 
-    binary_op_init_common(cb_id_src, cb_id_w, cb_id_combined);
+    compute_kernel_hw_startup(cb_id_src, cb_id_w, cb_id_combined);
 
     // NCRISC reader publishes active_steps * num_chunks after reading offsets.
     // Each iteration below processes one tiles_per_chunk chunk.
@@ -63,8 +63,7 @@ void kernel_main() {
             tile_regs_acquire();
             mul_bcast_cols_init_short(cb_id_src, cb_id_w);
             mul_tiles_bcast_cols(cb_id_src, cb_id_w, i, 0U, 0U);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                cb_id_existing_tile);
+            add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_id_existing_tile, cb_id_existing_tile);
             binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
                 cb_id_existing_tile, i, 0U);
             tile_regs_commit();

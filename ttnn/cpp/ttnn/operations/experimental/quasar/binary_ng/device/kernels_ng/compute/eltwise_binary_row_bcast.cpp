@@ -42,7 +42,7 @@ void kernel_main() {
     DataflowBuffer exp_cb_post_lhs(cb_post_lhs);
     DataflowBuffer exp_cb_post_rhs(cb_post_rhs);
 
-    binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
+    compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif

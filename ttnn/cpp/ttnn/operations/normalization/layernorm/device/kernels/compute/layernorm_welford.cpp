@@ -94,7 +94,7 @@ void kernel_main() {
     cb_eps_obj.wait_front(1);  // comes from the reader
 
     if constexpr (fuse_pre_add) {
-        binary_op_init_common(cb_in, cb_inb, cb_x);
+        compute_kernel_hw_startup(cb_in, cb_inb, cb_x);
         pack_reconfig_data_format(cb_x);
     } else {
         compute_kernel_hw_startup(cb_in, cb_ex);
@@ -112,7 +112,7 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (fuse_pre_add) {
             // x = in + b
-            add_tiles_init(cb_in, cb_inb);
+            add_init(cb_in, cb_inb);
             reconfig_data_format(cb_in, cb_inb);
             pack_reconfig_data_format(cb_x);
             for (auto block : generic::blocks(Wt, blk)) {
@@ -315,7 +315,7 @@ void kernel_main() {
         }
         cb_ex2_obj.wait_front(onetile);  // should have 1 tile
         tile_regs_acquire();
-        add_tiles_init(cb_ex2, cb_eps);
+        add_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
         rsqrt_tile_init();
         rsqrt_tile(dst0);

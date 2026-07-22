@@ -98,7 +98,7 @@ void kernel_main() {
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in0, cb_in1, cb_in_id);
-    add_tiles_init(cb_in0, cb_in1);
+    add_init(cb_in0, cb_in1);
     cb_in.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -149,7 +149,7 @@ void kernel_main() {
     // width only. cb_col_mask_packed is the writer-generated mask (1.0 valid / 0.0 padding),
     // waited on above and read by tile index.
     reconfig_data_format(cb_in_id, cb_col_mask_packed_id);
-    mul_tiles_init(cb_in_id, cb_col_mask_packed_id);
+    mul_init(cb_in_id, cb_col_mask_packed_id);
     cb_x2.reserve_back(num_tiles_per_block);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
@@ -199,7 +199,7 @@ void kernel_main() {
 #endif  // not RMSNORM
 
     // X^2
-    mul_tiles_init(cb_in0, cb_in0);
+    mul_init(cb_in0, cb_in0);
     index_h_offset = 0;
     cb_x2.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {

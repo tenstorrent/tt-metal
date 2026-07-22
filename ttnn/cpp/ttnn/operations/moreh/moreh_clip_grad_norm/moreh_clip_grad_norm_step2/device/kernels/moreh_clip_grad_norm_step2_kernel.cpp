@@ -65,7 +65,7 @@ void kernel_main() {
             dfb_x_obj.wait_front(onetile);
             dfb_x_obj.reserve_back(onetile);
 
-            add_tiles_init(cb_input, cb_x);
+            add_init(cb_input, cb_x);
             add_tiles(cb_input, cb_x, 0, 0, dst0);
             dfb_x_obj.pop_front(onetile);
             dfb_input_obj.pop_front(onetile);

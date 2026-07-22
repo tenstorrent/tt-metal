@@ -64,7 +64,7 @@ void kernel_main() {
  * X + Y
  */
 #ifdef FUSE_PRE_ADD
-        add_tiles_init(cb_in, cb_inb);
+        add_init(cb_in, cb_inb);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             tile_regs_acquire();
             // DPRINT_UNPACK("Waiting on cb_x\n");
@@ -138,7 +138,7 @@ void kernel_main() {
         /* (x - E[x])^2
          * compute temp = xmm*xmm = (x-E[x])^2
          */
-        mul_tiles_init(cb_xmm, cb_xmm);
+        mul_init(cb_xmm, cb_xmm);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_xmm, wt + blk);  // cumulative wait
             cb_reserve_back(cb_xmm2, blk);    // can probably use less space for this if we block
@@ -188,7 +188,7 @@ void kernel_main() {
          * add epsilon E[(x-E[x])^2]+eps
          */
         tile_regs_acquire();
-        add_tiles_init(cb_ex2, cb_eps);
+        add_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
         cb_reserve_back(cb_ex2pe, 1);  // 1

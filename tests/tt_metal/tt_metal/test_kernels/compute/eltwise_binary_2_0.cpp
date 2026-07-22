@@ -20,7 +20,7 @@ void kernel_main() {
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_in2(dfb::in2);
     DataflowBuffer dfb_out(dfb::out);
-    binary_op_init_common(dfb::in0, dfb::in1, dfb::out);
+    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
 #if not defined ELTWISE_DEST_REUSE_TYPE
 #ifdef FULL_INIT
     binary_tiles_init<true, ELTWISE_OP_TYPE>(dfb::in0, dfb::in1);
@@ -58,7 +58,15 @@ void kernel_main() {
 #endif
 
 #ifdef ELTWISE_DEST_REUSE_TYPE
-        binary_dest_reuse_tiles_init<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(dfb::in0);
+        // Dest-reuse init is folded into the per-op inits via the binary_reuse_dest template param;
+        // dispatch on the compile-time op type since there is no generic binary_init.
+        if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWADD) {
+            add_init<ELTWISE_DEST_REUSE_TYPE>(dfb::in0, dfb::in0);
+        } else if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWSUB) {
+            sub_init<ELTWISE_DEST_REUSE_TYPE>(dfb::in0, dfb::in0);
+        } else {
+            mul_init<ELTWISE_DEST_REUSE_TYPE>(dfb::in0, dfb::in0);
+        }
 #endif
 
         for (uint32_t i = 0; i < per_core_block_size; ++i) {

@@ -26,11 +26,11 @@ void kernel_main() {
     constexpr uint32_t dst_reg_idx = 0;
 
     // Initialize the Tensix Engine to perform an elementwise binary operation using circular buffers c_in0, c_in1 and c_out0.
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
     // Initialize FPU for elementwise add operation specifically. This function is called any time we want to switch
     // operation to a different elementwise operation. Since we are only adding tiles, this function is called
     // only once before the loop.
-    add_tiles_init(cb_in0, cb_in1);
+    add_init(cb_in0, cb_in1);
 
     // Loop over all the tiles and perform the computation.
     // it's important to keep in mind that compute kernel runs on three different RISC-V processors.

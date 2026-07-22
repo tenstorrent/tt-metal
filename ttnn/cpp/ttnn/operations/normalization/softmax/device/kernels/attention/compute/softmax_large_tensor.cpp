@@ -113,7 +113,7 @@ void apply_fused_attn_mask(
     reconfig_data_format(cb_in, cb_fused_attn_mask);
     pack_reconfig_data_format(cb_out);
 #ifdef CAUSAL_MASK
-    add_tiles_init(cb_in, cb_fused_attn_mask);
+    add_init(cb_in, cb_fused_attn_mask);
 #else
     add_bcast_rows_init_short(cb_in, cb_fused_attn_mask);
 #endif
@@ -141,7 +141,7 @@ void apply_fused_attn_mask(
         if (do_mask && cur_blk == cb_length_t - blk) {
             // add mask to the last register to pad with -inf
             reconfig_data_format_srca(cb_mask_padded);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_mask_padded);
+            add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_mask_padded, cb_mask_padded);
             cb_mask_padded_obj.wait_front(1);
             binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                 cb_mask_padded, 0 /*in_tile_index*/, blk - 1);
@@ -175,7 +175,7 @@ void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t b
         }
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             if (cur_dst == blk - 1 && cur_blk == cb_length_t - blk) {
-                add_tiles_init(cb_in, cb_mask_padded);
+                add_init(cb_in, cb_mask_padded);
                 cb_mask_padded_obj.wait_front(1);
                 add_tiles(cb_in, cb_mask_padded, cur_dst, 0, cur_dst);
             } else {
@@ -347,7 +347,7 @@ void kernel_main() {
     CircularBuffer cb_fused_scale_obj(cb_fused_scale);
     CircularBuffer cb_recip_obj(cb_recip);
     CircularBuffer cb_mask_padded_obj(cb_mask_padded);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
     init_sfpu(cb_mask_padded, cb_mask_padded);
 
     cb_max_scaler_obj.wait_front(1);  // comes from the reader

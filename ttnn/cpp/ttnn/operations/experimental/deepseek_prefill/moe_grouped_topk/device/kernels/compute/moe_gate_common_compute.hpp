@@ -79,7 +79,7 @@ void add_bias(
     CircularBuffer cb_in_bias(cb_in_bias_id);
     CircularBuffer cb_biased_scores(cb_biased_scores_id);
     // Perform add bias on sigmoid scores
-    add_tiles_init(cb_sigmoid_scores_id, cb_in_bias_id, false);
+    add_init(cb_sigmoid_scores_id, cb_in_bias_id, false);
     cb_sigmoid_scores.wait_front(width_tiles);
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_in_bias.wait_front(1);
@@ -169,8 +169,8 @@ void sum_top_experts_per_group(
     CircularBuffer cb_top_experts_per_group(cb_top_experts_per_group_id);
     CircularBuffer cb_group_summed_scores(cb_group_summed_scores_id);
     // sum the top experts_per_group rows for each group
-    binary_op_init_common(cb_top_experts_per_group_id, cb_top_experts_per_group_id, cb_group_summed_scores_id);
-    add_tiles_init(cb_top_experts_per_group_id, cb_top_experts_per_group_id, true);
+    compute_kernel_hw_startup(cb_top_experts_per_group_id, cb_top_experts_per_group_id, cb_group_summed_scores_id);
+    add_init(cb_top_experts_per_group_id, cb_top_experts_per_group_id, true);
     cb_top_experts_per_group.wait_front(summed_experts_per_group);
 
     cb_group_summed_scores.reserve_back(1);

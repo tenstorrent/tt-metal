@@ -73,7 +73,7 @@ void kernel_main() {
 
 // If input b is not repeat_interleaved, then no need to transpose, bcast row
 #ifndef REPEAT_INTERLEAVE_IN1
-            mul_tiles_init(cb_id_in0, cb_id_in1);
+            mul_init(cb_id_in0, cb_id_in1);
             reconfig_data_format_srca(cb_id_out, cb_id_in0);
             pack_reconfig_data_format(cb_in0_transposed, cb_id_out);
             mul_tiles(cb_id_in0, cb_id_in1, 0, 0, 0);

@@ -37,7 +37,7 @@ void kernel_main() {
     trans_mat_cb.wait_front(onetile);
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb_id, trans_mat_cb_id, rotated_in_interm_cb_id);
     matmul_init(in_cb_id, trans_mat_cb_id);
-    binary_op_init_common(rotated_in_interm_cb_id, sin_cb_id, sin_interm_cb_id);
+    compute_kernel_hw_startup(rotated_in_interm_cb_id, sin_cb_id, sin_interm_cb_id);
 
     for (uint32_t batch_idx = 0; batch_idx < batch_per_core; ++batch_idx) {
         sin_cb.reserve_back(onetile);
@@ -97,7 +97,7 @@ void kernel_main() {
             sin_interm_cb.wait_front(onetile);
             reconfig_data_format(cos_interm_cb_id, sin_interm_cb_id);
             pack_reconfig_data_format(out_cb_id);
-            add_tiles_init(cos_interm_cb_id, sin_interm_cb_id);
+            add_init(cos_interm_cb_id, sin_interm_cb_id);
             tile_regs_acquire();
             add_tiles(cos_interm_cb_id, sin_interm_cb_id, 0, 0, 0);
             tile_regs_commit();

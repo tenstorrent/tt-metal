@@ -27,6 +27,11 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
 
+    // This sentinel deliberately exercises the deprecated eltwise-binary inits to verify their
+    // reconfig-tracking behaviour for as long as the shims exist. Suppress the deprecation warning
+    // locally so it does not clobber the build logs (the shims are tracked in .github/deprecations.json).
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_NOTHING_CHANGED));
     binary_op_init_common(cb_in1, cb_in1, cb_out0);
@@ -40,6 +45,7 @@ void kernel_main() {
 
     binary_dest_reuse_tiles_init(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
+#pragma GCC diagnostic pop
 
     state_configure<Operand::PACK>(cb_out1, __builtin_LINE());
     matmul_init(cb_in0, cb_in1);

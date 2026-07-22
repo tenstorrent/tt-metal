@@ -11,7 +11,7 @@
 void kernel_main() {
     constexpr int onetile = 1;
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
     DataflowBuffer dfb_c0(tt::CBIndex::c_0);
     DataflowBuffer dfb_c1(tt::CBIndex::c_1);
@@ -25,7 +25,7 @@ void kernel_main() {
         dfb_c1.wait_front(onetile);
 
         tile_regs_acquire();
-        mul_tiles_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
+        mul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
         mul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
         tile_regs_commit();
 

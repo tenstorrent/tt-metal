@@ -88,14 +88,14 @@ FORCE_INLINE void cumsum_cube_axis_2(
 
     bool enable_reload = false;
 
-    binary_op_init_common(cb_input, cb_acc, cb_cumsum_stage_0);
+    compute_kernel_hw_startup(cb_input, cb_acc, cb_cumsum_stage_0);
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         WriteCBGuard cumsum_stage_cb_write_guard{cb_cumsum_stage_0, ONE_TILE};
         tile_regs_acquire();
         const uint32_t cb_op = enable_reload ? cb_acc : cb_start;
         input_cb.wait_front(ONE_TILE);
 
-        add_tiles_init(cb_input, cb_op);
+        add_init(cb_input, cb_op);
         add_tiles(cb_input, cb_op, FIRST_TILE, FIRST_TILE, WORKING_REG);
 
         input_cb.pop_front(ONE_TILE);
@@ -173,7 +173,7 @@ FORCE_INLINE void propagate_tile_into_cube(
         WriteCBGuard cb_cumsum_stage_1_guard{cb_cumsum_stage_b, ONE_TILE};
         tile_regs_acquire();
 
-        add_tiles_init(cb_axis_2_buffer, cb_cumsum_stage_a);
+        add_init(cb_axis_2_buffer, cb_cumsum_stage_a);
         add_tiles(cb_axis_2_buffer, cb_cumsum_stage_a, FIRST_TILE, FIRST_TILE, WORKING_REG);
 
         tile_regs_commit();

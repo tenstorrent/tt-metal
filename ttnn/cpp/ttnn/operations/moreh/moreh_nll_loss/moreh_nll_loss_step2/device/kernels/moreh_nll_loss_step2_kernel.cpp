@@ -31,7 +31,7 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(cb_tmp_weight, cb_tmp_input, cb_output);
+    compute_kernel_hw_startup(cb_tmp_weight, cb_tmp_input, cb_output);
 
 #if defined(DIVISOR)
     dfb_divisor_obj.wait_front(onetile);

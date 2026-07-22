@@ -96,7 +96,7 @@ struct GatherReduce {
         reconfig_data_format<false, true>(in_cb, in_cb);
         pack_reconfig_data_format<true>(out_cb);
         pack_block_contiguous_init(out_cb);
-        add_tiles_init(in_cb, in_cb);
+        add_init(in_cb, in_cb);
         cb_wait_front(in_cb, 2 * num_tiles);
         {
             DeviceZoneScopedN("add-tiles");

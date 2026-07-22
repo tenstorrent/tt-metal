@@ -307,7 +307,7 @@ void kernel_main() {
         if constexpr (row_broadcast_bias) {
             add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
         } else {
-            add_tiles_init(mm_partials_cb_id, bias_cb_id);
+            add_init(mm_partials_cb_id, bias_cb_id);
         }
         // reconfigure unpacker df for src B
         cb_wait_front(bias_cb_id, in1_per_core_w);

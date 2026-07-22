@@ -255,7 +255,7 @@ void kernel_main() {
     cb_wait_front(cb_bias, onetile);
 
     init_sfpu(cb_input_pass_1, cb_output);
-    binary_op_init_common(cb_input_pass_1, cb_input_pass_1, cb_output);
+    compute_kernel_hw_startup(cb_input_pass_1, cb_input_pass_1, cb_output);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         (void)row;

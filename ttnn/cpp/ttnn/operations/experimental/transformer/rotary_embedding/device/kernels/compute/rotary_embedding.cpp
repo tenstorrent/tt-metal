@@ -25,7 +25,7 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     mul_bcast_rows_init_short(in0_cb, in1_cb);
     mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
 #else
-    mul_tiles_init(in0_cb, in1_cb);
+    mul_init(in0_cb, in1_cb);
     mul_tiles(in0_cb, in1_cb, 0, 0, 0);
 #endif
     tile_regs_commit();
@@ -166,7 +166,7 @@ void kernel_main() {
             pack_reconfig_data_format(cos_interm_cb, out_cb);
 
             tile_regs_acquire();
-            add_tiles_init(cos_interm_cb, sin_interm_cb);
+            add_init(cos_interm_cb, sin_interm_cb);
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
             tile_regs_commit();
 

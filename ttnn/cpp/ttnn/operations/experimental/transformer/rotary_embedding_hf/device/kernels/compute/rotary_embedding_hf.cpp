@@ -20,7 +20,7 @@ ALWI void MUL_TILES(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, 
     out_cb.reserve_back(num_tiles);
 
     tile_regs_acquire();
-    mul_tiles_init(in0_cb_id, in1_cb_id);
+    mul_init(in0_cb_id, in1_cb_id);
     mul_tiles(in0_cb_id, in1_cb_id, 0, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
@@ -59,7 +59,7 @@ void kernel_main() {
 
     scalar_cb.wait_front(onetile);
 
-    binary_op_init_common(rotated_in_cb_id, scalar_cb_id, rotated_in_interm_cb_id);
+    compute_kernel_hw_startup(rotated_in_cb_id, scalar_cb_id, rotated_in_interm_cb_id);
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         for (uint32_t j = 0; j < Wt; ++j) {
@@ -100,7 +100,7 @@ void kernel_main() {
             reconfig_data_format_srca(rotated_in_cb_id, cos_interm_cb_id);
             pack_reconfig_data_format(cos_interm_cb_id, out_cb_id);
             tile_regs_acquire();
-            add_tiles_init(cos_interm_cb_id, sin_interm_cb_id);
+            add_init(cos_interm_cb_id, sin_interm_cb_id);
             add_tiles(cos_interm_cb_id, sin_interm_cb_id, 0, 0, 0);
             tile_regs_commit();
             tile_regs_wait();

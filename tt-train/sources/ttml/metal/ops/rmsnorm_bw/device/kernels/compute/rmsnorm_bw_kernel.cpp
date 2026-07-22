@@ -121,7 +121,7 @@ inline void compute_dL_dgamma_components(
 
     // Compute normalized_a = a / rms_a (using pre-computed reciprocal)
     reconfig_data_format(cb_input_idx, cb_recip_rms_a_bcasted_idx);
-    mul_tiles_init(cb_input_idx, cb_recip_rms_a_bcasted_idx);
+    mul_init(cb_input_idx, cb_recip_rms_a_bcasted_idx);
     mul_tiles(
         cb_input_idx,
         cb_recip_rms_a_bcasted_idx,
@@ -319,7 +319,7 @@ void kernel_main() {
     cb_wait_front(cb_zero_idx, onetile);
 
     init_sfpu(cb_input_idx, cb_dL_da_idx);
-    binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_dL_da_idx);
+    compute_kernel_hw_startup(cb_input_idx, cb_gamma_idx, cb_dL_da_idx);
     reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         cb_wait_front(cb_rms_a_idx, onetile);

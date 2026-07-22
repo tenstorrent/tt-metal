@@ -566,7 +566,7 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
     const uint32_t global_row_base = q_subblock * tiles_per_row;
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
 
     CircularBuffer(in0_cb).wait_front((q_subblock + 1) * tiles_per_row);
     CircularBuffer(in1_cb).wait_front((q_subblock + 1) * tiles_per_row);

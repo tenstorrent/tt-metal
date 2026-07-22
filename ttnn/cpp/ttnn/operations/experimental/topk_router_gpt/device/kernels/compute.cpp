@@ -150,8 +150,7 @@ void kernel_main() {
     // =====================================================================
     cb_partial_recv.wait_front(2);
 
-    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-        cb_partial_recv_id);
+    add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_partial_recv_id, cb_partial_recv_id);
     binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb_partial_recv_id, 0, 0);
     binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
@@ -243,8 +242,7 @@ void kernel_main() {
     transpose_init(cb_intermed_val_id);
     transpose_tile(cb_intermed_val_id, 0, 0);
 
-    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-        cb_softmax_mask_id);
+    add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_softmax_mask_id, cb_softmax_mask_id);
     binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb_softmax_mask_id, 0, 0);
 

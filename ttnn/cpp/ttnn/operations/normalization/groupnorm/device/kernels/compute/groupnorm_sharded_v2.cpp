@@ -204,7 +204,7 @@ void kernel_main() {
             // mask input
             index_h_offset = index_b_offset + index_g_offset;
             reconfig_data_format_srcb(cb_in0_id, cb_input_mask_id);
-            mul_tiles_init(cb_in0_id, cb_input_mask_id);
+            mul_init(cb_in0_id, cb_input_mask_id);
             cb_x.reserve_back(block_hw);
             cb_input_mask.wait_front(block_w);
             for (uint32_t i = 0; i < block_h; ++i) {
@@ -241,7 +241,7 @@ void kernel_main() {
 
             // Partial-E[x]
             index_h_offset = 0;
-            mul_tiles_init(cb_x_id, cb_ones_id);
+            mul_init(cb_x_id, cb_ones_id);
             cb_ex2pe.reserve_back(1);
             tile_regs_acquire();
             cb_x.wait_front(block_hw);
@@ -320,7 +320,7 @@ void kernel_main() {
             cb_ex_global.pop_front(1);
 
             reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
-            mul_tiles_init(cb_x_id, cb_input_mask_id);
+            mul_init(cb_x_id, cb_input_mask_id);
             cb_x.wait_front(block_hw);
 
             for (uint32_t i = 0; i < block_h; i++) {
@@ -350,7 +350,7 @@ void kernel_main() {
 
             // (x - E[x])^2
             index_h_offset = 0;
-            mul_tiles_init(cb_x_id, cb_x_id);
+            mul_init(cb_x_id, cb_x_id);
             cb_x.wait_front(block_hw);
 
             tile_regs_acquire();
@@ -406,7 +406,7 @@ void kernel_main() {
 
             // (Var + eps)
             tile_regs_acquire();
-            add_tiles_init(cb_ex_global_id, cb_eps_id);
+            add_init(cb_ex_global_id, cb_eps_id);
             add_tiles(cb_ex_global_id, cb_eps_id, 0, 0, dst0);
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
@@ -456,7 +456,7 @@ void kernel_main() {
                     if (copy_or_add == true) {
                         copy_tile_init(cb_x_id);
                     } else {
-                        add_tiles_init(cb_out_id, cb_x_id);
+                        add_init(cb_out_id, cb_x_id);
                     }
 
                     for (uint32_t i = 0; i < block_h; ++i) {
@@ -500,7 +500,7 @@ void kernel_main() {
                 // zero out values in cb_tilized_in input by multiplying with negative mask for the current group
                 cb_in_negative_mask.wait_front(block_w);
                 reconfig_data_format_srcb(cb_x_id, cb_in_negative_mask_id);
-                mul_tiles_init(cb_in_id, cb_in_negative_mask_id);
+                mul_init(cb_in_id, cb_in_negative_mask_id);
 
                 for (uint32_t w = 0; w < block_w_curr; w++) {
                     index_h_offset = index_b_offset + index_g_offset;
@@ -523,7 +523,7 @@ void kernel_main() {
                 }
 
                 reconfig_data_format_srcb(cb_in_negative_mask_id, cb_x_id);
-                add_tiles_init(cb_in_id, cb_x_id);
+                add_init(cb_in_id, cb_x_id);
                 // data in cb_x_id has valid data only for current group
                 // cb_in_id has cleared data for that group
                 // just add them together

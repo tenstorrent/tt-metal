@@ -43,7 +43,7 @@ ALWI void add_tiles_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    add_tiles_init(icb0.get_id(), icb1.get_id());
+    add_init(icb0.get_id(), icb1.get_id());
 }
 
 ALWI void add_bcast_rows_init_short_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
@@ -71,7 +71,7 @@ ALWI void sub_tiles_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    sub_tiles_init(icb0.get_id(), icb1.get_id());
+    sub_init(icb0.get_id(), icb1.get_id());
 }
 
 ALWI void sub_bcast_rows_init_short_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
@@ -101,7 +101,7 @@ ALWI void mul_tiles_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
-    mul_tiles_init(icb0.get_id(), icb1.get_id());
+    mul_init(icb0.get_id(), icb1.get_id());
 }
 
 ALWI void mul_bcast_rows_init_short_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {

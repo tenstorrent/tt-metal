@@ -57,7 +57,7 @@ void kernel_main() {
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
     const uint32_t tile_row_start = get_arg_val<uint32_t>(1);
 
-    binary_op_init_common(cb_inp_id, cb_inp_id, cb_stats_reduced_id);
+    compute_kernel_hw_startup(cb_inp_id, cb_inp_id, cb_stats_reduced_id);
 
     cb_eps.wait_front(1);  // broadcast epsilon is ready
 
@@ -80,7 +80,7 @@ void kernel_main() {
         reconfig_data_format(cb_stats_reduced_id, cb_eps_id);
         pack_reconfig_data_format(cb_recip_sqrt_var_id);
 
-        add_tiles_init(cb_stats_reduced_id, cb_eps_id);
+        add_init(cb_stats_reduced_id, cb_eps_id);
         rsqrt_tile_init<true>();
         tile_regs_acquire();
         tile_regs_wait();

@@ -56,7 +56,7 @@ void kernel_main() {
 #endif
 
 #if FUSE_PRE_ADD
-    binary_op_init_common(cb_in0_idx, cb_res_idx, cb_inp_idx);
+    compute_kernel_hw_startup(cb_in0_idx, cb_res_idx, cb_inp_idx);
 #else
     compute_kernel_hw_startup(cb_inp_idx, cb_inp_idx, cb_scratch_idx);
 #endif
@@ -134,7 +134,7 @@ void kernel_main() {
                     copy_tile_to_dst_init_short_with_dt(cb_res_idx, cb_in0_idx);
                 }
             } else {
-                add_tiles_init(cb_in0_idx, cb_res_idx);
+                add_init(cb_in0_idx, cb_res_idx);
                 tile_regs_acquire();
                 for (auto i : block.local()) {
                     add_tiles(cb_in0_idx, cb_res_idx, i, i, i);

@@ -37,7 +37,7 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
 
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
+    compute_kernel_hw_startup(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
 
     DataflowBuffer dfb_x_obj(cb_x);
     DataflowBuffer dfb_one_obj(cb_one);

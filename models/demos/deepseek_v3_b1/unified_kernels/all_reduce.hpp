@@ -464,10 +464,10 @@ private:
                 copy_tile(CTArgs::cb_residual, i, i);
             }
             cb_pop_front(CTArgs::cb_residual, CTArgs::num_tiles);
-            add_tiles_init(CTArgs::cb_local, CTArgs::cb_remote, true);
+            add_init(CTArgs::cb_local, CTArgs::cb_remote, true);
             batched_add<false>(CTArgs::cb_local, CTArgs::cb_remote, CTArgs::cb_out, CTArgs::num_tiles);
         } else {
-            add_tiles_init(CTArgs::cb_local, CTArgs::cb_remote);
+            add_init(CTArgs::cb_local, CTArgs::cb_remote);
             batched_add<true>(CTArgs::cb_local, CTArgs::cb_remote, CTArgs::cb_out, CTArgs::num_tiles);
         }
 #endif

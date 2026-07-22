@@ -119,7 +119,7 @@ void kernel_main() {
     // Layernorm-specific CBs
     constexpr uint32_t cb_mean_squared_idx = tt::CBIndex::c_7;  // E(x)**2
 
-    binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced_idx);
+    compute_kernel_hw_startup(cb_inp, cb_inp, cb_stats_reduced_idx);
 
     CircularBuffer cb_reduce(cb_reduce_idx);
     CircularBuffer cb_eps(cb_eps_idx);
@@ -176,7 +176,7 @@ void kernel_main() {
          */
         reconfig_data_format(cb_stats_reduced_idx, cb_stats_reduced_idx);
         pack_reconfig_data_format(cb_mean_squared_idx);
-        mul_tiles_init(cb_stats_reduced_idx, cb_stats_reduced_idx);
+        mul_init(cb_stats_reduced_idx, cb_stats_reduced_idx);
         cb_stats_reduced.wait_front(stats_tile_stride);
 
         tile_regs_acquire();
@@ -196,7 +196,7 @@ void kernel_main() {
          */
         reconfig_data_format(cb_stats_reduced_idx, cb_mean_squared_idx);
         pack_reconfig_data_format(cb_var_idx);
-        sub_tiles_init(cb_stats_reduced_idx, cb_mean_squared_idx);
+        sub_init(cb_stats_reduced_idx, cb_mean_squared_idx);
 
         cb_mean_squared.wait_front(1);
 
@@ -220,7 +220,7 @@ void kernel_main() {
         cb_var.wait_front(1);
         reconfig_data_format(cb_var_idx, cb_eps_idx);
         pack_reconfig_data_format(cb_recip_sqrt_var_idx);
-        add_tiles_init(cb_var_idx, cb_eps_idx);
+        add_init(cb_var_idx, cb_eps_idx);
 
         tile_regs_acquire();
         add_tiles(cb_var_idx, cb_eps_idx, 0, 0, 0);

@@ -607,8 +607,7 @@ struct ReduceToOneB1 {
             cb_pop_front(CTArgs::local_cb, CTArgs::num_tiles);
 
             // Accumulate from received_cb page 0 (LEAF data)
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                CTArgs::received_cb);
+            add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb, CTArgs::received_cb);
             cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                 binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(

@@ -101,7 +101,7 @@ void kernel_main() {
     constexpr uint32_t stats_tiles = 2;
     constexpr uint32_t cb_xmm = tt::CBIndex::c_18;  // x minus mean
 #endif
-    binary_op_init_common(init_in_cb, cb_scaler_global, init_out_cb);
+    compute_kernel_hw_startup(init_in_cb, cb_scaler_global, init_out_cb);
     CircularBuffer cb_xmm_obj(cb_xmm);
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
@@ -166,7 +166,7 @@ void kernel_main() {
             cb_ex_sqr_obj.reserve_back(1);
             cb_stats_reduced_obj.wait_front(1);
             tile_regs_acquire();
-            mul_tiles_init(cb_stats_reduced, cb_stats_reduced);
+            mul_init(cb_stats_reduced, cb_stats_reduced);
             mul_tiles(cb_stats_reduced, cb_stats_reduced, 0, 0, dst0);  // first tile in stats is always E(x)
             tile_regs_commit();
             tile_regs_wait();
@@ -182,7 +182,7 @@ void kernel_main() {
             cb_ex_sqr_obj.wait_front(1);
             cb_var_obj.reserve_back(1);
             tile_regs_acquire();
-            sub_tiles_init(cb_ex2, cb_ex_sqr);
+            sub_init(cb_ex2, cb_ex_sqr);
             sub_tiles(cb_ex2, cb_ex_sqr, 0, 0, dst0);
             tile_regs_commit();
             tile_regs_wait();
@@ -200,7 +200,7 @@ void kernel_main() {
             cb_eps_obj.wait_front(1);
             cb_stats_reduced_obj.reserve_back(1);
 
-            add_tiles_init(cb_var, cb_eps);
+            add_init(cb_var, cb_eps);
             tile_regs_acquire();
             add_tiles(cb_var, cb_eps, 0, 0, dst0);
             tile_regs_wait();

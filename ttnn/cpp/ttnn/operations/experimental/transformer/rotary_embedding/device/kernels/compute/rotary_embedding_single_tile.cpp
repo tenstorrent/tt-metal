@@ -119,7 +119,7 @@ void kernel_main() {
         mul_bcast_rows_init_short(rotated_in_interm_cb, updated_sin_cb);
         mul_tiles_bcast_rows(rotated_in_interm_cb, updated_sin_cb, 0, 0, 0);
 #else
-        mul_tiles_init(rotated_in_interm_cb, updated_sin_cb);
+        mul_init(rotated_in_interm_cb, updated_sin_cb);
         mul_tiles(rotated_in_interm_cb, updated_sin_cb, 0, 0, 0);
 #endif
         tile_regs_commit();
@@ -148,7 +148,7 @@ void kernel_main() {
         mul_bcast_rows_init_short(in_cb, updated_cos_cb);
         mul_tiles_bcast_rows(in_cb, updated_cos_cb, 0, 0, 0);
 #else
-        mul_tiles_init(in_cb, updated_cos_cb);
+        mul_init(in_cb, updated_cos_cb);
         mul_tiles(in_cb, updated_cos_cb, 0, 0, 0);
 #endif
         tile_regs_commit();
@@ -171,7 +171,7 @@ void kernel_main() {
         cb_sin_interm.wait_front(onetile);
         reconfig_data_format(cos_interm_cb, sin_interm_cb);
         pack_reconfig_data_format(out_cb);
-        add_tiles_init(cos_interm_cb, sin_interm_cb);
+        add_init(cos_interm_cb, sin_interm_cb);
 
         tile_regs_acquire();
         add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);

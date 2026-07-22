@@ -126,7 +126,7 @@ void kernel_main() {
     CircularBuffer cb_fusion(cb_fusion_id);
     CircularBuffer cb_out(cb_out_id);
 
-    binary_op_init_common(cb_in0, cb_in0, cb_x);
+    compute_kernel_hw_startup(cb_in0, cb_in0, cb_x);
 
 #ifdef DO_COL_MASK
     // The column mask has block_w tiles, one per tile across the shard width.
@@ -162,7 +162,7 @@ void kernel_main() {
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     reconfig_data_format_srcb(cb_in0, cb_in1);
-    add_tiles_init(cb_in0, cb_in1);
+    add_init(cb_in0, cb_in1);
     cb_in.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -203,7 +203,7 @@ void kernel_main() {
     // writer-generated mask (1.0 valid / 0.0 padding), already waited on above and read by
     // tile index.
     reconfig_data_format(cb_in_id, cb_col_mask_packed_id);
-    mul_tiles_init(cb_in_id, cb_col_mask_packed_id);
+    mul_init(cb_in_id, cb_col_mask_packed_id);
     cb_mask_scratch.reserve_back(num_tiles_per_block);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
@@ -323,7 +323,7 @@ void kernel_main() {
 #endif
 
     // (x - E[x])^2, cb_mm2 <-- cb_xmm_id
-    mul_tiles_init(cb_xmm_id, cb_xmm_id);
+    mul_init(cb_xmm_id, cb_xmm_id);
     index_h_offset = 0;
     cb_xmm2.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -417,7 +417,7 @@ void kernel_main() {
                 cb_ex2.wait_front(1);
                 cb_ex2pe.reserve_back(1);
                 tile_regs_acquire();
-                add_tiles_init(cb_ex2_id, cb_eps);
+                add_init(cb_ex2_id, cb_eps);
                 add_tiles(cb_ex2_id, cb_eps, i, 0, dst0);
                 tile_regs_wait();
                 rsqrt_tile_init<LEGACY_RSQRT>();

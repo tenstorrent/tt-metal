@@ -140,7 +140,7 @@ FORCE_INLINE void mask_tile_to_cb(
 #if defined FP32_DEST_ACC_EN
         reconfig_data_format(cb_in0, cb_mask);
 #endif
-        mul_tiles_init(cb_in, cb_mask);
+        mul_init(cb_in, cb_mask);
         mul_tiles(cb_in, cb_mask, 0, mask_tidx, 0);
         tile_regs_commit();
 

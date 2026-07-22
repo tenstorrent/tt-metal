@@ -48,7 +48,7 @@ ALWI void process_tile(
     DataflowBuffer exp_cb_post_bcast(CB_POST_BCAST);
     DataflowBuffer exp_cb_post_other(CB_POST_OTHER);
 
-    binary_op_init_common(cb_left, cb_right, cb_out);
+    compute_kernel_hw_startup(cb_left, cb_right, cb_out);
     PREPROCESS(BCAST_OP, DataflowBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
     exp_cb_post_bcast.wait_front(num_tiles_per_cycle);
 

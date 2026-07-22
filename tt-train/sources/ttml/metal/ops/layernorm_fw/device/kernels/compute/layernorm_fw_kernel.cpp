@@ -337,7 +337,7 @@ inline void compute_x_hat() {
             uint32_t input_tile_idx = col + block_idx;
 
             // Subtract mean: (input - mean)
-            sub_tiles_init(cb_input_idx, cb_mean_bcast_idx);
+            sub_init(cb_input_idx, cb_mean_bcast_idx);
             sub_tiles(cb_input_idx, cb_mean_bcast_idx, input_tile_idx, 0, x_hat_reg);
 
             // Load broadcasted rstd
@@ -410,7 +410,7 @@ inline void compute_output() {
             uint32_t temp_reg = x_hat_reg + 1;
 
             // Subtract mean: (input - mean)
-            sub_tiles_init(cb_input_idx, cb_mean_bcast_idx);
+            sub_init(cb_input_idx, cb_mean_bcast_idx);
             sub_tiles(cb_input_idx, cb_mean_bcast_idx, block_idx, 0, x_hat_reg);
 
             // Load broadcasted rstd
@@ -503,7 +503,7 @@ void kernel_main() {
 #endif
 
     init_sfpu(cb_input_idx, cb_output_idx);
-    binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_output_idx);
+    compute_kernel_hw_startup(cb_input_idx, cb_gamma_idx, cb_output_idx);
     reconfig_data_format(cb_scaler_idx, cb_sum_idx);
     matmul_init(cb_sum_idx, cb_scaler_idx);
 

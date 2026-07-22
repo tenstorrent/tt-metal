@@ -51,7 +51,7 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // (input_b * input_c)
-        mul_tiles_init(dfb_in1.get_id(), dfb_in2.get_id());
+        mul_init(dfb_in1.get_id(), dfb_in2.get_id());
         mul_tiles(dfb_in1.get_id(), dfb_in2.get_id(), 0, 0, 0);
 
         // Done with dfb_in1 and dfb_in2, pop them early for pipeline efficiency
@@ -74,8 +74,7 @@ ALWI void process_tile(
 #endif
 
         // Step 3: Load A and add with result DST[0] + dfb_in0 -> DST[0]
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-            dfb_in0.get_id());
+        add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_in0.get_id(), dfb_in0.get_id());
         binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
             dfb_in0.get_id(), 0, 0);
 
@@ -128,7 +127,7 @@ void kernel_main() {
     constexpr auto cb_out_id = tt::CBIndex::c_3;  // output
 
     // output = input_a + value * input_b * input_c
-    binary_op_init_common(cb_in1_id, cb_in2_id, cb_out_id);
+    compute_kernel_hw_startup(cb_in1_id, cb_in2_id, cb_out_id);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;

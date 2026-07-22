@@ -69,7 +69,7 @@ void kernel_main() {
     const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -144,7 +144,7 @@ void kernel_main() {
 #endif
 
 #ifdef CAUSAL_MASK
-        add_tiles_init(cb_scale_mask, cb_fused_attn);
+        add_init(cb_scale_mask, cb_fused_attn);
 #else
         add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
 #endif

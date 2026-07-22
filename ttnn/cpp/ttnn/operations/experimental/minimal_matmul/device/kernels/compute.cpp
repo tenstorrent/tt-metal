@@ -252,7 +252,7 @@ void add_bias_and_addcmul_block(
     } else {
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
 #ifndef TERNARY_B_IS_FLOAT32
-        mul_tiles_init(intermediate_cb, ternary_b_cb);
+        mul_init(intermediate_cb, ternary_b_cb);
 #endif
         binop_with_scalar_tile_init();
         reconfig_data_format(intermediate_cb, ternary_b_cb);
@@ -298,7 +298,7 @@ void add_bias_and_addcmul_block(
 
     cb_intermediate.wait_front(out_block_num_tiles);
 
-    add_tiles_init(intermediate_cb, ternary_a_cb);
+    add_init(intermediate_cb, ternary_a_cb);
     reconfig_data_format(intermediate_cb, ternary_a_cb);
     pack_reconfig_data_format(out_cb);
 

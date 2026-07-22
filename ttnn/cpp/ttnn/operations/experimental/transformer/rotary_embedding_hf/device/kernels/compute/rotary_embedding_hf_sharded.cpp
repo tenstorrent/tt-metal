@@ -37,7 +37,7 @@ void kernel_main() {
     CircularBuffer sin_interm_cb(sin_interm_cb_id);
     CircularBuffer out_cb(out_cb_id);
 
-    binary_op_init_common(in_cb_id, sin_cb_id, sin_interm_cb_id);  // General Init for all binary ops
+    compute_kernel_hw_startup(in_cb_id, sin_cb_id, sin_interm_cb_id);  // General Init for all binary ops
 
     // Wait for the reader kernel (reader_rotary_embedding_hf_sharded.cpp) to
     // write -1.0 into the scalar CB and push it.
@@ -122,7 +122,7 @@ void kernel_main() {
             // out = cos_interim + sin_interim
             sin_interm_cb.wait_front(Wt);
             cos_interm_cb.wait_front(Wt);
-            add_tiles_init(cos_interm_cb_id, sin_interm_cb_id);
+            add_init(cos_interm_cb_id, sin_interm_cb_id);
             tile_regs_acquire();
             for (uint32_t j = 0; j < Wt; ++j) {
                 add_tiles(cos_interm_cb_id, sin_interm_cb_id, j, j, j);

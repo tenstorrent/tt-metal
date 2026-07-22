@@ -38,9 +38,9 @@ void kernel_main() {
     reconfig_data_format_srcb(cb_s2c_in2_id);
     pack_reconfig_data_format(cb_s2c_out_id);
 
-    binary_op_init_common(cb_s2c_in2_id, cb_s2c_in2_id, cb_s2c_out_id);
+    compute_kernel_hw_startup(cb_s2c_in2_id, cb_s2c_in2_id, cb_s2c_out_id);
 
-    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in2_id);
+    add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in2_id, cb_s2c_in2_id);
 
     cb_s2c_out.reserve_back(num_iters);
 

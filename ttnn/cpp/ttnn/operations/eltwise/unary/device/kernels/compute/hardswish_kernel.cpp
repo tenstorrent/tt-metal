@@ -42,7 +42,7 @@ void kernel_main() {
         mul_binary_tile(0, 1, 0);
 #endif
 #ifdef INP_FLOAT
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input);
+        mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input, cb_input);
         binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input, 0, 0);
 #endif
 

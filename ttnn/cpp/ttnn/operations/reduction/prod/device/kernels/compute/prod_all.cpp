@@ -19,7 +19,7 @@ void kernel_main() {
     const int one_tile = 1;
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
 
-    binary_op_init_common(input_cb, input_cb, final_output_cb);
+    compute_kernel_hw_startup(input_cb, input_cb, final_output_cb);
     pack_reconfig_data_format(final_output_cb);
 
     final_output_cb_obj.reserve_back(one_tile);
@@ -35,7 +35,7 @@ void kernel_main() {
 
     // Fold each remaining tile in: DEST = DEST * next_tile.
     // DEST_TO_SRCA loads the running product from DEST into SRCA.
-    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(input_cb);
+    mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(input_cb, input_cb);
     for (uint32_t t = 1; t < num_tiles; t++) {
         input_cb_obj.wait_front(one_tile);
         binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(input_cb, 0, 0);

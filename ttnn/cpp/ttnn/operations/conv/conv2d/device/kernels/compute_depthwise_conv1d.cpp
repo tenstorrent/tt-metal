@@ -55,15 +55,14 @@ inline void mul_and_accumulate_block(
         tile_regs_acquire();
         // mul: srcA = in0 (bf16), srcB = in1 (bf8/bf16) -> dst[0]
         reconfig_data_format_srcb(in1_cb_id);
-        mul_tiles_init(in0_cb_id, in1_cb_id);
+        mul_init(in0_cb_id, in1_cb_id);
         mul_tiles(in0_cb_id, in1_cb_id, 0, 0, 0);
 
         if (idx != 0) {
             // dest-reuse add: dst[0] += scratch_cb (the prior tap's partial). srcA gets scratch_cb
             // (cfg52 must match its format); srcB is filled from dst[0] by the dest-reuse path.
             reconfig_data_format_srca(scratch_cb_id);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                scratch_cb_id);
+            add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(scratch_cb_id, scratch_cb_id);
             scratch_cb.wait_front(1);
             binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                 scratch_cb_id, 0, 0);
@@ -114,7 +113,7 @@ inline void mul_and_accumulate_coalesced_block(
                 const uint32_t act_tile_idx = h * in0_block_w + tap * in_channels_ntiles + c;
                 const uint32_t weight_tile_idx =
                     tap * act_block_h_ntiles * in_channels_ntiles + h * in_channels_ntiles + c;
-                mul_tiles_init(in0_cb_id, in1_cb_id, tap != 0 ? 1U : 0U, __builtin_LINE());
+                mul_init(in0_cb_id, in1_cb_id, tap != 0 ? 1U : 0U, __builtin_LINE());
                 mul_tiles(in0_cb_id, in1_cb_id, act_tile_idx, weight_tile_idx, 0);
             }
             tile_regs_commit();
@@ -152,10 +151,10 @@ void kernel_main() {
     experimental::CB cb_out(out_cb_id);
     experimental::CB cb_partials(partials_cb_id);
 
-    // binary_op_init_common configures pack for out_cb, math for in0/in1, and unpack for in0/in1.
+    // compute_kernel_hw_startup configures pack for out_cb, math for in0/in1, and unpack for in0/in1.
     // The pack target never changes (we only ever pack to out_cb), so no further pack reconfig is
     // needed for the lifetime of the kernel.
-    binary_op_init_common(in0_cb_id, in1_cb_id, out_cb_id);
+    compute_kernel_hw_startup(in0_cb_id, in1_cb_id, out_cb_id);
 
     for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
         for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {

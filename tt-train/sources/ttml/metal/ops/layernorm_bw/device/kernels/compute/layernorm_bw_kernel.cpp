@@ -63,7 +63,7 @@ inline void compute_x_hat_preprocessing(const uint32_t num_tiles) {
             const uint32_t temp_reg = x_hat_reg + 1;
 
             // Subtract mean: (input - mean)
-            sub_tiles_init(cb_input_idx, cb_mean_bcast_idx);
+            sub_init(cb_input_idx, cb_mean_bcast_idx);
             sub_tiles(cb_input_idx, cb_mean_bcast_idx, tile_idx + block_idx, 0, x_hat_reg);
 
             // Load broadcasted rstd
@@ -433,7 +433,7 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
 
     // Multiply by x_normalized: x_normalized * (1/N) * sum(dy*gamma * x_normalized)
     reconfig_data_format(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
-    mul_tiles_init(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
+    mul_init(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
     mul_tiles(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx, input_tile_idx, 0, temp_register);
 
     // Subtract: result - x_normalized * (1/N) * sum(...)
@@ -455,7 +455,7 @@ inline void compute_dgamma_components(
     const uint32_t input_tile_idx, const uint32_t dgamma_register, const uint32_t global_col) {
     // Computes dgamma_components = dy * x_normalized
     // Load x_normalized
-    mul_tiles_init(cb_dL_out_idx, cb_x_hat_idx);
+    mul_init(cb_dL_out_idx, cb_x_hat_idx);
     mul_tiles(cb_dL_out_idx, cb_x_hat_idx, input_tile_idx, input_tile_idx, dgamma_register);
 }
 
@@ -475,7 +475,7 @@ void kernel_main() {
     cb_wait_front(cb_scaler_idx, onetile);
 
     init_sfpu(cb_x_hat_idx, cb_dx_idx);
-    binary_op_init_common(cb_x_hat_idx, cb_gamma_idx, cb_dx_idx);
+    compute_kernel_hw_startup(cb_x_hat_idx, cb_gamma_idx, cb_dx_idx);
     reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_sum_idx);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {

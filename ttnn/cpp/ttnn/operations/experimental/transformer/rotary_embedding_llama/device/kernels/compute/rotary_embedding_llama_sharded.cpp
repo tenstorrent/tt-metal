@@ -45,7 +45,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, trans_mat_cb, out_cb);
     matmul_init(in_cb, trans_mat_cb);
-    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
+    compute_kernel_hw_startup(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
 
     // Get the trans_mat
     trans_mat_cb_obj.reserve_back(onetile);
@@ -107,7 +107,7 @@ void kernel_main() {
 
         sin_interm_cb_obj.wait_front(Wt);
         cos_interm_cb_obj.wait_front(Wt);
-        add_tiles_init(cos_interm_cb, sin_interm_cb);
+        add_init(cos_interm_cb, sin_interm_cb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             // out = cos_interim + sin_interim

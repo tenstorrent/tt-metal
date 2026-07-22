@@ -133,7 +133,7 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
         reconfig_data_format(cb_in_id, cb_inb_id);
         pack_reconfig_data_format(cb_x_id);
-        add_tiles_init(cb_in_id, cb_inb_id);
+        add_init(cb_in_id, cb_inb_id);
         for (auto block : generic::blocks(Wt, block_size)) {
             // In/inb come from the reader and need to be
             // synced on full block size. Keep cb_x_id aligned
@@ -210,7 +210,7 @@ void kernel_main() {
         /* (x - E[x])^2
          * compute temp = xmm*xmm = (x-E[x])^2
          */
-        mul_tiles_init(cb_xmm_id, cb_xmm_id);
+        mul_init(cb_xmm_id, cb_xmm_id);
         for (auto block : generic::blocks(Wt, block_size)) {
 #ifndef RMSNORM
             cb_xmm.wait_front(block.start() + block.size());
@@ -247,7 +247,7 @@ void kernel_main() {
         reconfig_data_format(cb_ex2_id, cb_eps_id);
 
         tile_regs_acquire();
-        add_tiles_init(cb_ex2_id, cb_eps_id);
+        add_init(cb_ex2_id, cb_eps_id);
         add_tiles(cb_ex2_id, cb_eps_id, 0, 0, dst0);
         rsqrt_tile_init<LEGACY_RSQRT>();
         rsqrt_tile<LEGACY_RSQRT>(dst0);

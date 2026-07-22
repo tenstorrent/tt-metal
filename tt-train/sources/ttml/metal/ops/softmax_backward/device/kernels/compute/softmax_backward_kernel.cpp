@@ -15,7 +15,7 @@ namespace ckernel {
 // When fp32_dest_acc_en is set, unpack/math must be explicitly reconfigured between ops (see FP32_DEST_ACC_EN).
 ALWI void mul_tiles_init_with_dt(uint32_t icb0, uint32_t icb1) {
     reconfig_data_format(icb0, icb1);
-    mul_tiles_init(icb0, icb1);
+    mul_init(icb0, icb1);
 }
 
 ALWI void sub_bcast_cols_init_short_with_dt(uint32_t icb0, uint32_t icb1) {
@@ -29,7 +29,7 @@ constexpr uint32_t DST_REG_ID = 0;
 constexpr uint32_t ONE_TILE = 1;
 
 // Stream y * grad through the row, mul-accumulating elementwise into DST[0].
-// `mul_tiles_init` programs ELWMUL with acc_to_dest=true, so within a single
+// `mul_init` programs ELWMUL with acc_to_dest=true, so within a single
 // tile_regs_acquire/commit window each `mul_tiles(y, grad, i, i, 0)` performs
 //   DST[0] += y[i] * grad[i]
 // (FP32 in DST when fp32_dest_acc_en). After all tiles, DST[0] holds 32 column
@@ -97,7 +97,7 @@ ALWI void fused_sub_mul(
 #if defined(FP32_DEST_ACC_EN)
     ckernel::reconfig_data_format_srca(y_cb_id);
 #endif
-    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id);
+    mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id, y_cb_id);
     binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         y_cb_id, y_tile_idx, DST_REG_ID);
 
@@ -121,7 +121,7 @@ void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // Number of rows to process
 
     // Initialize compute operations
-    binary_op_init_common(y_cb_id, grad_cb_id, out_cb_id);
+    compute_kernel_hw_startup(y_cb_id, grad_cb_id, out_cb_id);
     cb_wait_front(ones_cb_id, ONE_TILE);
 
     // Two-pass streaming algorithm for minimal L1 memory

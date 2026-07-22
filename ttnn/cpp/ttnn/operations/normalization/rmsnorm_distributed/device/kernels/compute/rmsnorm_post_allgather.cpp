@@ -64,7 +64,7 @@ void kernel_main() {
         cb_times_gamma_out_idx = tt::CBIndex::c_13;
     }
 
-    binary_op_init_common(cb_inp, cb_inp, cb_var_idx);
+    compute_kernel_hw_startup(cb_inp, cb_inp, cb_var_idx);
 
     CircularBuffer cb_reduce(cb_reduce_idx);
     CircularBuffer cb_eps(cb_eps_idx);
@@ -101,7 +101,7 @@ void kernel_main() {
         reconfig_data_format(cb_var_idx, cb_eps_idx);
         pack_reconfig_data_format(cb_recip_sqrt_var_idx);
 
-        add_tiles_init(cb_var_idx, cb_eps_idx);
+        add_init(cb_var_idx, cb_eps_idx);
         ACQ();
         add_tiles(cb_var_idx, cb_eps_idx, 0, 0, 0);
         rsqrt_tile_init<LEGACY_RSQRT>();

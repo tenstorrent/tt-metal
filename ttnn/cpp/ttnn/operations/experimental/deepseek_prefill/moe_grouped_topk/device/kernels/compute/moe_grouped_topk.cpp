@@ -55,7 +55,7 @@ void kernel_main() {
 
     const uint32_t start_height_tile = get_arg_val<uint32_t>(0);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(1);
-    binary_op_init_common(cb_in_scores, cb_in_bias, cb_biased_scores);
+    compute_kernel_hw_startup(cb_in_scores, cb_in_bias, cb_biased_scores);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         blocks::apply_score_func<score_func>(cb_in_scores, cb_sigmoid_scores, width_tiles);

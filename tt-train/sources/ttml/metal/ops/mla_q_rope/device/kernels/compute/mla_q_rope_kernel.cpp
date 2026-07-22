@@ -59,7 +59,7 @@ ALWI void process_rope_group(const uint32_t num_tiles) {
         cb_reserve_back(cos_interm_cb, Tr);
         cb_reserve_back(rope_out_cb, Tr);
 
-        mul_tiles_init(rotated_in_interm_cb, sin_cb);
+        mul_init(rotated_in_interm_cb, sin_cb);
         tile_regs_acquire();
         for (uint32_t j = 0U; j < Tr; ++j) {
             mul_tiles(rotated_in_interm_cb, sin_cb, j, j, j);
@@ -74,7 +74,7 @@ ALWI void process_rope_group(const uint32_t num_tiles) {
         cb_push_back(sin_interm_cb, Tr);
         cb_pop_front(rotated_in_interm_cb, Tr);
 
-        mul_tiles_init(q_pe_cb, cos_cb);
+        mul_init(q_pe_cb, cos_cb);
         tile_regs_acquire();
         for (uint32_t j = 0U; j < Tr; ++j) {
             mul_tiles(q_pe_cb, cos_cb, j, j, j);
@@ -91,7 +91,7 @@ ALWI void process_rope_group(const uint32_t num_tiles) {
 
         cb_wait_front(sin_interm_cb, Tr);
         cb_wait_front(cos_interm_cb, Tr);
-        add_tiles_init(cos_interm_cb, sin_interm_cb);
+        add_init(cos_interm_cb, sin_interm_cb);
         tile_regs_acquire();
         for (uint32_t j = 0U; j < Tr; ++j) {
             add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
@@ -113,7 +113,7 @@ void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(q_pe_cb, trans_mat_cb, rotated_in_interm_cb);
-    binary_op_init_common(rotated_in_interm_cb, cos_cb, rope_out_cb);
+    compute_kernel_hw_startup(rotated_in_interm_cb, cos_cb, rope_out_cb);
 
     cb_wait_front(trans_mat_cb, 1U);
 

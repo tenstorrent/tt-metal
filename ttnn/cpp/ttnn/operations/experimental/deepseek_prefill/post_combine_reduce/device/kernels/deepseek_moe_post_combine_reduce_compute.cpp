@@ -67,7 +67,7 @@ void kernel_main() {
         cb_dispatch_table.wait_front(dispatch_table_num_pages);
     }
 
-    binary_op_init_common(cb_combine_input_id, cb_weights_id, cb_output_id);
+    compute_kernel_hw_startup(cb_combine_input_id, cb_weights_id, cb_output_id);
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         if constexpr (use_dispatch_table_skip) {

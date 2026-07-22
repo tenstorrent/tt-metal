@@ -74,11 +74,11 @@ ALWI void batchnorm_bcast_tiles(
         cb_affine_or_out_obj.reserve_back(onetile);
 
         tile_regs_acquire();
-        sub_tiles_init(cb_other, cb_bcast);
+        sub_init(cb_other, cb_bcast);
         sub_tiles(cb_other, cb_bcast, 0, 0, 0);
 
         // (input - batch_mean)/(sqrt(batch_var + eps)) = result
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_den);
+        mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_den, cb_den);
         binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_den, 0, 0);
         tile_regs_commit();
 
@@ -160,7 +160,7 @@ void kernel_main() {
     auto cb_bcast = cb_batch_mean;
     auto cb_other = cb_input;
 
-    binary_op_init_common(cb_other, cb_bcast, cb_output_0);
+    compute_kernel_hw_startup(cb_other, cb_bcast, cb_output_0);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;

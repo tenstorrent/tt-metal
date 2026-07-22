@@ -217,7 +217,7 @@ struct EltwiseMul {
                 // ---- Simple binary multiply: in0 * in1 -> dest ----
                 reconfig_data_format<false, true>(CTArgs::cb_in0, CTArgs::cb_in1);
                 pack_reconfig_data_format<true>(CTArgs::cb_out);
-                mul_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1);
+                mul_init(CTArgs::cb_in0, CTArgs::cb_in1);
 
                 tile_regs_acquire();
 

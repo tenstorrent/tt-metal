@@ -59,7 +59,7 @@ void kernel_main() {
          */
         reconfig_data_format(cb_inp_id, cb_inp_id);
         pack_reconfig_data_format(cb_x2_id);
-        mul_tiles_init(cb_inp_id, cb_inp_id);
+        mul_init(cb_inp_id, cb_inp_id);
 
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_inp.wait_front(wt + blk);  // cumulative wait
@@ -112,7 +112,7 @@ void kernel_main() {
         binary_op_init_common(cb_x2_merge_id, cb_zero_id, cb_out_final_id);
         reconfig_data_format(cb_x2_merge_id, cb_zero_id);
         pack_reconfig_data_format(cb_out_final_id);
-        add_tiles_init(cb_x2_merge_id, cb_zero_id, true);
+        add_init(cb_x2_merge_id, cb_zero_id, true);
 
         tile_regs_acquire();
         // Add all 8 tiles together

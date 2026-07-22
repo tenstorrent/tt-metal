@@ -21,7 +21,7 @@ void kernel_main() {
     DataflowBuffer dfb_out(tt::CBIndex::c_3);
 
     // output = input_a + value * input_b * input_c
-    binary_op_init_common(dfb_in1.get_id(), dfb_in2.get_id(), dfb_out.get_id());
+    compute_kernel_hw_startup(dfb_in1.get_id(), dfb_in2.get_id(), dfb_out.get_id());
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         // Wait for input_b and input_c first (needed for first computation)
@@ -31,7 +31,7 @@ void kernel_main() {
         tile_regs_acquire();
 
         // (input_b * input_c)
-        mul_tiles_init(dfb_in1.get_id(), dfb_in2.get_id());
+        mul_init(dfb_in1.get_id(), dfb_in2.get_id());
         mul_tiles(dfb_in1.get_id(), dfb_in2.get_id(), 0, 0, 0);
 
         // Done with dfb_in1 and dfb_in2, pop them early for pipeline efficiency
@@ -48,8 +48,7 @@ void kernel_main() {
         dfb_in0.wait_front(num_tiles_per_cycle);
 
         // Step 3: Load A and add with result DST[0] + dfb_in0 -> DST[0]
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-            dfb_in0.get_id());
+        add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_in0.get_id(), dfb_in0.get_id());
         binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
             dfb_in0.get_id(), 0, 0);
 

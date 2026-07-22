@@ -165,7 +165,7 @@ void compute_u_scalar_row(
     const uint32_t scaler_bits,
     const uint32_t cb_u_scaler_output) {
     const uint32_t accum_register = 0;
-    // using binary_tiles_init function instead of specific mul_tiles_init() because specific one doesn't support
+    // using binary_tiles_init function instead of specific mul_init() because specific one doesn't support
     // accumulation to dest regs
     reconfig_data_format(cb_grad_output, cb_attn_output);
     binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(cb_grad_output, cb_attn_output, /*acc_to_dest*/ true);

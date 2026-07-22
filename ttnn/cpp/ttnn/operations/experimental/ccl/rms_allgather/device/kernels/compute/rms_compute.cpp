@@ -93,7 +93,7 @@ void kernel_main() {
     reconfig_data_format(cb_in0, cb_in1);
     pack_reconfig_data_format(cb_in);
     reconfig_data_format(cb_in0, cb_in1);
-    add_tiles_init(cb_in0, cb_in1);
+    add_init(cb_in0, cb_in1);
     cb_in_obj.reserve_back(num_tiles_per_block);
     index_subblock_w_offset = 0;
     for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -120,7 +120,7 @@ void kernel_main() {
 #endif
 
     // X^2
-    mul_tiles_init(cb_in, cb_in);
+    mul_init(cb_in, cb_in);
     index_h_offset = 0;
     cb_x2_obj.reserve_back(num_tiles_per_block);
     index_subblock_w_offset = 0;
@@ -232,7 +232,7 @@ void kernel_main() {
             cb_var_obj.wait_front(1);
             cb_eps_obj.wait_front(1);
 
-            add_tiles_init(cb_var, cb_eps);
+            add_init(cb_var, cb_eps);
             tile_regs_acquire();
             add_tiles(cb_var, cb_eps, 0, 0, post_dst0);
             tile_regs_wait();

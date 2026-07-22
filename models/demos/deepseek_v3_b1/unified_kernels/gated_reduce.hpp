@@ -131,7 +131,7 @@ struct GatedReduce {
             silu_tile_init();
             for (uint32_t k = 0; k < k_num_tiles; k++) {
                 // Group 1: reduce + SiLU
-                add_tiles_init(args.group1_cb, args.group1_cb, true /* acc_to_dest */);
+                add_init(args.group1_cb, args.group1_cb, true /* acc_to_dest */);
 
                 cb_wait_front(args.group1_cb, tiles_per_k);
                 cb_reserve_back(args.intermed_cb, 1);
@@ -190,7 +190,7 @@ struct GatedReduce {
 
                     cb_pop_front(args.scalar_cb, 1);
                 } else {
-                    mul_tiles_init(args.intermed_cb, args.intermed_cb);
+                    mul_init(args.intermed_cb, args.intermed_cb);
                     tile_regs_acquire();
                     mul_tiles(args.intermed_cb, args.intermed_cb, 0, 1, 0);
                     tile_regs_commit();

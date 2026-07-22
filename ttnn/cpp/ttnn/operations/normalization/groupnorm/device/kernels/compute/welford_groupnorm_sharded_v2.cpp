@@ -286,7 +286,7 @@ void kernel_main() {
         cb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
         reconfig_data_format_srcb(cb_eps_id);
-        add_tiles_init(cb_ex_global_id, cb_eps_id);
+        add_init(cb_ex_global_id, cb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
             add_tiles(cb_ex_global_id, cb_eps_id, 1 + (g << 1), 0, dst0);
@@ -362,7 +362,7 @@ void kernel_main() {
                     // // c. a * b
                     cb_xmm.wait_front(2);
                     reconfig_data_format(cb_input_mask_id, cb_xmm_id, cb_ex2pe_id, cb_xmm_id);
-                    mul_tiles_init(cb_xmm_id, cb_xmm_id);
+                    mul_init(cb_xmm_id, cb_xmm_id);
                     tile_regs_acquire();
                     mul_tiles(cb_xmm_id, cb_xmm_id, 0, 1, dst0);
                     tile_regs_commit();
@@ -389,7 +389,7 @@ void kernel_main() {
                         // This is not the first group for this tile, so we need to add
                         // the results over what is already in cb_x_id
                         reconfig_data_format_srca(cb_xmm_id, cb_x_id);
-                        add_tiles_init(cb_x_id, cb_xmm_id);
+                        add_init(cb_x_id, cb_xmm_id);
 
                         cb_xmm.wait_front(1);
                         cb_x.wait_front(1);

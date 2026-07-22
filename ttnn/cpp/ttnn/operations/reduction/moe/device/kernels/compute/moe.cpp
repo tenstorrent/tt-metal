@@ -106,7 +106,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     CircularBuffer in1_cb_obj(in1_cb);
 
     reconfig_data_format(in0_cb, in1_cb);
-    mul_tiles_init(in0_cb, in1_cb);
+    mul_init(in0_cb, in1_cb);
     in0_cb_obj.wait_front(num_tiles);
     in1_cb_obj.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {

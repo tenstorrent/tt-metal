@@ -310,7 +310,7 @@ void kernel_main() {
                 index_h_offset = 0;
                 reconfig_data_format_srcb(cb_in0_id, cb_input_mask_id);
                 // mask input
-                mul_tiles_init(cb_in0_id, cb_input_mask_id);
+                mul_init(cb_in0_id, cb_input_mask_id);
                 cb_x.reserve_back(out_block_hw_normal);
                 for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                     index_subblock_w_offset = 0;
@@ -421,7 +421,7 @@ void kernel_main() {
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
-                mul_tiles_init(cb_xmm_id, cb_input_mask_id);
+                mul_init(cb_xmm_id, cb_input_mask_id);
                 cb_x.reserve_back(out_block_hw_normal);
                 cb_xmm.wait_front(out_block_hw_normal);
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
@@ -451,7 +451,7 @@ void kernel_main() {
                 reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
                 // (x - E[x])^2
                 index_h_offset = 0;
-                mul_tiles_init(cb_x_id, cb_x_id);
+                mul_init(cb_x_id, cb_x_id);
                 cb_xmm.reserve_back(out_block_hw_normal);
                 cb_x.wait_front(out_block_hw_normal);
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
@@ -514,7 +514,7 @@ void kernel_main() {
             cb_ex2pe.reserve_back(1);
             // (Var + eps)
             tile_regs_acquire();
-            add_tiles_init(cb_ex2_global_id, cb_eps_id);
+            add_init(cb_ex2_global_id, cb_eps_id);
             add_tiles(cb_ex2_global_id, cb_eps_id, 0, 0, dst0);
             tile_regs_wait();
             // 1/[sqrt(Var + eps)]
@@ -574,7 +574,7 @@ void kernel_main() {
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
-                mul_tiles_init(cb_xmm_id, cb_input_mask_id);
+                mul_init(cb_xmm_id, cb_input_mask_id);
                 cb_x.reserve_back(out_block_hw_normal);
                 cb_xmm.wait_front(out_block_hw_normal);
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
@@ -646,7 +646,7 @@ void kernel_main() {
                     if (copy_or_add == true) {
                         copy_tile_init(cb_xmm_id);
                     } else {
-                        add_tiles_init(cb_reread_out_id, cb_xmm_id);
+                        add_init(cb_reread_out_id, cb_xmm_id);
                     }
 
                     for (uint32_t i = 0; i < out_block_h_actual; ++i) {

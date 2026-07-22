@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
     dfb_in1_obj.wait_front(onetile);
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         tile_regs_acquire();

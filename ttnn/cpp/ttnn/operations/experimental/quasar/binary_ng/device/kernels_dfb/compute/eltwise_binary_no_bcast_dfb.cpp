@@ -41,7 +41,7 @@ void kernel_main() {
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
 
-    binary_op_init_common(dfb::in0, dfb::in1, dfb::out);
+    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
     binary_tiles_init<true, ELTWISE_OP_TYPE>(dfb::in0, dfb::in1);
 
 #ifdef PACK_RELU

@@ -275,7 +275,7 @@ void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, 
     const uint32_t exp_max_diff_dst_idx = 0;
     reconfig_data_format(cb_prev_max_value, cb_cur_max_value);
     tile_regs_acquire();
-    sub_tiles_init(cb_prev_max_value, cb_cur_max_value);
+    sub_init(cb_prev_max_value, cb_cur_max_value);
     sub_tiles(
         cb_prev_max_value,
         cb_cur_max_value,

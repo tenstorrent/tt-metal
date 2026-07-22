@@ -48,7 +48,7 @@ void kernel_main() {
 #endif
 
     // Initialize binary unit for B*C path; output packer initialized with dfb_out
-    binary_op_init_common(dfb_eff_b.get_id(), dfb_eff_c.get_id(), dfb_out.get_id());
+    compute_kernel_hw_startup(dfb_eff_b.get_id(), dfb_eff_c.get_id(), dfb_out.get_id());
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
 // 1) Prepare B and C (broadcast if required), then compute mul(B, C) -> DST[0]
