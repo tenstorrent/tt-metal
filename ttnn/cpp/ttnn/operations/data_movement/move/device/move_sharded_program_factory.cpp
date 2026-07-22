@@ -135,7 +135,7 @@ void MoveDeviceOperation::override_runtime_arguments(
         case MoveOpParallelizationStrategy::MULTI_CORE:
             desc = MoveProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
             break;
-        default: TT_FATAL(false, "Invalid move operation parallelization strategy");
+        default: TT_THROW("Invalid move operation parallelization strategy");
     }
     tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
