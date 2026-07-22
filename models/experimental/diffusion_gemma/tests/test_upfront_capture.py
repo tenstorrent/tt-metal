@@ -26,6 +26,7 @@ from models.experimental.diffusion_gemma.tt.traced_denoise import upfront_captur
 
 DEVICE_GATED = os.environ.get("DG_RUN_DEVICE", "0") == "1"
 BASELINE_CONTROL_GATED = os.environ.get("DG_UPFRONT_BASELINE_CONTROL", "0") == "1"
+EARLY_HALT_DEVICE_GATED = os.environ.get("DG_UPFRONT_EARLY_HALT_TEST", "0") == "1"
 _DG_CKPT_INPUT = Path(
     os.path.expanduser(
         os.environ.get(
@@ -280,6 +281,7 @@ def test_vllm_warmup_captures_and_detaches_persistent_adapter(monkeypatch):
     wrapper._upfront = True
     wrapper._trace_enabled = True
     wrapper._persistent_adapter = None
+    wrapper._upfront_prefill_warmup_lens = frozenset({32})
     wrapper._upfront_pmax = 1024
     wrapper._make_session = _Session
     monkeypatch.setattr(generator_vllm, "_dram_snapshot", lambda *args, **kwargs: {})
@@ -292,6 +294,87 @@ def test_vllm_warmup_captures_and_detaches_persistent_adapter(monkeypatch):
     assert resets == [None]
     assert metrics[0][0] == "upfront_capture"
     assert metrics[0][1]["trace_stats"] == [{"capture_events": 1}]
+
+
+def test_vllm_upfront_warmup_defers_capture_until_trace_phase(monkeypatch):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    wrapper.data_parallel = 1
+    wrapper.model = []
+    wrapper._upfront = True
+    wrapper._persistent_adapter = None
+    wrapper._make_session = lambda: pytest.fail("compile-only warmup must not build a capture session")
+
+    wrapper.warmup_model_prefill(None, False, True)
+    wrapper.warmup_model_decode()
+
+    assert wrapper._persistent_adapter is None
+
+
+def test_vllm_upfront_compile_phase_warms_configured_prefill_lengths(monkeypatch):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    wrapper.data_parallel = 1
+    wrapper.model = [SimpleNamespace(mesh_device=None)]
+    wrapper._upfront = True
+    wrapper._upfront_pmax = 1024
+    wrapper._persistent_adapter = None
+    wrapper.canvas_length = 256
+    monkeypatch.setenv("DG_UPFRONT_PREFILL_WARMUP_LENS", "192,160,192")
+    warmed = []
+    monkeypatch.setattr(
+        generator_vllm,
+        "prefill_prompt_tokens",
+        lambda model, tokens: warmed.append(tuple(tokens.shape)),
+    )
+    monkeypatch.setattr(generator_vllm.ttnn, "synchronize_device", lambda mesh: None)
+
+    wrapper.warmup_model_prefill(None, False, True)
+
+    assert wrapper._upfront_compile_phase_seen is True
+    assert wrapper._upfront_prefill_warmup_lens == frozenset({160, 192})
+    assert warmed == [(1, 160), (1, 192)]
+
+
+def test_vllm_upfront_trace_phase_rejects_missing_prefill_warmups(expect_error):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    wrapper.data_parallel = 1
+    wrapper.model = []
+    wrapper._upfront = True
+    wrapper._upfront_compile_phase_seen = True
+    wrapper._upfront_prefill_warmup_lens = frozenset()
+
+    with expect_error(RuntimeError, match="requires a compile-only warmup"):
+        wrapper.warmup_model_prefill(None, True, True)
+
+
+def test_vllm_upfront_prefill_rejects_unseen_aligned_length(expect_error):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    class _Session:
+        def attach_persistent_adapter(self, adapter):
+            assert adapter == "persistent"
+
+    wrapper = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    wrapper.data_parallel = 1
+    wrapper.model = []
+    wrapper._sessions = {}
+    wrapper._upfront = True
+    wrapper._persistent_adapter = "persistent"
+    wrapper._upfront_compile_phase_seen = True
+    wrapper._upfront_prefill_warmup_lens = frozenset({32})
+    wrapper._make_session = _Session
+
+    with expect_error(RuntimeError, match="unseen aligned prefill length 64"):
+        wrapper.prefill_forward(torch.zeros((1, 33), dtype=torch.long))
 
 
 def test_vllm_destructor_releases_persistent_controller_then_adapter_exactly_once():
@@ -342,16 +425,20 @@ def upfront_device_bundle():
             "DG_VLLM_TRACE",
             "DG_DENOISE_EARLY_HALT",
             "DG_DENOISE_LAZY_CAPTURE",
+            "DG_UPFRONT_PREFILL_WARMUP_LENS",
         )
     }
+    early_halt = os.environ.get("DG_UPFRONT_EARLY_HALT", "0")
+    prefill_warmup_lens = os.environ.get("DG_UPFRONT_PREFILL_WARMUP_LENS", "32,64,320")
     os.environ.update(
         {
             "DG_UPFRONT_CAPTURE": "1",
             "DG_DENOISE_REVEAL_MASK": "1",
             "DG_DENOISE_REVEAL_PMAX": str(p_max),
             "DG_VLLM_TRACE": "1",
-            "DG_DENOISE_EARLY_HALT": "0",
+            "DG_DENOISE_EARLY_HALT": early_halt,
             "DG_DENOISE_LAZY_CAPTURE": "0",
+            "DG_UPFRONT_PREFILL_WARMUP_LENS": prefill_warmup_lens,
         }
     )
 
@@ -393,6 +480,7 @@ def _make_upfront_wrapper(bundle):
         config=config,
         gumbel_mode=os.environ.get("DG_UPFRONT_GUMBEL_MODE", "argmax"),
     )
+    wrapper.warmup_model_prefill(None, False, True)
     wrapper.warmup_model_prefill(None, True, True)
     return wrapper
 
@@ -411,7 +499,17 @@ def _serve_once(wrapper, tokens: torch.Tensor) -> torch.Tensor:
 
 def _persistent_stats(wrapper) -> dict:
     adapter = wrapper._persistent_adapter
-    controller = getattr(adapter, "_traced_denoise_controller")
+    controllers = [
+        getattr(adapter, attr, None)
+        for attr in (
+            "_traced_denoise_controller",
+            "_traced_denoise_multistep_controller",
+            "_traced_early_halt_controller",
+        )
+    ]
+    controllers = [controller for controller in controllers if controller is not None]
+    assert len(controllers) == 1
+    controller = controllers[0]
     return controller.stats()
 
 
@@ -612,6 +710,43 @@ def test_device_upfront_multi_request_smoke_has_no_stale_cross_request_state(upf
     finally:
         if wrapper is not None:
             wrapper.release_persistent_capture()
+
+
+@pytest.mark.skipif(
+    not EARLY_HALT_DEVICE_GATED,
+    reason="up-front early-halt repro requires DG_UPFRONT_EARLY_HALT_TEST=1",
+)
+def test_device_upfront_early_halt_serves_two_sequential_requests(upfront_device_bundle):
+    wrapper = _make_upfront_wrapper(upfront_device_bundle)
+    try:
+        prompts = [
+            _tokenize(upfront_device_bundle, "Give a friendly greeting."),
+            _tokenize(upfront_device_bundle, "Describe a black hole in one sentence. " * 4),
+        ]
+        capture_events = None
+        for request_idx, prompt in enumerate(prompts):
+            print(f"DG_UPFRONT_EH_MARK request={request_idx} prefill_forward_begin", flush=True)
+            output = wrapper.prefill_forward(prompt, prompt_lens=[int(prompt.shape[1])])
+            print(f"DG_UPFRONT_EH_MARK request={request_idx} prefill_forward_end", flush=True)
+            stats = _persistent_stats(wrapper)
+            controller = wrapper._persistent_adapter._traced_early_halt_controller
+            steps = controller.last_halt_trace[-1][0]
+            halted = steps < wrapper._config.max_denoise_steps
+            print(
+                f"DG_UPFRONT_EH_MARK request={request_idx} steps={steps} halted={halted} "
+                f"capture_events={stats['capture_events']}",
+                flush=True,
+            )
+            assert output.shape == (1, wrapper.canvas_length)
+            if request_idx == 0:
+                assert halted, "request 0 must halt early to exercise partial trace replay"
+                capture_events = stats["capture_events"]
+            else:
+                assert stats["capture_events"] == capture_events
+            wrapper.release_request(0)
+            print(f"DG_UPFRONT_EH_MARK request={request_idx} release_end", flush=True)
+    finally:
+        wrapper.release_persistent_capture()
 
 
 @pytest.mark.skipif(

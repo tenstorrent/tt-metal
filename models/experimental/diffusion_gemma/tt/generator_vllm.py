@@ -72,6 +72,7 @@ from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_c
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.tt.generate import (
     denoise_flags_select_traced,
+    prefill_prompt_tokens,
     select_traced_denoise_block_fn,
 )
 from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache
@@ -229,6 +230,8 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         self._trace_enabled = self._resolve_trace_pref()
         self._upfront = upfront_capture_enabled()
         self._persistent_adapter = None
+        self._upfront_compile_phase_seen = False
+        self._upfront_prefill_warmup_lens = frozenset()
         self._upfront_pmax = (
             _validate_upfront_capture_configuration(
                 trace_enabled=self._trace_enabled,
@@ -430,11 +433,44 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
 
     # ── warmup ──────────────────────────────────────────────────────────
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
-        del kv_cache, enable_trace, can_sample_on_device, greedy_only
+        del kv_cache, can_sample_on_device, greedy_only
         if not self._upfront:
             # The default path remains lazy and per-request exactly as before.
             logger.info("[DiffusionGemma vLLM] warmup is a no-op; block-diffusion warms on first prefill/decode")
             return
+        if not enable_trace:
+            # The TT vLLM runner performs a compile-only phase before its trace-capture phase.
+            # The denoise controller already warms its exact programs immediately before capture;
+            # defer here so later runner warmups cannot allocate buffers after an active trace.
+            self._upfront_compile_phase_seen = True
+            raw_warmup_lens = os.environ.get("DG_UPFRONT_PREFILL_WARMUP_LENS", "").strip()
+            if raw_warmup_lens:
+                warmup_lens = set()
+                for value in raw_warmup_lens.split(","):
+                    prompt_len = int(value.strip())
+                    if prompt_len <= 0 or prompt_len % ttnn.TILE_SIZE != 0:
+                        raise RuntimeError(
+                            "DG_UPFRONT_PREFILL_WARMUP_LENS values must be positive "
+                            f"{ttnn.TILE_SIZE}-token multiples, got {prompt_len}"
+                        )
+                    if prompt_len + self.canvas_length > self._upfront_pmax:
+                        raise RuntimeError(
+                            f"prefill warmup length {prompt_len} leaves no canvas within p_max={self._upfront_pmax}"
+                        )
+                    warmup_lens.add(prompt_len)
+                self._upfront_prefill_warmup_lens = frozenset(warmup_lens)
+                for prompt_len in sorted(self._upfront_prefill_warmup_lens):
+                    logger.info(f"[DiffusionGemma vLLM] warming prefill shape {prompt_len} before trace capture")
+                    mock_tokens = torch.zeros((1, prompt_len), dtype=torch.long)
+                    prefill_prompt_tokens(self.model[0], mock_tokens)
+                ttnn.synchronize_device(self.model[0].mesh_device)
+            logger.info("[DiffusionGemma vLLM] deferring up-front denoise capture to trace warmup phase")
+            return
+        if not getattr(self, "_upfront_prefill_warmup_lens", ()):
+            raise RuntimeError(
+                "DG_UPFRONT_CAPTURE requires a compile-only warmup with DG_UPFRONT_PREFILL_WARMUP_LENS; "
+                "executing an unseen prefill shape after trace capture can corrupt active traces"
+            )
         if self._persistent_adapter is not None:
             logger.info("[DiffusionGemma vLLM] up-front denoise capture already initialized")
             return
@@ -502,6 +538,11 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             f"[DiffusionGemma vLLM] captured persistent denoise trace at startup "
             f"(mock_cache_len={cache_len}, p_max={p_max})"
         )
+
+    def warmup_model_decode(self, *args, **kwargs):
+        """No-op: DiffusionGemma captures its complete block-denoise path in prefill warmup."""
+        del args, kwargs
+        logger.info("[DiffusionGemma vLLM] decode warmup is covered by up-front block-denoise capture")
 
     # ── block-granular forward ──────────────────────────────────────────
     def _prompt_tokens_for_row(self, tokens, prompt_lens, row):
@@ -616,6 +657,15 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                     )
                 session.attach_persistent_adapter(self._persistent_adapter)
             prompt_tokens = self._prompt_tokens_for_row(tokens, prompt_lens, row)
+            if getattr(self, "_upfront_compile_phase_seen", False):
+                cache_len = ((int(prompt_tokens.shape[1]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+                warmed = getattr(self, "_upfront_prefill_warmup_lens", frozenset())
+                if cache_len not in warmed:
+                    raise RuntimeError(
+                        f"up-front capture cannot serve unseen aligned prefill length {cache_len}; "
+                        f"warm it before capture via DG_UPFRONT_PREFILL_WARMUP_LENS "
+                        f"(configured={sorted(warmed)})"
+                    )
             ttft_t0 = time.perf_counter()
             try:
                 cache_len = session.prefill(prompt_tokens)

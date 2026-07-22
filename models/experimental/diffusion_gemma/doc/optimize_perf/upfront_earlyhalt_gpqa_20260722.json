@@ -1,0 +1,118 @@
+{
+  "status": "passed",
+  "scope": "up-front capture + traced early halt + sequential real GPQA requests",
+  "hardware": {
+    "architecture": "Blackhole",
+    "mesh": "P150x4",
+    "num_devices": 4,
+    "tensor_parallel": 4
+  },
+  "config": {
+    "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+    "num_layers": 30,
+    "max_seq_len": 1024,
+    "reveal_pmax": 1024,
+    "max_denoise_steps": 48,
+    "gumbel_mode": "argmax",
+    "early_halt_window": 1,
+    "prefill_warmup_lens": [
+      160,
+      192,
+      256,
+      384,
+      480
+    ],
+    "trace_region_size": 10737418240,
+    "num_concurrent": 1,
+    "max_gen_toks": 256
+  },
+  "startup": {
+    "engine_init_s": 63.65,
+    "capture_events": 48,
+    "recapture_events_during_requests": 0
+  },
+  "requests": [
+    {
+      "sample": 0,
+      "prompt_len": 154,
+      "cache_len": 160,
+      "denoise_steps": 13,
+      "halted": true,
+      "ttft_s": 6.615608
+    },
+    {
+      "sample": 1,
+      "prompt_len": 159,
+      "cache_len": 160,
+      "denoise_steps": 16,
+      "halted": true,
+      "ttft_s": 7.758684
+    },
+    {
+      "sample": 2,
+      "prompt_len": 184,
+      "cache_len": 192,
+      "denoise_steps": 12,
+      "halted": true,
+      "ttft_s": 6.082983
+    },
+    {
+      "sample": 3,
+      "prompt_len": 165,
+      "cache_len": 192,
+      "denoise_steps": 43,
+      "halted": true,
+      "ttft_s": 18.630989
+    },
+    {
+      "sample": 4,
+      "prompt_len": 380,
+      "cache_len": 384,
+      "denoise_steps": 10,
+      "halted": true,
+      "ttft_s": 5.3809
+    },
+    {
+      "sample": 5,
+      "prompt_len": 231,
+      "cache_len": 256,
+      "denoise_steps": 13,
+      "halted": true,
+      "ttft_s": 6.488178
+    },
+    {
+      "sample": 6,
+      "prompt_len": 191,
+      "cache_len": 192,
+      "denoise_steps": 19,
+      "halted": true,
+      "ttft_s": 8.852926
+    },
+    {
+      "sample": 7,
+      "prompt_len": 478,
+      "cache_len": 480,
+      "denoise_steps": 17,
+      "halted": true,
+      "ttft_s": 8.179886
+    }
+  ],
+  "aggregate": {
+    "requests_completed": 8,
+    "request_releases": 8,
+    "halted_requests": 8,
+    "denoise_steps_min": 10,
+    "denoise_steps_max": 43,
+    "capture_events_final": 48,
+    "exact_match": 0.0,
+    "exact_match_note": "The 256-token one-block cap truncates GPQA reasoning before final answer extraction; this run gates lifecycle, not accuracy."
+  },
+  "controls": {
+    "unwarmed_early_halt": "sample 0 passed at K=13; sample 1 hung in causal prefill AllBroadcast",
+    "drain_remaining_traces": "refuted; sample 1 still hung in causal prefill AllBroadcast",
+    "unwarmed_fixed_k": "refuted early-halt-specific diagnosis; sample 1 still hung in causal prefill AllBroadcast",
+    "warm_160_fixed_k": "samples 0 and 1 both passed",
+    "warm_all_observed_gpqa_buckets_early_halt": "all eight samples passed"
+  },
+  "root_cause": "A new aligned causal-prefill shape first compiled after denoise traces were active. Its program compilation/allocation corrupted active trace/CCL state; the next prefill stalled in AllBroadcast. Warming every admitted aligned prefill length before trace capture prevents the corruption."
+}

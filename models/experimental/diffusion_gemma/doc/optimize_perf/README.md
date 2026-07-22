@@ -36,6 +36,9 @@ The mode fails at startup unless reveal masking and tracing are enabled, `DG_TRA
 is positive, and `DG_DENOISE_REVEAL_PMAX` is explicit, positive, and tile aligned. Lazy capture is
 rejected because it could capture a previously unreached early-halt window during a later request.
 The fixed `p_max` is also enforced as the served `prompt + generated` cap before denoise/commit.
+Under vLLM, `DG_UPFRONT_PREFILL_WARMUP_LENS` must list every aligned prefill length the server will
+admit. Those shapes compile before denoise capture; an unseen runtime length fails loudly because
+compiling a new prefill program while traces are active can corrupt trace/CCL state.
 
 Full 30-layer QB2 evidence:
 
@@ -48,6 +51,8 @@ Full 30-layer QB2 evidence:
   executions, exact A roundtrip, prompt-distinct output, coherent decoded text for both prompts,
   checkpoint chat-template metadata, and exact prompt-B equality to a fresh-process per-request
   reveal-trace control.
+- `upfront_earlyhalt_gpqa_20260722.{json,md}`: eight sequential real GPQA-Diamond requests with
+  traced early halt (K=10–43), one startup trace set, eight clean releases, and zero recapture.
 
 These are direct wrapper/session runs on 4× Blackhole p300c; no Tracy or live-server profiling was
 used. Commands and the initial untuned timeout control are recorded in `work_log.md`.

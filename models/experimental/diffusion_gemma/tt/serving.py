@@ -312,6 +312,8 @@ class BlockDiffusionServingSession:
                         f"[prefix_cache] partial-prefix miss: matched {plan.matched_len} aligned "
                         f"tokens, suffix differs/extends → full prefill (needs chunked prefill / #47488)"
                     )
+            if self._persistent_adapter is not None:
+                logger.info(f"DG_UPFRONT_MARK prefill_device_begin prompt_len={prompt_len} cache_len={cache_len}")
             t0 = time.perf_counter()
             prefill = prefill_prompt_tokens(
                 self.tt_model,
@@ -322,6 +324,8 @@ class BlockDiffusionServingSession:
             self.prefill_time_s = time.perf_counter() - t0
             prompt_len = prefill.prompt_len
             cache_len = prefill.cache_len
+            if self._persistent_adapter is not None:
+                logger.info(f"DG_UPFRONT_MARK prefill_device_end prompt_len={prompt_len} cache_len={cache_len}")
             if reuse_active:
                 self.prefix_cache.observe_prefill_time(self.prefill_time_s)
 
@@ -336,7 +340,9 @@ class BlockDiffusionServingSession:
         self.finished = False
         self.prefill_reused = bool(plan is not None and plan.reuse)
         if self._persistent_adapter is not None:
+            logger.info(f"DG_UPFRONT_MARK rebind_begin cache_len={cache_len}")
             self._persistent_adapter.rebind_prompt(cache_len)
+            logger.info(f"DG_UPFRONT_MARK rebind_end cache_len={cache_len}")
             self._logits_fn = self._persistent_adapter
         else:
             self._logits_fn = self._logits_fn_builder(

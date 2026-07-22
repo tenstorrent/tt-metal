@@ -473,3 +473,51 @@ A fresh stage-review pass after wiring destructor cleanup returned `clean-pass` 
 work. It rechecked the live diff, production shutdown call site, request detachment, long-prompt
 mock-span overwrite, three-way chunked-Gumbel exactness, K=48 A→B→A evidence, prompt-B baseline
 control, triage anomaly, and the DiffusionGemma-local isolation gate.
+
+## 7. Up-front + early-halt GPQA hang repair (2026-07-22)
+
+The reported second-request hang was reproduced with the real
+`r1_gpqa_diamond` task. Request 0 completed at K=13, then request 1 stopped
+between `prefill_device_begin` and `prefill_device_end`. Exact live triage
+(`triage/upfront_earlyhalt_gpqa_hang_tt-triage.txt`) placed all four devices in
+the causal-prefill broadcast writer waiting on its semaphore.
+
+Hypothesis controls:
+
+1. Direct wrapper A→B with early halt passed (K=17, K=19), refuting a universal
+   early-controller request-reset bug.
+2. Replaying all skipped windows after a K=13 halt still hung on the next GPQA
+   prefill, refuting incomplete trace/CCL advancement.
+3. Fixed-K up-front capture hung on the same second GPQA prefill, refuting an
+   early-halt-specific root cause.
+4. Warming the 160-token prefill shape before denoise capture made both fixed-K
+   GPQA requests pass.
+
+Root cause: vLLM's compile-only phase previously deferred without compiling
+real prefill shapes, so the first real 160-token prompt compiled/allocated a new
+prefill program after 48 denoise traces were active. That violated trace address
+stability and corrupted CCL state; the following prefill stalled in
+`AllBroadcast`.
+
+The fix:
+
+- honors vLLM's two-phase warmup (`enable_trace=False` compiles configured
+  prefill lengths; `enable_trace=True` captures denoise);
+- makes DiffusionGemma decode warmup a no-op because the block-denoise path is
+  captured by prefill warmup;
+- requires `DG_UPFRONT_PREFILL_WARMUP_LENS` in vLLM mode;
+- rejects unseen aligned runtime prefill lengths before device execution;
+- leaves boundary markers around device prefill and adapter rebind.
+
+Full 30-layer validation used
+`DG_UPFRONT_PREFILL_WARMUP_LENS=160,192,256,384,480` and ran eight sequential
+real GPQA-Diamond requests with traced early halt. All eight passed and released;
+realized K was 10–43, TTFT 5.38–18.63 s, and `capture_events` stayed 48 with no
+recapture. The lm-eval exact-match score was 0 because this lifecycle run capped
+generation at one 256-token block, truncating reasoning before answer
+extraction. See `upfront_earlyhalt_gpqa_20260722.{json,md}`.
+
+A fresh independent stage review returned `clean-pass` with no required work.
+It verified the exact-hang triage, fixed-K/drain refutations, two-phase warmup
+ordering, unseen-length admission guard, eight-request GPQA evidence, and
+DiffusionGemma-local isolation.
