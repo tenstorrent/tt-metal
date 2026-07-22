@@ -2054,6 +2054,32 @@ def _env_flag_enabled(name: str) -> bool:
     return bool(value) and value not in ("0", "false", "False", "no", "off")
 
 
+# Environment variables set by the tt-metal functional simulator. Either may be present
+# depending on the CI configuration (slow- or fast-dispatch simulator), and both indicate
+# there is no meaningful device timing signal, so candidate benchmarking must be skipped.
+_SIMULATOR_ENV_VARS = ("TT_METAL_SIMULATOR", "TT_METAL_SIMULATOR_HOME")
+
+
+def _simulator_active() -> bool:
+    return any(os.environ.get(name) for name in _SIMULATOR_ENV_VARS)
+
+
+def _tuning_bypassed_by_environment() -> bool:
+    """True when measured candidate tuning must be skipped for the current environment.
+
+    Trace/eager benchmarking is invalid or unusable in these cases:
+      - slow dispatch: trace-based benchmarking does not work correctly there
+      - profiler sync: benchmarking warmups corrupt the op trace
+      - functional simulator: no meaningful timing signal and far too slow to benchmark
+    In all of them the selector falls back to the default config (pre-auto-config behavior).
+    """
+    return (
+        os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
+        or os.environ.get("TT_METAL_PROFILER_SYNC") == "1"
+        or _simulator_active()
+    )
+
+
 def _device_profiler_enabled() -> bool:
     """True when this process was launched under the Tracy device profiler.
 
@@ -2958,13 +2984,9 @@ def dispatch_matmul(
     # disabled there too because trace-based benchmarking does not work correctly in
     # slow dispatch mode. Those callers fall back to the default matmul config,
     # identical to pre-auto-config behaviour.
-    # A functional simulator (TT_METAL_SIMULATOR) has no meaningful timing signal and is far too
-    # slow for candidate benchmarking, so tuning is bypassed there as well.
-    if (
-        os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
-        or os.environ.get("TT_METAL_PROFILER_SYNC") == "1"
-        or os.environ.get("TT_METAL_SIMULATOR")
-    ):
+    # A functional simulator has no meaningful timing signal and is far too slow for candidate
+    # benchmarking, so tuning is bypassed there as well (detected via either simulator env var).
+    if _tuning_bypassed_by_environment():
         return _run_base_operation(
             base_operation=base_operation,
             input_tensor_a=prepared.input_tensor_a,
