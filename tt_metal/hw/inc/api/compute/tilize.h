@@ -388,9 +388,6 @@ ALWI void tilize_block(
         PACK((llk_packer_wait_for_math_done()));
 
         MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
-        // DEBUG (leave in until debugged): per-tile MATH marker — the last TZT printed before any 0x19 is the
-        // faulting tile. With the chunking removed this should run t=0..block-1 clean (no fault at t=8).
-        MATH((DPRINT("TZT t={}\n", (uint32_t)t)));
         PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
         // Release dest. NO llk_math_set_dvalid: it belongs to the dest-dvalid scheme and is compile-blocked on
         // the semaphore-sync path; the datacopy MOP + llk_math_dest_section_done handle FPU dvalid as WH does.
