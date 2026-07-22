@@ -5828,7 +5828,6 @@ def test_conv2d_fp32_input_no_fp16_saturation(device):
     assert passed, msg
 
 
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "shard_layout, output_channels, input_channels, input_height, input_width, config",
@@ -5875,4 +5874,37 @@ def test_conv2d_row_major_host_sharding_alignment_regression(
         input_layout=ttnn.ROW_MAJOR_LAYOUT,
         output_layout=ttnn.TILE_LAYOUT,
         has_bias=True,
+    )
+
+
+# Regression guard for the TileRowMajor + packer_l1_acc=OFF partials-aliasing bug (PR #47724).
+# A HEIGHT_SHARDED, bias-less, bf16-weight, TILE-output, l1_acc-off conv whose stranded SubblockMajor
+# subblock makes the factory auto-select a TileRowMajor subblock also aliased MATMUL_PARTIALS onto the
+# OUTPUT buffer (single-output-block L1 saving). For TRM + software-reload that alias silently clobbers
+# not-yet-reloaded partials (PCC ~0.687). The conv factory now refuses that alias
+# (can_alias_partials_onto_out excludes tile_pack_row_major && !packer_l1_acc). Shape = SDXL UNet
+# conv_in made bias-less (bias forces SubblockMajor, so !has_bias is what makes it TRM-eligible).
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_conv2d_trm_l1acc_off_partials_alias(device, torch_tensor_map):
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        output_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        batch_size=1,
+        output_channels=320,
+        input_channels=4,
+        input_height=128,
+        input_width=128,
+        filter_height=3,
+        filter_width=3,
+        stride_h=1,
+        stride_w=1,
+        padding=(1, 1),
+        config_override=None,
+        shard_layout=HS,
+        has_bias=False,
+        packer_l1_acc=False,
+        output_layout=ttnn.TILE_LAYOUT,
     )
