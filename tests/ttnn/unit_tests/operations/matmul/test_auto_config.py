@@ -25,26 +25,18 @@ def _ok_candidate_entries(result):
     return [entry for entry in result["candidate_timings_us"] if entry["status"] == "ok"]
 
 
-def test_slow_dispatch_mode_helper_respects_env(monkeypatch):
-    monkeypatch.delenv("TT_METAL_SLOW_DISPATCH_MODE", raising=False)
-    assert install_ops._slow_dispatch_mode_enabled() is False
-
-    monkeypatch.setenv("TT_METAL_SLOW_DISPATCH_MODE", "1")
-    assert install_ops._slow_dispatch_mode_enabled() is True
-
-
-def test_install_slow_dispatch_wrapper_preserves_doc_and_golden_function():
+def test_install_passthrough_wrapper_preserves_doc_and_golden_function():
     def wrapper():
         return None
 
-    wrapped = install_ops._install_slow_dispatch_wrapper(
+    wrapped = install_ops._install_passthrough_wrapper(
         wrapper,
-        doc="slow-dispatch-doc",
+        doc="passthrough-doc",
         golden_function=_ok_candidate_entries,
     )
 
     assert wrapped is wrapper
-    assert wrapped.__doc__ == "slow-dispatch-doc"
+    assert wrapped.__doc__ == "passthrough-doc"
     assert wrapped.golden_function is _ok_candidate_entries
 
 

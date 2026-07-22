@@ -14,10 +14,9 @@ golden functions rather than redefining them.
 """
 
 import inspect
-import os
 
 import ttnn
-from ttnn.decorators import REGISTERED_OPERATIONS, get_golden_function
+from ttnn.decorators import get_golden_function
 
 # Kept as a self-contained reStructuredText ``.. note::`` directive so it appends cleanly to the
 # base op docstrings without forming a definition list or colliding with their existing
@@ -44,10 +43,6 @@ def _compose_doc(base_doc: str | None) -> str:
 _CPP_MATMUL = None
 _CPP_LINEAR = None
 _installed = False
-
-
-def _slow_dispatch_mode_enabled() -> bool:
-    return os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
 
 
 def _matmul_wrapper_impl(
@@ -153,7 +148,7 @@ def _linear_wrapper_impl(
     )
 
 
-def _install_slow_dispatch_wrapper(function, *, doc, golden_function):
+def _install_passthrough_wrapper(function, *, doc, golden_function):
     function.__doc__ = doc
     ttnn.attach_golden_function(function, golden_function=golden_function)
     return function
@@ -180,33 +175,22 @@ def install_public_wrappers():
     matmul_doc = _compose_doc(_CPP_MATMUL.__doc__)
     linear_doc = _compose_doc(_CPP_LINEAR.__doc__)
 
-    if _slow_dispatch_mode_enabled():
-        # Keep the public matmul/linear API available, but avoid wrapping the
-        # call in another registered TTNN operation. Tracy slow-dispatch
-        # profiling joins host/device data using the kernel-backed op identity,
-        # so the underlying C++ op must remain the top-level tracked operation.
-        ttnn.matmul = _install_slow_dispatch_wrapper(
-            _matmul_wrapper_impl,
-            doc=matmul_doc,
-            golden_function=matmul_golden,
-        )
-        ttnn.linear = _install_slow_dispatch_wrapper(
-            _linear_wrapper_impl,
-            doc=linear_doc,
-            golden_function=linear_golden,
-        )
-    else:
-        REGISTERED_OPERATIONS.operations.discard(_CPP_MATMUL)
-        REGISTERED_OPERATIONS.operations.discard(_CPP_LINEAR)
-        ttnn.register_python_operation(
-            name="ttnn.matmul",
-            golden_function=matmul_golden,
-            doc=matmul_doc,
-        )(_matmul_wrapper_impl)
-        ttnn.register_python_operation(
-            name="ttnn.linear",
-            golden_function=linear_golden,
-            doc=linear_doc,
-        )(_linear_wrapper_impl)
+    # Install the public entrypoints as plain passthrough functions rather than registering them
+    # as new TTNN operations. This leaves the global operation registry completely untouched (no
+    # discard / re-register of the C++ ops), so importing ttnn has no global side effect on the
+    # rest of the op set, and the kernel-backed C++ op remains the tracked operation. The public
+    # matmul/linear API, auto_config support, host RHS/bias staging, queue-id passthrough, and
+    # golden functions are all preserved. (This is what the slow-dispatch path already did; using
+    # it unconditionally also keeps Tracy slow-dispatch profiling correct.)
+    ttnn.matmul = _install_passthrough_wrapper(
+        _matmul_wrapper_impl,
+        doc=matmul_doc,
+        golden_function=matmul_golden,
+    )
+    ttnn.linear = _install_passthrough_wrapper(
+        _linear_wrapper_impl,
+        doc=linear_doc,
+        golden_function=linear_golden,
+    )
 
     _installed = True
