@@ -285,14 +285,14 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
         return ttnn::prim::TilizeMultiCoreRetileProgramFactory{};
     }
 
-    // On Blackhole, the DRAM read alignment is 64 bytes. UInt8 rows narrower than 64 bytes
-    // (e.g. width=32 → 32-byte page) can produce a misalignment between the L1 write pointer
-    // offset and the DRAM source offset within a 64-byte block, causing the NOC to corrupt
-    // adjacent L1 data. The block factory reader handles this via a staging buffer (c_1) and
-    // an explicit alignment check. Route all non-sharded UInt8 inputs on Blackhole through
-    // the block factory to guarantee correct DRAM alignment handling.
-    if (!operation_attributes.use_low_perf && input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE &&
-        input_tensor_a.dtype() == DataType::UINT8 && !input_tensor_a.memory_config().is_sharded()) {
+    // On Blackhole, UINT8 rows narrower than the 64-byte DRAM read granularity can land on a
+    // misaligned DRAM page, causing the NOC to corrupt adjacent L1 data.
+    // TilizeMultiCoreBlockProgramFactory uses reader_unary_pad_multicore_both_dims which has
+    // an alignment-aware staging buffer (c_1) that handles this correctly.
+    // Route all non-sharded UINT8 inputs on Blackhole here regardless of use_multicore;
+    // the combination was broken before this fix so overriding the single-core hint is safe.
+    if (input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE && input_tensor_a.dtype() == DataType::UINT8 &&
+        !input_tensor_a.memory_config().is_sharded()) {
         return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
     }
 

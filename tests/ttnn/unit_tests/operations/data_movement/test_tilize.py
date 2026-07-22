@@ -1112,6 +1112,8 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
 #   Tile_x_dim (face_r_dim * num_faces * FACE_C_DIM, spanning the full
 #   tile) is incompatible with 8-bit data; the fix skips the BH workaround
 #   for IS_8BIT_FORMAT and uses FACE_DIM_1x16 (standard per-face dim).
+#   On Blackhole, non-sharded uint8 is always routed to TilizeMultiCoreBlockProgramFactory
+#   which uses an alignment-aware reader to handle narrow (<64 B) sticks.
 @pytest.mark.parametrize(
     "shape",
     [
