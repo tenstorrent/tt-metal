@@ -77,6 +77,8 @@ import torch
 from tqdm import tqdm
 
 import ttml
+from ttnn.device import is_blackhole, is_wormhole_b0
+from ttml.models.qwen3.flops import calculate_flops_per_token
 
 from utils.lora import LORA_TARGETS_ALL, inject_adapter_in_model
 from utils.memory import MemoryUsageTracker, finalize_memory
@@ -115,6 +117,25 @@ def constant_lr_schedule(step, warmup_steps, max_lr):
     if step < warmup_steps:
         return max_lr * (step + 1) / warmup_steps
     return max_lr
+
+
+def get_device_peak_tflops_bf16() -> float:
+    """Per-device theoretical BF16 TFLOPS. Whole-mesh peak = this × num_devices.
+
+    Mirrors ``get_device_peak_tflops_bf16`` in examples/train/train.py so the
+    MFU reported here matches the main training example.
+    """
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    # Per-core BF16 TFLOPS for each supported TT architecture.
+    if is_wormhole_b0(device):
+        per_core = 1.0
+    elif is_blackhole(device):
+        per_core = 1.35
+    else:
+        raise ValueError(f"Unknown device: {device.arch()}")
+    return num_cores * per_core
 
 
 # =====================================================================
@@ -680,6 +701,16 @@ def main():
             )
 
     tokens_per_step = micro_batch * dp_size * seq_len * accum_steps
+
+    # FLOPs / MFU accounting (mirrors examples/train/train.py ThroughputCallback):
+    # per-step TFLOPS = achieved tokens/s × full-model FLOPs/token, and
+    # MFU = achieved / whole-mesh peak. tokens_per_step excludes tp_size (TP
+    # replicates the data and shares the full-model FLOPs across the TP group),
+    # while peak scales over ALL devices (dp × tp), so the ratio accounts for TP.
+    num_devices = dp_size * tp_size
+    flops_per_token = calculate_flops_per_token(config, seq_len)
+    peak_tflops = get_device_peak_tflops_bf16() * num_devices if flops_per_token > 0 else 0.0
+
     eval_batches = max(1, accum_steps * args.valid_mul)
     print(f"\nTraining config:")
     print(f"  Steps: {total_steps}")
@@ -689,6 +720,10 @@ def main():
     print(f"  Sequence length: {seq_len}")
     print(f"  Gradient accumulation: {accum_steps}")
     print(f"  Tokens per optimizer step: {tokens_per_step:,}")
+    if flops_per_token > 0:
+        print(f"  FLOPs per token: {flops_per_token / 1e9:.3g}G")
+    if peak_tflops > 0:
+        print(f"  Peak (whole mesh): {peak_tflops:.1f} TFLOPS bf16 ({num_devices} devices)")
     print(f"  Peak LR: {args.lr}")
     print(f"  LR schedule: {args.lr_schedule}")
     print(f"  Warmup steps: {args.warmup_steps}")
@@ -899,11 +934,30 @@ def main():
         step_time = time.time() - step_start
         tokens_per_sec = tokens_per_step / step_time
 
+        # Per-step metrics line, matching examples/train/train.py's ThroughputCallback:
+        # "Step, Loss, Time (ms), TPS, TFLOPS, MFU". Uses tqdm.write so it doesn't
+        # clobber the progress bar.
+        step_line = (
+            f"Step: {step}, Loss: {step_loss:.6f}, " f"Time: {step_time * 1000.0:.2f} ms, TPS: {tokens_per_sec:.0f}"
+        )
+        if flops_per_token > 0 and step_time > 0:
+            achieved_tflops = tokens_per_sec * flops_per_token / 1e12
+            step_line += f", TFLOPS: {achieved_tflops:.3g}"
+            if peak_tflops > 0:
+                mfu = achieved_tflops / peak_tflops * 100.0
+                step_line += f", MFU: {mfu:.3g}%"
+        tqdm.write(step_line)
+
         if tb_train_writer is not None:
             tb_train_writer.add_scalar("loss", step_loss, step)
             tb_train_writer.add_scalar("lr", lr_now, step)
             tb_train_writer.add_scalar("throughput/tokens_per_sec", tokens_per_sec, step)
             tb_train_writer.add_scalar("throughput/step_time_sec", step_time, step)
+            if flops_per_token > 0 and step_time > 0:
+                achieved_tflops = tokens_per_sec * flops_per_token / 1e12
+                tb_train_writer.add_scalar("throughput/tflops", achieved_tflops, step)
+                if peak_tflops > 0:
+                    tb_train_writer.add_scalar("throughput/mfu_percent", achieved_tflops / peak_tflops * 100.0, step)
 
         # Update progress bar
         postfix = {
