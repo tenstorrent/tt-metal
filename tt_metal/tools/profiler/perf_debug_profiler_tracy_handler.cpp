@@ -67,7 +67,10 @@ TracyTTCtx PerfDebugTracyHandler::GetOrCreateContext(
     }
     const ChipAnchor& a = ait->second;
     TracyTTCtx ctx = TracyTTContext();
-    TracyTTContextPopulate(ctx, a.host_start, a.first_timestamp, a.frequency);
+    // Calibrated variant: marks the context calibrated (calibrationMod=1.0, no calibration events) so the
+    // Tracy GUI does NOT show a per-context "Drift (ns/s)/Auto" control under every core. Timestamps are
+    // host-rebased, so the anchor mapping is exact and no drift correction is wanted.
+    TracyTTContextPopulateCalibrated(ctx, a.host_start, a.first_timestamp, a.frequency);
     TracyTTContextName(ctx, name.c_str(), name.size());
     tracy_contexts_[key] = ctx;
     return ctx;
