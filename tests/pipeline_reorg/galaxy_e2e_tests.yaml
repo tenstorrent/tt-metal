@@ -53,18 +53,6 @@
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
 
-# Fabric DC validation neighbor-exchange test on a single Wormhole galaxy (#50505).
-# Single galaxy is one host, so --hosts is the runner's own node. --image none runs the
-# test against the pipeline container's build (galaxy_e2e has no in-container docker daemon).
-- id: galaxy-fabric-2d-torus-neighbor-exchange
-  name: Galaxy Fabric 2D Torus Neighbor Exchange DC Validation Tests
-  cmd: ./tools/scaleout/exabox/run_fabric_tests.sh --hosts "$(hostname)" --image none --config 4x8wh --filter name.2DTorusXYNeighborExchange
-  skus:
-    wh_galaxy:
-      timeout: 20
-  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: scaleout
-
 - id: galaxy-fabric-multi-mesh-4x4-2x4s
   name: Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests
   cmd: |
@@ -102,18 +90,6 @@
 - id: bh-galaxy-fabric-torus-stability
   name: BH Galaxy Fabric Torus Stability Tests
   cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml
-  skus:
-    bh_galaxy:
-      timeout: 20
-  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: scaleout
-
-# Fabric DC validation neighbor-exchange test on a single Blackhole galaxy (#50505).
-# Single galaxy is one host, so --hosts is the runner's own node. --image none runs the
-# test against the pipeline container's build (galaxy_e2e has no in-container docker daemon).
-- id: bh-galaxy-fabric-2d-torus-neighbor-exchange
-  name: BH Galaxy Fabric 2D Torus Neighbor Exchange DC Validation Tests
-  cmd: ./tools/scaleout/exabox/run_fabric_tests.sh --hosts "$(hostname)" --image none --config 4x8 --test-config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml --filter name.2DTorusXYNeighborExchange
   skus:
     bh_galaxy:
       timeout: 20

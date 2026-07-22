@@ -1,0 +1,84 @@
+name: "Fabric DC Validation (single galaxy)"
+
+# Pulls the pinned DC-validation container image and runs the fabric
+# "2D Torus XY neighbor exchange" test inside it, on a single galaxy, for both
+# Wormhole (--config 4x8wh) and Blackhole (--config 4x8). See issue #50505.
+#
+# Why it runs this way:
+#   - The pull itself is the `docker pull` step below, so we validate exactly the
+#     image named in the issue.
+#   - The test runs INSIDE the pulled image via `docker run`, because that image
+#     bundles the build, the test configs/mesh-graph descriptors, and mpirun-ulfm.
+#     run_fabric_tests.sh is therefore invoked with `--image none` (it runs the
+#     local build inside the container; it must not start a nested container).
+#   - This is a host-level job (no `container:` block) on the galaxy runner, which
+#     has a docker daemon. The galaxy_e2e per-test container does NOT have docker,
+#     so it cannot pull/run an image.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * *" # daily 07:00 UTC
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  DC_IMAGE: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.76.0-dev20260719-4-g7361a7ac160
+
+jobs:
+  fabric-dc-validation:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Wormhole
+            arch: arch-wormhole_b0
+            config: "4x8wh"
+            # 4x8wh defaults to the WH neighbor-exchange config internally.
+            test_config_arg: ""
+          - name: Blackhole
+            arch: arch-blackhole
+            config: "4x8"
+            test_config_arg: "--test-config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml"
+    name: Fabric DC Validation ${{ matrix.name }} (${{ matrix.config }})
+    runs-on:
+      - ${{ matrix.arch }}
+      - topology-6u
+      - in-service
+      - pipeline-functional
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull DC validation image
+        timeout-minutes: 15
+        run: docker pull "${DC_IMAGE}"
+
+      - name: Run 2D Torus XY neighbor-exchange fabric test in the image
+        timeout-minutes: 20
+        run: |
+          docker run --rm --net=host --privileged \
+            --device /dev/tenstorrent \
+            -v /dev/hugepages-1G:/dev/hugepages-1G \
+            -v /tmp:/tmp \
+            --entrypoint bash \
+            "${DC_IMAGE}" -lc '
+              # mpirun-ulfm lives under /opt/openmpi-*-ulfm/bin; ip (used by the MPI
+              # interface selector in run_fabric_tests.sh) lives in /usr/sbin:/sbin,
+              # which the container'"'"'s non-root PATH omits.
+              ULFM_BIN="$(ls -d /opt/openmpi-*-ulfm/bin 2>/dev/null | head -1 || true)"
+              export PATH="${ULFM_BIN:+$ULFM_BIN:}$PATH:/usr/sbin:/sbin"
+              cd "$TT_METAL_HOME"
+              ./tools/scaleout/exabox/run_fabric_tests.sh \
+                --hosts "$(hostname)" \
+                --image none \
+                --config ${{ matrix.config }} \
+                ${{ matrix.test_config_arg }} \
+                --filter name.2DTorusXYNeighborExchange
+            '
