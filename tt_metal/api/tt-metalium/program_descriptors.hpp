@@ -209,6 +209,21 @@ struct KernelDescriptor {
     void emplace_common_runtime_args(const RTArgList& args);
 };
 
+// The work-split produced by split_work_to_cores(): which cores run the kernels and how many
+// units each group handles.  When create_descriptor() records it on ProgramDescriptor, the framework
+// caches it at cache miss and hands it back to override_runtime_arguments() on every cache hit, so an
+// op re-applies its per-dispatch args against the cached split WITHOUT re-deriving it -- the
+// descriptor-model equivalent of what legacy shared_variables_t cached.
+struct CorePartition {
+    uint32_t num_cores = 0;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t units_per_core_group_1 = 0;
+    uint32_t units_per_core_group_2 = 0;
+    std::vector<CoreCoord> cores;
+};
+
 struct ProgramDescriptor {
     using KernelDescriptors = ttsl::SmallVector<KernelDescriptor, 3>;
     using SemaphoreDescriptors = ttsl::SmallVector<SemaphoreDescriptor, 3>;
@@ -218,6 +233,10 @@ struct ProgramDescriptor {
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
     std::optional<std::uint64_t> custom_program_hash;
+
+    // Optional cached work-split (see CorePartition).  When set, the framework stashes it at cache miss
+    // and provides it on cache hits, so the op skips re-deriving the split when re-applying dynamic args.
+    std::optional<CorePartition> core_partition;
 
     std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
 };
