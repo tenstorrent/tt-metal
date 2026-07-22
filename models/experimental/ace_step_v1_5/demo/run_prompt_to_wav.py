@@ -759,6 +759,25 @@ def main() -> None:
     )
     ap.add_argument("--prompt", type=str, required=True, help="Caption / text prompt.")
     ap.add_argument(
+        "--lyrics",
+        type=str,
+        default="[Instrumental]",
+        help=(
+            'Song lyrics. Use "[Instrumental]" (default) for no vocals; otherwise '
+            "pass lyric text, optionally with [verse]/[chorus]/[bridge] section tags."
+        ),
+    )
+    ap.add_argument(
+        "--instrumental",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Force instrumental on/off (--instrumental / --no-instrumental). "
+            "When unset, it is auto-derived from --lyrics "
+            '("[Instrumental]" or empty => instrumental).'
+        ),
+    )
+    ap.add_argument(
         "--variant",
         type=str,
         default="acestep-v15-turbo",
@@ -1437,8 +1456,10 @@ def main() -> None:
         params = GenerationParams(
             task_type="text2music",
             caption=run_prompt,
-            lyrics="[Instrumental]",
-            instrumental=True,
+            lyrics=args.lyrics,
+            instrumental=(
+                args.instrumental if args.instrumental is not None else args.lyrics.strip() in ("", "[Instrumental]")
+            ),
             reference_audio=None,
             duration=float(args.duration_sec),
             inference_steps=int(infer_steps),
