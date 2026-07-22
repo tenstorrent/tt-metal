@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Checkpoint and model-loading helpers for service initialization."""
 
-import importlib
 import os
+import sys
 from typing import Optional
 
 import torch
@@ -46,12 +46,15 @@ class InitServiceLoaderMixin(InitServiceLoaderComponentsMixin):
         if not model_module_name:
             return
 
-        try:
-            model_module = importlib.import_module(model_module_name)
-        except Exception as exc:
+        # The model class is already instantiated, so its defining module is
+        # guaranteed to be loaded. Look it up in sys.modules rather than doing a
+        # dynamic import driven by the module name — this fetches the same,
+        # already-loaded module while avoiding any dynamic code-loading sink.
+        model_module = sys.modules.get(model_module_name)
+        if model_module is None:
             logger.warning(
-                "[initialize_service] Failed to import model module for CUDA bool-argsort workaround: {}",
-                exc,
+                "[initialize_service] Model module {} not loaded; skipping CUDA bool-argsort workaround",
+                model_module_name,
             )
             return
 

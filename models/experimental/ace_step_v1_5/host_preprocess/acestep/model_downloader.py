@@ -136,20 +136,22 @@ def _sync_model_code_files(model_name: str, checkpoints_dir) -> List[str]:
     for src_file in source_dir.glob("*.py"):
         if src_file.name == "__init__.py":
             continue
-        dst_file = target_dir / src_file.name
-        # Defensive containment: the destination is built from a glob-derived
-        # basename, but confirm it still resolves inside target_dir before
-        # writing so a copy can never land outside the checkpoint directory.
+        # Defensive containment: reduce the filename to its basename (strips any
+        # directory, "..", or absolute prefix), resolve it, and confirm it stays
+        # inside target_dir before writing, then copy to the *validated* path so
+        # a write can never land outside the checkpoint directory.
+        safe_name = os.path.basename(src_file.name)
+        resolved_dst = os.path.realpath(os.path.join(target_root, safe_name))
         try:
-            within_root = os.path.commonpath([target_root, os.path.realpath(dst_file)]) == target_root
+            within_root = os.path.commonpath([target_root, resolved_dst]) == target_root
         except (ValueError, TypeError):
             within_root = False
         if not within_root:
             logger.warning(f"[Model Sync] Skipping {src_file.name}: destination outside target directory")
             continue
-        shutil.copy2(src_file, dst_file)
+        shutil.copy2(src_file, resolved_dst)
         synced.append(src_file.name)
-        logger.debug(f"[Model Sync] Synced {src_file.name} -> {dst_file}")
+        logger.debug(f"[Model Sync] Synced {src_file.name} -> {resolved_dst}")
 
     return synced
 

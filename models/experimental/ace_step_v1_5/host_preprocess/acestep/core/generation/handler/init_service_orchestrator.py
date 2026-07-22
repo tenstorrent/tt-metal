@@ -79,9 +79,15 @@ class InitServiceOrchestratorMixin:
             if env_ckpt:
                 checkpoint_dir = str(get_checkpoints_dir())
             elif project_root:
-                checkpoint_dir = os.path.join(project_root, "checkpoints")
+                # Normalize the caller-supplied project_root to a canonical
+                # absolute path before joining, collapsing any ".." components
+                # so the resulting checkpoint directory is deterministic and
+                # self-contained.
+                safe_root = os.path.realpath(os.path.abspath(project_root))
+                checkpoint_dir = os.path.join(safe_root, "checkpoints")
             else:
                 checkpoint_dir = str(get_checkpoints_dir())
+            checkpoint_dir = os.path.realpath(checkpoint_dir)
             checkpoint_path = Path(checkpoint_dir)
 
             # ``config_path`` is expected to be a simple checkpoint name (e.g.

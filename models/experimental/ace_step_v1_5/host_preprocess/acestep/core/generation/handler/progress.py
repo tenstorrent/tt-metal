@@ -40,11 +40,14 @@ class ProgressMixin:
         """Return progress-estimates path constrained to the project root."""
         base_dir = self._get_project_root()
         configured = getattr(self, "_progress_estimates_path", None)
-        if configured:
-            candidate = configured if os.path.isabs(configured) else os.path.join(base_dir, configured)
-        else:
-            candidate = os.path.join(base_dir, _PROGRESS_ESTIMATES_FILENAME)
-        resolved = os.path.realpath(candidate)
+        # Only the basename of any configured value is honored: this strips any
+        # directory, "..", or absolute prefix, so the cache file is always a
+        # single-component name directly under the project root and can never
+        # escape it. commonpath below is a redundant safety net.
+        filename = os.path.basename(configured) if configured else _PROGRESS_ESTIMATES_FILENAME
+        if not filename:
+            filename = _PROGRESS_ESTIMATES_FILENAME
+        resolved = os.path.realpath(os.path.join(base_dir, filename))
         if os.path.commonpath([base_dir, resolved]) != base_dir:
             raise ValueError(f"Progress estimates path escapes project root: {resolved}")
         return resolved
