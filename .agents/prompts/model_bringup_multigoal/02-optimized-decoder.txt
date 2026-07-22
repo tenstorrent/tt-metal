@@ -2,7 +2,7 @@
 
 As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
 
-This goal creates the optimized-decoder state for the repo-local TTNN autoport. Start from the completed functional decoder and work only on models/autoports/<model>/tt/optimized_decoder.py plus its tests and docs; do not begin multichip-decoder, full-model, or vLLM work here.
+This goal creates the optimized-decoder state for the repo-local TTNN autoport. Start from the fused decoder (models/autoports/<model>/tt/fused_decoder.py) if the optional 01b fused-decoder stage produced one, otherwise the completed functional decoder; work only on models/autoports/<model>/tt/optimized_decoder.py plus its tests and docs; do not begin multichip-decoder, full-model, or vLLM work here.
 
 Goal completion requirements:
 - models/autoports/<model>/tt/optimized_decoder.py exists and its tests exercise the optimized path, not a functional fallback.
