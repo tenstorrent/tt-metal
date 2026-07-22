@@ -60,7 +60,7 @@ Run it locally against a build:
     --arch blackhole --num-kernels 300 --repetitions 3
 ```
 
-## Goldens and record mode
+## Goldens and gating
 
 - [`compile_stress_golden.json`](./compile_stress_golden.json) — Wormhole (`wh_n300_civ2`)
 - [`compile_stress_blackhole_golden.json`](./compile_stress_blackhole_golden.json) — Blackhole (`bh_p150_perf`)
@@ -69,14 +69,20 @@ A golden metric set to `null` stays in **record mode**: the value is printed but
 job is **not** gated on it. A non-null metric is **gated** — the job fails if the
 measured value regresses beyond `tolerance_pct` (default 15%).
 
-Both goldens currently ship in record mode so this can land before CI-SKU numbers
-exist (same rollout as op-to-op).
+Both goldens are **armed on `compile_ms_min`** (15% tolerance), set to the worst
+`compile_ms min` observed across two CI runs per SKU:
 
-### Arming the gate (follow-up)
+| SKU | golden `compile_ms_min` | fails above (~min × 1.15) |
+| --- | --- | --- |
+| `wh_n300_civ2` (wormhole_b0) | 50700 ms | ~58.3 s |
+| `bh_p150_perf` (blackhole)   | 44800 ms | ~51.5 s |
 
-1. Let `runtime_perf_jit_build` run on CI for a few cycles.
-2. Read `compile_ms  min` off the passing runs for each SKU.
-3. Set `metrics.compile_ms_min` in the matching golden to that value (a stable
-   median across runs). Leave `kernels_per_sec_max` `null` unless you also want to
-   gate throughput.
-4. Adjust `tolerance_pct` if 15% is too tight/loose for observed CI variance.
+`kernels_per_sec_max` stays `null` on both — the time gate is sufficient and
+throughput is just its inverse.
+
+### Re-tuning the gate
+
+1. Read `compile_ms  min` off the passing CI runs for the SKU.
+2. Update `metrics.compile_ms_min` in the matching golden (use the worst stable
+   min so normal variance doesn't flake the gate).
+3. Adjust `tolerance_pct` if 15% is too tight/loose for observed CI variance.

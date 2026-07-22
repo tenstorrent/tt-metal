@@ -2,9 +2,9 @@
   "arch": "blackhole",
   "num_kernels": 300,
   "tolerance_pct": 15.0,
-  "comment": "Local JIT-build throughput golden for the (Runtime) Performance Tests pipeline (SKU bh_p150_perf). RECORD MODE: metrics are null so the job prints but does not gate. Arm compile_ms_min from CI-run medians in a follow-up once numbers are stable. See README_compile_stress_ci.md.",
+  "comment": "Local JIT-build throughput golden for the (Runtime) Performance Tests pipeline (SKU bh_p150_perf). GATED on compile_ms_min: armed to the worst min observed across two CI runs (44730/42881 ms) with the 15% tolerance, so the job fails only if a run's min exceeds ~51.5s. kernels_per_sec_max stays null (time gate is sufficient; throughput is its inverse). See README_compile_stress_ci.md.",
   "metrics": {
-    "compile_ms_min": null,
+    "compile_ms_min": 44800,
     "kernels_per_sec_max": null
   }
 }
