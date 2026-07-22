@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 
 /**
@@ -20,20 +20,20 @@
  * - Layout: First 32 elements get indices {wt*32, wt*32+1, ..., wt*32+31}
  *           Second 32 elements get indices {wt*32+32, wt*32+33, ..., wt*32+63}, etc.
  *
- * @param cb_id Circular buffer index to write the generated index tile
+ * @param dfb_id Circular buffer index to write the generated index tile
  * @param wt    Width tile position [0, Wt_local) identifying which tile position along width
  */
 template <typename T = uint16_t>
-FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
+FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) {
     // Constants
     constexpr uint32_t one_tile = 1;
 
     // Reserve space
-    CircularBuffer cb(cb_id);
-    cb.reserve_back(one_tile);
+    DataflowBuffer dfb(dfb_id);
+    dfb.reserve_back(one_tile);
 
     // Writer config
-    CoreLocalMem<volatile T> ptr(cb.get_write_ptr());
+    CoreLocalMem<volatile T> ptr(dfb.get_write_ptr());
     const uint32_t w = wt << 5;  // wt * 2^(5)
 
     // Writer loop
@@ -57,5 +57,5 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
         }  // j loop
     }  // i loop
     // Push the tile
-    cb.push_back(one_tile);
+    dfb.push_back(one_tile);
 }

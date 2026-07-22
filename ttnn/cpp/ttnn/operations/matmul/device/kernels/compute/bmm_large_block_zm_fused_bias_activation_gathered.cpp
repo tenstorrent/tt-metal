@@ -8,7 +8,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "internal/mod_div_lib.h"
 
 #ifdef SFPU_ACTIVATION
@@ -18,79 +18,79 @@
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
 FORCE_INLINE void reload_from_cb_to_dst(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t mm_partials_cb_id,
+    uint32_t in0_dfb_id,
+    uint32_t in1_dfb_id,
+    uint32_t mm_partials_dfb_id,
     bool in1_transpose_tile,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    DataflowBuffer mm_partials_dfb(mm_partials_dfb_id);
     // Reconfigure input
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
-    mm_partials_cb.wait_front(out_subblock_num_tiles);
+    copy_tile_to_dst_init_short_with_dt(in1_dfb_id, mm_partials_dfb_id);
+    mm_partials_dfb.wait_front(out_subblock_num_tiles);
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
-    copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
+    copy_block_matmul_partials(mm_partials_dfb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
-    mm_partials_cb.pop_front(out_subblock_num_tiles);
+    mm_partials_dfb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
-    reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
-    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    reconfig_data_format_srca(mm_partials_dfb_id, in1_dfb_id);
+    matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
-FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-    return local_cb.fifo_rd_ptr;
+FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t dfb_id) {
+    LocalCBInterface& local_dfb = get_local_cb_interface(dfb_id);
+    return local_dfb.fifo_rd_ptr;
 }
 
-FORCE_INLINE void update_local_cb_rd_ptr(uint32_t cb_id, uint32_t val) {
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-    local_cb.fifo_rd_ptr = val;
+FORCE_INLINE void update_local_cb_rd_ptr(uint32_t dfb_id, uint32_t val) {
+    LocalCBInterface& local_dfb = get_local_cb_interface(dfb_id);
+    local_dfb.fifo_rd_ptr = val;
 }
 
-FORCE_INLINE uint32_t get_local_cb_start_addr(uint32_t cb_id) {
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-    uint32_t fifo_size = local_cb.fifo_size;
-    uint32_t fifo_limit = local_cb.fifo_limit;
+FORCE_INLINE uint32_t get_local_cb_start_addr(uint32_t dfb_id) {
+    LocalCBInterface& local_dfb = get_local_cb_interface(dfb_id);
+    uint32_t fifo_size = local_dfb.fifo_size;
+    uint32_t fifo_limit = local_dfb.fifo_limit;
     uint32_t fifo_start_addr = fifo_limit - fifo_size;
     return fifo_start_addr;
 }
 
-FORCE_INLINE bool is_tensor_split(uint32_t cb_id, uint32_t tensor_size_bytes) {
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-    uint32_t fifo_rd_ptr = local_cb.fifo_rd_ptr;
-    uint32_t fifo_limit = local_cb.fifo_limit;
+FORCE_INLINE bool is_tensor_split(uint32_t dfb_id, uint32_t tensor_size_bytes) {
+    LocalCBInterface& local_dfb = get_local_cb_interface(dfb_id);
+    uint32_t fifo_rd_ptr = local_dfb.fifo_rd_ptr;
+    uint32_t fifo_limit = local_dfb.fifo_limit;
     bool split = (fifo_limit - fifo_rd_ptr) < tensor_size_bytes / L1_ALIGNMENT;
     return split;
 }
 
 FORCE_INLINE void calculate_next_block_index_and_update_rd_ptr(
-    uint32_t cb_id,
+    uint32_t dfb_id,
     uint32_t num_blocks,
     uint32_t block_size_bytes,
     uint32_t curr_block_index,
-    uint32_t cb_start_addr,
+    uint32_t dfb_start_addr,
     uint32_t rd_ptr_start_addr,
     bool tensor_split,
     uint32_t* updated_block_index,
     uint32_t* updated_rd_ptr) {
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    LocalCBInterface& local_dfb = get_local_cb_interface(dfb_id);
     uint32_t next_block_index = curr_block_index + 1;
-    uint32_t next_fifo_rd_ptr = local_cb.fifo_rd_ptr;
+    uint32_t next_fifo_rd_ptr = local_dfb.fifo_rd_ptr;
     uint32_t block_size_bytes_aligned = block_size_bytes / L1_ALIGNMENT;
-    bool reach_limit = local_cb.fifo_rd_ptr == local_cb.fifo_limit;
+    bool reach_limit = local_dfb.fifo_rd_ptr == local_dfb.fifo_limit;
     bool last_block = curr_block_index == (num_blocks - 1);
     if (tensor_split) {
         if (reach_limit) {
-            local_cb.fifo_rd_ptr = cb_start_addr;
+            local_dfb.fifo_rd_ptr = dfb_start_addr;
             if (last_block) {
                 next_block_index = 0;
                 next_fifo_rd_ptr = rd_ptr_start_addr;
             } else {
-                next_fifo_rd_ptr = cb_start_addr + block_size_bytes_aligned;
+                next_fifo_rd_ptr = dfb_start_addr + block_size_bytes_aligned;
             }
         } else {
             if (last_block) {
@@ -113,31 +113,31 @@ FORCE_INLINE void calculate_next_block_index_and_update_rd_ptr(
 }
 
 FORCE_INLINE void update_rd_ptr_to_ring_index(
-    uint32_t cb_id, uint32_t block_size_bytes, uint32_t ring_index, bool tensor_split) {
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    uint32_t dfb_id, uint32_t block_size_bytes, uint32_t ring_index, bool tensor_split) {
+    LocalCBInterface& local_dfb = get_local_cb_interface(dfb_id);
 
     if (tensor_split) {
-        if ((local_cb.fifo_rd_ptr + ring_index * block_size_bytes / L1_ALIGNMENT) >= local_cb.fifo_limit) {
-            uint32_t fifo_size = local_cb.fifo_size;
-            uint32_t fifo_limit = local_cb.fifo_limit;
+        if ((local_dfb.fifo_rd_ptr + ring_index * block_size_bytes / L1_ALIGNMENT) >= local_dfb.fifo_limit) {
+            uint32_t fifo_size = local_dfb.fifo_size;
+            uint32_t fifo_limit = local_dfb.fifo_limit;
             uint32_t fifo_start_addr = fifo_limit - fifo_size;
-            uint32_t fifo_size_skip_bytes = local_cb.fifo_rd_ptr - fifo_start_addr;
-            local_cb.fifo_rd_ptr =
+            uint32_t fifo_size_skip_bytes = local_dfb.fifo_rd_ptr - fifo_start_addr;
+            local_dfb.fifo_rd_ptr =
                 fifo_start_addr +
-                (fifo_size_skip_bytes + ring_index * block_size_bytes / L1_ALIGNMENT) % local_cb.fifo_size;
+                (fifo_size_skip_bytes + ring_index * block_size_bytes / L1_ALIGNMENT) % local_dfb.fifo_size;
 
         } else {
-            local_cb.fifo_rd_ptr = local_cb.fifo_rd_ptr + ring_index * block_size_bytes / L1_ALIGNMENT;
+            local_dfb.fifo_rd_ptr = local_dfb.fifo_rd_ptr + ring_index * block_size_bytes / L1_ALIGNMENT;
         }
     } else {
-        local_cb.fifo_rd_ptr = local_cb.fifo_rd_ptr + ring_index * block_size_bytes / L1_ALIGNMENT;
+        local_dfb.fifo_rd_ptr = local_dfb.fifo_rd_ptr + ring_index * block_size_bytes / L1_ALIGNMENT;
     }
 }
 
 // Named CB arg lookup tables for batch-indexed output and partials CBs.
 // The factory emits "cb_mm_out_0" .. "cb_mm_out_N" and "cb_mm_partials_0" .. "cb_mm_partials_N"
 // as named compile-time args. These tables let fill_named_cb_array resolve them by index.
-constexpr const char* mm_out_cb_names[] = {
+constexpr const char* mm_out_dfb_names[] = {
     "cb_mm_out_0",
     "cb_mm_out_1",
     "cb_mm_out_2",
@@ -155,7 +155,7 @@ constexpr const char* mm_out_cb_names[] = {
     "cb_mm_out_14",
     "cb_mm_out_15",
 };
-constexpr const char* mm_partials_cb_names[] = {
+constexpr const char* mm_partials_dfb_names[] = {
     "cb_mm_partials_0",
     "cb_mm_partials_1",
     "cb_mm_partials_2",
@@ -206,11 +206,11 @@ void kernel_main() {
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
     constexpr bool in1_is_dram_interleaved = get_compile_time_arg_val(16);     // in1 is in dram
     constexpr bool in1_is_dram_sharded = get_compile_time_arg_val(17);
-    constexpr uint32_t in0_cb_id = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t in2_cb_id = get_named_compile_time_arg_val("cb_in2");
-    constexpr uint32_t sync_cb = get_named_compile_time_arg_val("cb_sync");
-    constexpr uint32_t sync_cb2 = get_named_compile_time_arg_val("cb_sync2");
+    constexpr uint32_t in0_dfb_id = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t in1_dfb_id = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t in2_dfb_id = get_named_compile_time_arg_val("cb_in2");
+    constexpr uint32_t sync_dfb = get_named_compile_time_arg_val("cb_sync");
+    constexpr uint32_t sync_dfb2 = get_named_compile_time_arg_val("cb_sync2");
 
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type =
@@ -220,12 +220,12 @@ void kernel_main() {
     constexpr uint32_t activation_param2 = get_named_compile_time_arg_val("activation_param2");
 #endif
 
-    CircularBuffer in1_cb(in1_cb_id);
-    CircularBuffer sync_buf(sync_cb);
-    CircularBuffer sync2_buf(sync_cb2);
+    DataflowBuffer in1_dfb(in1_dfb_id);
+    DataflowBuffer sync_buf(sync_dfb);
+    DataflowBuffer sync2_buf(sync_dfb2);
 
-    constexpr std::array<uint32_t, batch> mm_out_cb_ids = fill_named_cb_array<batch>(mm_out_cb_names);
-    constexpr std::array<uint32_t, batch> mm_partials_cb_ids = fill_named_cb_array<batch>(mm_partials_cb_names);
+    constexpr std::array<uint32_t, batch> mm_out_dfb_ids = fill_named_cb_array<batch>(mm_out_dfb_names);
+    constexpr std::array<uint32_t, batch> mm_partials_dfb_ids = fill_named_cb_array<batch>(mm_partials_dfb_names);
 
     constexpr uint32_t ring_size = num_blocks;
     constexpr bool in1_is_dram = in1_is_dram_interleaved || in1_is_dram_sharded;
@@ -236,7 +236,7 @@ void kernel_main() {
     constexpr bool streaming_in1 = false;
 #endif
     // The DRAM path and the streaming (GCB-aligned) path both consume in1 through the standard
-    // in1_cb wait_front/pop_front cycle, so they share one gate. DRAM: the reader pushes one block
+    // in1_dfb wait_front/pop_front cycle, so they share one gate. DRAM: the reader pushes one block
     // of credit per landed block. Streaming: the prefetcher delivers blocks in ring-rotated FIFO
     // order and the in1 CB is aligned to the GCB ring, so the same front/pop cycle drives it
     // (in1_index_subblock_offset is 0 for the GCB path). llk_pop_tiles publishes this CB's consumer
@@ -246,7 +246,7 @@ void kernel_main() {
     constexpr bool consume_in1_cb = in1_is_dram || streaming_in1;
 
 #ifdef STREAMING_IN1
-    // Streaming consumes in1 through the standard in1_cb API, so the batched-only sync2 channel and
+    // Streaming consumes in1 through the standard in1_dfb API, so the batched-only sync2 channel and
     // the manual block-stride bytes are unused on this path.
     (void)sync2_buf;
     (void)in1_block_size_bytes;
@@ -276,27 +276,27 @@ void kernel_main() {
 
     constexpr bool spill = num_blocks > 1 && (out_block_num_tiles / out_subblock_num_tiles) > 1;
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_ids[0]);
-    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_ids[0]);
+    matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
 #if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
-        uint32_t in1_cb_start_addr = 0;
+        uint32_t in1_dfb_start_addr = 0;
         uint32_t in1_rd_ptr_start_addr = 0;
         [[maybe_unused]] uint32_t curr_in1_block_index = 0;
         bool in1_tensor_split = 0;
         uint32_t next_in1_block_index;
         uint32_t next_in1_rd_ptr_addr;
 
-        UNPACK((in1_cb_start_addr = get_local_cb_start_addr(in1_cb_id)));
-        UNPACK((in1_rd_ptr_start_addr = get_local_cb_rd_ptr(in1_cb_id)));
+        UNPACK((in1_dfb_start_addr = get_local_cb_start_addr(in1_dfb_id)));
+        UNPACK((in1_rd_ptr_start_addr = get_local_cb_rd_ptr(in1_dfb_id)));
         UNPACK((curr_in1_block_index = ring_idx));
-        UNPACK((in1_tensor_split = is_tensor_split(in1_cb_id, in1_tensor_size_bytes)));
-        UNPACK((update_rd_ptr_to_ring_index(in1_cb_id, in1_block_size_bytes, ring_idx, in1_tensor_split)));
+        UNPACK((in1_tensor_split = is_tensor_split(in1_dfb_id, in1_tensor_size_bytes)));
+        UNPACK((update_rd_ptr_to_ring_index(in1_dfb_id, in1_block_size_bytes, ring_idx, in1_tensor_split)));
 #endif
-        const uint32_t mm_out_cb_id = mm_out_cb_ids[b];
-        const uint32_t mm_partials_cb_id = mm_partials_cb_ids[b];
-        CircularBuffer mm_out_cb(mm_out_cb_id);
-        CircularBuffer mm_partials_cb(mm_partials_cb_id);
+        const uint32_t mm_out_dfb_id = mm_out_dfb_ids[b];
+        const uint32_t mm_partials_dfb_id = mm_partials_dfb_ids[b];
+        DataflowBuffer mm_out_dfb(mm_out_dfb_id);
+        DataflowBuffer mm_partials_dfb(mm_partials_dfb_id);
 
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
@@ -309,7 +309,7 @@ void kernel_main() {
 #endif
 
         if constexpr (batch > 1) {
-            PACK((pack_reconfig_data_format(mm_partials_cb_id)));
+            PACK((pack_reconfig_data_format(mm_partials_dfb_id)));
         }
 
         // Wait to receive in1
@@ -325,11 +325,11 @@ void kernel_main() {
             // Wait for in1 block (DRAM and streaming both drive the standard CB cycle; see
             // consume_in1_cb). in1_index_subblock_offset is 0 for both, so no manual rd_ptr here.
             if constexpr (consume_in1_cb) {
-                in1_cb.wait_front(in1_block_num_tiles);
+                in1_dfb.wait_front(in1_block_num_tiles);
             }
 
-            const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
-            CircularBuffer input0_cb(input0_cb_id);
+            const uint32_t input0_dfb_id = block == 0 ? in0_dfb_id : in2_dfb_id;
+            DataflowBuffer input0_dfb(input0_dfb_id);
             bool last_out = block == (num_blocks - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU
@@ -341,18 +341,18 @@ void kernel_main() {
 
             // Wait to receive in0 block
             if (block == 0) {
-                input0_cb.reserve_back(in0_block_num_tiles);
-                input0_cb.push_back(in0_block_num_tiles);
+                input0_dfb.reserve_back(in0_block_num_tiles);
+                input0_dfb.push_back(in0_block_num_tiles);
             }
-            input0_cb.wait_front(in0_block_num_tiles);
+            input0_dfb.wait_front(in0_block_num_tiles);
 
 #if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
             UNPACK((calculate_next_block_index_and_update_rd_ptr(
-                in1_cb_id,
+                in1_dfb_id,
                 num_blocks,
                 in1_block_size_bytes,
                 curr_in1_block_index,
-                in1_cb_start_addr,
+                in1_dfb_start_addr,
                 in1_rd_ptr_start_addr,
                 in1_tensor_split,
                 &next_in1_block_index,
@@ -371,9 +371,9 @@ void kernel_main() {
                     tile_regs_acquire();
                     if (enable_reload) {
                         reload_from_cb_to_dst(
-                            input0_cb_id,
-                            in1_cb_id,
-                            mm_partials_cb_id,
+                            input0_dfb_id,
+                            in1_dfb_id,
+                            mm_partials_dfb_id,
                             in1_transpose_tile,
                             out_subblock_num_tiles,
                             out_subblock_w,
@@ -392,8 +392,8 @@ void kernel_main() {
                         // accumulation is done by iterating matmul_block across inner dim
                         // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
                         matmul_block(
-                            input0_cb_id,
-                            in1_cb_id,
+                            input0_dfb_id,
+                            in1_dfb_id,
                             in0_index,
                             in1_index,
                             dst_index,
@@ -410,11 +410,11 @@ void kernel_main() {
 
                     if (last_out) {
                         if constexpr (untilize_out) {
-                            pack_untilize_dest_init<out_subblock_num_tiles>(mm_out_cb_id);
+                            pack_untilize_dest_init<out_subblock_num_tiles>(mm_out_dfb_id);
                         }
                         tile_regs_commit();
                         // Pack out to output buffer
-                        mm_out_cb.reserve_back(out_subblock_num_tiles);
+                        mm_out_dfb.reserve_back(out_subblock_num_tiles);
 
 #if not defined FUSE_BIAS and defined SFPU_ACTIVATION
                         apply_activation_from_pack<
@@ -427,7 +427,7 @@ void kernel_main() {
 #endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                        PACK((pack_reconfig_data_format(mm_out_cb_id)));
+                        PACK((pack_reconfig_data_format(mm_out_dfb_id)));
 #endif
 
 #ifdef PACKER_L1_ACC
@@ -437,21 +437,21 @@ void kernel_main() {
 
                         uint32_t start_dst_index = 0;
                         if constexpr (untilize_out) {
-                            pack_untilize_dest<out_subblock_num_tiles>(mm_out_cb_id);
+                            pack_untilize_dest<out_subblock_num_tiles>(mm_out_dfb_id);
                         } else {
-                            pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                            pack_tile_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
                         }
 
                         tile_regs_release();
                         if constexpr (untilize_out) {
-                            pack_untilize_uninit(mm_out_cb_id);
+                            pack_untilize_uninit(mm_out_dfb_id);
                         }
-                        mm_out_cb.push_back(out_subblock_num_tiles);
+                        mm_out_dfb.push_back(out_subblock_num_tiles);
 
                     } else if (spill) {
                         tile_regs_commit();
                         // Move partial result to interm buffer
-                        mm_partials_cb.reserve_back(out_subblock_num_tiles);
+                        mm_partials_dfb.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
@@ -463,10 +463,10 @@ void kernel_main() {
 #endif
 
                         uint32_t start_dst_index = 0;
-                        pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+                        pack_tile_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
 
                         tile_regs_release();
-                        mm_partials_cb.push_back(out_subblock_num_tiles);
+                        mm_partials_dfb.push_back(out_subblock_num_tiles);
                     }
 
                     in1_index_subblock_offset += out_subblock_w;
@@ -478,8 +478,8 @@ void kernel_main() {
 
             // Last iteration does spill and reload to output buffer
             if (block < num_blocks - 2 && spill) {
-                mm_partials_cb.wait_front(out_block_num_tiles);
-                mm_partials_cb.pop_front(out_block_num_tiles);
+                mm_partials_dfb.wait_front(out_block_num_tiles);
+                mm_partials_dfb.pop_front(out_block_num_tiles);
             }
             if (block == num_blocks - 2 && spill) {
                 enable_reload = true;
@@ -490,17 +490,17 @@ void kernel_main() {
             }
 #endif
 
-            input0_cb.pop_front(in0_block_num_tiles);
+            input0_dfb.pop_front(in0_block_num_tiles);
             // Pop the consumed in1 block with the standard API (advances rd_ptr to the next FIFO
             // block, wrapping at the fifo limit). Both DRAM and streaming take this path; streaming
             // relies on llk_pop_tiles publishing the consumer ack only after the unpacker drains the
             // block, which is what lets the reader recycle the GCB slot (see consume_in1_cb).
             if constexpr (consume_in1_cb) {
-                in1_cb.pop_front(in1_block_num_tiles);
+                in1_dfb.pop_front(in1_block_num_tiles);
             }
 #if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
             curr_in1_block_index = next_in1_block_index;
-            UNPACK((update_local_cb_rd_ptr(in1_cb_id, next_in1_rd_ptr_addr)));
+            UNPACK((update_local_cb_rd_ptr(in1_dfb_id, next_in1_rd_ptr_addr)));
 #endif
         }
 
@@ -508,9 +508,9 @@ void kernel_main() {
         // Release in1
         sync_buf.reserve_back(1);
         sync_buf.push_back(1);
-        UNPACK((update_local_cb_rd_ptr(in1_cb_id, in1_rd_ptr_start_addr)));  // reset rd_ptr back to the initial addr
+        UNPACK((update_local_cb_rd_ptr(in1_dfb_id, in1_rd_ptr_start_addr)));  // reset rd_ptr back to the initial addr
         UNPACK((update_rd_ptr_to_ring_index(
-            in1_cb_id, in1_block_size_bytes, ring_size, in1_tensor_split)));  // update to next tensor addr
+            in1_dfb_id, in1_block_size_bytes, ring_size, in1_tensor_split)));  // update to next tensor addr
 #endif
     }
 }

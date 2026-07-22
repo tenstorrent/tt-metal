@@ -19,7 +19,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     /*
@@ -117,117 +117,117 @@ void kernel_main() {
     constexpr uint32_t mean_dst = 1;
 
     // input cbs
-    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in_id = tt::CBIndex::c_29;
-    // Welford-fp32 alias for cb_in0 (non-TILIZE_IN path). Shares L1 memory with cb_in0 but has
+    constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_in_id = tt::CBIndex::c_29;
+    // Welford-fp32 alias for dfb_in0 (non-TILIZE_IN path). Shares L1 memory with dfb_in0 but has
     // its own buffer index configured with unpack_to_dest_mode=UnpackToDestFp32
-    // cb_in0 is in Default mode so the final-stage sub_tiles_bcast_scalar (FPU on SrcA) keeps working.
-    constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
+    // dfb_in0 is in Default mode so the final-stage sub_tiles_bcast_scalar (FPU on SrcA) keeps working.
+    constexpr uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
     // Boolean indicating whether the welford kernel uses the alias CB.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     // True when the welford intake CB is configured with UnpackToDestFp32, i.e. the FP32
     // path. Covers both the TILIZE_IN branch (intake CB is c_29) and the non-TILIZE_IN
-    // alias branch (intake CB is cb_in0_welford, see welford_fp32_alias). On this path,
+    // alias branch (intake CB is dfb_in0_welford, see welford_fp32_alias). On this path,
     // transpose_tile routes through llk_math_transpose_dest, whose math-side init
     // records slots [16, 32) of the math-thread replay buffer, clobbering welford's
     // LREG2 / LREG3 portions, so the welford SFPU state must be re-initialized after each
     // transpose. For bf16 input, transpose routes through SrcA without touching the
     // math-thread replay buffer, so no re-init is needed.
     constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
-    constexpr uint32_t cb_eps_id = tt::CBIndex::c_3;
-    constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
-    constexpr uint32_t cb_beta_id = tt::CBIndex::c_6;
-    constexpr uint32_t cb_input_mask_id = tt::CBIndex::c_28;
-    constexpr uint32_t cb_reciprocals_id = tt::CBIndex::c_18;
+    constexpr uint32_t dfb_eps_id = tt::CBIndex::c_3;
+    constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
+    constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
+    constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_28;
+    constexpr uint32_t dfb_reciprocals_id = tt::CBIndex::c_18;
 
     // interm cbs
-    constexpr uint32_t cb_repack_id = tt::CBIndex::c_26;
-    constexpr uint32_t cb_repack_out_id = tt::CBIndex::c_31;
-    constexpr uint32_t cb_x_id = tt::CBIndex::c_24;
-    constexpr uint32_t cb_xmm_id = tt::CBIndex::c_25;
-    constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex_global_id = tt::CBIndex::c_15;
-    constexpr uint32_t cb_ex2pe_id = tt::CBIndex::c_27;
+    constexpr uint32_t dfb_repack_id = tt::CBIndex::c_26;
+    constexpr uint32_t dfb_repack_out_id = tt::CBIndex::c_31;
+    constexpr uint32_t dfb_x_id = tt::CBIndex::c_24;
+    constexpr uint32_t dfb_xmm_id = tt::CBIndex::c_25;
+    constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
+    constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
+    constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_27;
 
     // interm cbs reuse
-    constexpr uint32_t cb_reread_write_out_id = tt::CBIndex::c_22;
+    constexpr uint32_t dfb_reread_write_out_id = tt::CBIndex::c_22;
 
     // output cb
-    constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
+    constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
-    constexpr uint32_t cb_out_id = tt::CBIndex::c_30;
+    constexpr uint32_t dfb_out_id = tt::CBIndex::c_30;
 #else
-    constexpr uint32_t cb_out_id = (do_gamma or do_beta) ? cb_out0_id : cb_reread_write_out_id;
+    constexpr uint32_t dfb_out_id = (do_gamma or do_beta) ? dfb_out0_id : dfb_reread_write_out_id;
 #endif
 
 #ifdef UNTILIZE_OUT
-    constexpr int cb_outgamma_id = cb_in_id;
-    constexpr int cb_inbeta_id = do_gamma ? cb_outgamma_id : cb_reread_write_out_id;
-    constexpr int cb_outbeta_id = do_gamma ? cb_out_id : cb_in_id;
-    constexpr int cb_untilize_in_id = (do_gamma and not do_beta) ? cb_outgamma_id
-                                      : do_beta                  ? cb_outbeta_id
-                                                                 : cb_reread_write_out_id;
-    constexpr int cb_untilize_out_id =
+    constexpr int dfb_outgamma_id = dfb_in_id;
+    constexpr int dfb_inbeta_id = do_gamma ? dfb_outgamma_id : dfb_reread_write_out_id;
+    constexpr int dfb_outbeta_id = do_gamma ? dfb_out_id : dfb_in_id;
+    constexpr int dfb_untilize_in_id = (do_gamma and not do_beta) ? dfb_outgamma_id
+                                       : do_beta                  ? dfb_outbeta_id
+                                                                  : dfb_reread_write_out_id;
+    constexpr int dfb_untilize_out_id =
 #ifdef READER_REPACK
-        cb_repack_out_id;
+        dfb_repack_out_id;
 #else
-        cb_out0_id;
+        dfb_out0_id;
 #endif
 #else
-    constexpr int cb_outgamma_id = do_beta ? cb_in_id : cb_out0_id;
-    constexpr int cb_inbeta_id = do_gamma ? cb_outgamma_id : cb_reread_write_out_id;
-    constexpr int cb_outbeta_id = cb_out0_id;
+    constexpr int dfb_outgamma_id = do_beta ? dfb_in_id : dfb_out0_id;
+    constexpr int dfb_inbeta_id = do_gamma ? dfb_outgamma_id : dfb_reread_write_out_id;
+    constexpr int dfb_outbeta_id = dfb_out0_id;
 #endif
 
-    CircularBuffer cb_beta(cb_beta_id);
-    CircularBuffer cb_eps(cb_eps_id);
-    CircularBuffer cb_ex2pe(cb_ex2pe_id);
-    CircularBuffer cb_ex_global(cb_ex_global_id);
-    CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    CircularBuffer cb_gamma(cb_gamma_id);
-    CircularBuffer cb_in(cb_in_id);
-    CircularBuffer cb_in0(cb_in0_id);
-    CircularBuffer cb_in0_welford(cb_in0_welford_id);
-    CircularBuffer cb_input_mask(cb_input_mask_id);
-    CircularBuffer cb_out(cb_out_id);
-    CircularBuffer cb_x(cb_x_id);
-    CircularBuffer cb_xmm(cb_xmm_id);
+    DataflowBuffer dfb_beta(dfb_beta_id);
+    DataflowBuffer dfb_eps(dfb_eps_id);
+    DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
+    DataflowBuffer dfb_ex_global(dfb_ex_global_id);
+    DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
+    DataflowBuffer dfb_gamma(dfb_gamma_id);
+    DataflowBuffer dfb_in(dfb_in_id);
+    DataflowBuffer dfb_in0(dfb_in0_id);
+    DataflowBuffer dfb_in0_welford(dfb_in0_welford_id);
+    DataflowBuffer dfb_input_mask(dfb_input_mask_id);
+    DataflowBuffer dfb_out(dfb_out_id);
+    DataflowBuffer dfb_x(dfb_x_id);
+    DataflowBuffer dfb_xmm(dfb_xmm_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
-    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_id);
+    binary_op_init_common(dfb_in0_id, dfb_in0_id, dfb_in_id);
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
-    constexpr uint32_t cb_in_rm_id = cb_repack_id;
+    constexpr uint32_t dfb_in_rm_id = dfb_repack_id;
     compute_kernel_lib::tilize<
         per_core_N,
-        cb_in_rm_id,
-        cb_in_id,
+        dfb_in_rm_id,
+        dfb_in_id,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
-    constexpr uint32_t cb_in_rm_id = cb_in0_id;
+    constexpr uint32_t dfb_in_rm_id = dfb_in0_id;
     compute_kernel_lib::tilize<
         per_core_N,
-        cb_in_rm_id,
-        cb_in_id,
+        dfb_in_rm_id,
+        dfb_in_id,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::NoWait,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
-    cb_in.wait_front(per_core_MN);
+    dfb_in.wait_front(per_core_MN);
 #else
-    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in0_id);
+    binary_op_init_common(dfb_in0_id, dfb_in0_id, dfb_in0_id);
 #endif
 
     if constexpr (welford_unpack_fp32_active) {
         // Reconfigure the transpose op for the welford intake CB. The factory marks this CB
         // with UnpackToDestFp32: c_29 in the TILIZE_IN branch, c_19 in the non-TILIZE_IN alias branch.
 #ifdef TILIZE_IN
-        transpose_init(cb_in_id);
+        transpose_init(dfb_in_id);
 #else
-        transpose_init(cb_in0_welford_id);
+        transpose_init(dfb_in0_welford_id);
 #endif
     }
 
@@ -244,20 +244,20 @@ void kernel_main() {
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, reciprocal_size>;
     auto p_reciprocal =
-        norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals_id, /*tile_idx=*/0);
+        norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb_reciprocals_id, /*tile_idx=*/0);
 
-    cb_eps.wait_front(1);
-    cb_input_mask.wait_front(num_tiles_input_mask);
+    dfb_eps.wait_front(1);
+    dfb_input_mask.wait_front(num_tiles_input_mask);
 
     if constexpr (do_gamma) {
-        cb_gamma.wait_front(per_core_N);
+        dfb_gamma.wait_front(per_core_N);
     }
     if constexpr (do_beta) {
-        cb_beta.wait_front(per_core_N);
+        dfb_beta.wait_front(per_core_N);
     }
 
     for (uint32_t b = 0; b < num_batches; ++b) {
-        cb_ex_partial.reserve_back(2);
+        dfb_ex_partial.reserve_back(2);
         tile_regs_acquire();
         welford_init();
 
@@ -292,20 +292,20 @@ void kernel_main() {
                 uint32_t curr_xy_coord = block_xy_coord;
 
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-                    cb_in0.wait_front(1);
+                    dfb_in0.wait_front(1);
                     if constexpr (welford_fp32_alias) {
-                        // The reader pushes cb_in0 and cb_in0_welford in separate push_back
-                        // calls (cb_in0 first, alias second); cb_in0.wait_front above only
+                        // The reader pushes dfb_in0 and dfb_in0_welford in separate push_back
+                        // calls (dfb_in0 first, alias second); dfb_in0.wait_front above only
                         // synchronizes on the first. Wait on the alias to synchronize on the
                         // second before transpose_tile reads via the alias below.
-                        cb_in0_welford.wait_front(1);
+                        dfb_in0_welford.wait_front(1);
                     }
 #ifdef TILIZE_IN
-                    transpose_init(cb_in_id);
-                    transpose_tile(cb_in_id, 0, input_dst);
+                    transpose_init(dfb_in_id);
+                    transpose_tile(dfb_in_id, 0, input_dst);
 #else
-                    transpose_init(cb_in0_welford_id);
-                    transpose_tile(cb_in0_welford_id, 0, input_dst);
+                    transpose_init(dfb_in0_welford_id);
+                    transpose_tile(dfb_in0_welford_id, 0, input_dst);
 #endif
 
                     // Re-establish the welford SFPU replay buffer state. When transpose_tile
@@ -357,9 +357,9 @@ void kernel_main() {
                             break;
                         }
                     }
-                    cb_in0.pop_front(1);
+                    dfb_in0.pop_front(1);
                     if constexpr (welford_fp32_alias) {
-                        cb_in0_welford.pop_front(1);
+                        dfb_in0_welford.pop_front(1);
                     }
                 }
                 block_xy_coord += num_channels_per_group;
@@ -375,34 +375,34 @@ void kernel_main() {
 
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile_block(mean_dst, cb_ex_partial_id, 2);
+        pack_tile_block(mean_dst, dfb_ex_partial_id, 2);
         tile_regs_release();
-        cb_ex_partial.push_back(2);
+        dfb_ex_partial.push_back(2);
         // End Statistics Aggregation
 
         // Start Normalization Factor Calculation
         // Wait for final welford values in cb_ex_global_id
-        cb_ex_global.wait_front(2 * num_groups);
-        cb_ex2pe.reserve_back(num_groups);
+        dfb_ex_global.wait_front(2 * num_groups);
+        dfb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
-        add_tiles_init(cb_ex_global_id, cb_eps_id);
-        reconfig_data_format_srcb(cb_eps_id);
+        add_tiles_init(dfb_ex_global_id, dfb_eps_id);
+        reconfig_data_format_srcb(dfb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
-            add_tiles(cb_ex_global_id, cb_eps_id, 1 + (g << 1), 0, dst0);
+            add_tiles(dfb_ex_global_id, dfb_eps_id, 1 + (g << 1), 0, dst0);
 
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
             rsqrt_tile<true>(dst0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe_id);
+            pack_tile(dst0, dfb_ex2pe_id);
             tile_regs_release();
         }
-        cb_ex2pe.push_back(num_groups);
+        dfb_ex2pe.push_back(num_groups);
         // End Normalization Factor Calculation
 
-        cb_ex2pe.wait_front(num_groups);
+        dfb_ex2pe.wait_front(num_groups);
 
         // Start Final Normalization
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
@@ -430,90 +430,90 @@ void kernel_main() {
                 uint32_t block_w_index = 0;
 
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-                    cb_in0.wait_front(1);
+                    dfb_in0.wait_front(1);
                     if constexpr (welford_fp32_alias) {
-                        // The reader pushes cb_in0 and cb_in0_welford in lockstep; wait on the
+                        // The reader pushes dfb_in0 and dfb_in0_welford in lockstep; wait on the
                         // alias so its rd_ptr advance (via pop_front below) is synchronized with
                         // the reader's wr_ptr advance on the alias.
-                        cb_in0_welford.wait_front(1);
+                        dfb_in0_welford.wait_front(1);
                     }
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
-                        cb_xmm.reserve_back(2);
+                        dfb_xmm.reserve_back(2);
 
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
-                        sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
-                        reconfig_data_format_srcb(cb_eps_id, cb_ex_global_id);
+                        sub_tiles_bcast_scalar_init_short(dfb_in0_id, dfb_ex_global_id);
+                        reconfig_data_format_srcb(dfb_eps_id, dfb_ex_global_id);
 
                         tile_regs_acquire();
-                        sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, 0, 0 + (g << 1), dst0);
+                        sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, 0, 0 + (g << 1), dst0);
                         tile_regs_commit();
                         tile_regs_wait();
-                        pack_tile(dst0, cb_xmm_id);
+                        pack_tile(dst0, dfb_xmm_id);
                         tile_regs_release();
 
                         // // b. 1/[sqrt(Var + eps)] * mask
                         const uint32_t mask_offset = g * block_w;
                         const uint32_t mask_index = mask_offset + block_w_index;
 
-                        mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
-                        reconfig_data_format_srcb(cb_ex_global_id, cb_ex2pe_id);
+                        mul_tiles_bcast_scalar_init_short(dfb_input_mask_id, dfb_ex2pe_id);
+                        reconfig_data_format_srcb(dfb_ex_global_id, dfb_ex2pe_id);
                         tile_regs_acquire();
-                        mul_tiles_bcast_scalar(cb_input_mask_id, cb_ex2pe_id, mask_index, g, dst0);
+                        mul_tiles_bcast_scalar(dfb_input_mask_id, dfb_ex2pe_id, mask_index, g, dst0);
                         tile_regs_commit();
                         tile_regs_wait();
-                        pack_tile(dst0, cb_xmm_id);
+                        pack_tile(dst0, dfb_xmm_id);
                         tile_regs_release();
-                        cb_xmm.push_back(2);
+                        dfb_xmm.push_back(2);
 
                         // // c. a * b
-                        cb_xmm.wait_front(2);
-                        mul_tiles_init(cb_xmm_id, cb_xmm_id);
-                        reconfig_data_format_srcb(cb_ex2pe_id, cb_xmm_id);
+                        dfb_xmm.wait_front(2);
+                        mul_tiles_init(dfb_xmm_id, dfb_xmm_id);
+                        reconfig_data_format_srcb(dfb_ex2pe_id, dfb_xmm_id);
                         tile_regs_acquire();
-                        mul_tiles(cb_xmm_id, cb_xmm_id, 0, 1, dst0);
+                        mul_tiles(dfb_xmm_id, dfb_xmm_id, 0, 1, dst0);
                         tile_regs_commit();
-                        cb_xmm.pop_front(2);
-                        cb_xmm.reserve_back(1);
+                        dfb_xmm.pop_front(2);
+                        dfb_xmm.reserve_back(1);
                         tile_regs_wait();
-                        pack_tile(dst0, cb_xmm_id);
+                        pack_tile(dst0, dfb_xmm_id);
                         tile_regs_release();
-                        cb_xmm.push_back(1);
+                        dfb_xmm.push_back(1);
 
                         // // d. Add to cb_xmm_id (accumulate results)
                         // // First we get the result in dst0
                         if (group_offset == 0) {
                             // When group_offset is 0, this is the first group for this tile,
                             // so we can copy the results to cb_x_id without needing to add them
-                            copy_tile_init(cb_xmm_id);
+                            copy_tile_init(dfb_xmm_id);
 
-                            cb_xmm.wait_front(1);
+                            dfb_xmm.wait_front(1);
                             tile_regs_acquire();
-                            copy_tile(cb_xmm_id, 0, dst0);
+                            copy_tile(dfb_xmm_id, 0, dst0);
                             tile_regs_commit();
-                            cb_xmm.pop_front(1);
+                            dfb_xmm.pop_front(1);
                         } else {
                             // This is not the first group for this tile, so we need to add
                             // the results over what is already in cb_x_id
-                            add_tiles_init(cb_x_id, cb_xmm_id);
+                            add_tiles_init(dfb_x_id, dfb_xmm_id);
 
-                            cb_xmm.wait_front(1);
-                            cb_x.wait_front(1);
+                            dfb_xmm.wait_front(1);
+                            dfb_x.wait_front(1);
                             tile_regs_acquire();
-                            add_tiles(cb_x_id, cb_xmm_id, 0, 0, dst0);
+                            add_tiles(dfb_x_id, dfb_xmm_id, 0, 0, dst0);
                             tile_regs_commit();
-                            cb_xmm.pop_front(1);
-                            cb_x.pop_front(1);
+                            dfb_xmm.pop_front(1);
+                            dfb_x.pop_front(1);
                         }
 
                         // Then we pack the result into cb_x_id
-                        cb_x.reserve_back(1);
+                        dfb_x.reserve_back(1);
                         tile_regs_wait();
-                        pack_tile(dst0, cb_x_id);
+                        pack_tile(dst0, dfb_x_id);
                         tile_regs_release();
-                        cb_x.push_back(1);
+                        dfb_x.push_back(1);
 
                         uint32_t cols_available = tile_width - group_offset;
                         uint32_t cols_consumed = std::min(cols_available, channels_left);
@@ -542,57 +542,57 @@ void kernel_main() {
                             break;
                         }
                     }
-                    cb_in0.pop_front(1);
+                    dfb_in0.pop_front(1);
                     if constexpr (welford_fp32_alias) {
-                        cb_in0_welford.pop_front(1);
+                        dfb_in0_welford.pop_front(1);
                     }
 
                     if constexpr (do_gamma) {
-                        mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
-                        reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
+                        mul_bcast_rows_init_short(dfb_x_id, dfb_gamma_id);
+                        reconfig_data_format_srcb(dfb_xmm_id, dfb_gamma_id);
 
-                        cb_x.wait_front(1);
+                        dfb_x.wait_front(1);
                         tile_regs_acquire();
-                        mul_tiles_bcast_rows(cb_x_id, cb_gamma_id, 0, nt, dst0);
+                        mul_tiles_bcast_rows(dfb_x_id, dfb_gamma_id, 0, nt, dst0);
                         tile_regs_commit();
-                        cb_x.pop_front(1);
-                        cb_x.reserve_back(1);
+                        dfb_x.pop_front(1);
+                        dfb_x.reserve_back(1);
                         tile_regs_wait();
-                        pack_tile(dst0, cb_x_id);
+                        pack_tile(dst0, dfb_x_id);
                         tile_regs_release();
-                        cb_x.push_back(1);
+                        dfb_x.push_back(1);
                     }
 
                     if constexpr (do_beta) {
-                        add_bcast_rows_init_short(cb_x_id, cb_beta_id);
-                        reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
+                        add_bcast_rows_init_short(dfb_x_id, dfb_beta_id);
+                        reconfig_data_format_srcb(do_gamma ? dfb_gamma_id : dfb_xmm_id, dfb_beta_id);
 
-                        cb_x.wait_front(1);
+                        dfb_x.wait_front(1);
                         tile_regs_acquire();
-                        add_tiles_bcast_rows(cb_x_id, cb_beta_id, 0, nt, dst0);
+                        add_tiles_bcast_rows(dfb_x_id, dfb_beta_id, 0, nt, dst0);
                         tile_regs_commit();
-                        cb_x.pop_front(1);
-                        cb_x.reserve_back(1);
+                        dfb_x.pop_front(1);
+                        dfb_x.reserve_back(1);
                         tile_regs_wait();
-                        pack_tile(dst0, cb_x_id);
+                        pack_tile(dst0, dfb_x_id);
                         tile_regs_release();
-                        cb_x.push_back(1);
+                        dfb_x.push_back(1);
                     }
 
                     // Write out the final output
-                    copy_tile_init(cb_x_id);
-                    reconfig_data_format_srcb(do_beta ? cb_beta_id : cb_xmm_id, cb_x_id);
+                    copy_tile_init(dfb_x_id);
+                    reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
 
-                    cb_x.wait_front(1);
+                    dfb_x.wait_front(1);
                     tile_regs_acquire();
-                    copy_tile(cb_x_id, 0, dst0);
+                    copy_tile(dfb_x_id, 0, dst0);
                     tile_regs_commit();
-                    cb_x.pop_front(1);
-                    cb_out.reserve_back(1);
+                    dfb_x.pop_front(1);
+                    dfb_out.reserve_back(1);
                     tile_regs_wait();
-                    pack_tile(dst0, cb_out_id);
+                    pack_tile(dst0, dfb_out_id);
                     tile_regs_release();
-                    cb_out.push_back(1);
+                    dfb_out.push_back(1);
                 }
             }
 
@@ -600,8 +600,8 @@ void kernel_main() {
             // untilize - DEST capacity auto-detected
             compute_kernel_lib::untilize<
                 per_core_N,
-                cb_untilize_in_id,
-                cb_untilize_out_id,
+                dfb_untilize_in_id,
+                dfb_untilize_out_id,
                 compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
                 compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
@@ -609,18 +609,18 @@ void kernel_main() {
         }
         // End Final Normalization
 
-        cb_ex_global.pop_front(2 * num_groups);
-        cb_ex2pe.pop_front(num_groups);
+        dfb_ex_global.pop_front(2 * num_groups);
+        dfb_ex2pe.pop_front(num_groups);
     }
 
-    cb_eps.pop_front(1);
-    cb_input_mask.pop_front(num_tiles_input_mask);
+    dfb_eps.pop_front(1);
+    dfb_input_mask.pop_front(num_tiles_input_mask);
 
     // Pop all the cb_beta_id and cb_gamma_id if used
     if constexpr (do_beta) {
-        cb_beta.pop_front(per_core_N);
+        dfb_beta.pop_front(per_core_N);
     }
     if constexpr (do_gamma) {
-        cb_gamma.pop_front(per_core_N);
+        dfb_gamma.pop_front(per_core_N);
     }
 }

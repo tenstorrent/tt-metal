@@ -35,47 +35,47 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
-    constexpr uint32_t cb_reduce_id = tt::CBIndex::c_1;
+    constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_reduce_id = tt::CBIndex::c_1;
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_14;
+    constexpr uint32_t dfb_out = tt::CBIndex::c_14;
 
-    constexpr uint32_t cb_x2_id = tt::CBIndex::c_6;   // x**2
-    constexpr uint32_t cb_res_id = tt::CBIndex::c_5;  // residual b (unused when !FUSE_PRE_ADD)
-    constexpr uint32_t cb_inp_id = FUSE_PRE_ADD ? tt::CBIndex::c_3 : cb_in0_id;  // fused a + b, or just a
+    constexpr uint32_t dfb_x2_id = tt::CBIndex::c_6;   // x**2
+    constexpr uint32_t dfb_res_id = tt::CBIndex::c_5;  // residual b (unused when !FUSE_PRE_ADD)
+    constexpr uint32_t dfb_inp_id = FUSE_PRE_ADD ? tt::CBIndex::c_3 : dfb_in0_id;  // fused a + b, or just a
 
     if constexpr (FUSE_PRE_ADD) {
-        binary_op_init_common(cb_in0_id, cb_res_id, cb_inp_id);
+        binary_op_init_common(dfb_in0_id, dfb_res_id, dfb_inp_id);
     } else {
-        binary_op_init_common(cb_inp_id, cb_reduce_id, cb_x2_id);
+        binary_op_init_common(dfb_inp_id, dfb_reduce_id, dfb_x2_id);
     }
 
-    CircularBuffer cb_in0(cb_in0_id);
-    CircularBuffer cb_res(cb_res_id);
-    CircularBuffer cb_inp(cb_inp_id);
-    CircularBuffer cb_x2(cb_x2_id);
-    CircularBuffer cb_reduce(cb_reduce_id);
+    DataflowBuffer dfb_in0(dfb_in0_id);
+    DataflowBuffer dfb_res(dfb_res_id);
+    DataflowBuffer dfb_inp(dfb_inp_id);
+    DataflowBuffer dfb_x2(dfb_x2_id);
+    DataflowBuffer dfb_reduce(dfb_reduce_id);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Fuse pre-add: cb_inp_id = cb_in0_id + cb_res_id (no-op when !FUSE_PRE_ADD)
-        pre_add::one_row<FUSE_PRE_ADD>(cb_in0, cb_res, cb_inp, Wt, blk);
+        pre_add::one_row<FUSE_PRE_ADD>(dfb_in0, dfb_res, dfb_inp, Wt, blk);
 
         /*
          * x**2
          */
-        reconfig_data_format(cb_inp_id, cb_inp_id);
-        pack_reconfig_data_format(cb_x2_id);
-        mul_tiles_init(cb_inp_id, cb_inp_id);
+        reconfig_data_format(dfb_inp_id, dfb_inp_id);
+        pack_reconfig_data_format(dfb_x2_id);
+        mul_tiles_init(dfb_inp_id, dfb_inp_id);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_inp.wait_front(wt + blk);  // cumulative wait
-            cb_x2.reserve_back(blk);
+            dfb_inp.wait_front(wt + blk);  // cumulative wait
+            dfb_x2.reserve_back(blk);
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(cb_inp_id, cb_inp_id, wt + wtr, wt + wtr, wtr);
-                pack_tile(wtr, cb_x2_id, wt + wtr);
+                mul_tiles(dfb_inp_id, dfb_inp_id, wt + wtr, wt + wtr, wtr);
+                pack_tile(wtr, dfb_x2_id, wt + wtr);
             }
             REL();
-            cb_x2.push_back(blk);
+            dfb_x2.push_back(blk);
         }
 
         /*
@@ -85,11 +85,11 @@ void kernel_main() {
         compute_kernel_lib::reduce<
             PoolType::AVG,
             ReduceDim::REDUCE_ROW,
-            cb_x2_id,
-            cb_reduce_id,
-            cb_out,
+            dfb_x2_id,
+            dfb_reduce_id,
+            dfb_out,
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
-        cb_inp.pop_front(Wt);
+        dfb_inp.pop_front(Wt);
     }
-    cb_reduce.pop_front(1);
+    dfb_reduce.pop_front(1);
 }

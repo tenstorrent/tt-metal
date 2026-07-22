@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 
@@ -48,31 +48,31 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr uint32_t in3_page_size = get_compile_time_arg_val(9);
     constexpr uint32_t in3_num_pages = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
-    constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
-    constexpr DataFormat bias_data_format = get_dataformat(cb_id_in3);
+    constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
+    constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(dfb_id_in3);
+    constexpr DataFormat bias_data_format = get_dataformat(dfb_id_in3);
 #endif
 
-    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t cb_id_out_reshard = get_named_compile_time_arg_val("cb_out_reshard");
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t dfb_id_out = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t dfb_id_out_reshard = get_named_compile_time_arg_val("cb_out_reshard");
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the
     // in1 CB pages are sized to match, so the block size in L1 must use the padded page stride
     // (in1_num_pages * in1_page_size) rather than get_tile_size() (the unpadded tile size).
     constexpr uint32_t in1_block_size_bytes = in1_num_pages * in1_page_size;
 
     Noc noc;
-    CircularBuffer cb_in1(cb_id_in1);
-    CircularBuffer cb_out(cb_id_out);
-    CircularBuffer cb_out_reshard(cb_id_out_reshard);
+    DataflowBuffer dfb_in1(dfb_id_in1);
+    DataflowBuffer dfb_out(dfb_id_out);
+    DataflowBuffer dfb_out_reshard(dfb_id_out_reshard);
 #ifdef FUSE_BIAS
-    CircularBuffer cb_in3(cb_id_in3);
+    DataflowBuffer dfb_in3(dfb_id_in3);
 #endif
 
     //  READER
     uint32_t l1_write_addr_in1;
     uint32_t l1_read_addr_in1 = 0;
-    constexpr DataFormat in1_data_format = get_dataformat(cb_id_in1);
+    constexpr DataFormat in1_data_format = get_dataformat(dfb_id_in1);
 
     AllocatorBank<AllocatorBankType::DRAM> dram_bank;
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
@@ -81,8 +81,8 @@ void kernel_main() {
 #ifdef ARCH_GRAYSKULL
     for (uint32_t block = 0; block < num_blocks; ++block) {
         // Operand 1
-        cb_in1.reserve_back(in1_block_num_tiles);
-        l1_write_addr_in1 = cb_in1.get_write_ptr();
+        dfb_in1.reserve_back(in1_block_num_tiles);
+        l1_write_addr_in1 = dfb_in1.get_write_ptr();
 
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
             noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
@@ -97,7 +97,7 @@ void kernel_main() {
         }
 
         noc.async_read_barrier();
-        cb_in1.push_back(in1_block_num_tiles);
+        dfb_in1.push_back(in1_block_num_tiles);
     }
 #else
     constexpr uint32_t total_num_blocks_in_buffer = 3;
@@ -111,9 +111,9 @@ void kernel_main() {
     // both block 0 and block 1 to avoid writing outside the reserved CB window.
     // When num_blocks == 1 the CB is single-buffered, so reserve only 1 block.
     constexpr uint32_t initial_reserved_blocks = (num_blocks > 1) ? 2 : 1;
-    cb_in1.reserve_back(in1_block_num_tiles * initial_reserved_blocks);
+    dfb_in1.reserve_back(in1_block_num_tiles * initial_reserved_blocks);
     uint32_t l1_write_addr_in1_offset = 0;
-    uint32_t l1_write_addr_in1_start = cb_in1.get_write_ptr();
+    uint32_t l1_write_addr_in1_start = dfb_in1.get_write_ptr();
     l1_write_addr_in1 = l1_write_addr_in1_start;
     for (uint32_t block = 0; block < num_blocks; ++block) {
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
@@ -130,11 +130,11 @@ void kernel_main() {
 
         if (num_free_blocks_in_buffer == 2) {
             noc.async_read_barrier<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(block_trid_to_wait)});
-            cb_in1.push_back(in1_block_num_tiles);
+            dfb_in1.push_back(in1_block_num_tiles);
             // wait for next block trid
             block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
             // reserve for next block
-            cb_in1.reserve_back(in1_block_num_tiles * 2);
+            dfb_in1.reserve_back(in1_block_num_tiles * 2);
         } else {
             num_free_blocks_in_buffer -= 1;
         }
@@ -150,13 +150,13 @@ void kernel_main() {
     }
     // last block to wait
     noc.async_read_barrier<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(block_trid_to_wait)});
-    cb_in1.push_back(in1_block_num_tiles);
+    dfb_in1.push_back(in1_block_num_tiles);
 #endif
 
 #ifdef FUSE_BIAS
     // Operand 1
-    cb_in3.reserve_back(in1_block_w);
-    uint32_t l1_write_addr_in3 = cb_in3.get_write_ptr();
+    dfb_in3.reserve_back(in1_block_w);
+    uint32_t l1_write_addr_in3 = dfb_in3.get_write_ptr();
     uint32_t l1_read_addr_in3 = 0;
 
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
@@ -176,19 +176,19 @@ void kernel_main() {
 
     // Barrier! make sure the reads are done
     noc.async_read_barrier();
-    cb_in3.push_back(in1_block_w);
+    dfb_in3.push_back(in1_block_w);
 #endif
 
     // WRITER
-    cb_out.wait_front(out_block_num_tiles);
+    dfb_out.wait_front(out_block_num_tiles);
 
 #ifndef SKIP_WRITE_BACK
     uint32_t index_offset = 0;
     uint32_t l1_read_addr_out_offset = 0;
 
     for (uint32_t i = 0; i < num_shard_to_write_back; ++i) {
-        uint32_t l1_read_addr_out = cb_out.get_read_ptr() + l1_read_addr_out_offset;
-        uint32_t l1_write_addr_out_reshard = cb_out_reshard.get_write_ptr();
+        uint32_t l1_read_addr_out = dfb_out.get_read_ptr() + l1_read_addr_out_offset;
+        uint32_t l1_write_addr_out_reshard = dfb_out_reshard.get_write_ptr();
 
         if (i == 0) {
             l1_write_addr_out_reshard += reshard_tensor_start_offset;
@@ -216,7 +216,7 @@ void kernel_main() {
     noc.async_write_barrier();
 #endif
 
-    cb_out.pop_front(out_block_num_tiles);
+    dfb_out.pop_front(out_block_num_tiles);
 
     // Restore NCRISC_RD_CMD_BUF NOC_CTRL to the firmware default (VC=1, set in
     // noc_init). set_async_read_state<NocOptions::CUSTOM_VC> writes a per-bank VC into NOC_CTRL
