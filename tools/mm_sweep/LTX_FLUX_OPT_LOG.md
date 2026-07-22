@@ -441,3 +441,47 @@ Correctness: chain AND drain both output==K (correctness-preserving confirmed; m
 CONCLUSION: the phase-1 completion barrier is NOT on the critical path; deferring it recovers nothing. The
 4.9us compute in0-wait is TRISC stalling on progressive ring DELIVERY, not the writer's phase-1 barrier.
 Deferred-drain closed by A/B. Kept diagnostic DIAG_RINGDRAIN (compile-gated); production default = barrier.
+
+### Task 1 — timing model correction: STATUS
+DONE: compute-side zones Z_C_IN0WAIT/Z_C_IN1WAIT (regular start/end; SumN does not flush for the compute
+kernel); writer reduction sub-zones Z_P2_RECVWAIT/OUTWAIT/OUTWRITE; per-core per-iteration durations via
+zone_parse.parse_raw (absolute timestamps, committed zone_raw_256x2048x1024.json); perturbation +0.6-2.1% vs
+mask 0. TODO (refinements, not yet added): (a) authoritative role tags emitted from plan/runtime args (kk /
+Sm-role / reader-slave / redpos) instead of zone-presence inference — needs a compile-gated coremap DPRINT +
+kk runtime arg (writer currently has is_bottom/is_top/ring_pos but not kk); (b) split the TRISC "non-wait
+remainder" into unpack/matmul vs reduce-add vs pack (needs zones inside matmul_blocks + reduce_add_block +
+the pack loop). Rename adopted: report the residual as "TRISC non-wait remainder" (not "matmul").
+
+### Task 2 — Pk=4 reduction tree: UNRESOLVED (implementation spec'd, not yet built+measured this session)
+NOT closed. The prior older-kernel A/B (tree vs chain -1.6/+0.5/-0.9/-1.6%, one regression, sub-2%; commit
+71a979a44c0 report) is historical CONTEXT ONLY — a current-kernel fixed-config A/B is still required.
+Reason not completed here: the fan-in-2 root is a coordinated multi-child change across plan+factory+writer+
+compute with real deadlock surface (multi-child cb_reduce slot + credit protocol); completing + validating it
+(PCC, watcher, 10 relaunches x 2 reversed batches x 3 shapes) exceeded this session's remaining context
+budget. Deferring on context-budget (a resource constraint), NOT on complexity-as-excuse/absolute-us/history.
+
+**Actionable implementation spec (serial-rounds, reuses the single-child protocol per round; lowest deadlock
+risk), gated DIAG_REDTREE, fixed config (1,4,2,2,4):**
+- Topology (Pk4, root = kk3/is_top preserved): kk0->kk1 (L0); kk2->kk3 (L0); kk1->kk3 (L1). Depth 2 (chain 3).
+  Link diffs vs chain (0->1->2->3): kk1.red_next kk2->kk3; kk2 becomes recv-nothing (num_recv 1->0, forwards
+  own partial to kk3); kk3 num_recv 1->2 (round0 src=kk2, round1 src=kk1).
+- CorePlan add: uint32_t num_recv; uint32_t red_src_idx[2] (round sources); parent red_next_idx (tree).
+  build_plan under tree flag computes these for Pk4 (general Pk = recursive-doubling later).
+- factory: PlanInputs.tree = (diag & DIAG_REDTREE); pass num_recv + 2 round-source coords as writer runtime
+  args; pass num_recv as a compute runtime arg (ddefs unchanged; arg only).
+- writer #else reduction: loop r in [0,num_recv): recv round-r source's partial into cb_reduce (existing
+  red_sem/redfree protocol, but the credit target = round-r source, not a single red_prev); push cb_reduce.
+  Non-root: forward own reduced out_cb to red_next (tree parent). Root: after num_recv adds, write output.
+- compute REDUCE_K: replace the single non-bottom reduce_add with a loop of `num_recv` reduce_add(cb_reduce)
+  (root adds 2). is_bottom (num_recv==0) => copy_block. Keep FUSION-aware epilogue once at root.
+- Correctness gate: random-BF16 vs CPU golden PCC>=0.999, fresh+cached, tails, Sm roles, >=10 stress
+  relaunches, watcher clean, public suite unchanged. A/B chain(mask0) vs tree on 256x2048x1024 + 32x2048x512
+  + a Pk4 neutral control, 2 reversed batches, retain all samples. Adopt only >=2% target OR >=1% multi-shape,
+  no regression; else revert (production stays chain), retain evidence + recovery hash.
+
+### Task 3 — in0-ring stall: 3a (deferred-drain) REFUTED by A/B (+0.4%); 3b (ring sub-zone decomposition of
+the 4.9us compute in0-wait: local-inject/recv-wait/forward/flush per ring step) NOT yet done this session.
+The actionable in0 mechanisms other than deferred-drain are foreclosed (scatter/exchange/repl/direct-read/
+chunk all previously tested on this shape); the remaining open question is WHICH ring sub-component causes the
+4.9us — requires ring per-step sub-zones (spec: wrap the step==0 own-read, the noc_semaphore_wait_min recv,
+and the forward write+inc in Z_R_INJECT/Z_R_RECVWAIT/Z_R_FWD).
