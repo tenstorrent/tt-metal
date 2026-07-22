@@ -1330,6 +1330,28 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
 
         TT_ASSERT(nodes.size() >= 2, "Graph descriptor connections must have at least two nodes");
 
+        // Directional inter-mesh connections are not yet supported end-to-end (issue #50292). Only the authored
+        // direction is recorded, so in the control plane the peer endpoint never gathers the physical cable (the
+        // two-sided connection_hash join needs both sides) and strict binding resolves 0 routers -> a hard-fatal
+        // with a confusing "0 resolved" downstream. Surface it clearly here at parse time. Prefer directional:
+        // false until directionality is tracked as a first-class property.
+        if (connection.directional()) {
+            std::string endpoints;
+            for (const auto& node_global_id : nodes) {
+                if (!endpoints.empty()) {
+                    endpoints += " -> ";
+                }
+                endpoints += instances_.at(node_global_id).name;
+            }
+            TT_THROW(
+                "Graph descriptor '{}' declares a directional inter-mesh connection ({}). Directional inter-mesh "
+                "connections are not fully supported: only the authored direction is stored, so the peer endpoint "
+                "will not gather the cable and strict binding will resolve 0 routers. Use directional: false "
+                "instead. Tracking: https://github.com/tenstorrent/tt-metal/issues/50292.",
+                instance.name,
+                endpoints);
+        }
+
         // Add the connection in every direction of the connection
         for (std::size_t i = 0; i < connection.nodes_size(); ++i) {
             // Create a copy of the nodes vector and swap the first and i-th elements so source is always first
