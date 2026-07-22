@@ -442,8 +442,11 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         this->config.num_entries,
         std::numeric_limits<uint16_t>::max());
     init.num_entries = static_cast<uint16_t>(this->config.num_entries);
-    init.producer_block_size = static_cast<uint8_t>(this->config.producer_block_size);
-    init.consumer_block_size = static_cast<uint8_t>(this->config.consumer_block_size);
+    // Default a non-BLOCKED side (block_size 0 in the config) to 1 here, so the device can assign
+    // LocalDFBInterface::block_size unconditionally. block_size==1 makes the per-block tile-counter
+    // advance fire every entry (i.e. the non-BLOCKED cadence).
+    init.producer_block_size = static_cast<uint8_t>(this->config.producer_block_size ? this->config.producer_block_size : 1u);
+    init.consumer_block_size = static_cast<uint8_t>(this->config.consumer_block_size ? this->config.consumer_block_size : 1u);
 
     log_debug(
         tt::LogMetal,
