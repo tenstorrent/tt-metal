@@ -31,9 +31,11 @@ Two tests:
     must self-identify (be closest to its OWN reference), a proper multi-speaker verification.
 
 SV backend is selectable via ``VV_SIM_SV_BACKEND``:
-  * ``base_plus`` (default) — ``microsoft/wavlm-base-plus-sv`` (ships with transformers).
-  * ``wavlm_large_ft`` — the WavLM-large fine-tuned SV model the VibeVoice technical report uses for
-    SIM (UniSpeech ``wavlm_large_finetune.pth``, vendored torch-only under ``common/wavlm_sv``).
+  * ``wavlm_large_ft`` (default) — the WavLM-large fine-tuned SV model the VibeVoice technical report
+    uses for SIM (UniSpeech ``wavlm_large_finetune.pth``, vendored torch-only under
+    ``common/wavlm_sv``). Clean cosine scale (same speaker ~0.9, impostors ~0).
+  * ``base_plus`` — ``microsoft/wavlm-base-plus-sv`` (ships with transformers, no extra deps;
+    compressed cosine scale so the relative margin, not the absolute value, is the signal).
 Thresholds are env-overridable (``VV_SIM_TARGET_FLOOR``, ``VV_SIM_MARGIN``; backend-aware defaults);
 ``VV_SIM_MAX_NEW_TOKENS`` caps AR steps (default renders ~20-25 s). ``VV_SIM_REUSE_TT=1`` reuses the
 saved TT wavs (e.g. to rescore the same audio with a different SV backend, no device). Artifacts
@@ -72,7 +74,7 @@ SV_SR = 16000  # WavLM feature-extractor sample rate
 #   "wavlm_large_ft" — the WavLM-large fine-tuned SV model the VibeVoice technical report uses for
 #                      SIM (UniSpeech wavlm_large_finetune.pth, vendored under common/wavlm_sv,
 #                      torch-only auto-download). Clean scale (same speaker ~0.9, impostors ~0).
-SV_BACKEND = os.environ.get("VV_SIM_SV_BACKEND", "base_plus")
+SV_BACKEND = os.environ.get("VV_SIM_SV_BACKEND", "wavlm_large_ft")
 # Per backend: (label, same-speaker reference threshold, default target floor, default margin).
 # The reference threshold is context-only ("optimal threshold is dataset-dependent"); the test
 # asserts a relative target-vs-impostor margin, not the absolute value.

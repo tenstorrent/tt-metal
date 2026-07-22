@@ -7,7 +7,7 @@ technical report for Speaker Similarity (SIM) — the UniSpeech ``wavlm_large_fi
 
 The vendored ``WavLM.py``/``modules.py`` are from microsoft/unilm (MIT); ``models/ecapa_tdnn.py``
 is from microsoft/UniSpeech (lightly patched: optional torchaudio/fairseq imports + a torch-only
-WavLM feature extractor). See NOTICE.md. The checkpoint is fetched from a HF mirror; the canonical
+WavLM feature extractor). See README.md. The checkpoint is fetched from a HF mirror; the canonical
 source is microsoft/UniSpeech ``downstreams/speaker_verification`` (wavlm_large_finetune.pth).
 """
 
@@ -76,7 +76,7 @@ def init_model(checkpoint_path=None, device="cpu"):
     """Build the ECAPA-TDNN(WavLM-large) SV model and load the fine-tuned weights."""
     from .models.ecapa_tdnn import ECAPA_TDNN_SMALL
 
-    model = ECAPA_TDNN_SMALL(feat_dim=1024, feat_type="wavlm_large", config_path="__standalone__")
+    model = ECAPA_TDNN_SMALL(feat_dim=1024, config_path="__standalone__")
     sd = torch.load(_resolve_checkpoint(checkpoint_path), map_location="cpu")["model"]
     # Non-strict: the checkpoint carries a training-only loss head (loss_calculator.*) we don't need.
     model.load_state_dict(sd, strict=False)
