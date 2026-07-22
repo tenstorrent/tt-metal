@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <nanobind/nanobind.h>
+#include "ttnn-nanobind/nanobind_fwd.hpp"
 
 namespace nb = nanobind;
 
