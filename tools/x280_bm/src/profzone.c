@@ -574,16 +574,23 @@ static void relay_run_socket(
         wt.noc_selector = 1; /* NOC1: the socket's pinned-buffer ATU mapping is reachable on NOC1 (proven
                               * profsock/old-profzone sender). NOC0 (raw host-channel window) delivers nothing here. */
         wt.posted = 1;
-        uint32_t dwin = SOCKET_WIN_BASE + (uint32_t)h; /* FIFO data window */
-        wt.addr = fifo_addr >> 21;
-        (void)noc_configure_tlb_2m_ext(dwin, &wt, 0);
-        fbase[h] =
-            NOC_2M_WINDOW_BASE + (uint64_t)dwin * NOC_2M_WINDOW_STRIDE + (fifo_addr & (NOC_2M_WINDOW_STRIDE - 1ULL));
-        uint32_t bwin = SOCKET_WIN_BASE + 4u + (uint32_t)h; /* bytes_sent window (separate pinned buf) */
-        wt.addr = bsent_addr >> 21;
-        (void)noc_configure_tlb_2m_ext(bwin, &wt, 0);
-        bsbase[h] =
-            NOC_2M_WINDOW_BASE + (uint64_t)bwin * NOC_2M_WINDOW_STRIDE + (bsent_addr & (NOC_2M_WINDOW_STRIDE - 1ULL));
+        /* The FIFO + its trailing bytes_sent slot may exceed one 2 MiB window (e.g. a 4 MiB buffer). Map nwin
+         * CONSECUTIVE windows over the CONSECUTIVE IOVA pages spanning [fifo_addr, bytes_sent+slack); a linear
+         * write then routes through the right window (the same aperture trick as the raw path). The D2HSocket
+         * FIFO IOVA is NOT guaranteed 2 MiB-aligned, so start from its containing page and keep the in-page
+         * offset. bytes_sent is contiguous (fifo_addr + fifo_bytes), so bsbase = fbase + fifo_bytes -- no
+         * separate window. (void)bsent_addr: the addr is contiguous, kept only for the debug stamp above. */
+        (void)bsent_addr;
+        uint64_t in_off = fifo_addr & (NOC_2M_WINDOW_STRIDE - 1ULL);
+        uint64_t span = in_off + (uint64_t)fifo_bytes[h] + 64; /* data + trailing bytes_sent slot (+slack) */
+        uint64_t nwin = (span + (NOC_2M_WINDOW_STRIDE - 1)) / NOC_2M_WINDOW_STRIDE;
+        uint32_t wbase = SOCKET_WIN_BASE + (uint32_t)(h * nwin);
+        for (uint64_t k = 0; k < nwin; k++) {
+            wt.addr = (fifo_addr + k * NOC_2M_WINDOW_STRIDE) >> 21;
+            (void)noc_configure_tlb_2m_ext(wbase + (uint32_t)k, &wt, 0);
+        }
+        fbase[h] = NOC_2M_WINDOW_BASE + (uint64_t)wbase * NOC_2M_WINDOW_STRIDE + in_off;
+        bsbase[h] = fbase[h] + (uint64_t)fifo_bytes[h]; /* bytes_sent slot follows the FIFO (linear, same aperture) */
         w32(CONS(h), 0);
     }
     fence_();

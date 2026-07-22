@@ -223,8 +223,9 @@ int main(int argc, char** argv) {
                                // --csv from ~438 knee stalls to 0). ~BATCH_RECS*N*sizeof(Rec) max footprint.
     bool do_tracy = false;     // --tracy: emit decoded zones into Tracy (via RealtimeProfilerTracyHandler) so
                                // they visualize. Uses ONE consumer (per-lane START/END order must be serial).
-    bool socket_mode = false;  // --socket: relay drains into one tt-metal D2HSocket per relay (the production
-                               // D2H transport) instead of raw sysmem rings; A/B the knee vs the raw path.
+    bool socket_mode = true;   // DEFAULT: relay drains into one tt-metal D2HSocket per relay (the production D2H
+                               // transport). --raw switches to raw sysmem rings (a test-only mode for A/B). Both
+                               // support the multi-window 4 MiB ring.
     bool bringup = false;      // --bringup: STEP1 -- boot profzone as a PERSISTENT active FW and confirm it
                                // stays resident (idle FW never re-entered); no workload, no P_STOP, exit resident.
     bool do_pin = false;       // --pin: bind each flusher to its own core (0,1,...). Pair with `taskset -c 2-N`
@@ -282,7 +283,9 @@ int main(int argc, char** argv) {
             wnoc1 = true;
             direct = true;
         } else if (a == "--socket") {
-            socket_mode = true;
+            socket_mode = true;  // explicit (already the default)
+        } else if (a == "--raw") {
+            socket_mode = false;  // test-only: raw sysmem rings instead of the D2HSocket transport
         } else if (a == "--nodrain") {
             nodrain = true;
         } else if (a == "--fullread") {
