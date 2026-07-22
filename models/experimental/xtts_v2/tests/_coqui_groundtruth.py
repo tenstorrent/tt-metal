@@ -117,6 +117,17 @@ def coqui_prefill_latents(gpt, inputs_embeds):
 
 
 @torch.no_grad()
+def coqui_cond(gpt, mel):
+    """Block 1 ground truth: conditioning encoder output and the full style embedding.
+
+    Returns (enc [b,1024,T], style [b,1024,32]). style = get_style_emb (perceiver output
+    transposed), i.e. the gpt_cond_latent transposed — what feeds the GPT prefix."""
+    enc = gpt.conditioning_encoder(mel)
+    style = gpt.get_style_emb(mel)
+    return enc, style
+
+
+@torch.no_grad()
 def coqui_decode(gpt, prefix_emb, n_steps, start=START_AUDIO_TOKEN, stop=STOP_AUDIO_TOKEN):
     """Greedy decode via coqui's real GPT2InferenceModel.forward (its own position logic)."""
     gpt.init_gpt_for_inference(kv_cache=True)
