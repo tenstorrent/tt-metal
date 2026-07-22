@@ -1,0 +1,87 @@
+unit_tests_legacy:
+# 2x3 tests run back-to-back
+  - filter: "*SingleDmL1Write*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "*MultiDmAddTwoInts*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+# Worker Fast Dispatch test
+  - filter: "*SingleDmL1Write*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_TENSIX_DISPATCH_CORES: 1
+
+# Fast Dispatch (Dispatch Engine) tests
+  - filter: "*SingleDmL1Write*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*DmLoopback*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarComputeKernelSingleThread*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarComputeKernelMultipleThread*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarCreateMultipleComputeKernelsSingleCluster*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarMeshDeviceSingleCardFixture*GlobalsAndTLS"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelTLS*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  # - filter: "QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline"
+  #   config: 1x3
+  #   back2back: true
+  #   env:
+
+  - filter: "*Bmm"
+    config: 2x3_DISPATCH
+    back2back: true
+
+unit_tests_api:
+  - filter: "*QuasarCRTASharedL1Address*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarCRTAUniqueL1Addresses*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TensixSingleCoreDirectDramReaderDatacopyWriter"
+    config: 2x3_DISPATCH
+    back2back: true
+
+unit_tests_device:
+  - filter: "*SimulatorFixture*QuasarStaticTlbReadWrite*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+# pytest tests/tt_metal/tools/profiler/test_device_profiler.py::test_custom_cycle_count_slow_dispatch
+#     config: 1x3
+#     env:
+#       TT_METAL_DEVICE_PROFILER=1
+#       TT_METAL_SLOW_DISPATCH_MODE=1
+
+# pytest tests/tt_metal/tools/profiler/test_device_profiler.py::test_custom_cycle_count
+#     config: 2x3_DISPATCH
+#     env:
+#       TT_METAL_DEVICE_PROFILER=1

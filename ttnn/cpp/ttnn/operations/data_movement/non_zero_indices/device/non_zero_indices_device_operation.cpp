@@ -81,7 +81,7 @@ NonzeroResultSpec NonZeroIndicesDeviceOperation::compute_output_specs(
     const tt::tt_metal::MemoryConfig output_mc{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, args.output_memory_config.buffer_type()};
     TensorLayout layout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), output_mc);
-    return {TensorSpec(num_non_zero_shape, layout), TensorSpec(indices_shape, layout)};
+    return {tt::tt_metal::TensorSpec(num_non_zero_shape, layout), tt::tt_metal::TensorSpec(indices_shape, layout)};
 }
 
 NonzeroResult NonZeroIndicesDeviceOperation::create_output_tensors(

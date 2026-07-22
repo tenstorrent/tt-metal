@@ -645,9 +645,21 @@ inline void calculate_asin() {
     }
 }
 
-inline void asin_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+// fp32-dest asin/acos route through the endpoint sqrt (_sfpu_sqrt_endpoint_), which reads the sqrt
+// seed/refinement constants from vConstIntPrgm0/1/2. Prime them via asin_acos_init (a no-op for bf16
+// dest, which uses the self-contained sfpu_sqrt_custom). Templated on the dest-acc flag so the bare
+// init path picks the right variant; the counter reset preserves the previous bare-init behavior.
+template <bool is_fp32_dest_acc_en>
+inline void asin_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    asin_acos_init<is_fp32_dest_acc_en>();
+}
 
-inline void acos_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+template <bool is_fp32_dest_acc_en>
+inline void acos_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    asin_acos_init<is_fp32_dest_acc_en>();
+}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_acos() {

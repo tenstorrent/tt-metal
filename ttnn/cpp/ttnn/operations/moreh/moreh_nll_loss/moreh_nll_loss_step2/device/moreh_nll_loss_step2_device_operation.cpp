@@ -86,7 +86,8 @@ MorehNllLossStep2DeviceOperation::spec_return_value_t MorehNllLossStep2DeviceOpe
     }
 
     auto output_shape = Shape{output_shape_vec};
-    return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config));
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config));
 }
 
 MorehNllLossStep2DeviceOperation::tensor_return_value_t MorehNllLossStep2DeviceOperation::create_output_tensors(

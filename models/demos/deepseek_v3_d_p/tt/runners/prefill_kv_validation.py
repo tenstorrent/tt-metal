@@ -93,6 +93,28 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Te
     return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
 
 
+def _load_golden_index_k(trace_dir, layer_idx: int, total_len: int) -> "torch.Tensor":
+    """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
+    dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
+    _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key."""
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    key = f"indexer_k_layer_{layer_idx}"
+    layer_dir = Path(trace_dir) / "dsa" / key
+    shards = sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1]))
+    rows, have = [], 0
+    for shard in shards:
+        with safe_open(shard, framework="pt") as f:
+            t = f.get_tensor(key)
+        rows.append(t)
+        have += t.shape[0]
+        if have >= total_len:
+            break
+    return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
+
+
 def kv_cache_pcc_check(
     pipeline: "TtPrefillRuntime",
     kvpe_cache,

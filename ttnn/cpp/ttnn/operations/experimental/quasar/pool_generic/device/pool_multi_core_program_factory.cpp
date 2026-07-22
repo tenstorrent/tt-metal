@@ -427,7 +427,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     }();
     MeshTensor reader_indices_owned = tt::tt_metal::enqueue_write_tensor(
         cq, reader_indices_host.host_tensor(), *mesh_device, reader_indices_mem_config);
-    const TensorSpec reader_indices_spec = reader_indices_owned.tensor_spec();
+    const tt::tt_metal::TensorSpec reader_indices_spec = reader_indices_owned.tensor_spec();
     const uint32_t reader_indices_page_size = reader_indices_owned.mesh_buffer().page_size();
 
     const uint32_t pad_h = setup.pad_t + setup.pad_b;
@@ -444,7 +444,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
 
     // Op-owned avg-pool scalar config tensor (only when !one_scalar_per_core).
     std::optional<MeshTensor> config_tensor_owned;
-    std::optional<TensorSpec> config_tensor_spec;
+    std::optional<tt::tt_metal::TensorSpec> config_tensor_spec;
     uint32_t config_buffer_page_size = 0;
     if (!one_scalar_per_core) {
         const uint32_t max_out_nhw_per_core = output_tensors[0].shard_spec()->shape[0];

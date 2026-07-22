@@ -22,7 +22,7 @@ struct DitFusedDistributedRmsnormDeviceOperation {
     //       MeshBuffer is allocated in lock-step across the mesh and every
     //       chip sees the same DRAM address — required for the fabric mcast
     //       to land at a consistent remote-chip page.
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<DitFusedDistributedRmsnormMeshWorkloadFactory>;
     using shared_variables_t = DitFusedDistributedRmsnormMeshWorkloadFactory::shared_variables_t;

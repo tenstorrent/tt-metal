@@ -52,7 +52,7 @@ GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
 static GlobalCircularBuffer build_matmul_1d_gcb_krow_major(
     MeshDevice* mesh_device,
     const std::vector<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_configs,
-    const std::vector<tt::tt_metal::Tensor>& weights,
+    const std::vector<ttnn::Tensor>& weights,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type) {
@@ -268,7 +268,7 @@ namespace {
 // expose an NdShardSpec-like descriptor via BDS, so the explicit legacy shard spec must win; and a
 // shard-count test is ambiguous when total_receivers == num_banks (num_shards == num_banks in both
 // layouts). num_shards == ring_size for recv-contig is enforced separately by the validator.
-bool is_receiver_contiguous_weight(const tt::tt_metal::Tensor& weight) {
+bool is_receiver_contiguous_weight(const ttnn::Tensor& weight) {
     TT_FATAL(weight.buffer() != nullptr && weight.buffer()->is_dram(), "prefetcher weight must live in DRAM");
     if (weight.buffer()->has_shard_spec()) {
         return false;  // legacy K-row-major (WIDTH_SHARDED)
@@ -282,7 +282,7 @@ bool is_receiver_contiguous_weight(const tt::tt_metal::Tensor& weight) {
 // rationale behind each guard.
 void validate_recv_contig_weight_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
-    const tt::tt_metal::Tensor& weight,
+    const ttnn::Tensor& weight,
     uint32_t ring_size) {
     TT_FATAL(program_config.gather_in0, "receiver-contiguous Tensor prefetcher requires gather_in0=true");
     TT_FATAL(ring_size > 0, "ring_size must be > 0");
@@ -359,7 +359,7 @@ void validate_recv_contig_weight_for_matmul_1d(
 
 uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
-    const tt::tt_metal::Tensor& weight,
+    const ttnn::Tensor& weight,
     const GlobalCircularBuffer& gcb) {
     // ring_size == total receivers == block_count (the matmul does wait_front(ring_size) per layer).
     const uint32_t ring_size = gcb.receiver_cores().num_cores();
@@ -374,7 +374,7 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
 static GlobalCircularBuffer build_matmul_1d_gcb_recv_contig(
     MeshDevice* mesh_device,
     const std::vector<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_configs,
-    const std::vector<tt::tt_metal::Tensor>& weights,
+    const std::vector<ttnn::Tensor>& weights,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type,
@@ -460,7 +460,7 @@ static GlobalCircularBuffer build_matmul_1d_gcb_recv_contig(
 GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
     MeshDevice* mesh_device,
     const std::vector<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_configs,
-    const std::vector<tt::tt_metal::Tensor>& weights,
+    const std::vector<ttnn::Tensor>& weights,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type,

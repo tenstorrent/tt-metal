@@ -24,7 +24,7 @@ struct PointToPointOp {
         const ::ttnn::ccl::Topology topology;
 
         // put this in here to hash on tensor spec
-        const ttnn::TensorSpec _input_tensor_spec;
+        const tt::tt_metal::TensorSpec _input_tensor_spec;
 
         static constexpr auto attribute_names = std::forward_as_tuple("send_coord", "receive_coord", "topology");
         auto attribute_values() const { return std::forward_as_tuple(send_coord, receive_coord, topology); };
@@ -37,7 +37,7 @@ struct PointToPointOp {
     };
 
     // entry 0 is the intermediate. Entry 1 is the final output
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
+    using spec_return_value_t = std::array<tt::tt_metal::TensorSpec, 2>;
     using tensor_return_value_t = std::array<ttnn::Tensor, 2>;
 
     struct SendReceive {
