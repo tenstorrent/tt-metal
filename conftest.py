@@ -626,14 +626,17 @@ def mesh_device(request, silicon_arch_name, device_params):
     mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
-    yield mesh_device
+    try:
+        yield mesh_device
+    finally:
+        try:
+            for submesh in mesh_device.get_submeshes():
+                ttnn.close_mesh_device(submesh)
 
-    for submesh in mesh_device.get_submeshes():
-        ttnn.close_mesh_device(submesh)
-
-    ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
-    del mesh_device
+            ttnn.close_mesh_device(mesh_device)
+            del mesh_device
+        finally:
+            reset_fabric(fabric_config)
 
 
 @pytest.fixture(scope="function")
