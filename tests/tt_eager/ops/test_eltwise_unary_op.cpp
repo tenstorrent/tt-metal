@@ -9,6 +9,7 @@
 #include <numbers>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -142,13 +143,29 @@ void test_operation_infrastructure() {
         .worker_grid = worker_grid,
         .sub_core_grids = std::nullopt,
     };
-    Op::tensor_args_t tensor_args{.input = input_tensor, .output_tensor = std::nullopt};
-    auto program_hash = Op::compute_program_hash(op_args, tensor_args);
-    auto program_hash_repeat = Op::compute_program_hash(op_args, tensor_args);
-    TT_FATAL(program_hash != 0, "compute_program_hash returned 0 — likely a bug");
+    Op::tensor_args_t tensor_args(input_tensor, std::nullopt);
+    op_args.input_dtype = input_tensor.dtype();
+    op_args.input_layout = input_tensor.layout();
+    op_args.input_memory_config = input_tensor.memory_config();
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        op_args.row_major_padded_shape = input_tensor.padded_shape();
+    }
+    const auto output_spec = Op::compute_output_specs(op_args, tensor_args);
+    if (const auto shard_specs = ttnn::operations::unary::get_shard_specs(input_tensor.tensor_spec(), output_spec)) {
+        const auto tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
+        if (input_tensor.is_sharded()) {
+            op_args.src_shard_vol = shard_specs->input_shard_spec.numel() / tile_hw;
+        }
+        const auto out_tile_hw = output_spec.tile().get_tile_hw();
+        op_args.dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
+    }
+    auto program_hash = ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<Op>, op_args, tensor_args);
+    auto program_hash_repeat =
+        ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<Op>, op_args, tensor_args);
+    TT_FATAL(program_hash != 0, "default program hash returned 0 — likely a bug");
     TT_FATAL(
         program_hash == program_hash_repeat,
-        "UnaryDeviceOperation::compute_program_hash must be deterministic ({} vs {})",
+        "UnaryDeviceOperation default program hash must be deterministic ({} vs {})",
         program_hash,
         program_hash_repeat);
 }

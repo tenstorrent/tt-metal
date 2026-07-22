@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -31,13 +33,56 @@ struct UnaryDeviceOperation {
         bool bfp8_pack_precise = false;
         const CoreRangeSet worker_grid;
         std::optional<CoreRangeSet> sub_core_grids;
+        DataType input_dtype = DataType::INVALID;
+        Layout input_layout = Layout::TILE;
+        MemoryConfig input_memory_config;
+        std::optional<Shape> row_major_padded_shape = std::nullopt;
+        std::optional<std::uint32_t> src_shard_vol = std::nullopt;
+        std::optional<std::uint32_t> dst_shard_vol = std::nullopt;
 
-        ttsl::hash::hash_t to_hash() const;
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "op_chain",
+            "output_dtype",
+            "memory_config",
+            "fp32_dest_acc_en",
+            "preserve_fp32_precision",
+            "bfp8_pack_precise",
+            "sub_core_grids",
+            "worker_grid",
+            "input_dtype",
+            "input_layout",
+            "input_memory_config",
+            "row_major_padded_shape",
+            "src_shard_vol",
+            "dst_shard_vol");
+        auto attribute_values() const {
+            return std::make_tuple(
+                op_chain,
+                output_dtype,
+                memory_config,
+                fp32_dest_acc_en,
+                preserve_fp32_precision,
+                bfp8_pack_precise,
+                sub_core_grids,
+                worker_grid,
+                input_dtype,
+                input_layout,
+                input_memory_config,
+                input_layout == Layout::ROW_MAJOR ? row_major_padded_shape : std::optional<Shape>{},
+                src_shard_vol,
+                dst_shard_vol);
+        }
     };
 
     struct tensor_args_t {
         const Tensor& input;
         std::optional<Tensor> output_tensor;
+
+        tensor_args_t(const Tensor& input_in, std::optional<Tensor> output_tensor_in) :
+            input(input_in), output_tensor(std::move(output_tensor_in)) {}
+
+        static constexpr auto attribute_names = std::forward_as_tuple();
+        auto attribute_values() const { return std::make_tuple(); }
     };
 
     struct ProgramFactory {
@@ -52,7 +97,6 @@ struct UnaryDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 
     // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer addresses),

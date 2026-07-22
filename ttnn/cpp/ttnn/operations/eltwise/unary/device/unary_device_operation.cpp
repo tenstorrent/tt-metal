@@ -5,25 +5,12 @@
 #include "unary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary {
-
-ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
-    return ttsl::hash::hash_objects_with_default_seed(
-        op_chain,
-        output_dtype,
-        memory_config,
-        fp32_dest_acc_en,
-        preserve_fp32_precision,
-        bfp8_pack_precise,
-        sub_core_grids,
-        worker_grid);
-}
 
 void UnaryDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -143,48 +130,6 @@ Tensor UnaryDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    TT_FATAL(
-        tt::tt_metal::is_device_tensor(input_tensor), "Unary: Unexpected tensor type {}", input_tensor.storage_type());
-
-    const auto output_spec = compute_output_specs(attributes, tensor_args);
-    const auto shard_specs = get_shard_specs(input_tensor.tensor_spec(), output_spec);
-    std::optional<uint32_t> src_shard_vol = std::nullopt;
-    std::optional<uint32_t> dst_shard_vol = std::nullopt;
-    if (shard_specs.has_value()) {
-        const auto tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
-        if (input_tensor.is_sharded()) {
-            src_shard_vol = shard_specs->input_shard_spec.numel() / tile_hw;
-        }
-        const auto out_tile_hw = output_spec.tile().get_tile_hw();
-        dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
-    }
-
-    // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
-    // different widths get separate cache entries. Consider hashing only the last
-    // dimension to allow cache reuse when only height differs
-    if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        return operation::hash_operation<UnaryDeviceOperation>(
-            attributes,
-            input_tensor.dtype(),
-            input_tensor.layout(),
-            input_tensor.memory_config(),
-            input_tensor.padded_shape(),
-            src_shard_vol,
-            dst_shard_vol);
-    }
-
-    return operation::hash_operation<UnaryDeviceOperation>(
-        attributes,
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.memory_config(),
-        src_shard_vol,
-        dst_shard_vol);
-}
-
 bool UnaryDeviceOperation::skip_launch(
     const operation_attributes_t& /*attributes*/,
     const tensor_args_t& /*tensor_args*/,
@@ -229,7 +174,22 @@ Tensor unary(
         .sub_core_grids = sub_core_grids,
     };
 
-    auto tensor_args = OperationType::tensor_args_t{.input = input, .output_tensor = optional_output_tensor};
+    auto tensor_args = OperationType::tensor_args_t(input, optional_output_tensor);
+    operation_attributes.input_dtype = input.dtype();
+    operation_attributes.input_layout = input.layout();
+    operation_attributes.input_memory_config = input.memory_config();
+    if (input.layout() == Layout::ROW_MAJOR) {
+        operation_attributes.row_major_padded_shape = input.padded_shape();
+    }
+    const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
+    if (const auto shard_specs = ttnn::operations::unary::get_shard_specs(input.tensor_spec(), output_spec)) {
+        const auto tile_hw = input.tensor_spec().tile().get_tile_hw();
+        if (input.is_sharded()) {
+            operation_attributes.src_shard_vol = shard_specs->input_shard_spec.numel() / tile_hw;
+        }
+        const auto out_tile_hw = output_spec.tile().get_tile_hw();
+        operation_attributes.dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
+    }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
