@@ -1,0 +1,29 @@
+# Benchmark-local copy of tt-train/configs/model_configs/llama3_2_1B.yaml.
+#
+# Identical to the shared model config EXCEPT max_sequence_length is 768 (not
+# 2048). The ttml-local completer sizes its resident KV cache from this value
+# (utils/ttml_local/llama_completer.py _get_kv_cache), so the smaller window
+# shrinks the cache (~512 MB -> ~192 MB at 4 devices) and frees the DRAM the
+# DDP tied-embedding gradient all-reduce needs during synchronize_gradients.
+# 768 covers a typical BoolQ prompt (~150-360 tokens) plus the 256-token
+# completion; only the benchmark configs (configs/ttml_*dev.yaml) point here, so
+# the shared model config and its other consumers are untouched.
+transformer_config:
+  model_type: "llama"
+  num_heads: 32
+  num_groups: 8
+  embedding_dim: 2048
+  intermediate_dim: 8192
+  dropout_prob: 0.0
+  num_blocks: 16
+  weight_tying: "enabled"
+  vocab_size: 32000 # not using Meta vocab size (128256), see comment about tokenizer choice above.
+  max_sequence_length: 768
+  runner_type: memory_efficient
+  theta: 500000.0
+
+  rope_scaling:
+    scaling_factor: 32.0
+    high_freq_factor: 4.0
+    low_freq_factor: 1.0
+    original_context_length: 8192

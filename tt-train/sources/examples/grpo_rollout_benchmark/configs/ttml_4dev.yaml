@@ -5,7 +5,7 @@
 # below are authoritative for a benchmark run.
 
 training_config:
-  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama3_2_1B.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/grpo_rollout_benchmark/configs/llama3_2_1B_bench.yaml"
 
   optimizer:
     type: MorehAdamW
