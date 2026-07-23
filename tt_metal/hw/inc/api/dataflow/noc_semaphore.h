@@ -7,45 +7,7 @@
 #include "dev_mem_map.h"
 #include "api/dataflow/noc.h"
 #include "api/debug/assert.h"
-
-/**
- * @brief Physical path a semaphore's accesses take (Quasar auto-path design).
- *
- * On Quasar the three RMW sources (TRISC / DM / NoC) reach L1 through different
- * physical tiers and no single hardware arbiter serializes them, so a semaphore's
- * *scope* determines which mechanism keeps it correct + atomic:
- *
- *  - LOCAL_NONATOMIC (default): legacy behavior. A plain L1 read-modify-write via
- *      the uncached alias on Quasar. NOT atomic across concurrent writers. Kept as
- *      the default so existing callers are byte-for-byte unchanged. New code should
- *      pick one of the atomic scopes below.
- *
- *  - DM_LOCAL_CACHED: the semaphore is only ever touched by DM cores on this node.
- *      Local increments use a 32-bit RISC-V AMO (amoadd.w) on the *cached* alias,
- *      atomic among the mutually-coherent DM cores and cheapest (no NoC round-trip).
- *      Must never be touched via the NoC / another node — remote ops are a compile
- *      error in this scope. (HW validated: TestDmCachedAmo32.)
- *
- *  - EXTERNAL: the semaphore is touched externally (NoC / another node / chip).
- *      EVERY access — including a local increment — goes through a self-targeted NoC
- *      atomic (NOC_AT_INS_INCR_GET) so local and remote writers serialize at one NIU
- *      atomicity point; local reads use the uncached alias. Correct + atomic; pays a
- *      NoC round-trip. (HW validated: TestSelfTargetedNocAtomicIncrement /
- *      TestSelfVsRemoteNodeNocAtomic.) Cross-domain atomic is increment-only, so an
- *      EXTERNAL semaphore is counting-up + single-owner reset; down() is a
- *      single-owner (non-atomic) decrement.
- *
- * NOTE (Phase 1 skeleton): the default is LOCAL_NONATOMIC to avoid regressing the
- * many existing Semaphore callers (DFB 2.0, CCL, SDPA, ...). Once host-side scope
- * baking + validation lands (Phase 2), the default for un-baked / ad-hoc uses is
- * intended to become EXTERNAL (correct-but-slow). This enum belongs in a shared
- * host/device header at that point.
- */
-enum class SemScope : uint8_t {
-    LOCAL_NONATOMIC = 0,
-    DM_LOCAL_CACHED = 1,
-    EXTERNAL = 2,
-};
+#include <hostdevcommon/sem_scope.h>  // enum class SemScope (shared host/device, Phase-2 baking)
 
 /**
  * @brief Semaphore synchronization primitive for programmable cores.
