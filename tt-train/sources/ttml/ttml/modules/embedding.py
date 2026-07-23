@@ -89,6 +89,8 @@ class VocabParallelEmbedding(AbstractModuleBase):
                 f"num_embeddings ({num_embeddings}) must be divisible by the tensor-parallel "
                 f"size ({self.tp_size}) of mesh axis '{axis_name}'."
             )
+        if embedding_dim % 32 != 0:
+            raise ValueError(f"embedding_dim ({embedding_dim}) must be a multiple of 32 for the embedding kernel.")
 
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
