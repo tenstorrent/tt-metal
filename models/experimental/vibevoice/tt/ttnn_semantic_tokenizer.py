@@ -316,6 +316,17 @@ class TTConv1d:
         self._cache = None
         self._cache_zeros_host = None  # cached host zeros for in-place reset (llama-pattern trace)
 
+        # Prepared-weight cache keyed by input geometry. ttnn.conv2d prepares the weight (and
+        # sometimes shards weight_matrix_height across a core grid chosen from the input geometry)
+        # on first use and hands it back via return_weights_and_bias; reusing a weight prepared for
+        # one geometry with a different one trips the width-sharded
+        # `act_matrix_width == weight_matrix_height` assertion.  A single conv instance can legitimately
+        # see multiple geometries (e.g. a single-shot encode of a short prompt vs. a streaming encode
+        # of a long one), so cache the prepared weight/bias per geometry signature instead of a single
+        # rebind.  Steady-state (trace) callers hit one key repeatedly → same tensor address, so trace
+        # capture/replay stays stable.
+        self._prepared: Dict[tuple, tuple] = {}
+
     def reset_cache(self) -> None:
         self._cache = None
 
@@ -413,10 +424,15 @@ class TTConv1d:
                     f"Tpad={T_padded} outw={out_w} abh={abh} pinned={_conv_cfg is not None}",
                     flush=True,
                 )
-        x_out, [_, w_out], [self.weight, self.bias] = ttnn.conv2d(
+        # Reuse the weight prepared for this exact geometry if we've seen it; otherwise prepare from
+        # the host original.  The prepared layout depends on T_padded and on whether the single-block
+        # override is applied (act_block_h), so both go in the key.
+        geo_key = (T_padded, _conv_cfg is not None)
+        w_in, b_in = self._prepared.get(geo_key, (self.weight, self.bias))
+        x_out, [_, w_out], [w_prep, b_prep] = ttnn.conv2d(
             input_tensor=x,
-            weight_tensor=self.weight,
-            bias_tensor=self.bias,
+            weight_tensor=w_in,
+            bias_tensor=b_in,
             device=self.device,
             in_channels=self.in_ch,
             out_channels=self.out_ch,
@@ -433,6 +449,7 @@ class TTConv1d:
             compute_config=_HIFI4,
             conv_config=_conv_cfg,
         )
+        self._prepared[geo_key] = (w_prep, b_prep)
         # Output from conv2d is [1, 1, B*w_out, out_ch]; reshape to [B, 1, T_out, out_ch]
         return ttnn.reshape(x_out, [B, 1, w_out, self.out_ch])
 
