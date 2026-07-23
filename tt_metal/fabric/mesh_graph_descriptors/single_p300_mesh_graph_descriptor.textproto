@@ -1,0 +1,16 @@
+# Single-chip Blackhole (P300 board presenting 1 chip) — viewed as a single device.
+# Point TT_MESH_GRAPH_DESC_PATH at this file so a P300 with only one visible chip
+# is treated as a standard 1x1 mesh instead of a CUSTOM cluster.
+
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 1 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
