@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <internal/tensor/unit_tensor_apis.hpp>
+#include <internal/tensor/byte_based_data_transfer_apis.hpp>
 
 #include "mesh_tensor_impl.hpp"
 
