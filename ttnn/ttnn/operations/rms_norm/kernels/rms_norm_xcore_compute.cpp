@@ -72,8 +72,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_x_in, cb_scaler, cb_out);
 
-    // Per-tile reduce (1 tile-row, 1 W-tile per chunk; accumulate over vwt tiles).
-    constexpr auto reduce_shape = ckl::ReduceInputBlockShape::of(1, 1, 1);
     constexpr auto one_tile = ckl::EltwiseShape::of(1, 1);
     constexpr auto partial_scaler_sel = ckl::ReducePartialScaler::last_tile_at(1);
 
@@ -89,6 +87,9 @@ void kernel_main() {
 
     for (uint32_t t = 0; t < HT_LOCAL; ++t) {
         // ---------- Pass 1: local partial Σ_slice x²·(1/W) ----------
+        // Square the vwt valid W-tiles into cb_xsq, then reduce the whole block in
+        // ONE call (cols=vwt) — the interleaved-path block-reduce pattern. The
+        // partial-holder routes the partial scaler to the block's last tile.
         for (uint32_t w = 0; w < vwt; ++w) {
             const uint32_t xin_off = t * PER_W_T + w;
             ckl::eltwise_chain(
@@ -107,16 +108,15 @@ void kernel_main() {
                     ckl::TileOffset::Set,
                     ckl::TileOffset::Set>{xin_off, xin_off},
                 ckl::PackTile<cb_xsq, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
-            const ckl::ReducePartialScaler ps = (HAS_PARTIAL_W && is_partial_holder && (w + 1 == vwt))
-                                                    ? partial_scaler_sel
-                                                    : ckl::ReducePartialScaler::none();
-            ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_stat_local>(
-                reduce_shape,
-                ckl::ReduceInputMemoryLayout::contiguous(),
-                ckl::Accumulate::at(cb_stat_local, w),
-                ckl::NoOp{},
-                ps);
         }
+        const ckl::ReducePartialScaler ps =
+            (HAS_PARTIAL_W && is_partial_holder) ? partial_scaler_sel : ckl::ReducePartialScaler::none();
+        ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_stat_local>(
+            ckl::ReduceInputBlockShape::of(1, vwt, 1),
+            ckl::ReduceInputMemoryLayout::contiguous(),
+            ckl::Accumulate::at(cb_stat_local, 0),
+            ckl::NoOp{},
+            ps);
         // reduce pushed cb_stat_local (1 tile). Writer gathers it to the master.
 
         // ---------- Master: fold K partials -> mean; (+eps, rsqrt) -> 1/RMS ----------

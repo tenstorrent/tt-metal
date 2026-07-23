@@ -99,3 +99,6 @@
 {"source":"tt-probe","pid":391053,"started_at_ms":1784771976858,"wait_ms":213,"run_ms":68431,"test_path":"rms_norm","exit_code":2}
 {"source":"tt-probe","pid":392311,"started_at_ms":1784772270715,"wait_ms":212,"run_ms":68181,"test_path":"rms_norm","exit_code":2}
 {"source":"tt-probe","pid":393011,"started_at_ms":1784772409675,"wait_ms":213,"run_ms":49602,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":394781,"started_at_ms":1784772513210,"wait_ms":181,"run_ms":54865,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":395884,"started_at_ms":1784772675619,"wait_ms":228,"run_ms":49176,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":396685,"started_at_ms":1784772859367,"wait_ms":215,"run_ms":54824,"test_path":"rms_norm","exit_code":0}

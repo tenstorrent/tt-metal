@@ -511,7 +511,9 @@ def _create_sharded_xcore_descriptor(
         )
 
     add_cb(CB_SCALER, tile_bf16, 2 if has_partial_w else 1, ttnn.bfloat16)
-    add_cb(CB_XSQ, tile_in, 2, in_dtype)
+    # pass-1 squares the whole vwt-tile block before the single block-reduce, so
+    # cb_xsq must hold a full W-slice block (2*per_w_t double-buffers it).
+    add_cb(CB_XSQ, tile_in, 2 * per_w_t, in_dtype)
     add_cb(CB_STAT_LOCAL, tile_fp32, 2, ttnn.float32)
     add_cb(CB_GATHER, tile_fp32, K, ttnn.float32)  # fixed-base fan-in (K partials/round)
     add_cb(CB_STAT_HANDOFF, tile_fp32, 2, ttnn.float32)
