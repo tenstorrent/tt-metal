@@ -337,75 +337,50 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
 
-      - name: Parse docker image
-        id: parse-image
-        run: |
-          IMAGE="${{ needs.build-artifact.outputs.dev-docker-image }}"
-          echo "repository=${IMAGE%:*}" >> $GITHUB_OUTPUT
-          echo "tag=${IMAGE##*:}" >> $GITHUB_OUTPUT
-
       - name: Get Allocation data
         uses: ./.github/actions/ttop-get-allocation-data
         with:
           allocationName: ci-${{ github.run_id }}-dc
           allocationNamespace: ttop-ci
 
-      - name: Create environment
+      # Deploy the PINNED DC image as the ttop worker environment, so the test
+      # runs inside the pinned image. (The worker hosts have no docker, so
+      # run_fabric_tests.sh --image / mpi-docker cannot be used here.)
+      - name: Create environment (pinned image workers)
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 30
         with:
           environmentName: ci-${{ github.run_id }}-dc
           allocationName: ci-${{ github.run_id }}-dc
           allocationNamespace: ttop-ci
-          workerRepository: ${{ steps.parse-image.outputs.repository }}
-          workerTag: ${{ steps.parse-image.outputs.tag }}
+          workerRepository: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx
+          workerTag: v0.76.0-dev20260719-4-g7361a7ac160
           useDevHostMount: 'true'
           sharedVolumeEnabled: 'true'
           path: /etc/ttop
 
-      - name: Reset cards (single galaxy)
+      - name: Reset cards
         timeout-minutes: 15
         run: |
           mpirun --pernode tt-smi -glx_reset || echo "WARNING: glx_reset failed; continuing"
 
-      # HOME (/home/user) must exist and be writable: docker login writes creds
-      # there, and mpi-docker mounts -v $HOME:$HOME into the DC container.
-      - name: Prepare home directory
-        run: |
-          sudo mkdir -p /home/user
-          sudo chown "$(id -u):$(id -g)" /home/user
-
-      # run_fabric_tests.sh auto-detects the MPI interface with `ip` (iproute2),
-      # which is not installed on the exabox runner. Install it and dump the
-      # interfaces so we can pin --mpi-if if auto-detection can't pick one.
-      - name: Install iproute2 for MPI interface detection
-        run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2
-          echo "--- available interfaces ---"; ip -br link || true
-
-      - name: Log in to GHCR (DC-validation image)
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-      # Verbatim BH command from issue #50505; --image keeps the pinned image loaded.
-      - name: DC validation - 2D Torus XY Neighbor Exchange (BH, pinned image)
+      # Run the DC neighbor-exchange test with tt-run against the pinned-image
+      # workers (same launcher the SC4 fabric test uses; no docker needed).
+      - name: DC validation - 2D Torus XY Neighbor Exchange (BH, pinned image workers)
         timeout-minutes: 20
         run: |
-          # mpi-docker hardcodes `mpirun-ulfm`, which this runner does not have
-          # (tt-run also reports "mpirun-ulfm not found, falling back to mpirun").
-          # Provide a shim on PATH that forwards to the plain mpirun that works here.
-          if ! command -v mpirun-ulfm >/dev/null 2>&1; then
-            printf '#!/bin/bash\nexec mpirun "$@"\n' | sudo tee /usr/local/bin/mpirun-ulfm >/dev/null
-            sudo chmod +x /usr/local/bin/mpirun-ulfm
-          fi
+          TTRUN_DIR=/etc/ttop
+          PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
           set -o pipefail
-          ./tools/scaleout/exabox/run_fabric_tests.sh \
-            --hosts "$(hostname)" \
-            --image ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.76.0-dev20260719-4-g7361a7ac160 \
-            --config 4x8 \
-            --test-config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_neighbor_exchange.yaml \
+          tt-run --skip-mgd-check --skip-executable-check \
+            --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+            --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir /home/user/tt-metal" \
+            /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric \
+            --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_neighbor_exchange.yaml \
             --filter name.2DTorusXYNeighborExchange 2>&1 | tee dc_result.log
-          # run_fabric_tests.sh exits 0 even on failure; enforce a real pass/fail.
-          grep -q "ALL FABRIC TESTS PASSED" dc_result.log && ! grep -q "DID NOT FULLY PASS" dc_result.log \
+          # Require the per-rank success marker so a partial/no-op run can't pass.
+          grep -q "All tests completed successfully" dc_result.log \
             || { echo "::error::DC validation (single galaxy) did not pass"; exit 1; }
 
   cleanup-dc:
@@ -515,7 +490,6 @@ jobs:
       # neighbor-exchange test config against the pinned-image workers.
       - name: DC validation (quad) - 2D Torus XY Neighbor Exchange (BH, pinned image workers)
         timeout-minutes: 20
-        working-directory: /home/user/tt-metal
         run: |
           TTRUN_DIR=/etc/ttop
           PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
@@ -523,7 +497,7 @@ jobs:
           set -o pipefail
           tt-run --skip-mgd-check --skip-executable-check \
             --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
-            --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
+            --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir /home/user/tt-metal" \
             /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric \
             --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_neighbor_exchange.yaml \
             --filter name.2DTorusXYNeighborExchange 2>&1 | tee dc_quad_result.log
