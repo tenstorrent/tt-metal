@@ -61,9 +61,11 @@ def test_unpack_tilize_uninit_restore(
     num_faces,
 ):
     # BH unpack_tilize does not support num_faces=1 (LLK asserts num_faces in {2, 4}).
-    # WH supports num_faces=1.
+    # WH supports num_faces=1. Tracked in https://github.com/tenstorrent/tt-metal/issues/50707.
     if num_faces == 1 and get_chip_architecture() == ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH unpack_tilize does not support num_faces=1")
+        pytest.skip(
+            "BH unpack_tilize does not support num_faces=1; see https://github.com/tenstorrent/tt-metal/issues/50707"
+        )
 
     torch_format = format_dict[formats.output_format]
     input_dimensions = [32, 32]

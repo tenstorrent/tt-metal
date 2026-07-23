@@ -570,8 +570,10 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces
 
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)
     {
+        // Tilize: math MOP iterates over all faces of the tile (num_faces * 16 rows).
+        // Non-tilize: single 16-row face pair (MOV_8_ROWS runs twice under the hood).
         eltwise_unary_configure_mop<type, is_fp32_dest_acc_en, src_b_bcast_type, tilize, is_int_fpu_en>(
-            p_mova2d::MOV_8_ROWS, tilize ? 64 : 16, num_faces, dst_format);
+            p_mova2d::MOV_8_ROWS, tilize ? (num_faces * 16) : 16, num_faces, dst_format);
     }
     else if constexpr (type == DataCopyType::B2D)
     {
