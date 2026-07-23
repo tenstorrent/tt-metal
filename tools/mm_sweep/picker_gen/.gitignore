@@ -1,1 +1,2 @@
-# raw sweep results are committed explicitly as a deliverable at campaign end, not the in-progress churn
+jobs/
+*.log
