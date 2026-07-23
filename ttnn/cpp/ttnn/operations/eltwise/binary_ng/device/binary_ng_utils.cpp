@@ -730,11 +730,11 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     return ret;
 }
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec) {
     return tensor_spec.memory_config().shard_spec();
 }
 
-bool is_uneven(const TensorSpec& t) {
+bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (not t.memory_config().is_sharded()) {
         return false;
     }
@@ -756,7 +756,8 @@ bool is_uneven(const TensorSpec& t) {
 // the check is based on user facing information, input tensors and output memory config
 // more info may be checked in other places, such as actual output is uneven or not
 // this function is called in both earlier and later stages of the program execution
-bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c) {
+bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c) {
     if (!c.is_sharded()) {
         return false;
     }

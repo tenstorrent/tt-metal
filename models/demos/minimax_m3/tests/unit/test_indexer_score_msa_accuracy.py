@@ -4,11 +4,11 @@
 """Intrinsic accuracy of the MSA indexer kernel ``ttnn.experimental.indexer_score_msa``.
 
 GIVEN CORRECT INPUTS, how close is the device kernel's per-block scores to the fp32 reference?
-This deliberately isolates the *kernel's* numerical accuracy from the Python gather/reorder bug
-(``gather_natural`` / ``_blockcyclic_to_natural`` in ``tt/attention/msa.py``) that can feed the
-indexer a wrong ``index_k`` in the chunked path. Here ``index_k`` is built directly and handed
-to the op, so any divergence is the kernel's own (bf16 dot accumulation, bf16-scale gate fold,
-block-max-pool precision, causal-mask edges, k_chunk tiling).
+This deliberately isolates the *kernel's* numerical accuracy from the block-cyclic cache-read
+handling (the ``msa_sp_attention`` gather + the ops' in-kernel ``block_cyclic_*`` remap in
+``tt/attention/msa.py``) that arranges ``index_k`` in the chunked path. Here ``index_k`` is built
+directly and handed to the op, so any divergence is the kernel's own (bf16 dot accumulation,
+bf16-scale gate fold, block-max-pool precision, causal-mask edges, k_chunk tiling).
 
 We compare the FULL pre-selection score field (the indexer's output *before* top-k):
 the op returns ``block_scores [1, num_groups, Sq, nblk]`` bf16 row-major, where each entry is the
@@ -139,7 +139,7 @@ def test_indexer_score_msa_accuracy(mesh_device, device_params, Sq, T, reset_see
         scale=scale,
         block_size=BLOCK,
         program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=Q_CHUNK, k_chunk_size=K_CHUNK, head_group_size=0),
-        cluster_axis=None,
+        seq_shard_axes=[],
     )
     dev = ttnn.to_torch(ttnn.get_device_tensors(bs)[0]).float()[0]  # [G, Sq, nblk]
     assert dev.shape == ref.shape, f"shape {tuple(dev.shape)} != {tuple(ref.shape)}"

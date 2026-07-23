@@ -7,6 +7,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_command_queue_base.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
+#include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
 #include "impl/buffers/h2d_socket_internal.hpp"
 
 #include <algorithm>

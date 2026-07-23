@@ -188,6 +188,7 @@ jobs:
       skip-tt-train: false
       enable-lto: ${{ inputs.enable-lto || false }}
       ref: ${{ inputs.ref || github.sha }}
+      checkout-filter: tree:0
 
   resolve-artifacts:
     runs-on: ubuntu-slim

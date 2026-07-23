@@ -93,6 +93,28 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Te
     return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
 
 
+def _load_golden_index_k(trace_dir, layer_idx: int, total_len: int) -> "torch.Tensor":
+    """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
+    dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
+    _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key."""
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    key = f"indexer_k_layer_{layer_idx}"
+    layer_dir = Path(trace_dir) / "dsa" / key
+    shards = sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1]))
+    rows, have = [], 0
+    for shard in shards:
+        with safe_open(shard, framework="pt") as f:
+            t = f.get_tensor(key)
+        rows.append(t)
+        have += t.shape[0]
+        if have >= total_len:
+            break
+    return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
+
+
 def kv_cache_pcc_check(
     pipeline: "TtPrefillRuntime",
     kvpe_cache,
@@ -177,13 +199,14 @@ def kv_cache_pcc_check(
     kv_lora = pipeline.hf_config.kv_lora_rank
     kvpe_dim = pipeline.hf_config.qk_rope_head_dim + kv_lora
 
-    # One gather: [num_users*num_layers, tp_replicas, seq_len_cache, kvpe] -> collapse TP via [:, :1].
-    cache_full = ttnn.to_torch(
-        kvpe_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.float32)[
-        :, :1
-    ]  # [num_users*num_layers, 1, seq_len_cache, kvpe]
+    # Gather the persistent representation and reconstruct scaled FP8 only on the host. This keeps
+    # validation compatible with both cache formats without allocating a BF16 cache on device.
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+
+    def _to_host(tensor):
+        return ttnn.to_torch(tensor, mesh_composer=composer)[:, :1]
+
+    cache_full = kvpe_cache.unpack_host(_to_host(kvpe_cache.storage)).to(torch.float32)
 
     p = blockcyclic_positions(sp, chunk_size, seq_len_cache)
     logger.info(f"[kv-pcc] device KV cache vs golden kv_post_transform (slot={slot_id}, per layer):")

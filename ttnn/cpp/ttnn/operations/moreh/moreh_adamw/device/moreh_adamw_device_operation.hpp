@@ -53,7 +53,7 @@ struct MorehAdamWDeviceOperation {
         const std::optional<Tensor>& max_exp_avg_sq_out;
     };
 
-    using spec_return_value_t = std::vector<std::optional<ttnn::TensorSpec>>;
+    using spec_return_value_t = std::vector<std::optional<tt::tt_metal::TensorSpec>>;
 
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 

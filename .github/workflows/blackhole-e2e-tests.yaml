@@ -37,6 +37,7 @@ on:
         type: choice
         options:
           - all
+          - bh-qb2-deepseek-d2d-socket-sync
       build-type:
         required: false
         type: choice

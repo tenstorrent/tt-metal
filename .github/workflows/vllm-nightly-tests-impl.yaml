@@ -405,7 +405,7 @@ jobs:
               "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
               "structured-output": true,
               "multimodal": true,
-              "additional-server-args": "--async-scheduling",
+              "additional-server-args": "--max_model_len 131072 --async-scheduling",
               "co-owner-1-id": "U08H31YMN4Q"
             },
             {
