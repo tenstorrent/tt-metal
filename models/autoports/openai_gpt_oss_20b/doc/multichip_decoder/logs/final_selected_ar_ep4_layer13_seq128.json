@@ -1,0 +1,37 @@
+{
+  "baseline": {
+    "baseline": "current OptimizedDecoder",
+    "layer_idx": 13,
+    "layer_kind": "full",
+    "mesh": [
+      1,
+      1
+    ],
+    "prefill_ms": 10.269923345185816,
+    "prefill_repeats": 20,
+    "seq_len": 128,
+    "trace_replays": 500,
+    "traced_decode_ms": 6.754405624233186
+  },
+  "decode_collective": "all_reduce",
+  "decode_efficiency": 1.6209683184778123,
+  "decode_speedup": 6.483873273911249,
+  "expert_strategy": "ep",
+  "fused_ag_matmul_payload_dtype": "bfloat16",
+  "fused_o_ag_pad_hidden": false,
+  "fused_o_projection_ag": false,
+  "implementation": "TP4 attention + EP4 gate-selected active experts",
+  "layer_idx": 13,
+  "layer_kind": "full",
+  "mesh": [
+    1,
+    4
+  ],
+  "multichip_prefill_ms": 25.207806890830398,
+  "multichip_traced_decode_ms": 1.0417238799855113,
+  "prefill_efficiency": 0.10185260651256425,
+  "prefill_repeats": 20,
+  "prefill_speedup": 0.407410426050257,
+  "seq_len": 128,
+  "trace_replays": 500
+}

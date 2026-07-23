@@ -1,0 +1,133 @@
+{
+  "artifacts": {
+    "logs/autofix_h5_manual_endpoint_capture.junit.xml": "6192f51691780c7f7d0e793aea66d42053276036febd377a4e1fc1d37c9ceb1c",
+    "logs/autofix_h5_boundary_trace_regression.junit.xml": "0a309355086fe4ee3f40ae8d8624d97175f62f20eab0423cb6a23bf1fa3010ba",
+    "logs/autofix_h5_endpoint_final_postformat.junit.xml": "b3d618fb883879ee9d054a5d235a11782ee64d3ed1b4316eb8ca49222f26b653",
+    "logs/candidate_carried_ep_residual_layer12.json": "caf713ec0bb1bc4e0504f9e0bacd0d9cf10963b751318cf7472ded958b244328",
+    "logs/candidate_carried_ep_residual_layer13.json": "ed6051e313fe6fc07156e5da2d9b6fb8706fccad1dea2b38915b2bee2fc7dba2",
+    "logs/candidate_fused_mm_rs_blackhole_rejection.json": "0f986265d1c50cdebf0660e18302dd120514abf18ec1cd7ca5eb0dfe4ff5b1d3",
+    "logs/candidate_fused_o_ag_natural_bf16_layer12.json": "f476783f119210a7392ddaf5257bca44fcd4539bf52c4d3026060ba40e54163a",
+    "logs/candidate_fused_o_ag_natural_bf16_layer13.json": "376596aad4cd3385d0be5053e6576ce53c27da17c37c52faec8fe2d86fe83152",
+    "logs/candidate_rs_ag_pad64_layer12.json": "4369dc26804e381e1d173d29e06ec350ad4a3ebc25fd90f5e10541548b8f22a0",
+    "logs/candidate_rs_ag_pad64_layer13.json": "da27241ad92f6508a87bbb02ab339ad4070bac47a00a2ab209dda05749eb67ef",
+    "logs/candidate_tp4_experts_layer12.json": "a62272f0186ebb35adba86863e33ac3547a4007208bb96b4c2fa1a0956519747",
+    "logs/candidate_tp4_experts_layer13.json": "b8726f7efedde5a59011bb2ded92febd0c4d14d1dd0027b2752fdb76d2edb503",
+    "logs/current_optimized_perf_layer12_seq17.json": "3298200bd15a516a4999d2375fb979b467723b1f4076889f4aa53eb73be742e3",
+    "logs/current_optimized_perf_layer12_seq128.json": "bab209746186c9877ed9bcd5e58f6435ab152ed2f18158c2dbcc01e8fb5b4073",
+    "logs/current_optimized_perf_layer13_seq17.json": "5062478a81aca7aa23cde9632cab14d0552d2ce8396e1ac5cb3747364564ebed",
+    "logs/current_optimized_perf_layer13_seq128.json": "d986fea42f9745372048248e649a977f5f7c94a343810c824a52082540e82e24",
+    "logs/current_optimized_context_endpoint_layer12.pt": "0078e05b18e23510228581e6bbbe61481beb76e1703a3a4e98358be3de3a1d22",
+    "logs/current_optimized_context_endpoint_layer13.pt": "c7502b799d8250a0bb5cce5a00acbe4f71c80a7fb19dd91c9883bb688cb6c994",
+    "logs/current_optimized_manual_context_endpoint_layer12.pt": "6b1d55d9387f002422b42bad156688c63affcbe0d2a48fcffadedcf9870fdf30",
+    "logs/current_optimized_manual_context_endpoint_layer13.pt": "dd10a98d6f90a8a4bbbeb5c9254e11621127a88193002b6712ae8143abb17c4a",
+    "logs/final_candidate_ar_tp4_layer12_seq128.json": "990277ce688f719b1ebbfbfa1d05e9982c9dc6e99008c68f33779e8ee55f900d",
+    "logs/final_candidate_ar_tp4_layer13_seq128.json": "c36d569c44d2f0284891cff74250137ae2349d88e23d0dc5d81dd65b2e3cfc04",
+    "logs/final_candidate_fused_o_ag_ep4_layer12_seq128.json": "2c855329194a9c58101def510ae7c9634e28b217c606917129b423ec48faf986",
+    "logs/final_candidate_fused_o_ag_ep4_layer13_seq128.json": "b179db5bb259921d1ef63a0d390f924329dfd98ca8a4d2df28a5487a1e308237",
+    "logs/final_candidate_rs_ag_ep4_layer12_seq128.json": "776a40784bf233b52405626ad30c7e539b5c01c869d02edc76b7c1e43d308c85",
+    "logs/final_candidate_rs_ag_ep4_layer13_seq128.json": "a4ddf2bd319b98f24c27b80babfcbb3e8fc16b844c48ee69ee24a3ba1645e094",
+    "logs/final_context_capture_131072.junit.xml": "9df033bb0e3bc066d8f60458e5c9931c6296b7685d367125b1f57f21846f15e1",
+    "logs/final_frozen_source_suite.junit.xml": "62a4a2ffd66db6e3b131603053922abccf575ed603165d2ea8c464c1dd91cc73",
+    "logs/final_perf_candidate_ar_tp4_seq128.junit.xml": "20f993c8ad67a3bf67c82d5020d48acb4802960acafa7fa1958bb384c7ed9adc",
+    "logs/final_perf_candidate_fused_o_ag_ep4_seq128.junit.xml": "d52c4faee2dbea1f2919e1420a9d05f019c2429465bf2b7adc98deeefa9916b8",
+    "logs/final_perf_candidate_rs_ag_ep4_seq128.junit.xml": "f6dc526a1a4011358e0cfff1631a94624551160c402a76a2fa0471340d43f585",
+    "logs/final_perf_selected_ar_ep4_seq17.junit.xml": "8c35aa41c3cf6312d0c31268bf47f7d28c276de4149f72163a87a99b025f8724",
+    "logs/final_perf_selected_ar_ep4_seq128.junit.xml": "341ef3fcb065be6e55f1d11ce2b5a8ba76e5fcba0cebf32bea73f5e456dde552",
+    "logs/final_perf_single_seq17.junit.xml": "d58dd64da8b82a4d9706c29966e4056854c55bfdb20b1851f5a9ed079dbfa4c3",
+    "logs/final_perf_single_seq128.junit.xml": "88c6db7ab65783e8cd2ab6542bdaeb01b64d6e0e1474915abefaf1e3633e9c91",
+    "logs/final_selected_ar_ep4_layer12_seq17.json": "02e49ff965de77c3f78eda8f145e9b39dbac6e0370114d62fbb4bd7b8940c24f",
+    "logs/final_selected_ar_ep4_layer12_seq128.json": "cc0f84ce2b581aed50291ba12750ba45bac57fc41742b4027be678e065fb3db7",
+    "logs/final_selected_ar_ep4_layer13_seq17.json": "9f2963281cc208267b50403ffecd5e19244e98c062e5a8d80ce2fa8c37b85593",
+    "logs/final_selected_ar_ep4_layer13_seq128.json": "85c3a7324d05302facfcefd1f9649f07fc1647530f65e26a3e523e3c80748097",
+    "logs/final_topology_candidates_correctness.junit.xml": "645ab157aeeb2b5b68962f174eebbff22b404d1e4f4d1f85fd2863fdf7d86be8",
+    "logs/precision_capture_s128_bfp8_hifi_split_final.junit.xml": "205eba33533cebdda9e1a2d5b17748bf225cdf52bd901afeeab5ddb97356976a",
+    "logs/precision_capture_s129_s2048_bfp8_hifi_split_final.junit.xml": "705383f03043c29d68444da12ea96b27951840efa688071f4c608a92e6d76249",
+    "logs/precision_multichip_all_lengths_selected_final.junit.xml": "79716203f019998e8ca1f9f2e19c06c2da8cfe8a7d0bc2e0fd77778346dc8198",
+    "logs/precision_postmerge_h2_trace_regression.junit.xml": "c29f80b1e6a44befed54106f26095bdd804d3f8740ec85ef6de9c87b247455c0",
+    "logs/triage_eth_arc_final_frozen.log": "a87eea0cbe0580738d57f44daea013f9bbc0622c039cdb9c077680ea4b7f0863",
+    "logs/tt_smi_final_frozen.log": "c2e74f7a13ac262fa0eb87dbdae861b8e53e520a0467ecd88721ce4cee75e717",
+    "logs/watcher_eth_attempt_final_frozen.log": "5787b69f814cb606a3e73e3ebdc72b411d27af5464fb83fe60c3bfbf9aa2e88e",
+    "logs/watcher_final_frozen.junit.xml": "c9f5ce7cb178b84ca6258fab753efe4a83b1e2dcedd651ecf2ff522efc6b2b44",
+    "logs/watcher_final_frozen.log": "d33f8e8e331caad8cb70e5407fa3245486b02130479b10b47d6ed08d3dc9111b",
+    "perf/decode_final_frozen_ops_summary.csv.csv": "0f78efb89e799420977122eae0288977f727c3e7d9bb3611d06816cd82efb2a7",
+    "perf/prefill_final_frozen_ops_summary.csv.csv": "4b11e602e7a3f5e2dbdee9f46dbf9e1bf2f4d79337e0e8ec944619a08c15127c",
+    "perf/tracy_final_frozen/reports/gpt_oss_20b_tp4_ep4_seq17_final/2026_07_23_07_18_45/ops_perf_results_gpt_oss_20b_tp4_ep4_seq17_final_2026_07_23_07_18_45.csv": "b2474a265c273c5e986676cbef1aa4c9c7019d34e01cc5e31c94b7f6be8d1a08"
+  },
+  "frozen_at_utc": "2026-07-23T07:04:08Z",
+  "git_base_commit": "e78e3cd110810695ca1172002deffcc6ddb97e43",
+  "git_branch": "mvasiljevic/models/v2/openai-gpt-oss-20b",
+  "hardware": {
+    "architecture": "Blackhole",
+    "cards": 4,
+    "firmware_bundle": "19.8.0",
+    "mesh": [
+      1,
+      4
+    ],
+    "product": "P300c",
+    "topology": "FABRIC_1D_RING",
+    "worker_grid": [
+      11,
+      10
+    ]
+  },
+  "run_groups": {
+    "candidate_correctness": {
+      "environment": {
+        "MULTICHIP_TOPOLOGY_TRACE_REPLAYS": "100",
+        "RUN_MULTICHIP_TOPOLOGY_CANDIDATES": "1"
+      },
+      "result": "8 passed"
+    },
+    "default_suite": {
+      "command": "pytest -q models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py",
+      "result": "34 passed, 18 expected opt-in skips, 0 failures"
+    },
+    "profile": {
+      "environment": {
+        "MULTICHIP_DECODER_PERF_SEQ": "17",
+        "MULTICHIP_DECODER_PREFILL_REPEATS": "1",
+        "MULTICHIP_DECODER_TRACE_REPLAYS": "3",
+        "RUN_MULTICHIP_DECODER_PERF": "1"
+      },
+      "result_path_override": "logs/profile_final_layer{layer_idx}_seq{seq_len}.json",
+      "tool": "python -m tracy -r -p --check-exit-code"
+    },
+    "timing": {
+      "environment": {
+        "MULTICHIP_DECODER_PREFILL_REPEATS": "20",
+        "MULTICHIP_DECODER_TRACE_REPLAYS": "500",
+        "RUN_MULTICHIP_DECODER_PERF": "1"
+      },
+      "sequences": [
+        17,
+        128
+      ]
+    },
+    "watcher": {
+      "full_eth_result": "platform limit before model execution: ACTIVE_ETH 27920 bytes > 25600 bytes",
+      "worker_environment": {
+        "TT_METAL_WATCHER": "10",
+        "TT_METAL_WATCHER_DISABLE_ETH": "1"
+      },
+      "worker_result": "4 passed across both boundary and page-bank trace layer kinds"
+    }
+  },
+  "source_files": {
+    "models/autoports/openai_gpt_oss_20b/doc/context_contract.json": {
+      "sha256": "f3797d184f7239fe481b5216db6f2b16d88c90f65b07bef46c48b1f127e3f1b2"
+    },
+    "models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py": {
+      "sha256": "3df7e045c066b5beefb790ec8ff4998e9cf912b6c7f198de966f07ed75471c13"
+    },
+    "models/autoports/openai_gpt_oss_20b/tt/multichip_decoder.py": {
+      "sha256": "25fee42d80fb2bcf4a8b8136cb133775ab3ff824d60d31c885191c598cbd9d64"
+    }
+  },
+  "status": "frozen-source-final-evidence-complete",
+  "timing_contract": {
+    "decode": "warmed trace replay",
+    "prefill_repeats": 20,
+    "trace_replays": 500
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "baseline": "current OptimizedDecoder",
+  "layer_idx": 12,
+  "layer_kind": "sliding",
+  "mesh": [
+    1,
+    1
+  ],
+  "prefill_ms": 12.88049933500588,
+  "prefill_repeats": 20,
+  "seq_len": 128,
+  "trace_replays": 500,
+  "traced_decode_ms": 0.7967817038297653
+}
