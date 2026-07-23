@@ -371,6 +371,7 @@ from ttnn.types import (
     TensorAccessorArgs,
     Mcast1D,
     Mcast1DShape,
+    Mcast1DSenderPlacement,
     Mcast2D,
     McastConfig,
     McastDataReady,
