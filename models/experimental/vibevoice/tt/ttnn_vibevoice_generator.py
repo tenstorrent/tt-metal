@@ -340,8 +340,10 @@ class TTVibeVoiceGenerator:
         # reused every AR step — avoids a full-vocab host alloc + H2D upload per step).
         self._token_mask_tt: Optional[ttnn.Tensor] = None
 
-        # Optional WHOLE-SEGMENT fused trace (opt-in via VV_TRACE_SEGMENT=1, set by demo --trace):
-        # the true llama shape — a fully device-driven fused frame (the whole steady-state
+        # WHOLE-SEGMENT fused trace (VV_TRACE_SEGMENT=1). Demo / ISL sweep enable this by
+        # default and open the device with a ~1.4 GB trace region + 2 CQs; other entry points
+        # stay eager unless they set the env and reserve the region.  The true llama shape —
+        # a fully device-driven fused frame (the whole steady-state
         # speech-diffusion frame — neg-LM → diffusion → post-diffusion → pos-LM — as ONE graph),
         # so there are NO per-frame host RoPE/position writes and NO capture-poison re-run:
         # positions self-advance via ttnn.plus_one INSIDE the trace, RoPE rows are gathered on
