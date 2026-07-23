@@ -144,6 +144,57 @@ def style_linear_plan(batch: int, style_dim: int, out_features: int):
     return None, False
 
 
+def _pick_1d_mcast_grid(cores: int, gx_max: int, gy_max: int):
+    """Smallest ``gx`` with ``cores/gx <= gy_max`` (reproduces swept winners 2x8 / 4x8 / 8x8)."""
+    for gx in range(1, gx_max + 1):
+        if cores % gx:
+            continue
+        gy = cores // gx
+        if gy <= gy_max:
+            return gx, gy
+    return None
+
+
+def style_linear_program_config(batch: int, style_dim: int, out_features: int, *, grid_size):
+    """Winning 1D-mcast program config for the M=1 AdaIN style ``fc`` linear ``[b,K]@[K,N]``.
+
+    Sweep (``perf/test_decoder_matmul_sweep.py`` / ``feedback_decoder_matmul_sweep``): a max-core
+    1D-mcast grid (cores = N/32), FULL-K ``in0_block_w`` (single accumulation pass → no K reorder,
+    PCC-safe), ``per_core_N=1``, ``out_subblock 1x1`` beats the default program config by ~27-30%
+    across N in {512, 1024, 2048}. Applies only when the M extent is a single tile (batch <= 32,
+    the production decoder is batch 1) and N is tile-aligned with a core grid that fits the device;
+    returns ``None`` otherwise so the caller keeps the default matmul.
+
+    This targets the tile-aligned style linears that :func:`style_linear_plan` leaves on the default
+    path (N/32 > the width-shard core cap): generator stage-0 resblocks (N=512), decode[3] norm2
+    (N=1024), and encode / decode[0..2] norm2 (N=2048).
+    """
+    M = tile_padded_rows(int(batch))
+    K = int(style_dim)
+    N = int(out_features)
+    if M > _TILE or K % _TILE or N % _TILE:
+        return None
+    cores = N // _TILE
+    gx_max, gy_max = int(grid_size.x), int(grid_size.y)
+    if cores > gx_max * gy_max:
+        return None
+    grid = _pick_1d_mcast_grid(cores, gx_max, gy_max)
+    if grid is None:
+        return None
+    gx, gy = grid
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=K // _TILE,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
 def maybe_to_memory_config(x: ttnn.Tensor, mc: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
     cur = x.memory_config()
     if cur.buffer_type == mc.buffer_type and cur.memory_layout == mc.memory_layout:

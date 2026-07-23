@@ -21,7 +21,11 @@ import torch.nn as nn
 
 import ttnn
 
-from .tt_matmul_memory import activation_interleaved_mc, maybe_reshard_to_caller, style_linear_plan
+from .tt_matmul_memory import (
+    maybe_reshard_to_caller,
+    style_linear_plan,
+    style_linear_program_config,
+)
 
 # ``ttnn.layer_norm`` on ``[B*C, L]`` matches ``InstanceNorm1d`` for most Kokoro shapes, but trained
 # ``decoder.encode.norm2`` (C=1024, bf16, L≈96) still needs the decomposed path for PCC > 0.99.
@@ -316,7 +320,26 @@ class TTAdaIN1d:
         p = self.params
         b = int(style_bs.shape[0])
         style_out_mc, style_reshard = style_linear_plan(b, int(p.fc_weight.shape[-1]), 2 * c)
-        linear_mc = style_out_mc if style_out_mc is not None else activation_interleaved_mc(memory_config)
+        # When the width-shard plan does not apply (N/32 > the width-shard core cap), use the swept
+        # max-core 1D-mcast program config (full-K, per_core_N=1) on an L1 output — ~27-30% faster
+        # than the default matmul and PCC-safe (single accumulation pass). See
+        # :func:`style_linear_program_config`.
+        style_prog_cfg = None
+        if style_out_mc is None:
+            style_prog_cfg = style_linear_program_config(
+                b,
+                int(p.fc_weight.shape[-1]),
+                2 * c,
+                grid_size=style_bs.device().compute_with_storage_grid_size(),
+            )
+        if style_out_mc is not None:
+            linear_mc = style_out_mc
+        else:
+            # Keep the style-linear output L1-resident whether or not a program config applies
+            # (per the L1-over-DRAM preference): mcast N=512/1024/2048 and the un-tuned odd-N norm1
+            # (N=1028/2180) fc's alike. The output is tiny ([b, 1, 2C]) so L1 never OOMs, and the
+            # downstream reshape relocates it to the caller layout anyway.
+            linear_mc = ttnn.L1_MEMORY_CONFIG
         h = ttnn.linear(
             style_bs,
             p.fc_weight,
@@ -324,6 +347,7 @@ class TTAdaIN1d:
             transpose_b=True,
             memory_config=linear_mc,
             compute_kernel_config=compute_kernel_config,
+            program_config=style_prog_cfg,
         )
         if style_reshard:
             h = maybe_reshard_to_caller(h, memory_config)
