@@ -76,3 +76,31 @@ source_to_all + reader waits all shards. Interleaved multi-relaunch A/B over the
 D=2 (no relay: r=0 source + r=1 receiver, forward==backward) → validate chunk-granular + local-first + credits
 + markers + wraparound; then D=4/D=8 ring relay. Gates: PCC>=0.999 fresh/cached/fresh-sems, Pk=1 and Pk>1,
 Ns/Sm; watcher-clean forced wraparound; markers prove both overlaps; A/B reported with all runs/median/spread.
+
+## Results (implemented)
+The general-D relay (`dm_in0_ring.cpp`) is ONE interleaved per-chunk loop (send+drain), NOT sequential rounds
+(which deadlock past num_slots). Received chunks are forwarded FROM gather DRAM (round r reads shard (d-r) stored
+in round r-1) so there is no L1-slot lifetime across rounds.
+
+Correctness (`test_all_gather_regime_a_matmul_async.py`): PCC>=0.999 fresh+cached+fresh-sems on every device;
+D=2/4/8; Pk=1 and Pk>1; Ns>1, Sm>1, auto-picker; forced slot wraparound ((D-1)*bps >> num_slots=2);
+watcher-clean D=4.
+
+Overlap PROVEN (`agmm_markers.py`, D=4, 4 devices x 11 relaunches, all True): first_local_MM < local_tx_done
+(lead ~57-66us) and first_remote_MM < gather_done (lead ~156-163us). So compute on the local shard starts before
+the local shard finishes transmitting, and compute on a remote shard starts before the all-gather finishes.
+
+Local-first (point 6): achieved via round-0 local publication + per-kb-block readiness (verified by the markers
+above), NOT via an explicit ring_pos reorder — the validated F5 PARETO placement is left intact, since the
+markers already show local-first holds and the ring is not the faster transport anyway (below).
+
+A/B (`agmm_ab.py`, three transports interleaved per round, 7 scored rounds, total device-span median):
+- D=4  32x6144x3072: ring_stream ~211-231us, source_to_all ~135-143us, full_wait ~136-146us (ring 1.55x slower)
+- D=4  256x6144x768:  ring_stream ~668-682us, source_to_all ~388-399us, full_wait ~398-407us (ring 1.71x slower)
+- D=8  32x6144x3072: ring_stream ~251-271us, source_to_all ~186-210us, full_wait ~203-226us (ring 1.29x slower)
+All PCC 0.99999. ring_stream is CORRECT and overlaps as intended but is currently SLOWER than the source_to_all
+diagnostic: the single relay core serially does DRAM-read (forward-from-DRAM) + fabric-fwd + fabric-recv + DRAM-
+write per chunk, whereas source_to_all reads each shard once and fires D-1 non-blocking unicasts. The ring is
+fabric-bandwidth-optimal (each link carries the gather once) but relay-core / DRAM round-trips dominate at these
+D. The gap narrows with D (1.55x@D4 -> 1.29x@D8). Task-4 perf levers: forward-from-L1 (drop the relay re-reads),
+multiple relay cores/links, and confirming the crossover at larger D.
