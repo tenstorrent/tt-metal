@@ -192,7 +192,7 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec PagedFillCacheDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec PagedFillCacheDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // In-place operation, return cache tensor's spec
     return tensor_args.cache_tensor.tensor_spec();

@@ -51,7 +51,16 @@ class GateComputeMode(Enum):
 class TtMoEGateConfig:
     # gate_params
 
-    ccl_config: dict = field(default_factory=lambda: {"DISPATCH_AXIS": 0, "TP_AXIS": 1, "NUM_LINKS": 2})
+    ccl_config: dict = field(
+        default_factory=lambda: {
+            "DISPATCH_AXIS": 0,
+            "TP_AXIS": 1,
+            "NUM_LINKS": 2,
+            # CCL topology for the TP-axis gate all-reduce. Ring requires the TP axis to be physically
+            # wrapped (FABRIC_2D_TORUS_X / _XY); set from TtMoe's col_topology. Defaults to Linear.
+            "TOPOLOGY": ttnn.Topology.Linear,
+        }
+    )
     mm_configs: dict = field(
         default_factory=lambda: {
             # Keyed by (sp_dim, per_device_emb_dim, n_routed_experts); forward() looks up the tuple.
@@ -549,7 +558,7 @@ class TtMoEGatePrefill(LightweightModule):
                 num_links=self.config.ccl_config["NUM_LINKS"],
                 math_op=ttnn.ReduceType.Sum,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,
+                topology=self.config.ccl_config.get("TOPOLOGY", ttnn.Topology.Linear),
             )
         return logits
 
@@ -644,7 +653,11 @@ class TtMoEGatePrefill(LightweightModule):
         padding_side: str = "right",
         padding_config: ttnn.Tensor = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Run moe_grouped_topk on device with fp32 typecast.
+        """Run moe_grouped_topk on device.
+
+        The (bf16) logits and bias are fed directly to the op, which upcasts them to fp32 inside
+        the kernel; no host-side fp32 typecast is needed (the method name is kept for the DEVICE_FP32
+        gate mode it serves).
 
         When actual_isl is set, padded token rows get sentinel expert
         indices (= n_routed_experts) so downstream masked_bincount/dispatch/
@@ -659,11 +672,12 @@ class TtMoEGatePrefill(LightweightModule):
         if owns_padding_config:
             padding_config = self.build_padding_config(actual_isl, padding_side) if actual_isl is not None else None
 
-        logits_f32 = ttnn.typecast(logits, ttnn.float32)
-        bias_f32 = ttnn.typecast(self.bias, ttnn.float32)
+        # moe_grouped_topk upcasts the (bf16) logits and bias to fp32 inside the kernel, so the
+        # previous host-side ttnn.typecast ops are gone. They were very short (2-5us) and created
+        # op-to-op gaps that fast-dispatch could not hide.
         ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
-            logits_f32,
-            bias_f32,
+            logits,
+            self.bias,
             n_groups=self.config.n_expert_groups,
             summed_experts_per_group=self.config.n_expert_groups // self.config.n_limited_groups,
             topk_groups=self.config.n_limited_groups,
@@ -674,8 +688,6 @@ class TtMoEGatePrefill(LightweightModule):
             score_func=self.config.score_func,
             padding_config=padding_config,
         )
-        ttnn.deallocate(logits_f32)
-        ttnn.deallocate(bias_f32)
         if owns_padding_config and padding_config is not None:
             ttnn.deallocate(padding_config)
         return ttnn_scores, ttnn_top_k_experts_indices
@@ -690,8 +702,9 @@ class TtMoEGatePrefill(LightweightModule):
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run moe_hash_gate on device: fused tid2eid[input_ids] routing + score_func/normalize/scale.
 
-        Mirrors _device_grouped_gate_fp32's fp32 typecast and padding-config ownership, but expert
-        selection comes from the hash table instead of top-k.
+        Mirrors _device_grouped_gate_fp32's padding-config ownership, but expert selection comes
+        from the hash table instead of top-k. moe_hash_gate still requires an fp32 logits input, so
+        this path keeps the host-side typecast (unlike moe_grouped_topk, which upcasts internally).
         """
         if input_ids is None:
             raise ValueError("GateComputeMode.HASH_DEVICE forward requires input_ids for the tid2eid lookup.")

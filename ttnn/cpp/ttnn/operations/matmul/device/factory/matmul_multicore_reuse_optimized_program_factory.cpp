@@ -24,7 +24,6 @@ using tt::tt_metal::ComputeConfigDescriptor;
 using tt::tt_metal::KernelDescriptor;
 using tt::tt_metal::ProgramDescriptor;
 using tt::tt_metal::ReaderConfigDescriptor;
-using tt::tt_metal::Tensor;
 using tt::tt_metal::WriterConfigDescriptor;
 
 namespace ttnn::prim {
@@ -165,7 +164,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
 
     // Optional fused full-tile bias. The whole per-batch [M, N] bias block
     // is loaded once and reused across the core's batch iterations.
-    const auto bias = tt::tt_metal::as_optional_mesh_tensor(tensor_args.optional_input_tensors.at(0));
+    const auto bias = ttnn::as_optional_mesh_tensor(tensor_args.optional_input_tensors.at(0));
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;
     tt::tt_metal::Tile bias_tile = output_tile;
     uint32_t bias_single_tile_size = 0;

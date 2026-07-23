@@ -97,7 +97,7 @@ void matmul_relu_pass(uint32_t head_in_group, uint32_t q_row, uint32_t k_col) {
     emit_qk_matmul_block<q_cb, k_cb>(head_in_group, q_row, k_col);
     qk.reserve_back(heads_per_dest_pass);
     tile_regs_wait();
-    pack_tile_block(0, qk_cb, heads_per_dest_pass);
+    pack_block(0, qk_cb, heads_per_dest_pass);
     tile_regs_release();
     qk.push_back(heads_per_dest_pass);
 }

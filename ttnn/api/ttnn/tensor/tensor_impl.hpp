@@ -16,7 +16,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 
-namespace tt::tt_metal::tensor_impl {
+namespace ttnn::tensor_impl {
 
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -26,8 +26,8 @@ namespace tt::tt_metal::tensor_impl {
 //                                  .view()
 // ======================================================================================
 
-HostTensor view(
-    const HostTensor& tensor,
+tt::tt_metal::HostTensor view(
+    const tt::tt_metal::HostTensor& tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape);
 
@@ -35,7 +35,7 @@ HostTensor view(
 //                                         Print
 // ======================================================================================
 
-std::ostream& operator<<(std::ostream& os, const DataType& dtype);
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& dtype);
 
 enum class TensorPrintProfile {
     Empty,
@@ -61,4 +61,4 @@ std::string to_string(const Tensor& tensor);
 
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);
 
-}  // namespace tt::tt_metal::tensor_impl
+}  // namespace ttnn::tensor_impl

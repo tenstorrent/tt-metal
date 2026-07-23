@@ -37,6 +37,7 @@
 #   --lock-timeout N  Seconds to wait for the lock (default: 900)
 #   --sim-path PATH   Override TT_UMD_SIMULATOR_PATH
 #                     (default: /proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-<arch>-1x3)
+#   --speed-of-light  Pass pytest --speed-of-light (compile-time formats / SOL path).
 #   --no-split        Skip compile-producer step; run pytest --run-simulator without
 #                     --compile-consumer (combined compile+run in one pytest invocation).
 #                     Use for issue-solver tests that don't pre-build ELFs.
@@ -97,6 +98,7 @@ LOCKFILE=""  # set in _validate based on ARCH if not user-overridden
 LOCK_TIMEOUT="900"
 SIM_PATH=""
 NO_SPLIT="false"
+SPEED_OF_LIGHT="false"
 LOG_DIR=""
 VERBOSE="false"
 
@@ -115,6 +117,7 @@ while [[ $# -gt 0 ]]; do
     --lock-timeout)  LOCK_TIMEOUT="$2";  shift 2 ;;
     --sim-path)      SIM_PATH="$2";      shift 2 ;;
     --log-dir)       LOG_DIR="$2";       shift 2 ;;
+    --speed-of-light) SPEED_OF_LIGHT="true"; shift ;;
     --no-split)      NO_SPLIT="true";    shift   ;;
     --verbose|-v)    VERBOSE="true";     shift   ;;
     --help|-h)
@@ -262,6 +265,8 @@ _do_compile() {
   # wrote, so an unfiltered producer + filtered consumer would either rebuild
   # variants the consumer skips or miss variants the consumer needs.
   local -a kflag=()
+  local -a solflag=()
+  [[ "$SPEED_OF_LIGHT" == "true" ]] && solflag=(--speed-of-light)
   local -a pytest_targets=("${TEST_FILES[@]}")
   local target_label="$(_test_label)"
   if [[ -n "$TEST_ID" ]]; then
@@ -271,7 +276,7 @@ _do_compile() {
     kflag=(-k "$K_FILTER")
   fi
 
-  _vlog "compile: ${target_label} (arch=${ARCH}, -n ${JOBS}${kflag[*]:+, -k '${K_FILTER}'})"
+  _vlog "compile: ${target_label} (arch=${ARCH}, -n ${JOBS}${kflag[*]:+, -k '${K_FILTER}'}$([[ "$SPEED_OF_LIGHT" == true ]] && echo ', sol'))"
 
   if [[ -n "$LOG_DIR" ]]; then
     mkdir -p "$LOG_DIR"
@@ -279,14 +284,14 @@ _do_compile() {
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${kflag[@]}" "${pytest_targets[@]}"
+      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${solflag[@]}" "${kflag[@]}" "${pytest_targets[@]}"
     ) > >(tee -a "${LOG_DIR}/compile.log") 2> >(tee -a "${LOG_DIR}/compile.log" >&2)
   else
     (
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${kflag[@]}" "${pytest_targets[@]}"
+      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${solflag[@]}" "${kflag[@]}" "${pytest_targets[@]}"
     )
   fi
 }
@@ -326,6 +331,7 @@ _do_simulate() {
     pytest_flags="${pytest_flags} --run-simulator --port=${PORT}"
   fi
   [[ "$NO_SPLIT" == "false" ]] && pytest_flags="${pytest_flags} --compile-consumer"
+  [[ "$SPEED_OF_LIGHT" == "true" ]] && pytest_flags="${pytest_flags} --speed-of-light"
   [[ -n "$MAXFAIL" ]] && pytest_flags="${pytest_flags} --maxfail=${MAXFAIL}"
 
   # Determine the test target (file, -k filter, or single variant by ID)
