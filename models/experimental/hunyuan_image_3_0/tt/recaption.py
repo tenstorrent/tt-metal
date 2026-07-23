@@ -61,7 +61,8 @@ def run_recaption_on_device(
 
     Device-logits sampling is **on by default** (``HY_DEVICE_SAMPLING`` /
     ``HY_SAMPLE_DEVICE``; set ``=0`` to disable). Falls back to the host sampler
-    when stage-force / ratio / rep-penalty processors are active.
+    when ratio / rep-penalty processors are active. Simple stage force
+    (``think_recaption`` ``</think>``→``<recaption>``) stays on the device path.
 
     Default sample step: D2H logits → host torch topk (Instruct ``top_k``, e.g. 1024)
     → host shortlist multinomial. Set ``HY_TOP_K=32`` / ``HY_TOPK=32`` (or
@@ -100,18 +101,25 @@ def run_recaption_on_device(
     if device_sampling_enabled() and not use_device_sampling:
         print(
             "[recaption] device sampling requested but host processors active "
-            "(stage transitions / ratio / rep-penalty / greedy) — using host sampler",
+            "(ratio / rep-penalty / greedy) — using host sampler",
             flush=True,
         )
     elif use_device_sampling:
         from models.experimental.hunyuan_image_3_0.tt.device_sampling import ttnn_sampling_op_enabled
 
         if ttnn_sampling_op_enabled():
-            print("[recaption] on-device sampling (ttnn.topk + ttnn.sampling)", flush=True)
+            print(
+                "[recaption] on-device sampling (ttnn.topk + ttnn.sampling"
+                + ("; stage-force on device" if params.stage_transitions else "")
+                + ")",
+                flush=True,
+            )
         else:
             print(
                 "[recaption] on-device sampling (D2H + host torch topk/shortlist; "
-                "set HY_TOP_K=32 for ttnn.topk+sampling)",
+                "set HY_TOP_K=32 / HY_TOPK=32 for ttnn.topk+sampling"
+                + ("; stage-force on device" if params.stage_transitions else "")
+                + ")",
                 flush=True,
             )
 

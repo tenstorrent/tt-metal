@@ -14,8 +14,9 @@
 #   ``ttnn.sampling`` hard-caps k to (0, 32]; BH hangs on W=32 (pad to ≥64).
 #
 # Full-vocab ``ttnn.sampling`` (W≈262144) OOMs with the resident backbone.
-# Repetition penalty / stage-force / ratio processors still force host generate.
-# Disable device-logits path with ``HY_DEVICE_SAMPLING=0`` (alias ``HY_SAMPLE_DEVICE=0``).
+# Simple stage-force (think→recaption) runs on the device path via
+# ``StageForceController``. Repetition penalty / ratio slice processors still
+# force host generate. Disable with ``HY_DEVICE_SAMPLING=0`` (alias ``HY_SAMPLE_DEVICE=0``).
 
 from __future__ import annotations
 
@@ -516,18 +517,66 @@ def can_use_device_sampling(
     stage_transitions=None,
     logits_processors=None,
 ) -> bool:
-    """True when host-only processors are inactive so device-logits sampling is safe."""
+    """True when host-only processors are inactive so device-logits sampling is safe.
+
+    Simple ``stage_transitions`` (e.g. think→recaption force-emit) are allowed: the
+    device AR loop applies the same force bookkeeping as
+    ``StageTransitionLogitsProcessor`` without masking full-vocab logits.
+
+    Ratio / slice ``logits_processors`` and repetition penalty still require the
+    host generate path.
+    """
     if not device_sampling_enabled():
         return False
     if not getattr(config, "do_sample", True):
         return False
     if getattr(config, "repetition_penalty", 1.0) != 1.0:
         return False
-    if stage_transitions:
-        return False
     if logits_processors:
         return False
     return True
+
+
+class StageForceController:
+    """Host-side stage forcing matching ``StageTransitionLogitsProcessor`` (no logits).
+
+    ``stage_transitions`` is ``[(stop_id, [append_ids...]), ...]``. When the last
+    generated token equals ``stop_id`` (once), the ``append_ids`` are force-emitted
+    in order before free sampling resumes. Used by ``think_recaption``
+    (``</think>`` → ``<recaption>``) under device sampling.
+    """
+
+    def __init__(self, stage_transitions, batch_size: int):
+        self.transition_map = {int(stop_id): list(append_ids) for stop_id, append_ids in (stage_transitions or [])}
+        self.pending_tokens = [[] for _ in range(batch_size)]
+        self.completed = [set() for _ in range(batch_size)]
+
+    def forced_ids(self, last_tokens: torch.Tensor) -> list[int | None]:
+        """Per-row forced token id, or ``None`` to free-sample that row."""
+        out: list[int | None] = []
+        for i in range(last_tokens.shape[0]):
+            last_token = int(last_tokens[i].item())
+            if self.pending_tokens[i] and last_token == self.pending_tokens[i][0]:
+                self.pending_tokens[i].pop(0)
+            if self.pending_tokens[i]:
+                out.append(int(self.pending_tokens[i][0]))
+                continue
+            if last_token in self.transition_map and last_token not in self.completed[i]:
+                self.completed[i].add(last_token)
+                next_tokens = self.transition_map[last_token]
+                if next_tokens:
+                    self.pending_tokens[i] = list(next_tokens)
+                    out.append(int(self.pending_tokens[i][0]))
+                    continue
+            out.append(None)
+        return out
+
+
+def upload_token_ids_tt(device, token_ids: torch.Tensor, mesh_mapper=None) -> ttnn.Tensor:
+    """Upload host token ids ``[B]`` or ``[B,1]`` as device ``[B,1]`` uint32."""
+    host = token_ids.detach().to(torch.int32).view(-1, 1).contiguous()
+    mapper = mesh_mapper if mesh_mapper is not None else _replicate_mapper(device)
+    return _upload_rm(device, host, dtype=ttnn.uint32, mesh_mapper=mapper)
 
 
 def append_token_ids_tt(seq_tt: ttnn.Tensor | None, token_tt: ttnn.Tensor) -> ttnn.Tensor:
