@@ -202,13 +202,12 @@ inline void _llk_unpack_tilize_(
     // 16*N..16*N+15 via the Zstride configured by configure_unpack_AB. This relies on
     // SRCA_SET_SetOvrdWithAddr = 1 (letting OutAddr drive the SrcA row directly, without
     // SrcRow being added). Contract: the bit is set to 1 by configure_unpack_AB at unpack
-    // init (see cunpack_common.h:946 -- TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4)) and is the
-    // resting state. It is transiently cleared to 0 only by set_dst_write_addr (cunpack
-    // _common.h:1015) with a paired restore in unpack_to_dest_tile_done (line 1009).
-    // Because this path asserts !unpack_to_dest at init, we can never be inside that
-    // transient window on entry -- the bit is guaranteed to be 1. NOTE: future FP8
-    // unpack_to_dest support would enter with the bit cleared and must either restore
-    // it explicitly or use a different addressing scheme.
+    // init and is the resting state. It is transiently cleared to 0 only by
+    // set_dst_write_addr with a paired restore in unpack_to_dest_tile_done. Because this
+    // path asserts !unpack_to_dest at init, we can never be inside that transient window
+    // on entry -- the bit is guaranteed to be 1. NOTE: future FP8 unpack_to_dest support
+    // would enter with the bit cleared and must either restore it explicitly or use a
+    // different addressing scheme.
     // The active context selects between REG3_Base_address (cntx0) and REG3_Base_cntx1
     // _address for both the base-address cfg write and the CFGSHIFTMASK target.
     //   num_faces==4: 4 UNPACRs (face 3 with SetDvalid) + CFGSHIFTMASK between top and
