@@ -495,6 +495,7 @@ def _create_height_sharded_descriptor(
     CB_X_IN = 1
     CB_SCALER = 2
     CB_GAMMA = 3
+    CB_GAMMA_STICKS = 4
     CB_OUT = 16
     CB_XSQ = 24
     CB_RSTD = 25
@@ -526,6 +527,10 @@ def _create_height_sharded_descriptor(
         # would blow L1 on top of the resident input+output shards for wide W. cb_gamma
         # stays small (never sized by Wt), so HEIGHT fits any W (op_design.md §7).
         add_cb(CB_GAMMA, tile_gamma, DEPTH * BLOCK_SIZE, gamma_dtype)
+        if gamma_is_rm:
+            # RM gamma: reader streams sticks per block into cb_gamma_sticks; compute
+            # tilizes them into cb_gamma (mirror of the interleaved RM-gamma knob-turn).
+            add_cb(CB_GAMMA_STICKS, tile_gamma, DEPTH * BLOCK_SIZE, gamma_dtype)
 
     # ---- Reader: scaler prep + resident gamma read; x is resident (no x read) ----
     reader_ct_args = [

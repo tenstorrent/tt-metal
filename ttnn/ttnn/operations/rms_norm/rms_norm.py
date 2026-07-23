@@ -137,14 +137,12 @@ SUPPORTED = {
 
 EXCLUSIONS = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
-    # Refinement 5 lands HEIGHT_SHARDED for TILE input + {TILE gamma, no gamma} via the
-    # zero-copy resident-shard row-parallel path. The two RM corners on HEIGHT need the
-    # tilize/untilize-on-resident-shard plumbing (RM input) or the resident-path RM-gamma
-    # tilize (RM gamma) — deferred to R5a. Refused cell-level so they stay xfail-strict:
+    # Refinement 5 lands HEIGHT_SHARDED for TILE input (TILE gamma, RM gamma, no gamma)
+    # via the zero-copy resident-shard row-parallel path. RM INPUT + HEIGHT still needs the
+    # tilize/untilize-on-resident-shard plumbing (a local-reduction analog of the R4b RM
+    # sub-scheme) — deferred to R5a. Refused cell-level so it stays xfail-strict:
     #   * RM INPUT + HEIGHT: covers RM+no-gamma and RM+RM-gamma (RM+TILE-gamma is INVALID).
-    #   * RM GAMMA + HEIGHT: covers TILE-input+RM-gamma (and RM-input+RM-gamma, redundant).
     {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED},
-    {"gamma_layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED},
     # Refinement 4a lands RM-gamma on the cross-core path (reader reads the gamma
     # W-slice as row-major sticks, compute tilizes them into cb_gamma before the
     # pass-2 ·gamma). Refinement 4b lands RM-INPUT + WIDTH/BLOCK sharded: the reader

@@ -203,6 +203,11 @@ void kernel_main() {
                         // HEIGHT: gamma streamed per block (reader pushes BLOCK_SIZE/block);
                         // Bulk = wait+pop the block's gamma tiles. Same streaming ·gamma mul
                         // as the interleaved streaming path below (small cb_gamma, any W).
+                        if constexpr (GAMMA_IS_RM) {
+                            // RM gamma: tilize the block's sticks the reader pushed to
+                            // cb_gamma_sticks -> cb_gamma (mirror of the interleaved RM-gamma).
+                            ckl::tilize<BLOCK_SIZE, cb_gamma_sticks, cb_gamma>(1);
+                        }
                         ckl::mul<
                             cb_norm,
                             cb_gamma,

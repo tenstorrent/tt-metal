@@ -143,18 +143,30 @@ void kernel_main() {
             // HEIGHT_SHARDED (Refinement 5): x is the resident zero-copy shard (compute
             // self-arms cb_x_in), so skip the x read. gamma is STREAMED per block per row
             // in compute's pass-2 consume order (small cb_gamma fits any W; gamma is the
-            // same (1,1,1,W) for every row so tile b = b*BLOCK_SIZE + wt, re-read per row).
+            // same (1,1,1,W) for every row, re-read per row). TILE gamma reads whole tiles;
+            // RM gamma reads sticks into cb_gamma_sticks (compute tilizes them) — the same
+            // per-block gamma streaming as the interleaved path.
             const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
             for (uint32_t i = 0; i < num_rows; ++i) {
                 for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
-                    cb_reserve_back(cb_gamma, BLOCK_SIZE);
-                    uint32_t gl1 = get_write_ptr(cb_gamma);
-                    for (uint32_t wt = 0; wt < BLOCK_SIZE; ++wt) {
-                        noc_async_read_tile(b * BLOCK_SIZE + wt, gamma_accessor, gl1);
-                        gl1 += gamma_tile_bytes;
+                    if constexpr (GAMMA_IS_RM) {
+                        const uint32_t col0 = b * BLOCK_SIZE * TILE_DIM;
+                        uint32_t cols = origin_W - col0;
+                        if (cols > BLOCK_SIZE * TILE_DIM) {
+                            cols = BLOCK_SIZE * TILE_DIM;
+                        }
+                        dataflow_kernel_lib::read_sticks_for_tilize<cb_gamma_sticks>(
+                            gamma_accessor, 1, cols * gamma_elem, 0, col0 * gamma_elem);
+                    } else {
+                        cb_reserve_back(cb_gamma, BLOCK_SIZE);
+                        uint32_t gl1 = get_write_ptr(cb_gamma);
+                        for (uint32_t wt = 0; wt < BLOCK_SIZE; ++wt) {
+                            noc_async_read_tile(b * BLOCK_SIZE + wt, gamma_accessor, gl1);
+                            gl1 += gamma_tile_bytes;
+                        }
+                        noc_async_read_barrier();
+                        cb_push_back(cb_gamma, BLOCK_SIZE);
                     }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_gamma, BLOCK_SIZE);
                 }
             }
         }
