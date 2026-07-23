@@ -150,8 +150,10 @@ run_version_check_gate() {
     rc=$?
     printf '%s\n' "$out"
 
-    # A genuine version-below-minimum is always a hard failure.
-    if printf '%s\n' "$out" | grep -q '< required'; then
+    # A genuine version-below-minimum is always a hard failure. Use a bash pattern match rather than
+    # a `... | grep -q` pipeline: under `set -o pipefail`, grep can close the pipe on an early match,
+    # the upstream printf gets SIGPIPE, and the pipeline returns non-zero, masking the match.
+    if [[ "$out" == *"< required"* ]]; then
         echo ""
         echo "Error: version check failed on one or more hosts (see above)."
         echo "       Required: tt-smi >= $TT_SMI_MIN_VERSION, KMD >= $KMD_MIN_VERSION, firmware >= $FW_MIN_VERSION."
