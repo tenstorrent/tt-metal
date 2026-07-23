@@ -258,13 +258,6 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
     uint64_t ts_base = 0;
     static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
     uint64_t dbg_iters = 0, dbg_pages = 0, dbg_emit = 0;
-    // Near-zero-cost stream-order validation: one counter per lane = # of currently-open REAL zones (an
-    // X280-STALL 0x7FFF may legally nest inside a real zone, so stalls are ignored). A real zone opening
-    // while another real zone is already open is the "consecutive STARTs -> Tracy staircase" bug. Logged
-    // inline the moment it happens (survives a timeout-kill), plus a max-depth summary at drain exit.
-    std::vector<int32_t> real_open(ctx.nl, 0);
-    uint64_t real_nest = 0;
-    int32_t max_real_open = 0;
 
     while (!stop_.load(std::memory_order_acquire)) {
         uint32_t np = sock->pages_available();
@@ -311,28 +304,6 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
                 const uint32_t ci = lane / kNRisc, risc = lane % kNRisc;
                 if (ci >= ctx.core_virt.size()) {
                     return;
-                }
-                // Stream-order validation (see lane_stack decl). Detects the improper-nesting/mispair bug
-                // in the DECODED stream (i.e. before Tracy), isolating producer/decoder from the Tracy sink.
-                if (static_cast<uint16_t>(hash) != 0x7FFFu) {  // ignore X280-STALL (legal nesting)
-                    if (type == kernel_profiler::ZONE_START) {
-                        if (real_open[lane] > 0 && real_nest++ < 40) {
-                            log_warning(
-                                tt::LogMetal,
-                                "[order] REAL-NEST ci={} risc={} lane={} hash=0x{:x} open={} ts={}",
-                                ci,
-                                risc,
-                                lane,
-                                static_cast<uint16_t>(hash),
-                                real_open[lane],
-                                ts);
-                        }
-                        if (++real_open[lane] > max_real_open) {
-                            max_real_open = real_open[lane];
-                        }
-                    } else if (real_open[lane] > 0) {
-                        --real_open[lane];
-                    }
                 }
                 // DIAG (TT_PERF_DEBUG_ZONE_DUMP=1): dump the first decoded markers' per-lane timestamp split
                 // (hi = timer_hi, lo = timer_low) to spot a lane whose timer_hi never got set (-> zones land at
@@ -387,15 +358,6 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
             dbg_iters,
             dbg_pages,
             dbg_emit);
-    }
-    if (real_nest || max_real_open > 1) {
-        log_warning(
-            tt::LogMetal,
-            "[order sock={} SUMMARY] real_nest={} max_real_open={} (real_nest>0 == the Tracy zone-staircase "
-            "bug in the DECODED stream -> producer/decoder, not the Tracy handler)",
-            sock_idx,
-            real_nest,
-            max_real_open);
     }
 }
 
