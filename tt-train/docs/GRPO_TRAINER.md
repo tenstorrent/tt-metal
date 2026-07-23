@@ -55,7 +55,7 @@ rank count. It only calls `completer.generate(...)`,
 same mesh as the policy, or on a peer MPI rank — is the completer's
 choice. For a worked-out two-rank deployment (separate trainer and
 inference ranks, weight push every step), see the
-[BoolQ example](../sources/examples/grpo/boolq/README.md).
+[BoolQ example](../sources/examples/grpo_remote_rollout/boolq/README.md).
 
 ---
 
@@ -103,9 +103,19 @@ model architecture (Llama, Qwen, etc.).
 | `generate_str` | `(prompt_strs: List[str]) -> List[str]` | Generate completions from string prompts, returning decoded strings. |
 | `compute_nlog_probs` | `(prompts, completions) -> (nlog_probs, mask)` | Compute per-token negative log probabilities for prompt+completion pairs. Returns tensors `[B_local, T_padded]`. |
 
-The shipped concrete completer is `LlamaCompleterRemoteRollout` (in
-`tt-train/sources/examples/grpo/utils/llama_grpo_completer.py`),
-documented alongside the [BoolQ example](../sources/examples/grpo/boolq/README.md).
+Three concrete completers ship today:
+
+- `LlamaGRPOCompleter`
+  ([`sources/examples/grpo/utils/llama_completer.py`](../sources/examples/grpo/utils/llama_completer.py))
+  — single-process Llama; owns its own mesh via `setup_device`.
+- `Qwen3GRPOCompleter`
+  ([`sources/examples/grpo/utils/qwen3_completer.py`](../sources/examples/grpo/utils/qwen3_completer.py))
+  — single-process Qwen3 with FSDP (see below).
+- `LlamaCompleterRemoteRollout`
+  ([`sources/examples/grpo_remote_rollout/utils/llama_grpo_completer.py`](../sources/examples/grpo_remote_rollout/utils/llama_grpo_completer.py))
+  — two-rank Llama; receives an already-opened mesh and delegates
+  generation to a peer MPI rank. Documented alongside the
+  [BoolQ example](../sources/examples/grpo_remote_rollout/boolq/README.md).
 
 ### Qwen3GRPOCompleter
 
@@ -120,6 +130,8 @@ HuggingFace config of `model_source`; only `max_sequence_length` is taken from
 `transformer_config` (to bound the generation horizon).
 
 ```python
+from ttml.common.config import DeviceConfig
+
 completer = Qwen3GRPOCompleter(
     ctx=Qwen3CompletionCtx(
         max_tokens_to_complete=256,
@@ -127,10 +139,20 @@ completer = Qwen3GRPOCompleter(
         completions_per_prompt=8,
     ),
     transformer_config=transformer_config,   # max_sequence_length only
-    device_config={"enable_fsdp": True, "mesh_shape": [32, 1]},
+    device_config=DeviceConfig(
+        {"device_config": {"enable_fsdp": True, "mesh_shape": [32, 1]}}
+    ),
     model_source="Qwen/Qwen3-32B",
 )
 ```
+
+`DeviceConfig` is defined in
+[`ttml/common/config.py`](../sources/ttml/ttml/common/config.py); its
+constructor accepts either a full YAML dict (with a top-level
+`device_config:` block) or a path to a YAML file. In practice the
+BoolQ script loads a training YAML and passes the raw dict, i.e.
+`DeviceConfig(raw)` (see
+[`boolq_training_example.py`](../sources/examples/grpo/boolq_training_example.py)).
 
 Unlike the Llama completer, `setup_device` opens a **named** mesh via
 `ttml.open_device_mesh` so an `"fsdp"` axis exists. By default
@@ -192,7 +214,7 @@ GRPOTrainer(
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `completer` | `GRPOCompleter` | A model-specific completion engine (e.g. `LlamaCompleterRemoteRollout`). Responsible for generation, forward passes, and device setup. |
+| `completer` | `GRPOCompleter` | A model-specific completion engine (e.g. `LlamaGRPOCompleter`, `Qwen3GRPOCompleter`, or `LlamaCompleterRemoteRollout`). Responsible for generation, forward passes, and device setup. |
 | `dataset` | `Dataset` | HuggingFace `datasets.Dataset` with at least a `"prompt"` column. All other columns are passed to the reward function. |
 | `config` | `GRPOConfig` | Training configuration (see above). |
 | `reward_func` | `Callable` | Reward function. Receives decoded completions and any dataset columns (see [Reward Functions](#reward-functions)). |
@@ -294,8 +316,8 @@ access to `trainer.model` and `trainer.config`.
 > a peer MPI rank can use a `TrainerCallback` to push freshly-updated
 > policy weights to the peer after each optimizer step. The trainer
 > itself does not know about this — it just fires `on_step_end`. See
-> the [BoolQ example](../sources/examples/grpo/boolq/README.md) for
-> the shipped pattern (`WeightSyncCallback` + `MPIRolloutClient`).
+> the [BoolQ example](../sources/examples/grpo_remote_rollout/boolq/README.md)
+> for the shipped pattern (`WeightSyncCallback` + `MPIRolloutClient`).
 
 ---
 
@@ -348,9 +370,10 @@ built-in optimizers.
 
 ## Device Config
 
-There is no separate `device_config` parameter on `GRPOTrainer` or on
-the abstract `GRPOCompleter`. The mesh is configured in a YAML
-training config (`device_config:` block) and applied by your
+The abstract `GRPOCompleter` and `GRPOTrainer` impose no
+`device_config` of their own — concrete completers decide how (and
+whether) to consume one. Either way, the mesh is configured from a
+YAML training config (`device_config:` block) applied by your
 entrypoint:
 
 ```yaml
@@ -359,18 +382,32 @@ device_config:
   enable_ddp: true
 ```
 
-The entrypoint reads this block, opens the mesh, and hands the opened
-mesh + flags to whatever concrete `GRPOCompleter` it constructs:
+**In-process completers (`LlamaGRPOCompleter`, `Qwen3GRPOCompleter`)**
+accept a `DeviceConfig` object (see
+[`ttml/common/config.py`](../sources/ttml/ttml/common/config.py))
+and open the mesh themselves inside `setup_device`. The entrypoint
+just constructs it from the loaded YAML dict:
+
+```python
+from ttml.common.config import DeviceConfig
+
+raw = load_config(config_path)
+device_config = DeviceConfig(raw)
+completer = LlamaGRPOCompleter(..., device_config=device_config)
+```
+
+**Remote-rollout completer (`LlamaCompleterRemoteRollout`)** instead
+receives an already-opened `mesh_device`; the entrypoint opens it
+before construction:
 
 ```python
 mesh_device = ttnn.open_mesh_device(
     mesh_shape=ttnn.MeshShape(*device_config.mesh_shape), ...
 )
-completer = MyCompleter(..., mesh_device=mesh_device, enable_ddp=device_config.enable_ddp)
+completer = LlamaCompleterRemoteRollout(
+    ..., mesh_device=mesh_device, enable_ddp=device_config.enable_ddp
+)
 ```
-
-Different completer implementations consume these differently — the
-abstract base imposes no kwargs of its own.
 
 ### FSDP
 
@@ -466,7 +503,7 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 
 | Aspect | TRL `GRPOTrainer` | ttml `GRPOTrainer` |
 |--------|-------------------|---------------------|
-| **Model** | Passed as a `transformers` model object | Built by a `GRPOCompleter` (e.g. `LlamaCompleterRemoteRollout`) from a HF ID or local path |
+| **Model** | Passed as a `transformers` model object | Built by a `GRPOCompleter` (e.g. `LlamaGRPOCompleter`, `Qwen3GRPOCompleter`, or `LlamaCompleterRemoteRollout`) from a HF ID or local path |
 | **Reward functions** | List of functions (`reward_funcs=[f1, f2]`), summed | Single function (`reward_func=f`) |
 | **Training budget** | `max_steps` (optimizer steps) | `prompts_to_train` (total prompts) |
 | **Optimizer** | String name (`optim="adamw_bnb_8bit"`) | Config dict (`{"type": "MorehAdamW", ...}`) |

@@ -5,14 +5,14 @@ Reference for two related dict formats:
 1. The HuggingFace `transformers` Llama state-dict (the format on the
    HF Hub).
 2. The on-device dict that
-   [`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
+   [`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo_remote_rollout/utils/llama_overrides.py)
    produces for transfer to
    [`tt_transformers.tt.model.Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
    This same dict is also the wire format consumed by the cross-rank
-   [`WeightBridge`](../sources/examples/grpo/utils/weight_bridge.py),
+   [`WeightBridge`](../sources/examples/grpo_remote_rollout/utils/weight_bridge.py),
    which ships it from a ttml rank to a tt-transformers rank over MPI.
    It is what the GRPO BoolQ example
-   ([`tt-train/sources/examples/grpo/boolq/`](../sources/examples/grpo/boolq/))
+   ([`tt-train/sources/examples/grpo_remote_rollout/boolq/`](../sources/examples/grpo_remote_rollout/boolq/))
    uses to push the freshly-updated policy to the inference worker on
    every training step.
 
@@ -115,7 +115,7 @@ lm_head.weight                                   shape=(128256, 2048)
 
 ## 3. Transfer format: `ttml → tt-transformers`
 
-[`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
+[`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo_remote_rollout/utils/llama_overrides.py)
 returns a `dict[str, ttnn.Tensor]` that is the **wire format** between
 ttml and tt-transformers'
 [`Transformer.update_weights(hf_state_dict, hf_rope=False)`](../../models/tt_transformers/tt/model.py).
@@ -243,20 +243,37 @@ finally:
 ```
 
 Cross-rank, via the `WeightBridge` (one process per rank, separate
-meshes; the BoolQ GRPO example uses this path on every step):
+meshes; the BoolQ GRPO example uses this path on every step). The
+transport is created explicitly and threaded through the RPC client:
 
 ```python
-# ttml rank
-client = MPIRolloutClient(peer_rank=TTT_RANK, device=ttml_mesh)
+from utils.mpi_rollout import MPIRolloutClient
+from utils.weight_bridge import HostWeightBridge, TTML_RANK, TTT_RANK
+
+# ttml rank (sender)
+bridge = HostWeightBridge.init_sender(mesh=ttml_mesh, peer_rank=TTT_RANK)
+client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)   # ctor calls bridge.connect()
 client.send_weights(ttml_model.weights_ref_hf_dict())
 
-# ttt rank — inside MPIRolloutServer.serve_forever, on_weights_received:
-ttt_model.update_weights(received_hf_dict, hf_rope=False)
+# ttt rank (receiver) — typical setup inside MPIRolloutServer.serve_forever:
+bridge = HostWeightBridge.init_receiver(
+    mesh=parent_mesh, peer_rank=TTML_RANK, submeshes=worker.submeshes
+)
+# server responds to OP_REQUEST_TRANSFER by calling bridge.receive_weights()
+for submesh_dict in bridge.receive_weights():
+    ttt_model.update_weights(submesh_dict, hf_rope=False)
 ```
 
+`MPIRolloutClient.__init__` takes `peer_rank=` and `bridge=` — see
+[`mpi_rollout.py`](../sources/examples/grpo_remote_rollout/utils/mpi_rollout.py)
+and the working construction in
+[`boolq_training_example.py`](../sources/examples/grpo_remote_rollout/boolq/boolq_training_example.py).
+
 End-to-end smoke tests:
-- In-process: [`test_ttml_to_ttt_weight_transfer.py`](../sources/examples/grpo/tests/test_ttml_to_ttt_weight_transfer.py).
-- Cross-rank: [`weight_transfer/test_bridge_transfer.py`](../sources/examples/grpo/tests/weight_transfer/test_bridge_transfer.py).
+- Weight transfer (in-process, per submesh):
+  [`test_weight_transfer.py`](../tests/python/grpo_remote_rollout/weight_transfer/test_weight_transfer.py).
+- `WeightBridge` cross-rank transport:
+  [`test_weight_bridge.py`](../tests/python/grpo_remote_rollout/weight_bridge/test_weight_bridge.py).
 
 ---
 
@@ -265,8 +282,8 @@ End-to-end smoke tests:
 * HF reference implementation: `transformers.models.llama.modeling_llama`
   ([huggingface/transformers](https://github.com/huggingface/transformers/tree/main/src/transformers/models/llama)).
 * ttml model definition: `LlamaCompositeKV` in
-  [`grpo/utils/llama_overrides.py`](../sources/examples/grpo/utils/llama_overrides.py).
+  [`grpo_remote_rollout/utils/llama_overrides.py`](../sources/examples/grpo_remote_rollout/utils/llama_overrides.py).
 * tt-transformers dispatcher:
   [`Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
 * Cross-rank transport: `WeightBridge` in
-  [`grpo/utils/weight_bridge.py`](../sources/examples/grpo/utils/weight_bridge.py).
+  [`grpo_remote_rollout/utils/weight_bridge.py`](../sources/examples/grpo_remote_rollout/utils/weight_bridge.py).
