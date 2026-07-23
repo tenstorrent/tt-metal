@@ -255,11 +255,17 @@ class KimiDeltaAttention:
             ttnn.L1_MEMORY_CONFIG if batch * sequence * self._convolution_width <= 65536 else ttnn.DRAM_MEMORY_CONFIG
         )
 
-        qkv = ttnn.linear(
+        projected = ttnn.linear(
             hidden_states,
-            weights.qkv_projection,
+            weights.input_projection,
             memory_config=memory_config,
             compute_kernel_config=self.compute_config,
+        )
+        qkv = _slice_width(projected, 0, self._convolution_width)
+        auxiliary = _slice_width(
+            projected,
+            self._convolution_width,
+            self._convolution_width + config.head_k_dim + config.head_v_dim + config.num_heads,
         )
         if mode == "chunk" and batch == 1 and sequence >= ttnn.TILE_SIZE:
             qkv, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence)
@@ -283,12 +289,6 @@ class KimiDeltaAttention:
         if mode == "recurrent" or sequence % ttnn.TILE_SIZE != 0:
             v = ttnn.reshape(v, (batch, sequence, config.num_heads, config.head_v_dim))
 
-        auxiliary = ttnn.linear(
-            hidden_states,
-            weights.auxiliary_projection,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_config,
-        )
         decay_rank = _slice_width(auxiliary, 0, config.head_k_dim)
         output_gate_rank = _slice_width(
             auxiliary,

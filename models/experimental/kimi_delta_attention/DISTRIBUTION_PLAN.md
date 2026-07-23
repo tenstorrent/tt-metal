@@ -138,6 +138,11 @@ Output-gate head-layout fusion is now measured: batched head weights emit
 retain the same 80-core/16-core/8x8 map. Further work should target program
 fusion and the 148 us output collective, not redistribute KDA heads.
 
+The input projection now uses the same ownership map directly: every physical
+weight shard is `[Q_local|K_local|V_local|f_a|g_a|beta_local]`. Fusing these
+columns reduces traced latency to 0.874 ms without a collective or ownership
+change.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence

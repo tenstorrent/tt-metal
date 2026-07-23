@@ -611,3 +611,10 @@
 - Report: `/tmp/kda_tp_layer_t640_batched_gate_r10/reports/2026_07_23_11_08_44/ops_perf_results_2026_07_23_11_08_44.csv`. Ten replays reduced device span 0.987 -> 0.890 ms (9.8%), host time 1.023 -> 0.924 ms/layer, and active kernels to 0.844-0.845 ms/device.
 - The batched matmul adds about 13 us but removes an 84.7 us reshape and about 22 us transpose. Mesh throughput is 66.50 TFLOP/s or 5.47% of peak.
 - Full hardware regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 9/9 in 9.36 s.
+
+### 2026-07-23 11:13:49 UTC — Fuse QKV and auxiliary input projections
+
+- Hypothesis: QKV and auxiliary are projections of the same replicated hidden input, so grouping `[Q_local|K_local|V_local|f_a|g_a|beta_local]` per device removes one matmul launch without communication.
+- T=32 PCC and TP=8 T=64 trace smoke passed. The TP weight test now checks the exact fused physical payload; dead separate QKV/auxiliary tensors were removed.
+- Report: `/tmp/kda_tp_layer_t640_fused_input_r10/reports/2026_07_23_11_13_49/ops_perf_results_2026_07_23_11_13_49.csv`. Ten replays reduced device span 0.890 -> 0.874 ms and host time 0.924 -> 0.913 ms/layer. Matmul active time fell 51.3 us while slicing added 12.6 us; active kernels are 0.806-0.807 ms/device.
+- Mesh throughput is 67.71 TFLOP/s or 5.57% of peak. Full hardware regression passed 9/9 in 15.37 s.
