@@ -260,6 +260,13 @@ jobs:
             --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
             /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_superpod_short_running.yaml
 
+      # run_fabric_tests.sh auto-detects the MPI interface with `ip` (iproute2);
+      # install it on the runner (where detection runs) and dump interfaces.
+      - name: Install iproute2 for MPI interface detection
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2
+          echo "--- available interfaces ---"; ip -br link || true
+
       # DC validation across the whole quad. run_fabric_tests.sh --image launches
       # the pinned image via mpi-docker on ALL hosts, so every host's docker must
       # be authenticated to GHCR (a login on the runner host alone is not enough).
@@ -398,6 +405,14 @@ jobs:
         run: |
           sudo mkdir -p /home/user
           sudo chown "$(id -u):$(id -g)" /home/user
+
+      # run_fabric_tests.sh auto-detects the MPI interface with `ip` (iproute2),
+      # which is not installed on the exabox runner. Install it and dump the
+      # interfaces so we can pin --mpi-if if auto-detection can't pick one.
+      - name: Install iproute2 for MPI interface detection
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2
+          echo "--- available interfaces ---"; ip -br link || true
 
       - name: Log in to GHCR (DC-validation image)
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
