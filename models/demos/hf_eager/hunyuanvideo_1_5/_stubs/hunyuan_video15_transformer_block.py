@@ -329,8 +329,11 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         # the prior manual mean/multiply/rsqrt/multiply sequence it replaces).
         return ttnn.rms_norm(x, epsilon=rms_eps, weight=w, compute_kernel_config=compute_config)
 
-    def _adazero(x, temb, w, b, eps):
-        s = ttnn.silu(temb)
+    def _adazero(x, s, w, b, eps):
+        # `s` is the PRE-computed silu(temb): temb is identical for the hidden and
+        # context streams (both _adazero calls share it), so silu is hoisted to the
+        # caller and computed ONCE per block instead of twice (one fewer dispatch-
+        # bound launch on the launch-bound path).
         # ONE fused (C -> 6C) matmul (bias in epilogue), then slice the 6 params.
         if b is not None:
             p = ttnn.linear(s, w, bias=b, compute_kernel_config=compute_config)
@@ -353,17 +356,24 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         nx = ttnn.addcmul(shift_msa, nx, scale_msa)
         return nx, gate_msa, shift_mlp, scale_mlp, gate_mlp
 
-    def _apply_rope(x4, cos, sin):
-        # x4: (B, S, H, D); cos/sin: (S, D). out = x*cos + rot(x)*sin, all on device.
+    def _rope_bcast(cos, sin, Sx, Dx, dtype):
+        # Broadcast-reshape (and dtype-match) the (S,D) freqs to (1,S,1,D) ONCE per
+        # block: rope runs for BOTH q and k with identical cos/sin, so hoisting this
+        # out of _apply_rope removes 2 reshapes (+ up to 2 typecasts) per block on the
+        # launch-bound path.
+        cos_b = ttnn.reshape(cos, (1, Sx, 1, Dx))
+        sin_b = ttnn.reshape(sin, (1, Sx, 1, Dx))
+        if cos_b.dtype != dtype:  # bf16 fast path: match the fp32 freqs to activations
+            cos_b = ttnn.typecast(cos_b, dtype)
+            sin_b = ttnn.typecast(sin_b, dtype)
+        return cos_b, sin_b
+
+    def _apply_rope(x4, cos_b, sin_b):
+        # x4: (B, S, H, D); cos_b/sin_b: pre-broadcast (1,S,1,D). out = x*cos + rot(x)*sin.
         Bx, Sx, Hx, Dx = (int(d) for d in x4.shape)
         x2 = ttnn.reshape(x4, (Bx * Sx * Hx, Dx))
         rot = ttnn.matmul(x2, rot_M, compute_kernel_config=compute_config)
         rot4 = ttnn.reshape(rot, (Bx, Sx, Hx, Dx))
-        cos_b = ttnn.reshape(cos, (1, Sx, 1, Dx))
-        sin_b = ttnn.reshape(sin, (1, Sx, 1, Dx))
-        if cos_b.dtype != x4.dtype:  # bf16 fast path: match the fp32 freqs to activations
-            cos_b = ttnn.typecast(cos_b, x4.dtype)
-            sin_b = ttnn.typecast(sin_b, x4.dtype)
         # x*cos + rot*sin fused: mul + addcmul (2 ops) instead of mul + mul + add (3).
         return ttnn.addcmul(ttnn.multiply(x4, cos_b), rot4, sin_b)
 
@@ -408,8 +418,9 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         # HunyuanVideo15AttnProcessor2_0 (apply_rotary_emb after norm_q/norm_k).
         if freqs_cis is not None:
             _cos, _sin = freqs_cis
-            q = _apply_rope(q, _cos, _sin)
-            k = _apply_rope(k, _cos, _sin)
+            cos_b, sin_b = _rope_bcast(_cos, _sin, int(q.shape[1]), int(q.shape[3]), q.dtype)
+            q = _apply_rope(q, cos_b, sin_b)
+            k = _apply_rope(k, cos_b, sin_b)
 
         eqkv = _linear(ne, w_aqkv, b_aqkv)  # (B, Ltxt, 3*inner) local
         eq = _rms(heads_split(ttnn.slice(eqkv, (0, 0, 0), (B, Ltxt, inner))), naq_w)  # (B, Ltxt, H, D)
@@ -553,8 +564,9 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
 
         attn_bias = kwargs.get("attn_bias")
 
-        nh, gate_msa, shift_mlp, scale_mlp, gate_mlp = _adazero(h, t, ada1_w, ada1_b, ada1_eps)
-        ne, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = _adazero(e, t, adac_w, adac_b, adac_eps)
+        s_t = ttnn.silu(t)  # shared by both streams' AdaLN modulation (compute once)
+        nh, gate_msa, shift_mlp, scale_mlp, gate_mlp = _adazero(h, s_t, ada1_w, ada1_b, ada1_eps)
+        ne, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = _adazero(e, s_t, adac_w, adac_b, adac_eps)
 
         attn_out, ctx_out = _joint_attention(
             nh, ne, freqs_cis=freqs_cis, attn_bias=attn_bias, logical_n=kwargs.get("logical_n")
