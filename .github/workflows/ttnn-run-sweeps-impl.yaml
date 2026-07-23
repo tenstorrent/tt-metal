@@ -78,7 +78,11 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    timeout-minutes: 60
+    # Single-source-of-truth per-job timeout: compute_sweep_matrix.py stamps
+    # matrix.timeout from tests/pipeline_reorg/ttnn_sweep_tests.yaml (checked against
+    # .github/time_budget.yaml by verify_time_budget.py). Fall back to 60 for run
+    # types not budget-tracked in the yaml (nightly/comprehensive).
+    timeout-minutes: ${{ matrix.timeout || 60 }}
     runs-on: ${{ matrix.runs_on }}
     steps:
       - name: 🧬 Checkout Repository
