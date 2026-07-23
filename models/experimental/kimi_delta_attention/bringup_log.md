@@ -649,3 +649,11 @@
 - Ten replays reduced median slowest-device span 0.85484 -> 0.84802 ms (0.80%) and median active time 0.80034 -> 0.79339 ms/device. Across the mesh and samples, Typecast count fell 240 -> 160 and BinaryNg aggregate time fell 1.294 -> 1.151 ms.
 - Mesh throughput is 69.82 TFLOP/s or 5.74% of the eight-chip HiFi4 peak. The result retains the existing core/tensor distribution.
 - Full hardware regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 9/9 in 9.98 s. TP output/recurrent/convolution PCC was 0.999953/0.999910/0.999997.
+
+### 2026-07-23 11:55:48 UTC — Produce the scaled decay gate in FP32
+
+- Hypothesis: the decay-scale multiply can produce the prep-required FP32 tensor directly and eliminate the remaining chunk-input typecast.
+- Report: `/tmp/kda_tp_layer_t640_fp32_decay_r10/reports/2026_07_23_11_55_48/ops_perf_results_2026_07_23_11_55_48.csv`; matched control: `/tmp/kda_tp_layer_t640_mixed_gate_r10/reports/2026_07_23_11_49_38/ops_perf_results_2026_07_23_11_49_38.csv`.
+- Ten replays reduced median device span 0.84802 -> 0.84038 ms (0.90%) and program count 42 -> 41/device/layer. Typecast count across the mesh fell 160 -> 80.
+- The FP32 multiply is slower: summed per-op kernel maxima rose 0.79339 -> 0.80205 ms/device. Prep and fused collective remained 84.05 and 146.31 us, while the serialized device span improved from the removed program boundary.
+- Mesh throughput is 70.45 TFLOP/s or 5.79% of peak. Full hardware regression passed 9/9 in 10.26 s; TP output/recurrent/convolution PCC was 0.999952/0.999903/0.999997.
