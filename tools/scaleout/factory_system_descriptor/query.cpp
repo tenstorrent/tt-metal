@@ -5,6 +5,7 @@
 #include "query.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <set>
 #include <stdexcept>
 

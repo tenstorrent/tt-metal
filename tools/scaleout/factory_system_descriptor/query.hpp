@@ -20,6 +20,7 @@ namespace tt::scaleout_tools {
 class FsdQuery {
 public:
     explicit FsdQuery(const fsd::proto::FactorySystemDescriptor& fsd);
+    FsdQuery(fsd::proto::FactorySystemDescriptor&&) = delete;
 
     // Full instance_path segments of a host (root -> host).
     std::vector<std::string> get_instance_path(uint32_t host_id) const;
