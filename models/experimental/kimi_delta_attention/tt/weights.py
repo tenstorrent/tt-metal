@@ -24,6 +24,8 @@ class KDAWeights:
     output_projection: ttnn.Tensor
     decay_scale: ttnn.Tensor
     decay_bias: ttnn.Tensor
+    decay_scale_flat: ttnn.Tensor
+    decay_bias_flat: ttnn.Tensor
     norm: ttnn.Tensor
     convolution_taps: tuple[ttnn.Tensor, ...]
 
@@ -72,6 +74,8 @@ def load_kda_weights(
 
     decay_scale = -state_dict["A_log"].float().exp()
     decay_bias = state_dict["dt_bias"].reshape(1, 1, config.num_heads, config.head_k_dim)
+    decay_scale_flat = decay_scale.expand(-1, -1, -1, config.head_k_dim).reshape(1, 1, config.q_dim)
+    decay_bias_flat = decay_bias.reshape(1, 1, config.q_dim)
     convolution_taps = []
     for tap in range(config.conv_kernel_size):
         fused_tap = torch.cat(
@@ -100,6 +104,8 @@ def load_kda_weights(
         ),
         decay_scale=device_tensor(decay_scale, "decay_scale"),
         decay_bias=device_tensor(decay_bias, "decay_bias"),
+        decay_scale_flat=device_tensor(decay_scale_flat, "decay_scale_flat"),
+        decay_bias_flat=device_tensor(decay_bias_flat, "decay_bias_flat"),
         norm=device_tensor(state_dict["o_norm.weight"], "norm"),
         convolution_taps=tuple(convolution_taps),
     )

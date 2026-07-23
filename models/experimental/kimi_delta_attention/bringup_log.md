@@ -500,3 +500,12 @@
 - Tracy report: `/tmp/kda_layer_t640_baseline_profile/reports/2026_07_23_09_25_52/ops_perf_results_2026_07_23_09_25_52.csv`. Three warm iterations averaged `5870.5100 us` of serialized device-kernel time.
 - The largest groups were reshape/view `1835.592 us`, matmul `692.019 us`, slice `460.632 us`, untilize `442.856 us`, ternary `436.314 us`, tilize `425.282 us`, KDA prep `318.918 us`, and KDA scan `181.603 us`.
 - Profiler-model aggregate utilization across rows with valid ideal-cycle data was `18.69%`. This is an operation-weighted diagnostic, not yet the formal layer roofline: custom KDA prep/scan rows have no ideal-cycle model and the report does not expose complete DRAM/NoC traffic.
+
+
+### 2026-07-23 09:29:14 UTC — Keep aligned decay gate flat
+
+- Diagnosis: the aligned chunk path reshaped the decay projection from `[B,T,H*K]` to `[B,T,H,K]`, applied pointwise bias/softplus/scale, then reshaped it back to the flat layout consumed by KDA prep. Each TILE-layout reshape cost about `604 us` at T=640.
+- Added pre-expanded flat decay constants during weight loading and retained the projection flat only on the tile-aligned chunk path. Decode and padded prefill retain the original rank-4 compatibility path.
+- Full Blackhole regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 12/12; reconfirmed immediately before commit in 12.55 s.
+- Tracy report: `/tmp/kda_layer_flat_decay_profile/reports/2026_07_23_09_29_14/ops_perf_results_2026_07_23_09_29_14.csv`. Three warm T=640 iterations averaged `4641.3253 us`, down `1229.1847 us` or `20.94%` from the full-layer baseline.
+- Profiler-model aggregate utilization increased from `18.69%` to `23.64%`. Reshape/view fell from `1835.592 us` to `627.498 us`; the remaining approximately `602 us` reshape is the output-gate flat-to-head boundary.
