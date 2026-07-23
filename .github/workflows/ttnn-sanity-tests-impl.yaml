@@ -182,6 +182,7 @@ jobs:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         TT_LOGGER_LEVEL: warn
+        TTNN_CONFIG_OVERRIDES: '{"validate_program_run_args": true}'
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -241,7 +242,7 @@ jobs:
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
-          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
+          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false, \"validate_program_run_args\": true}" >> $GITHUB_ENV
 
       - name: Set up coverage profiling
         if: ${{ inputs.collect-coverage }}
