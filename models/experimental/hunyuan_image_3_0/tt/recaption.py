@@ -208,6 +208,23 @@ def run_recaption_on_device(
 
     tracer = getattr(forward_logits_fn, "tracer", None)
 
+    # Metadata generate_text's device path reads off forward_logits_fn; re-attach after wraps.
+    _logits_fn_meta = (
+        "return_device_logits",
+        "decode_device_token",
+        "prefix_len",
+        "vocab_size",
+        "vocab_parallel",
+        "device",
+        "kv_cache",
+        "tracer",
+    )
+
+    def _copy_logits_fn_meta(src, dst):
+        for attr in _logits_fn_meta:
+            if hasattr(src, attr):
+                setattr(dst, attr, getattr(src, attr))
+
     # TTFT/TPS: track wall-clock per AR forward step regardless of verbosity.
     _step_times: list[float] = []
     _ar_t0 = time.time()
@@ -218,6 +235,8 @@ def run_recaption_on_device(
         logits = _timed(ids)
         _step_times.append(time.time() - t_fwd)
         return logits
+
+    _copy_logits_fn_meta(_timed, forward_logits_fn)
 
     if os.environ.get("HY_RECAPTION_VERBOSE", "1") != "0":
         _step = [0]
@@ -241,19 +260,7 @@ def run_recaption_on_device(
             )
             return logits
 
-        # Preserve metadata used by generate_text device path.
-        for attr in (
-            "return_device_logits",
-            "decode_device_token",
-            "prefix_len",
-            "vocab_size",
-            "vocab_parallel",
-            "device",
-            "kv_cache",
-            "tracer",
-        ):
-            if hasattr(_orig, attr):
-                setattr(forward_logits_fn, attr, getattr(_orig, attr))
+        _copy_logits_fn_meta(_orig, forward_logits_fn)
 
     out = generate_text(
         forward_logits_fn,
