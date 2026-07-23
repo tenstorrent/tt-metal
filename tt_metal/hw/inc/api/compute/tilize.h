@@ -470,7 +470,37 @@ ALWI void fast_tilize_block(
 #endif
 }
 
-#endif  // !ARCH_QUASAR
+#else   // ARCH_QUASAR
+// Quasar has no separate fast-tilize LLK path -- its regular unpack_tilize is already fast, so these
+// wrappers just forward to the plain tilize_* implementation defined above.
+ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    tilize_init(icb, full_dim, ocb, call_line);
+}
+
+ALWI void fast_tilize_init_skip_remap(
+    uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    tilize_init(icb, full_dim, ocb, call_line);
+}
+
+ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+    reconfig_data_format(icb, icb);
+    tilize_init(icb, full_dim, ocb);
+}
+
+ALWI void fast_tilize_init_with_dt_skip_remap(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+    reconfig_data_format(icb, icb);
+    tilize_init(icb, full_dim, ocb);
+}
+
+ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, [[maybe_unused]] uint32_t full_dim) {
+    tilize_uninit(icb, ocb);
+}
+
+ALWI void fast_tilize_block(
+    uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
+    tilize_block(icb, block, ocb, input_tile_index, output_tile_index);
+}
+#endif  // ARCH_QUASAR
 
 // clang-format off
 /**

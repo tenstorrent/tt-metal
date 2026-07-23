@@ -385,7 +385,7 @@ jobs:
   # test list: train_merge_gate_tests.yaml
   # ===========================================================================
 
-  train-smoke-tests:
+  train-merge-gate-tests:
     needs: [build, find-changes]
     if: ${{ github.event_name == 'workflow_dispatch' ||
             github.ref_name == 'main' ||
@@ -516,14 +516,14 @@ jobs:
         contains(join(needs.*.result, ','), 'failure')
       }}
 
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-smoke-tests, scaleout-unit-tests, llk-unit-tests]
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-unit-tests]
     runs-on: ubuntu-slim
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-smoke-tests, scaleout-unit-tests, llk-unit-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-unit-tests"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')

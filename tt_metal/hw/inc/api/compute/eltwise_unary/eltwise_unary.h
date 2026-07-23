@@ -35,10 +35,6 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
     // Asserted after hw_configure (which sets the operand-driven DEFAULT) so it is the last writer
     // before the op runs; skip-if-set keeps it cheap.
     MATH((ckernel::math::_configure_unary_preserve_zero_flag_state_()));
-    // Once-per-kernel SFPU init (SFPU config reg + invariant ADDR_MOD_7). Hoisted out of the per-op SFPU init
-    // so self-contained per-op inits (ckernel::sfpu::_init_<op>_) don't re-run it. init_sfpu() delegates here,
-    // so it inherits this call.
-    MATH((llk_math_sfpu_init_once()));
 #else
     UNPACK((llk_unpack_hw_configure(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(

@@ -84,11 +84,14 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // ========== Core Dimensions ==========
     // B = batch size, PNH = padded num Q heads, S = sequence length, DH = head dim
     //
-    // With block_size_override set, this call reads a K/V cache allocated for a
-    // different layer's shape; Q's last dim drives DH. Without it, k_shape[3] is used
+    // With PagedCacheGeometryOverride.block_size set, this call reads a K/V cache allocated
+    // for a different layer's shape; Q's last dim drives DH. Without it, k_shape[3] is used
     // and the strict q.head_dim == k.head_dim check in validate keeps legacy callers
-    // byte-identical.
-    const bool has_block_size_override = operation_attributes.block_size_override.has_value();
+    // byte-identical. Overrides are rejected under MLA in validate; do not apply them when
+    // use_mla is true (same asymmetry fix as chunked prefill).
+    const auto& geo = operation_attributes.paged_cache_geometry;
+    const bool apply_geometry_override = !use_mla && geo.active();
+    const bool has_block_size_override = apply_geometry_override && geo.block_size.has_value();
     uint32_t B = q_shape[1];
     uint32_t PNH = q_shape[2];
     uint32_t S = k_shape[2];
@@ -101,7 +104,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // layer's spec (e.g. Gemma4-26B-A4B sliding kv=8 cache read by a full kv=2
     // layer). The override drives the kernel's per-block stride and head-parallel
     // reduction grid the same way the legacy cache shape did.
-    uint32_t num_kv_heads = operation_attributes.num_kv_heads_override.value_or(k_shape[1]);
+    uint32_t num_kv_heads = apply_geometry_override ? geo.num_kv_heads.value_or(k_shape[1]) : k_shape[1];
     TT_FATAL(num_kv_heads > 0, "num_kv_heads must be > 0");
     uint32_t num_q_heads = q_shape_unpadded[2];
     uint32_t page_block_size_t = 0;
@@ -114,7 +117,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         B = page_table_tensor->is_sharded() ? page_table_tensor->padded_shape()[0] /
                                                   page_table_tensor->memory_config().shard_spec()->grid.num_cores()
                                             : page_table_tensor->padded_shape()[0];
-        uint32_t block_size = operation_attributes.block_size_override.value_or(k_shape[2]);
+        uint32_t block_size = apply_geometry_override ? geo.block_size.value_or(k_shape[2]) : k_shape[2];
         // original_block_size gates the sub-tile padding mask. With an override active,
         // validate already enforces it's a multiple of TILE_HEIGHT (no padding path).
         original_block_size = has_block_size_override ? block_size : input_tensor_k.logical_shape()[2];

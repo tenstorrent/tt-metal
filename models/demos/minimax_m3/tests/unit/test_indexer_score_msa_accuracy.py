@@ -139,7 +139,7 @@ def test_indexer_score_msa_accuracy(mesh_device, device_params, Sq, T, reset_see
         scale=scale,
         block_size=BLOCK,
         program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=Q_CHUNK, k_chunk_size=K_CHUNK, head_group_size=0),
-        cluster_axis=None,
+        seq_shard_axes=[],
     )
     dev = ttnn.to_torch(ttnn.get_device_tensors(bs)[0]).float()[0]  # [G, Sq, nblk]
     assert dev.shape == ref.shape, f"shape {tuple(dev.shape)} != {tuple(ref.shape)}"

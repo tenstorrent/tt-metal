@@ -86,7 +86,7 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::DataType::FLOAT32,
         ttnn::Layout::TILE,
         mesh_device,
-        ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
+        ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
 
     // "no contribution" intermediate: logsumexp = -inf (col 0), rest zeros
     // exp(-inf) = 0, so this chunk contributes nothing to the combined softmax
@@ -184,7 +184,7 @@ autograd::TensorPtr ring_attention_sdpa(
             ttnn::DataType::FLOAT32,
             ttnn::Layout::TILE,
             mesh_device,
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
         ttnn::Tensor grad_Q_step = ttnn::zeros_like(query_tensor);
         ttnn::Tensor grad_K_step = ttnn::zeros_like(key->get_value());
         ttnn::Tensor grad_V_step = ttnn::zeros_like(value->get_value());

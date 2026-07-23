@@ -191,7 +191,7 @@ jobs:
         if: ${{ inputs.test-category == 'perf' }}
         run: |
           uv pip list
-          uv pip install "gitpython==3.1.50" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
+          uv pip install "gitpython==3.1.55" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
 
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}

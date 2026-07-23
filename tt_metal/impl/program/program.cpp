@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <future>
 #include <initializer_list>
@@ -167,6 +168,46 @@ void generate_kernel_source_files(
     }
 }
 
+// Returns true if every expected ELF for this kernel is already present locally and still valid, so
+// the client can skip the remote round-trip (preprocess + RPC + ELF transfer) entirely and let
+// read_binaries() load the cached ELF.
+bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel) {
+    uint32_t core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+    uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
+    int num_binaries = kernel->expected_num_binaries();
+    if (num_binaries <= 0) {
+        return false;
+    }
+    for (int i = 0; i < num_binaries; ++i) {
+        const JitBuildState& bs =
+            BuildEnvManager::get_instance(extract_context_id(device))
+                .get_kernel_build_state(
+                    device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        if (!bs.warmed_elf_reusable(kernel->get_full_kernel_name())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Write the preprocess-and-ship reuse cache for every binary of this kernel, from the .d files the -E
+// step left on disk plus the link inputs. Called only after the remote compile succeeds and the ELFs
+// are on disk, so a failed compile leaves no validatable cache to reuse a stale ELF.
+void finalize_preprocess_reuse_cache(IDevice* device, const std::shared_ptr<Kernel>& kernel) {
+    uint32_t core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+    uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
+    int num_binaries = kernel->expected_num_binaries();
+    for (int i = 0; i < num_binaries; ++i) {
+        const JitBuildState& bs =
+            BuildEnvManager::get_instance(extract_context_id(device))
+                .get_kernel_build_state(
+                    device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        bs.write_reuse_cache(kernel->get_full_kernel_name());
+    }
+}
+
 // Build a KernelCompileDescriptor to be submitted to RemoteCompileCoordinator.
 KernelCompileDescriptor build_kernel_descriptor(
     IDevice* device,
@@ -185,8 +226,14 @@ KernelCompileDescriptor build_kernel_descriptor(
     desc.request.build_key = build_env.build_key();
     desc.request.kernel_name = kernel->name() + "/" + std::to_string(kernel_hash);
     desc.request.gpp = build_env.build_env.get_gpp();
-    static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
-    desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
+    static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
+    // Non-preprocess mode ships the generated source tree for the server to compile. In
+    // preprocess-and-ship mode the shipped .ii units are self-contained (headers/defines inlined), so
+    // the source tree is neither read nor sent -- saving client I/O and RPC bandwidth on the farm path.
+    if (!preprocess_and_ship) {
+        static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
+        desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
+    }
 
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
@@ -196,6 +243,54 @@ KernelCompileDescriptor build_kernel_descriptor(
                     device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
         desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
         desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
+    }
+
+    // Preprocess-and-ship (TT_METAL_JIT_PREPROCESS=1): run each source through the preprocessor (-E)
+    // on the client and ship the self-contained .ii (headers/defines inlined). The server then
+    // compiles the .ii with no include tree, no defines, and no source file on its filesystem --
+    // only the toolchain. The .ii travels over the generated_files content channel, is written into
+    // the per-kernel cache dir on the server, and is referenced as a sibling of the target output
+    // dir ("../<name>").
+    if (preprocess_and_ship) {
+        for (std::size_t t = 0; t < desc.request.targets.size(); ++t) {
+            auto& target = desc.request.targets[t];
+            const std::string client_out_dir = std::filesystem::path(desc.expected_elf_paths[t]).parent_path().string();
+            std::filesystem::create_directories(client_out_dir);
+            for (std::size_t i = 0; i < target.srcs.size(); ++i) {
+                const std::string ii_name =
+                    target.target_name + "__" + std::filesystem::path(target.objs[i]).filename().string() + ".ii";
+                const std::string ii_path = client_out_dir + "/" + ii_name;
+                // Preprocess with the EXACT compile flags via the shared argv builder + exec_command
+                // (posix_spawn, NO shell). A shell command string would mangle map-valued defines
+                // like -DKERNEL_COMPILE_TIME_ARG_MAP={"cb_in0",1},... (braces/quotes/commas/spaces)
+                // and drop named compile-time args. cwd = client_out_dir so -I. / -I.. resolve to
+                // the target + generated-files dirs, identical to the real compile env. -MMD (in
+                // cflags) leaves a .d next to each .ii; the reuse-cache sidecar is built from those
+                // only after a successful compile (see JitBuildState::write_reuse_cache).
+                const auto args = tt::jit_build::utils::build_gpp_argv(
+                    desc.request.gpp,
+                    target.compiler_opt_level,
+                    target.cflags,
+                    target.includes,
+                    target.defines,
+                    target.srcs[i],
+                    tt::jit_build::utils::GppAction::Preprocess,
+                    ii_path);
+                if (!tt::jit_build::utils::exec_command(args, client_out_dir, ii_path + ".log")) {
+                    TT_THROW("preprocess-and-ship: -E failed for {} (log: {})", target.srcs[i], ii_path + ".log");
+                }
+                const auto bytes = tt::jit_build::utils::read_file_bytes(ii_path);
+                tt::jit_build::GeneratedFile gf;
+                gf.name = ii_name;
+                gf.content.assign(bytes.begin(), bytes.end());
+                desc.request.generated_files.push_back(std::move(gf));
+                // Server compiles this self-contained unit instead of the original source path.
+                target.srcs[i] = "../" + ii_name;
+            }
+            // The .ii has includes + defines baked in; the server must not need the tree.
+            target.includes.clear();
+            target.defines.clear();
+        }
     }
 
     return desc;
@@ -391,6 +486,15 @@ std::bitset<MAX_PROCESSOR_TYPES_COUNT> get_kernel_processor_set(const Kernel& ke
 KernelHandle detail::ProgramImpl::add_kernel(
     const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& programmable_core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add kernel to an already compiled program {}", this->id);
+
+    // Metal 2.0 kernels (with named bindings, e.g. dfb::/tensor::/args::) are only legal on Metal 2.0 Programs
+    if (kernel->is_metal2_kernel()) {
+        TT_FATAL(
+            this->created_from_spec_,
+            "Internal error: Metal 2.0 named bindings (dfb::/sem::/tensor::/args::) are only valid in a "
+            "Metal 2.0 Program (created from a ProgramSpec).");
+    }
+
     // Id is unique across all kernels on all core types
     KernelHandle id = this->num_kernels();
     uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
@@ -2245,6 +2349,15 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         return;
     }
 
+    // Emule never links a real RISC-V kernel binary -- DispatchCompiledProgramToDevice already skips
+    // this function for Emule, JIT-compiling to x86 in execute_program_emulated instead. Eager callers
+    // (MakeProgramFromSpec/MakeMeshWorkloadFromSpecs) reach compile() directly, so skip here too.
+    if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
+        compiled_.insert(build_env.build_key());
+        Inspector::program_compile_finished(this, device, build_env.build_key());
+        return;
+    }
+
     TT_FATAL(
         device->is_initialized(),
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
@@ -2303,21 +2416,39 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         RemoteCompileCoordinator coordinator(
             std::move(endpoints), extract_context_id(device), device->build_id(), build_env.build_key());
 
+        static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
         std::vector<std::pair<std::shared_ptr<Kernel>, JitBuildOptions>> submitted_kernels;
+        // Kernels preprocess-and-shipped this run, whose reuse cache is written once the compile
+        // succeeds (from the .d files left by the -E step).
+        std::vector<std::shared_ptr<Kernel>> preprocessed_kernels;
 
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
                 validate_kernel_placement(force_slow_dispatch, kernel, device->id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
-                coordinator.submit(kernel_hash, [&]() {
-                    generate_kernel_source_files(device, build_options, kernel);
-                    return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
-                });
+                // Skip the remote round-trip when the ELF is already validly cached locally.
+                if (!remote_kernel_cached(device, kernel)) {
+                    coordinator.submit(kernel_hash, [&]() {
+                        generate_kernel_source_files(device, build_options, kernel);
+                        return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
+                    });
+                    if (preprocess_and_ship) {
+                        preprocessed_kernels.push_back(kernel);
+                    }
+                }
+                // Always recorded: cached kernels still need read_binaries() to load the on-disk ELF.
                 submitted_kernels.emplace_back(kernel, std::move(build_options));
             }
         }
 
+        // Throws on any compile failure; only past this point are all ELFs guaranteed on disk.
         coordinator.finish();
+
+        // Now that the compile succeeded, write the reuse cache. A failure above would have thrown,
+        // so no sidecar is ever written for a missing or stale ELF.
+        for (const auto& kernel : preprocessed_kernels) {
+            finalize_preprocess_reuse_cache(device, kernel);
+        }
 
         const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
         for (const auto& [kernel, build_options] : submitted_kernels) {
