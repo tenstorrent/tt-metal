@@ -427,6 +427,9 @@ int main(int argc, char** argv) {
         std::vector<CoreCoord> vc;                        // this band's VIRTUAL coords (host UMD access)
         std::vector<uint8_t> coords;                      // this band's TRANSLATED coords (X280 read-window table)
         std::vector<uint32_t> noc0x, noc0y;               // this band's NOC0 coords
+        std::vector<uint32_t> gcore;                      // band-local core idx -> GLOBAL full-grid core idx (so
+                                                          // the flusher emits a global lane; column bands are
+                                                          // strided in global space, so a flat offset won't do)
         uint32_t bcx0 = 0, bcy0 = 0, bcx1 = 0, bcy1 = 0;  // this band's logical column range (full cy)
         uint32_t num_cores = 0, NL = 0;                   // this band's cores / lanes
         uint64_t nharts = 0;
@@ -568,10 +571,16 @@ int main(int argc, char** argv) {
         nc.coords.assign((size_t)bcores * 8, 0);
         nc.noc0x.assign(bcores, 0);
         nc.noc0y.assign(bcores, 0);
+        nc.gcore.assign(bcores, 0);
+        const uint32_t full_rgx = (uint32_t)(cx1 - cx0 + 1);  // full-grid width -> row-major global core index
         uint32_t bidx = 0;
         for (uint32_t ly = nc.bcy0; ly <= nc.bcy1; ly++) {
             for (uint32_t lx = nc.bcx0; lx <= nc.bcx1; lx++) {
                 CoreCoord lg{lx, ly};
+                // Map this band-local core to the GLOBAL full-grid core index (same row-major order the full-grid
+                // vc/noc0 tables at ~line 479 use). Without this, node1's local lanes collide with node0's in the
+                // shared MPMC -> two physical cores merge into one Tracy thread -> non-monotonic ts -> negative zones.
+                nc.gcore[bidx] = (ly - (uint32_t)cy0) * full_rgx + (lx - (uint32_t)cx0);
                 nc.vc[bidx] = cluster.get_virtual_coordinate_from_logical_coordinates(device_id, lg, CoreType::WORKER);
                 tt::umd::CoreCoord tr = bsoc.translate_coord_to(
                     {lg, tt::CoreType::TENSIX, tt::CoordSystem::LOGICAL}, tt::CoordSystem::TRANSLATED);
@@ -934,7 +943,10 @@ int main(int argc, char** argv) {
             }
             last_ts[lane] = ts;
             mk++;
-            batch.push_back(Rec{lane, type, zone, ts, cur_prog});
+            // Per-node arrays (cur_hi/depth/last_ts) index by the band-LOCAL lane; the Rec pushed to the shared
+            // MPMC must carry the GLOBAL lane so a single (core,risc) maps to one Tracy thread across nodes.
+            uint32_t glane = nc.gcore[lane / (uint32_t)NRISC] * (uint32_t)NRISC + (lane % (uint32_t)NRISC);
+            batch.push_back(Rec{glane, type, zone, ts, cur_prog});
             if (batch.size() >= BATCH_RECS) {
                 mq.push(std::move(batch));
                 batch = Batch();
