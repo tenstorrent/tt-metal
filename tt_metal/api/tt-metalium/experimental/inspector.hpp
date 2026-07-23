@@ -19,6 +19,14 @@ class MeshDevice;
 
 namespace tt::tt_metal::experimental::inspector {
 
+// Per-tensor-argument debug record captured at op dispatch: the tensor spec plus its device buffer
+// address+size (both 0 for a non-device / unallocated tensor).
+struct TensorDebugInfo {
+    TensorSpec spec;
+    uint64_t address = 0;
+    uint64_t size = 0;
+};
+
 // Inspector feature flag
 bool IsEnabled();
 
@@ -30,12 +38,13 @@ bool ShouldCaptureTensorSpecs();
 std::optional<tt::tt_metal::distributed::MeshTraceId> GetCurrentMeshTraceId(
     tt::tt_metal::distributed::MeshDevice* mesh_device);
 
-// Emit a debug entry for a mesh workload execution, capturing the operation name and tensor specs.
+// Emit a debug entry for a mesh workload execution: the operation name and a per-tensor-argument
+// debug record (spec + buffer address/size) for each tensor arg.
 void EmitMeshWorkloadDebugEntry(
     tt::tt_metal::distributed::MeshWorkload& workload,
     uint64_t runtime_id,
     std::string_view operation_name,
-    std::vector<TensorSpec> tensor_specs,
+    std::vector<TensorDebugInfo> tensors,
     std::optional<tt::tt_metal::distributed::MeshTraceId> trace_id = std::nullopt);
 
 // Drops the per-trace runtime-entry bucket. Called at trace release time.

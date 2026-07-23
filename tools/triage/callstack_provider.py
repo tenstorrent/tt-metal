@@ -62,6 +62,62 @@ class KernelCallstackWithMessage:
     message: str | None
 
 
+@dataclass
+class KernelArgsDump:
+    """Raw per-core kernel args for one (core, risc): compile-time (Inspector) + runtime (live device
+    L1). Values only — a consumer-side script maps names/indices to semantics."""
+
+    named_cta: list[tuple[str, int]]
+    positional_cta: list[int]
+    unique_rta: list[int]
+    common_rta: list[int]
+    watcher_count_word: bool
+
+
+def format_kernel_args(kernel_args: "KernelArgsDump | None") -> str:
+    """Render kernel args as raw hex, grouped by kind; strips the watcher count-word from RTA."""
+    if kernel_args is None:
+        return "N/A"
+    # No brackets around value lists: the triage renderer parses [..] as rich markup and would eat them.
+    lines: list[str] = []
+    if kernel_args.named_cta:
+        lines.append("CTA named: " + ", ".join(f"{n}={v:#x}" for n, v in kernel_args.named_cta))
+    if kernel_args.positional_cta:
+        lines.append("CTA pos: " + ", ".join(f"{v:#x}" for v in kernel_args.positional_cta))
+    strip = kernel_args.watcher_count_word
+    unique = kernel_args.unique_rta[1:] if (strip and kernel_args.unique_rta) else kernel_args.unique_rta
+    common = kernel_args.common_rta[1:] if (strip and kernel_args.common_rta) else kernel_args.common_rta
+    if unique:
+        lines.append("RTA core: " + ", ".join(f"{v:#x}" for v in unique))
+    if common:
+        lines.append("RTA common: " + ", ".join(f"{v:#x}" for v in common))
+    return "\n".join(lines) if lines else "N/A"
+
+
+def _build_kernel_args(
+    dispatcher_data: DispatcherData,
+    location: OnChipCoordinate,
+    risc_name: str,
+    dispatcher_core_data: DispatcherCoreData,
+) -> KernelArgsDump | None:
+    """Collect a core's compile-time args (Inspector) + runtime args (live device L1). None if empty."""
+    try:
+        kernel = dispatcher_data.find_kernel(dispatcher_core_data.watcher_kernel_id)
+    except Exception:
+        kernel = None
+    named = [(a.name, int(a.value)) for a in (getattr(kernel, "namedCompileTimeArgs", None) or [])] if kernel else []
+    positional = [int(v) for v in (getattr(kernel, "compileTimeArgs", None) or [])] if kernel else []
+
+    rta = dispatcher_data.read_runtime_args(location, risc_name)
+    unique = rta.unique if rta else []
+    common = rta.common if rta else []
+    watcher = rta.watcher_count_word if rta else False
+
+    if not (named or positional or unique or common):
+        return None
+    return KernelArgsDump(named, positional, unique, common, watcher)
+
+
 def _pc_not_in_range_message(dispatcher_core_data: DispatcherCoreData) -> str:
     msg = "PC was not in range of any provided ELF files."
     if dispatcher_core_data.block_type == "active_eth":
@@ -192,6 +248,7 @@ class CallstacksData:
     kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
         "Kernel Callstack", format_callstack_with_message
     )
+    kernel_args: KernelArgsDump | None = triage_field("Kernel Args", format_kernel_args)
 
 
 class CallstackProvider:
@@ -271,6 +328,7 @@ class CallstackProvider:
                 dispatcher_core_data=dispatcher_core_data,
                 pc=None,
                 kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
+                kernel_args=None,
             )
 
         if dispatcher_core_data.block_type == "active_eth" and not self.force_active_eth:
@@ -364,6 +422,7 @@ class CallstackProvider:
             if len(callstack_with_message.callstack) > 0
             else risc_debug.get_pc(),
             kernel_callstack_with_message=callstack_with_message,
+            kernel_args=_build_kernel_args(self.dispatcher_data, location, risc_name, dispatcher_core_data),
         )
 
 

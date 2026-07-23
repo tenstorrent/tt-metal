@@ -14,6 +14,7 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 
 namespace tt::tt_metal {
@@ -30,6 +31,14 @@ namespace tt::tt_metal::inspector {
 
 using time_point = std::chrono::time_point<std::chrono::high_resolution_clock>;
 
+// Physical RTA word-count for one logical core (includes the watcher count-word when watcher-assert
+// is enabled). Bounds the tt-triage device-L1 RTA read.
+struct KernelRtaCount {
+    uint32_t core_x{};
+    uint32_t core_y{};
+    uint32_t count{};
+};
+
 struct KernelData {
     std::weak_ptr<Kernel> kernel;
     std::string name;
@@ -40,6 +49,13 @@ struct KernelData {
     // kernel are left empty. Served to tt-triage over RPC so it doesn't have to reconstruct paths from per-processor
     // naming conventions.
     std::vector<std::string> processor_elf_paths;
+    // Compile-time args captured at compile-finished (immutable): positional (index-addressed) + named.
+    std::vector<uint32_t> compile_time_args;
+    std::vector<std::pair<std::string, uint32_t>> named_compile_time_args;
+    // Per-core / common RTA word counts. Bound the triage device-L1 read; RTA values are not captured
+    // here (the host copy is stale after the first dispatch — triage reads values from device L1).
+    std::vector<KernelRtaCount> per_core_rta_count;
+    uint32_t common_rta_count{};
 };
 
 struct ProgramData {
@@ -84,11 +100,12 @@ struct MeshWorkloadRuntimeEntry {
     uint64_t workload_id = 0;
     uint64_t runtime_id = 0;
     std::string_view operation_name;
-    std::vector<TensorSpec> tensor_specs;
+    std::vector<tt::tt_metal::experimental::inspector::TensorDebugInfo> tensors;
     std::optional<distributed::MeshTraceId> trace_id;
 };
 
-std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs);
+std::string stringify_tensor_specs(
+    const std::vector<tt::tt_metal::experimental::inspector::TensorDebugInfo>& tensors);
 
 struct MeshWorkloadData {
     const distributed::MeshWorkloadImpl* mesh_workload = nullptr;

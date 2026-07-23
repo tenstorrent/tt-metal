@@ -79,6 +79,17 @@ class OperationInfo:
         return OperationInfo(name="", parameters="", trace_id=None)
 
 
+@dataclass
+class KernelArgs:
+    """Raw compile-time args for one kernel of a running op. Values only — a consumer-side script
+    maps names/indices to semantics (see kernel_args_capture_design.md)."""
+
+    watcher_kernel_id: int
+    name: str
+    named_cta: list[tuple[str, int]]
+    positional_cta: list[int]
+
+
 class OperationRuntimeMap:
     """Resolves dispatcher `host_assigned_id` values to Inspector-recorded op info."""
 
@@ -127,10 +138,16 @@ class RunningOperationAggregation:
         self.previous_operation_parameters = previous_operation_parameters
         self.core_locations: set[str] = set()
         self.device_labels: set[str] = set()
+        self.watcher_kernel_ids: set[int] = set()
+        self.kernel_args: list[KernelArgs] = []
 
-    def add_core(self, device_label: str, location: OnChipCoordinate) -> None:
+    def add_core(
+        self, device_label: str, location: OnChipCoordinate, watcher_kernel_id: int | None = None
+    ) -> None:
         self.core_locations.add(_format_core_location(device_label, location))
         self.device_labels.add(device_label)
+        if watcher_kernel_id is not None and watcher_kernel_id > 0:
+            self.watcher_kernel_ids.add(watcher_kernel_id)
 
 
 @dataclass
@@ -158,6 +175,21 @@ def _build_runtime_id_map(inspector_data: InspectorData) -> OperationRuntimeMap:
         log_check(False, f"Failed to build runtime_id to operation map: {e}")
         log_check(False, "Operation names and parameters will not be available")
     return OperationRuntimeMap(runtime_id_map)
+
+
+def _resolve_kernel_args(dispatcher_data: DispatcherData, watcher_kernel_id: int) -> KernelArgs | None:
+    """Resolve a kernel's raw compile-time args via Inspector; None if unavailable.
+
+    getattr degradation: log/serialized data without the CTA fields yields empty lists. RTA VALUES are
+    intentionally not read here — they are stale on the host; triage reads them from device L1.
+    """
+    try:
+        kernel = dispatcher_data.find_kernel(watcher_kernel_id)
+    except Exception:
+        return None
+    named = [(a.name, int(a.value)) for a in (getattr(kernel, "namedCompileTimeArgs", None) or [])]
+    positional = [int(v) for v in (getattr(kernel, "compileTimeArgs", None) or [])]
+    return KernelArgs(watcher_kernel_id, getattr(kernel, "name", "") or "", named, positional)
 
 
 def _collect_dispatcher_data(
@@ -257,10 +289,22 @@ def run(args, context: Context) -> RunningOpsAggregation:
             aggregation.add_core(
                 device_description_serializer(check_result.device_description),
                 check_result.location,
+                dispatcher_core_data.watcher_kernel_id,
             )
         except Exception as e:
             log_check(False, f"Failed to aggregate one core's running-op data: {e}")
             continue
+
+    # Resolve raw compile-time args per op (union over the op's observed kernels), caching each
+    # kernel id so shared kernels resolve once. RTA values are not resolved here — see _resolve_kernel_args.
+    kernel_args_cache: dict[int, KernelArgs | None] = {}
+    for aggregation in aggregations.values():
+        for kid in sorted(aggregation.watcher_kernel_ids):
+            if kid not in kernel_args_cache:
+                kernel_args_cache[kid] = _resolve_kernel_args(dispatcher_data, kid)
+            ka = kernel_args_cache[kid]
+            if ka is not None and (ka.named_cta or ka.positional_cta):
+                aggregation.kernel_args.append(ka)
 
     return RunningOpsAggregation(aggregations, runtime_id_to_operation)
 

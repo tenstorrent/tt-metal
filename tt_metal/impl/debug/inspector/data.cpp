@@ -24,19 +24,27 @@
 
 namespace tt::tt_metal::inspector {
 
-std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs) {
-    if (tensor_specs.empty()) {
+std::string stringify_tensor_specs(
+    const std::vector<tt::tt_metal::experimental::inspector::TensorDebugInfo>& tensors) {
+    if (tensors.empty()) {
         return "Not captured";
     }
 
     constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
     fmt::memory_buffer buf;
     buf.reserve(TENSOR_ARGS_BUFFER_SIZE);
-    for (size_t i = 0; i < tensor_specs.size(); ++i) {
+    for (size_t i = 0; i < tensors.size(); ++i) {
         if (i > 0) {
             fmt::format_to(std::back_inserter(buf), ", ");
         }
-        fmt::format_to(std::back_inserter(buf), "[{}]: {}", i, tensor_specs[i]);
+        // Fold each tensor's device buffer address+size onto its "[i]" header (parsed by tt-triage).
+        // address 0 == non-device/unallocated tensor.
+        const auto& t = tensors[i];
+        if (t.address != 0) {
+            fmt::format_to(std::back_inserter(buf), "[{}] @ 0x{:x} ({} B): {}", i, t.address, t.size, t.spec);
+        } else {
+            fmt::format_to(std::back_inserter(buf), "[{}] (host): {}", i, t.spec);
+        }
     }
     return std::string(buf.data(), buf.size());
 }
@@ -91,6 +99,30 @@ void Data::serialize_rpc() {
     rpc_server_controller.get_rpc_server().serialize(logger.get_logging_path());
 }
 
+namespace {
+// Serialize a kernel's captured compile-time args + RTA word-counts into the RPC KernelData.
+// Shared by the getPrograms and getKernel builders. RTA values are intentionally not served (the
+// host copy is stale after the first dispatch); tt-triage reads them from device L1 using these counts.
+void serialize_kernel_arg_fields(rpc::KernelData::Builder kernel, const KernelData& kernel_data) {
+    auto named_cta = kernel.initNamedCompileTimeArgs(kernel_data.named_compile_time_args.size());
+    for (size_t k = 0; k < kernel_data.named_compile_time_args.size(); ++k) {
+        named_cta[k].setName(kernel_data.named_compile_time_args[k].first);
+        named_cta[k].setValue(kernel_data.named_compile_time_args[k].second);
+    }
+    auto cta = kernel.initCompileTimeArgs(kernel_data.compile_time_args.size());
+    for (size_t k = 0; k < kernel_data.compile_time_args.size(); ++k) {
+        cta.set(k, kernel_data.compile_time_args[k]);
+    }
+    auto rta_counts = kernel.initPerCoreRtaCount(kernel_data.per_core_rta_count.size());
+    for (size_t k = 0; k < kernel_data.per_core_rta_count.size(); ++k) {
+        rta_counts[k].setCoreX(static_cast<uint16_t>(kernel_data.per_core_rta_count[k].core_x));
+        rta_counts[k].setCoreY(static_cast<uint16_t>(kernel_data.per_core_rta_count[k].core_y));
+        rta_counts[k].setCount(kernel_data.per_core_rta_count[k].count);
+    }
+    kernel.setCommonRtaCount(kernel_data.common_rta_count);
+}
+}  // namespace
+
 void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results) {
     std::lock_guard<std::mutex> lock(programs_mutex);
     auto programs = results.initPrograms(programs_data.size());
@@ -129,6 +161,7 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
             for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
                 elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
             }
+            serialize_kernel_arg_fields(kernel, kernel_data);
         }
     }
 }
@@ -246,7 +279,7 @@ void Data::rpc_get_mesh_workload_runtime_entries(
         entry.setWorkloadId(re.workload_id);
         entry.setRuntimeId(re.runtime_id);
         entry.setOperationName(std::string(re.operation_name));
-        entry.setOperationParameters(stringify_tensor_specs(re.tensor_specs));
+        entry.setOperationParameters(stringify_tensor_specs(re.tensors));
         entry.setTraceId(re.trace_id.has_value() ? **re.trace_id : kNoTraceId);
     };
 
@@ -299,6 +332,7 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
     for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
         elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
     }
+    serialize_kernel_arg_fields(kernel, kernel_data);
 }
 
 // Get build environment information for all devices

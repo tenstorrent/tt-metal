@@ -18,6 +18,8 @@ Description:
       - One row per unique **Op Id** currently observed on at least one inspected core
         (Op Id == dispatcher host_assigned_id).
       - Includes current Op Id/Name/Params, previous Op (Prev Op Id/Name/Params), and device/core coverage:
+          - Op Params: per-tensor spec; each Tensor[i] header carries its device buffer
+            address+size inline (`@ 0xADDR (N B)`), or `(host)` for a non-device tensor.
           - Device Cnt / Core Cnt: total unique devices/cores running this Op Id
           - Devices / Cores: enumerated lists (may be truncated with "..." for readability)
 
@@ -67,6 +69,7 @@ class RunningOperationSummary:
     host_assigned_id: int = triage_field("Op Id")
     operation_name: str = triage_field("Op Name")
     operation_parameters: str = triage_field("Op Params")
+    operation_cta: str = triage_field("Op CTA")
     previous_host_assigned_id: int | None = triage_field("Prev Op Id")
     previous_operation_name: str = triage_field("Prev Op Name")
     previous_operation_parameters: str = triage_field("Prev Op Params")
@@ -74,6 +77,22 @@ class RunningOperationSummary:
     core_count: int = triage_field("Core Cnt")
     devices: list[str] = triage_field("Devices", collection_serializer(", "))
     cores: list[str] = triage_field("Cores", collection_serializer("\n"))
+
+
+def _format_cta(kernel_args) -> str:
+    """Op-level raw compile-time args, grouped per kernel. Values shown as hex and left raw —
+    a consumer-side script maps names/indices to semantics."""
+    if not kernel_args:
+        return "N/A"
+    lines: list[str] = []
+    for ka in kernel_args:
+        lines.append(f"{ka.name or 'kernel'} (id {ka.watcher_kernel_id})")
+        for name, val in ka.named_cta:
+            lines.append(f"  {name}: {val:#x}")
+        if ka.positional_cta:
+            # No brackets: the triage renderer parses [..] as rich markup and would eat the label.
+            lines.append(f"  pos: {', '.join(f'{v:#x}' for v in ka.positional_cta)}")
+    return "\n".join(lines)
 
 
 def _to_summary(agg: RunningOperationAggregation, full_cores: bool) -> RunningOperationSummary:
@@ -105,6 +124,7 @@ def _to_summary(agg: RunningOperationAggregation, full_cores: bool) -> RunningOp
         host_assigned_id=agg.host_assigned_id,
         operation_name=display_name,
         operation_parameters=operation_params_display,
+        operation_cta=_format_cta(agg.kernel_args),
         previous_host_assigned_id=agg.previous_host_assigned_id,
         previous_operation_name=agg.previous_operation_name or "N/A",
         previous_operation_parameters=prev_operation_params_display,

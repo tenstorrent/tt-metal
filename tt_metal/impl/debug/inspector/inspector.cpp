@@ -190,6 +190,20 @@ void Inspector::program_kernel_compile_finished(
             kernel_data.processor_elf_paths = std::move(processor_elf_paths);
         }
         kernel_data.source = kernel->kernel_source().source_;
+        // Capture compile-time args (immutable) + RTA word-counts by copy. RTA values are NOT
+        // captured (the host copy goes stale after the first dispatch); tt-triage reads values from
+        // device L1, bounded by these counts.
+        kernel_data.compile_time_args = kernel->compile_time_args();
+        for (const auto& [name, value] : kernel->named_compile_time_args()) {
+            kernel_data.named_compile_time_args.emplace_back(name, value);
+        }
+        for (const auto& core : kernel->cores_with_runtime_args()) {
+            kernel_data.per_core_rta_count.push_back(
+                {static_cast<uint32_t>(core.x),
+                 static_cast<uint32_t>(core.y),
+                 static_cast<uint32_t>(kernel->runtime_args(core).size())});
+        }
+        kernel_data.common_rta_count = static_cast<uint32_t>(kernel->common_runtime_args().size());
         data->kernel_id_to_program_id[kernel->get_watcher_kernel_id()] = program->get_id();
         data->logger.log_program_kernel_compile_finished(program_data, kernel_data);
     } catch (const std::exception& e) {
@@ -426,7 +440,7 @@ void Inspector::emit_debug_entry(
     const distributed::MeshWorkloadImpl* mesh_workload,
     uint64_t runtime_id,
     std::string_view operation_name,
-    std::vector<TensorSpec> tensor_specs,
+    std::vector<tt::tt_metal::experimental::inspector::TensorDebugInfo> tensors,
     std::optional<distributed::MeshTraceId> trace_id) noexcept {
     if (!is_enabled()) {
         return;
@@ -445,7 +459,7 @@ void Inspector::emit_debug_entry(
             slot.workload_id = mesh_workload->get_id();
             slot.runtime_id = runtime_id;
             slot.operation_name = operation_name;
-            slot.tensor_specs = std::move(tensor_specs);
+            slot.tensors = std::move(tensors);
             slot.trace_id = trace_id;
             if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
                 data->logger.log_runtime_entry(slot);
@@ -457,7 +471,7 @@ void Inspector::emit_debug_entry(
             slot.workload_id = mesh_workload->get_id();
             slot.runtime_id = runtime_id;
             slot.operation_name = operation_name;
-            slot.tensor_specs = std::move(tensor_specs);
+            slot.tensors = std::move(tensors);
             slot.trace_id.reset();
             if (pos == 2 * inspector::Data::kRuntimeEntriesCapacity) {
                 data->runtime_entries_write_pos = inspector::Data::kRuntimeEntriesCapacity + 1;
@@ -675,10 +689,10 @@ void EmitMeshWorkloadDebugEntry(
     tt::tt_metal::distributed::MeshWorkload& workload,
     uint64_t runtime_id,
     std::string_view operation_name,
-    std::vector<TensorSpec> tensor_specs,
+    std::vector<TensorDebugInfo> tensors,
     std::optional<tt::tt_metal::distributed::MeshTraceId> trace_id) {
     tt::tt_metal::Inspector::emit_debug_entry(
-        &workload.impl(), runtime_id, operation_name, std::move(tensor_specs), trace_id);
+        &workload.impl(), runtime_id, operation_name, std::move(tensors), trace_id);
 }
 
 void ReleaseTraceDebugEntries(tt::tt_metal::distributed::MeshTraceId trace_id) {

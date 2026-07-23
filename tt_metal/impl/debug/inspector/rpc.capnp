@@ -11,6 +11,20 @@ $Cxx.namespace("tt::tt_metal::inspector::rpc");
 
 # Inspector RPC interface for querying TT-Metal runtime state
 
+struct NamedArg {
+    name @0 :Text;
+    value @1 :UInt32;
+}
+
+# Physical RTA word-count for one logical core (includes the watcher count-word when watcher-assert
+# is enabled). Used by tt-triage to bound its device-L1 RTA read. RTA VALUES are not served here: the
+# host copy is stale after the first dispatch, so triage reads the values from device L1.
+struct CoreRtaCount {
+    coreX @0 :UInt16;
+    coreY @1 :UInt16;
+    count @2 :UInt32;
+}
+
 struct KernelData {
     watcherKernelId @0 :Int32;
     name @1 :Text;
@@ -18,6 +32,13 @@ struct KernelData {
     source @3 :Text;
     programId @4 :UInt64;
     processorElfPaths @5 :List(Text);
+    # Compile-time args, captured at compile-finished (immutable). Raw values only; consumer-side
+    # scripts map them to semantics. Positional are index-addressed; named carry a name.
+    namedCompileTimeArgs @6 :List(NamedArg);
+    compileTimeArgs @7 :List(UInt32);
+    # RTA word counts to bound the triage device-L1 read (values not served here — see CoreRtaCount).
+    perCoreRtaCount @8 :List(CoreRtaCount);
+    commonRtaCount @9 :UInt32;
 }
 
 enum BinaryStatus {

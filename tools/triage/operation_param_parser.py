@@ -21,8 +21,10 @@ class ParameterParser:
     # Parsing constraints
     MAX_RECURSION_DEPTH = 15  # Prevent infinite recursion in nested structures
 
-    # Compiled regex patterns for performance
-    TENSOR_PATTERN = re.compile(r"\[(\d+)\]:\s*")
+    # Compiled regex patterns for performance.
+    # Matches "[i]:", "[i] @ 0x<addr> (<n> B):", or "[i] (host):" — the inspector folds each tensor's
+    # device buffer address+size into the "[i]" header (group 2 = the optional address annotation).
+    TENSOR_PATTERN = re.compile(r"\[(\d+)\]( @ 0x[0-9a-fA-F]+ \(\d+ B\)| \(host\))?:\s*")
     CONSTRUCTOR_PATTERN = re.compile(r"(\w+)\((.*)\)$", re.DOTALL)
     KEY_VALUE_PATTERN = re.compile(r"(\w+)\s*=\s*")
 
@@ -33,20 +35,22 @@ class ParameterParser:
         if not params or params == "N/A" or params == "Not captured":
             return params
 
-        # Split by tensor pattern: [0]:, [1]:, etc.
+        # Split by tensor pattern: [0]:, [1] @ 0x.. (.. B):, etc. Two capture groups (index,
+        # annotation) => parts are [before, idx, annotation, content, idx, annotation, content, ...].
         tensor_parts = cls.TENSOR_PATTERN.split(params)
 
         result_lines: list[str] = []
 
-        # Process pairs: (tensor_index, tensor_content)
-        for idx in range(1, len(tensor_parts), 2):
-            if idx + 1 >= len(tensor_parts):
+        # Process triples: (tensor_index, address_annotation, tensor_content)
+        for idx in range(1, len(tensor_parts), 3):
+            if idx + 2 >= len(tensor_parts):
                 break
 
             tensor_index = tensor_parts[idx]
-            tensor_content = tensor_parts[idx + 1]
+            annotation = tensor_parts[idx + 1] or ""
+            tensor_content = tensor_parts[idx + 2]
 
-            result_lines.append(f"Tensor[{tensor_index}]")
+            result_lines.append(f"Tensor[{tensor_index}]{annotation}")
 
             # Extract and format all key=value pairs
             try:

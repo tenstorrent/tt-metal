@@ -21,6 +21,7 @@ import threading
 from typing import Callable
 
 from ttexalens.umd_device import TimeoutDeviceRegisterError
+from ttexalens.tt_exalens_lib import read_words_from_device
 
 from inspector_capnp import BuildEnvData
 from inspector_data import run as get_inspector_data, InspectorData
@@ -88,6 +89,20 @@ class DispatcherCoreData:
     # Hint surfaced when find_kernel fails — explains the most likely cause (program cache off,
     # or workload destroyed despite cache being on) so callers can append it to "PC not in range" style errors.
     kernel_lookup_warning: str | None = None
+
+
+@dataclass
+class KernelRuntimeArgs:
+    """Per-core (unique) + common runtime args read LIVE from device L1 for one (core, risc).
+
+    Counts come from Inspector (perCoreRtaCount / commonRtaCount); values are read from
+    kernel_config_base + rta_offset / crta_offset because the host-side copy goes stale after the
+    first dispatch (see tools/triage/kernel_args_capture_design.md). When watcher-assert is enabled the
+    first word of each list is the count word, not an arg (watcher_count_word=True)."""
+
+    unique: list[int]
+    common: list[int]
+    watcher_count_word: bool
 
 
 class DispatcherData:
@@ -298,6 +313,70 @@ class DispatcherData:
             self.use_rpc_kernel_find = False
             return self.kernels[watcher_kernel_id]
         raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
+
+    def read_runtime_args(self, location: OnChipCoordinate, risc_name: str) -> KernelRuntimeArgs | None:
+        """Read the running kernel's unique + common RTA values from device L1, or None if unavailable.
+
+        RTA word counts come from Inspector (the host copy is stale); values are read from
+        kernel_config_base + rta_offset / crta_offset (firmware_common.h). Called only by callstack
+        consumers, so the running-ops scan does not pay for these device reads.
+        """
+        try:
+            core_data = self.get_cached_core_data(location, risc_name)
+        except Exception:
+            return None
+        if core_data.mailboxes is None or core_data.kernel_config_base in (None, -1):
+            return None
+
+        # proc_type via the same enum selection as get_core_data.
+        block_type = core_data.block_type or self._get_block_type(location)
+        match block_type:
+            case "tensix":
+                enum_values = self._enum_values_tenisx
+            case "idle_eth" | "active_eth":
+                enum_values = self._enum_values_eth
+            case "dram":
+                enum_values = self._enum_values_dram
+            case _:
+                return None
+        proc_type = enum_values.get("ProcessorTypes", {}).get(risc_name.upper())
+        if proc_type is None:
+            return None
+
+        try:
+            kernel_config = core_data.mailboxes.launch[core_data.launch_msg_rd_ptr].kernel_config
+            rta_offset = int(kernel_config.rta_offset[proc_type].rta_offset)
+            crta_offset = int(kernel_config.rta_offset[proc_type].crta_offset)
+        except Exception:
+            return None
+
+        unique_count = 0
+        common_count = 0
+        try:
+            kernel = self.find_kernel(core_data.watcher_kernel_id)
+            lx, ly = location.to("logical")[0]
+            for entry in getattr(kernel, "perCoreRtaCount", None) or []:
+                if int(entry.coreX) == lx and int(entry.coreY) == ly:
+                    unique_count = int(entry.count)
+                    break
+            common_count = int(getattr(kernel, "commonRtaCount", 0) or 0)
+        except Exception:
+            return None
+
+        base = core_data.kernel_config_base
+        try:
+            unique = list(read_words_from_device(location, base + rta_offset, word_count=unique_count)) if unique_count else []
+            common = (
+                list(read_words_from_device(location, base + crta_offset, word_count=common_count)) if common_count else []
+            )
+        except TimeoutDeviceRegisterError:
+            raise
+        except Exception:
+            return None
+
+        if not unique and not common:
+            return None
+        return KernelRuntimeArgs(unique, common, bool(core_data.watcher_enabled))
 
     @staticmethod
     def _inspector_kernel_elf_path(kernel, proc_type: int) -> str | None:

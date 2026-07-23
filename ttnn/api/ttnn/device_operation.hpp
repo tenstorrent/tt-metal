@@ -189,18 +189,28 @@ void enqueue_mesh_workload(
     if (tt::tt_metal::experimental::inspector::IsEnabled()) {
         auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
 
-        std::vector<TensorSpec> spec_copies;
+        std::vector<tt::tt_metal::experimental::inspector::TensorDebugInfo> tensor_copies;
         if (tt::tt_metal::experimental::inspector::ShouldCaptureTensorSpecs()) {
-            size_t specs_count = ttsl::reflection::count_object_of_type<Tensor>(tensor_args);
-            spec_copies.reserve(specs_count);
+            tensor_copies.reserve(ttsl::reflection::count_object_of_type<Tensor>(tensor_args));
 
             ttsl::reflection::visit_object_of_type<Tensor>(
-                [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
+                [&](const Tensor& t) {
+                    uint64_t address = 0;
+                    uint64_t size = 0;
+                    if (t.storage_type() == tt::tt_metal::StorageType::DEVICE && t.is_allocated()) {
+                        const auto& mesh_buffer = t.mesh_buffer();
+                        address = mesh_buffer.address();
+                        size = mesh_buffer.device_local_size();
+                    }
+                    tensor_copies.emplace_back(tt::tt_metal::experimental::inspector::TensorDebugInfo{
+                        .spec = t.tensor_spec(), .address = address, .size = size});
+                },
+                tensor_args);
         }
 
         auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(mesh_device);
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
-            workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
+            workload, runtime_id, operation_name, std::move(tensor_copies), trace_id);
     }
 
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
