@@ -88,6 +88,7 @@ jobs:
         ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
+        TTNN_CONFIG_OVERRIDES: '{"validate_program_run_args": true}'
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
