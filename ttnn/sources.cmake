@@ -60,6 +60,7 @@ set(TTNNCPP_SRCS
     # FIXME: Move these out to appropriate sub targets
     cpp/ttnn/operations/compute_throttle_utils.cpp
     cpp/ttnn/operations/trace.cpp
+    cpp/ttnn/graph/capture_program_config_registry.cpp
     cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
     cpp/ttnn/operations/generic/generic_op.cpp
     cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
@@ -192,6 +193,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/events.hpp
     api/ttnn/global_circular_buffer.hpp
     api/ttnn/global_semaphore.hpp
+    api/ttnn/graph/capture_program_config.hpp
     api/ttnn/graph/graph_consts.hpp
     api/ttnn/graph/graph_serialization.hpp
     api/ttnn/graph/graph_operation_queries.hpp

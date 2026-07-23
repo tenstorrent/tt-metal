@@ -30,8 +30,13 @@ mypy==1.9.0
 protobuf==5.29.6
 
 # For TT-Transformers Qwen3 support
-transformers == 5.10.2
+transformers == 5.12.1
 huggingface-hub >= 0.30.0
+
+# For Qwen-VL / multimodal demo preprocessing: qwen-vl-utils (process_vision_info for image prompts)
+# and av/pyav (the transformers load_video backend used for video prompts, e.g. qwen36 vision_demo)
+qwen-vl-utils
+av
 
 # For Tracy WASM profiler web GUI server
 websockets==16.0

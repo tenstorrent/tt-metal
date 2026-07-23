@@ -46,7 +46,7 @@
 - name: Galaxy Wan2.2 demo tests
   cmd: |
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
-    pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500
+    pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p" --timeout 1500
   model: wan22
   skus:
     wh_galaxy_perf:

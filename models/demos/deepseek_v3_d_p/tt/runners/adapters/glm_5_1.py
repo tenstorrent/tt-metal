@@ -22,9 +22,9 @@ from __future__ import annotations
 import os
 from typing import Callable
 
-from models.demos.common.prefill.adapter import KvCaches
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config, glm_hf_config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
+from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 
 
 class GLM51Adapter(MLAPrefillAdapter):
@@ -50,7 +50,7 @@ class GLM51Adapter(MLAPrefillAdapter):
         max_seq = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 8192))
         return glm_hf_config(max_seq=max_seq)
 
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> KvCaches:
+    def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> MlaKvCaches:
         """GLM is sparse (DSA), so it owns TWO device caches, returned as a KvCaches tuple (both with
         the same block-cyclic, user-major layout of ``num_users * num_layers`` slots, so the merged
         migration table can address them identically):
@@ -85,7 +85,7 @@ class GLM51Adapter(MLAPrefillAdapter):
             num_users=params.num_users,
             dtype=ttnn.bfloat8_b,
         )
-        return KvCaches([kvpe_cache, index_cache])
+        return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
 
     # --- test metadata (HF download coordinates + PCC thresholds + golden trace) ---
     hf_repo_id = "zai-org/GLM-5.1-FP8"

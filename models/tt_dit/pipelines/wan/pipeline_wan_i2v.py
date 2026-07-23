@@ -53,6 +53,7 @@ class WanPipelineI2V(WanPipeline):
             subfolder="vae_encoder",
             parallel_config=self.vae_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: self._vae.torch_state_dict(),
         )
 

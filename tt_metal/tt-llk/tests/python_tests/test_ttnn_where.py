@@ -14,6 +14,8 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DISABLE_SRC_ZERO_FLAG,
     MATH_OP,
+    NUM_BLOCKS,
+    NUM_TILES_IN_BLOCK,
 )
 
 
@@ -52,7 +54,7 @@ def test_ttnn_where(
     ) and dest_acc == DestAccumulation.Yes:
         pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
 
-    input_dimensions = [32, 32]  # Single tile dimensions
+    input_dimensions = [256, 128]
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -86,7 +88,7 @@ def test_ttnn_where(
         "sources/ttnn_where_test.cpp",
         formats,
         templates=[MATH_OP(mathop), DISABLE_SRC_ZERO_FLAG(True)],
-        runtimes=[],
+        runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
             src_A.flatten(),
             formats.input_format,
@@ -107,7 +109,6 @@ def test_ttnn_where(
 
     res_from_L1 = configuration.run().result
 
-    res_from_L1 = res_from_L1[:1024]
     assert len(res_from_L1) == len(
         golden
     ), "Result tensor and golden tensor are not of the same length"
@@ -145,8 +146,8 @@ def test_ttnn_where(
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=MathOperation.TTNNWhere,
-    height=[32],
-    width=[32],
+    height=[256],
+    width=[128],
 )
 def test_ttnn_where_mcw(
     formats,
@@ -177,24 +178,25 @@ def test_ttnn_where_mcw(
 
     golden_generator = get_golden_generator(WhereGolden)
     golden = golden_generator(C, T, F)
+    tile_count = height * width // (32 * 32)
 
     configuration = TestConfig(
         "sources/ttnn_where_test.cpp",
         formats,
         templates=[MATH_OP(mathop), DISABLE_SRC_ZERO_FLAG(True)],
-        runtimes=[],
+        runtimes=[NUM_BLOCKS(tile_count), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
             C.flatten(),
             formats.input_format,
             T.flatten(),
             formats.input_format,
             formats.output_format,
-            tile_count_A=1,
-            tile_count_B=1,
-            tile_count_res=1,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
             buffer_C=F.flatten(),
             stimuli_C_format=formats.input_format,
-            tile_count_C=1,
+            tile_count_C=tile_count,
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
         dest_acc=dest_acc,
@@ -202,8 +204,6 @@ def test_ttnn_where_mcw(
     )
 
     res_from_L1 = configuration.run().result
-
-    res_from_L1 = res_from_L1[:1024]
 
     golden_tensor = torch.tensor(
         golden,
@@ -214,7 +214,7 @@ def test_ttnn_where_mcw(
         ),
     )
 
-    golden_tensor = golden_tensor.flatten()[:1024]  # Ensure it matches the result size
+    golden_tensor = golden_tensor.flatten()
 
     res_tensor = torch.tensor(
         res_from_L1,

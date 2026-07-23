@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -28,17 +28,17 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer dfb_out(cb_id_out);
 
     const uint32_t padded_width_diff = (block_width_tiles - unpadded_block_width_tiles) * tile_bytes;
 
     uint32_t row_start_tile_id = start_id;
-    cb_out.wait_front(block_num_tiles);
+    dfb_out.wait_front(block_num_tiles);
     uint32_t l1_read_offset = 0;
     for (uint32_t h = 0; h < unpadded_block_height_tiles; h++) {
         uint32_t tile_id = row_start_tile_id;
         for (uint32_t w = 0; w < unpadded_block_width_tiles; w++) {
-            noc.async_write(cb_out, s, tile_bytes, {.offset_bytes = l1_read_offset}, {.page_id = tile_id});
+            noc.async_write(dfb_out, s, tile_bytes, {.offset_bytes = l1_read_offset}, {.page_id = tile_id});
             tile_id++;
             l1_read_offset += tile_bytes;
         }
@@ -46,5 +46,5 @@ void kernel_main() {
         row_start_tile_id += output_width_tiles;
     }
     noc.async_write_barrier();
-    cb_out.pop_front(block_num_tiles);
+    dfb_out.pop_front(block_num_tiles);
 }

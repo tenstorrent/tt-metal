@@ -122,6 +122,12 @@ void RunTestOnCore(
     if (multi_dm_race && !is_quasar) {
         GTEST_SKIP() << "Multi-DM race test only runs on Quasar";
     }
+    // The Quasar NOC shifts the data so transfers don't need to be aligned; a misaligned transfer is
+    // legal there and there is nothing to flag. These tests stay valid on WH/BH where alignment is
+    // enforced.
+    if ((feature == SanitizeNOCAlignmentL1Write || feature == SanitizeNOCAlignmentL1Read) && is_quasar) {
+        GTEST_SKIP() << "Quasar NOC has no L1 alignment restriction; misaligned transfers are legal";
+    }
     // Both exercise Quasar's uncached L1 alias, which only exists on Quasar DM cores.
     if ((feature == SanitizeNOCMailboxWriteUncachedAlias || feature == SanitizeL1OverflowStraddle) &&
         (!is_quasar || is_eth_core)) {
@@ -238,6 +244,11 @@ void RunTestOnCore(
         }
         // (gen1 path: no CTA bindings needed; the kernel runs on exactly one DM processor.)
 
+        // Under SD the kernel signals completion via RUN_MSG_DONE, not the FD notify path (which wedges the NOC).
+        if (fixture->IsSlowDispatch()) {
+            defines["WATCHER_KERNEL_SLOW_DISPATCH"] = "1";
+        }
+
         // Select the DM config variant matching the current architecture (Gen2 on Quasar, Gen1 otherwise).
         auto gen1_processor =
             use_ncrisc ? tt::tt_metal::DataMovementProcessor::RISCV_1 : tt::tt_metal::DataMovementProcessor::RISCV_0;
@@ -323,8 +334,8 @@ void RunTestOnCore(
             output_buf_noc_xy.y = 18;
             break;
         case SanitizeNOCAlignmentL1Write:
-            output_buffer_addr++;  // This is illegal because reading DRAM->L1 needs DRAM alignment
-                                   // requirements (32 byte aligned).
+            output_buffer_addr++;  // Misaligned L1 write: on WH/BH the NoC requires
+                                   // NOC_L1_WRITE_ALIGNMENT_BYTES alignment.
             buffer_size--;
             break;
         case SanitizeNOCAlignmentL1Read:
@@ -839,6 +850,23 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCAlignmentL1ReadNCrisc) {
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCAlignmentL1Read, true);
         },
         this->devices_[0]);
+}
+
+// Quasar relaxes NoC transfer alignment to 1B (misaligned transfers are legal, so the watcher can't
+// flag them) while allocation alignment stays at the physical floor. Guards against regressing either.
+TEST_F(MeshWatcherFixture, TensixTestWatcherQuasarAlignmentContract) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (hal.get_arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Relaxed NoC alignment is Quasar-only";
+    }
+    // NoC transfer alignment relaxed to 1B.
+    EXPECT_EQ(hal.get_read_alignment(HalMemType::L1), 1u);
+    EXPECT_EQ(hal.get_write_alignment(HalMemType::L1), 1u);
+    EXPECT_EQ(hal.get_read_alignment(HalMemType::DRAM), 1u);
+    EXPECT_EQ(hal.get_write_alignment(HalMemType::DRAM), 1u);
+    // Allocation alignment stays at the physical floor.
+    EXPECT_EQ(hal.get_alignment(HalMemType::L1), 16u);
+    EXPECT_EQ(hal.get_alignment(HalMemType::DRAM), 64u);
 }
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCZeroL1Write) {

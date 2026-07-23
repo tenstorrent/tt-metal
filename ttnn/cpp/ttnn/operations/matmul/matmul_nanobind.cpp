@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -863,6 +863,9 @@ void py_module(nb::module_& mod) {
 
         Keyword Args:
             bias (ttnn.Tensor, optional): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
+                Most program configs take a row-vector bias of shape ``[1, N]`` (or ``[1, 1, 1, N]``), broadcast across the output rows.
+                The batched ``MatmulMultiCoreReuseProgramConfig`` path additionally supports a full-tile bias of shape ``[M, N]``,
+                added to the output and broadcast over the batch dimension.
             transpose_a (bool, optional): Whether to transpose input_tensor_a. Defaults to `False`.
             transpose_b (bool, optional): Whether to transpose input_tensor_b. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
@@ -1216,7 +1219,7 @@ void py_module(nb::module_& mod) {
             nb::arg("tensor_args"))
         .def_static(
             "compute_program_hash",
-            &ttnn::prim::MatmulDeviceOperation::compute_program_hash,
+            &ttnn::prim::MatmulDeviceOperation::compute_descriptor_program_hash,
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 

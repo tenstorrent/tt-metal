@@ -91,24 +91,38 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
     uint32_t mm_partials_cb_id,
+    uint32_t mm_partials_reload_cb_id,
     bool in1_transpose_tile,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
     CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    // mm_partials_reload_cb_id is the CB view the reload copies through. It equals mm_partials_cb_id
+    // unless the partials CB is also read as an FPU operand elsewhere (the fused bias add reads it via
+    // SrcA), in which case UnpackToDestFp32 cannot be set on it directly; instead a second buffer index
+    // aliases the same SRAM with UnpackToDestFp32 set, and the reload copies through that alias while the
+    // FPU consumer keeps the original view. The alias has its own read pointer, so align it with the
+    // partials CB's current read position before copying.
     // Reconfigure input
-    reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
-    copy_init(mm_partials_cb_id);
+    reconfig_data_format_srca(in1_cb_id, mm_partials_reload_cb_id);
+    copy_init(mm_partials_reload_cb_id);
     mm_partials_cb.wait_front(out_subblock_num_tiles);
+
+    if (mm_partials_reload_cb_id != mm_partials_cb_id) {
+        // Only the unpacker owns cb_interface / the read pointer; keep this off the MATH/PACK threads.
+        UNPACK(
+            (get_local_cb_interface(mm_partials_reload_cb_id).fifo_rd_ptr =
+                 get_local_cb_interface(mm_partials_cb_id).fifo_rd_ptr));
+    }
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
-    copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
+    copy_block_matmul_partials(mm_partials_reload_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
     mm_partials_cb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
-    reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+    reconfig_data_format_srca(mm_partials_reload_cb_id, in1_cb_id);
     matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
@@ -188,6 +202,15 @@ void kernel_main() {
     constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t out_cb_id = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t mm_partials_cb_id = get_named_compile_time_arg_val("cb_intermed0");
+    // CB view the cross-block reload copies through: the UnpackToDestFp32-marked alias of the partials
+    // CB when it is also read as an FPU operand (fused bias), otherwise the partials CB itself.
+#ifdef MM_PARTIALS_RELOAD_ALIAS_CB
+    // The partials CB is also read as an FPU operand (fused bias) and so cannot carry UnpackToDestFp32;
+    // the reload instead copies through this alias view of the same SRAM, which does carry the flag.
+    constexpr uint32_t mm_partials_reload_cb_id = MM_PARTIALS_RELOAD_ALIAS_CB;
+#else
+    constexpr uint32_t mm_partials_reload_cb_id = mm_partials_cb_id;
+#endif
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
     // When in0 needs to be transposed, the original data is read from cb_in0 (in0_transpose_cb_id),
     // transposed, and the result is written to cb_in0_transposed (in0_cb_id), which is then used
@@ -318,6 +341,7 @@ void kernel_main() {
                                     in0_cb_id,
                                     in1_cb_id,
                                     mm_partials_cb_id,
+                                    mm_partials_reload_cb_id,
                                     in1_transpose_tile,
                                     out_subblock_num_tiles,
                                     out_subblock_w,
@@ -489,7 +513,17 @@ void kernel_main() {
                         mm_partials_cb.wait_front(out_subblock_num_tiles);
                         tile_regs_acquire();
                         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
+#ifdef BIAS_FULL_BLOCK
+                            // The bias CB holds a full [M, N] tile block. m_tile is this output tile's
+                            // row within that block; bias_tile_idx is the position of the matching bias
+                            // tile in the CB (row m_tile, column in1_index_subblock_offset). Only
+                            // matmul_multicore_reuse_optimized loads the full block; other callers load a
+                            // single bias row and use the N-only index below.
+                            const uint32_t m_tile = in0_subblock * out_subblock_h + j;
+                            uint32_t bias_tile_idx = m_tile * in1_block_w + in1_index_subblock_offset;
+#else
                             uint32_t bias_tile_idx = in1_index_subblock_offset;
+#endif
                             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
                                 const uint32_t safe_bias_tile_idx =
                                     (is_last_in1_subblock_padded && k >= last_subblock_w_valid)

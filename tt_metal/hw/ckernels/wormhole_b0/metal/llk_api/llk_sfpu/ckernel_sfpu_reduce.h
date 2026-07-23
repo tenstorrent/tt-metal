@@ -13,6 +13,7 @@
 #include "ckernel_instr_params.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "lltt.h"
 #include "sfpi.h"
 
@@ -1674,6 +1675,7 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
  */
 template <PoolType pool_type, DataFormat format, bool is_fp32_dest_accum_en>
 inline void init_reduce(std::uint32_t block_ct_dim = 1) {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     static_assert(
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");

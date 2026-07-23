@@ -81,6 +81,7 @@ class AniSoraPipeline(WanPipelineI2V):
                 subfolder=state.checkpoint.subfolder,
                 parallel_config=self.parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
+                mesh_device=self.mesh_device,
                 is_fsdp=self.is_fsdp,
                 get_torch_state_dict=lambda s=state: s.checkpoint.state_dict(),
             )
@@ -93,6 +94,7 @@ class AniSoraPipeline(WanPipelineI2V):
             subfolder=state.checkpoint.subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda f=filename: load_lightx2v_state_dict(
                 self.HF_REPO,

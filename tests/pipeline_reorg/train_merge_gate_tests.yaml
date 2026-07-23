@@ -10,14 +10,30 @@
 #   team: The team that owns the test.
 #
 # For max allowed timeout refer to .github/time_budget.yaml.
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 
-# Non-nightly smoke tests
-- name: tt-train cpp smoke tests
+# Non-nightly merge gate tests
+# TODO: Split into two groups due to inconsistent durations: https://github.com/tenstorrent/tt-metal/issues/50449
+- name: tt-train cpp merge gate tests (id 0)
   cmd: |
+    export GTEST_TOTAL_SHARDS=2
+    export GTEST_SHARD_INDEX=0
     mkdir -p generated/test_reports
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
   skus:
     wh_n150_civ2:
-      timeout: 20
+      timeout: 15
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+- name: tt-train cpp merge gate tests (id 1)
+  cmd: |
+    export GTEST_TOTAL_SHARDS=2
+    export GTEST_SHARD_INDEX=1
+    mkdir -p generated/test_reports
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
+  skus:
+    wh_n150_civ2:
+      timeout: 15
   owner_id: U07K00A281X # Kevin Wu
   team: train

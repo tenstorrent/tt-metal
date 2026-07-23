@@ -188,10 +188,41 @@ def _handle_sigterm(signum, frame):
 # ---------------------------------------------------------------------------
 
 
-def compute_layer_split(num_layers: int, num_ranks: int) -> list[tuple[int, int]]:
+def _snap_counts_to_starts(counts, valid_starts, num_layers):
+    """Nudge an even split's interior rank boundaries onto the nearest valid start (preserving
+    sum == num_layers), for models that constrain where a rank may begin (layer_split_boundaries).
+    Nearest by |distance| then lower index; each boundary is used at most once and stays increasing."""
+    valid = sorted(valid_starts)
+    boundaries, s = [], 0
+    for c in counts[:-1]:
+        s += c
+        boundaries.append(s)
+    snapped, prev = [], 0
+    for b in boundaries:
+        cand = min(
+            (v for v in valid if prev < v < num_layers and v not in snapped),
+            key=lambda v: (abs(v - b), v),
+            default=None,
+        )
+        if cand is None:
+            raise ValueError(f"cannot place {len(counts)} pipeline ranks on valid layer boundaries {valid}")
+        snapped.append(cand)
+        prev = cand
+    out, prev = [], 0
+    for b in [*snapped, num_layers]:
+        out.append(b - prev)
+        prev = b
+    return out
+
+
+def compute_layer_split(num_layers: int, num_ranks: int, valid_starts=None) -> list[tuple[int, int]]:
     """Contiguous (first_layer_idx, count) per rank. PREFILL_PP_LAYER_COUNTS, a
     comma-separated count list summing to num_layers, overrides the default even
-    split (remainder handed to the earlier ranks)."""
+    split (remainder handed to the earlier ranks).
+
+    ``valid_starts`` (from the adapter's ``layer_split_boundaries``): layer indices at which a rank may
+    begin. None => unconstrained. When set, the default even split is auto-snapped onto valid
+    boundaries, and any split (explicit or snapped) whose rank starts fall off them is rejected early."""
     override = os.environ.get("PREFILL_PP_LAYER_COUNTS")
     if override:
         counts = [int(x) for x in override.split(",")]
@@ -203,12 +234,24 @@ def compute_layer_split(num_layers: int, num_ranks: int) -> list[tuple[int, int]
     else:
         base, rem = divmod(num_layers, num_ranks)
         counts = [base + (1 if r < rem else 0) for r in range(num_ranks)]
+        if valid_starts is not None:
+            counts = _snap_counts_to_starts(counts, valid_starts, num_layers)
 
     ranges = []
     start = 0
     for count in counts:
         ranges.append((start, count))
         start += count
+
+    if valid_starts is not None:
+        for first_idx, _ in ranges:
+            if first_idx not in valid_starts:
+                near = sorted(b for b in valid_starts if abs(b - first_idx) <= 4)
+                raise ValueError(
+                    f"pipeline rank starts at layer {first_idx}, not a valid boundary for this model "
+                    f"(nearest valid: {near}). Set PREFILL_PP_LAYER_COUNTS so every cumulative boundary "
+                    f"is a valid start."
+                )
     return ranges
 
 
@@ -443,12 +486,17 @@ def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done:
 
 def run_request_loop(
     runtime, kv_caches, rank: int, num_ranks: int, *, hidden_size: int, h2d_service=None, d2d_in=None, d2d_out=None
-) -> None:
+):
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
     closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
     as a hard fallback, until SIGTERM/SIGKILL. No fixed NUM_CHUNKS bound, no trace input, no PCC — see
-    run_standalone_loop for those."""
+    run_standalone_loop for those.
+
+    Exception: in migration-validation mode (PREFILL_VALIDATE_MIGRATION=1) the scheduler driver never
+    pushes the shutdown sentinel — it pushes PREFILL_STANDALONE_CHUNKED_NCHUNKS chunks, migrates, then
+    writes the DONE sentinel for the runner to poll. So the loop exits after that many chunks and returns
+    to validate_after_prefill. Returns (chunks_per_slot, real_end_per_slot, total_chunks)."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
@@ -459,6 +507,16 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+    # Per-slot bookkeeping for the optional post-loop migration validation (validate_after_prefill):
+    # how many chunks each slot received and its highest real (non-pad) end position.
+    chunks_per_slot: dict = {}
+    real_end_per_slot: dict = {}
+    # If we run prefill validation, we need to know the expected number of chunks to exit the loop.
+    _expected_chunks = (
+        int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "0"))
+        if os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1"
+        else 0
+    )
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
@@ -473,11 +531,23 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
+        slot = meta["slot_id"]
+        chunks_per_slot[slot] = chunks_per_slot.get(slot, 0) + 1
+        real_end_per_slot[slot] = max(real_end_per_slot.get(slot, 0), meta["actual_end"])
         t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
         if first is None:
             first = t
         c += 1
+        if _expected_chunks and c >= _expected_chunks:
+            logger.info(
+                f"[pp rank {rank}] processed {c}/{_expected_chunks} chunks "
+                "(PREFILL_STANDALONE_CHUNKED_NCHUNKS reached); exiting request loop for migration validation"
+            )
+            if d2d_out is not None:
+                _forward_shutdown(d2d_out, rank, hidden_size)
+            break
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
+    return chunks_per_slot, real_end_per_slot, c
 
 
 def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
@@ -614,7 +684,7 @@ def main() -> None:
     rank = int(ttnn.distributed_context_get_rank())
     num_ranks = int(ttnn.distributed_context_get_size())
 
-    layer_split = compute_layer_split(NUM_LAYERS, num_ranks)
+    layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS))
     first_layer_idx, num_my_layers = layer_split[rank]
     is_first_rank = rank == 0
     is_last_rank = rank == num_ranks - 1
@@ -803,7 +873,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
-    run_request_loop(
+    chunks_per_slot, real_end_per_slot, total_chunks = run_request_loop(
         runtime,
         kv_caches,
         rank,
@@ -813,6 +883,21 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         d2d_in=d2d_in,
         d2d_out=d2d_out,
     )
+
+    # Post-loop KV validation (bring-up / migration accuracy; never in production serving). Single-rank
+    # only: only the last/single rank owns the whole cache. By now the scheduler has migrated the slots
+    # out-of-band and written the DONE sentinel; the validator waits for it and PCCs the migrated pairs.
+    if single_rank and os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1":
+        from models.demos.common.prefill.runners.validation import validate_after_prefill
+
+        validate_after_prefill(
+            runtime,
+            kv_caches,
+            chunks_per_slot=chunks_per_slot,
+            real_end_per_slot=real_end_per_slot,
+            num_users=NUM_USERS,
+            total_chunks=total_chunks,
+        )
 
     # Release services while the mesh + command queues are still alive (their dtors free a command
     # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
@@ -826,4 +911,15 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
 
 if __name__ == "__main__":
+    # Best-effort: some galaxies ship a small RLIMIT_NPROC soft limit that starves the runner's threads, so
+    # raise it to the hard limit. Guarded — get/setrlimit can raise OSError/ValueError when the limit is
+    # immutable or the process lacks permission, and that must not crash the runner before main().
+    try:
+        import resource
+
+        _, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+        resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
+    except (OSError, ValueError) as e:
+        logger.warning(f"[prefill] could not raise RLIMIT_NPROC to the hard limit: {e}")
+
     main()

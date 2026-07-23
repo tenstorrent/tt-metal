@@ -19,14 +19,18 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
-#include <algorithm>
+#include <fstream>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <sstream>
+#include <utility>
 #include <vector>
+#include <unordered_map>
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -531,6 +535,134 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
     }
 }
 
+bool compare_intermesh_port_assignment_files(
+    const std::filesystem::path& generated_file, const std::filesystem::path& golden_file) {
+    if (!std::filesystem::exists(generated_file) || !std::filesystem::exists(golden_file)) {
+        return false;
+    }
+    try {
+        // Both files are pre-sorted and host-independent, so a canonical YAML re-emit + string compare is
+        // sufficient (and robust to insignificant whitespace differences).
+        YAML::Emitter gen_emitter;
+        gen_emitter << YAML::LoadFile(generated_file.string());
+        YAML::Emitter gold_emitter;
+        gold_emitter << YAML::LoadFile(golden_file.string());
+        return std::string(gen_emitter.c_str()) == std::string(gold_emitter.c_str());
+    } catch (const std::exception& e) {
+        log_error(tt::LogTest, "Failed to compare inter-mesh port assignment files: {}", e.what());
+        return false;
+    }
+}
+
+void check_intermesh_port_assignment_against_golden(const std::string& golden_name) {
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    // Only compare in mock tests (real-device port assignment is hardware-specific).
+    if (!rtoptions.get_mock_enabled()) {
+        return;
+    }
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    int world_size = *distributed_context->size();
+    int rank = *distributed_context->rank();
+
+    std::filesystem::path root_dir = rtoptions.get_root_dir();
+    std::filesystem::path fabric_dir = root_dir / "generated" / "fabric";
+
+    // Each rank writes only its own local mesh's channels. Wait for every rank to finish before rank 0
+    // aggregates the per-rank files into the complete, all-mesh assignment (mock runs place all ranks on one
+    // node, so rank 0 can read every sibling file).
+    distributed_context->barrier();
+    if (rank != 0) {
+        return;
+    }
+
+    // Merge every per-rank file into one all-mesh map, covering both the inter-mesh port assignment and (if
+    // present) the intra-mesh channel assignment. A single mesh can span multiple host ranks, and each such rank
+    // writes the same "M{a}->M{b}" key holding only its own chips' ports. Overwriting on collision would keep just
+    // the last file read and silently drop every other rank's ports, so concatenate the inner sequences instead,
+    // then sort + dedup for a deterministic result independent of file-read order.
+    auto merge_seq_into = [](YAML::Node& dst_map, const std::string& key, const YAML::Node& src_seq) {
+        if (!src_seq.IsSequence()) {
+            return;
+        }
+        std::vector<std::string> entries;
+        if (YAML::Node existing = dst_map[key]; existing && existing.IsSequence()) {
+            for (const auto& e : existing) {
+                entries.push_back(e.as<std::string>());
+            }
+        }
+        for (const auto& e : src_seq) {
+            entries.push_back(e.as<std::string>());
+        }
+        std::sort(entries.begin(), entries.end());
+        entries.erase(std::unique(entries.begin(), entries.end()), entries.end());
+        YAML::Node merged(YAML::NodeType::Sequence);
+        // Match the per-rank writer's flow style so the merged/regoldened file stays byte-stable.
+        merged.SetStyle(YAML::EmitterStyle::Flow);
+        for (const auto& e : entries) {
+            merged.push_back(e);
+        }
+        dst_map[key] = merged;
+    };
+
+    YAML::Node merged_intermesh(YAML::NodeType::Map);
+    YAML::Node merged_intramesh(YAML::NodeType::Map);
+    for (int r = 1; r <= world_size; ++r) {
+        std::filesystem::path f = fabric_dir / ("intermesh_port_assignment_rank_" + std::to_string(r) + "_of_" +
+                                                std::to_string(world_size) + ".yaml");
+        if (!std::filesystem::exists(f)) {
+            continue;
+        }
+        YAML::Node doc = YAML::LoadFile(f.string());
+        if (YAML::Node inter = doc["intermesh_port_assignment"]; inter && inter.IsMap()) {
+            for (auto it = inter.begin(); it != inter.end(); ++it) {
+                merge_seq_into(merged_intermesh, it->first.as<std::string>(), it->second);
+            }
+        }
+        if (YAML::Node intra = doc["intramesh_channel_assignment"]; intra && intra.IsMap()) {
+            for (auto it = intra.begin(); it != intra.end(); ++it) {
+                merge_seq_into(merged_intramesh, it->first.as<std::string>(), it->second);
+            }
+        }
+    }
+    YAML::Node combined(YAML::NodeType::Map);
+    combined["intermesh_port_assignment"] = merged_intermesh;
+    if (merged_intramesh.size() > 0) {
+        combined["intramesh_channel_assignment"] = merged_intramesh;
+    }
+    std::filesystem::path combined_file =
+        fabric_dir / ("intermesh_port_assignment_ALL_of_" + std::to_string(world_size) + ".yaml");
+    {
+        YAML::Emitter em;
+        em << combined;
+        std::ofstream o(combined_file);
+        o << em.c_str();
+    }
+
+    std::filesystem::path golden_file =
+        root_dir / "tests" / "tt_metal" / "tt_fabric" / "golden_mapping_files" / (golden_name + ".yaml");
+
+    // Regolden mode (TT_METAL_REGOLDEN=1): overwrite the golden with this run's merged all-mesh assignment.
+    if (const char* regolden_env = std::getenv("TT_METAL_REGOLDEN");
+        regolden_env != nullptr && regolden_env[0] != '\0') {
+        std::filesystem::create_directories(golden_file.parent_path());
+        std::filesystem::copy_file(combined_file, golden_file, std::filesystem::copy_options::overwrite_existing);
+        log_info(tt::LogTest, "Regoldened {} -> {}", combined_file.string(), golden_file.string());
+        return;
+    }
+
+    if (!std::filesystem::exists(golden_file)) {
+        FAIL() << "Golden inter-mesh port assignment file does not exist: " << golden_file.string()
+               << ". See tests/tt_metal/tt_fabric/golden_mapping_files/README.md.";
+    }
+    bool comparison_result = compare_intermesh_port_assignment_files(combined_file, golden_file);
+    EXPECT_TRUE(comparison_result) << "Inter-mesh port assignment mismatch vs golden " << golden_name
+                                   << ". This usually means the port-determination result changed (or became "
+                                      "host-dependent).";
+    if (!comparison_result) {
+        FAIL() << "Inter-mesh port assignment mismatch detected (golden: " << golden_name << ").";
+    }
+}
+
 namespace {
 
 // Host rank for this MPI process as set by tt-run via TT_MESH_HOST_RANK (rank bindings YAML).
@@ -612,6 +744,472 @@ void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control
         EXPECT_EQ(full_mesh_shape.mesh_size() % expected_local_shape.mesh_size(), 0u)
             << "rank " << mpi_rank << " mesh " << *mesh_id
             << " full MGD mesh chip count must divide evenly by per-host slice";
+    }
+}
+
+namespace {
+
+bool rank_group_shape_is(const MeshShape& shape, uint32_t dim0, uint32_t dim1) {
+    if (shape.dims() != 2) {
+        return false;
+    }
+    return (shape[0] == dim0 && shape[1] == dim1) || (shape[0] == dim1 && shape[1] == dim0);
+}
+
+void expect_rank_group_shape_and_size(
+    MeshId mesh_id, MeshHostRankId host_rank, const MeshShape& rank_shape, uint32_t dim0, uint32_t dim1) {
+    EXPECT_EQ(rank_shape.dims(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank << " rank group must be 2D";
+    EXPECT_TRUE(rank_group_shape_is(rank_shape, dim0, dim1))
+        << "mesh " << *mesh_id << " host_rank " << *host_rank << " rank group shape must be " << dim0 << "x" << dim1
+        << " or " << dim1 << "x" << dim0;
+    EXPECT_EQ(rank_shape.mesh_size(), dim0 * dim1)
+        << "mesh " << *mesh_id << " host_rank " << *host_rank << " rank group mesh_size";
+}
+
+}  // namespace
+
+void expect_galaxy_rank_group_1x1_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
+    (void)control_plane;
+    (void)mesh_id;
+    (void)host_rank;
+    // Pass - no rank group checks needed for 1x1 shape
+}
+
+void expect_galaxy_rank_group_1x2_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto chip_ids = mesh_graph.get_chip_ids(mesh_id, host_rank);
+    ASSERT_EQ(chip_ids.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                   << " 1x2 rank group must contain exactly 2 chips";
+
+    std::optional<uint32_t> expected_tray_id;
+    std::optional<std::string> expected_hostname;
+    std::optional<uint32_t> first_asic_location;
+    std::optional<uint32_t> second_asic_location;
+    FabricNodeId first_fabric_node_id(mesh_id, 0);
+    FabricNodeId second_fabric_node_id(mesh_id, 0);
+
+    for (const auto chip_id : chip_ids.values()) {
+        const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+        const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        const uint32_t tray_id_value = *psd.get_tray_id(asic_id);
+        const uint32_t asic_location_value = *psd.get_asic_location(asic_id);
+        const std::string hostname = psd.get_host_name_for_asic(asic_id);
+
+        if (!expected_hostname.has_value()) {
+            expected_hostname = hostname;
+        } else {
+            EXPECT_EQ(hostname, *expected_hostname)
+                << "mesh " << *mesh_id << " host_rank " << *host_rank
+                << " 1x2 rank group fabric nodes must be on the same host; fabric node " << fabric_node_id
+                << " hostname=" << hostname << " expected hostname=" << *expected_hostname;
+        }
+
+        if (!expected_tray_id.has_value()) {
+            expected_tray_id = tray_id_value;
+            first_asic_location = asic_location_value;
+            first_fabric_node_id = fabric_node_id;
+        } else {
+            EXPECT_EQ(tray_id_value, *expected_tray_id)
+                << "mesh " << *mesh_id << " host_rank " << *host_rank
+                << " 1x2 rank group fabric nodes must be on the same tray; fabric node " << fabric_node_id
+                << " tray_id=" << tray_id_value << " expected tray_id=" << *expected_tray_id;
+
+            second_asic_location = asic_location_value;
+            second_fabric_node_id = fabric_node_id;
+        }
+    }
+
+    ASSERT_TRUE(first_asic_location.has_value() && second_asic_location.has_value());
+
+    static const std::set<std::pair<uint32_t, uint32_t>> valid_asic_location_pairs = {
+        {1, 2},
+        {3, 4},
+        {5, 6},
+        {7, 8},
+        {1, 5},
+        {2, 6},
+        {3, 7},
+        {4, 8},
+    };
+    uint32_t loc_a = *first_asic_location;
+    uint32_t loc_b = *second_asic_location;
+    if (loc_a > loc_b) {
+        std::swap(loc_a, loc_b);
+    }
+    EXPECT_TRUE(valid_asic_location_pairs.contains({loc_a, loc_b}))
+        << "mesh " << *mesh_id << " host_rank " << *host_rank
+        << " 1x2 rank group asic locations must be one of (1,2), (3,4), (5,6), (7,8), (1,5), (2,6), (3,7), (4,8); "
+        << "got " << first_fabric_node_id << " asic_location=" << *first_asic_location << " and "
+        << second_fabric_node_id << " asic_location=" << *second_asic_location;
+}
+
+void expect_galaxy_rank_group_2x2_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto chip_ids = mesh_graph.get_chip_ids(mesh_id, host_rank);
+    ASSERT_EQ(chip_ids.size(), 4u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                   << " 2x2 rank group must contain exactly 4 chips";
+
+    std::optional<uint32_t> expected_tray_id;
+    std::optional<std::string> expected_hostname;
+    std::set<uint32_t> asic_locations;
+
+    for (const auto chip_id : chip_ids.values()) {
+        const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+        const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        const uint32_t tray_id_value = *psd.get_tray_id(asic_id);
+        const uint32_t asic_location_value = *psd.get_asic_location(asic_id);
+        const std::string hostname = psd.get_host_name_for_asic(asic_id);
+
+        if (!expected_hostname.has_value()) {
+            expected_hostname = hostname;
+        } else {
+            EXPECT_EQ(hostname, *expected_hostname)
+                << "mesh " << *mesh_id << " host_rank " << *host_rank
+                << " 2x2 rank group fabric nodes must be on the same host; fabric node " << fabric_node_id
+                << " hostname=" << hostname << " expected hostname=" << *expected_hostname;
+        }
+
+        if (!expected_tray_id.has_value()) {
+            expected_tray_id = tray_id_value;
+        } else {
+            EXPECT_EQ(tray_id_value, *expected_tray_id)
+                << "mesh " << *mesh_id << " host_rank " << *host_rank
+                << " 2x2 rank group fabric nodes must be on the same tray; fabric node " << fabric_node_id
+                << " tray_id=" << tray_id_value << " expected tray_id=" << *expected_tray_id;
+        }
+        asic_locations.insert(asic_location_value);
+    }
+
+    static const std::set<std::set<uint32_t>> valid_asic_location_groups = {
+        {1, 2, 5, 6},
+        {3, 4, 7, 8},
+    };
+    EXPECT_TRUE(valid_asic_location_groups.contains(asic_locations))
+        << "mesh " << *mesh_id << " host_rank " << *host_rank
+        << " 2x2 rank group asic locations must be {1,2,5,6} or {3,4,7,8}";
+}
+
+void expect_galaxy_rank_group_4x4_4x4split_check(
+    const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
+    (void)host_rank;
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const MeshShape mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+    ASSERT_EQ(mesh_shape.dims(), 2u) << "mesh " << *mesh_id << " 4x4-split rank group requires 2D device topology";
+    ASSERT_TRUE(mesh_shape[0] == 4u && mesh_shape[1] == 4u)
+        << "mesh " << *mesh_id << " 4x4-split layout check requires 4x4 device topology";
+
+    static const std::set<uint32_t> all_trays = {1, 2, 3, 4};
+
+    std::set<uint32_t> trays;
+    std::set<std::string> hostnames;
+    std::map<uint32_t, size_t> chips_per_tray;
+
+    for (const auto& [_, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+        const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+        const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        const uint32_t tray_id_value = *psd.get_tray_id(asic_id);
+
+        hostnames.insert(psd.get_host_name_for_asic(asic_id));
+        trays.insert(tray_id_value);
+        ++chips_per_tray[tray_id_value];
+    }
+
+    EXPECT_TRUE(hostnames.size() == 1u || hostnames.size() == 2u)
+        << "mesh " << *mesh_id << " 4x4-split layout must sit on one or two hosts";
+    EXPECT_EQ(trays, all_trays) << "mesh " << *mesh_id << " 4x4-split layout must use trays {1,2,3,4}";
+    for (uint32_t tray_id = 1; tray_id <= 4; ++tray_id) {
+        EXPECT_EQ(chips_per_tray[tray_id], 4u)
+            << "mesh " << *mesh_id << " 4x4-split layout tray " << tray_id << " must contain exactly 4 chips";
+    }
+}
+
+void expect_galaxy_rank_group_2x4_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto chip_ids = mesh_graph.get_chip_ids(mesh_id, host_rank);
+    ASSERT_EQ(chip_ids.size(), 8u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                   << " 2x4 rank group must contain exactly 8 chips";
+
+    static const std::set<uint32_t> full_tray_asic_locations = {1, 2, 3, 4, 5, 6, 7, 8};
+    static const std::set<uint32_t> half_tray_group_a = {1, 2, 5, 6};
+    static const std::set<uint32_t> half_tray_group_b = {3, 4, 7, 8};
+    static const std::set<std::set<uint32_t>> valid_half_tray_asic_location_groups = {
+        half_tray_group_a, half_tray_group_b};
+    static const std::set<std::set<uint32_t>> rev_c_tray_pairs = {{1, 2}, {3, 4}};
+    static const std::set<std::set<uint32_t>> rev_ab_tray_pairs = {{1, 3}, {2, 4}};
+
+    std::set<uint32_t> all_asic_locations;
+    std::set<uint32_t> trays;
+    std::set<std::string> hostnames;
+    std::map<uint32_t, std::set<uint32_t>> asic_locations_by_tray;
+
+    for (const auto chip_id : chip_ids.values()) {
+        const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+        const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        const uint32_t tray_id_value = *psd.get_tray_id(asic_id);
+        const uint32_t asic_location_value = *psd.get_asic_location(asic_id);
+
+        hostnames.insert(psd.get_host_name_for_asic(asic_id));
+        trays.insert(tray_id_value);
+        all_asic_locations.insert(asic_location_value);
+        asic_locations_by_tray[tray_id_value].insert(asic_location_value);
+    }
+
+    EXPECT_EQ(hostnames.size(), 1u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                    << " 2x4 rank group fabric nodes must be on the same host";
+
+    if (trays.size() == 1u) {
+        EXPECT_EQ(all_asic_locations, full_tray_asic_locations)
+            << "mesh " << *mesh_id << " host_rank " << *host_rank
+            << " 2x4 rank group on one tray must use asic locations {1,2,3,4,5,6,7,8}";
+        return;
+    }
+
+    EXPECT_EQ(trays.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                << " 2x4 rank group must sit on one tray or exactly two trays";
+
+    const auto& valid_tray_pairs = psd.is_bh_galaxy_rev_c() ? rev_c_tray_pairs : rev_ab_tray_pairs;
+    EXPECT_TRUE(valid_tray_pairs.contains(trays))
+        << "mesh " << *mesh_id << " host_rank " << *host_rank << " 2x4 rank group tray pair must be "
+        << (psd.is_bh_galaxy_rev_c() ? "{1,2} or {3,4}" : "{1,3} or {2,4}");
+
+    for (const auto& [tray_id, asic_locations] : asic_locations_by_tray) {
+        EXPECT_EQ(asic_locations.size(), 4u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                             << " 2x4 rank group tray " << tray_id << " must contain exactly 4 chips";
+    }
+
+    // 8 chips total; all asic locations must be one half-tray group ({1,2,5,6} or {3,4,7,8}), not a mix of both.
+    EXPECT_TRUE(valid_half_tray_asic_location_groups.contains(all_asic_locations))
+        << "mesh " << *mesh_id << " host_rank " << *host_rank
+        << " 2x4 rank group split across two trays must use asic locations {1,2,5,6} or {3,4,7,8}";
+
+    for (const auto& [tray_id, asic_locations] : asic_locations_by_tray) {
+        EXPECT_EQ(asic_locations, all_asic_locations)
+            << "mesh " << *mesh_id << " host_rank " << *host_rank << " 2x4 rank group tray " << tray_id
+            << " must use the same half-tray asic location group as the rank group";
+    }
+}
+
+void expect_galaxy_rank_group_2x8_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto chip_ids = mesh_graph.get_chip_ids(mesh_id, host_rank);
+    ASSERT_EQ(chip_ids.size(), 16u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                    << " 2x8 rank group must contain exactly 16 chips";
+
+    static const std::set<std::set<uint32_t>> rev_c_tray_pairs = {{1, 3}, {2, 4}};
+    static const std::set<std::set<uint32_t>> rev_ab_tray_pairs = {{1, 2}, {3, 4}};
+
+    std::set<uint32_t> trays;
+    std::set<std::string> hostnames;
+
+    for (const auto chip_id : chip_ids.values()) {
+        const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+        const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        const uint32_t tray_id_value = *psd.get_tray_id(asic_id);
+
+        hostnames.insert(psd.get_host_name_for_asic(asic_id));
+        trays.insert(tray_id_value);
+    }
+
+    EXPECT_EQ(hostnames.size(), 1u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                    << " 2x8 rank group fabric nodes must be on the same host";
+    EXPECT_EQ(trays.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                << " 2x8 rank group must sit on exactly two trays";
+
+    const auto& valid_tray_pairs = psd.is_bh_galaxy_rev_c() ? rev_c_tray_pairs : rev_ab_tray_pairs;
+    EXPECT_TRUE(valid_tray_pairs.contains(trays))
+        << "mesh " << *mesh_id << " host_rank " << *host_rank << " 2x8 rank group tray pair must be "
+        << (psd.is_bh_galaxy_rev_c() ? "{1,3} or {2,4}" : "{1,2} or {3,4}");
+}
+
+void expect_galaxy_rank_group_4x4_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto chip_ids = mesh_graph.get_chip_ids(mesh_id, host_rank);
+    ASSERT_EQ(chip_ids.size(), 16u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                    << " 4x4 rank group must contain exactly 16 chips";
+
+    static const std::set<std::set<uint32_t>> rev_c_tray_pairs = {{1, 2}, {3, 4}};
+    static const std::set<std::set<uint32_t>> rev_ab_tray_pairs = {{1, 3}, {2, 4}};
+
+    std::set<uint32_t> trays;
+    std::set<std::string> hostnames;
+
+    for (const auto chip_id : chip_ids.values()) {
+        const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+        const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        const uint32_t tray_id_value = *psd.get_tray_id(asic_id);
+
+        hostnames.insert(psd.get_host_name_for_asic(asic_id));
+        trays.insert(tray_id_value);
+    }
+
+    EXPECT_EQ(hostnames.size(), 1u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                    << " 4x4 rank group fabric nodes must be on the same host";
+    EXPECT_EQ(trays.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                << " 4x4 rank group must sit on exactly two trays";
+
+    const auto& valid_tray_pairs = psd.is_bh_galaxy_rev_c() ? rev_c_tray_pairs : rev_ab_tray_pairs;
+    EXPECT_TRUE(valid_tray_pairs.contains(trays))
+        << "mesh " << *mesh_id << " host_rank " << *host_rank << " 4x4 rank group tray pair must be "
+        << (psd.is_bh_galaxy_rev_c() ? "{1,2} or {3,4}" : "{1,3} or {2,4}");
+}
+
+void expect_galaxy_rank_group_4x8_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto chip_ids = mesh_graph.get_chip_ids(mesh_id, host_rank);
+    ASSERT_EQ(chip_ids.size(), 32u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                    << " 4x8 rank group must contain exactly 32 chips";
+
+    std::set<std::string> hostnames;
+    for (const auto chip_id : chip_ids.values()) {
+        const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+        const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        hostnames.insert(psd.get_host_name_for_asic(asic_id));
+    }
+
+    EXPECT_EQ(hostnames.size(), 1u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                    << " 4x8 rank group fabric nodes must be on the same host";
+}
+
+void expect_galaxy_rank_group_4x16_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto chip_ids = mesh_graph.get_chip_ids(mesh_id, host_rank);
+    ASSERT_EQ(chip_ids.size(), 64u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                    << " 4x16 rank group must contain exactly 64 chips";
+
+    std::set<std::string> hostnames;
+    for (const auto chip_id : chip_ids.values()) {
+        const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+        const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        hostnames.insert(psd.get_host_name_for_asic(asic_id));
+    }
+
+    EXPECT_EQ(hostnames.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                    << " 4x16 rank group fabric nodes must be on exactly two hosts";
+}
+
+void expect_galaxy_rank_group_4x32_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto chip_ids = mesh_graph.get_chip_ids(mesh_id, host_rank);
+    ASSERT_EQ(chip_ids.size(), 128u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                     << " 4x32 rank group must contain exactly 128 chips";
+
+    std::set<std::string> hostnames;
+    for (const auto chip_id : chip_ids.values()) {
+        const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+        const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        hostnames.insert(psd.get_host_name_for_asic(asic_id));
+    }
+
+    EXPECT_EQ(hostnames.size(), 4u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                    << " 4x32 rank group fabric nodes must be on exactly four hosts";
+}
+
+void expect_galaxy_rank_group_8x16_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto chip_ids = mesh_graph.get_chip_ids(mesh_id, host_rank);
+    ASSERT_EQ(chip_ids.size(), 128u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                     << " 8x16 rank group must contain exactly 128 chips";
+
+    std::set<std::string> hostnames;
+    for (const auto chip_id : chip_ids.values()) {
+        const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+        const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        hostnames.insert(psd.get_host_name_for_asic(asic_id));
+    }
+
+    EXPECT_EQ(hostnames.size(), 4u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                    << " 8x16 rank group fabric nodes must be on exactly four hosts";
+}
+
+void expect_galaxy_rank_group_checks(const ControlPlane& control_plane) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    for (const MeshId mesh_id : mesh_graph.get_mesh_ids()) {
+        for (const auto& [_, host_rank] : mesh_graph.get_host_ranks(mesh_id)) {
+            const MeshShape rank_shape = mesh_graph.get_mesh_shape(mesh_id, host_rank);
+
+            if (rank_group_shape_is(rank_shape, 1, 1)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 1, 1);
+                expect_galaxy_rank_group_1x1_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 1, 2)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 1, 2);
+                expect_galaxy_rank_group_1x2_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 2, 2)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 2);
+                expect_galaxy_rank_group_2x2_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 2, 4)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 4);
+                expect_galaxy_rank_group_2x4_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 2, 8)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 8);
+                expect_galaxy_rank_group_2x8_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 4, 4)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 4);
+                expect_galaxy_rank_group_4x4_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 4, 8)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 8);
+                expect_galaxy_rank_group_4x8_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 4, 16)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 16);
+                expect_galaxy_rank_group_4x16_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 4, 32)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 32);
+                expect_galaxy_rank_group_4x32_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 8, 16)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 8, 16);
+                expect_galaxy_rank_group_8x16_check(control_plane, mesh_id, host_rank);
+            } else {
+                ADD_FAILURE() << "mesh " << *mesh_id << " host_rank " << *host_rank << " rank group shape "
+                              << rank_shape << " is not tested; please add test";
+            }
+        }
+    }
+}
+
+void expect_galaxy_4x4_split_host_mesh_checks(const ControlPlane& control_plane) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    for (const MeshId mesh_id : mesh_graph.get_mesh_ids()) {
+        if (!rank_group_shape_is(mesh_graph.get_mesh_shape(mesh_id), 4, 4)) {
+            continue;
+        }
+
+        bool ran_4x4split_check = false;
+        for (const auto& [_, host_rank] : mesh_graph.get_host_ranks(mesh_id)) {
+            const MeshShape rank_shape = mesh_graph.get_mesh_shape(mesh_id, host_rank);
+
+            if (rank_group_shape_is(rank_shape, 1, 1)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 1, 1);
+                expect_galaxy_rank_group_1x1_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 1, 2)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 1, 2);
+                expect_galaxy_rank_group_1x2_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 2, 2)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 2);
+                expect_galaxy_rank_group_2x2_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 2, 4)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 4);
+                expect_galaxy_rank_group_2x4_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 4, 4)) {
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 4);
+                if (!ran_4x4split_check) {
+                    expect_galaxy_rank_group_4x4_4x4split_check(control_plane, mesh_id, host_rank);
+                    ran_4x4split_check = true;
+                }
+            } else {
+                ADD_FAILURE() << "mesh " << *mesh_id << " host_rank " << *host_rank
+                              << " split-host 4x4 layout rank shape must be 1x1, 1x2, 2x2, 2x4, or 4x4, got "
+                              << rank_shape;
+            }
+        }
     }
 }
 

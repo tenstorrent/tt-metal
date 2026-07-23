@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -37,11 +37,11 @@ void kernel_main() {
     // feeds `noc_async_read_sharded`'s multi-shard split via `get_aligned_page_size()`.
     const auto s0 = TensorAccessor(src_args, src_addr, padded_stick_size);
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
 
     Noc noc;
-    // Create CircularBuffer for Device 2.0 API
-    CircularBuffer cb_in0(cb_id_in0);
+    // Create DataflowBuffer for Device 2.0 API
+    DataflowBuffer dfb_in0(dfb_id_in0);
 
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
@@ -55,8 +55,8 @@ void kernel_main() {
                 if (batch > num_read_per_barrier) {
                     batch = num_read_per_barrier;
                 }
-                cb_in0.reserve_back(batch);
-                uint32_t src_buffer_l1_addr = cb_in0.get_write_ptr();
+                dfb_in0.reserve_back(batch);
+                uint32_t src_buffer_l1_addr = dfb_in0.get_write_ptr();
                 for (uint32_t k = 0; k < batch; ++k) {
                     const uint32_t cur = c + k;
                     const uint32_t offset = cur * chunk_size;
@@ -66,7 +66,7 @@ void kernel_main() {
                     src_buffer_l1_addr += chunk_size;
                 }
                 noc.async_read_barrier();
-                cb_in0.push_back(batch);
+                dfb_in0.push_back(batch);
                 c += batch;
             }
             sticks_read++;
@@ -85,8 +85,8 @@ void kernel_main() {
     }
 
     for (uint32_t iter = 0; iter < num_sticks_per_core_read && sticks_read < num_sticks_per_core; ++iter) {
-        cb_in0.reserve_back(num_read_per_barrier);
-        uint32_t src_buffer_l1_addr = cb_in0.get_write_ptr();
+        dfb_in0.reserve_back(num_read_per_barrier);
+        uint32_t src_buffer_l1_addr = dfb_in0.get_write_ptr();
 
         for (uint32_t i = 0; i < num_read_per_barrier && sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
@@ -112,6 +112,6 @@ void kernel_main() {
             }
         }
         noc.async_read_barrier();
-        cb_in0.push_back(num_read_per_barrier);
+        dfb_in0.push_back(num_read_per_barrier);
     }
 }

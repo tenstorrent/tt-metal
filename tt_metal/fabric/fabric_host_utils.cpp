@@ -17,12 +17,15 @@
 #include <vector>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <stdexcept>
 #include "fabric_context.hpp"
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
 #include <filesystem>
 #include <fstream>
+#include <fmt/format.h>
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -351,6 +354,182 @@ void serialize_asic_to_fabric_node_mapping_to_file(
     out_file.close();
 
     log_debug(tt::LogFabric, "Serialized ASIC to Fabric node ID mapping to file: {}", output_file_path.string());
+}
+
+namespace {
+
+std::optional<PhysicalGroupingDescriptor> load_pgd_if_regular_file(const std::filesystem::path& path) {
+    if (std::filesystem::exists(path) && std::filesystem::is_regular_file(path)) {
+        log_info(tt::LogFabric, "Loaded physical groupings from: {}", path.string());
+        return PhysicalGroupingDescriptor(path);
+    }
+    return std::nullopt;
+}
+
+std::vector<std::filesystem::path> build_physical_grouping_descriptor_search_paths(
+    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
+    const char* cluster_name_env = std::getenv("TT_CLUSTER_NAME");
+    const std::string cluster_name = cluster_name_env != nullptr ? cluster_name_env : "";
+    const char* tt_metal_home_env = std::getenv("TT_METAL_HOME");
+    const std::string tt_metal_home = tt_metal_home_env != nullptr ? tt_metal_home_env : ".";
+
+    std::vector<std::filesystem::path> search_paths;
+    if (!cluster_name.empty()) {
+        search_paths.push_back(
+            std::filesystem::path("/data/scaleout_configs") / cluster_name /
+            (cluster_name + "_physical_grouping_descriptor.textproto"));
+        search_paths.push_back(
+            std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" / "tt_fabric" / "physical_groupings" /
+            (cluster_name + "_physical_grouping_descriptor.textproto"));
+    }
+
+    std::string arch_cluster_filename = "default_physical_grouping_descriptor.textproto";
+    auto& context = tt::tt_metal::MetalContext::instance();
+    const auto& cluster = context.get_cluster();
+    const tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
+    const tt::ARCH arch = cluster.arch();
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY && arch == tt::ARCH::WORMHOLE_B0) {
+        arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+    } else if (
+        (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY || cluster.is_ubb_galaxy()) &&
+        arch == tt::ARCH::BLACKHOLE) {
+        if (physical_system_descriptor != nullptr && physical_system_descriptor->is_bh_galaxy_rev_c()) {
+            arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+        } else {
+            arch_cluster_filename = "bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
+        }
+    } else if (cluster_type == tt::tt_metal::ClusterType::T3K && arch == tt::ARCH::WORMHOLE_B0) {
+        arch_cluster_filename = "wh_t3k_physical_grouping_descriptor.textproto";
+    }
+
+    search_paths.push_back(
+        std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" / "tt_fabric" / "physical_groupings" /
+        arch_cluster_filename);
+    return search_paths;
+}
+
+}  // namespace
+
+PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
+    const std::optional<std::filesystem::path>& pgd_path,
+    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
+    if (pgd_path.has_value() && !pgd_path->empty()) {
+        if (auto loaded = load_pgd_if_regular_file(*pgd_path)) {
+            return *loaded;
+        }
+        TT_THROW("Physical Grouping Descriptor path provided but file does not exist: {}", pgd_path->string());
+    }
+
+    const char* pgd_path_env = std::getenv("TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH");
+    if (pgd_path_env != nullptr && std::strlen(pgd_path_env) > 0) {
+        const std::filesystem::path explicit_path(pgd_path_env);
+        if (auto loaded = load_pgd_if_regular_file(explicit_path)) {
+            return *loaded;
+        }
+        TT_THROW(
+            "TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH is set but file does not exist: {}", explicit_path.string());
+    }
+
+    const auto search_paths = build_physical_grouping_descriptor_search_paths(physical_system_descriptor);
+    for (const auto& path : search_paths) {
+        if (auto loaded = load_pgd_if_regular_file(path)) {
+            return *loaded;
+        }
+    }
+
+    const char* cluster_name_env = std::getenv("TT_CLUSTER_NAME");
+    std::string error_msg = "Could not find Physical Grouping Descriptor file. Searched:\n";
+    for (const auto& path : search_paths) {
+        error_msg += "  - " + path.string() + "\n";
+    }
+    if (cluster_name_env != nullptr && cluster_name_env[0] != '\0') {
+        error_msg += std::string("Cluster name from TT_CLUSTER_NAME: ") + cluster_name_env + "\n";
+    } else {
+        error_msg += "TT_CLUSTER_NAME not set\n";
+    }
+    throw std::runtime_error(error_msg);
+}
+
+std::optional<PhysicalGroupingDescriptor> try_find_and_load_physical_grouping_descriptor(
+    const std::optional<std::filesystem::path>& pgd_path,
+    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
+    try {
+        return find_and_load_physical_grouping_descriptor(pgd_path, physical_system_descriptor);
+    } catch (const std::exception& e) {
+        log_debug(tt::LogFabric, "Physical Grouping Descriptor not loaded (soft-skip): {}", e.what());
+        return std::nullopt;
+    }
+}
+
+void serialize_intermesh_port_assignment_to_file(
+    const std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>>& exit_node_directions,
+    const std::map<FabricNodeId, std::unordered_map<chan_id_t, std::pair<FabricNodeId, chan_id_t>>>&
+        intermesh_chan_to_peer,
+    const std::filesystem::path& output_file_path) {
+    auto dir_to_str = [](RoutingDirection d) -> const char* {
+        switch (d) {
+            case RoutingDirection::N: return "N";
+            case RoutingDirection::E: return "E";
+            case RoutingDirection::S: return "S";
+            case RoutingDirection::W: return "W";
+            case RoutingDirection::Z: return "Z";
+            case RoutingDirection::C: return "C";
+            default: return "NONE";
+        }
+    };
+
+    std::map<std::string, std::vector<std::string>> intermesh_port_assignment;
+    for (const auto& [my_fn, chan_map] : intermesh_chan_to_peer) {
+        std::vector<chan_id_t> chans;
+        chans.reserve(chan_map.size());
+        for (const auto& [c, _peer] : chan_map) {
+            chans.push_back(c);
+        }
+        std::sort(chans.begin(), chans.end());
+        for (auto c : chans) {
+            const auto& [peer_fn, peer_chan] = chan_map.at(c);
+            RoutingDirection dir = RoutingDirection::NONE;
+            if (auto dit = exit_node_directions.find(my_fn); dit != exit_node_directions.end()) {
+                if (auto cit = dit->second.find(c); cit != dit->second.end()) {
+                    dir = cit->second;
+                }
+            }
+            intermesh_port_assignment[fmt::format("M{}->M{}", *my_fn.mesh_id, *peer_fn.mesh_id)].push_back(fmt::format(
+                "D{}ch{}({})>M{}D{}ch{}",
+                my_fn.chip_id,
+                c,
+                dir_to_str(dir),
+                *peer_fn.mesh_id,
+                peer_fn.chip_id,
+                peer_chan));
+        }
+    }
+    for (auto& [_boundary, entries] : intermesh_port_assignment) {
+        std::sort(entries.begin(), entries.end());
+    }
+
+    std::filesystem::create_directories(output_file_path.parent_path());
+
+    std::ofstream out_file(output_file_path);
+    if (!out_file.is_open()) {
+        TT_THROW("Failed to open output file: {}", output_file_path.string());
+    }
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "intermesh_port_assignment" << YAML::Value << YAML::BeginMap;
+    for (const auto& [boundary, entries] : intermesh_port_assignment) {
+        emitter << YAML::Key << boundary << YAML::Value << YAML::Flow << YAML::BeginSeq;
+        for (const auto& entry : entries) {
+            emitter << entry;
+        }
+        emitter << YAML::EndSeq;
+    }
+    emitter << YAML::EndMap;
+    emitter << YAML::EndMap;
+    out_file << emitter.c_str();
+    out_file.close();
+
+    log_debug(tt::LogFabric, "Serialized inter-mesh port assignment to file: {}", output_file_path.string());
 }
 
 }  // namespace tt::tt_fabric

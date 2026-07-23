@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
@@ -18,6 +19,10 @@ void kernel_main() {
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
+    CircularBuffer cb_input(input_cb_id);
+    CircularBuffer cb_intermediate(intermediate_cb);
+    CircularBuffer cb_output(output_cb);
+
     binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
     add_tiles_init(input_cb_id, intermediate_cb, false);
 
@@ -30,8 +35,8 @@ void kernel_main() {
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                 uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
-                cb_wait_front(input_cb_id, tile_granularity);
-                cb_wait_front(intermediate_cb, tile_granularity);
+                cb_input.wait_front(tile_granularity);
+                cb_intermediate.wait_front(tile_granularity);
 
                 tile_regs_acquire();
                 for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
@@ -39,18 +44,16 @@ void kernel_main() {
                 }
                 tile_regs_commit();
 
-                cb_pop_front(input_cb_id, tile_granularity);
-                cb_pop_front(intermediate_cb, tile_granularity);
+                cb_input.pop_front(tile_granularity);
+                cb_intermediate.pop_front(tile_granularity);
 
-                cb_reserve_back(output_cb, tile_granularity);
-
+                cb_output.reserve_back(tile_granularity);
                 tile_regs_wait();
                 for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
                     pack_tile(tile_id, output_cb);
                 }
                 tile_regs_release();
-
-                cb_push_back(output_cb, tile_granularity);
+                cb_output.push_back(tile_granularity);
 
                 tiles_read += num_pages_to_read;
             }

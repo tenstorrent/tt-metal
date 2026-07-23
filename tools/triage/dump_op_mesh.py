@@ -21,10 +21,10 @@ Description:
     that has no live ops shows `(idle)`; a device on this host that this
     process never opened shows `(unused)`; cross-host chips show `(remote)`.
 
-    A leading `[!] ` on an op line marks that op as a *straggler* — its
+    A leading `[!] ` on an op line marks that op as a *straggler* - its
     `host_assigned_id` is strictly less than the highest live id in the
     mesh (the leading edge of dispatch). In a hang, the leading-edge chips
-    are themselves stuck — they're waiting on the stragglers to finish —
+    are themselves stuck - they're waiting on the stragglers to finish -
     so stragglers are the root cause and get the marker; leading-edge ops
     stay clean. On a multi-op chip, only the lagging op line is flagged;
     the leading-edge op on the same chip is unmarked. In a healthy mesh
@@ -86,7 +86,7 @@ def _leading_edge_op_id(aggregations: dict[int, RunningOperationAggregation]) ->
 
 
 def _ubb_prefix(cd, chip_id: int) -> str:
-    # `get_tray_id` returns None for non-UBB boards by contract — use that as the predicate.
+    # `get_tray_id` returns None for non-UBB boards by contract - use that as the predicate.
     tray = cd.get_tray_id(chip_id)
     if tray is None:
         return ""
