@@ -54,4 +54,28 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& ones = std::nullopt,
     const std::optional<ttnn::Tensor>& masks = std::nullopt);
 
+/**
+ * Chunk-parallel Kimi Delta Attention recurrence with per-key vector decay.
+ * q/k must be L2-normalized; scale defaults to K^-0.5.
+ *
+ * q, k, g [B,T,H,K], v [B,T,H,V], beta [B,T,H].
+ * Returns o [B,T,H,V] and optional final_state [B,H,K,V].
+ */
+std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& v,
+    const ttnn::Tensor& g,
+    const ttnn::Tensor& beta,
+    std::optional<float> scale = std::nullopt,
+    const std::optional<ttnn::Tensor>& initial_state = std::nullopt,
+    bool output_final_state = false,
+    uint32_t chunk_size = 32,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& eye = std::nullopt,
+    const std::optional<ttnn::Tensor>& tril = std::nullopt,
+    const std::optional<ttnn::Tensor>& ones = std::nullopt,
+    const std::optional<ttnn::Tensor>& masks = std::nullopt);
+
 }  // namespace ttnn::transformer

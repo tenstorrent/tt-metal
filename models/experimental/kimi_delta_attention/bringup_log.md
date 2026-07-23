@@ -377,3 +377,15 @@
   state-traffic/dataflow bound, not compute bound.
 - Decision: preserve this T=1 kernel as the correctness/decode primitive, then
   pursue the utilization target in a chunk-parallel KDA prefill op. The trusted
+
+
+### 2026-07-23 08:01:07 UTC — Chunk-parallel KDA correctness
+
+- Added `ttnn.transformer.chunk_kda`, reusing the phased GDN prep/scan scheduler with a vector-gate specialization. Prep factors `exp(G_i-G_j)` into per-key row scalings; scan carries the FP32 KxV recurrent state across 32-token chunks.
+- First minimal hardware run hung. Triage showed the reader blocked reserving three WY-mask tiles while compute waited for those same three tiles. The shared `cb_u` alias had capacity `C*V=1`; sizing it to `max(C*V,3)` removed the reciprocal wait and also fixes that scalar-GDN edge case.
+- The first completed run produced output PCC `0.949004`. FLA/source comparison proved the WY matrix must be `-strictly_lower(Akk)`; the vector path had inverted `diag(Akk)-Akk` without first masking the upper triangle. Adding the causal mask raised minimal output/state PCC to `0.999992` / `0.999995`.
+- Direct hardware command: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s`. Result: `SAFE_PYTEST_RESULT: PASS`; two cases passed in 6.80 s. Exact two-chunk H=32,K=V=128,T=64 output/state PCC: `0.999993` / `0.999996`; max absolute errors: `6.757900e-04` / `8.301616e-03`.
+- Chunk mode now routes through the fused primitive; recurrent mode retains `kda_recurrent_step`. The adapter restores TILE layout at its private boundary before RMSNorm.
+- Full layer command: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s`. Result: `SAFE_PYTEST_RESULT: PASS`; six cases passed in 7.04 s, including chunk prefill, fused decode, cache continuity, exact target decode, and FP32/BF16 external state.
+- CPU reference/factory command: `python_env/bin/python3 -m pytest models/experimental/kimi_delta_attention/tests/test_reference.py models/experimental/kimi_delta_attention/tests/test_factory.py -q`. Result: 11 passed in 2.45 s.
+- Current coverage proves single-device functional correctness through two chunks. It does not yet establish T=640 latency, compute utilization, multi-device tensor parallelism, or CCL utilization.

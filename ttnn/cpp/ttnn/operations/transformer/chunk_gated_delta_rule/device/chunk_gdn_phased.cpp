@@ -68,13 +68,13 @@ ChunkGdnPrepOperation::spec_return_value_t ChunkGdnPrepOperation::compute_output
     };
     const uint32_t BH = attrs.BH, NC = attrs.num_chunks, C = attrs.chunk_size, K = attrs.key_dim, V = attrs.val_dim;
     return {
-        f32(ttnn::Shape({BH, NC, C, V})),  // v_beta
-        f32(ttnn::Shape({BH, NC, C, K})),  // kd
-        f32(ttnn::Shape({BH, NC, C, K})),  // q_decay
-        f32(ttnn::Shape({BH, NC, C, C})),  // intra
-        f32(ttnn::Shape({BH, NC, K, C})),  // k_dec_t
-        f32(ttnn::Shape({BH, NC, 1, 1})),  // dl (1 tile per chunk)
-        f32(ttnn::Shape({BH, NC, C, C})),  // t_inv
+        f32(ttnn::Shape({BH, NC, C, V})),                          // v_beta
+        f32(ttnn::Shape({BH, NC, C, K})),                          // kd
+        f32(ttnn::Shape({BH, NC, C, K})),                          // q_decay
+        f32(ttnn::Shape({BH, NC, C, C})),                          // intra
+        f32(ttnn::Shape({BH, NC, K, C})),                          // k_dec_t
+        f32(ttnn::Shape({BH, NC, attrs.vector_gate ? K : 1, 1})),  // dl
+        f32(ttnn::Shape({BH, NC, C, C})),                          // t_inv
     };
 }
 
@@ -108,7 +108,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_norm,
     float scale,
     bool qk_flat,
-    uint32_t Hk) {
+    uint32_t Hk,
+    bool vector_gate) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Derive dims. Head-major q gives BH/NC/K directly; flat q [B,T,Hk*K] gives B/T, so BH=B*HV,
@@ -129,6 +130,7 @@ std::vector<Tensor> chunk_gdn_prep(
         .Hk = Hk,
         .qk_norm = qk_norm,
         .scale = scale,
+        .vector_gate = vector_gate,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };
@@ -207,7 +209,8 @@ std::vector<Tensor> chunk_gdn_scan(
     uint32_t chunk_size,
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool vector_gate) {
     const auto& vb_shape = v_beta.logical_shape();  // [BH, NC, C, V]
     const auto& kd_shape = kd.logical_shape();      // [BH, NC, C, K]
     auto attrs = ChunkGdnScanOperation::operation_attributes_t{
@@ -218,6 +221,7 @@ std::vector<Tensor> chunk_gdn_scan(
         .val_dim = vb_shape[3],
         .has_initial_state = initial_state.has_value(),
         .output_final_state = output_final_state,
+        .vector_gate = vector_gate,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };
