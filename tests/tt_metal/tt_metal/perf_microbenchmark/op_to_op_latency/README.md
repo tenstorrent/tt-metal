@@ -142,11 +142,33 @@ python3 $S --preset compute-nops --accumulate  # run the sweep (device profiler 
 ```
 
 Presets cover compute load, program/page counts, reader modes (0/1/2), writer end-barrier
-modes, NoC assignment, active-core count, read-only, and page size. To add an axis, add an
-entry to the `PRESETS` dict (a one-line, reviewed change); for a one-off run, invoke the
-binary directly (see "Run locally"). Research axes that need new binary modes (e.g.
-`--kernel-unroll`, `--reader-read-bytes`, per-core placement) can be added to `PRESETS`
-once those knobs land in the binary.
+modes, NoC assignment, active-core count, read-only, page size, and the research knobs
+below. To add an axis, add an entry to the `PRESETS` dict (a one-line, reviewed change);
+for a one-off run, invoke the binary directly (see "Run locally").
+
+### Research characterization knobs
+
+Ported from the research branch (ungated; the CI gate never touches them):
+
+- `--kernel-unroll N` — repeat the whole reader/compute/writer workload N times inside one
+  program with **no barrier between reps**. The delta vs `--num-programs N` of the same
+  workload isolates the removed op-to-op sync-barrier cost. (preset `kernel-unroll`)
+- `--reader-read-bytes N` — reader-mode-2 "cheap read": NoC-read only N bytes/page (dummy
+  payload) but still push a full CB page, forcing the **output-bound** regime. (preset
+  `reader-read-bytes`, which includes the required `--reader-dbuf-trid` base)
+- `--reader-stagger-cycles N` — core *i* spins *i·N* cycles after go before reading, to probe
+  whether staggering reads relieves write-barrier congestion. (preset `reader-stagger`)
+- `--core-offset N` / `--core-list "x,y;x,y"` / `--log-core-map` — pick *which* cores run
+  (skip the first N in fill order, or hand-pick a logical set) and log the logical→physical
+  mapping, to separate NoC distance from grid contention. (`--core-offset` has preset
+  `core-offset`; `--core-list`/`--log-core-map` are one-off, run the binary directly)
+- `--read-progress-every N` / `--write-progress-every N` — emit a timestamped cumulative-page
+  marker every N pages for a measured bytes-vs-time trace per core. These are
+  `DeviceTimestampedData` markers (**compiled out under `TT_METAL_PROFILER_ACCUMULATE=1`**),
+  so run them without accumulate; they are timeline diagnostics, not a sweep curve.
+
+Note: the research branch's `--lean-compute` is the **default** here — pass `--profile-detail`
+for the detailed (non-lean) compute path instead.
 
 ## Populating / updating the golden
 
