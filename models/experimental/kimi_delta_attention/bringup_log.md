@@ -535,3 +535,11 @@
 - Full build: `./build_metal.sh --build-ttnn` passed.
 - Hardware regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 12/12 in 10.77 s.
 - Tracy confirmation: `/tmp/kda_chunk_h4_adaptive_profile/reports/2026_07_23_09_58_44/ops_perf_results_2026_07_23_09_58_44.csv`. Eleven H=4,T=640 scan calls averaged `95.940 us` (min `95.133 us`, max `97.238 us`), matching the forced-split crossover measurement (`96.132 us`) within `0.2%`.
+
+
+### 2026-07-23 10:05:01 UTC — Whole-head TP=8 weight placement
+
+- Mirrored the existing Qwen3.5 TP GDN contract but preserved KDA tensor semantics: each device receives corresponding Q/K/V head slices, replicated `f_a`/`g_a` low-rank factors plus its local beta slice, local decay/output-gate columns, local convolution taps, and a row shard of the output projection.
+- A naïve shard of globally fused `[Q|K|V]` or `[f_a|g_a|beta]` is incorrect because it assigns projection families rather than corresponding heads. The loader now groups each device payload before applying `ShardTensorToMesh`.
+- Eight-device layout test: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 1/1 in 7.15 s. It compares the physical tensor on every device against the exact expected host slice for fused QKV, fused auxiliary, output projection, and convolution taps.
+- Single-device composed regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 7/7 in 8.19 s. Existing output/state PCC is unchanged; target decode output/state remained `0.999970` / `0.999968`.

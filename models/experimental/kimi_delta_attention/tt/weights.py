@@ -28,48 +28,70 @@ class KDAWeights:
     decay_bias_flat: ttnn.Tensor
     norm: ttnn.Tensor
     convolution_taps: tuple[ttnn.Tensor, ...]
+    tensor_parallel_size: int
 
 
 def load_kda_weights(
-    device: ttnn.Device,
+    device: ttnn.Device | ttnn.MeshDevice,
     config: KDAConfig,
     state_dict: Mapping[str, torch.Tensor],
     tensor_cache_path: Path | None = None,
 ) -> KDAWeights:
-    """Fuse compatible projections and place all runtime weights on device."""
+    """Fuse compatible projections and place whole-head shards on device."""
     validate_reference_weights(state_dict, config)
+    tensor_parallel_size = device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1
+    if config.num_heads % tensor_parallel_size != 0:
+        raise ValueError(
+            f"num_heads {config.num_heads} must be divisible by tensor parallel size {tensor_parallel_size}"
+        )
 
     def device_tensor(
         tensor: torch.Tensor,
         name: str,
         *,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        shard_dim: int | None = None,
     ) -> ttnn.Tensor:
-        cache_file = tensor_cache_path / name if tensor_cache_path is not None else None
+        cache_name = f"{name}.tp{tensor_parallel_size}" if tensor_parallel_size > 1 else name
+        cache_file = tensor_cache_path / cache_name if tensor_cache_path is not None else None
+        mesh_mapper = None
+        if tensor_parallel_size > 1:
+            mesh_mapper = (
+                ttnn.ReplicateTensorToMesh(device)
+                if shard_dim is None
+                else ttnn.ShardTensorToMesh(device, dim=shard_dim)
+            )
         return ttnn.as_tensor(
             tensor.contiguous(),
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            mesh_mapper=mesh_mapper,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_file,
         )
 
-    qkv = torch.cat(
-        (
-            state_dict["q_proj.weight"],
-            state_dict["k_proj.weight"],
-            state_dict["v_proj.weight"],
-        ),
-        dim=0,
+    def group_output_shards(*weights: torch.Tensor) -> torch.Tensor:
+        """Group every projection tensor corresponding head slice on the same device."""
+        grouped = []
+        for device_index in range(tensor_parallel_size):
+            device_weights = []
+            for weight in weights:
+                shard_width = weight.shape[0] // tensor_parallel_size
+                start = device_index * shard_width
+                device_weights.append(weight[start : start + shard_width])
+            grouped.append(torch.cat(device_weights, dim=0))
+        return torch.cat(grouped, dim=0)
+
+    qkv = group_output_shards(
+        state_dict["q_proj.weight"],
+        state_dict["k_proj.weight"],
+        state_dict["v_proj.weight"],
     ).T
-    auxiliary = torch.cat(
-        (
-            state_dict["f_a_proj.weight"],
-            state_dict["g_a_proj.weight"],
-            state_dict["b_proj.weight"],
-        ),
-        dim=0,
+    auxiliary = group_output_shards(
+        state_dict["f_a_proj.weight"].repeat(tensor_parallel_size, 1),
+        state_dict["g_a_proj.weight"].repeat(tensor_parallel_size, 1),
+        state_dict["b_proj.weight"],
     ).T
 
     decay_scale = -state_dict["A_log"].float().exp()
@@ -85,27 +107,37 @@ def load_kda_weights(
                 state_dict["v_conv1d.weight"][:, 0, tap],
             )
         ).reshape(1, 1, config.q_dim + config.k_dim + config.v_dim)
-        convolution_taps.append(device_tensor(fused_tap, f"conv_tap_{tap}"))
+        if tensor_parallel_size > 1:
+            fused_tap = group_output_shards(
+                state_dict["q_conv1d.weight"][:, 0, tap],
+                state_dict["k_conv1d.weight"][:, 0, tap],
+                state_dict["v_conv1d.weight"][:, 0, tap],
+            ).reshape(1, 1, -1)
+        convolution_taps.append(device_tensor(fused_tap, f"conv_tap_{tap}", shard_dim=-1))
 
     return KDAWeights(
-        qkv_projection=device_tensor(qkv, "qkv_projection"),
-        auxiliary_projection=device_tensor(auxiliary, "auxiliary_projection"),
+        qkv_projection=device_tensor(qkv, "qkv_projection", shard_dim=-1),
+        auxiliary_projection=device_tensor(auxiliary, "auxiliary_projection", shard_dim=-1),
         decay_output_projection=device_tensor(
             state_dict["f_b_proj.weight"].T,
             "decay_output_projection",
+            shard_dim=-1,
         ),
         output_gate_projection=device_tensor(
             state_dict["g_b_proj.weight"].T,
             "output_gate_projection",
+            shard_dim=-1,
         ),
         output_projection=device_tensor(
             state_dict["o_proj.weight"].T,
             "output_projection",
+            shard_dim=-2,
         ),
-        decay_scale=device_tensor(decay_scale, "decay_scale"),
-        decay_bias=device_tensor(decay_bias, "decay_bias"),
-        decay_scale_flat=device_tensor(decay_scale_flat, "decay_scale_flat"),
-        decay_bias_flat=device_tensor(decay_bias_flat, "decay_bias_flat"),
+        decay_scale=device_tensor(decay_scale, "decay_scale", shard_dim=-2),
+        decay_bias=device_tensor(decay_bias, "decay_bias", shard_dim=-2),
+        decay_scale_flat=device_tensor(decay_scale_flat, "decay_scale_flat", shard_dim=-1),
+        decay_bias_flat=device_tensor(decay_bias_flat, "decay_bias_flat", shard_dim=-1),
         norm=device_tensor(state_dict["o_norm.weight"], "norm"),
         convolution_taps=tuple(convolution_taps),
+        tensor_parallel_size=tensor_parallel_size,
     )
