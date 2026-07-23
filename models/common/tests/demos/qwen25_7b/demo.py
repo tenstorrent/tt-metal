@@ -75,7 +75,7 @@ from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import encode_prompt_hf
+from models.tt_transformers.tt.common import encode_prompt_hf, get_padded_prefill_len
 
 # =============================================================================
 # Expected metrics — perf gates set from a same-box TTTv1-vs-TTTv2 sweep, NOT PERF.md / not a cross-box
@@ -1058,21 +1058,23 @@ def _run_perf_benchmark(
         kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
         page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
-        # Decode-token budget, clamped to the KV-cache headroom. Prompts bucket to ~128 and we keep a
-        # 16-token margin, so the high-water decode position stays inside max_seq_len.
-        _PROMPT_BUCKET = 128
+        prompts = load_input_prompts(batch_size)
+        # Natural-length tokenization (matches TTTv1): the executor buckets each user's real length to
+        # get_padded_prefill_len. These sample prompts are ~90-125 tokens -> 128 bucket.
+        input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer, max_prefill_len=max_prefill_len)
+
+        # Decode-token budget, clamped to the KV-cache headroom. Derive the prefill footprint from the
+        # ACTUAL prompts (the largest padded bucket any user maps to via get_padded_prefill_len), not a
+        # fixed 128, so the high-water decode position provably stays inside max_seq_len even when a
+        # prompt buckets above 128. The 16-token margin absorbs the trailing decode step.
+        _PROMPT_BUCKET = get_padded_prefill_len(int(prompt_lens.max()))
         _DECODE_MARGIN = 16
         requested_decode = _PERF_NUM_DECODE_TOKENS if num_decode_tokens is None else num_decode_tokens
         effective_decode = min(requested_decode, max_seq_len - _PROMPT_BUCKET - _DECODE_MARGIN)
         logger.info(
             f"[{case_name}] num_decode_tokens: requested={requested_decode}, "
-            f"effective={effective_decode} (max_seq_len={max_seq_len})"
+            f"effective={effective_decode} (max_seq_len={max_seq_len}, prefill_bucket={_PROMPT_BUCKET})"
         )
-
-        prompts = load_input_prompts(batch_size)
-        # Natural-length tokenization (matches TTTv1): the executor buckets each user's real length to
-        # get_padded_prefill_len. These sample prompts are ~90-125 tokens -> 128 bucket.
-        input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer, max_prefill_len=max_prefill_len)
 
         # BenchmarkProfiler brackets the timed prefill/decode regions inside run_perf_benchmark
         # (default-None ⇒ byte-inert for every other caller) so we can emit CI perf telemetry.
