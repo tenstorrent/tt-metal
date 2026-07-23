@@ -19,7 +19,8 @@ pytestmark = [
 
 def test_chunk_kda_device_perf(device: ttnn.Device) -> None:
     """Profile warm T=640 chunk KDA; invoke through Tracy, not as a latency test."""
-    batch, sequence, heads, key_dim, value_dim = 1, 640, 32, 128, 128
+    batch, sequence, key_dim, value_dim = 1, 640, 128, 128
+    heads = int(os.getenv("PERF_HEADS", "32"))
     generator = torch.Generator().manual_seed(503)
     shape = (batch, sequence, heads)
 
