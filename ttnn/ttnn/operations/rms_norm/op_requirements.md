@@ -640,7 +640,7 @@ fork. Gate on soft `pcc_threshold` 0.9995.
 
 ---
 
-### [ ] Refinement 6c — Sharded cross-core: two-stage (hierarchical) gather
+### [~] Refinement 6c — Sharded cross-core: two-stage (hierarchical) gather
 
 **Type**: perf
 
@@ -664,6 +664,66 @@ the residual as the master-serialized fold+gather via mode/pipeline ablations. R
 restructure (lever 3). Reuse the R4/R6/R6a/R6b xcore kernels + segmented-mcast transport + the 3-monotone-
 counter protocol; do not fork. This is a T3 collective-topology change (two semaphore stages), so verify
 `--dev`-clean across HT_LOCAL and ragged groups. Gate on soft `pcc_threshold` 0.9995.
+
+**Done when**: measured median device-ns improves further on the BLOCK/large-K WIDTH sharded perf shapes
+(fresh-cache trial loop) toward achievable, soft PCC holding, golden green, no regression.
+
+**Landed (partial `[~]`)**: the two-stage (hierarchical) gather shipped on the shared
+`_assemble_xcore_kernels` transport (reader/compute/writer + a new `SEM_GATHER2` stage-2 counter and
+two small fp32 CBs `cb_rowpartial`/`cb_gather2`) — no forked files; correct (`--dev` + non-dev clean),
+gated to never regress. The lever, and why it moved only the 2D WIDTH target:
+- **Mechanism.** For a clean 2D rectangle group (NX×NY): stage 1 gathers each grid row's NX partials
+  to its x0 row-leader (fan-in NX-1, parallel across the NY rows) which folds them to a row-partial;
+  stage 2 gathers the NY row-partials to the root (fan-in NY-1) which folds + finalizes (+eps, rsqrt).
+  Fan-in drops K-1 → (NX-1)+(NY-1); the fold is distributed off the single master. The stat-compaction
+  (col-0 faces) composes through both legs; the broadcast leg reuses the R6/R6a segmented mcast unchanged.
+- **Host gate (single source of truth, `XCORE_TWO_STAGE_GATHER` + `XCORE_TWO_STAGE_MIN_SAVING=13`).**
+  Engages ONLY on the pure tiled WIDTH-sharded path when every group is a clean rectangle (NX·NY==K),
+  the master is the low corner, `Ht_local==1` (single round, C=1), AND the fan-in saving
+  `(NX-1)·(NY-1) >= 13`. Everything else — 1-D groups (WIDTH n×1; **BLOCK per-row groups, which are
+  1-D and where two-stage collapses to the flat root reduce**, master.md), ragged/logical/RM, and
+  small-saving 2D groups — keeps the **byte-identical** flat gather.
+- **Measured (blackhole_p150b, median of 8 fresh trials, exact perf config):** WIDTH **8×4 8115 → 7615 ns
+  (1.066×, 1.54x → 1.45x above achievable)** — WIN; WIDTH 7×4 9163 → 9136 ns (flat — per_w_t=8 makes the
+  per-core compute dominate, so the round fan-in is a small fraction); WIDTH 8×1/9×1 and **BLOCK 8×8
+  (4.21×) byte-identical** (1-D, flat). Ablation K-sweep (gap-free 7-wide, per_w_t=1) isolates the
+  mechanism: two-stage flattens the flat gather's ~68 ns/core fan-in — K28 5534 → 5253 (1.05×) — but
+  **regresses ny=2** (K14 4764 → 4884, −2.5%) because the extra stage-2 handshake+fold (~900 ns) exceeds
+  a saving of only 6 transfers; hence the `>= 13` gate (K21 saving 12 flat, K28 saving 18 wins).
+- **Why the BLOCK residual did not move — the honest limit of this lever.** BLOCK 8×8's groups are one
+  grid ROW each (1-D, NY=1 within a group), so two-stage is topologically a no-op there — it cannot
+  touch the dominant 4.21× residual, which R6a/R6b characterized as the per-tile-row stat data-movement
+  + the unpipelined compute floor + the *master-serialized* fold. Removing the master bottleneck on a
+  1-D group needs an **allgather (Pattern B)**, not a hierarchical gather → filed as R6d.
+
+**Deferred to R6d** (the master-bottleneck residual two-stage cannot reach): **allgather (Pattern B)**
+for the 1-D BLOCK/WIDTH groups + the large-per_w_t WIDTH headroom.
+
+---
+
+### [ ] Refinement 6d — Sharded cross-core: allgather (Pattern B) for the 1-D master-bottleneck residual
+
+**Type**: perf
+
+**Goal**: close the residual R6c could not reach — the dominant **BLOCK 8×8 (still ~4.2× above
+achievable)** and the large-per_w_t WIDTH shapes. R6c's two-stage gather distributed the fold for 2D
+groups, but BLOCK's groups are one grid ROW each (1-D), so two-stage collapses to the flat master root:
+K-1 workers still converge on ONE master core and the master's fold sits ON the round's critical path
+(the characterized bottleneck across R6a/R6b/R6c). One lever:
+
+1. **Allgather (Pattern B) — remove the master bottleneck.** Instead of gather → single-master fold →
+   broadcast (Pattern A), have every core in the group receive all K partials (an allgather of the tiny
+   stat tiles) and fold them redundantly (K-element combine is negligible compute), so there is **no
+   serial master fan-in and no single-master fold on the critical path** — `cross_core_reduction_design.md`
+   §3 Pattern B / §7 (recommended precisely because the norm stat payload is tiny). Most relevant to the
+   1-D BLOCK per-row groups (and the 1-D WIDTH n×1 groups) that two-stage leaves on the flat root. Pairs
+   with R6b's round-batching + compaction + pipelining (unchanged) and the segmented mcast transport.
+
+**Verifier notes**: R6c landed the two-stage gather (winner on 2D WIDTH 8×4; topologically inapplicable
+to 1-D BLOCK) and characterized the residual as the master-serialized fold on 1-D groups. R6d is the
+allgather restructure (Pattern B). Reuse the R4/R6/R6a/R6b/R6c xcore kernels + segmented-mcast transport;
+do not fork. T3 collective-topology change — verify `--dev`-clean across HT_LOCAL and ragged groups. Gate
+on soft `pcc_threshold` 0.9995.
 
 **Done when**: measured median device-ns improves further on the BLOCK/large-K WIDTH sharded perf shapes
 (fresh-cache trial loop) toward achievable, soft PCC holding, golden green, no regression.

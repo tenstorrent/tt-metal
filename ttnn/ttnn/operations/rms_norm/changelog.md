@@ -679,3 +679,67 @@
   and replaced with the byte-identical col-0-FACES compaction. No defects.
 - Tests added: none new (the R6a `test_rms_norm_perf_r6a.py` batched-round correctness + `test_rms_norm_perf_r6.py`
   perf harness cover the changed path); probes 038-042 (prior R6b attempt's grid/geometry surveys) preserved.
+
+## Refinement 6c — Sharded cross-core: two-stage (hierarchical) gather
+- Date: 2026-07-23
+- Type: perf (partial — `[~]`); no SUPPORTED change.
+- What was done: landed the R6c lever (two-stage/hierarchical gather) on the shared cross-core
+  (`_assemble_xcore_kernels`) reader/compute/writer transport — no forked kernel files; correct
+  (`--dev` + non-dev clean), gated to never regress. Reused the R4/R6/R6a/R6b xcore combine +
+  segmented-mcast broadcast + stat-compaction unchanged; only the GATHER+FOLD topology changed for
+  clean 2D rectangle groups. Roofline/ablation-first per the perf methodology.
+  - **Lever — two-stage (hierarchical) gather.** For a 2D reduction rectangle (NX×NY, both > 1):
+    stage 1 gathers each grid row's NX partials to its x0 row-leader (fan-in NX-1, parallel across
+    the NY rows) which folds them to a row-partial (no finalize); stage 2 gathers the NY row-partials
+    to the root (fan-in NY-1) which folds + finalizes (+eps, rsqrt) -> 1/RMS. Fan-in drops K-1 ->
+    (NX-1)+(NY-1) and the fold is distributed off the single master (the `tensix_all_reduce`
+    grid-two-stage pattern; master.md: grid two-stage wins when the grid is busy or the payload is
+    tiny; on a 1-D group it collapses to the flat root reduce). New `SEM_GATHER2` stage-2 counter
+    (id 3) + two small fp32 CBs `cb_rowpartial`(10)/`cb_gather2`(11); single round (C=1) so no
+    round-to-round back-pressure. Compaction (col-0 faces) composes through both gather legs
+    (numerically byte-identical to the flat fold); the broadcast leg (root -> all members) reuses
+    the R6/R6a segmented mcast unchanged.
+  - **Host gate (single source of truth: `XCORE_TWO_STAGE_GATHER=True`, `XCORE_TWO_STAGE_MIN_SAVING=13`).**
+    Engages ONLY on the pure tiled WIDTH-sharded cross-core path when every group is a clean rectangle
+    (NX·NY==K) with the master at the low corner, `Ht_local==1` (single round), AND fan-in saving
+    `(NX-1)·(NY-1) >= 13`. Everything else keeps the byte-identical flat gather: 1-D groups (WIDTH n×1;
+    BLOCK per-row groups — 1-D, where two-stage collapses to flat), ragged/logical/RM, and small-saving
+    2D groups (the ny=2 regression, see below). C-batching + pipelining are off on this path (single
+    round makes them no-ops).
+- Accuracy achieved: soft PCC gate 0.9995 holds on all engaged + fallback shapes; PCC ≥ 0.99998 on the
+  R6c correctness suite (aligned, NON-aligned-W partial-holder through BOTH stages, no-gamma, and the
+  flat-fallback 1-D / small-saving cases). Golden `TOLERANCES` unchanged.
+- Measured perf (blackhole_p150b, 110-core grid, median of 8 fresh trials, exact perf config
+  bf16 / fp32_dest_acc_en=False / TILE / TILE gamma / HiFi2; `test_rms_norm_perf_r6.py`):
+  | case | grid/K | R6b flat | R6c two-stage | vs achievable | speedup |
+  |---|---|---|---|---|---|
+  | WIDTH 8×4 (2D, HT=1) | K=32 | 8115 | 7615 | 1.54x → 1.45x | **1.066×** (WIN) |
+  | WIDTH 7×4 (2D, HT=1) | K=28 | 9163 | 9136 | 1.67x | flat (per_w_t=8: compute dominates) |
+  | WIDTH 8×1 (1-D) | K=8 | 5621 | 5619 | 1.37x | byte-identical (flat) |
+  | WIDTH 9×1 (1-D) | K=9 | 7708 | 7749 | 1.68x | byte-identical (flat) |
+  | BLOCK 8×8 (1-D rows) | K=8 | 107957 | 107990 | 4.21x | byte-identical (flat) |
+  - Ablation K-sweep (gap-free 7-wide, per_w_t=1, `test_rms_norm_r6_ablation.py`) isolates the
+    mechanism at constant per-core work: flat fan-in ~68 ns/core (K7 4096 → K28 5534). Two-stage
+    flattens it — K28 5534 → 5253 (**1.05×**) — but REGRESSES small ny: K14 (ny=2) 4764 → 4884
+    (−2.5%) because the extra stage-2 handshake+fold (~900 ns ≈ 13 transfers) exceeds a saving of only
+    6 transfers; K21 (ny=3, saving 12) is flat; K28 (ny=4, saving 18) wins. Hence the `>= 13` gate.
+- Levers: two-stage gather — CORRECT, KEPT, WINNING on the 2D WIDTH large-K target (8×4, 1.066×);
+  gated so it can NEVER regress (1-D / small-saving fall back to byte-identical flat). Not reverted.
+- Why `[~]` (not `[x]`): the lever wins on WIDTH 8×4 but is topologically a no-op on the dominant
+  BLOCK 8×8 residual (4.21×) — BLOCK's groups are one grid ROW each (1-D), so two-stage collapses to
+  the flat root reduce and cannot touch the master-serialized fold that R6a/R6b/R6c characterized as
+  BLOCK's bottleneck. Removing that on a 1-D group needs an allgather (Pattern B), a different lever →
+  filed as R6d. WIDTH 8×4 also still has headroom (1.45x). Real work landed + characterized at depth.
+- Golden test progress: green — no regression. `test_op_loose` 19/19 (incl. the WIDTH 8×4/7×4 two-stage
+  perf geometries + BLOCK 8×8). `test_op` cartesian WIDTH_SHARDED bf16 slice 665 passed / 0 failed /
+  0 xpassed / 105 xfailed; BLOCK_SHARDED bf16 slice 665 passed / 0 failed. No supported_fail, no xpass drift.
+- No regression across the guard set: unit dir **431 passed / 32 skipped** (`--dev` + non-dev, race-clean);
+  R6c correctness 7/7 (`--dev` + non-dev); ablation 7/7 (`--dev`). The gate keeps every 1-D / ragged /
+  logical / RM / interleaved / HEIGHT cell byte-identical (flat gather).
+- Issues encountered: (1) the ny=2 regression (characterized above) — resolved by the fan-in-saving gate,
+  not a defect. (2) test-authoring only: an early R6c correctness test passed the shard MemoryConfig as
+  `compute_kernel_config` and used over-provisioned WIDTH shards (grid wider than the width, W ≠ K·sw);
+  fixed to `W_padded == K·sw` with a partial last tile for the non-aligned cases. No kernel defect.
+- Tests added: `test_rms_norm_perf_r6c.py` (two-stage correctness across 2D WIDTH geometries: aligned,
+  NON-aligned-W partial-holder through both stages, per_w_t>1, no-gamma; plus 1-D + small-saving
+  flat-fallback cases; soft PCC gate).

@@ -28,6 +28,8 @@ constexpr uint32_t cb_shard_out = 9;  // RM output: zero-copy alias of the resid
 constexpr uint32_t cb_gather = 5;
 constexpr uint32_t cb_stat_handoff = 6;
 constexpr uint32_t cb_stat_global = 7;
+constexpr uint32_t cb_rowpartial = 10;  // R6c two-stage: row-leader stage-1 fold output (compute -> writer)
+constexpr uint32_t cb_gather2 = 11;     // R6c two-stage: root stage-2 fan-in (ny row-partials, fixed base)
 constexpr uint32_t cb_out = 16;
 constexpr uint32_t cb_out_sticks = 17;  // RM output: tile-padded sticks (compute untilize) -> loopback shard
 constexpr uint32_t cb_stat_local = 25;
@@ -77,8 +79,19 @@ void kernel_main() {
     constexpr uint32_t G_LEN0 = get_compile_time_arg_val(15);
     constexpr uint32_t G_OFF1 = get_compile_time_arg_val(16);
     constexpr uint32_t G_LEN1 = get_compile_time_arg_val(17);
+    // TWO_STAGE (Refinement 6c): hierarchical gather for a 2D group (NX x NY, both > 1). Replaces
+    // the flat K-1 -> master gather with stage 1 (each grid row's NX cores -> the row's x0
+    // row-leader, folded to a row-partial) then stage 2 (the NY row-leaders -> the root, folded +
+    // finalized). Fan-in drops from K-1 to (NX-1)+(NY-1) and the fold is distributed off the single
+    // master. Host-gated to single-round (C=1, HT_LOCAL=1) clean rectangles; the broadcast leg
+    // (root -> all members) reuses the R6/R6a segmented mcast unchanged. TWO_STAGE=0 -> the flat
+    // path below is byte-identical.
+    constexpr bool TWO_STAGE = get_compile_time_arg_val(18) != 0;
+    constexpr uint32_t NX = get_compile_time_arg_val(19);           // cores per grid row (stage-1 fan-in)
+    constexpr uint32_t NY = get_compile_time_arg_val(20);           // grid rows (stage-2 fan-in)
+    constexpr uint32_t SEM_GATHER2 = get_compile_time_arg_val(21);  // stage-2 gather counter id
 
-    constexpr auto out_args = TensorAccessorArgs<18>();
+    constexpr auto out_args = TensorAccessorArgs<22>();
 
     // DRAM-write args first (fixed-position); the variable-length worker coords follow.
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
@@ -114,15 +127,158 @@ void kernel_main() {
     const uint32_t seg1_xhi = get_arg_val<uint32_t>(19);
     const uint32_t seg1_yhi = get_arg_val<uint32_t>(20);
     const uint32_t seg1_nd = get_arg_val<uint32_t>(21);
+    // R6c two-stage per-core fields (0 when TWO_STAGE off): role 2=root, 1=row-leader, 0=worker;
+    // xrel = stage-1 gather slot (column within row); yrel = stage-2 gather slot (row index);
+    // (rl_vx,rl_vy) = this core's row-leader VIRTUAL coords (a row-leader/root gets its own coords,
+    // the self-loopback source — mirroring how the flat master loopbacks via master_vx/vy).
+    const uint32_t role = get_arg_val<uint32_t>(22);
+    const uint32_t xrel = get_arg_val<uint32_t>(23);
+    const uint32_t yrel = get_arg_val<uint32_t>(24);
+    const uint32_t rl_vx = get_arg_val<uint32_t>(25);
+    const uint32_t rl_vy = get_arg_val<uint32_t>(26);
     // master only: worker virtual coords follow as [vx, vy] * num_workers (used by the
     // all-unicast fallback; unused on the mcast path but always emitted by the host).
-    constexpr uint32_t WORKER_COORDS_BASE = 22;
+    constexpr uint32_t WORKER_COORDS_BASE = 27;
 
     volatile tt_l1_ptr uint32_t* sem_gather = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER));
     volatile tt_l1_ptr uint32_t* sem_bcast = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_BCAST));
     volatile tt_l1_ptr uint32_t* sem_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_DONE));
+    volatile tt_l1_ptr uint32_t* sem_gather2 =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER2));
 
     const auto out_accessor = TensorAccessor(out_args, out_addr, out_page);
+
+    // ======================= R6c two-stage (hierarchical) gather =======================
+    // Single round (host-gated to C=1, HT_LOCAL=1). The output is a zero-copy sharded CB
+    // (OUT_TO_DRAM=0, IS_RM=0 on this path), so there is no output drain — only the stat
+    // transport. Compaction (G_OFF*/G_LEN*) applies to BOTH gather legs; the broadcast leg
+    // moves the full stat tile (reuses the R6/R6a segmented mcast unchanged).
+    if constexpr (TWO_STAGE) {
+        cb_wait_front(cb_stat_local, 1);  // compute produced this core's local partial
+        const uint32_t local_src = get_read_ptr(cb_stat_local);
+
+        if (role == 0) {
+            // ---- worker: send partial to its row-leader's cb_gather[xrel], await broadcast ----
+            cb_reserve_back(cb_stat_global, 1);                        // position the receive slot (fixed base)
+            const uint32_t rl_gather_base = get_write_ptr(cb_gather);  // uniform CB base across cores
+            const uint32_t dst = rl_gather_base + xrel * stat_bytes;
+            noc_async_write(local_src + G_OFF0, get_noc_addr(rl_vx, rl_vy, dst + G_OFF0), G_LEN0);
+            if (G_LEN1) {
+                noc_async_write(local_src + G_OFF1, get_noc_addr(rl_vx, rl_vy, dst + G_OFF1), G_LEN1);
+            }
+            noc_async_write_barrier();
+            noc_semaphore_inc(get_noc_addr(rl_vx, rl_vy, get_semaphore(SEM_GATHER)), 1);
+            cb_pop_front(cb_stat_local, 1);
+            noc_semaphore_wait_min(sem_bcast, 1);  // root broadcast the finalized 1/RMS
+            cb_push_back(cb_stat_global, 1);
+        } else {
+            // ---- row-leader (role 1) or root (role 2): stage-1 gather this grid row ----
+            cb_reserve_back(cb_gather, NX);  // fixed-base fan-in (NX partials, this row)
+            const uint32_t gbase = get_write_ptr(cb_gather);
+            // loopback own partial into slot 0 (rl_vx/rl_vy == this core's own virtual coords)
+            noc_async_read(get_noc_addr(rl_vx, rl_vy, local_src + G_OFF0), gbase + G_OFF0, G_LEN0);
+            if (G_LEN1) {
+                noc_async_read(get_noc_addr(rl_vx, rl_vy, local_src + G_OFF1), gbase + G_OFF1, G_LEN1);
+            }
+            noc_async_read_barrier();
+            cb_pop_front(cb_stat_local, 1);
+            noc_semaphore_wait_min(sem_gather, NX - 1);  // this row's workers landed
+            cb_push_back(cb_gather, NX);                 // -> compute stage-1 fold -> cb_rowpartial
+
+            cb_wait_front(cb_rowpartial, 1);  // compute folded the NX partials -> row-partial
+            const uint32_t rp_src = get_read_ptr(cb_rowpartial);
+
+            if (role == 1) {
+                // ---- row-leader: send row-partial to root's cb_gather2[yrel], await broadcast ----
+                cb_reserve_back(cb_stat_global, 1);
+                const uint32_t g2base = get_write_ptr(cb_gather2);  // uniform base across cores
+                const uint32_t dst2 = g2base + yrel * stat_bytes;
+                noc_async_write(rp_src + G_OFF0, get_noc_addr(master_vx, master_vy, dst2 + G_OFF0), G_LEN0);
+                if (G_LEN1) {
+                    noc_async_write(rp_src + G_OFF1, get_noc_addr(master_vx, master_vy, dst2 + G_OFF1), G_LEN1);
+                }
+                noc_async_write_barrier();
+                noc_semaphore_inc(get_noc_addr(master_vx, master_vy, get_semaphore(SEM_GATHER2)), 1);
+                cb_pop_front(cb_rowpartial, 1);
+                noc_semaphore_wait_min(sem_bcast, 1);
+                cb_push_back(cb_stat_global, 1);
+            } else {
+                // ---- root: stage-2 gather the NY row-partials, fold+finalize, broadcast ----
+                cb_reserve_back(cb_gather2, NY);
+                const uint32_t g2base = get_write_ptr(cb_gather2);
+                // loopback own row-partial into slot 0 (master_vx/vy == root's own coords)
+                noc_async_read(get_noc_addr(master_vx, master_vy, rp_src + G_OFF0), g2base + G_OFF0, G_LEN0);
+                if (G_LEN1) {
+                    noc_async_read(get_noc_addr(master_vx, master_vy, rp_src + G_OFF1), g2base + G_OFF1, G_LEN1);
+                }
+                noc_async_read_barrier();
+                cb_pop_front(cb_rowpartial, 1);
+                noc_semaphore_wait_min(sem_gather2, NY - 1);  // row-leaders landed
+                cb_push_back(cb_gather2, NY);  // -> compute stage-2 fold (+eps, rsqrt) -> cb_stat_handoff
+
+                // ---- broadcast: root sends the finalized 1/RMS to every group member ----
+                cb_wait_front(cb_stat_handoff, 1);
+                const uint32_t handoff_src = get_read_ptr(cb_stat_handoff);
+                cb_reserve_back(cb_stat_global, 1);
+                const uint32_t global_dst = get_write_ptr(cb_stat_global);
+                noc_async_read(get_noc_addr(master_vx, master_vy, handoff_src), global_dst, stat_bytes);  // own copy
+                if (n_mcast_seg > 0) {
+                    for (uint32_t s = 0; s < n_mcast_seg; ++s) {
+                        const uint32_t sxlo = (s == 0) ? seg0_xlo : seg1_xlo;
+                        const uint32_t sylo = (s == 0) ? seg0_ylo : seg1_ylo;
+                        const uint32_t sxhi = (s == 0) ? seg0_xhi : seg1_xhi;
+                        const uint32_t syhi = (s == 0) ? seg0_yhi : seg1_yhi;
+                        const uint32_t snd = (s == 0) ? seg0_nd : seg1_nd;
+                        if (snd == 0) {
+                            continue;
+                        }
+                        const uint64_t mcast_dst = (noc_index == 1)
+                                                       ? get_noc_multicast_addr(sxhi, syhi, sxlo, sylo, global_dst)
+                                                       : get_noc_multicast_addr(sxlo, sylo, sxhi, syhi, global_dst);
+                        noc_async_write_multicast(handoff_src, mcast_dst, stat_bytes, snd);
+                    }
+                } else {
+                    for (uint32_t w = 0; w < num_workers; ++w) {
+                        const uint32_t wx = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w);
+                        const uint32_t wy = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w + 1);
+                        noc_async_write(handoff_src, get_noc_addr(wx, wy, global_dst), stat_bytes);
+                    }
+                }
+                noc_async_write_barrier();
+                noc_async_read_barrier();
+                cb_push_back(cb_stat_global, 1);  // -> root compute pass 2
+                cb_pop_front(cb_stat_handoff, 1);
+                // signal every member the broadcast landed (monotone set = 1, single round)
+                if (n_mcast_seg > 0) {
+                    noc_semaphore_set(sem_bcast, 1);
+                    for (uint32_t s = 0; s < n_mcast_seg; ++s) {
+                        const uint32_t sxlo = (s == 0) ? seg0_xlo : seg1_xlo;
+                        const uint32_t sylo = (s == 0) ? seg0_ylo : seg1_ylo;
+                        const uint32_t sxhi = (s == 0) ? seg0_xhi : seg1_xhi;
+                        const uint32_t syhi = (s == 0) ? seg0_yhi : seg1_yhi;
+                        const uint32_t snd = (s == 0) ? seg0_nd : seg1_nd;
+                        if (snd == 0) {
+                            continue;
+                        }
+                        const uint64_t mcast_sem =
+                            (noc_index == 1) ? get_noc_multicast_addr(sxhi, syhi, sxlo, sylo, get_semaphore(SEM_BCAST))
+                                             : get_noc_multicast_addr(sxlo, sylo, sxhi, syhi, get_semaphore(SEM_BCAST));
+                        noc_semaphore_set_multicast(get_semaphore(SEM_BCAST), mcast_sem, snd);
+                    }
+                    noc_async_write_barrier();
+                } else {
+                    for (uint32_t w = 0; w < num_workers; ++w) {
+                        const uint32_t wx = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w);
+                        const uint32_t wy = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w + 1);
+                        noc_semaphore_inc(get_noc_addr(wx, wy, get_semaphore(SEM_BCAST)), 1);
+                    }
+                }
+            }
+        }
+        noc_async_atomic_barrier();  // flush semaphore-inc atomics before exit
+        return;
+    }
+    // ===================== end R6c two-stage gather =====================
 
     const uint32_t num_rounds = (HT_LOCAL + C_ROWS - 1) / C_ROWS;
     for (uint32_t r = 0; r < num_rounds; ++r) {

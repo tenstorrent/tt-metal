@@ -89,6 +89,31 @@ _STAT_FACE_BYTES = _STAT_TILE_BYTES // 4
 # multi-round tiled path (single-round WIDTH groups degenerate byte-identically). Live knob.
 XCORE_PIPELINE_LOOKAHEAD = True
 
+# ---- Cross-core two-stage (hierarchical) gather (op_requirements.md R6c lever 1) ----
+# The flat gather fans K-1 workers into ONE master (fan-in ~68 ns/core, master-serialized fold on
+# the round's critical path — R6b's characterized residual). For a group that is a clean 2D
+# rectangle (nx x ny, nx>1 and ny>1) the gather is done in TWO stages over the grid rectangle:
+#   stage 1 : each grid row's nx cores -> the row's x0 "row-leader" (fan-in nx-1, in parallel across
+#             the ny rows); each row-leader folds its nx partials -> a row-partial (no finalize).
+#   stage 2 : the ny row-leaders -> the root (= the (x0,y0) master; fan-in ny-1); the root folds the
+#             ny row-partials + (+eps, rsqrt) -> 1/RMS, then broadcasts (the existing segmented mcast).
+# Fan-in drops from K-1 to (nx-1)+(ny-1) and the fold is distributed off the single master — the
+# `tensix_all_reduce` grid-two-stage pattern (examples/master.md: grid two-stage wins when the grid
+# is busy or the payload is tiny; on a 1-D group it collapses to the flat root reduce). Engaged ONLY
+# on the pure tiled sharded cross-core path when EVERY group is such a rectangle with the master at
+# its low corner AND Ht_local==1 (single round, C=1 — the 2D WIDTH perf geometries 8x4/7x4). 1-D
+# groups (WIDTH n x 1, BLOCK per-row) and ragged/logical/RM keep the flat root gather byte-identical.
+# Live knob (single source of truth); False falls back to the R6b flat gather everywhere.
+XCORE_TWO_STAGE_GATHER = True
+# The extra stage-2 handshake+fold (row-leader write -> SEM_GATHER2 -> root wait -> root fold) is a
+# ~fixed ~900 ns cost on the round's critical path, so two-stage only pays off once the fan-in it
+# saves — (NX-1)*(NY-1) transfers at the measured ~68 ns/transfer, i.e. break-even ~13 transfers —
+# exceeds it. Measured (blackhole, gap-free 7-wide K-sweep, per_w_t=1): saving 6 (7x2) REGRESSES
+# 2.5%, saving 12 (7x3) is flat, saving 18 (7x4) wins 1.05x. So engage only when
+# (NX-1)*(NY-1) >= 13 — the 2D WIDTH perf geometries (8x4 saving 21, 7x4 saving 18) qualify; small-ny
+# 2D groups fall back to the byte-identical flat gather (no regression).
+XCORE_TWO_STAGE_MIN_SAVING = 13
+
 
 def _gather_runs(mode: int):
     """(off0, len0, off1, len1) contiguous byte runs the gather moves per stat tile."""
@@ -764,6 +789,7 @@ def _create_height_sharded_descriptor(
 _SEM_GATHER = 0
 _SEM_BCAST = 1
 _SEM_DONE = 2
+_SEM_GATHER2 = 3  # R6c two-stage: row-leader -> root stage-2 gather counter (monotone)
 
 
 def _create_sharded_xcore_descriptor(
@@ -1064,6 +1090,55 @@ def _create_logical_xcore_descriptor(
     )
 
 
+def _two_stage_topology(masters, workers_of, Ht_local, device):
+    """R6c hierarchical (two-stage) gather topology for 2D reduction groups.
+
+    Returns ``(engaged, nx, ny, percore)``. ``engaged`` is True only when EVERY reduction
+    group is a clean 2D rectangle (nx>1 and ny>1, nx*ny == group size) whose master sits at
+    the group's low (x0,y0) corner, and ``Ht_local==1`` (single round, C=1 — the 2D WIDTH
+    perf geometries). All groups must share the same (nx,ny) so the program-level CT flag can
+    express them uniformly. ``percore[(x,y)] = (role, xrel, yrel, rl_vx, rl_vy)`` where role
+    2=root, 1=row-leader (x0 column, y!=y0), 0=worker; (rl_vx,rl_vy) are the VIRTUAL coords of
+    the core's row-leader (for a row-leader/root, its own coords — the self-loopback source).
+    1-D groups (WIDTH n x 1; BLOCK per-row) collapse to the flat root reduce, so this returns
+    False for them and the caller keeps the byte-identical flat gather.
+    """
+
+    def _v(core):
+        vc = device.worker_core_from_logical_core(ttnn.CoreCoord(core.x, core.y))
+        return int(vc.x), int(vc.y)
+
+    if Ht_local != 1:
+        return False, 1, 1, {}
+    nx_g = ny_g = None
+    percore = {}
+    for key, master in masters.items():
+        members = [master] + workers_of.get(key, [])
+        xs = [int(m.x) for m in members]
+        ys = [int(m.y) for m in members]
+        x0, y0 = min(xs), min(ys)
+        nx = max(xs) - x0 + 1
+        ny = max(ys) - y0 + 1
+        if not (nx > 1 and ny > 1 and nx * ny == len(members)):
+            return False, 1, 1, {}  # 1-D group or ragged rectangle -> flat gather
+        if (nx - 1) * (ny - 1) < XCORE_TWO_STAGE_MIN_SAVING:
+            return False, 1, 1, {}  # fan-in saving too small to pay for the extra stage -> flat
+        if (int(master.x), int(master.y)) != (x0, y0):
+            return False, 1, 1, {}  # root must be the low corner (row-leader of row y0)
+        if nx_g is None:
+            nx_g, ny_g = nx, ny
+        elif (nx, ny) != (nx_g, ny_g):
+            return False, 1, 1, {}  # non-uniform groups -> a single CT flag cannot express both
+        for m in members:
+            xrel = int(m.x) - x0
+            yrel = int(m.y) - y0
+            role = 2 if (xrel == 0 and yrel == 0) else (1 if xrel == 0 else 0)
+            rl = ttnn.CoreCoord(x0, int(m.y))  # this core's row-leader (x0 column, same grid row)
+            rlvx, rlvy = _v(rl)
+            percore[(int(m.x), int(m.y))] = (role, xrel, yrel, rlvx, rlvy)
+    return True, nx_g, ny_g, percore
+
+
 def _mcast_segments(members_v, master_v):
     """Segmented NoC-mcast plan for one reduction group's broadcast (R6 + R6a lever 2).
 
@@ -1183,6 +1258,8 @@ def _assemble_xcore_kernels(
     CB_STAT_GLOBAL = 7
     CB_SHARD_IN = 8
     CB_SHARD_OUT = 9
+    CB_ROWPARTIAL = 10  # R6c two-stage: row-leader stage-1 fold output (compute -> writer)
+    CB_GATHER2 = 11  # R6c two-stage: root stage-2 fan-in (ny row-partials, fixed base)
     CB_OUT = 16
     CB_OUT_STICKS = 17
     CB_XSQ = 24
@@ -1215,6 +1292,18 @@ def _assemble_xcore_kernels(
         c_max_l1 = max(1, avail // per_C)
         batch_rows = max(1, min(Ht_local, STAT_BATCH_ROWS, c_max_l1))
     C = batch_rows
+
+    # ---- R6c two-stage (hierarchical) gather topology ----
+    # `masters` maps each group's master (mx,my) -> master core; derived once here (single
+    # source of truth), reused by the two-stage topology and the mcast-segment plan below.
+    masters = {}
+    for _c, _si, _master, _iph, _wts, _vwt in entries:
+        masters.setdefault((int(_master.x), int(_master.y)), _master)
+    two_stage = False
+    nx_ts = ny_ts = 1
+    ts_percore = {}
+    if XCORE_TWO_STAGE_GATHER and x_zero_copy and (not is_rm) and (not out_to_dram):
+        two_stage, nx_ts, ny_ts, ts_percore = _two_stage_topology(masters, workers_of, Ht_local, device)
 
     cbs = []
 
@@ -1263,7 +1352,18 @@ def _assemble_xcore_kernels(
     # (K*C / C) — full rounds wrap the fifo back to base so every core's get_write_ptr matches.
     # cb_stat_local / cb_stat_handoff are local (compute<->writer), double-buffered at 2*C.
     add_cb(CB_STAT_LOCAL, tile_fp32, 2 * C, ttnn.float32)
-    add_cb(CB_GATHER, tile_fp32, K * C, ttnn.float32)  # fixed-base fan-in (K partials/round × C rows)
+    if two_stage:
+        # R6c: two-stage gather (C=1, single round). cb_gather is the STAGE-1 fan-in (nx
+        # partials per row-leader, fixed base -> depth == the per-round count so the fifo
+        # wraps to base on every core); cb_gather2 is the STAGE-2 fan-in on the root (ny
+        # row-partials, fixed base); cb_rowpartial is the row-leader fold output (compute ->
+        # writer handoff, double-buffered). All allocated on every core (uniform CB layout);
+        # only the role uses each. Stat compaction (col-0 faces) composes through both legs.
+        add_cb(CB_GATHER, tile_fp32, nx_ts, ttnn.float32)  # stage-1 fan-in (nx partials)
+        add_cb(CB_ROWPARTIAL, tile_fp32, 2, ttnn.float32)  # row-leader stage-1 fold output
+        add_cb(CB_GATHER2, tile_fp32, ny_ts, ttnn.float32)  # stage-2 fan-in (ny row-partials)
+    else:
+        add_cb(CB_GATHER, tile_fp32, K * C, ttnn.float32)  # fixed-base fan-in (K partials/round × C rows)
     add_cb(CB_STAT_HANDOFF, tile_fp32, 2 * C, ttnn.float32)
     add_cb(CB_STAT_GLOBAL, tile_fp32, C, ttnn.float32)  # depth C -> fixed base for the batched mcast-back
     add_cb(CB_NORM, tile_in, 2, in_dtype)
@@ -1336,7 +1436,11 @@ def _assemble_xcore_kernels(
     # synchronous cross-core round. Measured FLAT on BLOCK 8x8 (the master fold stays on the
     # critical path), so it ships parked OFF (byte-identical to R6a); kept as a validated live
     # knob. Only meaningful on the multi-round tiled path; a single source of truth constant.
-    pipeline_lookahead = XCORE_PIPELINE_LOOKAHEAD and (x_zero_copy and (not is_rm) and (not out_to_dram))
+    # Two-stage (R6c) is single-round (Ht_local==1), so pipelining degenerates anyway; keep it
+    # off on that path so the flat/two-stage compute paths stay cleanly separated.
+    pipeline_lookahead = (
+        XCORE_PIPELINE_LOOKAHEAD and (x_zero_copy and (not is_rm) and (not out_to_dram)) and (not two_stage)
+    )
 
     # ---- Writer (cross-core transport + [logical] out-to-DRAM) ----
     writer_ct = [
@@ -1357,7 +1461,11 @@ def _assemble_xcore_kernels(
         g_off0,  # gather run0 offset (idx 14)
         g_len0,  # gather run0 length (idx 15)
         g_off1,  # gather run1 offset (idx 16)
-        g_len1,  # gather run1 length (idx 17) — accessor chained after at <18>
+        g_len1,  # gather run1 length (idx 17)
+        1 if two_stage else 0,  # TWO_STAGE (R6c; idx 18)
+        nx_ts,  # NX — cores per grid row in the group (stage-1 fan-in; idx 19)
+        ny_ts,  # NY — grid rows in the group (stage-2 fan-in; idx 20)
+        _SEM_GATHER2,  # stage-2 gather semaphore id (idx 21) — accessor chained after at <22>
     ]
     writer_ct.extend(
         ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
@@ -1372,10 +1480,8 @@ def _assemble_xcore_kernels(
     # lever 2). Ragged groups (logical decode's multi-row-major set; WIDTH auto-shard wrapping
     # a partial row) get 0 segments and keep the topology-agnostic all-unicast fallback, so
     # those paths stay byte-identical. Master = group low corner (WIDTH cores[0]; BLOCK row x0).
-    masters = {}
-    for _c, _si, _master, _iph, _wts, _vwt in entries:
-        _key = (int(_master.x), int(_master.y))
-        masters.setdefault(_key, _master)
+    # `masters` was derived once above (single source of truth for both the two-stage topology
+    # and the mcast-segment plan).
     group_seg = {}
     for _key, _master in masters.items():
         _members = [_master] + workers_of.get(_key, [])
@@ -1390,7 +1496,8 @@ def _assemble_xcore_kernels(
         vc, vrt, _rpw, phase = rm_percore[(int(c.x), int(c.y))] if is_rm else (0, 0, 0, 0)
         n_seg, segs = group_seg[(int(master.x), int(master.y))]
         # fixed fields 0-9; num_workers at 10; n_mcast_seg at 11; seg0 12-16; seg1 17-21;
-        # worker coords from 22 (WORKER_COORDS_BASE).
+        # R6c two-stage per-core fields 22-26 (role, xrel, yrel, rl_vx, rl_vy); worker coords
+        # from 27 (WORKER_COORDS_BASE, master only — the unicast-fallback broadcast list).
         row = [out_addr, w_tile_start, vwt, is_master, slice_index, mvx, mvy, vc, vrt, phase]
         if is_master:
             wl = workers_of.get((int(master.x), int(master.y)), [])
@@ -1401,13 +1508,17 @@ def _assemble_xcore_kernels(
                     row.extend(list(segs[si]))  # (xlo, ylo, xhi, yhi, ndests)
                 else:
                     row.extend([0, 0, 0, 0, 0])
-            for w in wl:
-                wvx, wvy = _v(w)
-                row.extend([wvx, wvy])  # 22+ worker coords (unicast fallback)
         else:
             row.append(0)  # 10 num_workers
             row.append(0)  # 11 n_mcast_seg (workers never broadcast)
             row.extend([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])  # 12-21 seg0/seg1 (unused)
+        # 22-26: two-stage role + slots + row-leader coords (0s when two_stage is off)
+        role, xrel, yrel, rl_vx, rl_vy = ts_percore.get((int(c.x), int(c.y)), (0, 0, 0, 0, 0))
+        row.extend([role, xrel, yrel, rl_vx, rl_vy])
+        if is_master:
+            for w in workers_of.get((int(master.x), int(master.y)), []):
+                wvx, wvy = _v(w)
+                row.extend([wvx, wvy])  # 27+ worker coords (unicast fallback broadcast)
         writer_rt[c.x][c.y] = row
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_xcore_writer.cpp"),
@@ -1430,10 +1541,19 @@ def _assemble_xcore_kernels(
         1 if is_rm else 0,  # IS_RM (tilize resident RM shard, untilize output)
         C,  # C_ROWS (round-batching factor; idx 9)
         1 if pipeline_lookahead else 0,  # PIPELINE_LOOKAHEAD (R6b lever 2; idx 10)
+        1 if two_stage else 0,  # TWO_STAGE (R6c; idx 11)
+        nx_ts,  # NX — stage-1 fold count (idx 12)
+        ny_ts,  # NY — stage-2 fold count (idx 13)
     ]
     compute_rt = ttnn.RuntimeArgs()
     for c, slice_index, _m, is_partial_holder, _wts, vwt in entries:
-        compute_rt[c.x][c.y] = [vwt, 1 if is_partial_holder else 0, 1 if slice_index == 0 else 0]
+        role = ts_percore.get((int(c.x), int(c.y)), (0, 0, 0, 0, 0))[0]
+        compute_rt[c.x][c.y] = [
+            vwt,
+            1 if is_partial_holder else 0,
+            1 if slice_index == 0 else 0,  # is_master (== root on the two-stage path)
+            1 if role == 1 else 0,  # is_row_leader (R6c; role 1 = x0 column, y != y0)
+        ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_xcore_compute.cpp"),
         core_ranges=all_cores,
@@ -1446,6 +1566,7 @@ def _assemble_xcore_kernels(
         ttnn.SemaphoreDescriptor(id=_SEM_GATHER, core_ranges=all_cores, initial_value=0),
         ttnn.SemaphoreDescriptor(id=_SEM_BCAST, core_ranges=all_cores, initial_value=0),
         ttnn.SemaphoreDescriptor(id=_SEM_DONE, core_ranges=all_cores, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=_SEM_GATHER2, core_ranges=all_cores, initial_value=0),  # R6c stage-2
     ]
 
     return ttnn.ProgramDescriptor(

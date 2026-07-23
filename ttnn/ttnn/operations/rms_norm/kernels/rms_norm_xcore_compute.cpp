@@ -53,9 +53,11 @@ constexpr uint32_t cb_x_in = 1;          // sharded input W-slice (zero-copy, re
 constexpr uint32_t cb_scaler = 2;        // 1/W reduce scaler (+partial), bf16
 constexpr uint32_t cb_gamma = 3;         // gamma W-slice tiles (held)
 constexpr uint32_t cb_gamma_sticks = 4;  // RM-gamma stick input (tilized -> cb_gamma)
-constexpr uint32_t cb_gather = 5;        // master: K partials gathered (fp32)
+constexpr uint32_t cb_gather = 5;        // master: K partials gathered (fp32); R6c two-stage: NX/row
 constexpr uint32_t cb_stat_handoff = 6;  // master: 1/RMS -> writer broadcast (fp32)
 constexpr uint32_t cb_stat_global = 7;   // 1/RMS received (fp32)
+constexpr uint32_t cb_rowpartial = 10;   // R6c two-stage: row-leader stage-1 fold output (-> writer)
+constexpr uint32_t cb_gather2 = 11;      // R6c two-stage: root stage-2 fan-in (NY row-partials)
 constexpr uint32_t cb_out = 16;          // sharded output W-slice (zero-copy) OR untilize input (RM)
 constexpr uint32_t cb_out_sticks = 17;   // RM output: tile-padded sticks (untilize) -> writer loopback
 constexpr uint32_t cb_xsq = 24;          // x^2 (pass-1 intermediate)
@@ -110,10 +112,19 @@ void kernel_main() {
     // 2*C deep (two rounds in flight) and the writer/semaphore protocol + fixed-base
     // cb_gather/cb_stat_global addressing are UNCHANGED — only the compute issue order changes.
     constexpr bool PIPELINE_LOOKAHEAD = get_compile_time_arg_val(10) != 0;
+    // TWO_STAGE (Refinement 6c): hierarchical gather over a 2D group (NX x NY). Row-leaders (incl
+    // the root) fold their row's NX partials -> a row-partial (stage 1); the root folds the NY
+    // row-partials + finalize (+eps, rsqrt) -> 1/RMS (stage 2). Host-gated single-round (C=1). The
+    // per-tile-row math (pass 1 / pass 2) is byte-identical to the flat path; only the fold
+    // topology differs (distributed across row-leaders instead of one master).
+    constexpr bool TWO_STAGE = get_compile_time_arg_val(11) != 0;
+    constexpr uint32_t NX = get_compile_time_arg_val(12);  // stage-1 fold count (cores per grid row)
+    constexpr uint32_t NY = get_compile_time_arg_val(13);  // stage-2 fold count (grid rows)
 
     const uint32_t vwt = get_arg_val<uint32_t>(0);  // valid W-tiles (<= PER_W_T)
     const uint32_t is_partial_holder = get_arg_val<uint32_t>(1);
     const uint32_t is_master = get_arg_val<uint32_t>(2);
+    const uint32_t is_row_leader = get_arg_val<uint32_t>(3);  // R6c: role 1 (x0 column, y != y0)
 
     compute_kernel_hw_startup(cb_x_in, cb_scaler, cb_out);
 
@@ -423,6 +434,65 @@ void kernel_main() {
         }
         cb_pop_front(cb_stat_global, C_this);
     };
+
+    // R6c two-stage fold: sum `count` fp32 tiles from `in_cb` into DST[0] (associative partial
+    // sum; col-0 carries the reduce result, other columns ignored downstream via BroadcastDim::Col)
+    // and pack to `out_cb`. `finalize` appends the RMS finish (+eps, rsqrt) — same DST body as the
+    // flat do_fold / streaming transform_in_place. Stage 1 (row-leader): fold NX, no finalize ->
+    // cb_rowpartial. Stage 2 (root): fold NY, finalize -> cb_stat_handoff. C=1 (single round).
+    auto fold_tiles = [&](uint32_t in_cb, uint32_t out_cb, uint32_t count, bool finalize) {
+        cb_wait_front(in_cb, count);
+        cb_reserve_back(out_cb, 1);
+        reconfig_data_format(in_cb, in_cb);
+        pack_reconfig_data_format(out_cb);
+        tile_regs_acquire();
+        uint32_t first_pair = 0;
+        if (count & 1u) {
+            copy_tile_to_dst_init_short(in_cb);
+            copy_tile(in_cb, 0, 0);
+            first_pair = 1;
+        }
+        if (count > 1) {
+            add_tiles_init(in_cb, in_cb, /*acc_to_dest=*/true);
+            for (uint32_t k = first_pair; k < count; k += 2) {
+                add_tiles(in_cb, in_cb, k, k + 1, 0);
+            }
+        }
+        if (finalize) {
+            binop_with_scalar_tile_init();
+            add_unary_tile(0, eps_bits);
+            rsqrt_tile_init();
+            rsqrt_tile(0);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, out_cb);
+        tile_regs_release();
+        cb_push_back(out_cb, 1);
+        cb_pop_front(in_cb, count);
+    };
+
+    // R6c two-stage (hierarchical) gather — single round (host-gated C=1, HT_LOCAL=1):
+    //   pass 1 -> local partial; row-leaders (incl root) fold their row (stage 1); root folds the
+    //   row-leaders (stage 2, +finalize); pass 2. The writer routes the cross-core traffic; the
+    //   per-tile-row math is identical to the flat path. Non-two-stage falls through to the round
+    //   loop below (byte-identical).
+    if constexpr (TWO_STAGE) {
+        do_pass1(0, 1);
+        if (is_row_leader || is_master) {
+            fold_tiles(cb_gather, cb_rowpartial, NX, /*finalize=*/false);  // stage 1
+        }
+        if (is_master) {
+            fold_tiles(cb_gather2, cb_stat_handoff, NY, /*finalize=*/true);  // stage 2 (+eps, rsqrt)
+        }
+        do_pass2(0, 1);
+        cb_pop_front(cb_x_in, shard_tiles);
+        if constexpr (HAS_GAMMA) {
+            cb_pop_front(cb_gamma, vwt);
+        }
+        cb_pop_front(cb_scaler, HAS_PARTIAL_W ? 2 : 1);
+        return;
+    }
 
     // Round loop. PIPELINE_LOOKAHEAD (R6b lever 2) selects the issue order:
     //  * OFF (byte-identical to R6a): strictly sequential per round — pass 1 -> fold -> pass 2.
