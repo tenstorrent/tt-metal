@@ -657,6 +657,13 @@ def generate_sfpu_unary_combinations():
     """
     combinations = []
     for cfg in OP_CONFIGS:
+        # Ops that expose both a non-approximate and an approximate kernel are swept over both
+        # ApproximationMode values; every other op has a single implementation (ApproximationMode.No).
+        approx_modes = (
+            (ApproximationMode.No, ApproximationMode.Yes)
+            if cfg.mathop in (MathOperation.Exp, MathOperation.Reciprocal)
+            else (ApproximationMode.No,)
+        )
         for fmt in formats_for_op(cfg):
             in_fmt = fmt.input_format
 

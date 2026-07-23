@@ -19,11 +19,11 @@
 #include "llk_sfpu/ckernel_sfpu_comp.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
+#include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "sfpu/ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_rsqrt.h"
 #include "sfpu/ckernel_sfpu_sigmoid.h"
@@ -83,6 +83,10 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::square)
     {
         init_square();
+    }
+    else if constexpr (OPERATION == SfpuType::reciprocal)
+    {
+        _init_reciprocal_<APPROX>();
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
@@ -181,7 +185,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_reciprocal_<true /* APPROX */, ITERATIONS>, dst_index);
+        _llk_math_eltwise_unary_sfpu_params_(calculate_reciprocal<APPROX, is_fp32_dest_acc_en, ITERATIONS>, dst_index);
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
