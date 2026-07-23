@@ -39,7 +39,9 @@ class TtXttsGenerator:
         self.model = model
 
     def _argmax(self, logits):  # logits [b, 1, NUM_AUDIO_TOKENS] -> Python int
-        idx = ttnn.argmax(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), dim=-1)
+        # ttnn.argmax runs directly on the TILE logits (verified index-identical to the ROW_MAJOR
+        # path) — drops a per-token full-tensor untilize (to_layout) from the decode hot loop.
+        idx = ttnn.argmax(logits, dim=-1)
         return int(ttnn.to_torch(idx).flatten()[0].item())
 
     def generate(
