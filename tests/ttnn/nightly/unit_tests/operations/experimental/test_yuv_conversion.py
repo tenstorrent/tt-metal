@@ -6,7 +6,7 @@ Tests the ttnn.experimental.yuv_conversion op which converts a CHWT bfloat16
 tensor (C=3, values in [-1, 1]) to YUV 4:2:0 uint8 planar format.
 
 Run with:
-    scripts/run_safe_pytest.sh models/tt_dit/tests/unit/test_yuv_conversion.py -s
+    scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/experimental/test_yuv_conversion.py -s
 """
 
 import os
