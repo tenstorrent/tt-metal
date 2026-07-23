@@ -130,6 +130,16 @@ void kernel_main() {
     // WIDTH / RM / logical / two-stage keep the byte-identical flat master fold below.
     constexpr bool TWO_PHASE_FOLD = get_compile_time_arg_val(14) != 0;
     constexpr uint32_t NUM_FOLDERS = get_compile_time_arg_val(15);
+    // PASS2_BATCH (Refinement 6g lever 1): batch pass-2's x·rstd (and, tile-aligned, ·gamma) over
+    // the whole PER_W_T-tile W-slice in ONE eltwise_chain per tile-row, instead of PER_W_T
+    // one-tile chains — amortizing the per-call chain init/reconfig over the block (the R6f lever-3
+    // square pattern, applied to pass 2). This needs cb_norm deepened 2 -> 2*PER_W_T (the batch
+    // buffer), so it is host-gated to the non-RM cross-core path (the RM path has its own per-tile
+    // pass-2 loop above and keeps cb_norm=2). PASS2_BATCH=0 degenerates byte-identically to the
+    // R4/R6f per-tile pass 2. The batched form mirrors the interleaved resident pass 2
+    // (rms_norm_compute.cpp block_shape): Block-walk x + Col rstd for x·rstd; Scalar(front-walked
+    // by Streaming pops) norm + Row gamma for ·gamma.
+    constexpr bool PASS2_BATCH = get_compile_time_arg_val(16) != 0;
 
     const uint32_t vwt = get_arg_val<uint32_t>(0);  // valid W-tiles (<= PER_W_T)
     const uint32_t is_partial_holder = get_arg_val<uint32_t>(1);
@@ -395,18 +405,22 @@ void kernel_main() {
     };
 
     // ---------- Pass 2: x·rstd·gamma over the W-slice for a batch of C_this tile-rows ----------
+    // Refinement 6g lever 1: when PASS2_BATCH is set, batch x·rstd (and the tile-aligned ·gamma)
+    // over the whole PER_W_T-tile W-slice in ONE eltwise_chain per tile-row instead of PER_W_T
+    // one-tile chains, amortizing the per-call init/reconfig over the block. The math is identical:
+    // same x·rstd per tile (Col-broadcast rstd tile cc across the block walk — Ht=1 so the Col
+    // index stays cc), same ·gamma over the vwt valid tiles, same copy on the trailing pad tiles.
+    // PASS2_BATCH=0 keeps the R4/R6f per-tile pass 2 (byte-identical).
     auto do_pass2 = [&](uint32_t base_t, uint32_t C_this) {
         cb_wait_front(cb_stat_global, C_this);  // C_this 1/RMS tiles (broadcast landed)
         for (uint32_t cc = 0; cc < C_this; ++cc) {
             const uint32_t t = base_t + cc;
-            for (uint32_t w = 0; w < PER_W_T; ++w) {
-                const uint32_t xin_off = t * PER_W_T + w;
-                // x·rstd (rstd is REDUCE_ROW -> column-shaped -> BroadcastDim::Col). rstd for
-                // row cc lives at cb_stat_global tile cc (broadcast wrote C_this contiguous
-                // tiles); read it via the Col operand's TileOffset::Set base. CallerManaged:
-                // this loop owns the cb_stat_global wait/pop (C_this) around the whole batch.
+            if constexpr (PASS2_BATCH) {
+                // Batched x·rstd over the tile-row's PER_W_T tiles: Block-walk x from the resident
+                // base t*PER_W_T, Col rstd held at cb_stat_global tile cc (Ht=1 -> the Col index is
+                // constant cc across the walk). Streams PER_W_T tiles into cb_norm (depth 2*PER_W_T).
                 ckl::eltwise_chain(
-                    one_tile,
+                    ckl::EltwiseShape::of(1, PER_W_T),
                     ckl::BinaryFpu<
                         cb_x_in,
                         cb_stat_global,
@@ -419,30 +433,85 @@ void kernel_main() {
                         ckl::OperandKind::Block,
                         ckl::OperandKind::Col,
                         ckl::TileOffset::Set,
-                        ckl::TileOffset::Set>{xin_off, cc},
+                        ckl::TileOffset::Set>{t * PER_W_T, cc},
                     ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
 
-                if (HAS_GAMMA && (w < vwt)) {
-                    // norm·gamma (gamma is [1,W] -> row-shaped -> BroadcastDim::Row).
+                if (HAS_GAMMA) {
+                    if (vwt > 0) {
+                        // Batched ·gamma over the vwt valid tiles: cb_norm front-walked by the
+                        // Streaming pops (Scalar reads the front each iter), gamma Row-indexed from
+                        // tile 0 (Row index = wt). For tile-aligned W (vwt == PER_W_T) this covers
+                        // the whole block; non-aligned leaves the pad tail to the copy loop below.
+                        ckl::eltwise_chain(
+                            ckl::EltwiseShape::of(1, vwt),
+                            ckl::BinaryFpu<
+                                cb_norm,
+                                cb_gamma,
+                                ckl::BinaryFpuOp::Mul,
+                                ckl::BroadcastDim::Row,
+                                ckl::InputLifecycle::Streaming,
+                                ckl::InputLifecycle::CallerManaged,
+                                ckl::BinaryDataFormatReconfig::Input,
+                                ckl::Dst::D0,
+                                ckl::OperandKind::Scalar,
+                                ckl::OperandKind::Row,
+                                ckl::TileOffset::Unset,
+                                ckl::TileOffset::Set>{0, 0},
+                            ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                    }
+                    // trailing all-pad tiles (w >= vwt): plain copy (output discarded on write-back).
+                    for (uint32_t w = vwt; w < PER_W_T; ++w) {
+                        ckl::copy<cb_norm, cb_out>(one_tile);
+                    }
+                } else {
+                    ckl::copy<cb_norm, cb_out>(ckl::EltwiseShape::of(1, PER_W_T));
+                }
+            } else {
+                for (uint32_t w = 0; w < PER_W_T; ++w) {
+                    const uint32_t xin_off = t * PER_W_T + w;
+                    // x·rstd (rstd is REDUCE_ROW -> column-shaped -> BroadcastDim::Col). rstd for
+                    // row cc lives at cb_stat_global tile cc (broadcast wrote C_this contiguous
+                    // tiles); read it via the Col operand's TileOffset::Set base. CallerManaged:
+                    // this loop owns the cb_stat_global wait/pop (C_this) around the whole batch.
                     ckl::eltwise_chain(
                         one_tile,
                         ckl::BinaryFpu<
-                            cb_norm,
-                            cb_gamma,
+                            cb_x_in,
+                            cb_stat_global,
                             ckl::BinaryFpuOp::Mul,
-                            ckl::BroadcastDim::Row,
-                            ckl::InputLifecycle::Streaming,
+                            ckl::BroadcastDim::Col,
+                            ckl::InputLifecycle::CallerManaged,
                             ckl::InputLifecycle::CallerManaged,
                             ckl::BinaryDataFormatReconfig::Input,
                             ckl::Dst::D0,
-                            ckl::OperandKind::Scalar,
-                            ckl::OperandKind::Row,
-                            ckl::TileOffset::Unset,
-                            ckl::TileOffset::Set>{0, w},
-                        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
-                } else {
-                    // no gamma, or a trailing padding tile (output discarded on read-back).
-                    ckl::copy<cb_norm, cb_out>(one_tile);
+                            ckl::OperandKind::Block,
+                            ckl::OperandKind::Col,
+                            ckl::TileOffset::Set,
+                            ckl::TileOffset::Set>{xin_off, cc},
+                        ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+
+                    if (HAS_GAMMA && (w < vwt)) {
+                        // norm·gamma (gamma is [1,W] -> row-shaped -> BroadcastDim::Row).
+                        ckl::eltwise_chain(
+                            one_tile,
+                            ckl::BinaryFpu<
+                                cb_norm,
+                                cb_gamma,
+                                ckl::BinaryFpuOp::Mul,
+                                ckl::BroadcastDim::Row,
+                                ckl::InputLifecycle::Streaming,
+                                ckl::InputLifecycle::CallerManaged,
+                                ckl::BinaryDataFormatReconfig::Input,
+                                ckl::Dst::D0,
+                                ckl::OperandKind::Scalar,
+                                ckl::OperandKind::Row,
+                                ckl::TileOffset::Unset,
+                                ckl::TileOffset::Set>{0, w},
+                            ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                    } else {
+                        // no gamma, or a trailing padding tile (output discarded on read-back).
+                        ckl::copy<cb_norm, cb_out>(one_tile);
+                    }
                 }
             }
         }

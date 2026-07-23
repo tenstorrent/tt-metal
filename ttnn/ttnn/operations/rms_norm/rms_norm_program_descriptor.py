@@ -129,6 +129,20 @@ XCORE_TWO_STAGE_MIN_SAVING = 13
 # WIDTH single-round / RM / logical / two-stage keep the byte-identical flat master fold. Live knob.
 XCORE_TWO_PHASE_FOLD = True
 
+# ---- Pass-2 batching (op_requirements.md R6g lever 1) ----
+# R6f's ablation pins the dominant BLOCK-8x8 residual to the per-core COMPUTE floor; R6f lever 3
+# already batched pass 1's square into one chain, but pass 2 (x·rstd + ·gamma) was still issued one
+# one-tile chain per W-tile. Batch pass 2's x·rstd (and the tile-aligned ·gamma) over the whole
+# per_w_t-tile W-slice in ONE eltwise_chain per tile-row so the fixed per-call chain init/reconfig
+# amortizes over the block — exactly the R6f lever-3 pattern, applied to pass 2, and identical to
+# the interleaved resident pass 2 (rms_norm_compute.cpp block_shape). This deepens cb_norm 2 ->
+# 2*per_w_t (the batch buffer) — the SAME size cb_xsq has carried unconditionally since R4 (the
+# pass-1 square block buffer), so it is proven-safe on every cross-core path; it is folded into the
+# XCORE_STAT_L1_BUDGET C gate (single source of truth) and gated to the non-RM cross-core path (RM
+# keeps its own per-tile pass-2 loop + cb_norm=2). Live knob; False keeps the R4/R6f per-tile pass 2
+# (byte-identical), cb_norm back at depth 2.
+XCORE_PASS2_BATCH = True
+
 
 def _gather_runs(mode: int):
     """(off0, len0, off1, len1) contiguous byte runs the gather moves per stat tile."""
@@ -1283,6 +1297,15 @@ def _assemble_xcore_kernels(
 
     shard_tiles = Ht_local * per_w_t
 
+    # ---- Pass-2 batching + cb_norm depth (op_requirements.md R6g lever 1) ----
+    # Batch pass-2's x·rstd (+ tile-aligned ·gamma) over the per_w_t-tile W-slice in one chain per
+    # tile-row (compute PASS2_BATCH), which turns cb_norm into the block batch buffer (depth 2 ->
+    # 2*per_w_t — the SAME depth cb_xsq has carried since R4). Gated to the non-RM cross-core path;
+    # RM keeps its own per-tile pass-2 loop and cb_norm=2. `norm_depth` is the single source of
+    # truth for the cb_norm allocation AND the C-gate fixed_cb below.
+    pass2_batch = XCORE_PASS2_BATCH and (not is_rm)
+    norm_depth = (2 * per_w_t) if pass2_batch else 2
+
     # ---- Round-batching factor C (op_requirements.md R6a lever 1) ----
     # Batch C tile-rows' partials into one cross-core round so the flat ~3150 ns round
     # latency amortizes over C rows (rounds = ceil(Ht_local / C)). Only the pure tiled
@@ -1296,7 +1319,7 @@ def _assemble_xcore_kernels(
     if x_zero_copy and (not is_rm) and (not out_to_dram) and Ht_local > 1:
         shard_l1 = shard_tiles * (tile_in + tile_out)  # zero-copy resident in+out shards
         fixed_cb = (2 * per_w_t) * tile_in  # cb_xsq
-        fixed_cb += 2 * tile_in  # cb_norm
+        fixed_cb += norm_depth * tile_in  # cb_norm (R6g: 2*per_w_t when pass2_batch, else 2)
         fixed_cb += (2 if has_partial_w else 1) * tile_bf16  # cb_scaler
         if has_gamma:
             fixed_cb += per_w_t * tile_gamma  # cb_gamma
@@ -1445,7 +1468,10 @@ def _assemble_xcore_kernels(
         add_cb(CB_GATHER, tile_fp32, K * C, ttnn.float32)  # fixed-base fan-in (K partials/round × C rows)
     add_cb(CB_STAT_HANDOFF, tile_fp32, 2 * C, ttnn.float32)
     add_cb(CB_STAT_GLOBAL, tile_fp32, C, ttnn.float32)  # depth C -> fixed base for the batched mcast-back
-    add_cb(CB_NORM, tile_in, 2, in_dtype)
+    # cb_norm is the pass-2 x·rstd intermediate. R6g lever 1 batches pass 2 over the per_w_t-tile
+    # W-slice, making cb_norm the block batch buffer (depth 2*per_w_t, same as cb_xsq); depth 2 on
+    # the non-batched (RM / knob-off) path. Single source: norm_depth.
+    add_cb(CB_NORM, tile_in, norm_depth, in_dtype)
     if has_gamma:
         # cb_gamma holds tiles in both regimes; single producer per compiled
         # program (reader for TILE gamma, compute-tilize for RM gamma).
@@ -1626,6 +1652,7 @@ def _assemble_xcore_kernels(
         ny_ts,  # NY — stage-2 fold count (idx 13)
         1 if two_phase else 0,  # TWO_PHASE_FOLD (R6e; idx 14)
         num_folders,  # NUM_FOLDERS (R6e; idx 15)
+        1 if pass2_batch else 0,  # PASS2_BATCH (R6g lever 1; idx 16)
     ]
     compute_rt = ttnn.RuntimeArgs()
     for c, slice_index, _m, is_partial_holder, _wts, vwt in entries:
