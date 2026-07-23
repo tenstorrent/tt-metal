@@ -2,38 +2,36 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t Ht = get_arg_val<uint32_t>(3);  // Index 3 to match with regular writer_unary
-    uint32_t Wt = get_arg_val<uint32_t>(4);
-    uint32_t Wt_read = get_arg_val<uint32_t>(5);
-    uint32_t Wt_skip = get_arg_val<uint32_t>(6);
-    uint32_t NC = get_arg_val<uint32_t>(7);
-    uint32_t HtWt = get_arg_val<uint32_t>(8);
+    // (legacy positional layout put Ht at index 3, to match the regular writer_unary arg order)
+    auto Ht = get_arg(args::Ht);
+    auto Wt = get_arg(args::Wt);
+    auto Wt_read = get_arg(args::Wt_read);
+    auto Wt_skip = get_arg(args::Wt_skip);
+    auto NC = get_arg(args::NC);
+    auto HtWt = get_arg(args::HtWt);
 
-    constexpr auto dst_args = TensorAccessorArgs<0>();
+    constexpr std::uint32_t onetile = 1;
 
-    constexpr uint32_t cb_id_out0 = 16;
-
-    constexpr uint32_t onetile = 1;
-
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    DataflowBuffer dfb_out(cb_id_out0);
-    const uint32_t tile_bytes = get_tile_size(cb_id_out0);
+    DataflowBuffer dfb_out(dfb::out);
+    const std::uint32_t tile_bytes = dfb_out.get_tile_size();
 
-    uint32_t tile_id = 0;
-    uint32_t i_nc = 0;
-    for (uint32_t nc = 0; nc < NC; nc++) {
+    std::uint32_t tile_id = 0;
+    std::uint32_t i_nc = 0;
+    for (std::uint32_t nc = 0; nc < NC; nc++) {
         tile_id = i_nc + Wt_read;
-        for (uint32_t i = 0; i < Ht; i++) {
-            for (uint32_t j = 0; j < Wt; j++) {
+        for (std::uint32_t i = 0; i < Ht; i++) {
+            for (std::uint32_t j = 0; j < Wt; j++) {
                 dfb_out.wait_front(onetile);
                 noc.async_write(dfb_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id, .offset_bytes = 0});
                 noc.async_write_barrier();
