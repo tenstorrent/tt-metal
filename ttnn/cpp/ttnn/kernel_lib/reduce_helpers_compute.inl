@@ -302,6 +302,9 @@ ALWI void reduce(
         reduce_type != PoolType::AVG || reduce_format != DataFormat::Int32,
         "Int32 AVG (mean) is not supported");
     static_assert(
+        reduce_type != PoolType::MIN || is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>(),
+        "MIN is only valid on the Int32 SFPU reduce path; the FPU path implements MIN as -MAX(-x)");
+    static_assert(
         is_accumulation_type_v<AccumulateT>,
         "AccumulateT must be a valid accumulation type (NoAccumulation or Accumulate)");
     static_assert(
