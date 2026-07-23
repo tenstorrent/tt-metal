@@ -110,3 +110,65 @@ def composed_kda_recurrence(
     if len(outputs) == 1:
         return outputs[0], state
     return ttnn.concat(outputs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG), state
+
+
+def fused_kda_recurrence(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    gate: ttnn.Tensor,
+    beta: ttnn.Tensor,
+    initial_state: ttnn.Tensor,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Execute the fused T=1 recurrence after device-side preprocessing."""
+    batch, sequence, heads, key_dim = q.shape
+    value_dim = v.shape[-1]
+    if sequence != 1:
+        raise ValueError(f"fused KDA recurrence requires T=1, got T={sequence}")
+
+    q = ttnn.typecast(q, ttnn.float32)
+    k = ttnn.typecast(k, ttnn.float32)
+    v = ttnn.typecast(v, ttnn.float32)
+    gate = ttnn.typecast(gate, ttnn.float32)
+    beta = ttnn.typecast(beta, ttnn.float32)
+    state = initial_state if initial_state.dtype == ttnn.float32 else ttnn.typecast(initial_state, ttnn.float32)
+
+    q = ttnn.multiply(
+        l2_norm_ttnn(q, dim=-1),
+        key_dim**-0.5,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    k = l2_norm_ttnn(k, dim=-1)
+    q = ttnn.reshape(ttnn.permute(q, (0, 2, 1, 3)), (batch * heads, 1, key_dim))
+    k = ttnn.reshape(ttnn.permute(k, (0, 2, 1, 3)), (batch * heads, 1, key_dim))
+    v = ttnn.reshape(ttnn.permute(v, (0, 2, 1, 3)), (batch * heads, 1, value_dim))
+    gate = ttnn.reshape(
+        ttnn.permute(gate, (0, 2, 1, 3)),
+        (batch * heads, 1, key_dim),
+    )
+    beta = ttnn.reshape(ttnn.permute(beta, (0, 2, 1)), (batch * heads, 1, 1))
+    decay = ttnn.exp(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    decay = ttnn.transpose(decay, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    state = ttnn.reshape(state, (batch * heads, key_dim, value_dim))
+    q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+    k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
+    v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
+    beta = ttnn.to_memory_config(beta, ttnn.DRAM_MEMORY_CONFIG)
+    state = ttnn.to_memory_config(state, ttnn.DRAM_MEMORY_CONFIG)
+
+    output, final_state = ttnn.transformer.kda_recurrent_step(
+        q,
+        k,
+        v,
+        decay,
+        beta,
+        state,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return (
+        ttnn.permute(
+            ttnn.reshape(output, (batch, heads, 1, value_dim)),
+            (0, 2, 1, 3),
+        ),
+        ttnn.reshape(final_state, (batch, heads, key_dim, value_dim)),
+    )
