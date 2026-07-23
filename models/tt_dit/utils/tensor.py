@@ -602,14 +602,18 @@ def fast_device_to_host(
 
             n_hosts = int(ttnn.distributed_context_get_size())
             if n_hosts > 1:
-                # mesh_partition's internal slice asserts per-chip W is
-                # tile-aligned in TILE layout. Predict the per-chip shape
-                # after the upcoming repeat (× n_hosts on inter_dim) and
-                # mesh_partition (÷ inter_axis_size on inter_dim), then drop
-                # to ROW_MAJOR if W won't be tile-aligned.
+                # A TILE-layout all_gather/repeat/mesh_partition is only safe when
+                # BOTH of the last two dims are tile-aligned. If the second-to-last
+                # dim (H) is not a multiple of TILE_SIZE, its tile padding makes the
+                # TILE repeat/mesh_partition interleave H rows across the shards ->
+                # horizontal-band noise corruption on multi-host (single-host skips
+                # this block, hence 4x8 was clean but 4x32 corrupted). Predict the
+                # per-chip shape after repeat (× n_hosts) and mesh_partition
+                # (÷ inter_axis_size) on inter_dim, and drop to ROW_MAJOR unless
+                # BOTH last dims are tile-aligned (matches the known-good behavior).
                 post_shape = list(gathered_tensor.shape)
                 post_shape[inter_dim] = post_shape[inter_dim] * n_hosts // mesh_shape[inter_host_axis]
-                if post_shape[-1] % ttnn.TILE_SIZE != 0:
+                if post_shape[-1] % ttnn.TILE_SIZE != 0 or post_shape[-2] % ttnn.TILE_SIZE != 0:
                     gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
 
                 repeat_dims = [1] * len(gathered_tensor.shape)
