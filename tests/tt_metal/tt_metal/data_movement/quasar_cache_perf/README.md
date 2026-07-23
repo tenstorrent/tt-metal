@@ -35,3 +35,22 @@ pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py \
 
 Output: `data/quasar/Quasar Cache Write Sizes.png` — duration (cycles) vs total
 data size, one line per path.
+
+## Known limitation on the 1x3 emulator (slow dispatch)
+
+The `emu-quasar-1x3` target has no fast-dispatch cores, so tests must run in
+slow-dispatch mode (`TT_METAL_SLOW_DISPATCH_MODE=1`). Under slow dispatch the
+profiler does not increment `run host ID` — every one of the 24 sweep runs is
+stamped `run_host_id = 0`. Because `stats_collector.aggregate_performance`
+groups runs by `run_host_id`, all runs collapse into a single aggregated point,
+so the auto-generated PNG shows one point rather than the two 12-point curves.
+
+The per-run data is still fully captured in
+`generated/profiler/.logs/profile_log_device.csv`: each `RISCV1` `ZONE_START`/
+`ZONE_END` pair is immediately followed, in order, by that run's
+`Transaction size in bytes` and `Write path` stamps. The correct per-run tuples
+can be reconstructed by walking the CSV in order. A proper fix (an order-based
+aggregation fallback when `run_host_id`s collide, or incrementing `run_host_id`
+under slow dispatch) is deferred until this runs on hardware / a fast-dispatch
+grid, where `run_host_id` increments normally and the shared pipeline plots the
+two curves directly.
