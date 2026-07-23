@@ -250,11 +250,12 @@ FabricContext::FabricContext(
     // Step 2: Derive topology (depends on: fabric_config_)
     this->topology_ = FabricContext::get_topology_from_config(fabric_config);
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh(control_plane);
+    for (const auto& mesh_id : control_plane.get_mesh_graph().get_all_mesh_ids()) {
+        this->physical_mesh_shapes_.emplace(mesh_id, control_plane.get_physical_mesh_shape(mesh_id));
+    }
 
     // Step 3: Compute routing flags (depends on: topology_)
     this->is_2D_routing_enabled_ = is_2D_topology(this->topology_);
-    this->bubble_flow_control_enabled_ = is_ring_or_torus(this->topology_);
-
     // Step 4: Compute and validate routing mode (depends on: topology_)
     this->compute_routing_mode();
 
@@ -341,21 +342,18 @@ const FabricBuilderContext& FabricContext::get_builder_context() const {
     return *builder_context_;
 }
 
-bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions direction) const {
+bool FabricContext::need_deadlock_avoidance_support(MeshId mesh_id, eth_chan_directions direction) const {
     if (topology_ == Topology::Ring) {
         return true;
     }
     if (topology_ == Topology::Torus) {
         const auto fabric_type = get_fabric_type(fabric_config_, is_ubb_galaxy_);
-        // if we are not torused along a dimension, we dont need deadlock avoidance for that direction
-        const bool is_north_south =
-            (direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH);
-        const bool is_east_west = (direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST);
-
-        const bool torus_mismatch = (fabric_type == FabricType::TORUS_X && is_north_south) ||
-                                    (fabric_type == FabricType::TORUS_Y && is_east_west);
-
-        return !torus_mismatch;
+        const auto mesh_shape_it = physical_mesh_shapes_.find(mesh_id);
+        TT_FATAL(
+            mesh_shape_it != physical_mesh_shapes_.end(),
+            "Cannot determine torus deadlock-avoidance for unknown physical mesh {}",
+            mesh_id);
+        return requires_torus_deadlock_avoidance(fabric_type, mesh_shape_it->second, direction);
     }
 
     return false;

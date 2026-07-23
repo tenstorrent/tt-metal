@@ -414,6 +414,7 @@ void MeshGraph::initialize_from_mgd(
         } else {
             effective_fabric_type = mgd_fabric_type;
         }
+        effective_fabric_type = normalize_fabric_type_for_mesh_shape(effective_fabric_type, mesh_shape);
 
         // Build connectivity using effective_fabric_type
         MeshCoordinateRange mesh_coord_range(mesh_shape);
@@ -561,6 +562,7 @@ void MeshGraph::initialize_from_mgd(
         } else {
             effective_fabric_type = mgd_fabric_type;
         }
+        effective_fabric_type = normalize_fabric_type_for_mesh_shape(effective_fabric_type, switch_shape);
 
         // Build connectivity using effective_fabric_type
         MeshCoordinateRange switch_coord_range(switch_shape);
@@ -954,6 +956,8 @@ MeshGraph MeshGraph::generate_mesh_graph_of_shape(
                 mesh_shape[1]);
         }
     }
+
+    fabric_type = normalize_fabric_type_for_mesh_shape(fabric_type, mesh_shape);
 
     // Initialize for a single mesh (mesh_id = 0)
     MeshId mesh_id(0);
