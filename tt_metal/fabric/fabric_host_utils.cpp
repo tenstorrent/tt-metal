@@ -82,7 +82,27 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ub
     }
 }
 
+FabricType normalize_fabric_type_for_mesh_shape(FabricType fabric_type, const MeshShape& mesh_shape) {
+    TT_FATAL(mesh_shape.dims() == 2, "Fabric type normalization requires a 2D mesh shape, got {}", mesh_shape);
+
+    const bool has_distinct_x_wrap = has_flag(fabric_type, FabricType::TORUS_X) && mesh_shape[1] > 2;
+    const bool has_distinct_y_wrap = has_flag(fabric_type, FabricType::TORUS_Y) && mesh_shape[0] > 2;
+    if (has_distinct_x_wrap && has_distinct_y_wrap) {
+        return FabricType::TORUS_XY;
+    }
+    if (has_distinct_x_wrap) {
+        return FabricType::TORUS_X;
+    }
+    if (has_distinct_y_wrap) {
+        return FabricType::TORUS_Y;
+    }
+    return FabricType::MESH;
+}
+
 bool requires_more_connectivity(FabricType requested_type, FabricType available_type, const MeshShape& mesh_shape) {
+    requested_type = normalize_fabric_type_for_mesh_shape(requested_type, mesh_shape);
+    available_type = normalize_fabric_type_for_mesh_shape(available_type, mesh_shape);
+
     // Requesting MESH is always valid (can restrict any topology to MESH)
     if (requested_type == FabricType::MESH) {
         return false;
@@ -90,18 +110,7 @@ bool requires_more_connectivity(FabricType requested_type, FabricType available_
 
     // Check if available topology can satisfy the requested topology
     if (available_type == FabricType::MESH) {
-        // Special case: 2-element dimensions make torus wrap-around equivalent to mesh neighbor connections
-        // E.g., in a 2-row mesh, north/south wrap-around just connects to the adjacent row
-        bool has_two_rows = (mesh_shape[0] == 2);
-        bool has_two_cols = (mesh_shape[1] == 2);
-
-        if (has_flag(requested_type, FabricType::TORUS_Y) && !has_two_rows) {
-            return true;
-        }
-        if (has_flag(requested_type, FabricType::TORUS_X) && !has_two_cols) {
-            return true;
-        }
-        return false;
+        return true;
     }
 
     // For non-MESH available types, check if requested features are present
@@ -116,6 +125,25 @@ bool requires_more_connectivity(FabricType requested_type, FabricType available_
     }
 
     return false;
+}
+
+bool requires_torus_deadlock_avoidance(
+    FabricType fabric_type, const MeshShape& mesh_shape, eth_chan_directions direction) {
+    const auto normalized_fabric_type = normalize_fabric_type_for_mesh_shape(fabric_type, mesh_shape);
+
+    const bool is_north_south = direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
+    if (is_north_south) {
+        return has_flag(normalized_fabric_type, FabricType::TORUS_Y);
+    }
+
+    const bool is_east_west = direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST;
+    if (is_east_west) {
+        return has_flag(normalized_fabric_type, FabricType::TORUS_X);
+    }
+
+    // Preserve the existing behavior for Z routers. A torus dimension does not collapse the independent inter-mesh
+    // path.
+    return direction == eth_chan_directions::Z && fabric_type != FabricType::MESH;
 }
 
 uint32_t compute_max_1d_hops(const std::vector<MeshShape>& mesh_shapes) {

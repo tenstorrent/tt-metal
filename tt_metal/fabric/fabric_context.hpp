@@ -20,8 +20,6 @@ namespace tt::tt_fabric {
 
 // Forward declaration
 class FabricBuilderContext;
-
-
 /**
  * FabricContext
  *
@@ -57,8 +55,7 @@ public:
     bool is_wrap_around_mesh(MeshId mesh_id) const;
     tt::tt_fabric::Topology get_fabric_topology() const { return topology_; }
     bool is_2D_routing_enabled() const { return is_2D_routing_enabled_; }
-    bool is_bubble_flow_control_enabled() const { return bubble_flow_control_enabled_; }
-    bool need_deadlock_avoidance_support(eth_chan_directions direction) const;
+    bool need_deadlock_avoidance_support(MeshId mesh_id, eth_chan_directions direction) const;
     bool is_ubb_galaxy() const { return is_ubb_galaxy_; }
 
     // ============ Mesh Type Queries ============
@@ -167,11 +164,11 @@ private:
     FabricRouterConfig router_config_{};
 
     bool is_2D_routing_enabled_ = false;
-    bool bubble_flow_control_enabled_ = false;
     bool tensix_enabled_ = false;
     bool is_ubb_galaxy_ = false;
 
     std::unordered_map<MeshId, bool> wrap_around_mesh_;
+    std::unordered_map<MeshId, MeshShape> physical_mesh_shapes_;
 
     size_t packet_header_size_bytes_ = 0;
     size_t max_payload_size_bytes_ = 0;

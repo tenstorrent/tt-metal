@@ -37,10 +37,20 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ubb_galaxy);
 
+// A torus flag only changes connectivity when the dimension contains more than two devices. For size two, the
+// wrap neighbor is the same device as the ordinary mesh neighbor, so retain mesh directionality for that axis.
+FabricType normalize_fabric_type_for_mesh_shape(FabricType fabric_type, const MeshShape& mesh_shape);
+
 // Helper to validate that requested FabricType doesn't require more connectivity than available FabricType provides
 // Returns true if requested_type requires more connections than available_type provides
 // mesh_shape: [rows, cols] - used to detect edge cases where 2-row/2-col torus is equivalent to mesh
 bool requires_more_connectivity(FabricType requested_type, FabricType available_type, const MeshShape& mesh_shape);
+
+// Bubble flow control is required only when a torus dimension has a distinct wrap edge. In a two-element dimension,
+// the ordinary and wrap neighbors are the same physical device, so that direction does not require torus deadlock
+// avoidance.
+bool requires_torus_deadlock_avoidance(
+    FabricType fabric_type, const MeshShape& mesh_shape, eth_chan_directions direction);
 
 // Compute maximum 1D hops across all meshes in topology
 // Returns max(rows-1, cols-1) across all meshes, representing longest linear path
