@@ -869,7 +869,7 @@ tested topology (8×8 K=8/C=8; 4×4 K=4/C=8) happens to have uniform ownership.
 - **Gate green:** `test_rms_norm_r6_ablation.py` 7/7 (incl. `K28_HT16` and `K28_HT32`, `--dev`);
   `test_rms_norm_r6e.py` 4/4; unit dir 452 passed / 32 skipped; **full golden `test_golden.py`
   5056 passed / 33918 skipped / 1365 xfailed / 0 failed / 0 xpassed** (ran to completion, no hang).
-### [ ] Refinement 6f — Sharded cross-core: shrink the per-core compute floor (pass-2 fusion + compute/round overlap)
+### [~] Refinement 6f — Sharded cross-core: shrink the per-core compute floor (pass-2 fusion + compute/round overlap)
 
 **Type**: perf
 
@@ -901,3 +901,86 @@ the R4→R6e xcore kernels; do not fork. Gate on soft `pcc_threshold` 0.9995.
 **Done when**: measured median device-ns improves further on the BLOCK/WIDTH sharded perf shapes (fresh-cache
 trial loop) toward achievable, soft PCC holding, golden green, no regression across the config-spanning
 guard set (TILE interleaved, RM interleaved, HEIGHT, WIDTH, BLOCK, no-gamma).
+
+**Landed (partial `[~]`)** — two of the three named levers shipped on the shared R4→R6e xcore kernels via
+CT flags (no forked files), both numerically byte-identical (PCC 1.001005 == baseline) and correct
+(`--dev` + non-dev clean). Combined **BLOCK 8×8 86619 → 71669 ns (1.209×, 3.38× → 2.80× above achievable)**;
+every WIDTH sharded perf shape also improved. Measured on blackhole_p150b (median of 8 fresh trials, exact
+perf config bf16 / fp32_dest_acc_en=False / TILE / TILE gamma / HiFi2; `test_rms_norm_perf_r6.py`):
+- **Lever 2 — overlap the distributed round under compute (the complementary step to R6e).** R6e shipped
+  the two-phase loop FULLY SYNCHRONOUS because R6b measured pipelining flat while the master's serial fold
+  sat ON the round's critical path. R6e distributed that fold off the master (folders own disjoint tile-rows),
+  so re-enabling the R6b `PIPELINE_LOOKAHEAD` lookahead on the two-phase loop now WINS: issue batch r+1's
+  pass 1 before batch r's fold/pass 2 so the local reduce overlaps the writer's synchronous round. Host-side
+  the `pipeline_lookahead` gate drops its `and (not two_phase)` clause; the compute two-phase loop honors the
+  flag; `cb_stat_local` is already 2*C deep and the writer is serial across rounds (unchanged), so the
+  reorder is byte-identical. **BLOCK 8×8 86619 → 80755 ns (1.073×)**; single-round WIDTH (C=1) degenerates
+  byte-identically.
+- **Lever 3 (partial) — coarser DST batching on pass-1's square.** `do_pass1` squared the vwt tiles one
+  one-tile chain each; now it squares the whole vwt-tile block in ONE `eltwise_chain` (Block-walk from the
+  tile-row's resident base — the R3 resident-square pattern), amortizing the per-call chain init/reconfig
+  over the block. `cb_xsq` is already 2*per_w_t so no CB resize; byte-identical. **BLOCK 8×8 80755 → 71669 ns
+  (1.127× on top of lever 2)**; and it helps the single-round WIDTH groups lever 2 could not — WIDTH 8×1
+  1.04×, 9×1 1.08×, 8×4 1.04×, 7×4 1.07×.
+- **Lever 1 (pass-2 mul fusion, the named "biggest") — characterized as a helper-surface dead-end for the
+  gamma target (not shipped).** The literal fusion (`BinaryFpu` x·rstd → `BinaryFpu` ·gamma → one `PackTile`)
+  is NOT expressible with the kernel-lib surface: a second `BinaryFpu` reads two CBs and writes DEST (it
+  cannot consume the running DEST), and the only DEST-consuming binary element (`DestReuseBinary` →
+  `binary_dest_reuse_tiles`) has NO broadcast — while `·gamma` requires `BroadcastDim::Row` (gamma is `[1,W]`
+  row-shaped). Reaching a ROW-bcast dest-reuse needs net-new custom LLK (a `llk_unpack_A<ROW, DEST_TO_SRCA>`
+  + `llk_math_eltwise_binary<ELWMUL, ROW, DEST_TO_SRCA>` pair — the MATH half exists at
+  `llk_math_eltwise_binary.h:577-586` but is unexposed), which forks off the mandated helper surface. And the
+  in-tree `examples/compute_fusion` MEASURED exactly the FPU-consumes-DEST dest-reuse pattern: it **loses**
+  (0.82× on the combine step; the pack-to-L1 + unpack round-trip is 1.22× faster — `examples/master.md:82-99`),
+  so even the raw-LLK path (or a gamma pre-expansion into a full tile to make the mul element-wise) is
+  measured-inferior on this FPU-consumer shape. Filed as R6g to try-cheap-first on Blackhole before committing.
+- **No regression**: golden `test_op_loose` 19/19; golden `test_op` BLOCK/WIDTH `1x1x2048x256` multi-round
+  slice 39 passed / 0 failed / 0 xpassed / 9 xfailed (the standing `{f32,acc=False}` EXCLUSION); unit dir
+  449 passed / 32 skipped (`--dev` + non-dev); `test_rms_norm_r6e.py` 4/4 + `test_rms_norm_r6_ablation.py`
+  7/7 (`--dev` + non-dev). Both levers gate to the tiled cross-core path; every interleaved/HEIGHT/RM/logical
+  cell is byte-identical.
+
+**Deferred to R6g** (the residual compute-floor levers, characterized above): pass-2 x·rstd batching (needs a
+per-path `cb_norm` resize + L1 gate) and the pass-2 mul fusion (measure the gamma-pre-expansion dest-reuse
+form on Blackhole before committing — Wormhole `compute_fusion` says the FPU-consumer form loses).
+
+---
+
+### [ ] Refinement 6g — Sharded cross-core: pass-2 batching + gamma-fusion residual on the compute floor
+
+**Type**: perf
+
+**Goal**: close more of the BLOCK 8×8 residual R6f left (still **2.80× above achievable, 71669 ns** after
+lever 2 pipelining + lever 3 pass-1-square batching). R6f's ablation lineage (R6e) pins the dominant residual
+to the **per-core compute floor** (pass 2 = x·rstd + ·gamma over `Ht_local × per_w_t` tiles); R6f amortized
+pass-1's square init but left pass 2 per-tile. Two levers, in priority order:
+
+1. **Batch pass-2's x·rstd (and, tile-aligned, ·gamma) per tile-row (biggest cheap lever).** `do_pass2` issues
+   x·rstd (`BroadcastDim::Col`) as one one-tile `eltwise_chain` per W-tile, then a per-tile ·gamma / copy.
+   Batch the x·rstd over the whole per_w_t-tile block in ONE chain (Block-walk x + Col rstd — the R3 resident
+   x·rstd pattern), so the per-call init/reconfig amortizes like lever 3 did for the square. This needs
+   `cb_norm` deepened from 2 to `2*per_w_t` tiles (it becomes the batch buffer) — but `cb_norm` is added
+   UNCONDITIONALLY for every cross-core program (WIDTH/BLOCK/logical/decode/RM), and wide logical/decode
+   per_w_t can be large, so the resize MUST be gated per-path and folded into the `XCORE_STAT_L1_BUDGET` C
+   gate (single source of truth) so no wide cell OOMs. For tile-aligned W (vwt == per_w_t, e.g. the BLOCK 8×8
+   target) the ·gamma can also batch (grid(1,vwt) Row-bcast); non-aligned keeps the per-tile copy tail.
+2. **Pass-2 mul fusion via gamma pre-expansion (the R6f lever-1 "biggest", measure-first).** Fuse
+   `(x·rstd)·gamma` into ONE DST window by pre-expanding gamma `[1,W]` → a full `[32,W]` tile ONCE per core
+   (`unary_bcast<ROW>` copy, amortized over the core's tile-rows since gamma is held resident), then
+   `BinaryFpu` x·rstd → `DestReuseBinary<cb_gamma_full, Mul, DEST_TO_SRCA>` (NONE bcast, expressible) →
+   `PackTile<cb_out>` — halving pass-2's pack/unpack + eliminating the `cb_norm` round-trip. **Try cheap
+   first**: the in-tree `examples/compute_fusion` measured the FPU-consumes-DEST dest-reuse form at **0.82×**
+   on Wormhole (the pack-to-L1 round-trip is faster); measure the isolated combine on **Blackhole** (R6f's box)
+   before committing — if it also loses, the lever is a hardware dead-end (like R6d's allgather) and stays
+   unshipped with the measurement recorded, not parked as dead code.
+
+**Verifier notes**: R6f landed lever 2 (pipelining, winning) + lever 3 pass-1-square (winning) and characterized
+lever 1 as a helper-surface dead-end for the gamma path. R6g is the pass-2 compute-floor lever family. Lever 1
+(pass-2 batching) touches the SHARED `do_pass2` used by every cross-core path AND resizes `cb_norm` for every
+cross-core program — measure the interleaved/HEIGHT/WIDTH/logical guard set for regression AND L1 (wide
+per_w_t), not just BLOCK. Reuse the R4→R6f xcore kernels; do not fork. Gate on soft `pcc_threshold` 0.9995.
+
+**Done when**: measured median device-ns improves further on the BLOCK/WIDTH sharded perf shapes (fresh-cache
+trial loop) toward achievable, soft PCC holding, golden green, no regression (incl. L1) across the
+config-spanning guard set (TILE interleaved, RM interleaved, HEIGHT, WIDTH, BLOCK, no-gamma) — OR the
+gamma-fusion is measured a Blackhole dead-end and recorded as such.

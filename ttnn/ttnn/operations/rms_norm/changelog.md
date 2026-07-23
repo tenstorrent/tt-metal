@@ -900,3 +900,49 @@
 - Tests added: none new — `test_rms_norm_r6_ablation.py` already exercises the exact K∤C class
   (`K28_HT16` C=8, `K28_HT32` C=8, BLOCK 7-wide) the gate caught; both now pass (7/7, `--dev`).
   Full guard: unit dir 452 passed / 32 skipped, `test_rms_norm_r6e.py` 4/4.
+
+## Refinement 6f — Sharded cross-core: shrink the per-core compute floor (pass-2 fusion + compute/round overlap)
+- Date: 2026-07-23
+- What was done: perf refinement on the sharded cross-core compute floor. Two of the three named
+  levers shipped on the shared R4→R6e xcore kernels via CT flags (no forked files), both numerically
+  byte-identical (PCC 1.001005 == baseline) and correct (`--dev` + non-dev clean):
+  * **Lever 2 — overlap the distributed round under compute (the complementary step to R6e).** R6e
+    shipped the two-phase loop fully synchronous because R6b measured pipelining flat while the
+    master's serial fold sat ON the round's critical path. R6e distributed that fold off the master
+    (folders own disjoint tile-rows), so re-enabling the R6b `PIPELINE_LOOKAHEAD` lookahead on the
+    two-phase loop now WINS — the compute two-phase branch honors the flag (issue batch r+1's pass 1
+    before batch r's fold/pass 2), and the host `pipeline_lookahead` gate drops its `and (not two_phase)`
+    clause. `cb_stat_local` is already 2*C deep and the writer is serial across rounds (unchanged), so
+    the reorder is byte-identical. BLOCK 8×8 86619 → 80755 ns (1.073×); single-round WIDTH degenerates
+    byte-identically.
+  * **Lever 3 (partial) — coarser DST batching on pass-1's square.** `do_pass1` now squares the whole
+    vwt-tile block in ONE `eltwise_chain` (Block-walk from the tile-row's resident base — the R3
+    resident-square pattern) instead of vwt one-tile chains, amortizing the per-call init/reconfig.
+    `cb_xsq` is already 2*per_w_t so no CB resize; byte-identical. BLOCK 8×8 80755 → 71669 ns (1.127×
+    on top of lever 2); helps the single-round WIDTH groups lever 2 could not (8×1 1.04×, 9×1 1.08×,
+    8×4 1.04×, 7×4 1.07×).
+  * **Lever 1 (pass-2 mul fusion, the named "biggest") — characterized as a helper-surface dead-end
+    for the gamma target, NOT shipped.** The literal fusion is not expressible: a second `BinaryFpu`
+    cannot consume the running DEST, and the only DEST-consuming binary element (`DestReuseBinary` →
+    `binary_dest_reuse_tiles`) has no broadcast — while `·gamma` needs `BroadcastDim::Row`. Reaching a
+    ROW-bcast dest-reuse needs net-new custom LLK (forks off the mandated helper surface), and the
+    in-tree `examples/compute_fusion` MEASURED the FPU-consumes-DEST form at 0.82× on Wormhole (the
+    pack-to-L1 round-trip is 1.22× faster) — so even raw-LLK / gamma-pre-expansion is measured-inferior
+    on this FPU-consumer shape. Filed R6g to try-cheap-first on Blackhole before committing.
+- Accuracy achieved: PCC=1.001005 (byte-identical to the R6e baseline) on BLOCK 8×8; soft PCC ≥ 0.9995
+  on all sharded perf shapes; golden `test_op_loose` 19/19; golden `test_op` BLOCK/WIDTH `1x1x2048x256`
+  multi-round slice 39 passed / 0 failed / 0 xpassed / 9 xfailed (standing `{f32,acc=False}` EXCLUSION).
+- Measured speedups (blackhole_p150b, median of 8 fresh trials, exact perf config): BLOCK 8×8
+  86619 → 71669 ns (**1.209×**, 3.38× → 2.80× above achievable); WIDTH 8×1 5640→5404 (1.04×),
+  9×1 7725→7164 (1.08×), 8×4 7590→7320 (1.04×), 7×4 9153→8571 (1.07×).
+- Golden test progress: no cell change (perf refinement, no SUPPORTED change); no regression —
+  loose 19/19, unit dir 449 passed / 32 skipped (`--dev` + non-dev), `test_rms_norm_r6e.py` 4/4 +
+  `test_rms_norm_r6_ablation.py` 7/7 (`--dev` + non-dev).
+- Issues encountered: Lever 1 (the named "biggest") is blocked at the kernel-lib helper surface (no
+  broadcast dest-reuse) and measured-inferior even via raw LLK (`compute_fusion` 0.82× on Wormhole);
+  characterized at depth and deferred to R6g. Pass-2 x·rstd batching deferred to R6g because it needs a
+  `cb_norm` resize that broadens L1 pressure across every cross-core program (wide logical/decode/RM
+  per_w_t) — belongs behind a per-path L1 gate, not this focused diff.
+- Tests added: none new — reused `test_rms_norm_perf_r6.py` (device-ns), `test_rms_norm_r6e.py`
+  (two-phase correctness), `test_rms_norm_r6_ablation.py` (K∤C gate). Filed follow-up Refinement 6g
+  (pass-2 batching + gamma-fusion residual).
