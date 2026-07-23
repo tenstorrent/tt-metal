@@ -11,7 +11,7 @@ DEFAULT_MODEL = MODELS[2]
 # Initializing a model (with random weights) from the configuration
 model = RTDetrForObjectDetection.from_pretrained(DEFAULT_MODEL)
 
-resnet_embedder = model.model.backbone.model.encoder.stages[0]
+module = model.model.encoder.lateral_convs
 
-for name, tensor in resnet_embedder.state_dict().items():
+for name, tensor in module.state_dict().items():
     print(name, tensor.shape)

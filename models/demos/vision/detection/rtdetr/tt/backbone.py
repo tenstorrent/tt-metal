@@ -181,6 +181,8 @@ class TtRTDetrResNetConvLayer:
         self.padding = padding
         if activation == "relu":
             self.activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+        elif activation == "silu":
+            self.activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
         elif activation == "identity":
             self.activation = None
         else:
