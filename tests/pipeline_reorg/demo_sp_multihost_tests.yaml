@@ -97,17 +97,24 @@
 # ============================================================================
 # BH SC16 Multihost Pipeline Tests (4 connected SC4 = 16 galaxies)
 # ============================================================================
+# bh_sc16 uses Count allocation (no ttop rankfile / rank_bindings.yaml). Launch via
+# tt-run automapper (--mesh-graph-descriptor + --hosts); Phase-1 generate_rank_bindings
+# writes bindings under generated/ttrun/<cache_id>/. Do not pass --rank-binding,
+# --map-by rankfile, or --host in --mpi-args. Use --bind-to none (not hwt): Phase 1
+# has no rankfile, and hwt mapping fails on worker cpusets.
 
 - name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
     TTRUN_DIR=/etc/ttop
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
-      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+      --mesh-graph-descriptor "$MGD" \
+      --hosts "$PIPELINE_HOSTS" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME}" \
       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
@@ -128,11 +135,13 @@
     TTRUN_DIR=/etc/ttop
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
-      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+      --mesh-graph-descriptor "$MGD" \
+      --hosts "$PIPELINE_HOSTS" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME}" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -152,11 +161,13 @@
     TTRUN_DIR=/etc/ttop
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
-      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+      --mesh-graph-descriptor "$MGD" \
+      --hosts "$PIPELINE_HOSTS" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME}" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --repeat-generations 2 \
