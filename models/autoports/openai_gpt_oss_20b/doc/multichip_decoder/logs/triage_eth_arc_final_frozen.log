@@ -1,0 +1,37 @@
+Script started on 2026-07-23 07:22:23+00:00 [COMMAND="python tools/tt-triage.py --run=check_eth_status --run=check_arc --dev=all --llm-output --disable-progress --skip-version-check" <not executed on terminal>]
+
+check_eth_status.py:
+  pass
+    Device 0: Skipping: noc_read(): incompatible function arguments. The 
+following argument types are supported:\n    1. noc_read(self, core_x: int, 
+core_y: int, addr: int, size: int) -> bytes\n    2. noc_read(self, noc_id: int, 
+core_x: int, core_y: int, addr: int, buffer: bytearray) -> None\n\nInvoked with 
+types: tt_umd.tt_umd.TTDevice, int, int, int, int, memoryview
+    Device 1: Skipping: noc_read(): incompatible function arguments. The 
+following argument types are supported:\n    1. noc_read(self, core_x: int, 
+core_y: int, addr: int, size: int) -> bytes\n    2. noc_read(self, noc_id: int, 
+core_x: int, core_y: int, addr: int, buffer: bytearray) -> None\n\nInvoked with 
+types: tt_umd.tt_umd.TTDevice, int, int, int, int, memoryview
+    Device 2: Skipping: noc_read(): incompatible function arguments. The 
+following argument types are supported:\n    1. noc_read(self, core_x: int, 
+core_y: int, addr: int, size: int) -> bytes\n    2. noc_read(self, noc_id: int, 
+core_x: int, core_y: int, addr: int, buffer: bytearray) -> None\n\nInvoked with 
+types: tt_umd.tt_umd.TTDevice, int, int, int, int, memoryview
+    Device 3: Skipping: noc_read(): incompatible function arguments. The 
+following argument types are supported:\n    1. noc_read(self, core_x: int, 
+core_y: int, addr: int, size: int) -> bytes\n    2. noc_read(self, noc_id: int, 
+core_x: int, core_y: int, addr: int, buffer: bytearray) -> None\n\nInvoked with 
+types: tt_umd.tt_umd.TTDevice, int, int, int, int, memoryview
+
+check_arc.py:
+Dev,Loc,Postcode,Up time,Clock MHz,Heartbeats/s
+0,"8-0 (a0,0)",N/A,4:49:19.800000,800,9.997967554847722
+1,"8-0 (a0,0)",N/A,4:49:19.800000,800,9.997896096093903
+2,"8-0 (a0,0)",N/A,4:49:19.800000,800,9.997938053318126
+3,"8-0 (a0,0)",N/A,4:49:19.700000,800,9.998003058852152
+elfs cache enabled=True
+distinct elf files=0
+total size=0.0MB
+
+
+Script done on 2026-07-23 07:22:26+00:00 [COMMAND_EXIT_CODE="0"]

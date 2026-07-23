@@ -1,0 +1,39 @@
+{
+  "attended_gather_shape": [
+    1,
+    1,
+    1,
+    4096
+  ],
+  "attended_local_shape": [
+    1,
+    1,
+    1,
+    1024
+  ],
+  "candidate": "fused_attended_ag_local_o_natural720_bfloat16",
+  "candidate_fused_ag_local_o_ms": 0.20176802296191454,
+  "layer_idx": 13,
+  "local_output_shape": [
+    1,
+    1,
+    1,
+    720
+  ],
+  "logical_output_shape": [
+    1,
+    1,
+    1,
+    2880
+  ],
+  "mesh": [
+    1,
+    4
+  ],
+  "output_pcc": 0.9998798966407776,
+  "payload_dtype": "bfloat16",
+  "persistent_buffer": "attended all-gather [1,1,1,4096]",
+  "selected_local_o_ar_ms": 0.06469468120485544,
+  "selected_over_candidate_speedup": 0.32063892114890336,
+  "trace_replays": 100
+}

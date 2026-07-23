@@ -1,0 +1,44 @@
+{
+  "candidate": "tp4_gate_selected_experts",
+  "candidate_tp_weight_shapes_per_rank": {
+    "down": [
+      1,
+      32,
+      720,
+      2880
+    ],
+    "gate_up": [
+      1,
+      32,
+      2880,
+      720
+    ]
+  },
+  "ep4_boundary_ms": 0.4063442815095186,
+  "ep4_over_tp4_speedup": 0.9050906040483905,
+  "gate_selected_experts_per_token": 4,
+  "layer_idx": 13,
+  "mesh": [
+    1,
+    4
+  ],
+  "output_pcc": 0.9997320175170898,
+  "router_top4_exact": true,
+  "selected": "ep4_gate_selected_experts",
+  "selected_ep_weight_shapes_per_rank": {
+    "down": [
+      1,
+      8,
+      2880,
+      2880
+    ],
+    "gate_up": [
+      1,
+      8,
+      2880,
+      2880
+    ]
+  },
+  "tp4_boundary_ms": 0.4489542590454221,
+  "trace_replays": 100
+}

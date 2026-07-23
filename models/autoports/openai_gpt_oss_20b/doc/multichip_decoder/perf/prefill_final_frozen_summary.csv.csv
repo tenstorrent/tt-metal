@@ -1,0 +1,4 @@
+Total % [%],Op Code,Device Time Sum [μs],Op Count
+64.14,Compute,3893.61,28
+33.15,Other,2012.29,18
+2.72,TM,165.01,28

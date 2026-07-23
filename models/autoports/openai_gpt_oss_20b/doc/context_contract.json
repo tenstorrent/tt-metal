@@ -48,6 +48,23 @@
     "cache_storage_change": "BFP8_B replaces BF16 for persistent K/V. Callers select max_cache_len up to the public context; the emitted default remains 128 for compatibility.",
     "capacity_change": "The earlier S=128 reduction was based on an avoidable unchunked dense implementation. After bounding live tensors, a progressive real-weight full-layer sweep passes the HF endpoint, so current_supported_context is restored to 131072."
   },
+  "multichip_decoder_stage": {
+    "target_hardware": "four local Blackhole P300c devices in a fixed 1x4 FABRIC_1D_RING",
+    "tensor_parallel_degree": 4,
+    "expert_parallel_degree": 4,
+    "real_weight_validated_prefill_contexts": [17, 127, 128, 129, 2048],
+    "validated_decode_positions": "17 through 19, repeated 127 through 131, sequential traced 128 through 131 and 191 through 193, following-prefill positions 128/129/2048, and endpoint 131071 for both sliding and full-attention layers",
+    "non_aligned_lengths": [17, 127, 129, 193],
+    "cache_dtype": "BFP8_B",
+    "cache_layout": "per-rank TILE DRAM pages [ceil(max_cache_len/64),2,64,64]",
+    "cache_storage_change": "KV-head TP4 changes each rank from the global eight-head cache view to two local KV heads. At context 131072, each rank has 2048 physical pages and one local K or V cache contains 16,777,216 BFP8 values.",
+    "page_table_contract": "Replicated INT32 logical-to-physical page mappings may be arbitrary permutations. Reverse mappings cross physical and logical page boundaries in correctness, trace, and endpoint tests.",
+    "trace_contract": "Native short decode accepts mutable device position tensors across one captured graph. At and above position 127, sink-correct manual attention uses fixed 64-token trace banks, a device-mutable current-position tensor, and device-side causal/sliding masks. One warmed capture replays every token within a bank; recapture is required only at a 64-token page-bank boundary. Sequential reverse-page tests cover positions 128-131 and 191-193 with exact eager output and per-rank K/V writes.",
+    "precision_contract": "Prefill preserves the optimized baseline's layer-aware policy: sliding uses BF16-output HiFi2 active experts; full S=128 uses exact TP-local FP32 attention; full prefill uses HiFi4 active experts. Decode uses LoFi experts, HiFi2 long projections for sliding attention, and HiFi4 long projections for full attention to preserve near-tied top-4 routing at the 131072 endpoint. Expert weights remain BFP8_B and execution remains gate-selected EP4.",
+    "real_weight_boundary_pcc": "Across positions 127-131, attention PCC is at least 0.999397 for sliding and 0.999051 for full attention; final decode PCC is at least 0.997467 and 0.997569 respectively against the current single-chip OptimizedDecoder. At S=128/129/2048, minimum prefill output PCC is 0.997193, minimum attention PCC is 0.999994, and following-decode PCC is at least 0.997193.",
+    "advertised_context_result": "PASS for both layer kinds: [2048,2,64,64] local K and V caches allocate on all four ranks and decode position 131071 updates reverse-mapped physical page 0 offset 63. Sliding/full final output PCC is 0.997989/0.999263 versus default-native OptimizedDecoder; full exact-manual attention/routing/final PCC is 0.999947/0.999994/0.999319 with exact top-4.",
+    "capacity_change": "No reduction. KV-head TP4 lowers per-device cache storage and the full 131072-token HF-advertised capability remains supported."
+  },
   "paths": {
     "prefill": {
       "status": "translated",

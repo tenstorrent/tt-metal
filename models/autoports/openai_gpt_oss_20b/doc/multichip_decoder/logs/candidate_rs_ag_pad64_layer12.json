@@ -1,0 +1,32 @@
+{
+  "candidate": "rs_ag_pad64",
+  "layer_idx": 12,
+  "mesh": [
+    1,
+    4
+  ],
+  "output_pcc": 0.9998074769973755,
+  "padded_input_bytes_per_rank": 5888,
+  "padded_input_shape": [
+    1,
+    1,
+    1,
+    2944
+  ],
+  "payload_dtype": "bfloat16",
+  "persistent_resources": "CCLManager ping-pong semaphores",
+  "reduce_scatter_output_bytes_per_rank": 1472,
+  "reduce_scatter_output_shape": [
+    1,
+    1,
+    1,
+    736
+  ],
+  "selected_input_bytes_per_rank": 5760,
+  "selected_input_shape": [
+    1,
+    1,
+    1,
+    2880
+  ]
+}
