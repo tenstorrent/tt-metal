@@ -217,7 +217,6 @@ def attention_forward(
                 ccl_manager=ccl_manager,
                 cached_len=cached_len,
                 s_local=seq_len,
-                n_chunks=n_chunks,
                 chunk_local=chunk_local,
                 scale=config.head_dim**-0.5,
                 block_size=config.msa_block_size,

@@ -14,7 +14,7 @@
     set -euo pipefail
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto -x \
-      -m "$PYTEST_MARKERS" \
+      --dist=worksteal -m "$PYTEST_MARKERS" \
       --timeout=60 \
       --junitxml=pytest-report-wormhole.xml .
   skus:
@@ -29,7 +29,7 @@
     set -euo pipefail
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto -x \
-      -m "$PYTEST_MARKERS" \
+      --dist=worksteal -m "$PYTEST_MARKERS" \
       --timeout=60 \
       --junitxml=pytest-report-blackhole.xml .
   skus:

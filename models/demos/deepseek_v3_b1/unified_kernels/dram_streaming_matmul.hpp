@@ -274,7 +274,7 @@ struct DRAMStreamingMatmul {
                 custom_mm_block_init<transpose, split_acc, dense_packing, CTArgs::fp32_dest_acc_en>(
                     CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             } else {
-                reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
+                reconfig_data_format<SrcOrder::Reverse, true>(CTArgs::cb_in0, CTArgs::cb_in1);
                 pack_reconfig_data_format<true>(CTArgs::cb_out);
                 custom_mm_block_init_short<transpose, split_acc, dense_packing>(
                     CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);

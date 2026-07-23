@@ -124,6 +124,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/sentinel/sentinel_core.h
     inc/api/compute/sentinel/testing_spy.h
     inc/api/compute/softmax.h
+    inc/api/compute/src_order.h
     inc/api/compute/sub_int_sfpu.h
     inc/api/compute/tile_move_copy.h
     inc/api/compute/tilize.h

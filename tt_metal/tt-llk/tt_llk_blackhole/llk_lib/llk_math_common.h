@@ -153,21 +153,24 @@ inline void _llk_math_pack_sync_init_()
 /**
  * @brief Reconfigure the math thread for a new source A data format.
  *
- * On Blackhole the ALU source format is inferred, so this is a no-op unless the reconfiguration crosses an
- * Int8/Int32 boundary (to_from_int8), in which case it re-evaluates and programs the INT8 math enable bit.
+ * On Blackhole the ALU source format is inferred, so this only re-derives the INT8 math enable bit from the new
+ * format. It does so by default so an int8-boundary reconfig cannot leave the bit stale (tt-metal#34499); pass
+ * skip_int8 = true (making it a no-op) only when the caller guarantees no Int8/UInt8/Int32 boundary is crossed.
  *
- * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when to_from_int8 is set).
- * @tparam to_from_int8: Set when the reconfiguration switches to or from an Int8/Int32 format.
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when the new format is Int8/UInt8/Int32).
+ * @tparam skip_int8: Skip re-deriving the INT8 math enable bit from the new format.
  * @param srca_data_format: New data format of source A (DataFormat enum underlying value).
  */
-template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
+template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_format)
 {
     llk::san::math_operand_configure<true>(srca_data_format, llk::san::IGNORE);
 
-    if constexpr (to_from_int8)
+    if constexpr (!skip_int8)
     {
-        static_assert(is_fp32_dest_acc_en, "Reconfiguring math to/from Int8 formats requires FP32 Dest mode enabled");
+        LLK_ASSERT(
+            is_fp32_dest_acc_en || !is_int8_or_int32_format(srca_data_format),
+            "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
         // Only INT8_math_enabled is written here; it is FPU-only (the SFPU never reads it, and on Blackhole SrcB
         // format is inferred rather than rewritten here), so draining the FPU (MATH) suffices -- no WAIT_SFPU.
         // (Wormhole's twin uses WAIT_SFPU because there the reconfig also rewrites the SFPU-read SrcB format.)
@@ -183,21 +186,24 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
 /**
  * @brief Reconfigure the math thread for a new source B data format.
  *
- * On Blackhole the ALU source format is inferred, so this is a no-op unless the reconfiguration crosses an
- * Int8/Int32 boundary (to_from_int8), in which case it re-evaluates and programs the INT8 math enable bit.
+ * On Blackhole the ALU source format is inferred, so this only re-derives the INT8 math enable bit from the new
+ * format. It does so by default so an int8-boundary reconfig cannot leave the bit stale (tt-metal#34499); pass
+ * skip_int8 = true (making it a no-op) only when the caller guarantees no Int8/UInt8/Int32 boundary is crossed.
  *
- * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when to_from_int8 is set).
- * @tparam to_from_int8: Set when the reconfiguration switches to or from an Int8/Int32 format.
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when the new format is Int8/UInt8/Int32).
+ * @tparam skip_int8: Skip re-deriving the INT8 math enable bit from the new format.
  * @param srcb_data_format: New data format of source B (DataFormat enum underlying value).
  */
-template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
+template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_format)
 {
     llk::san::math_operand_configure<true>(llk::san::IGNORE, srcb_data_format);
 
-    if constexpr (to_from_int8)
+    if constexpr (!skip_int8)
     {
-        static_assert(is_fp32_dest_acc_en, "Reconfiguring math to/from Int8 formats requires FP32 Dest mode enabled");
+        LLK_ASSERT(
+            is_fp32_dest_acc_en || !is_int8_or_int32_format(srcb_data_format),
+            "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
         // Only INT8_math_enabled is written here; it is FPU-only (the SFPU never reads it, and on Blackhole SrcB
         // format is inferred rather than rewritten here), so draining the FPU (MATH) suffices -- no WAIT_SFPU.
         // (Wormhole's twin uses WAIT_SFPU because there the reconfig also rewrites the SFPU-read SrcB format.)
@@ -213,23 +219,25 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
 /**
  * @brief Reconfigure the math thread for new source A and source B data formats.
  *
- * On Blackhole the ALU source format is inferred, so this is a no-op unless the reconfiguration crosses an
- * Int8/Int32 boundary (to_from_int8), in which case it re-evaluates and programs the INT8 math enable bit
- * from both source formats.
+ * On Blackhole the ALU source format is inferred, so this only re-derives the INT8 math enable bit from both new
+ * formats. It does so by default so an int8-boundary reconfig cannot leave the bit stale (tt-metal#34499); pass
+ * skip_int8 = true (making it a no-op) only when the caller guarantees no Int8/UInt8/Int32 boundary is crossed.
  *
- * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when to_from_int8 is set).
- * @tparam to_from_int8: Set when the reconfiguration switches to or from an Int8/Int32 format.
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when either new format is Int8/UInt8/Int32).
+ * @tparam skip_int8: Skip re-deriving the INT8 math enable bit from the new formats.
  * @param srca_data_format: New data format of source A (DataFormat enum underlying value).
  * @param srcb_data_format: New data format of source B (DataFormat enum underlying value).
  */
-template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
+template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
     llk::san::math_operand_configure<true>(srca_data_format, srcb_data_format);
 
-    if constexpr (to_from_int8)
+    if constexpr (!skip_int8)
     {
-        static_assert(is_fp32_dest_acc_en, "Reconfiguring math to/from Int8 formats requires FP32 Dest mode enabled");
+        LLK_ASSERT(
+            is_fp32_dest_acc_en || !(is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format)),
+            "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
         // Only INT8_math_enabled is written here; it is FPU-only (the SFPU never reads it, and on Blackhole SrcB
         // format is inferred rather than rewritten here), so draining the FPU (MATH) suffices -- no WAIT_SFPU.
         // (Wormhole's twin uses WAIT_SFPU because there the reconfig also rewrites the SFPU-read SrcB format.)

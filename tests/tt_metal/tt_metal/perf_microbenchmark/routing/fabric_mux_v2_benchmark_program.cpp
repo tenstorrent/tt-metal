@@ -45,7 +45,7 @@ constexpr uint32_t kStandaloneDownstreamFreeSlotsStreamId =
     tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
 
 struct SenderExecutionContext {
-    CoreCoord logical_core;
+    tt::tt_metal::CoreCoord logical_core;
     uint32_t test_results_address = 0;
 };
 
@@ -78,20 +78,20 @@ uint32_t get_worker_l1_end_address() {
         hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE));
 }
 
-std::vector<CoreCoord> enumerate_worker_cores(const MeshDevicePtr& device) {
+std::vector<tt::tt_metal::CoreCoord> enumerate_worker_cores(const MeshDevicePtr& device) {
     const auto grid_size = device->compute_with_storage_grid_size();
-    std::vector<CoreCoord> worker_cores;
+    std::vector<tt::tt_metal::CoreCoord> worker_cores;
     worker_cores.reserve(static_cast<size_t>(grid_size.x) * static_cast<size_t>(grid_size.y));
     for (std::size_t y = 0; y < grid_size.y; ++y) {
         for (std::size_t x = 0; x < grid_size.x; ++x) {
-            worker_cores.push_back(CoreCoord{static_cast<std::size_t>(x), static_cast<std::size_t>(y)});
+            worker_cores.push_back(tt::tt_metal::CoreCoord{static_cast<std::size_t>(x), static_cast<std::size_t>(y)});
         }
     }
     return worker_cores;
 }
 
 void write_zero_words_to_device(
-    tt::tt_metal::IDevice* device, const CoreCoord& logical_core, size_t address, size_t size_bytes) {
+    tt::tt_metal::IDevice* device, const tt::tt_metal::CoreCoord& logical_core, size_t address, size_t size_bytes) {
     TT_FATAL(
         (size_bytes % sizeof(uint32_t)) == 0,
         "Zero-init region size {} must be a multiple of {}",
@@ -103,7 +103,7 @@ void write_zero_words_to_device(
 }
 
 void write_word_to_device(
-    tt::tt_metal::IDevice* device, const CoreCoord& logical_core, size_t address, uint32_t value) {
+    tt::tt_metal::IDevice* device, const tt::tt_metal::CoreCoord& logical_core, size_t address, uint32_t value) {
     std::vector<uint32_t> word_buffer{value};
     tt::tt_metal::detail::WriteToDeviceL1(
         device, logical_core, to_uint32_checked(address, "word_init_address"), word_buffer);
@@ -111,7 +111,7 @@ void write_word_to_device(
 
 void initialize_sender_start_barrier_state(
     tt::tt_metal::IDevice* device,
-    const CoreCoord& sender_logical_core,
+    const tt::tt_metal::CoreCoord& sender_logical_core,
     uint32_t start_signal_address,
     uint32_t ready_count_address,
     uint32_t initial_ready_count) {
@@ -120,7 +120,7 @@ void initialize_sender_start_barrier_state(
 }
 
 std::vector<uint32_t> build_sender_noc_xy_encodings(
-    const MeshDevicePtr& sender_device, const std::vector<CoreCoord>& sender_logical_cores) {
+    const MeshDevicePtr& sender_device, const std::vector<tt::tt_metal::CoreCoord>& sender_logical_cores) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     std::vector<uint32_t> sender_noc_xy_encodings;
     sender_noc_xy_encodings.reserve(sender_logical_cores.size());
@@ -149,7 +149,7 @@ std::vector<uint32_t> build_peer_sender_noc_xy_encodings(
 void create_data_movement_kernel(
     tt::tt_metal::Program& program,
     const std::string& kernel_path,
-    const CoreCoord& logical_core,
+    const tt::tt_metal::CoreCoord& logical_core,
     const std::vector<uint32_t>& compile_args,
     const std::vector<uint32_t>& runtime_args,
     tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default) {
@@ -378,7 +378,7 @@ void validate_sender_memory_map(const SenderMemoryMap& memory_map) {
 
 void initialize_drainer_state(
     tt::tt_metal::IDevice* device,
-    const CoreCoord& drainer_logical_core,
+    const tt::tt_metal::CoreCoord& drainer_logical_core,
     const StandaloneMuxV2DrainerLayout& drainer_layout) {
     write_zero_words_to_device(device, drainer_logical_core, drainer_layout.get_status_address(), sizeof(uint32_t));
     write_zero_words_to_device(
@@ -395,8 +395,8 @@ void initialize_drainer_state(
 std::vector<uint32_t> build_mux_downstream_sender_rt_args(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
-    const CoreCoord& mux_logical_core,
-    const CoreCoord& drainer_virtual_core,
+    const tt::tt_metal::CoreCoord& mux_logical_core,
+    const tt::tt_metal::CoreCoord& drainer_virtual_core,
     const StandaloneMuxV2DrainerLayout& drainer_layout) {
     const auto worker_teardown_semaphore_id = tt::tt_metal::CreateSemaphore(program, mux_logical_core, 0);
     const auto worker_buffer_index_semaphore_id = tt::tt_metal::CreateSemaphore(program, mux_logical_core, 0);
@@ -427,7 +427,7 @@ std::vector<uint32_t> build_mux_downstream_sender_rt_args(
 
 void create_drainer_kernel(
     tt::tt_metal::Program& program,
-    const CoreCoord& drainer_logical_core,
+    const tt::tt_metal::CoreCoord& drainer_logical_core,
     uint64_t expected_total_packets,
     const StandaloneMuxV2DrainerLayout& drainer_layout) {
     const std::vector<uint32_t> compile_args = {
@@ -449,11 +449,11 @@ void create_drainer_kernel(
 
 void create_sender_kernel(
     tt::tt_metal::Program& program,
-    const CoreCoord& sender_logical_core,
-    const CoreCoord& drainer_virtual_core,
+    const tt::tt_metal::CoreCoord& sender_logical_core,
+    const tt::tt_metal::CoreCoord& drainer_virtual_core,
     const SenderMemoryMap& sender_memory_map,
     const tt::tt_fabric::FabricMuxV2Config& mux_config,
-    const CoreCoord& mux_virtual_core,
+    const tt::tt_metal::CoreCoord& mux_virtual_core,
     const StandaloneMuxV2DrainerLayout& drainer_layout,
     uint32_t logical_channel_id,
     uint32_t num_packets,
@@ -583,23 +583,23 @@ bool FabricMuxV2BenchmarkContext::can_support_case(
     return true;
 }
 
-CoreCoord FabricMuxV2BenchmarkContext::get_mux_logical_core() const {
+tt::tt_metal::CoreCoord FabricMuxV2BenchmarkContext::get_mux_logical_core() const {
     TT_FATAL(!worker_cores_.empty(), "No worker cores are available for the standalone mux benchmark");
     return worker_cores_.at(0);
 }
 
-CoreCoord FabricMuxV2BenchmarkContext::get_drainer_logical_core() const {
+tt::tt_metal::CoreCoord FabricMuxV2BenchmarkContext::get_drainer_logical_core() const {
     TT_FATAL(worker_cores_.size() >= 2, "No drainer core is available for the standalone mux benchmark");
     return worker_cores_.at(1);
 }
 
-std::vector<CoreCoord> FabricMuxV2BenchmarkContext::get_sender_logical_cores(
+std::vector<tt::tt_metal::CoreCoord> FabricMuxV2BenchmarkContext::get_sender_logical_cores(
     const MuxV2ThroughputCase& benchmark_case) const {
     TT_FATAL(
         worker_cores_.size() >= static_cast<std::size_t>(benchmark_case.num_senders + 2),
         "Not enough worker cores to satisfy sender-core request");
 
-    return std::vector<CoreCoord>(
+    return std::vector<tt::tt_metal::CoreCoord>(
         worker_cores_.begin() + 2, worker_cores_.begin() + 2 + static_cast<std::ptrdiff_t>(benchmark_case.num_senders));
 }
 

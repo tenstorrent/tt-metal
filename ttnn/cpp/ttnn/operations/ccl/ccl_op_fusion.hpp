@@ -13,11 +13,11 @@
 namespace ttnn::experimental::ccl {
 
 struct CoreSemPair {
-    CoreCoord core = {0, 0};
+    tt::tt_metal::CoreCoord core = {0, 0};
     uint32_t sem_id = 0;
 
     CoreSemPair() = default;
-    CoreSemPair(CoreCoord core, uint32_t sem_id) : core(core), sem_id(sem_id) {}
+    CoreSemPair(tt::tt_metal::CoreCoord core, uint32_t sem_id) : core(core), sem_id(sem_id) {}
 };
 
 enum class FusedOpSignalerMode {
@@ -31,12 +31,12 @@ enum class FusedOpSignalerMode {
 
 struct AllGatherFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 0;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc;
+    std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores;
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
 
     /* All Gather specific */
-    std::vector<CoreCoord> all_gather_worker_cores_noc;
+    std::vector<tt::tt_metal::CoreCoord> all_gather_worker_cores_noc;
     uint32_t all_gather_worker_sync_semaphore = 0;
 
     bool initialized_fused_op = false;
@@ -45,7 +45,7 @@ struct AllGatherFusedOpSignaler {
     AllGatherFusedOpSignaler() = default;
 
     void init_fused_op(
-        const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
+        const std::vector<tt::tt_metal::CoreCoord>& fused_op_receiver_cores_noc,
         const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
@@ -54,7 +54,7 @@ struct AllGatherFusedOpSignaler {
         const tt::tt_metal::IDevice* device,
 
         const CoreRangeSet& all_gather_workers,
-        std::vector<CoreCoord>& all_gather_worker_cores);
+        std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
 
     void push_all_gather_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args,
@@ -66,12 +66,12 @@ struct AllGatherFusedOpSignaler {
 
 struct StridedAllGatherFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 0;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc;
+    std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores;
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
 
     /* All Gather specific */
-    std::vector<CoreCoord> all_gather_worker_cores_noc;
+    std::vector<tt::tt_metal::CoreCoord> all_gather_worker_cores_noc;
     uint32_t all_gather_worker_sync_semaphore = 0;
 
     bool initialized_fused_op = false;
@@ -80,7 +80,7 @@ struct StridedAllGatherFusedOpSignaler {
     StridedAllGatherFusedOpSignaler() = default;
 
     void init_fused_op(
-        const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
+        const std::vector<tt::tt_metal::CoreCoord>& fused_op_receiver_cores_noc,
         const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
@@ -89,7 +89,7 @@ struct StridedAllGatherFusedOpSignaler {
         const tt::tt_metal::IDevice* device,
 
         const CoreRangeSet& all_gather_workers,
-        std::vector<CoreCoord>& all_gather_worker_cores);
+        std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
 
     void push_all_gather_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args,
@@ -102,7 +102,7 @@ struct StridedAllGatherFusedOpSignaler {
 // Used to propagate semaphore information from matmul to reduce scatter in matmul_reduce_scatter op
 struct ReduceScatterFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 1;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc;
+    std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores;
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::SINGLE;
 
@@ -133,7 +133,7 @@ struct MatmulFusedOpSignaler {
 
     /* Matmul info for All Gather */
     uint32_t num_fused_op_cores_to_signal = 0;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc;
+    std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores;  // [dir0, dir1]
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
 
@@ -148,8 +148,8 @@ struct MatmulFusedOpSignaler {
     uint32_t weight_output_page_offset = 0;
 
     /* Matmul info for Reduce Scatter */
-    std::vector<CoreCoord> matmul_worker_cores_noc;
-    std::vector<CoreCoord> matmul_worker_cores;
+    std::vector<tt::tt_metal::CoreCoord> matmul_worker_cores_noc;
+    std::vector<tt::tt_metal::CoreCoord> matmul_worker_cores;
     uint32_t matmul_worker_sync_semaphore = 0;
 
     /* Info for Llama Reduce Scatter*/
@@ -157,8 +157,8 @@ struct MatmulFusedOpSignaler {
     uint32_t rs_semaphore = 0;
     uint32_t matmul_semaphore_target = 0;
     CoreRangeSet rs_cores;
-    CoreCoord privilaged_core;
-    CoreCoord privilaged_core_physical;
+    tt::tt_metal::CoreCoord privilaged_core;
+    tt::tt_metal::CoreCoord privilaged_core_physical;
 
     /* Info for Llama All Gather*/
     uint32_t start_cb_index = 0;
@@ -192,7 +192,7 @@ struct MatmulFusedOpSignaler {
         uint32_t start_cb_index);
 
     void init_reduce_scatter(
-        const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
+        const std::vector<tt::tt_metal::CoreCoord>& fused_op_receiver_cores_noc,
         const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
         FusedOpSignalerMode fused_op_signaler_mode);
 
@@ -209,7 +209,7 @@ struct MatmulFusedOpSignaler {
     // First core to run this is the privileged core
     void push_llama_rs_rt_args_for_mm(
         std::vector<uint32_t>& out_rt_args,
-        CoreCoord current_core,
+        tt::tt_metal::CoreCoord current_core,
         tt::tt_metal::NOC writer_noc,
         const tt::tt_metal::IDevice* device) const;
 
@@ -217,7 +217,7 @@ struct MatmulFusedOpSignaler {
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
         const CoreRange& matmul_workers,
-        const std::vector<CoreCoord>& matmul_worker_cores);
+        const std::vector<tt::tt_metal::CoreCoord>& matmul_worker_cores);
 
     void init_fused_op(
         tt::tt_metal::Program& program,
@@ -239,7 +239,7 @@ struct MatmulFusedOpSignaler {
 struct MinimalMatmulFusedOpSignaler {
     /* Matmul info for All Gather */
     uint32_t num_fused_op_cores_to_signal = 0;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc;
+    std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores;  // [dir0, dir1]
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
 
@@ -283,7 +283,7 @@ struct MinimalMatmulFusedOpSignaler {
 // so the matmul master knows which cores and semaphore to signal.
 struct StridedReduceScatterFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 0;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc;
+    std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
     uint32_t fused_op_receiver_signal_semaphore = 0;
 
     bool initialized = false;

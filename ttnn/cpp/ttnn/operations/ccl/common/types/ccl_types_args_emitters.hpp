@@ -51,7 +51,7 @@ args_list_t legacy_emit_address_generator_runtime_args(const tt::tt_metal::IDevi
 args_list_t emit_address_generator_compile_time_args(const ttnn::Tensor& t);
 args_list_t legacy_emit_address_generator_compile_time_args(const ttnn::Tensor& tensor);
 
-std::pair<CoreCoord, CoreCoord> shard_grid_from_shard_spec(const tt::tt_metal::ShardSpec& shard_spec);
+std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreCoord> shard_grid_from_shard_spec(const tt::tt_metal::ShardSpec& shard_spec);
 
 struct ShardedAddrGenArgBuilder {
     static bool shard_grid_is_transposed(const ttnn::Tensor& t);

@@ -422,7 +422,7 @@ void UDMFabricUnicastCommon(
         std::tuple<RoutingDirection, uint32_t /*num_hops*/>,
         std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info,
     std::optional<RoutingDirection> override_initial_direction = std::nullopt,
-    std::optional<std::vector<std::pair<CoreCoord, CoreCoord>>> worker_coords_list = std::nullopt,
+    std::optional<std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreCoord>>> worker_coords_list = std::nullopt,
     bool dual_risc = false);
 
 void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType noc_packet_type, bool dual_risc = false);

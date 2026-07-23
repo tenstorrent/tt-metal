@@ -102,7 +102,7 @@ std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint32_t end
 std::shared_ptr<tt_metal::Program> create_receiver_program(
     const std::vector<uint32_t>& compile_time_args,
     const std::vector<uint32_t>& runtime_args,
-    const CoreCoord& logical_core) {
+    const tt::tt_metal::CoreCoord& logical_core) {
     auto recv_program = std::make_shared<tt_metal::Program>();
     auto recv_kernel = tt_metal::CreateKernel(
         *recv_program,
@@ -218,8 +218,8 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
         }
     }
 
-    CoreCoord sender_logical_core = {0, 0};    // This core on the sender (remote chip) will make the mcast request
-    CoreCoord receiver_logical_core = {1, 0};  // Data will be forwarded to this core on al chips in the mcast group
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};    // This core on the sender (remote chip) will make the mcast request
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};  // Data will be forwarded to this core on al chips in the mcast group
 
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& edm_config = fabric_context.get_builder_context().get_fabric_router_config();
@@ -233,7 +233,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
         mcast_group_devices.push_back(fixture->get_device(id));
     }
 
-    CoreCoord receiver_virtual_core = mcast_start_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = mcast_start_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -347,8 +347,8 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
 }
 
 void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDirection direction) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -432,7 +432,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
 
     auto sender_device = fixture->get_device(src_physical_device_id);
     auto receiver_device = fixture->get_device(dst_physical_device_id);
-    CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     // test parameters
     auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
@@ -545,8 +545,8 @@ void run_unicast_test_bw_chips(
     ChipId dst_physical_device_id,
     uint32_t num_hops,
     bool use_dram_dst = false) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
 
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
@@ -554,7 +554,7 @@ void run_unicast_test_bw_chips(
 
     auto sender_device = fixture->get_device(src_physical_device_id);
     auto receiver_device = fixture->get_device(dst_physical_device_id);
-    CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
@@ -864,8 +864,8 @@ void RunTestMCastConnAPI(
     uint32_t fwd_hops,
     RoutingDirection bwd_dir,
     uint32_t bwd_hops) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
     std::vector<tt_metal::Program> receiver_programs;
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -929,7 +929,7 @@ void RunTestMCastConnAPI(
     auto left_fabric_node_id = end_fabric_node_ids_by_dir[fwd_dir][fwd_hops - 1];
     auto right_fabric_node_id = end_fabric_node_ids_by_dir[bwd_dir][bwd_hops - 1];
 
-    CoreCoord receiver_virtual_core = left_recv_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = left_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     // test parameters
     auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
@@ -1120,8 +1120,8 @@ void RunTest2DMCastConnAPI(
     uint32_t south_branch_east_hops = east_hops;
     uint32_t south_branch_west_hops = west_hops;
 
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
     std::vector<tt_metal::Program> receiver_programs;
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1371,7 +1371,7 @@ void RunTest2DMCastConnAPI(
     auto sender_device = fixture->get_device(src_phys_chip_id);
     auto dst_recv_device = fixture->get_device(dst_recv_phys_chip_id);
 
-    CoreCoord receiver_virtual_core = dst_recv_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = dst_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -1653,8 +1653,8 @@ void RunTest2DMCastConnAPI(
 }
 
 void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32_t start_distance, uint32_t range) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
     std::vector<tt_metal::Program> receiver_programs;
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1718,7 +1718,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
     auto first_recv_fabric_node_id = end_fabric_node_ids_by_dir[dir][0];
     auto last_recv_fabric_node_id = end_fabric_node_ids_by_dir[dir][range - 1];
 
-    CoreCoord receiver_virtual_core =
+    tt::tt_metal::CoreCoord receiver_virtual_core =
         last_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     // test parameters
@@ -1959,7 +1959,7 @@ void RunEDMConnectionStressTest(
             auto worker_logical_cores_vec = corerange_to_cores(worker_logical_cores, std::nullopt, false);
 
             // Map logical to virtual cores
-            std::vector<CoreCoord> worker_virtual_cores;
+            std::vector<tt::tt_metal::CoreCoord> worker_virtual_cores;
             worker_virtual_cores.reserve(worker_logical_cores_vec.size());
             for (const auto& logical_core : worker_logical_cores_vec) {
                 worker_virtual_cores.push_back(sender_device->worker_core_from_logical_core(logical_core));
@@ -2113,8 +2113,8 @@ void FabricUnicastCommon(
     const std::vector<std::tuple<RoutingDirection, uint32_t>>& pair_ordered_dirs,
     FabricApiType api_type,
     bool with_state) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -2172,7 +2172,7 @@ void FabricUnicastCommon(
         dest_fabric_node_ids.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_physical_device_id));
     }
     auto sender_device = fixture->get_device(src_physical_device_id);
-    CoreCoord receiver_virtual_core = receiver_devices.back()->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = receiver_devices.back()->worker_core_from_logical_core(receiver_logical_core);
 
     tt_metal::Program sender_program = tt_metal::CreateProgram();
 
@@ -2296,14 +2296,14 @@ void UDMFabricUnicastCommon(
         std::tuple<RoutingDirection, uint32_t /*num_hops*/>,
         std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info,
     std::optional<RoutingDirection> override_initial_direction,
-    std::optional<std::vector<std::pair<CoreCoord, CoreCoord>>> worker_coords_list,
+    std::optional<std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreCoord>>> worker_coords_list,
     bool dual_risc) {
     // Build list of worker coordinate pairs - default to single pair (0,0) -> (1,0)
-    std::vector<std::pair<CoreCoord, CoreCoord>> worker_pairs;
+    std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreCoord>> worker_pairs;
     if (worker_coords_list.has_value()) {
         worker_pairs = worker_coords_list.value();
     } else {
-        worker_pairs.push_back({CoreCoord{0, 0}, CoreCoord{1, 0}});
+        worker_pairs.push_back({tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{1, 0}});
     }
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -2434,7 +2434,7 @@ void UDMFabricUnicastCommon(
             : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_receiver.cpp";
 
     // Build CoreRangeSets for all sender and receiver cores
-    std::vector<CoreCoord> sender_cores, receiver_cores;
+    std::vector<tt::tt_metal::CoreCoord> sender_cores, receiver_cores;
     for (const auto& [sender_logical_core, receiver_logical_core] : worker_pairs) {
         sender_cores.push_back(sender_logical_core);
         receiver_cores.push_back(receiver_logical_core);
@@ -2550,8 +2550,8 @@ void UDMFabricUnicastCommon(
 
     // Set per-core runtime args (receiver/sender coords + fabric connection)
     for (const auto& [sender_logical_core, receiver_logical_core] : worker_pairs) {
-        CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
-        CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
+        tt::tt_metal::CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
+        tt::tt_metal::CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
         // Sender runtime args: receiver coords first, then fabric connection
         std::vector<uint32_t> sender_runtime_args = {receiver_virtual_core.x, receiver_virtual_core.y};
@@ -2597,8 +2597,8 @@ void UDMFabricUnicastCommon(
     fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     // Helper lambda to check test results for a given RISC
-    auto check_risc_results = [&](const CoreCoord& sender_core,
-                                  const CoreCoord& receiver_core,
+    auto check_risc_results = [&](const tt::tt_metal::CoreCoord& sender_core,
+                                  const tt::tt_metal::CoreCoord& receiver_core,
                                   const WorkerMemMap& mem_map,
                                   const std::string& risc_name) {
         std::vector<uint32_t> sender_status;
@@ -2829,8 +2829,8 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
             this_device_idx};                           // receiver_device_idx (skip this slot)
 
         // Collect all sender-receiver core pairs (top half senders, bottom half receivers)
-        std::vector<CoreCoord> sender_logical_cores;
-        std::vector<CoreCoord> receiver_logical_cores;
+        std::vector<tt::tt_metal::CoreCoord> sender_logical_cores;
+        std::vector<tt::tt_metal::CoreCoord> receiver_logical_cores;
         for (uint32_t i = 0; i < num_core_pairs; i++) {
             uint32_t x = i % grid_size.x;
             uint32_t sender_y = i / grid_size.x;
@@ -2883,8 +2883,8 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
         // Set runtime args per sender core
         // Each sender sends to the corresponding receiver on ALL other devices
         for (uint32_t core_idx = 0; core_idx < num_core_pairs; core_idx++) {
-            CoreCoord sender_logical_core = sender_logical_cores[core_idx];
-            CoreCoord receiver_logical_core = receiver_logical_cores[core_idx];
+            tt::tt_metal::CoreCoord sender_logical_core = sender_logical_cores[core_idx];
+            tt::tt_metal::CoreCoord receiver_logical_core = receiver_logical_cores[core_idx];
 
             // Runtime args: for each destination: (noc_x, noc_y, dst_dev_id, dst_mesh_id)
             std::vector<uint32_t> sender_runtime_args;
@@ -2894,7 +2894,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
                 }
                 const auto& dest_fabric_node_id = fabric_node_ids[dest_idx];
                 const auto& dest_device_ptr = device_ptrs[dest_idx];
-                CoreCoord receiver_virtual_core = dest_device_ptr->worker_core_from_logical_core(receiver_logical_core);
+                tt::tt_metal::CoreCoord receiver_virtual_core = dest_device_ptr->worker_core_from_logical_core(receiver_logical_core);
 
                 sender_runtime_args.push_back(receiver_virtual_core.x);
                 sender_runtime_args.push_back(receiver_virtual_core.y);
@@ -2952,8 +2952,8 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
         // Runtime args: (noc_x, noc_y, dst_dev_id, dst_mesh_id) for each reader
         if (is_read) {
             for (uint32_t core_idx = 0; core_idx < num_core_pairs; core_idx++) {
-                CoreCoord sender_logical_core = sender_logical_cores[core_idx];
-                CoreCoord receiver_logical_core = receiver_logical_cores[core_idx];
+                tt::tt_metal::CoreCoord sender_logical_core = sender_logical_cores[core_idx];
+                tt::tt_metal::CoreCoord receiver_logical_core = receiver_logical_cores[core_idx];
 
                 std::vector<uint32_t> receiver_runtime_args;
                 for (size_t reader_idx = 0; reader_idx < num_active_devices; reader_idx++) {
@@ -2963,7 +2963,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
                     const auto& reader_fabric_node_id = fabric_node_ids[reader_idx];
                     const auto& reader_device_ptr = device_ptrs[reader_idx];
                     // The reader's sender core at the same position reads from this receiver
-                    CoreCoord reader_sender_virtual_core =
+                    tt::tt_metal::CoreCoord reader_sender_virtual_core =
                         reader_device_ptr->worker_core_from_logical_core(sender_logical_core);
 
                     receiver_runtime_args.push_back(reader_sender_virtual_core.x);
@@ -2984,7 +2984,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
         if (noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC) {
             uint32_t total_l1_to_clear = static_cast<uint32_t>(num_active_devices) * per_sender_l1_size;
             for (uint32_t core_idx = 0; core_idx < num_core_pairs; core_idx++) {
-                CoreCoord receiver_logical_core = receiver_logical_cores[core_idx];
+                tt::tt_metal::CoreCoord receiver_logical_core = receiver_logical_cores[core_idx];
                 std::vector<uint32_t> zeros(total_l1_to_clear / sizeof(uint32_t), 0);
                 tt_metal::detail::WriteToDeviceL1(
                     device_ptr->get_devices()[0],
@@ -3028,8 +3028,8 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
                 uint32_t x = core_idx % grid_size.x;
                 uint32_t sender_y = core_idx / grid_size.x;
                 uint32_t receiver_y = receiver_y_start + sender_y;
-                CoreCoord sender_logical_core = {x, sender_y};
-                CoreCoord receiver_logical_core = {x, receiver_y};
+                tt::tt_metal::CoreCoord sender_logical_core = {x, sender_y};
+                tt::tt_metal::CoreCoord receiver_logical_core = {x, receiver_y};
 
                 // Check sender status
                 std::vector<uint32_t> sender_status;
@@ -3097,8 +3097,8 @@ void Fabric2DMulticastCommon(
     NocPacketType noc_packet_type,
     const std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>>& connection_configs,
     bool with_state) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -3270,7 +3270,7 @@ void Fabric2DMulticastCommon(
     }
     auto last_recv_phys_chip_id = *receiver_device_ids.begin();
     auto last_recv_device = fixture->get_device(last_recv_phys_chip_id);
-    CoreCoord receiver_virtual_core = last_recv_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = last_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     if (noc_packet_type == NocPacketType::NOC_UNICAST_INLINE_WRITE) {
         worker_mem_map.packet_payload_size_bytes = 4;
@@ -3395,8 +3395,8 @@ void FabricMulticastCommon(
     NocPacketType noc_packet_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>& pair_ordered_dir_configs,
     bool with_state) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -3458,7 +3458,7 @@ void FabricMulticastCommon(
     }
     auto last_recv_phys_chip_id = physical_end_device_ids_by_dir[first_dir].back();
     auto last_recv_device = fixture->get_device(last_recv_phys_chip_id);
-    CoreCoord receiver_virtual_core = last_recv_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = last_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     if (noc_packet_type == NocPacketType::NOC_UNICAST_INLINE_WRITE) {
         worker_mem_map.packet_payload_size_bytes = 4;
@@ -3684,8 +3684,8 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedScatterWriteAtomic
 
 void FabricSparseMulticastCommon(
     BaseFabricFixture* fixture, const std::vector<std::tuple<RoutingDirection, uint16_t>>& pair_ordered_dir_configs) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -3753,7 +3753,7 @@ void FabricSparseMulticastCommon(
     }
 
     auto sender_device = fixture->get_device(src_physical_device_id);
-    CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
 
     tt_metal::Program sender_program = tt_metal::CreateProgram();
 
