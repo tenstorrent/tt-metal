@@ -13,7 +13,7 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
     exit 1
 fi
 
-EX_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo/boolq"
+EX_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo_remote_rollout/boolq"
 TOPOLOGY="2x2"
 HOST_FILE=""
 RANK_BINDINGS_FILE=""
