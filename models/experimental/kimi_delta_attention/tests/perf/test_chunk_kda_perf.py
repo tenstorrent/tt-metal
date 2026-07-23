@@ -34,7 +34,9 @@ def test_chunk_kda_device_perf(device: ttnn.Device) -> None:
 
     q = to_device(torch.randn(*shape, key_dim, generator=generator), ttnn.bfloat16)
     k = to_device(torch.randn(*shape, key_dim, generator=generator), ttnn.bfloat16)
-    v = to_device(torch.randn(*shape, value_dim, generator=generator), ttnn.bfloat16)
+    v = to_device(
+        torch.randn(*shape, value_dim, generator=generator).reshape(batch, sequence, heads * value_dim), ttnn.bfloat16
+    )
     gate = to_device(-0.02 * torch.rand(*shape, key_dim, generator=generator), ttnn.float32)
     beta = to_device(torch.rand(*shape, generator=generator), ttnn.float32)
     state = to_device(0.02 * torch.randn(batch, heads, key_dim, value_dim, generator=generator), ttnn.float32)
