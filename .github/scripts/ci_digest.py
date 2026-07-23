@@ -163,12 +163,11 @@ def _fmt_ts(iso: str) -> str:
     return datetime.fromisoformat(iso.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
 
 
-def _health_bar(counts: dict, width: int = 20) -> str | None:
-    """Bar of passing / total jobs; None when there are no jobs to score."""
+def _health_bar(counts: dict, width: int = 20) -> str:
+    """Bar of passing / total jobs. No jobs scores 0% — a failed run with no
+    per-job detail is 0% healthy, and the bar keeps every section uniform."""
     total = counts.get("broken", 0) + counts.get("infra", 0) + counts.get("passing", 0)
-    if not total:
-        return None
-    pct = round(100 * counts.get("passing", 0) / total)
+    pct = round(100 * counts.get("passing", 0) / total) if total else 0
     filled = round(pct / 100 * width)
     return f"Health: `{'█' * filled}{'░' * (width - filled)}` {pct}%"
 
@@ -188,14 +187,13 @@ def _section(r: dict) -> list[str]:
     c = r.get("counts") or {}
     total = c.get("broken", 0) + c.get("infra", 0) + c.get("passing", 0)
     if total:
-        bar = _health_bar(c)
-        if bar:
-            out.append(bar)
+        out.append(_health_bar(c))
         out.append(f"🔴 {c.get('broken', 0)} · 🟣 {c.get('infra', 0)} · 🟢 {c.get('passing', 0)}{when}")
     elif r.get("outcome") == "GREEN":
         # Green via the run-conclusion fallback (no per-job counts available).
         out.append(f"🟢 green{when}")
     else:
+        out.append(_health_bar(c))  # 0% — uniform with scored sections
         out.append(f"🔴 no per-job summary{when}")
     jobs = (r.get("real_jobs") or []) + (r.get("infra_jobs") or [])
     if jobs:
@@ -390,6 +388,7 @@ class TestRender(unittest.TestCase):
             ],
         )
         self.assertIn("no per-job summary", md)
+        self.assertIn("0%", md)  # health bar present and at zero, uniform with scored sections
         self.assertNotIn("Failed jobs", md)
 
     def test_infra_only(self):
