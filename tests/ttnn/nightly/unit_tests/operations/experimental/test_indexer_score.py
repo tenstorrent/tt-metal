@@ -766,14 +766,14 @@ def test_indexer_score_rejects_fp32_dest_acc(device, expect_error):
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="perf test - run locally")
 @pytest.mark.parametrize("case_id, heads", GLX_CASES, ids=GLX_IDS)
 def test_indexer_score_perf(device, case_id, heads):
-    """Wall-clock latency per op for the GLX shape at the fullest causal rank (sp7), bfp8 k. Host-dispatched
-    single-op latency (includes enqueue overhead; use tracy for pure device time). Logged ms is the signal;
-    the assert is a coarse hang/regression guard (board-dependent)."""
+    """Wall-clock latency per op for the GLX shape at the fullest causal rank (sp7), with bfp8 q and k.
+    Host-dispatched single-op latency (includes enqueue overhead; use tracy for pure device time). Logged ms
+    is the signal; the assert is a coarse hang/regression guard (board-dependent)."""
     warmup_iters, measured_iters = 3, 20
     chunk_start = GLX_HISTORY + 7 * GLX_SQ
     cfg = glx_config(heads)
     q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
-    q_dev = to_device(q, device)
+    q_dev = to_device(q, device, dtype=ttnn.bfloat8_b)
     k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
     w_dev = to_device(w, device)
 
@@ -791,10 +791,10 @@ def test_indexer_score_perf(device, case_id, heads):
     ms_per_op = (time.perf_counter() - start) / measured_iters * 1e3
 
     logger.info(
-        f"indexer_score {case_id} rank7 heads={heads} k=bfp8: "
+        f"indexer_score {case_id} rank7 heads={heads} q=k=bfp8: "
         f"{ms_per_op:.3f} ms/op (mean of {measured_iters} iters)"
     )
-    assert ms_per_op < 50.0, f"{case_id} rank7 k=bfp8: {ms_per_op:.3f} ms/op exceeds 50 ms guard (regression or hang)"
+    assert ms_per_op < 50.0, f"{case_id} rank7 q=k=bfp8: {ms_per_op:.3f} ms/op exceeds 50 ms guard (regression or hang)"
 
 
 # ---------------------------------------------------------------------------
@@ -805,7 +805,8 @@ def test_indexer_score_perf(device, case_id, heads):
 SP7_CHUNK_START = GLX_HISTORY + 7 * GLX_SQ  # fullest causal case (99.5% valid)
 
 # Blackhole matmul peak (tests/nightly/sdpa_perf_utils.py): 4096 mm FLOP/cycle/core at LoFi, halved per
-# extra math-fidelity phase. The band checks measure the deployed HiFi2 path (bf16 q, bfp8 k).
+# extra math-fidelity phase. The band checks measure the deployed LoFi path: indexer_score selects LoFi when
+# both Q and K are bfp8.
 _BH_CLOCK_GHZ = 1.35
 _MM_FLOPS_PER_CYCLE_PER_CORE = {"LoFi": 4096, "HiFi2": 2048, "HiFi3": 1365, "HiFi4": 1024}
 
@@ -824,16 +825,16 @@ def indexer_mm_flops(valid_tiles, heads):
     return valid_tiles * heads * (32 * 32) * (2 * GLX_DIM)
 
 
-# perf run helpers at the deployed HiFi2 dtypes (bf16 q + bfp8 k). Each builds its inputs and dispatches the
+# Perf run helpers at the deployed LoFi dtypes (bfp8 q + bfp8 k). Each builds its inputs and dispatches the
 # op once, returning the output -- the same shape as the SDPA sprint's run_sdpa closure. test_indexer_score_
 # math_util profiles one call with the real-time device profiler (one dispatch -> one record). No accuracy
 # check -- these exist solely to be profiled.
 
 
 def run_indexer_sp7(device, heads):
-    """DSA at GLX sp_rank 7 (bf16 q, bfp8 k). Dispatches indexer_score_dsa once and returns the output."""
+    """DSA at GLX sp_rank 7 (bfp8 q and k). Dispatches indexer_score_dsa once and returns the output."""
     q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
-    q_dev = to_device(q, device, dtype=ttnn.bfloat16)
+    q_dev = to_device(q, device, dtype=ttnn.bfloat8_b)
     k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
     w_dev = to_device(w, device)
     cfg = glx_config(heads)
@@ -873,10 +874,10 @@ def short_config(heads):
 
 def run_indexer_short(device, heads):
     """GLM5/DSv32 resharded TP=1/SP=32 -- a SHORT 160-query chunk (QC=1) that under-fills the grid, so the
-    block-split scheduler replicates each q-group across num_blocks=2 row-blocks (110 cores). bf16 q + bfp8 k.
+    block-split scheduler replicates each q-group across num_blocks=2 row-blocks (110 cores). bfp8 q and k.
     Dispatches indexer_score_dsa once and returns the output."""
     q, k, w = make_inputs(heads, GLX_DIM, SHORT_SQ, GLX_T)
-    q_dev = to_device(q, device, dtype=ttnn.bfloat16)
+    q_dev = to_device(q, device, dtype=ttnn.bfloat8_b)
     k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
     w_dev = to_device(w, device)
     cfg = short_config(heads)
@@ -1238,10 +1239,10 @@ def m3_valid_tiles():
 
 
 def run_indexer_m3(device):
-    """One SP=8 x TP=4 M3 device (1 group, 640 q, 55296 kv, raw dot, scale=1/sqrt(d), bf16 q + bfp8 k).
+    """One SP=8 x TP=4 M3 device (1 group, 640 q, 55296 kv, raw dot, scale=1/sqrt(d), bfp8 q and k).
     Dispatches indexer_score_msa once and returns the output. No accuracy check."""
     q, k, _ = make_inputs(1, M3_DIM, M3_SQ, M3_T)
-    q_dev = to_device(q, device, dtype=ttnn.bfloat16)
+    q_dev = to_device(q, device, dtype=ttnn.bfloat8_b)
     k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
     # Deployed config: block_size=128 fuses the per-128-key block max (the writer emits the tiny block-score
     # tensor, not the full ~70 MB score that made the unfused path memory-bound). QC=2 + grid-aligned q/K
@@ -1259,8 +1260,8 @@ def run_indexer_m3(device):
 
 
 # ---------------------------------------------------------------------------
-# The math-utilization band checks (CI runs these on the IOMMU-enabled BH sku), all at the deployed HiFi2 dtypes
-# (bf16 q + bfp8 k): the deployed TP=4/SP=8 shapes GLM5, DSv32 and MiniMax-M3 at sp_rank 7, plus the resharded
+# The math-utilization band checks (CI runs these on the IOMMU-enabled BH sku), all at the deployed LoFi dtypes
+# (bfp8 q + bfp8 k): the deployed TP=4/SP=8 shapes GLM5, DSv32 and MiniMax-M3 at sp_rank 7, plus the resharded
 # TP=1/SP=32 grid-fill shapes glm5_tp1 and dsv32_tp1 (block-split, fullest causal). Each profiles one dispatch
 # of its op with the real-time device profiler, reads the device kernel duration, computes
 # math_util = matmul FLOPs / (cores x device cycles x matmul peak), and asserts it within +/-
@@ -1270,24 +1271,24 @@ def run_indexer_m3(device):
 # lower expected util than the multi-head DSA cases.)
 # ---------------------------------------------------------------------------
 _MATH_UTIL_CASES = [
-    # (case_id, run_fn(device) -> op output, mm_flops_thunk, expected_util) -- HiFi2 (bf16 q, bfp8 k)
+    # (case_id, run_fn(device) -> op output, mm_flops_thunk, expected_util) -- LoFi (bfp8 q and k)
     (
         "glm5",
         lambda device: run_indexer_sp7(device, 8),
         lambda: indexer_mm_flops(sp7_valid_tiles(), 8),
-        70.1,
+        36.48,
     ),
     (
         "dsv32",
         lambda device: run_indexer_sp7(device, 16),
         lambda: indexer_mm_flops(sp7_valid_tiles(), 16),
-        76.1,
+        64.11,
     ),
     (
         "minimax_m3",
         run_indexer_m3,
         lambda: m3_valid_tiles() * (32 * 32) * (2 * M3_DIM),
-        42.9,
+        21.62,
     ),
     # Block-split grid fill: GLM5/DSv32 resharded TP=1/SP=32 -- a short 160-query chunk (QC=1, 5 q-groups) the
     # scheduler spreads across num_blocks=2 row-blocks (110 cores); without the fill these would use only 55
@@ -1298,13 +1299,13 @@ _MATH_UTIL_CASES = [
         "dsv32_tp1",
         lambda device: run_indexer_short(device, 64),
         lambda: indexer_mm_flops(short_valid_tiles(), 64),
-        77.31,
+        70.72,
     ),
     (
         "glm5_tp1",
         lambda device: run_indexer_short(device, 32),
         lambda: indexer_mm_flops(short_valid_tiles(), 32),
-        75.54,
+        64.98,
     ),
 ]
 
@@ -1318,7 +1319,7 @@ _MATH_UTIL_CASES = [
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_indexer_score_math_util(device, case_id, run_fn, mm_flops_thunk, expected_util):
-    """Per-deployment HiFi2 (bf16 q, bfp8 k) matmul math utilization via real-time device program records,
+    """Per-deployment LoFi (bfp8 q and k) matmul math utilization via real-time device program records,
     asserted within +/- INDEXER_PERF_MARGIN: GLM5 / DSv32 / MiniMax-M3 at the deployed TP=4/SP=8, plus
     glm5_tp1 / dsv32_tp1 at the resharded TP=1/SP=32 grid-fill shapes. Profiles one dispatch of the case's op
     with the real-time device profiler and compares the achieved math_util to the expected value (measured on
@@ -1332,14 +1333,14 @@ def test_indexer_score_math_util(device, case_id, run_fn, mm_flops_thunk, expect
     _, perf_record = profile_realtime_program(device, lambda: run_fn(device))
     duration_ns = perf_record["duration_ns"]
     core_count = INDEXER_PERF_CORES
-    peak = _MM_FLOPS_PER_CYCLE_PER_CORE["HiFi2"]
+    peak = _MM_FLOPS_PER_CYCLE_PER_CORE["LoFi"]
     cycles = duration_ns * _BH_CLOCK_GHZ
     utilization = (mm_flops_thunk() / (core_count * cycles * peak)) * 100 if core_count > 0 else 0.0
 
     lower = expected_util * (1 - INDEXER_PERF_MARGIN)
     upper = expected_util * (1 + INDEXER_PERF_MARGIN)
     logger.info(
-        f"indexer_score math util {case_id} (HiFi2): duration={duration_ns / 1e6:.3f} ms, cores={core_count}, "
+        f"indexer_score math util {case_id} (LoFi): duration={duration_ns / 1e6:.3f} ms, cores={core_count}, "
         f"math_util={utilization:.2f}% (expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
     )
     assert lower <= utilization <= upper, (

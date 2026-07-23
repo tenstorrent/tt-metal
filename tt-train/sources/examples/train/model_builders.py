@@ -35,14 +35,14 @@ FLOPS_REGISTRY: dict[str, Callable] = {
 
 
 @dataclass
-class _GPT2Spec:
+class GPT2Spec:
     bias: bool = True
     positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
     use_composite_layernorm: bool = False
 
 
 @dataclass
-class _LlamaSpec:
+class LlamaSpec:
     num_groups: int = 3
     theta: float = 500000.0
     intermediate_dim: int | None = None
@@ -50,10 +50,11 @@ class _LlamaSpec:
     high_freq_factor: float = 4.0
     low_freq_factor: float = 1.0
     original_context_length: int = 0
+    embedding_placement: ttml.models.EmbeddingPlacement = ttml.models.EmbeddingPlacement.Replicated
 
 
 @dataclass
-class _DeepSeekSpec:
+class DeepSeekSpec:
     theta: float = 10000.0
     inter_dim: int | None = None
     moe_inter_dim: int = 256
@@ -73,7 +74,7 @@ class _DeepSeekSpec:
 
 
 @dataclass
-class _Qwen3Spec:
+class Qwen3Spec:
     num_groups: int = 3
     theta: float = 1000000.0
     intermediate_dim: int | None = None
@@ -85,7 +86,7 @@ class _Qwen3Spec:
     original_context_length: int = 0
 
 
-ModelSpec = _GPT2Spec | _LlamaSpec | _DeepSeekSpec | _Qwen3Spec
+ModelSpec = GPT2Spec | LlamaSpec | DeepSeekSpec | Qwen3Spec
 
 
 @dataclass
@@ -114,8 +115,8 @@ def _default_mlp_inter_dim(embedding_dim: int) -> int:
     return ((4 * embedding_dim * 2) // 3 + 255) // 256 * 256
 
 
-def _parse_gpt2(tc: dict) -> _GPT2Spec:
-    spec = _GPT2Spec()
+def _parse_gpt2(tc: dict) -> GPT2Spec:
+    spec = GPT2Spec()
     spec.bias = tc.get("bias", spec.bias)
     spec.positional_embedding_type = tc.get("positional_embedding_type", spec.positional_embedding_type)
     if "experimental" in tc:
@@ -127,7 +128,7 @@ def _parse_gpt2(tc: dict) -> _GPT2Spec:
 def _build_gpt2(cfg: ModelConfig, use_tp: bool) -> Model:
     if use_tp:
         raise ValueError("model_type=gpt2 has no TP path; use model_type=llama for DP+TP")
-    assert isinstance(cfg.spec, _GPT2Spec)
+    assert isinstance(cfg.spec, GPT2Spec)
     spec = cfg.spec
     exp = NanoGPTExperimentalConfig(use_composite_layernorm=spec.use_composite_layernorm)
     return create_nanogpt(
@@ -147,8 +148,8 @@ def _build_gpt2(cfg: ModelConfig, use_tp: bool) -> Model:
     )
 
 
-def _parse_llama(tc: dict) -> _LlamaSpec:
-    spec = _LlamaSpec()
+def _parse_llama(tc: dict) -> LlamaSpec:
+    spec = LlamaSpec()
     spec.num_groups = tc.get("num_groups", spec.num_groups)
     spec.theta = tc.get("theta", spec.theta)
     spec.intermediate_dim = tc.get("intermediate_dim", spec.intermediate_dim)
@@ -158,11 +159,13 @@ def _parse_llama(tc: dict) -> _LlamaSpec:
         spec.high_freq_factor = rope.get("high_freq_factor", spec.high_freq_factor)
         spec.low_freq_factor = rope.get("low_freq_factor", spec.low_freq_factor)
         spec.original_context_length = rope.get("original_context_length", spec.original_context_length)
+    if "embedding_placement" in tc:
+        spec.embedding_placement = ttml.models.EmbeddingPlacement.from_string(tc["embedding_placement"])
     return spec
 
 
 def _build_llama(cfg: ModelConfig, use_tp: bool) -> Model:
-    assert isinstance(cfg.spec, _LlamaSpec)
+    assert isinstance(cfg.spec, LlamaSpec)
     spec = cfg.spec
     if spec.num_groups <= 0:
         raise ValueError("num_groups must be a positive integer")
@@ -189,12 +192,13 @@ def _build_llama(cfg: ModelConfig, use_tp: bool) -> Model:
                 original_context_length=spec.original_context_length,
             ),
             use_tp=use_tp,
+            embedding_placement=spec.embedding_placement,
         )
     )
 
 
-def _parse_deepseek(tc: dict) -> _DeepSeekSpec:
-    spec = _DeepSeekSpec()
+def _parse_deepseek(tc: dict) -> DeepSeekSpec:
+    spec = DeepSeekSpec()
     spec.theta = tc.get("theta", spec.theta)
     spec.inter_dim = tc.get("inter_dim", spec.inter_dim)
     spec.moe_inter_dim = tc.get("moe_inter_dim", spec.moe_inter_dim)
@@ -217,7 +221,7 @@ def _parse_deepseek(tc: dict) -> _DeepSeekSpec:
 def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
     if use_tp:
         raise ValueError("model_type=deepseek has no TP path; use model_type=llama for DP+TP")
-    assert isinstance(cfg.spec, _DeepSeekSpec)
+    assert isinstance(cfg.spec, DeepSeekSpec)
     spec = cfg.spec
     inter_dim = spec.inter_dim or _default_mlp_inter_dim(cfg.embedding_dim)
     return DeepSeek(
@@ -248,8 +252,8 @@ def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
     )
 
 
-def _parse_qwen3(tc: dict) -> _Qwen3Spec:
-    spec = _Qwen3Spec()
+def _parse_qwen3(tc: dict) -> Qwen3Spec:
+    spec = Qwen3Spec()
     spec.num_groups = tc.get("num_groups", spec.num_groups)
     spec.theta = tc.get("theta", spec.theta)
     spec.intermediate_dim = tc.get("intermediate_dim", spec.intermediate_dim)
@@ -267,7 +271,7 @@ def _parse_qwen3(tc: dict) -> _Qwen3Spec:
 def _build_qwen3(cfg: ModelConfig, use_tp: bool) -> Model:
     if use_tp:
         raise ValueError("model_type=qwen3 has no TP path; use model_type=llama for DP+TP")
-    assert isinstance(cfg.spec, _Qwen3Spec)
+    assert isinstance(cfg.spec, Qwen3Spec)
     spec = cfg.spec
     head_dim = spec.head_dim or cfg.embedding_dim // cfg.num_heads
     intermediate = spec.intermediate_dim or _default_mlp_inter_dim(cfg.embedding_dim)
