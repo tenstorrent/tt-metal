@@ -253,6 +253,8 @@
   slice (`-k "WIDTH_SHARDED or BLOCK_SHARDED"`): **1160 passed, 0 failed, 1840
   xfailed** (the deferred RM EXCLUSIONS), 17160 INVALID skipped. No supported_fail,
   no xpass drift. Unit dir: 345 passed / 32 skipped (no regression).
+  Full `test_op` cartesian: **2660 passed, 3760 xfailed, 33900 skipped, 0 failed**
+  (up from R2's 1598 passed → +1062 sharded cells; golden green, no supported_fail).
 - Issues encountered: (1) raw-LLK master fold tripped an unpacker-A src-format
   LLK_ASSERT (hang) — fixed with `reconfig_data_format`/`pack_reconfig_data_format`.
   (2) `noc_semaphore_inc` atomics unflushed at writer exit tripped the
