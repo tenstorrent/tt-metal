@@ -570,7 +570,8 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                 mesh_device,
                 sender_core,
                 RealtimeProfilerRuntimeSizes::fifo_size,
-                D2HSocket::ExternalConfigBuffer{.address = dev_state.core_l1.socket_config});
+                D2HSocket::ExternalConfigBuffer{.address = dev_state.core_l1.socket_config},
+                D2HSocket::ProcessScope::InProcess);
             dev_state.socket->set_page_size(RealtimeProfilerRuntimeSizes::page_size);
         } catch (const std::exception& e) {
             log_warning(
