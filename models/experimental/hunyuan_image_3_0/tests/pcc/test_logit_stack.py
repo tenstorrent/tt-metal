@@ -80,8 +80,15 @@ def _to_tt(device, x: torch.Tensor):
     )
 
 
-def _reference_logits(c: dict, input_ids: torch.Tensor, num_layers: int, *, last_token_only: bool):
-    """fp32 free-running (or equivalently golden) logits for comparison."""
+def _reference_logits(
+    c: dict, input_ids: torch.Tensor, num_layers: int, *, last_token_only: bool, keep_golden: bool = True
+):
+    """fp32 free-running (or equivalently golden) logits for comparison.
+
+    ``keep_golden``: when False (free-running TT path), do not retain per-layer
+    activations. At max context (S≈22k) that list alone is ~12GB and tips the
+    subsequent WTE ``as_tensor`` into SIGBUS under host memory pressure.
+    """
     wte_w = load_tensors(resolve_base_model_dir(), ["model.wte.weight"])["model.wte.weight"]
     lnf_w = load_tensors(resolve_base_model_dir(), ["model.ln_f.weight"])["model.ln_f.weight"]
     lm_w = load_tensors(resolve_base_model_dir(), ["lm_head.weight"])["lm_head.weight"]
@@ -93,7 +100,8 @@ def _reference_logits(c: dict, input_ids: torch.Tensor, num_layers: int, *, last
     golden = []
     with torch.no_grad():
         h = F.embedding(input_ids, wte_w.float())
-        golden.append(h.clone())
+        if keep_golden:
+            golden.append(h.clone())
         for i in range(num_layers):
             sd = load_prefixed_state_dict(resolve_base_model_dir(), f"model.layers.{i}.")
             layer = RefLayer(
@@ -114,15 +122,21 @@ def _reference_logits(c: dict, input_ids: torch.Tensor, num_layers: int, *, last
             layer.load_state_dict({k: v.float() for k, v in sd.items()}, strict=True)
             layer.eval()
             h = layer(h, attention_mask=mask_add, custom_pos_emb=(cos, sin))
-            golden.append(h.clone())
+            if keep_golden:
+                golden.append(h.clone())
             del layer
             gc.collect()
+
+        del mask_add, cos, sin
+        gc.collect()
 
         ln_f = HunyuanRMSNorm(c["H"], eps=c["EPS"])
         ln_f.load_state_dict({"weight": lnf_w.float()})
         ln_f.eval()
         h = ln_f(h)
         logits = lm_head_logits(h, lm_w.float())
+        del h, ln_f
+        gc.collect()
 
     if last_token_only:
         logits = logits[:, -1:, :]
@@ -239,10 +253,15 @@ def _logit_stack_run(device, seq_len: int, *, last_token_only: bool, threshold: 
     c = transformer_cfg()
     torch.manual_seed(0)
     input_ids = torch.randint(0, min(130000, c.get("vocab_size", 133120)), (BATCH, seq_len), dtype=torch.long)
-    ref, golden = _reference_logits(c, input_ids, NUM_LAYERS, last_token_only=last_token_only)
+    ref, golden = _reference_logits(
+        c, input_ids, NUM_LAYERS, last_token_only=last_token_only, keep_golden=teacher_forced
+    )
     if teacher_forced:
         tt = _tt_logits_teacher_forced(device, c, golden, NUM_LAYERS, seq_len, last_token_only=last_token_only)
+        del golden
     else:
+        del golden
+        gc.collect()
         tt = _tt_logits_free_running(device, c, input_ids, NUM_LAYERS, last_token_only=last_token_only)
     assert tuple(ref.shape) == tuple(tt.shape), f"{tuple(ref.shape)} != {tuple(tt.shape)}"
     return pcc_metrics(ref, tt, threshold)

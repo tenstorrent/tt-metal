@@ -240,11 +240,14 @@ class HunyuanTtModel(LightweightModule):
         """Embed input_ids ([B, S] uint32, ROW_MAJOR) -> [B, S, H] TILE."""
         if self.embed_weight is None:
             raise ValueError("model was built without embed_state_dict; pass inputs_embeds to forward() instead")
-        emb = ttnn.embedding(input_ids, self.embed_weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         # Normalise to rank-3 [B, S, H] (ttnn.embedding may emit a leading 1-dim);
         # downstream attention assumes a 3-D hidden tensor.
         bsz = input_ids.shape[0]
         seq = input_ids.shape[-1]
+        # Gate with resid_mem_config(S): an L1 residual at long S pins the buffer
+        # floor under SDPA/matmul static CBs (CB end > lowest L1 addr → clash).
+        # Matches the SP entry path and RESID_L1_MAX_SEQ in parallel_utils.
+        emb = ttnn.embedding(input_ids, self.embed_weight, layout=ttnn.TILE_LAYOUT, memory_config=resid_mem_config(seq))
         return ttnn.reshape(emb, [bsz, seq, self.hidden_size])
 
     def forward(
@@ -277,6 +280,18 @@ class HunyuanTtModel(LightweightModule):
         if inputs_embeds is not None:
             hidden = inputs_embeds
             caller_owns_hidden = True
+            # Spill L1 inputs_embeds when S is above the residual CB-clash bound so
+            # the live residual does not sit under layer-0 SDPA/matmul CBs.
+            target_mc = resid_mem_config(int(hidden.shape[1]))
+            if (
+                hidden.memory_config().buffer_type == ttnn.BufferType.L1
+                and target_mc.buffer_type == ttnn.BufferType.DRAM
+            ):
+                spilled = ttnn.to_memory_config(hidden, target_mc)
+                if spilled is not hidden:
+                    # Take ownership of the DRAM copy; leave caller tensor alone.
+                    hidden = spilled
+                    caller_owns_hidden = False
         elif input_ids is not None:
             hidden = self.embed(input_ids)
             caller_owns_hidden = False
