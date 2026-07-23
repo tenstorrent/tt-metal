@@ -31,6 +31,7 @@ _MODEL_TYPE_FAMILY = {
     "hunyuan_image_3_moe": ("decoder-only causal LM", ["MoE", "image-tokens"]),
     "nemotron_h": ("decoder-only causal LM", ["Mamba/SSM", "MoE"]),
     "voxtral": ("decoder-only causal LM", ["audio"]),
+    "emu3": ("decoder-only causal LM", ["image-tokens"]),
     "qwen2_vl": ("VLM (ViT + decoder LM)", []),
     "qwen2_5_vl": ("VLM (ViT + decoder LM)", []),
     "qwen3_vl": ("VLM (ViT + decoder LM)", []),
@@ -96,20 +97,18 @@ def _norm(s: Optional[str]) -> str:
 def _backbone_from_text(text: str) -> Optional[str]:
     if any(k in text for k in ("transformer2d", "dit ", "ditlayer", "ditmodel", "diffusion transformer")):
         return "DiT (diffusion transformer)"
-    if ("forcausallm" in text or "forcausalmm" in text or "decoder-only" in text) and "encoder" not in text:
+    if ("causallm" in text or "causalmm" in text or "decoder-only" in text) and "encoder" not in text:
         return "decoder-only causal LM"
     if "mamba" in text or "state-space" in text or "state space" in text:
         return "SSM/Mamba (hybrid)"
     if ("unet" in text or "stable diffusion" in text or "latent diffusion" in text) and "dit" not in text:
         return "diffusion UNet+VAE"
-    if "forconditionalgeneration" in text or ("encoder" in text and "decoder" in text) or "seq2seq" in text:
+    if ("encoder" in text and "decoder" in text) or "encoderdecoder" in text or "seq2seq" in text:
         return "encoder-decoder transformer"
     if any(k in text for k in ("resnet", "convnext", "mobilenet", "conv1d", "conv2d")):
         return "CNN/conv"
     if any(k in text for k in ("vit", "beit", "deit", "swin")):
         return "ViT (vision transformer)"
-    if "forcausallm" in text:
-        return "decoder-only causal LM"
     return None
 
 

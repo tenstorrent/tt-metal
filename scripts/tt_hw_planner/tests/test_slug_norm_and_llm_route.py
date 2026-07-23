@@ -213,6 +213,17 @@ def test_arch_fingerprint_backbone_families():
     assert "diffusion" not in d and "decoder-only" in d
     # unknown model_type falls back to architectures-class inference
     assert arch_descriptor(model_type="totallynovel", architectures=["FooForCausalLM"]).startswith("decoder-only")
+    # any *CausalLM / *CausalMM arch is decoder-only (not just For*) -- Janus MultiModalityCausalLM
+    assert arch_descriptor(model_type="multi_modality", architectures=["MultiModalityCausalLM"]).startswith(
+        "decoder-only"
+    )
+    assert arch_descriptor(model_type="emu3", architectures=["Emu3ForConditionalGeneration"]).startswith("decoder-only")
+    # bare ForConditionalGeneration is NOT assumed encoder-decoder (many AR/VLM models use it)
+    assert "encoder-decoder" not in arch_descriptor(
+        model_type="novelx", architectures=["NovelForConditionalGeneration"]
+    )
+    # a real encoder+decoder signal still classifies as encoder-decoder
+    assert arch_descriptor(model_type="novel_s2s", notes="encoder-decoder seq2seq").startswith("encoder-decoder")
 
 
 def test_derivation_reads_real_model_type_from_config(tmp_path):
