@@ -95,26 +95,25 @@ inline void _calculate_causal_conv1d_silu_(
     const std::uint32_t off_cache_out = dst_index_cache_out * dst_tile_size_sfpi;
     const std::uint32_t off_silu_out  = dst_index_silu_out * dst_tile_size_sfpi;
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        // One row of every operand, read before any output for this row is stored -- this is what
-        // lets dst_index_cache_out/silu_out safely alias a weight slot.
-        const sfpi::vFloat wa = sfpi::dst_reg[off_wa];
-        const sfpi::vFloat wb = sfpi::dst_reg[off_wb];
-        const sfpi::vFloat wc = sfpi::dst_reg[off_wc];
-        const sfpi::vFloat wd = sfpi::dst_reg[off_wd];
-        const sfpi::vFloat x  = sfpi::dst_reg[off_x];
-        const sfpi::vFloat y  = sfpi::dst_reg[off_y];
-        const sfpi::vFloat z  = sfpi::dst_reg[off_z];
-        const sfpi::vFloat w  = sfpi::dst_reg[off_w];
-
-        // new_cache = a*x + b*y + c*z + d*w -- three chained tensor*tensor FMAs, entirely in
-        // registers (every operand is a per-channel tensor; unlike addcmul's scalar `value`, no
-        // term here is uniform across lanes).
-        sfpi::vFloat new_cache = wa * x;
-        new_cache              = wb * y + new_cache;
-        new_cache              = wc * z + new_cache;
-        new_cache              = wd * w + new_cache;
+        // new_cache = a*x + b*y + c*z + d*w -- four chained tensor*tensor FMAs (every operand is a
+        // per-channel tensor; unlike addcmul's scalar `value`, no term here is uniform across
+        // lanes). Each operand is read inline into a short-lived vFloat as its FMA consumes it,
+        // rather than hoisting all eight inputs into up-front vFloats, so only the accumulator plus
+        // the current term's operand pair need be live at once.
+        //
+        // This ordering also keeps the alias-safety invariant self-evident: all four weights are
+        // read (across the four FMAs below) before this row's outputs are stored, so
+        // dst_index_cache_out / dst_index_silu_out may reuse a weight slot without ever clobbering
+        // a value still needed this iteration. The `#pragma GCC unroll 8` above matches the
+        // convention of the other SFPU ITERATIONS loops (where.h, comp.h, ...) and adds no register
+        // pressure of its own.
+        sfpi::vFloat new_cache = sfpi::vFloat(sfpi::dst_reg[off_wa]) * sfpi::vFloat(sfpi::dst_reg[off_x]);
+        new_cache              = sfpi::vFloat(sfpi::dst_reg[off_wb]) * sfpi::vFloat(sfpi::dst_reg[off_y]) + new_cache;
+        new_cache              = sfpi::vFloat(sfpi::dst_reg[off_wc]) * sfpi::vFloat(sfpi::dst_reg[off_z]) + new_cache;
+        new_cache              = sfpi::vFloat(sfpi::dst_reg[off_wd]) * sfpi::vFloat(sfpi::dst_reg[off_w]) + new_cache;
 
         // SiLU(new_cache) = new_cache * sigmoid(new_cache), reusing the piecewise-linear sigmoid
         // approximation unchanged.
