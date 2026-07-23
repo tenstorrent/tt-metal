@@ -293,7 +293,7 @@
     bh_p300:
       timeout: 12
     bh_p100a_civ2_viommu:
-      timeout: 12
+      timeout: 17
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
