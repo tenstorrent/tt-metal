@@ -96,6 +96,12 @@ template <typename R, typename... A>
 struct static_fn_return<R (*)(A...)> {
     using type = R;
 };
+// noexcept-qualified static override: its pointer type is a distinct type, so it needs its own
+// specialization or a noexcept override would be silently misclassified (base instead of custom).
+template <typename R, typename... A>
+struct static_fn_return<R (*)(A...) noexcept> {
+    using type = R;
+};
 
 // True iff T has a single static override_runtime_arguments returning ProgramRunArgs. Keyed on the
 // return type, not presence, so the legacy void-returning override_runtime_arguments (some matmul

@@ -879,7 +879,9 @@ public:
                 "ProgramSpec factory adapter requires at least one Tensor in tensor_args or "
                 "tensor_return_value to source the MeshDevice");
             auto* mesh_device = first_tensor.value().device();
-            TT_FATAL(mesh_device != nullptr, "First tensor in tensor_args must be allocated on a MeshDevice");
+            TT_FATAL(
+                mesh_device != nullptr,
+                "The sourced tensor (from tensor_args or tensor_return_value) must be allocated on a MeshDevice");
 
             // The factory produces a single ProgramArtifacts; the adapter stamps it
             // across all coordinate ranges. Bindings derive from the (single) set of
