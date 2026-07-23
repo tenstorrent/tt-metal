@@ -223,11 +223,18 @@ def test_producer_runner_pcc(scenario, tmp_path):
     prod_log = os.path.join(_REPORT_DIR, f"ci_producer_{scenario}.log")
     trace_env = {}
     if "prompt_file" in sc:
-        trace_dir = str(tmp_path / "prompt_trace")
-        # Generate the host reference at exactly the pushed depth (isl == chunks * CHUNK_SIZE). The
-        # reference forward is chunked-SDPA so RAM stays bounded at any depth; runtime is still O(seq^2),
-        # which the per-test timeout accounts for.
-        _generate_prompt_trace(trace_dir, sc["isl"], sc["prompt_file"])
+        # A pre-built reference (PREFILL_REUSE_TRACE_DIR) lets an A/B across device builds compare the
+        # device KV against one byte-identical golden — the host reference is device-independent, so
+        # regenerating it per build would only add float-order noise to the comparison.
+        reuse_dir = os.environ.get("PREFILL_REUSE_TRACE_DIR")
+        if reuse_dir and os.path.exists(os.path.join(reuse_dir, "metadata.json")):
+            trace_dir = reuse_dir
+        else:
+            trace_dir = str(tmp_path / "prompt_trace")
+            # Generate the host reference at exactly the pushed depth (isl == chunks * CHUNK_SIZE). The
+            # reference forward is chunked-SDPA so RAM stays bounded at any depth; runtime is still O(seq^2),
+            # which the per-test timeout accounts for.
+            _generate_prompt_trace(trace_dir, sc["isl"], sc["prompt_file"])
         trace_env["PREFILL_TRACE_DIR"] = trace_dir
     with _running_runner(scenario, sc["users"], sc["max_seq_len"], **trace_env) as runner_log:
         env = _transport_env(
