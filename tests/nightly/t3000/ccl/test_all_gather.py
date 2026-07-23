@@ -8,6 +8,7 @@ import math
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 from models.common.utility_functions import skip_for_blackhole
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
@@ -121,7 +122,7 @@ def run_all_gather_impl(
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
-    allowed_pcc=1,
+    allowed_pcc=1.0,
     skip_check=False,
     num_l1_banks=64,
     all_gather_function=None,
@@ -129,10 +130,10 @@ def run_all_gather_impl(
     use_broadcast=False,
     use_explicit_subdevice_id=True,
 ):
-    use_sub_devices = False
     torch.manual_seed(0)
-
+    torch_dtype = tt_dtype_to_torch_dtype[ag_input_dtype]
     tile = (32, 32)
+    use_sub_devices = False
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = tuple(mesh_device.shape)
@@ -223,7 +224,13 @@ def run_all_gather_impl(
     ag_output_tensor_goldens_list = []
 
     for i in range(num_iters):
-        ag_output_tensor = torch.rand(ag_output_shape).bfloat16()
+        if torch_dtype in (torch.bfloat16, torch.float32):
+            torch_input = torch.randn(ag_output_shape, dtype=torch_dtype)
+        else:
+            torch_input = torch.randint(0, 100, ag_output_shape, dtype=torch_dtype)
+
+        # Convert golden from torch dtype to ttnn dtype, so we can check pcc==1.0 for a lossless copy
+        ag_output_tensor = ttnn.to_torch(ttnn.from_torch(torch_input, dtype=ag_input_dtype, layout=layout))
         ag_output_tensor_goldens_list.append(ag_output_tensor)
 
         if cluster_axis is None:
@@ -233,7 +240,7 @@ def run_all_gather_impl(
             mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape)
 
         input_tensor_mesh = ttnn.from_torch(
-            ag_output_tensor,
+            torch_input,
             device=mesh_device,
             layout=layout,
             dtype=ag_input_dtype,
