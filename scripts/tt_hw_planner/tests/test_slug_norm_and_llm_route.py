@@ -116,6 +116,41 @@ def test_vl_demos_derive_as_vlm_with_tag():
     assert fams["whisper (auto-upstream)"]["category"] == "STT"
 
 
+def test_sibling_voting_runs_n_asks_and_caches(monkeypatch):
+    import threading
+
+    sr._SIBLING_CACHE.clear()
+    monkeypatch.setenv("TT_HW_PLANNER_SIBLING_VOTES", "3")
+    A, B = _fake_backend("A"), _fake_backend("B")
+    calls = []
+    lock = threading.Lock()
+
+    def fake(**kw):
+        with lock:
+            calls.append(1)
+        return [(A, 90, "a"), (B, 40, "b")]
+
+    monkeypatch.setattr(sr, "rank_backends_llm", fake)
+    monkeypatch.setattr(sr, "rank_backends", lambda **k: [])
+    r = sr.rank_siblings(model_id="m", category="X", model_type="mt", top_n=2)
+    assert r[0][0].name == "A", r
+    assert len(calls) == 3, "should vote 3x"
+    # cached: a second call must not re-vote
+    sr.rank_siblings(model_id="m", category="X", model_type="mt", top_n=2)
+    assert len(calls) == 3, "second call should hit the cache"
+
+
+def test_sibling_votes_one_is_single_ask(monkeypatch):
+    sr._SIBLING_CACHE.clear()
+    monkeypatch.setenv("TT_HW_PLANNER_SIBLING_VOTES", "1")
+    A = _fake_backend("A")
+    calls = []
+    monkeypatch.setattr(sr, "rank_backends_llm", lambda **k: (calls.append(1), [(A, 90, "a")])[1])
+    monkeypatch.setattr(sr, "rank_backends", lambda **k: [])
+    sr.rank_siblings(model_id="m2", category="X", model_type="mt")
+    assert len(calls) == 1
+
+
 def test_arch_fingerprint_backbone_families():
     from scripts.tt_hw_planner.fingerprint import arch_descriptor
 

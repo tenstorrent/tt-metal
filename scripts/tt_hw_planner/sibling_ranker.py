@@ -224,6 +224,49 @@ def rank_backends_llm(
     return out[:top_n]
 
 
+_SIBLING_CACHE: Dict[Tuple, List[Tuple[FamilyBackend, int, str]]] = {}
+
+
+def _sibling_votes() -> int:
+    try:
+        return max(1, int(os.environ.get("TT_HW_PLANNER_SIBLING_VOTES", "5")))
+    except (TypeError, ValueError):
+        return 5
+
+
+def _vote_rank_llm(votes: int, **kw) -> List[Tuple[FamilyBackend, int, str]]:
+    """Run :func:`rank_backends_llm` ``votes`` times concurrently and aggregate by
+    AVERAGE score per backend (a backend absent from a run scores 0 for that run),
+    returning the top ``top_n`` by average. Self-consistency: a single flaky ask
+    can't decide the rank-1 that seeds the scaffold. votes<=1 -> a single ask."""
+    top_n = kw.get("top_n", 3)
+    if votes <= 1:
+        return rank_backends_llm(**kw)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    runs: List[List[Tuple[FamilyBackend, int, str]]] = []
+    with ThreadPoolExecutor(max_workers=min(votes, 5)) as ex:
+        futs = [ex.submit(rank_backends_llm, **kw) for _ in range(votes)]
+        for f in as_completed(futs):
+            try:
+                runs.append(f.result() or [])
+            except Exception:
+                runs.append([])
+
+    totals: Dict[str, float] = {}
+    backend_of: Dict[str, FamilyBackend] = {}
+    best_reason: Dict[str, Tuple[int, str]] = {}
+    for lst in runs:
+        for b, s, r in lst:
+            totals[b.name] = totals.get(b.name, 0.0) + s
+            backend_of[b.name] = b
+            if b.name not in best_reason or s > best_reason[b.name][0]:
+                best_reason[b.name] = (s, r)
+    out = [(backend_of[nm], int(round(totals[nm] / votes)), best_reason[nm][1]) for nm in totals]
+    out.sort(key=lambda t: -t[1])
+    return out[:top_n]
+
+
 def rank_siblings(
     *,
     model_id: str,
@@ -243,15 +286,21 @@ def rank_siblings(
     the full registry (seeded with the deterministic scores as a HINT, so a real
     exact match is never lost) and its order is authoritative -- this is what
     generalizes across the path-slug vs HF-model_type key gap that pure string
-    matching misses. The deterministic ranking is appended for any backend the
-    LLM omitted, and is used verbatim as the fallback when the LLM/SDK is
-    unavailable, so behaviour never hard-regresses. Every returned backend is a
-    real registered backend."""
+    matching misses. The LLM ranking is a self-consistency VOTE (N asks averaged,
+    ``TT_HW_PLANNER_SIBLING_VOTES`` default 5) so one flaky ask can't decide rank-1.
+    The deterministic ranking is appended for any backend the LLM omitted, and is
+    used verbatim as the fallback when the LLM/SDK is unavailable, so behaviour
+    never hard-regresses. Cached per model so the vote fires at most once per run."""
+    cache_key = (model_id or "", category or "", model_type or "", pipeline_tag or "", top_n, bool(use_llm))
+    if use_llm and cache_key in _SIBLING_CACHE:
+        return _SIBLING_CACHE[cache_key]
+
     det = rank_backends(category=category, model_type=model_type, pipeline_tag=pipeline_tag, top_n=None)
 
     llm: List[Tuple[FamilyBackend, int, str]] = []
     if use_llm:
-        llm = rank_backends_llm(
+        llm = _vote_rank_llm(
+            _sibling_votes(),
             model_id=model_id,
             category=category,
             model_type=model_type,
@@ -276,7 +325,10 @@ def rank_siblings(
             continue
         result.append(t)
         seen.add(t[0].name)
-    return result[:top_n]
+    result = result[:top_n]
+    if use_llm:
+        _SIBLING_CACHE[cache_key] = result
+    return result
 
 
 def resolve_backend_with_quality(
