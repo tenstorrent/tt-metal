@@ -9,7 +9,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc, run_for_blackhole
 from models.experimental.kimi_delta_attention.config import KDAConfig
 from models.experimental.kimi_delta_attention.reference import kda_forward_reference
-from models.experimental.kimi_delta_attention.tests.test_reference import _config, _random_weights
+from models.experimental.kimi_delta_attention.tests.test_factory import make_config, random_weights
 from models.experimental.kimi_delta_attention.tt.layer import KimiDeltaAttention
 
 pytestmark = [
@@ -45,8 +45,8 @@ def _forward(
 
 @pytest.mark.parametrize("sequence", [1, 4])
 def test_composed_layer_pcc(device: ttnn.Device, sequence: int) -> None:
-    config = _config()
-    weights = _random_weights(config)
+    config = make_config()
+    weights = random_weights(config)
     hidden = torch.randn(
         1,
         sequence,
@@ -85,7 +85,7 @@ def test_target_shape_decode_pcc(device: ttnn.Device) -> None:
         conv_kernel_size=4,
         norm_eps=1e-5,
     )
-    weights = _random_weights(config)
+    weights = random_weights(config)
     hidden = torch.randn(
         1,
         1,
@@ -116,8 +116,8 @@ def test_target_shape_decode_pcc(device: ttnn.Device) -> None:
 
 
 def test_prefill_decode_cache_continuity(device: ttnn.Device) -> None:
-    config = _config()
-    weights = _random_weights(config)
+    config = make_config()
+    weights = random_weights(config)
     hidden = torch.randn(
         1,
         5,
@@ -148,3 +148,54 @@ def test_prefill_decode_cache_continuity(device: ttnn.Device) -> None:
     _assert_pcc("cache decode output", golden_decode, actual_decode)
     _assert_pcc("cache recurrent state", golden_state.recurrent, actual_recurrent)
     _assert_pcc("cache convolution state", golden_convolution, actual_convolution)
+
+
+@pytest.mark.parametrize("recurrent_state_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_external_state_is_updated_in_place(device: ttnn.Device, recurrent_state_dtype: ttnn.DataType) -> None:
+    config = make_config(recurrent_state_dtype=recurrent_state_dtype)
+    weights = random_weights(config)
+    hidden = torch.randn(
+        1,
+        2,
+        config.hidden_size,
+        generator=torch.Generator().manual_seed(109),
+    ).to(torch.bfloat16)
+    golden_output, golden_state = kda_forward_reference(hidden, weights, config)
+
+    layer = KimiDeltaAttention(device, config, weights)
+    layer.reset_state(batch_size=1)
+    assert layer.recurrent_state is not None
+    assert layer.convolution_state is not None
+    external_recurrent = layer.recurrent_state
+    external_convolution = layer.convolution_state
+    recurrent_address = external_recurrent.buffer_address()
+    convolution_address = external_convolution.buffer_address()
+    layer.set_external_state(external_recurrent, external_convolution)
+
+    actual_output = torch.cat(
+        (
+            _forward(layer, hidden[:, :1], "recurrent"),
+            _forward(layer, hidden[:, 1:], "recurrent"),
+        ),
+        dim=1,
+    )
+
+    assert layer.recurrent_state is external_recurrent
+    assert layer.convolution_state is external_convolution
+    assert layer.recurrent_state.buffer_address() == recurrent_address
+    assert layer.convolution_state.buffer_address() == convolution_address
+    assert layer.recurrent_state.dtype == recurrent_state_dtype
+    actual_recurrent = ttnn.to_torch(layer.recurrent_state)
+    actual_convolution = ttnn.to_torch(layer.convolution_state)
+    golden_convolution = torch.cat(
+        (
+            golden_state.q_convolution,
+            golden_state.k_convolution,
+            golden_state.v_convolution,
+        ),
+        dim=-1,
+    )
+    dtype_name = str(recurrent_state_dtype)
+    _assert_pcc(f"external {dtype_name} output", golden_output, actual_output)
+    _assert_pcc(f"external {dtype_name} recurrent state", golden_state.recurrent, actual_recurrent)
+    _assert_pcc(f"external {dtype_name} convolution state", golden_convolution, actual_convolution)

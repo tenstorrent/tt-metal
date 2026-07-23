@@ -18,46 +18,7 @@ from models.experimental.kimi_delta_attention.reference import (
     sigmoid_gated_rms_norm_reference,
     validate_reference_weights,
 )
-
-
-def _config() -> KDAConfig:
-    return KDAConfig(
-        hidden_size=64,
-        num_heads=2,
-        head_k_dim=32,
-        head_v_dim=32,
-        conv_kernel_size=4,
-        norm_eps=1e-5,
-        chunk_size=4,
-    )
-
-
-def _random_weights(config: KDAConfig) -> dict[str, torch.Tensor]:
-    generator = torch.Generator().manual_seed(20260723)
-
-    def normal(*shape: int, scale: float = 0.05) -> torch.Tensor:
-        return scale * torch.randn(*shape, generator=generator)
-
-    hidden = config.hidden_size
-    key_rank, value_rank = config.head_k_dim, config.head_v_dim
-    weights = {
-        "q_proj.weight": normal(config.q_dim, hidden),
-        "k_proj.weight": normal(config.k_dim, hidden),
-        "v_proj.weight": normal(config.v_dim, hidden),
-        "q_conv1d.weight": normal(config.q_dim, 1, config.conv_kernel_size, scale=0.2),
-        "k_conv1d.weight": normal(config.k_dim, 1, config.conv_kernel_size, scale=0.2),
-        "v_conv1d.weight": normal(config.v_dim, 1, config.conv_kernel_size, scale=0.2),
-        "A_log": torch.log(torch.linspace(1.0, 4.0, config.num_heads)).reshape(1, 1, config.num_heads, 1),
-        "f_a_proj.weight": normal(key_rank, hidden),
-        "f_b_proj.weight": normal(config.num_heads * key_rank, key_rank),
-        "dt_bias": normal(config.num_heads * key_rank),
-        "b_proj.weight": normal(config.num_heads, hidden),
-        "g_a_proj.weight": normal(value_rank, hidden),
-        "g_b_proj.weight": normal(config.num_heads * value_rank, value_rank),
-        "o_norm.weight": 1.0 + normal(value_rank),
-        "o_proj.weight": normal(hidden, config.num_heads * value_rank),
-    }
-    return weights
+from models.experimental.kimi_delta_attention.tests.test_factory import make_config, random_weights
 
 
 def test_target_config_mapping() -> None:
@@ -160,8 +121,8 @@ def test_output_norm_uses_sigmoid_gate() -> None:
 
 
 def test_full_layer_split_equivalence() -> None:
-    config = _config()
-    weights = _random_weights(config)
+    config = make_config()
+    weights = random_weights(config)
     hidden = torch.randn(1, 6, config.hidden_size, generator=torch.Generator().manual_seed(29))
 
     full_output, full_state = kda_forward_reference(hidden, weights, config)
@@ -177,8 +138,8 @@ def test_full_layer_split_equivalence() -> None:
 
 
 def test_weight_validation_reports_exact_name_and_shape(expect_error) -> None:
-    config = _config()
-    weights = _random_weights(config)
+    config = make_config()
+    weights = random_weights(config)
     weights["q_proj.weight"] = torch.empty(config.q_dim, config.hidden_size + 1)
 
     with expect_error(ValueError, r"q_proj\.weight shape .* !="):

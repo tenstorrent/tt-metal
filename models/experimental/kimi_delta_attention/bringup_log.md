@@ -264,3 +264,48 @@
   `0.999993` / `5.755138e-02`.
 - This proves exact-shape one-token correctness with fallback rejection. It
   does not cover long-state accumulation, mesh distribution, or performance.
+
+### 2026-07-23 07:06:04 UTC — Recurrent-state precision and ownership
+
+- Source fact: Kimi initializes `A_log` from `log(uniform(1,16))`, but creates
+  `dt_bias` with `torch.empty`; its generic initializer handles Linear and
+  Embedding modules only. Without checkpoint weights, no checkpoint-like decay
+  distribution can be inferred from random initialization.
+- Controlled CPU experiment compared an FP32 cache with a cache quantized to
+  BF16 after every token. Inputs were deterministic random tensors with
+  B=1, H=2, K=V=32; decay was held constant to isolate retention sensitivity.
+- At T=2048, output/state PCC for BF16 persistence was:
+  `g=-1e-3`: `0.999945` / `0.999943`;
+  `g=-1e-2`: `0.999969` / `0.999970`;
+  `g=-1e-1`: `0.999994` / `0.999990`.
+- At T=8192, output/state PCC and relative L2 error were:
+  `g=-1e-4`: `0.999943` / `0.999937`, `1.087%` / `1.120%`;
+  `g=-1e-3`: `0.999944` / `0.999937`, `1.054%` / `1.126%`.
+- Decision: retain FP32 as the default recurrent-state dtype. BF16 remains an
+  explicit memory/performance option, but it is not presumed accuracy-safe
+  until real checkpoint activation statistics and end-to-end PCC are measured.
+- Refactored deterministic config/weight construction into one shared test
+  factory; this removes device-test dependence on private CPU-test helpers.
+- Device command:
+  `scripts/run_safe_pytest.sh
+  models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py::test_external_state_is_updated_in_place
+  -q -s`.
+- Result: `SAFE_PYTEST_RESULT: PASS`; FP32 and BF16 cases passed in 4.68 s.
+- Both policies retained the exact recurrent and convolution buffer addresses
+  across two decode calls and updated those external buffers in place.
+- FP32 output/recurrent/convolution PCC:
+  `0.999919` / `0.999975` / `0.999992`.
+- BF16 output/recurrent/convolution PCC:
+  `0.999919` / `0.999974` / `0.999992`.
+- CPU reference command:
+  `python -m pytest -q
+  models/experimental/kimi_delta_attention/tests/test_reference.py`.
+- Result: 11 passed in 2.10 s.
+- Coverage now proves eager address stability and dtype behavior. Full TTNN
+  trace capture/replay remains a separate graph-level validation.
+- Full device regression command:
+  `scripts/run_safe_pytest.sh
+  models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s`.
+- Result: `SAFE_PYTEST_RESULT: PASS`; six cases passed in 7.25 s warm,
+  including exact target decode, chunk/decode continuity, both external-state
+  dtypes, address stability, and fallback rejection.
