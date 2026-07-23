@@ -431,3 +431,126 @@ jobs:
         with:
           allocationName: ci-${{ github.run_id }}-dc
           namespace: ttop-ci
+
+  # ===========================================================================
+  # DC validation on the QUAD (issue #50505). The ttop worker hosts have no
+  # docker, so run_fabric_tests.sh --image (mpi-docker) can't run here. Instead
+  # we deploy the PINNED image AS the ttop worker environment and run the
+  # neighbor-exchange test with tt-run over mpirun (the way the SC4 job runs its
+  # fabric test) -- no docker needed on the hosts, and the image is still what's
+  # exercised (it IS the worker image).
+  # ===========================================================================
+  create-allocation-dc-quad:
+    name: Create Allocation for DC validation (quad)
+    needs: build-artifact
+    timeout-minutes: 30
+    runs-on:
+      group: exabox
+      labels: exabox-multihost
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Extract allocation spec from SKU
+        id: extract-spec
+        run: |
+          pip3 install PyYAML
+          {
+            echo "allocation_spec<<EOF"
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_sc4-mgd"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Create allocation
+        id: allocation
+        uses: ./.github/actions/ttop-create-allocation
+        with:
+          allocationName: ci-${{ github.run_id }}-dc-quad
+          namespace: ttop-ci
+          spec: ${{ steps.extract-spec.outputs.allocation_spec }}
+
+  run-dc-quad:
+    name: Run DC validation test (quad)
+    needs: create-allocation-dc-quad
+    runs-on:
+      group: exabox
+      labels: exabox-multihost-with-nfs
+    env:
+      PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      VIRTUAL_ENV: /opt/venv
+      HOME: /home/user
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Get Allocation data
+        uses: ./.github/actions/ttop-get-allocation-data
+        with:
+          allocationName: ci-${{ github.run_id }}-dc-quad
+          allocationNamespace: ttop-ci
+
+      # Deploy the PINNED DC image as the ttop worker environment (instead of the
+      # freshly-built dev image), so the test runs inside the pinned image.
+      - name: Create environment (pinned image workers)
+        uses: ./.github/actions/ttop-create-environment
+        timeout-minutes: 30
+        with:
+          environmentName: ci-${{ github.run_id }}-dc-quad
+          allocationName: ci-${{ github.run_id }}-dc-quad
+          allocationNamespace: ttop-ci
+          workerRepository: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx
+          workerTag: v0.76.0-dev20260719-4-g7361a7ac160
+          useDevHostMount: 'true'
+          sharedVolumeEnabled: 'true'
+          path: /etc/ttop
+
+      - name: Reset cards
+        timeout-minutes: 15
+        run: |
+          mpirun --pernode tt-smi -glx_reset || echo "WARNING: glx_reset failed; continuing"
+
+      # Same tt-run invocation as the SC4 fabric test, but running the DC
+      # neighbor-exchange test config against the pinned-image workers.
+      - name: DC validation (quad) - 2D Torus XY Neighbor Exchange (BH, pinned image workers)
+        timeout-minutes: 20
+        working-directory: /home/user/tt-metal
+        run: |
+          TTRUN_DIR=/etc/ttop
+          PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+          set -o pipefail
+          tt-run --skip-mgd-check --skip-executable-check \
+            --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+            --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
+            /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric \
+            --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_neighbor_exchange.yaml \
+            --filter name.2DTorusXYNeighborExchange 2>&1 | tee dc_quad_result.log
+          # Require the per-rank success marker so a partial/no-op run can't pass.
+          grep -q "All tests completed successfully" dc_quad_result.log \
+            || { echo "::error::DC validation (quad) did not pass"; exit 1; }
+
+  cleanup-dc-quad:
+    name: Cleanup DC validation (quad)
+    needs: [run-dc-quad, create-allocation-dc-quad]
+    if: always()
+    runs-on:
+      group: exabox
+      labels: exabox-multihost
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Delete environment
+        uses: ./.github/actions/ttop-delete-environment
+        with:
+          environmentName: ci-${{ github.run_id }}-dc-quad
+          namespace: ttop-ci
+
+      - name: Delete allocation
+        uses: ./.github/actions/ttop-delete-allocation
+        with:
+          allocationName: ci-${{ github.run_id }}-dc-quad
+          namespace: ttop-ci
