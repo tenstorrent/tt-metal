@@ -453,9 +453,45 @@ kernel once rather than being reworked under it. Golden `causal` cells (and the
 to supported_pass; `{causal, cross}` cells are cleanly refused (xfail via ExcludedCell);
 `is_causal + attn_mask` raises ValueError; no regression on none/custom.
 
-### [ ] Refinement 5 — Speed up the perf-flagged profile (block-size / buffer-depth co-tune)
+### [~] Refinement 5 — Speed up the perf-flagged profile (block-size / buffer-depth co-tune)
 
 **Type**: perf
+
+**Outcome (2026-07-23)**: Co-tuned every named block-surface knob on the flagged shape
+`(1,10,9472,128)` bf16 @ `fp32_dest_acc_en=False` and confirmed the block-surface is
+**exhausted** — measurement refutes any further win from this refinement's toolbox (the same
+pattern R3/3b/3c/3d each hit). Baseline **10.25 ms** (util ~0.15), 110 cores.
+- **matmul output-subblock**: already at the DEST ceiling (8 tiles under `fp32_dest_acc_en=False`,
+  `_pick_subblock` maxes it) in both the (4,4) and (8,8) regimes — no headroom (confirms 3b).
+- **chunk / compute-block granularity**: the (4,4)→(8,8) coarsening win (**1.078×**, 3b) is
+  **kept, not reverted** — R5's chunk knob is realized. No further coarsening is a divisor pair
+  that keeps the grid filled.
+- **CB buffer depth** (`kv_buffer_factor`, now env-tunable `TTNN_SDPA_KV_BUF`): swept 2/3/4 →
+  **10.25 / 10.30 / 10.34 ms** (flat/worse; 3b tested only depth 3). Parked at the double-buffer
+  default as a live knob.
+- **Reader-barrier batching** (new compile-time knob `BATCH_KV`, env `TTNN_SDPA_BATCH_KV`): issues
+  the per-KV-block K+V read streams behind ONE `noc_async_read_barrier` instead of two →
+  **10.26 ms, flat**. Correct; parked at its byte-identical default (0) as a live knob.
+
+**Why the levers are all flat — measured, not inferred**: reused the kept `TTNN_SDPA_ABLATE=3`
+gate to reconfirm the pure dataflow/CB/NoC floor = **5.31 ms** (matches 3d's 5.29 ms). Full wall
+**10.25 ms** > floor, so the reader's feed (5.3 ms, unthrottled when compute is stubbed) sits
+**entirely under** the compute time and is **fully hidden** — the shape is **compute-bound, reads
+are off the critical path**. This is now the **4th independent confirmation** (R3 read-volume ↓10×
+flat; 3b + this pass buffer-depth flat; this pass barrier-batching flat). No dataflow/buffer lever
+can move a compute-bound wall.
+
+**Why [~] not [x]**: R5's own action produced **no further device-ns win** — every lever it had left
+to try (buffer depth, reader-barrier batching) measured flat because the shape is compute-bound; the
+only block-surface win (chunk coarsening) was already banked by 3b. The residual headroom (wall
+10.25 ms vs floor 5.3 ms) is **entirely compute/exp-bound**, which is **outside R5's block-surface
+scope** — it is 3d's SFPU-floor territory, whose exact next lever (fast-exp PCC recovery so the
+measured **1.44×** is realizable at the 0.997 contract) is **already filed as Refinement 3d-a**. Per
+"keep a correct lever at its trivial byte-identical default," both new knobs (`TTNN_SDPA_KV_BUF`,
+`TTNN_SDPA_BATCH_KV`) are kept, defaulted to byte-identical no-ops, live tunables for any future
+read-bound shape. Nothing reverted. Golden suite **1511 passed / 398 xfailed** (no hang, byte-
+identical to R4); unit dir 127 passed / 8 skipped; perf test exact PCC 0.997 + approx PCC 0.996
+green. 3b's (8,8) regime, R3's gated mcast, 3d's approx-exp + ablation gate all untouched.
 
 **Goal**: with the redundant-read bottleneck relieved by Refinement 3, co-tune the
 remaining block-surface knobs on the same flagged shape `(1,10,9472,128)` toward the
@@ -477,3 +513,33 @@ residual headroom before filing effort here.
 **Done when**: measured device-ns improves further on the flagged shape with the golden
 suite green, its soft PCC gate holds, and no regression across the config-spanning
 guard set (one representative per distinct kernel path × layout × placement).
+
+### [ ] Refinement 5a — Compute/exp-bound residual on the perf-flagged profile (R5's real lever = 3d-a)
+
+**Type**: perf
+
+**Goal**: Refinement 5 proved on device — via four independent flat measurements (read volume,
+buffer depth 2/3/4, reader-barrier batching) plus the `TTNN_SDPA_ABLATE=3` floor (5.31 ms) sitting
+entirely under the 10.25 ms wall — that the flagged shape `(1,10,9472,128)` bf16 @
+`fp32_dest_acc_en=False` is **compute-bound with reads fully hidden**. The block-surface knob set
+(subblock at DEST ceiling, chunk-coarsening banked in 3b, buffer depth flat, barrier batching flat)
+is therefore **exhausted** — no dataflow/buffer lever can move a compute-bound wall. The remaining
+headroom (wall 10.25 ms vs floor 5.3 ms) is **exp-dominated compute** (3d's ablation: exp chain 21%;
+fast-exp already measured **1.44×**, 10.25→7.11 ms, but only at `math_approx_mode=True`, PCC 0.9967).
+
+**The exact next lever is identical to the already-filed `Refinement 3d-a`** — a PCC-recovery path
+(hybrid near-range-exact / deep-negative-fast exp, or a corrected fast-exp) so the 1.44× is realizable
+at the flagged shape's contract anchor (`math_approx_mode=False`, PCC ≥ 0.997). This heading exists to
+keep R5's lineage explicit in the queue; **do not author a duplicate spec — execute Refinement 3d-a**
+(single source of truth). If 3d-a lands, R5's residual closes with it. Keep R5's parked knobs
+(`TTNN_SDPA_KV_BUF`, `TTNN_SDPA_BATCH_KV`), 3b's (8,8) regime, R3's gated mcast, and 3d's approx-exp
+lever untouched.
+
+**Verifier notes**: This is not a distinct scheme-change from 3d-a — it is 3d-a viewed from R5's
+block-surface-exhaustion finding. Re-use the `TTNN_SDPA_ABLATE` gate to re-attribute the exp cost per
+precision variant. PCC 0.997 is the soft gate the lever must clear at the exact config.
+
+**Done when**: measured device-ns improves materially below 10.24 ms on the flagged shape **at
+`math_approx_mode=False` with PCC ≥ 0.997** (via 3d-a's exp precision-recovery), golden suite green,
+no regression on the config-spanning guard set — OR the exp-bound-without-approximation conclusion is
+recorded at depth and the `math_approx_mode`-gated 1.44× lever is kept.

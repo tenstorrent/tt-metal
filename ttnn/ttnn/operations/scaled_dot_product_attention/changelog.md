@@ -422,3 +422,51 @@
 - Tests added: tests/.../test_scaled_dot_product_attention_causal.py (dtype × scale ×
   MHA/GQA/MQA/multi-batch self shapes, causal≈custom equivalence, {causal,cross}
   ExcludedCell, is_causal+attn_mask ValueError) — 45 passed.
+
+## Refinement 5 — Speed up the perf-flagged profile (block-size / buffer-depth co-tune) (partial)
+- Date: 2026-07-23
+- What was done: Co-tuned every named block-surface knob on the flagged shape
+  `(1,10,9472,128)` bf16 @ `fp32_dest_acc_en=False` (110 cores) and confirmed the
+  block-surface is EXHAUSTED — measurement refutes any further win from R5's toolbox.
+  Baseline 10.25 ms (util ~0.15). **Program-descriptor + reader only; two new live knobs,
+  both defaulted to byte-identical no-ops.**
+  * **matmul output-subblock**: already at the DEST ceiling (8 tiles under
+    fp32_dest_acc_en=False; `_pick_subblock` maxes it) in both (4,4) and (8,8) regimes —
+    no headroom (re-confirms 3b).
+  * **chunk granularity**: 3b's (4,4)→(8,8) coarsening win (1.078×) is kept, not reverted —
+    R5's chunk knob is realized; no further coarsening is a grid-filling divisor pair.
+  * **CB buffer depth** (`kv_buffer_factor`, now env-tunable `TTNN_SDPA_KV_BUF`, default 2):
+    swept 2/3/4 → 10.25 / 10.30 / 10.34 ms (flat/worse; 3b tested only depth 3). Parked at
+    the double-buffer default as a live knob.
+  * **Reader-barrier batching** (NEW compile-time knob `BATCH_KV`, env `TTNN_SDPA_BATCH_KV`,
+    default 0): the per-KV-block K+V read streams issued behind ONE noc_async_read_barrier
+    (both in flight, one NoC drain) instead of two → 10.26 ms, flat. Correct; parked at its
+    byte-identical default (0) as a live knob. Required a clean reader-CT shift (BATCH_KV at
+    index 14; mcast block 15..19; TensorAccessorArgs base 19→20 — updated consistently in the
+    kernel and descriptor, verified across none/custom/causal/mcast paths).
+- Why all levers are flat (measured, not inferred): re-used the kept `TTNN_SDPA_ABLATE=3`
+  gate to reconfirm the pure dataflow/CB/NoC floor = 5.31 ms (matches 3d's 5.29 ms). Full wall
+  10.25 ms > floor, so the reader's unthrottled feed (5.3 ms) sits ENTIRELY UNDER the compute
+  time and is fully hidden — the shape is compute-bound, reads are off the critical path. This
+  is the 4th independent confirmation (R3 read-volume ↓10× flat; 3b + this pass buffer-depth
+  flat; this pass barrier-batching flat). No dataflow/buffer lever can move a compute-bound wall.
+- Accuracy achieved: flagged shape exact PCC 0.997 (soft gate) holds on the default path
+  (byte-identical to prior phases); approx PCC 0.996. No RMSE regression.
+- Golden test progress: **1511 passed / 398 xfailed / 0 failed** (no hang) — byte-identical to
+  Refinement 4; zero regression, zero xpass drift. Unit dir 127 passed / 8 skipped.
+- Perf result: default 10.248 ms (byte-identical to the 10.252 ms baseline); buf3 10.299 ms;
+  buf4 10.338 ms; batch_kv 10.263 ms — all flat. DEVICE KERNEL DURATION, 110 cores.
+- Decision: **[~] partial**. R5's own action produced no further device-ns win — every lever it
+  had left (buffer depth, reader-barrier batching) is flat because the shape is compute-bound;
+  the only block-surface win (chunk coarsening) was already banked by 3b (kept). The residual
+  headroom (wall 10.25 ms vs floor 5.3 ms) is compute/exp-bound — outside R5's block-surface
+  scope, in 3d's SFPU-floor territory. The exact next lever (fast-exp PCC recovery so the
+  measured 1.44× is realizable at the 0.997 contract) is already filed as **Refinement 3d-a**;
+  filed a thin **Refinement 5a** pointing at it (no duplicate spec — single source of truth).
+  Per "keep a correct lever at its trivial byte-identical default," both new knobs are kept.
+- Issues encountered: None. The reader-CT index shift came up correct on the first run (perf
+  test byte-identical + all mask regimes green). The only "surprise" was how decisively every
+  dataflow lever measured flat — which is exactly the compute-bound diagnosis, consistent across
+  R3/3b/3c/3d.
+- Tests added: None (reused test_scaled_dot_product_attention_perf.py + the golden suite + unit
+  dir as the regression net; both new levers are env-driven, no new test file).

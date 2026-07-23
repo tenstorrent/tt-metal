@@ -121,9 +121,14 @@ void kernel_main() {
     constexpr uint32_t MASK_BCAST = get_compile_time_arg_val(11);
     constexpr uint32_t USE_MCAST = get_compile_time_arg_val(12);
     constexpr uint32_t GC = get_compile_time_arg_val(13);
+    // Refinement 5 — reader-barrier batching (perf knob, default 0 = byte-identical
+    // to prior phases). When 1, the per-KV-block K and V read streams are issued
+    // behind a SINGLE noc_async_read_barrier() (both blocks in flight, one wait)
+    // instead of one barrier each — halves the reader's per-block barrier count.
+    constexpr uint32_t BATCH_KV = get_compile_time_arg_val(14);
 
-    // Mcast CT block occupies [14..18]; TensorAccessorArgs chain after it.
-    constexpr auto q_args = TensorAccessorArgs<19>();
+    // Mcast CT block occupies [15..19]; TensorAccessorArgs chain after it.
+    constexpr auto q_args = TensorAccessorArgs<20>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto m_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -163,8 +168,8 @@ void kernel_main() {
 
     // ---- Refinement 3: K/V reuse-multicast regime (no mask; one head per row) ----
     if constexpr (USE_MCAST) {
-        // Mcast CT block at 14; per-core mcast RT (rect|coords) at RT 10.
-        constexpr auto mc = McastArgs</*CT=*/14, /*RT=*/10>();
+        // Mcast CT block at 15; per-core mcast RT (rect|coords) at RT 10.
+        constexpr auto mc = McastArgs</*CT=*/15, /*RT=*/10>();
         const uint32_t row_y = get_arg_val<uint32_t>(6);
         const uint32_t col_x = get_arg_val<uint32_t>(7);
         const uint32_t rounds = get_arg_val<uint32_t>(8);
@@ -304,21 +309,39 @@ void kernel_main() {
                     l1k += tile_bytes;
                 }
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_k_in, k_block_tiles);
-
-            // ---- V chunk: natural (SK_CHUNK_T, DHT) ----
-            cb_reserve_back(cb_v_in, k_block_tiles);
-            uint32_t l1v = get_write_ptr(cb_v_in);
-            for (uint32_t kt = 0; kt < SK_CHUNK_T; ++kt) {
-                const uint32_t s_tile = k_chunk * SK_CHUNK_T + kt;
-                for (uint32_t dt = 0; dt < DHT; ++dt) {
-                    noc_async_read_tile((k_base + s_tile) * DHT + dt, v_acc, l1v);
-                    l1v += tile_bytes;
+            if constexpr (BATCH_KV) {
+                // Refinement 5 — issue V reads into their CB BEFORE the barrier so
+                // K and V are in flight together, then ONE barrier for both, then push
+                // both. Halves the per-block barrier count (one NoC drain instead of two).
+                cb_reserve_back(cb_v_in, k_block_tiles);
+                uint32_t l1v = get_write_ptr(cb_v_in);
+                for (uint32_t kt = 0; kt < SK_CHUNK_T; ++kt) {
+                    const uint32_t s_tile = k_chunk * SK_CHUNK_T + kt;
+                    for (uint32_t dt = 0; dt < DHT; ++dt) {
+                        noc_async_read_tile((k_base + s_tile) * DHT + dt, v_acc, l1v);
+                        l1v += tile_bytes;
+                    }
                 }
+                noc_async_read_barrier();
+                cb_push_back(cb_k_in, k_block_tiles);
+                cb_push_back(cb_v_in, k_block_tiles);
+            } else {
+                noc_async_read_barrier();
+                cb_push_back(cb_k_in, k_block_tiles);
+
+                // ---- V chunk: natural (SK_CHUNK_T, DHT) ----
+                cb_reserve_back(cb_v_in, k_block_tiles);
+                uint32_t l1v = get_write_ptr(cb_v_in);
+                for (uint32_t kt = 0; kt < SK_CHUNK_T; ++kt) {
+                    const uint32_t s_tile = k_chunk * SK_CHUNK_T + kt;
+                    for (uint32_t dt = 0; dt < DHT; ++dt) {
+                        noc_async_read_tile((k_base + s_tile) * DHT + dt, v_acc, l1v);
+                        l1v += tile_bytes;
+                    }
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_v_in, k_block_tiles);
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_v_in, k_block_tiles);
 
             // ---- Mask chunk: full (SQ_CHUNK_T, SK_CHUNK_T) ----
             if constexpr (HAS_CUSTOM_MASK) {

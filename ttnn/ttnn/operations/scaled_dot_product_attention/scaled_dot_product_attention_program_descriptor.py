@@ -52,7 +52,7 @@ K_CHUNK_COARSE = 8  # Sk_chunk_t coarse (amortization) block factor
 # (slightly worse from L1 pressure): reads are OFF the critical path here (R3 proved the
 # shape is compute/dataflow-latency bound, not read-bound), so a deeper read buffer is a
 # no-op. Kept at the double-buffer default (a live tunable for any future read-bound shape).
-KV_BUFFER_FACTOR = 2
+KV_BUFFER_FACTOR = int(os.environ.get("TTNN_SDPA_KV_BUF", "2"))  # env-tunable; default 2 (byte-identical)
 Q_BUFFER_FACTOR = 1  # Q held resident across the whole KV loop
 
 # ---- Per-core L1 budget (Refinement 2) ----------------------------------------
@@ -326,6 +326,13 @@ def create_program_descriptor(
     mcast_opt_in = os.environ.get("TTNN_SDPA_KV_MCAST", "0") == "1"
     use_mcast = mcast_opt_in and (not needs_mask_cb) and (b * h_q == grid_rows) and (grid_cols > 1)
 
+    # Refinement 5 — reader-barrier batching (perf knob): issue the per-KV-block K and
+    # V read streams behind a SINGLE noc_async_read_barrier (both in flight, one NoC
+    # drain) instead of one barrier each. Default 0 = byte-identical to prior phases;
+    # env-tunable so the flagged-shape effect is measurable. Only meaningful on the
+    # per-core DRAM read path (the mcast path uses the SenderPipe/ReceiverPipe handshake).
+    batch_kv = 1 if (os.environ.get("TTNN_SDPA_BATCH_KV", "0") == "1" and not use_mcast) else 0
+
     semaphores = []
     mcast_ct = [0, 0, 0, 0, 0]  # McastArgs CT block (5 words); inert when !use_mcast
 
@@ -419,8 +426,9 @@ def create_program_descriptor(
         mask_broadcast_head,
         1 if use_mcast else 0,
         grid_cols,
+        batch_kv,  # Refinement 5 reader-barrier-batching knob (reader CT 14; default 0)
     ]
-    reader_ct.extend(mcast_ct)  # McastArgs CT block -> reader CT [14..18]
+    reader_ct.extend(mcast_ct)  # McastArgs CT block -> reader CT [15..19]
     reader_ct.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
