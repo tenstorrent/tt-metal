@@ -208,7 +208,11 @@ def test_text_encoder_lora_fusion_pcc(mesh_device, te_lora_path):
     ref_pipeline.fuse_lora(components=components, lora_scale=1.0)
 
     for component in components:
-        ref_sd = getattr(ref_pipeline, component).state_dict()
+        # After fuse_lora the reference pipeline keeps the PEFT wrapper attached,
+        # so its state dict has ...base_layer.weight names plus lora_A/lora_B
+        # adapter tensors. The TT pipeline fuses and unloads to plain weight
+        # names, so normalize the reference keys to match before comparing.
+        ref_sd = _get_lora_impacted_weights(getattr(ref_pipeline, component).state_dict())
         fused_sd = getattr(tt_pipeline.torch_pipeline, component).state_dict()
         for name, ref_tensor in ref_sd.items():
             assert name in fused_sd, f"{component}: missing fused weight {name}"
