@@ -132,7 +132,7 @@ inline void _llk_unpack_configure_stoch_rnd_()
  *
  * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
  * @tparam dim_stride_target: Whether to reprogram dim/stride, values = <IGNORE/FACE_ROW_MAJOR>
- * @tparam to_from_int8: Reconfiguring to/from an Int8 format (requires FP32 dest mode).
+ * @tparam to_from_int8: Reconfiguring to/from an Int8 format; reprograms the Src unsigned flag for UInt8.
  * @param unpack_src_format: New source data format of operand A in L1.
  * @param unpack_dst_format: New destination data format operand A is converted to.
  * @param tile_size: New tile size of operand A stored to the tile-size GPR.
@@ -174,7 +174,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
     if constexpr (to_from_int8)
     {
-        static_assert(is_fp32_dest_acc_en, "Reconfiguring unpack to/from Int8 formats requires FP32 Dest mode enabled");
+        // SrcAUnsigned selects unsigned unpacking for UInt8; it is correct in any dest mode (no FP32-dest requirement).
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcAUnsigned_RMW>((unpack_src_format == to_underlying(DataFormat::UInt8)) ? 1 : 0);
     }
 
@@ -213,7 +213,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
  *
  * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
  * @tparam dim_stride_target: Whether to reprogram dim/stride, values = <IGNORE/FACE_ROW_MAJOR>
- * @tparam to_from_int8: Reconfiguring to/from an Int8 format (requires FP32 dest mode).
+ * @tparam to_from_int8: Reconfiguring to/from an Int8 format; reprograms the Src unsigned flag for UInt8.
  * @param unpack_src_format: New source data format of operand B in L1.
  * @param unpack_dst_format: New destination data format operand B is converted to.
  * @param tile_size: New tile size of operand B stored to the tile-size GPR.
@@ -255,7 +255,7 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK1);
     if constexpr (to_from_int8)
     {
-        static_assert(is_fp32_dest_acc_en, "Reconfiguring unpack to/from Int8 formats requires FP32 Dest mode enabled");
+        // SrcBUnsigned selects unsigned unpacking for UInt8; it is correct in any dest mode (no FP32-dest requirement).
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcBUnsigned_RMW>((unpack_src_format == to_underlying(DataFormat::UInt8)) ? 1 : 0);
     }
 

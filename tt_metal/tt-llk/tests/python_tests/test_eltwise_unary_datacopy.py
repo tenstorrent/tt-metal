@@ -217,6 +217,28 @@ def test_unary_datacopy(
 
 
 @parametrize(
+    formats=input_output_formats([DataFormat.UInt8]),
+    input_dimensions=[[32, 32], [64, 64]],
+)
+def test_unary_datacopy_uint8_16bit_dest(formats, input_dimensions):
+    """UInt8 datacopy must round-trip through a 16-bit (non-FP32) Dest.
+
+    UInt8 masks to the Int8 ALU format, so math hw-config previously enabled INT8
+    math for it regardless of Dest mode; INT8 math forces an int32 Dest layout and
+    corrupts the MOVA2D copy when Dest is 16-bit, making the copy return zeros. With
+    INT8 math gated on FP32 Dest, the copy uses the normal MOVA2D path and must be
+    bit-exact.
+    """
+    _run_unary_datacopy_test(
+        formats,
+        DestAccumulation.No,
+        num_faces=4,
+        tilize=Tilize.No,
+        input_dimensions=input_dimensions,
+    )
+
+
+@parametrize(
     formats=[
         fmt
         for fmt in input_output_formats(

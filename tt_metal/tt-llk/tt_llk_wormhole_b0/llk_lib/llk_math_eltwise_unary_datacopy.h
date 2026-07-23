@@ -348,7 +348,7 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
 /**
  * @brief Program the datacopy MOP, selecting the move instruction (MOVA2D/MOVB2D/ELWADD) per direction, format, and broadcast.
  *
- * A2D normally uses MOVA2D but falls back to ELWADD when dest is FP32/INT (except UInt16, which stays on MOVA2D) or the datum is UInt8; B2D uses
+ * A2D normally uses MOVA2D but falls back to ELWADD when dest is FP32/INT (except UInt16, which stays on MOVA2D); B2D uses
  * MOVB2D (or ELWADD for non-UInt16 column broadcast) with loop counts derived from the broadcast type.
  *
  * @tparam type: Datacopy direction, values = <A2D/B2D>
@@ -370,9 +370,10 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
         std::uint32_t innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
         std::uint32_t outerloop = num_faces;
 
-        if (((is_fp32_dest_acc_en || is_int_fpu_en) && !(dst_format == to_underlying(DataFormat::UInt16))) || (dst_format == to_underlying(DataFormat::UInt8)))
+        if ((is_fp32_dest_acc_en || is_int_fpu_en) && !(dst_format == to_underlying(DataFormat::UInt16)))
         {
-            // use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode OR to handle uint8 datums
+            // use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode.
+            // uint8 into a 16-bit dest takes the MOVA2D path below (INT8 math stays disabled).
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
