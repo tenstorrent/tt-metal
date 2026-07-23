@@ -223,8 +223,8 @@ inline void calculate_nez_uint32() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
-        vUInt r = 1;
-        v_if(v == 0) { r = 0; }
+        vUInt r = 0;
+        v_if(v != 0) { r = 1; }
         v_endif;
         dst_reg[0].mode<sfpi::DataLayout::U32>() = r;
         dst_reg++;
