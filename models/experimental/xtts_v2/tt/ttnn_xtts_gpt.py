@@ -189,7 +189,7 @@ class TracedGPTDecoder:
             attn = ttnn.transformer.scaled_dot_product_attention(
                 q, k, v, is_causal=True, scale=SCALE, compute_kernel_config=COMPUTE_KERNEL_CONFIG
             )  # [1, N_HEAD, P, HEAD_DIM]
-            attn = ttnn.reshape(ttnn.permute(attn, [0, 2, 1, 3]), [1, P, N_EMBD])  # concat heads
+            attn = ttnn.reshape(ttnn.experimental.nlp_concat_heads(attn), [1, P, N_EMBD])  # concat heads (fused; inverse of nlp_create_qkv_heads)
             x = ttnn.add(x, ttnn.linear(attn, w["proj_w"], bias=w["proj_b"], compute_kernel_config=COMPUTE_KERNEL_CONFIG))
             x = ttnn.add(x, _mlp(ttnn.layer_norm(x, weight=w["ln_2_wp"], bias=w["ln_2_bp"], epsilon=LN_EPS, compute_kernel_config=COMPUTE_KERNEL_CONFIG), w))
 
