@@ -802,3 +802,67 @@
   exact BLOCK 8x8 1-D topology via the `tensix_all_reduce` example API — correctness of Pattern A /
   Pattern B allgather / two_phase at isolated + grid-filling; + a BLOCK 8x8 Pattern-A regression
   guard; measured ns table + repro command in the docstring). 7/7 pass.
+
+## Refinement 6e — Sharded cross-core: two-phase (tile-index) reduce-mcast for the 1-D master bottleneck
+- Date: 2026-07-23
+- Type: perf (partial — `[~]`); no SUPPORTED change.
+- What was done: landed the R6d-named winner — **two-phase (tile-index) distributed fold** — on the
+  shared cross-core (`_assemble_xcore_kernels`) reader/compute/writer transport via a `TWO_PHASE_FOLD`
+  CT flag + `NUM_FOLDERS` (no forked kernel files); correct (`--dev` + non-dev clean), gated so every
+  non-BLOCK-multi-round cell is byte-identical. Try-cheap-first per the verifier's "ablate the in-op
+  yield before committing" directive.
+  - **In-op ablation FIRST (blackhole_p150b, BLOCK 8×8, temporary kernel stubs, perf-only — revised the
+    honest-ceiling):** baseline **108.0 µs**; stub gather DATA MOVEMENT → 106.4 µs (gather bytes only
+    **1.6 µs / 1.5 %** — the honest-ceiling's "per-tile-row stat movement" is NOT the bottleneck); stub
+    the master FOLD ARITHMETIC keeping the round → 78.3 µs (**master serial fold = 29.7 µs / 28 %, fully
+    on the critical path**); stub the whole round (compute floor) → 67.1 µs. The dominant round cost is
+    the master's serial K-1 add_tiles + rsqrt for all HT_LOCAL tile-rows on ONE core — exactly what
+    two-phase distributes by tile-index (works on BLOCK's 1-D groups where R6c two-stage was a no-op).
+    So the collective is ON the critical path (first "Done when" branch applies, not the R6f escape).
+  - **Lever — two-phase distributed fold.** Every core pushes each batched tile-row's partial to that
+    row's FOLDER (owner = row % `NUM_FOLDERS`, `NUM_FOLDERS = min(C, K)`); each folder gathers its owned
+    rows' K partials, compute folds them (+eps, rsqrt) → `cb_rowpartial` (reused; two-stage off on this
+    path), the folder scatters the finalized 1/RMS to the root's `cb_stat_global`, and the root assembles
+    all C and mcasts them back (reusing the R6/R6a segmented mcast). Fully synchronous per round; both
+    `cb_stat_global` back-pressures are FREE (the round barrier + the gather including every core, whose
+    round-r push is gated behind its own pass-2 r-1 pop). SEM reuse only (SEM_GATHER cores→folder waits
+    `(r+1)*K`, SEM_GATHER2 folders→root waits `(r+1)*NUM_FOLDERS`, SEM_BCAST root→members set `r+1`); no
+    new semaphore, no new kernel file. `cb_gather` shrinks to `max_owned*K` (vs flat `K*C`). do_pass1 /
+    do_pass2 are byte-identical to the flat path — only the fold is distributed off the master.
+  - **Host gate (single source, `XCORE_TWO_PHASE_FOLD=True`):** engages ONLY on the pure tiled sharded
+    cross-core path with C>1 multi-round batching (`Ht_local % C == 0` → uniform per-round ownership,
+    monotone semaphore counts stay clean) AND every group mcast-able (`n_seg>0`). C=1 / WIDTH single-round
+    / RM / logical / two-stage keep the byte-identical flat master fold. Two-phase and R6b pipelining are
+    mutually exclusive (two-phase has its own fully-synchronous loop).
+- Accuracy achieved: soft PCC gate 0.9995 holds; BLOCK 8×8 PCC **1.001005 == baseline** (byte-identical
+  output — the fold is the same associative sum, just distributed). `test_rms_norm_r6e.py` 4/4 (`--dev` +
+  non-dev): (2048,256)/(1024,512) grid 4×4 gamma+no-gamma (owned_max=2 multi-owned-row folds) and the
+  (8192,1024) grid 8×8 perf-target topology (owned_max=1). Golden `TOLERANCES` unchanged.
+- Measured perf (blackhole_p150b, 110-core grid, median of 8 fresh trials, exact perf config
+  bf16 / fp32_dest_acc_en=False / TILE / TILE gamma / HiFi2; `test_rms_norm_perf_r6.py`):
+  | case | grid/K | R6d/prev | R6e | vs achievable | speedup |
+  |---|---|---|---|---|---|
+  | BLOCK 8x8 (HT_LOCAL=32, C=8) | K=8 | 108023 | 86606 | 4.21x → 3.38x | **1.247x** (fold distributed across 8 folders) |
+  | WIDTH 8x4 | K=32 | 7616 | 7616 | 1.45x | byte-identical (single-round C=1 → two-phase gated off; R6c two-stage still engages) |
+  | WIDTH 7x4 | K=28 | 9160 | 9160 | 1.67x | byte-identical |
+  | WIDTH 8x1 | K=8 | 5613 | 5613 | 1.37x | byte-identical |
+  | WIDTH 9x1 | K=9 | 7776 | 7776 | 1.68x | byte-identical |
+- Levers: two-phase distributed fold — CORRECT, KEPT, WINNING on the BLOCK multi-round target (1.247×);
+  gated so single-round / non-BLOCK stay byte-identical (can never regress). Not reverted.
+- Why `[~]` (not `[x]`): the named lever fully landed and won, but BLOCK 8×8 is still 3.38× above
+  achievable — the ablation pins the residual to the **per-core compute floor (67.1 µs = 62 % of the op)**,
+  a different lever family (compute: pass-2 mul fusion, compute/round overlap now that the fold is
+  distributed, coarser DST batching). Filed as R6f with the exact next levers.
+- Golden test progress: green — no regression. `test_op_loose` 19/19 (incl. BLOCK 8×8 two-phase geometry).
+  `test_op` BLOCK bf16 tile-aligned slice 500 passed / 0 failed / 0 xpassed / 60 xfailed (standing
+  exclusions). No supported_fail, no xpass drift.
+- No regression across the guard set: core + RM/HEIGHT/RM-HEIGHT/WIDTH/BLOCK sharded + gamma-layout unit
+  221 passed (`--dev` + non-dev); R6a batched-round + R6c two-stage correctness 21; precision baseline +
+  R6d ablation 23. WIDTH perf byte-identical; two-phase gated to BLOCK multi-round only.
+- Issues encountered: None — the semaphore choreography (gather→folder, scatter→root, assemble+mcast) was
+  correct on the first device run; both `cb_stat_global` back-pressures proved free under the fully-sync
+  round barrier (no extra semaphore needed). The ablation-first discipline (measure the in-op yield before
+  the ~250-line restructure) confirmed the lever was on the critical path and projected the 1.247× win.
+- Tests added: `test_rms_norm_r6e.py` (two-phase correctness across multi-round BLOCK geometries: owned_max
+  1 and 2, gamma/no-gamma, the 8×8 perf topology; soft PCC gate). The in-op ablation was run via temporary
+  `ABLATE_STUB_*` kernel macros (reverted after measurement; numbers recorded above + in breadcrumbs).

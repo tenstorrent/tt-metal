@@ -114,6 +114,21 @@ XCORE_TWO_STAGE_GATHER = True
 # 2D groups fall back to the byte-identical flat gather (no regression).
 XCORE_TWO_STAGE_MIN_SAVING = 13
 
+# ---- Cross-core two-phase (tile-index) distributed fold (op_requirements.md R6e) ----
+# The dominant BLOCK-8x8 round residual (in-op ablation: 29.7 us = 28% of the op, fully on the
+# critical path) is the group MASTER's SERIAL K-partial fold arithmetic — the K-1 add_tiles +
+# rsqrt for all HT_LOCAL tile-rows done on ONE core while everyone waits (the gather DATA MOVEMENT
+# is only 1.6 us / 1.5%). Two-stage (R6c) distributes the fold but is topologically a no-op on
+# BLOCK's 1-D groups; two-phase distributes by TILE-INDEX so it works on a 1-D line: every core
+# pushes each batched tile-row's partial to that row's FOLDER (owner = row % NUM_FOLDERS), each of
+# the NUM_FOLDERS = min(C, K) folders gathers+folds a disjoint set of the C rows, scatters its
+# finalized 1/RMS to the root, and the root assembles all C and mcasts back. This is the R6d
+# on-device bake-off winner (two_phase_reduce_mcast 1.40x vs Pattern A at the exact BLOCK 1-D
+# topology). Engaged ONLY on the pure tiled sharded cross-core path with C>1 multi-round batching
+# (Ht_local % C == 0 -> uniform per-round ownership) and every group mcast-able (n_seg>0). C=1 /
+# WIDTH single-round / RM / logical / two-stage keep the byte-identical flat master fold. Live knob.
+XCORE_TWO_PHASE_FOLD = True
+
 
 def _gather_runs(mode: int):
     """(off0, len0, off1, len1) contiguous byte runs the gather moves per stat tile."""
@@ -1305,6 +1320,54 @@ def _assemble_xcore_kernels(
     if XCORE_TWO_STAGE_GATHER and x_zero_copy and (not is_rm) and (not out_to_dram):
         two_stage, nx_ts, ny_ts, ts_percore = _two_stage_topology(masters, workers_of, Ht_local, device)
 
+    # ---- Per-group segmented NoC-mcast plan (R6 + R6a lever 2) — computed once, single source ----
+    # Reused by the two-phase gate below (needs every group mcast-able) and the writer RT builder.
+    group_seg = {}
+    for _key, _master in masters.items():
+        _members = [_master] + workers_of.get(_key, [])
+        _members_v = [_v(m) for m in _members]
+        group_seg[_key] = _mcast_segments(_members_v, _v(_master))
+
+    # ---- R6e two-phase (tile-index) distributed fold topology ----
+    # NUM_FOLDERS = min(C, K) folder cores (slice_index 0..NUM_FOLDERS-1) each fold a disjoint set
+    # of the C batched tile-rows (owner(cc) = cc % NUM_FOLDERS). owned_max(f) = number of rows in
+    # [0,C) with cc%NUM_FOLDERS==f = ceil((C-f)/NUM_FOLDERS) (constant per round since Ht_local%C==0).
+    # folder_coords[key] = virtual coords of folders 0..NUM_FOLDERS-1 (every core needs them to push).
+    two_phase = False
+    num_folders = 1
+    folder_coords = {}  # group key -> [(vx,vy)] * num_folders
+    tp_owned = {}  # (x,y) -> (is_folder, owned_max)
+    if (
+        XCORE_TWO_PHASE_FOLD
+        and x_zero_copy
+        and (not is_rm)
+        and (not out_to_dram)
+        and (not two_stage)
+        and C > 1
+        and K > 1
+        and (Ht_local % C == 0)
+        and all(group_seg[key][0] > 0 for key in masters)  # every group mcast-able
+    ):
+        num_folders = min(C, K)
+        # slice_index -> core, per group; folders are slice 0..num_folders-1
+        two_phase = True
+        for key, master in masters.items():
+            members = [master] + workers_of.get(key, [])
+            by_si = {}
+            for c, si, m, _iph, _wts, _vwt in entries:
+                if (int(m.x), int(m.y)) == key:
+                    by_si[si] = c
+            if any(f not in by_si for f in range(num_folders)):
+                two_phase = False  # a folder slice is missing -> bail (keep flat)
+                break
+            folder_coords[key] = [_v(by_si[f]) for f in range(num_folders)]
+        if two_phase:
+            for c, si, m, _iph, _wts, _vwt in entries:
+                is_f = si < num_folders
+                owned = (C - si + num_folders - 1) // num_folders if is_f else 0
+                tp_owned[(int(c.x), int(c.y))] = (1 if is_f else 0, owned)
+    max_owned = ((C - 0 + num_folders - 1) // num_folders) if two_phase else 0  # folder 0 owns the most
+
     cbs = []
 
     def add_cb(idx, page_size, num_pages, fmt):
@@ -1362,6 +1425,11 @@ def _assemble_xcore_kernels(
         add_cb(CB_GATHER, tile_fp32, nx_ts, ttnn.float32)  # stage-1 fan-in (nx partials)
         add_cb(CB_ROWPARTIAL, tile_fp32, 2, ttnn.float32)  # row-leader stage-1 fold output
         add_cb(CB_GATHER2, tile_fp32, ny_ts, ttnn.float32)  # stage-2 fan-in (ny row-partials)
+    elif two_phase:
+        # R6e: each folder's fan-in is only its owned rows × K partials (fixed base, drained/round),
+        # and cb_rowpartial is the folder-local finalized-rstd buffer (compute fold -> writer scatter).
+        add_cb(CB_GATHER, tile_fp32, max_owned * K, ttnn.float32)  # folder fan-in (max_owned rows × K)
+        add_cb(CB_ROWPARTIAL, tile_fp32, 2 * max_owned, ttnn.float32)  # folder-local finalized rstds
     else:
         add_cb(CB_GATHER, tile_fp32, K * C, ttnn.float32)  # fixed-base fan-in (K partials/round × C rows)
     add_cb(CB_STAT_HANDOFF, tile_fp32, 2 * C, ttnn.float32)
@@ -1439,7 +1507,10 @@ def _assemble_xcore_kernels(
     # Two-stage (R6c) is single-round (Ht_local==1), so pipelining degenerates anyway; keep it
     # off on that path so the flat/two-stage compute paths stay cleanly separated.
     pipeline_lookahead = (
-        XCORE_PIPELINE_LOOKAHEAD and (x_zero_copy and (not is_rm) and (not out_to_dram)) and (not two_stage)
+        XCORE_PIPELINE_LOOKAHEAD
+        and (x_zero_copy and (not is_rm) and (not out_to_dram))
+        and (not two_stage)
+        and (not two_phase)  # R6e two-phase has its own fully-synchronous round loop
     )
 
     # ---- Writer (cross-core transport + [logical] out-to-DRAM) ----
@@ -1465,7 +1536,9 @@ def _assemble_xcore_kernels(
         1 if two_stage else 0,  # TWO_STAGE (R6c; idx 18)
         nx_ts,  # NX — cores per grid row in the group (stage-1 fan-in; idx 19)
         ny_ts,  # NY — grid rows in the group (stage-2 fan-in; idx 20)
-        _SEM_GATHER2,  # stage-2 gather semaphore id (idx 21) — accessor chained after at <22>
+        _SEM_GATHER2,  # stage-2 gather semaphore id (idx 21)
+        1 if two_phase else 0,  # TWO_PHASE_FOLD (R6e; idx 22)
+        num_folders,  # NUM_FOLDERS (R6e; idx 23) — accessor chained after at <24>
     ]
     writer_ct.extend(
         ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
@@ -1473,21 +1546,8 @@ def _assemble_xcore_kernels(
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
     # ---- Refinement 6 + 6a collective-topology lever: per-group NoC-mcast plan ----
-    # A reduction group broadcasts the finalized 1/RMS with a NoC multicast (K-independent)
-    # instead of K-1 serial unicast writes. `_mcast_segments` returns 1 rectangle for a
-    # gap-free group (R6), or 2 contiguous virtual-x runs for a group straddling the Blackhole
-    # DRAM columns (virtual x=8,9) — the 8-wide WIDTH/BLOCK targets R6 could not mcast (R6a
-    # lever 2). Ragged groups (logical decode's multi-row-major set; WIDTH auto-shard wrapping
-    # a partial row) get 0 segments and keep the topology-agnostic all-unicast fallback, so
-    # those paths stay byte-identical. Master = group low corner (WIDTH cores[0]; BLOCK row x0).
-    # `masters` was derived once above (single source of truth for both the two-stage topology
-    # and the mcast-segment plan).
-    group_seg = {}
-    for _key, _master in masters.items():
-        _members = [_master] + workers_of.get(_key, [])
-        _members_v = [_v(m) for m in _members]
-        group_seg[_key] = _mcast_segments(_members_v, _v(_master))
-
+    # `group_seg` (the per-group segmented-mcast plan) was derived once above (single source of
+    # truth for the two-phase gate, the two-stage topology, and this writer RT). See its comment.
     writer_rt = ttnn.RuntimeArgs()
     out_addr = output_tensor.buffer_address() if out_to_dram else 0
     for c, slice_index, master, _iph, w_tile_start, vwt in entries:
@@ -1496,8 +1556,10 @@ def _assemble_xcore_kernels(
         vc, vrt, _rpw, phase = rm_percore[(int(c.x), int(c.y))] if is_rm else (0, 0, 0, 0)
         n_seg, segs = group_seg[(int(master.x), int(master.y))]
         # fixed fields 0-9; num_workers at 10; n_mcast_seg at 11; seg0 12-16; seg1 17-21;
-        # R6c two-stage per-core fields 22-26 (role, xrel, yrel, rl_vx, rl_vy); worker coords
-        # from 27 (WORKER_COORDS_BASE, master only — the unicast-fallback broadcast list).
+        # R6c two-stage per-core fields 22-26 (role, xrel, yrel, rl_vx, rl_vy); then either the
+        # R6e two-phase tail (is_folder 27, owned_max 28, folder coords 29+ — every core) OR the
+        # master's unicast-fallback worker coords from 27 (WORKER_COORDS_BASE). Two-phase and the
+        # unicast fallback are mutually exclusive CT-gated paths, so 27+ is reused safely.
         row = [out_addr, w_tile_start, vwt, is_master, slice_index, mvx, mvy, vc, vrt, phase]
         if is_master:
             wl = workers_of.get((int(master.x), int(master.y)), [])
@@ -1515,7 +1577,14 @@ def _assemble_xcore_kernels(
         # 22-26: two-stage role + slots + row-leader coords (0s when two_stage is off)
         role, xrel, yrel, rl_vx, rl_vy = ts_percore.get((int(c.x), int(c.y)), (0, 0, 0, 0, 0))
         row.extend([role, xrel, yrel, rl_vx, rl_vy])
-        if is_master:
+        if two_phase:
+            # 27 is_folder, 28 owned_max, 29+ folder coords (every core pushes to all folders)
+            is_f, owned = tp_owned[(int(c.x), int(c.y))]
+            row.append(is_f)
+            row.append(owned)
+            for fvx, fvy in folder_coords[(int(master.x), int(master.y))]:
+                row.extend([fvx, fvy])
+        elif is_master:
             for w in workers_of.get((int(master.x), int(master.y)), []):
                 wvx, wvy = _v(w)
                 row.extend([wvx, wvy])  # 27+ worker coords (unicast fallback broadcast)
@@ -1544,15 +1613,20 @@ def _assemble_xcore_kernels(
         1 if two_stage else 0,  # TWO_STAGE (R6c; idx 11)
         nx_ts,  # NX — stage-1 fold count (idx 12)
         ny_ts,  # NY — stage-2 fold count (idx 13)
+        1 if two_phase else 0,  # TWO_PHASE_FOLD (R6e; idx 14)
+        num_folders,  # NUM_FOLDERS (R6e; idx 15)
     ]
     compute_rt = ttnn.RuntimeArgs()
     for c, slice_index, _m, is_partial_holder, _wts, vwt in entries:
         role = ts_percore.get((int(c.x), int(c.y)), (0, 0, 0, 0, 0))[0]
+        is_f, owned = tp_owned.get((int(c.x), int(c.y)), (0, 0))
         compute_rt[c.x][c.y] = [
             vwt,
             1 if is_partial_holder else 0,
-            1 if slice_index == 0 else 0,  # is_master (== root on the two-stage path)
+            1 if slice_index == 0 else 0,  # is_master (== root on the two-stage/two-phase path)
             1 if role == 1 else 0,  # is_row_leader (R6c; role 1 = x0 column, y != y0)
+            is_f,  # is_folder (R6e; idx 4)
+            owned,  # owned_max (R6e; idx 5)
         ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_xcore_compute.cpp"),

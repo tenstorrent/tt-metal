@@ -90,8 +90,21 @@ void kernel_main() {
     constexpr uint32_t NX = get_compile_time_arg_val(19);           // cores per grid row (stage-1 fan-in)
     constexpr uint32_t NY = get_compile_time_arg_val(20);           // grid rows (stage-2 fan-in)
     constexpr uint32_t SEM_GATHER2 = get_compile_time_arg_val(21);  // stage-2 gather counter id
+    // TWO_PHASE_FOLD (Refinement 6e): distribute the master's serial K-partial fold across
+    // NUM_FOLDERS = min(C_ROWS, K) folder cores by tile-index. Every core pushes each tile-row's
+    // partial to that row's folder (owner = row % NUM_FOLDERS); each folder gathers K partials for
+    // its owned rows, compute folds them (+eps, rsqrt), the folder scatters the finalized 1/RMS
+    // tiles to the root's cb_stat_global, and the root assembles all C and mcasts them back
+    // (segmented, R6/R6a). SEM reuse: SEM_GATHER (cores->folder, folder waits (r+1)*K), SEM_GATHER2
+    // (folders->root, root waits (r+1)*NUM_FOLDERS), SEM_BCAST (root->non-root, set r+1). Both
+    // cb_stat_global back-pressures are FREE: the round is fully synchronous and the gather barrier
+    // includes every core (incl root), whose round-r push is gated behind its own pass-2 r-1 pop.
+    // Host-gated to the pure tiled BLOCK path with C>1 multi-round + a valid mcast segment; the flat
+    // path below is byte-identical when TWO_PHASE_FOLD=0.
+    constexpr bool TWO_PHASE_FOLD = get_compile_time_arg_val(22) != 0;
+    constexpr uint32_t NUM_FOLDERS = get_compile_time_arg_val(23);
 
-    constexpr auto out_args = TensorAccessorArgs<22>();
+    constexpr auto out_args = TensorAccessorArgs<24>();
 
     // DRAM-write args first (fixed-position); the variable-length worker coords follow.
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
@@ -147,6 +160,126 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER2));
 
     const auto out_accessor = TensorAccessor(out_args, out_addr, out_page);
+
+    // ======================= Refinement 6e: two-phase distributed fold =======================
+    // Every core pushes each batched tile-row's partial to that row's FOLDER (owner = row %
+    // NUM_FOLDERS) instead of all to one master; each folder gathers K partials for its owned
+    // rows, compute folds them (+eps, rsqrt), and the folder scatters the finalized 1/RMS tiles
+    // to the root's cb_stat_global. The root assembles all C_this and mcasts them back (segmented,
+    // R6/R6a). Fully synchronous per round; host gates Ht_local % C_ROWS == 0 so every folder owns
+    // owned_max rows every round (monotone semaphore counts stay uniform). The output shard is a
+    // zero-copy CB on this path (no drain). Both cb_stat_global back-pressures are free: the round
+    // barrier + the gather including every core (whose round-r push is gated behind its own pass-2
+    // r-1 pop) guarantee the buffer is drained before any round-r remote write lands.
+    if constexpr (TWO_PHASE_FOLD) {
+        const uint32_t is_folder = get_arg_val<uint32_t>(27);
+        const uint32_t owned_max = get_arg_val<uint32_t>(28);
+        constexpr uint32_t FOLDER_COORDS_BASE = 29;
+        const uint32_t num_rounds = (HT_LOCAL + C_ROWS - 1) / C_ROWS;
+        for (uint32_t r = 0; r < num_rounds; ++r) {
+            const uint32_t base_t = r * C_ROWS;
+            uint32_t C_this = HT_LOCAL - base_t;
+            if (C_this > C_ROWS) {
+                C_this = C_ROWS;
+            }
+            const uint32_t bcast_bytes = C_this * stat_bytes;
+
+            cb_wait_front(cb_stat_local, C_this);  // compute produced C_this local partials
+            const uint32_t local_src = get_read_ptr(cb_stat_local);
+
+            // ---- gather-push: send row cc's partial to folder (cc % NUM_FOLDERS), slot l*K+si ----
+            for (uint32_t f = 0; f < NUM_FOLDERS; ++f) {
+                const uint32_t fvx = get_arg_val<uint32_t>(FOLDER_COORDS_BASE + 2 * f);
+                const uint32_t fvy = get_arg_val<uint32_t>(FOLDER_COORDS_BASE + 2 * f + 1);
+                const uint32_t fbase = get_write_ptr(cb_gather);  // uniform CB base (empty -> base)
+                uint32_t l = 0;
+                for (uint32_t cc = f; cc < C_this; cc += NUM_FOLDERS) {
+                    const uint32_t src = local_src + cc * stat_bytes;
+                    const uint32_t dst = fbase + (l * K + slice_index) * stat_bytes;
+                    noc_async_write(src + G_OFF0, get_noc_addr(fvx, fvy, dst + G_OFF0), G_LEN0);
+                    if (G_LEN1) {
+                        noc_async_write(src + G_OFF1, get_noc_addr(fvx, fvy, dst + G_OFF1), G_LEN1);
+                    }
+                    ++l;
+                }
+            }
+            noc_async_write_barrier();
+            for (uint32_t f = 0; f < NUM_FOLDERS; ++f) {
+                const uint32_t fvx = get_arg_val<uint32_t>(FOLDER_COORDS_BASE + 2 * f);
+                const uint32_t fvy = get_arg_val<uint32_t>(FOLDER_COORDS_BASE + 2 * f + 1);
+                noc_semaphore_inc(get_noc_addr(fvx, fvy, get_semaphore(SEM_GATHER)), 1);
+            }
+            cb_pop_front(cb_stat_local, C_this);
+
+            // ---- folder: gather K partials/owned-row -> compute fold -> scatter rstds to root ----
+            if (is_folder) {
+                cb_reserve_back(cb_gather, owned_max * K);        // blocks until compute popped prev
+                noc_semaphore_wait_min(sem_gather, (r + 1) * K);  // all K cores pushed my owned rows
+                cb_push_back(cb_gather, owned_max * K);           // -> compute do_fold_owned
+
+                cb_wait_front(cb_rowpartial, owned_max);  // compute finalized my owned rstds
+                const uint32_t rp_src = get_read_ptr(cb_rowpartial);
+                const uint32_t root_global_base = get_write_ptr(cb_stat_global);  // uniform base
+                uint32_t l = 0;
+                for (uint32_t cc = slice_index; cc < C_this; cc += NUM_FOLDERS) {
+                    // scatter finalized 1/RMS for owned row cc -> root's cb_stat_global[cc] (full tile)
+                    const uint32_t src = rp_src + l * stat_bytes;
+                    const uint32_t dst = root_global_base + cc * stat_bytes;
+                    noc_async_write(src, get_noc_addr(master_vx, master_vy, dst), stat_bytes);
+                    ++l;
+                }
+                noc_async_write_barrier();
+                noc_semaphore_inc(get_noc_addr(master_vx, master_vy, get_semaphore(SEM_GATHER2)), 1);
+                cb_pop_front(cb_rowpartial, owned_max);
+            }
+
+            // ---- root: assemble all C_this rstds + broadcast (segmented mcast) ----
+            if (is_master) {
+                cb_reserve_back(cb_stat_global, C_this);  // bookkeeping; buffer already free (round barrier)
+                noc_semaphore_wait_min(sem_gather2, (r + 1) * NUM_FOLDERS);  // all folders scattered
+                const uint32_t global_src = get_write_ptr(cb_stat_global);   // assembled C_this rstds at base
+                for (uint32_t s = 0; s < n_mcast_seg; ++s) {
+                    const uint32_t sxlo = (s == 0) ? seg0_xlo : seg1_xlo;
+                    const uint32_t sylo = (s == 0) ? seg0_ylo : seg1_ylo;
+                    const uint32_t sxhi = (s == 0) ? seg0_xhi : seg1_xhi;
+                    const uint32_t syhi = (s == 0) ? seg0_yhi : seg1_yhi;
+                    const uint32_t snd = (s == 0) ? seg0_nd : seg1_nd;
+                    if (snd == 0) {
+                        continue;
+                    }
+                    const uint64_t mcast_dst = (noc_index == 1)
+                                                   ? get_noc_multicast_addr(sxhi, syhi, sxlo, sylo, global_src)
+                                                   : get_noc_multicast_addr(sxlo, sylo, sxhi, syhi, global_src);
+                    noc_async_write_multicast(global_src, mcast_dst, bcast_bytes, snd);
+                }
+                noc_async_write_barrier();
+                cb_push_back(cb_stat_global, C_this);  // -> root compute pass 2
+                noc_semaphore_set(sem_bcast, r + 1);
+                for (uint32_t s = 0; s < n_mcast_seg; ++s) {
+                    const uint32_t sxlo = (s == 0) ? seg0_xlo : seg1_xlo;
+                    const uint32_t sylo = (s == 0) ? seg0_ylo : seg1_ylo;
+                    const uint32_t sxhi = (s == 0) ? seg0_xhi : seg1_xhi;
+                    const uint32_t syhi = (s == 0) ? seg0_yhi : seg1_yhi;
+                    const uint32_t snd = (s == 0) ? seg0_nd : seg1_nd;
+                    if (snd == 0) {
+                        continue;
+                    }
+                    const uint64_t mcast_sem =
+                        (noc_index == 1) ? get_noc_multicast_addr(sxhi, syhi, sxlo, sylo, get_semaphore(SEM_BCAST))
+                                         : get_noc_multicast_addr(sxlo, sylo, sxhi, syhi, get_semaphore(SEM_BCAST));
+                    noc_semaphore_set_multicast(get_semaphore(SEM_BCAST), mcast_sem, snd);
+                }
+                noc_async_write_barrier();
+            } else {
+                cb_reserve_back(cb_stat_global, C_this);   // bookkeeping; buffer already free
+                noc_semaphore_wait_min(sem_bcast, r + 1);  // root broadcast landed
+                cb_push_back(cb_stat_global, C_this);      // -> compute pass 2
+            }
+        }
+        noc_async_atomic_barrier();  // flush the semaphore-inc atomics before exit
+        return;
+    }
+    // ===================== end Refinement 6e two-phase distributed fold =====================
 
     // ======================= R6c two-stage (hierarchical) gather =======================
     // Single round (host-gated to C=1, HT_LOCAL=1). The output is a zero-copy sharded CB

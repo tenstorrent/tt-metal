@@ -120,11 +120,23 @@ void kernel_main() {
     constexpr bool TWO_STAGE = get_compile_time_arg_val(11) != 0;
     constexpr uint32_t NX = get_compile_time_arg_val(12);  // stage-1 fold count (cores per grid row)
     constexpr uint32_t NY = get_compile_time_arg_val(13);  // stage-2 fold count (grid rows)
+    // TWO_PHASE_FOLD (Refinement 6e): distribute the master's serial K-partial fold across up to
+    // NUM_FOLDERS = min(C_ROWS, K) "folder" cores by tile-index. Each folder gathers+folds a
+    // disjoint set of the C batched tile-rows -> its finalized 1/RMS, scatters them to the root,
+    // and the root assembles + mcasts back. Only the FOLD moves off the master (pass 1 / pass 2 /
+    // the round-batch structure are unchanged); this attacks the master serial fold arithmetic
+    // (in-op ablation: 28% of BLOCK 8x8, fully on the critical path — the R6d two_phase winner).
+    // Host-gated to the pure tiled BLOCK path with C>1 multi-round (Ht_local % C == 0); C=1 /
+    // WIDTH / RM / logical / two-stage keep the byte-identical flat master fold below.
+    constexpr bool TWO_PHASE_FOLD = get_compile_time_arg_val(14) != 0;
+    constexpr uint32_t NUM_FOLDERS = get_compile_time_arg_val(15);
 
     const uint32_t vwt = get_arg_val<uint32_t>(0);  // valid W-tiles (<= PER_W_T)
     const uint32_t is_partial_holder = get_arg_val<uint32_t>(1);
     const uint32_t is_master = get_arg_val<uint32_t>(2);
     const uint32_t is_row_leader = get_arg_val<uint32_t>(3);  // R6c: role 1 (x0 column, y != y0)
+    const uint32_t is_folder = get_arg_val<uint32_t>(4);      // R6e: this core folds (slice_index < NUM_FOLDERS)
+    const uint32_t owned_max = get_arg_val<uint32_t>(5);      // R6e: max owned rows this folder handles per round
 
     compute_kernel_hw_startup(cb_x_in, cb_scaler, cb_out);
 
@@ -486,6 +498,60 @@ void kernel_main() {
             fold_tiles(cb_gather2, cb_stat_handoff, NY, /*finalize=*/true);  // stage 2 (+eps, rsqrt)
         }
         do_pass2(0, 1);
+        cb_pop_front(cb_x_in, shard_tiles);
+        if constexpr (HAS_GAMMA) {
+            cb_pop_front(cb_gamma, vwt);
+        }
+        cb_pop_front(cb_scaler, HAS_PARTIAL_W ? 2 : 1);
+        return;
+    }
+
+    // ---------- Refinement 6e: two-phase (tile-index) distributed fold ----------
+    // Every folder (slice_index < NUM_FOLDERS) folds its `owned_max` disjoint tile-rows per
+    // round (K partials each -> +eps, rsqrt) into cb_rowpartial (reused as the folder-local
+    // finalized-rstd buffer; two-stage is off on this path). The writer scatters those rstds to
+    // the root, which assembles all C and mcasts back. Non-folders skip the fold. do_pass1 /
+    // do_pass2 are byte-identical to the flat path — only the fold is distributed off the master.
+    if constexpr (TWO_PHASE_FOLD) {
+        auto do_fold_owned = [&](uint32_t owned) {
+            cb_wait_front(cb_gather, owned * K);  // writer gathered owned rows × K partials
+            cb_reserve_back(cb_rowpartial, owned);
+            reconfig_data_format(cb_gather, cb_gather);
+            pack_reconfig_data_format(cb_rowpartial);
+            for (uint32_t l = 0; l < owned; ++l) {
+                const uint32_t g = l * K;  // owned row l's K partials are contiguous [g, g+K)
+                tile_regs_acquire();
+                uint32_t first_pair = 0;
+                if (K & 1u) {
+                    copy_tile_to_dst_init_short(cb_gather);
+                    copy_tile(cb_gather, g + 0, 0);
+                    first_pair = 1;
+                }
+                if (K > 1) {
+                    add_tiles_init(cb_gather, cb_gather, /*acc_to_dest=*/true);
+                    for (uint32_t k = first_pair; k < K; k += 2) {
+                        add_tiles(cb_gather, cb_gather, g + k, g + k + 1, 0);
+                    }
+                }
+                binop_with_scalar_tile_init();
+                add_unary_tile(0, eps_bits);
+                rsqrt_tile_init();
+                rsqrt_tile(0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_rowpartial);  // finalized 1/RMS for owned row l
+                tile_regs_release();
+            }
+            cb_push_back(cb_rowpartial, owned);
+            cb_pop_front(cb_gather, owned * K);
+        };
+        for (uint32_t r = 0; r < num_rounds; ++r) {
+            do_pass1(r * C_ROWS, c_of(r));
+            if (is_folder) {
+                do_fold_owned(owned_max);
+            }
+            do_pass2(r * C_ROWS, c_of(r));
+        }
         cb_pop_front(cb_x_in, shard_tiles);
         if constexpr (HAS_GAMMA) {
             cb_pop_front(cb_gamma, vwt);

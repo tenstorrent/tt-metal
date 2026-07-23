@@ -754,7 +754,7 @@ dominant target; WIDTH 8×1/9×1/8×4/7×4 = 1.37/1.68/1.45/1.67×.
 
 ---
 
-### [ ] Refinement 6e — Sharded cross-core: two-phase (tile-index) reduce-mcast for the 1-D master bottleneck
+### [~] Refinement 6e — Sharded cross-core: two-phase (tile-index) reduce-mcast for the 1-D master bottleneck
 
 **Type**: perf
 
@@ -786,3 +786,74 @@ before committing, and if the residual is dominated by per-tile-row stat movemen
 trial loop) toward achievable, soft PCC holding, golden green, no regression — OR the in-op ablation
 shows the collective is off the critical path and R6f (per-tile-row stat movement / compute floor) is
 filed with the exact next lever.
+
+**Landed (partial `[~]`)** — the two-phase distributed fold shipped on the shared
+`_assemble_xcore_kernels` reader/compute/writer transport via a `TWO_PHASE_FOLD` CT flag + `NUM_FOLDERS`
+(no forked files); correct (`--dev` + non-dev clean), gated so every non-BLOCK-multi-round cell is
+byte-identical. **The in-op ablation first REVISED the honest-ceiling** and confirmed the collective is
+ON the critical path (so the first "Done when" branch applies, not the R6f escape):
+- **In-op ablation (blackhole_p150b, BLOCK 8×8, temporary kernel stubs, perf-only):** baseline **108.0 µs**;
+  stub the gather DATA MOVEMENT → **106.4 µs** (gather bytes only **1.6 µs / 1.5 %** — the honest-ceiling's
+  "per-tile-row stat movement" is NOT the bottleneck); stub the master FOLD ARITHMETIC (keep the round) →
+  **78.3 µs** (**master serial fold = 29.7 µs / 28 %, fully on the critical path**); stub the whole round
+  (compute floor) → **67.1 µs**. The dominant round cost is the master's serial K-1 add_tiles + rsqrt for
+  all HT_LOCAL tile-rows on ONE core — exactly what two-phase distributes by tile-index (works on 1-D
+  BLOCK groups where two-stage R6c was a no-op).
+- **Lever — two-phase (tile-index) distributed fold.** Every core pushes each batched tile-row's partial
+  to that row's FOLDER (owner = row % `NUM_FOLDERS`, `NUM_FOLDERS = min(C, K)`); each folder gathers its
+  owned rows' K partials, compute folds them (+eps, rsqrt) into `cb_rowpartial`, the folder scatters the
+  finalized 1/RMS to the root's `cb_stat_global`, the root assembles all C and mcasts back (reusing the
+  R6/R6a segmented mcast). Fully synchronous per round; both `cb_stat_global` back-pressures are FREE (the
+  round barrier + the gather including every core, whose round-r push is gated behind its own pass-2 r-1
+  pop). SEM reuse (SEM_GATHER cores→folder, SEM_GATHER2 folders→root, SEM_BCAST root→members); no new
+  semaphore. Host-gated to the pure tiled BLOCK path with C>1 multi-round (`Ht_local % C == 0`) and every
+  group mcast-able; C=1 / WIDTH single-round / RM / logical / two-stage keep the byte-identical flat fold.
+- **Measured (blackhole_p150b, median of 8 fresh trials, exact perf config):** BLOCK 8×8
+  **108.0 → 86.6 µs (1.247×, 4.21× → 3.38× above achievable)** — WIN, matches the ablation projection
+  (30 µs fold distributed across 8 folders). WIDTH 8×1/9×1/8×4/7×4 byte-identical (single-round C=1 →
+  two-phase gated off). PCC 1.001005 == baseline (byte-identical output — the fold is the same associative
+  sum, just distributed). Correctness `test_rms_norm_r6e.py` 4/4 (`--dev` + non-dev, incl. owned_max=2
+  multi-owned-row folds + the 8×8 topology).
+- **No regression:** golden `test_op_loose` 19/19 (incl. the BLOCK 8×8 two-phase perf geometry); golden
+  `test_op` BLOCK bf16 tile-aligned slice 500 passed / 0 failed / 0 xpassed; core+sharded unit 221; R6a
+  batched-round + R6c two-stage 21; precision baseline + R6d ablation 23.
+
+**Deferred to R6f** (the remaining residual, characterized at depth): after two-phase, BLOCK 8×8 is still
+**3.38× above achievable** and the ablation pins the residual to the **per-core compute floor (67.1 µs =
+62 % of the op)** — NOT the fold topology (two-phase closed that) and NOT the stat movement (1.6 µs). This
+is a different lever family (compute), filed as R6f with the exact next levers.
+
+---
+
+### [ ] Refinement 6f — Sharded cross-core: shrink the per-core compute floor (pass-2 fusion + compute/round overlap)
+
+**Type**: perf
+
+**Goal**: close the residual R6e characterized but two-phase could not reach — BLOCK 8×8 is still **3.38×
+above achievable (86.6 µs)** and the in-op ablation pins the dominant remaining cost to the **per-core
+compute floor (67.1 µs = 62 % of the op)**: pass-1 (square + reduce) + pass-2 (x·rstd + ·gamma) over
+`Ht_local × per_w_t` tiles, run largely serial with the (now-distributed) cross-core round. The fold
+topology (R4→R6e) and the stat movement (R6b compaction) are done; this is a **compute** lever family, not
+a collective one. Levers in priority order:
+
+1. **Fuse pass-2's two muls (biggest).** Pass-2 does `norm = x·rstd` (BroadcastDim::Col) then
+   `out = norm·gamma` (BroadcastDim::Row) as TWO separate `eltwise_chain` calls per tile — two DST windows,
+   two pack/unpack cycles. Fuse into ONE chain (`BinaryFpu` x·rstd → `BinaryFpu` ·gamma → `PackTile` in a
+   single DST window) so pass-2 halves its per-tile pack/unpack + reconfig overhead. Applies to every
+   cross-core + interleaved compute path (the same `do_pass2` body), so guard it as a shared change.
+2. **Overlap the distributed round under compute (the complementary step to R6e).** R6e ships the two-phase
+   loop FULLY SYNCHRONOUS (no pipelining). Now that the fold is off the single master, re-enable the R6b
+   pipelining lookahead on the two-phase path (issue batch r+1's pass-1 during batch r's synchronous
+   round) so the ~40 µs round overlaps the 67 µs compute floor toward `max(...)` instead of additive.
+3. **Coarser DST batching / compute block size.** Raise the pass-1/pass-2 per-call tile granularity
+   (`ROWS_PER_CALL` / DST-limit batching) to amortize the per-tile LLK init/reconfig across the block —
+   the master.md chunk-granularity floor bounds the search.
+
+**Verifier notes**: R6e landed two-phase (winning) + the full in-op ablation that pins the residual to the
+compute floor. R6f is the compute-floor lever family. Lever 1 (pass-2 fusion) touches the SHARED `do_pass2`
+used by every path — measure the interleaved/HEIGHT/WIDTH guard set for regression, not just BLOCK. Reuse
+the R4→R6e xcore kernels; do not fork. Gate on soft `pcc_threshold` 0.9995.
+
+**Done when**: measured median device-ns improves further on the BLOCK/WIDTH sharded perf shapes (fresh-cache
+trial loop) toward achievable, soft PCC holding, golden green, no regression across the config-spanning
+guard set (TILE interleaved, RM interleaved, HEIGHT, WIDTH, BLOCK, no-gamma).
