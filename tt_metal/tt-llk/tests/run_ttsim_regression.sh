@@ -210,7 +210,7 @@ if [[ ! -d "$TESTS_DIR" ]]; then
 fi
 
 # ttsim does not implement SFPLOADMACRO; default to disabling unless caller set it.
-export DISABLE_SFPLOADMACRO="${DISABLE_SFPLOADMACRO:-1}"
+export TT_METAL_DISABLE_SFPLOADMACRO="${TT_METAL_DISABLE_SFPLOADMACRO:-1}"
 
 mkdir -p "$RESULTS_DIR"
 
@@ -328,7 +328,7 @@ echo "============================================================"
 echo " Architecture   : ${ARCHITECTURE}"
 echo " Simulator      : ${TT_METAL_SIMULATOR}"
 echo " SoC descriptor : $(dirname "$TT_METAL_SIMULATOR")/soc_descriptor.yaml"
-echo " SFPLOADMACRO   : disabled=${DISABLE_SFPLOADMACRO}"
+echo " SFPLOADMACRO   : disabled=${TT_METAL_DISABLE_SFPLOADMACRO}"
 echo " Workers (-n)   : ${WORKERS}"
 echo " Per-test fork  : on"
 echo " Timeout        : ${TIMEOUT}s"

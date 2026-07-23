@@ -60,7 +60,7 @@ class MatmulFpu(Fpu):
     ) -> str:
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
-        transpose = "true" if compute_unit.unpack_transpose_faces.value else "false"
+        transpose = compute_unit.unpack_transpose_faces.cpp_enum_value
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
 

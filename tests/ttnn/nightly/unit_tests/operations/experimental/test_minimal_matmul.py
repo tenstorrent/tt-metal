@@ -8,6 +8,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc
+from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
@@ -165,6 +166,39 @@ def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subbl
     )
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
+
+
+# Correctness guard for the granular output-writer path (write_block_sync_granular): each row's
+# write-source reads out of the cb_out slot must be flushed before cb_pop_front releases it back to
+# the compute producer, otherwise the producer can repack the freed slot while the writes are still
+# reading it (WAR on the output CB) and corrupt the output. This shape drives the output-writer core
+# through the granular-write path and turns an ordering regression there into a PCC failure; the WAR
+# is timing-masked, so this is a value-correctness guard, not a deterministic reproducer.
+@pytest.mark.parametrize(
+    "M, K, N",
+    [(4096, 512, 2048)],
+)
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(8, 8, 8, 2, 2)],
+)
+def test_linear_granular_write_ordering(
+    device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w
+):
+    check_result = run_test_linear(
+        device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+    )
+
+    assert check_result["pcc"] > 0.999_500, f'Expected PCC > 0.999500, got {check_result["pcc"]}'
+    assert check_result["relative_rmse"] < 0.02, f'Expected relative RMSE < 0.02, got {check_result["relative_rmse"]}'
 
 
 @pytest.mark.parametrize(
@@ -343,6 +377,67 @@ def test_linear_padded_wan_shapes(device, M, K, N, M_block_size, K_block_size, N
     check_result = run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w)
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "bias"])
+@pytest.mark.parametrize("gate_is_first", [False, True], ids=["up_gate", "gate_up"])
+def test_linear_swiglu(device, gate_is_first, use_bias):
+    """fuse_swiglu=True: silu(gate)*up with both [up|gate] and [gate|up] weight layouts."""
+    M, K, out_N = 256, 256, 256  # weight is [K, 2*out_N]; output is [M, out_N]
+    two_N = 2 * out_N
+    torch_dtype = torch.float32
+
+    torch_input = torch.randn((M, K), dtype=torch_dtype)
+    weight_input = torch.randn((K, two_N), dtype=torch_dtype)
+    bias_input = torch.randn((1, two_N), dtype=torch_dtype) if use_bias else None
+
+    with torch.no_grad():
+        full = torch_input @ weight_input
+        if bias_input is not None:
+            full = full + bias_input
+        if gate_is_first:
+            gate, up = torch.chunk(full, 2, dim=-1)
+        else:
+            up, gate = torch.chunk(full, 2, dim=-1)
+        golden = torch.nn.functional.silu(gate) * up
+
+    weight_il = prepare_for_fused_swiglu(weight_input, ndev=1, gate_is_first=gate_is_first)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_il, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_bias = None
+    if use_bias:
+        bias_il = prepare_for_fused_swiglu(bias_input, ndev=1, gate_is_first=gate_is_first)
+        tt_bias = ttnn.from_torch(bias_il, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+    )
+
+    tt_output = ttnn.experimental.minimal_matmul(
+        tt_input,
+        tt_weight,
+        bias_tensor=tt_bias,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+        fuse_swiglu=True,
+    )
+
+    tt_output = ttnn.to_torch(tt_output)
+    result = assert_quality(golden, tt_output)
+    logger.info(f"gate_is_first={gate_is_first}, use_bias={use_bias}: PCC={result['pcc']:.7f}")
+    assert result["pcc"] > 0.9999, f"PCC {result['pcc']:.7f}"
 
 
 def test_run_performance(device):

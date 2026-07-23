@@ -22,7 +22,7 @@
 namespace tt::tt_metal::distributed {
 
 struct D2HStreamServiceDescriptor {
-    static constexpr uint32_t kVersion = 1;
+    static constexpr uint32_t kVersion = 2;
 
     tt::tt_metal::Shape global_shape;
     DataType global_dtype = DataType::INVALID;

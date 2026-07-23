@@ -2,8 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple, Union
 
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
@@ -16,6 +18,31 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
+
+# Optional per-layer MLA-vs-FFN host timing (rough ratio only). Gated by TT_PREFILL_BLOCK_TIMING=1.
+# Host wall-clock with a device sync bracketing each region, so the syncs serialize the pipeline and
+# ABSOLUTE times inflate vs an un-instrumented run — trust the MLA:FFN ratio and the per-layer shape,
+# NOT the totals. When off (default) there is no sync and no timing, so normal runs are unperturbed.
+# Keyed by global layer_idx -> {"mla": [seconds...], "ffn": [seconds...]} (one entry per forward call).
+_BLOCK_TIMING_ENABLED = os.environ.get("TT_PREFILL_BLOCK_TIMING", "0") == "1"
+_BLOCK_TIMINGS: dict[int, dict[str, list[float]]] = {}
+
+
+def reset_block_timings() -> None:
+    """Drop all recorded per-layer MLA/FFN samples (e.g. to exclude a warmup iteration)."""
+    _BLOCK_TIMINGS.clear()
+
+
+def get_block_timings() -> dict[int, dict[str, list[float]]]:
+    """Per-layer {"mla": [s...], "ffn": [s...]} host-timing samples recorded since the last reset."""
+    return _BLOCK_TIMINGS
+
+
+# Per-axis CCL topology. A scalar applies to both mesh axes; a 2-tuple (row = SP-axis-0,
+# col = TP-axis-1) configures each axis independently — e.g. (Ring, Linear) for
+# FABRIC_2D_TORUS_Y, where only the SP axis is wrapped into a ring.
+PerAxisTopology = Tuple[ttnn.Topology, ttnn.Topology]
+TopologyArg = Union[ttnn.Topology, PerAxisTopology]
 
 
 class TtPrefillBlock(LightweightModule):
@@ -70,7 +97,7 @@ class TtPrefillBlock(LightweightModule):
         seq_len: int = 1024,
         dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 2,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: TopologyArg = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
@@ -182,7 +209,7 @@ class TtPrefillBlock(LightweightModule):
         seq_len: int,
         dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: TopologyArg = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
@@ -206,7 +233,18 @@ class TtPrefillBlock(LightweightModule):
         assert not is_chunked or layer_num is not None, "chunked prefill requires layer_num (model layer count)"
         self.mesh_device = mesh_device
         self.num_links = num_links
-        self.topology = topology
+        # Per-axis CCL topology. A (row=SP-axis-0, col=TP-axis-1) tuple configures each mesh
+        # axis independently; a scalar applies to both. FABRIC_2D_TORUS_Y wraps ONLY the SP
+        # axis into a ring, so TP-axis collectives (RMS-norm, MLA, dense-FFN all-gather — all
+        # on cluster_axis=tp_axis) must stay Linear even when the SP-axis MoE dispatch/combine
+        # run Ring. Applying Ring to the unwrapped TP axis deadlocks: get_usable_topology keeps
+        # Ring (the coords span the axis) and the all-gather waits forever on a wrap link that
+        # has no physical fabric edge. MoE receives the full `topology` and splits row/col itself.
+        assert (
+            not isinstance(topology, tuple) or len(topology) == 2
+        ), f"per-axis topology must be a 2-tuple (sp_axis_0, tp_axis_1), got {topology!r}"
+        tp_topology = topology[1] if isinstance(topology, tuple) else topology
+        self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis (cluster_axis=1)
         self.kv_only = kv_only
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
 
@@ -225,7 +263,7 @@ class TtPrefillBlock(LightweightModule):
             epsilon=config.rms_norm_eps,
             cluster_axis=tp_axis,
             num_links=num_links,
-            topology=topology,
+            topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
         )
@@ -242,6 +280,9 @@ class TtPrefillBlock(LightweightModule):
             seq_len=max_seq_len if max_seq_len is not None else seq_len,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
+            # Pass the full per-axis topology: MLA's q/kv/wo CCLs use the TP element (cluster_axis=
+            # tp_axis), but its ring-attention SDPA runs on the SP axis and needs the SP element.
+            topology=topology,
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
             is_chunked=is_chunked,
@@ -262,7 +303,7 @@ class TtPrefillBlock(LightweightModule):
             epsilon=config.rms_norm_eps,
             cluster_axis=tp_axis,
             num_links=num_links,
-            topology=topology,
+            topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
         )
@@ -290,13 +331,22 @@ class TtPrefillBlock(LightweightModule):
                 is_balanced=is_balanced,
             )
         else:
+            # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
+            # so GLM-5.1 (hidden 6144, dense intermediate 12288) doesn't inherit the 7168 default. emb_dim
+            # is always safe (== default for 7168-dim models); hidden_dim only overrides when the config
+            # exposes intermediate_size (GLM does; DSv3/Kimi fall back to the TtFfn default).
+            _dense_ffn_kwargs = {}
+            if getattr(config, "intermediate_size", None):
+                _dense_ffn_kwargs["hidden_dim"] = config.intermediate_size
             self.ffn = TtFfn(
                 mesh_device=mesh_device,
                 torch_weights=state_dict.get("ffn_weights"),  # None if cache exists
+                emb_dim=emb_dim,
                 num_links=num_links,
-                topology=topology,
+                topology=tp_topology,  # dense FFN all-gather/reduce-scatter run on the TP axis
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.ffn",
+                **_dense_ffn_kwargs,
             )
 
     @staticmethod
@@ -308,7 +358,7 @@ class TtPrefillBlock(LightweightModule):
         sp_axis,
         emb_dim,
         num_links,
-        topology,
+        topology: TopologyArg,
         gate_fallback_mode,
         routed_expert_activations_dtype,
         routed_expert_weights_dtype,
@@ -386,6 +436,9 @@ class TtPrefillBlock(LightweightModule):
         return_kv_intermediates: bool = False,
         actual_isl: Optional[int] = None,
         padding_side: str = "right",
+        indexer_indices: Optional[ttnn.Tensor] = None,
+        return_indexer_indices: bool = False,
+        index_kv_cache: Optional[ttnn.Tensor] = None,
     ):
         """
         Args:
@@ -413,6 +466,14 @@ class TtPrefillBlock(LightweightModule):
             (output_tensor, kv_cache) where kv_cache is a host tensor or None, or
             (output_tensor, kv_intermediates_dict) when return_kv_intermediates=True.
         """
+        # Optional MLA-vs-FFN host timing (TT_PREFILL_BLOCK_TIMING=1). Bracket each region with a device
+        # sync so the wall-clock reflects device work; disabled by default (no sync, no perturbation).
+        # Skip kv_only layers (they run no FFN and return early below).
+        _timing = _BLOCK_TIMING_ENABLED and not self.kv_only
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_start = time.perf_counter()
+
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
         seq_len_local = attn_norm_out.shape[2]
@@ -424,10 +485,18 @@ class TtPrefillBlock(LightweightModule):
             actual_start=actual_start,
             cache_user_id=cache_user_id,
             return_kv_intermediates=return_kv_intermediates,
+            indexer_indices=indexer_indices,
+            return_indexer_indices=return_indexer_indices,
+            index_kv_cache=index_kv_cache,
         )
         kv_intermediates = None
-        if return_kv_intermediates:
+        mla_indices = None  # GLM-5.2 reuse: this layer's top-k indices (full layer) for downstream shared layers
+        if return_kv_intermediates and return_indexer_indices:
+            mla_out, kv_intermediates, mla_indices = mla_out
+        elif return_kv_intermediates:
             mla_out, kv_intermediates = mla_out
+        elif return_indexer_indices:
+            mla_out, mla_indices = mla_out
         ttnn.deallocate(attn_norm_out)
 
         # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
@@ -439,15 +508,19 @@ class TtPrefillBlock(LightweightModule):
         # across pipeline ranks); cache_layer_idx is the LOCAL per-rank cache slot.
         if on_layer_complete is not None:
             assert actual_end is not None, "actual_end required when on_layer_complete is set"
-            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                kvpe_cache,
-                cache_user_id,
-                cache_layer_idx,
-                self.mla.layer_num,
-                actual_end,
-                seq_len_local * self.mla.sp_factor,
-                self.mla.sp_axis,
-            )
+            # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
+            # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
+            # sparse.
+            if kvpe_cache.layout == ttnn.TILE_LAYOUT:
+                ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                    kvpe_cache,
+                    cache_user_id,
+                    cache_layer_idx,
+                    self.mla.layer_num,
+                    actual_end,
+                    seq_len_local * self.mla.sp_factor,
+                    self.mla.sp_axis,
+                )
             ttnn.synchronize_device(self.mesh_device)
             on_layer_complete(self.mla.layer_idx)
 
@@ -455,10 +528,15 @@ class TtPrefillBlock(LightweightModule):
             # KV cache filled (by MLA), migration callback fired. The block
             # output is unused (no FFN, no further layers). Return (None, None)
             # so the transformer can short-circuit.
+            if return_indexer_indices:
+                return None, None, None
             return None, None
 
         x = ttnn.add(x, mla_out)
         ttnn.deallocate(mla_out)
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_mla = time.perf_counter()
         if return_kv_intermediates:
             # post-MLA residual (x + mla_out), TP-sharded on hidden.
             kv_intermediates["post_mla_residual"] = ttnn.clone(x)
@@ -482,11 +560,21 @@ class TtPrefillBlock(LightweightModule):
         ttnn.deallocate(ffn_norm_out)
         x = ttnn.add(x, ffn_out)
         ttnn.deallocate(ffn_out)
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_ffn = time.perf_counter()
+            rec = _BLOCK_TIMINGS.setdefault(self.mla.layer_idx, {"mla": [], "ffn": []})
+            rec["mla"].append(_t_mla - _t_start)  # attn_norm + MLA + residual
+            rec["ffn"].append(_t_ffn - _t_mla)  # ffn_norm + (MoE|dense FFN) + residual
 
         if return_kv_intermediates:
+            if return_indexer_indices:
+                return x, kv_intermediates, mla_indices
             return x, kv_intermediates
 
         kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
+        if return_indexer_indices:
+            return x, kv_cache, mla_indices
         return x, kv_cache
 
     def _moe_path(

@@ -24,9 +24,9 @@ Usage:
     python validate_test_type_selection.py <tests_yaml_path> <selection>
 
 Examples:
-    python validate_test_type_selection.py tests/pipeline_reorg/galaxy_deepseek_prefill_tests.yaml "mla,prefill_block"
-    python validate_test_type_selection.py tests/pipeline_reorg/galaxy_deepseek_prefill_tests.yaml ""        # -> all
-    python validate_test_type_selection.py tests/pipeline_reorg/galaxy_deepseek_prefill_tests.yaml "all"
+    python validate_test_type_selection.py tests/pipeline_reorg/blaze_models_prefill_tests.yaml "mla,prefill_block"
+    python validate_test_type_selection.py tests/pipeline_reorg/blaze_models_prefill_tests.yaml ""        # -> all
+    python validate_test_type_selection.py tests/pipeline_reorg/blaze_models_prefill_tests.yaml "all"
 """
 
 import os

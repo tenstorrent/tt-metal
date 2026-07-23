@@ -147,8 +147,12 @@ class ResNet50TestInfra:
         self.resnet50_first_conv_kernel_size = 3
         self.resnet50_first_conv_stride = 2
 
-        if batch_size <= 2:
-            pytest.skip("Batch size 1 and 2 are not supported with sharded data")
+        # Batch 1-2 were only validated as unsupported on the Wormhole/Blackhole silicon targets. On the
+        # Quasar sim/emulator they run on BOTH the 2x3 grid AND the full 32-core grid (the latter is ~16x
+        # faster since per-core work = total/num_cores) — the small-grid bring-up path the LLK team uses.
+        # So skip only on WH/BH; let small batch through on Quasar.
+        if batch_size <= 2 and (is_wormhole_b0() or is_blackhole()):
+            pytest.skip("Batch size 1 and 2 are not supported with sharded data on Wormhole/Blackhole")
         elif batch_size == 8:
             pytest.skip("Skipping batch size 8 due to memory config issue")
         elif is_wormhole_b0() and batch_size == 20:
@@ -210,6 +214,10 @@ class ResNet50TestInfra:
         return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None):
+        # Default grid; the device-cap clamp below (num_cores = min(..., max_num_cores, ...)) reduces it
+        # to the device's real core count, so batches not explicitly handled here (e.g. the small batches
+        # used on the 2x3 emulator / craq-sim grid) still get a valid grid instead of an undefined name.
+        core_grid = ttnn.CoreGrid(y=8, x=8)
         if self.batch_size == 16:
             core_grid = ttnn.CoreGrid(y=8, x=6)
         elif self.batch_size == 20:

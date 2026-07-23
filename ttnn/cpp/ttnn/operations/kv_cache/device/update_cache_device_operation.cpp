@@ -145,7 +145,7 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec UpdateKVCacheOperation::compute_output_specs(
+tt::tt_metal::TensorSpec UpdateKVCacheOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache.tensor_spec();
@@ -161,6 +161,53 @@ tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tt::tt_metal::operation::hash_operation<UpdateKVCacheOperation>(
         args.op_type, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> UpdateKVCacheOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // The work-split (hence the core set) depends only on shapes, which ARE in the program hash, so
+    // the active core set is identical on every cache hit — no freeze hazard from growing cores.
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+
+    if (operation_attributes.op_type == UpdateCacheOpType::FILL) {
+        // FILL: kernel push order in FillCacheMultiCoreProgramFactory::create_descriptor is
+        // reader(0), writer(1). Only writer arg 2 (cache_start_id) is derived from the
+        // hash-excluded batch_idx/update_idx; the reader args are shape-only.
+        constexpr uint32_t kWriterKernelIdx = 1;
+        constexpr uint32_t kCacheStartIdArgIdx = 2;
+        const auto start_ids = compute_fill_cache_start_ids(operation_attributes, tensor_args);
+        dynamic_args.reserve(start_ids.size());
+        for (const auto& [core, cache_start_id] : start_ids) {
+            dynamic_args.push_back({kWriterKernelIdx, core, kCacheStartIdArgIdx, cache_start_id});
+        }
+        return dynamic_args;
+    }
+
+    // UPDATE: kernel push order in UpdateCacheMultiCoreProgramFactory::create_descriptor is
+    // reader(0), writer(1), compute(2), [optional compute(3)]. The hash-excluded values are:
+    //   reader arg 8  = cache_start_id (per core)
+    //   writer arg 7  = cache_start_id (per core)
+    //   writer arg 10 = tile_update_offset (op-wide)
+    //   writer arg 11 = batch_read_offset (op-wide)
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    constexpr uint32_t kReaderCacheStartIdArgIdx = 8;
+    constexpr uint32_t kWriterCacheStartIdArgIdx = 7;
+    constexpr uint32_t kWriterTileUpdateOffsetArgIdx = 10;
+    constexpr uint32_t kWriterBatchReadOffsetArgIdx = 11;
+
+    const auto dyn = compute_update_cache_dynamic_args(operation_attributes, tensor_args);
+    dynamic_args.reserve(dyn.cache_start_ids.size() * 4);
+    for (const auto& [core, cache_start_id] : dyn.cache_start_ids) {
+        dynamic_args.push_back({kReaderKernelIdx, core, kReaderCacheStartIdArgIdx, cache_start_id});
+        dynamic_args.push_back({kWriterKernelIdx, core, kWriterCacheStartIdArgIdx, cache_start_id});
+        dynamic_args.push_back({kWriterKernelIdx, core, kWriterTileUpdateOffsetArgIdx, dyn.tile_update_offset});
+        dynamic_args.push_back({kWriterKernelIdx, core, kWriterBatchReadOffsetArgIdx, dyn.batch_read_offset});
+    }
+    return dynamic_args;
 }
 
 Tensor update_cache(

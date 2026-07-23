@@ -249,7 +249,7 @@ static std::vector<Tensor> pool2d_L1(
         // Apply zero padding to channels if needed - we need it in case when output dtype is block float because if we
         // have random values it would affect common exponent calculation
         if (padding_needed > 0 && is_block_float(dtype)) {
-            ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
+            ttsl::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
             input_tensor_flattened = ttnn::pad(input_tensor_flattened, pad_spec, 0.0f);
         }
         input_tensor_sharded = ttnn::to_memory_config(input_tensor_flattened, in_memory_config, std::nullopt);
@@ -906,8 +906,8 @@ static std::vector<Tensor> pool2d_DRAM(
     }
 
     // Create output tensors for DRAM slicing
-    Tensor dram_output_tensor = tt::tt_metal::create_device_tensor(
-        TensorSpec(
+    Tensor dram_output_tensor = ttnn::create_device_tensor(
+        tt::tt_metal::TensorSpec(
             ttnn::Shape({batch_size, output_height, output_width, channels}),
             tt::tt_metal::TensorLayout(
                 dtype,

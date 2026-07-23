@@ -23,7 +23,7 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
     ttnn::bind_function<"experimental.all_gather_minimal_matmul_async">(
         mod,
         R"doc(
-        all_gather_minimal_matmul_async(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None)
+        all_gather_minimal_matmul_async(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None, fuse_swiglu=False)
 
         Experimental, high-performance matrix multiply (A @ B [+ bias]) with optional fused activation.
         This op expects TILE layout tensors on device and operates in tile units internally. It is designed
@@ -72,6 +72,14 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             Optional fused unary activation applied per output tile during packing. See ttnn unary utilities
             for supported ops and parameters. Typical examples include relu/gelu/etc. If provided, it is applied
             after bias (if any) and before the tile is written out.
+
+        fuse_swiglu : bool, default: False
+            If True, applies SwiGLU activation fused into the matmul: the weight tensor's N columns are
+            interpreted as a tile-pair-interleaved [gate|up] layout — column tile 2p is the gate and 2p+1 is
+            the up projection for each pair p (``models.tt_dit.utils.tensor.prepare_for_fused_swiglu``
+            can be used to produce this layout). The op computes silu(gate) * up and the output width is therefore N/2.
+            The bias (if provided) must use the same column layout. N must be divisible by 2*32 (two
+            tile-aligned halves). Mutually exclusive with fused_activation.
 
         config : Optional[MinimalMatmulConfig], default: None
             Execution configuration in tile units. If omitted, reasonable defaults are selected based on tensor
@@ -145,8 +153,9 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
         Returns
         -------
         std::vector<ttnn.Tensor>
-            Output tensor with shape [..., M, N], TILE layout, and dtype specified by `dtype` parameter
-            (or same dtype as `input_tensor` if `dtype` is not provided).
+            Output tensor in TILE layout with dtype specified by `dtype` (or same as `input_tensor` if not provided).
+            - fuse_swiglu=False: shape [..., M, N].
+            - fuse_swiglu=True: shape [..., M, N/2] (SwiGLU halves the output width).
 
         Shape Semantics
         ----------------
@@ -155,7 +164,7 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
         - bias_tensor (optional): [..., N] (row-broadcast)
         - addcmul_input_tensor1: [..., M, N] (full output shape)
         - addcmul_input_tensor2: [..., 1, N] (broadcast like bias)
-        - output: [..., M, N]
+        - output: [..., M, N] normally; [..., M, N/2] when fuse_swiglu=True
         Note: All leading dims (dims < -2) are required to be 1 (no batching). Tensors are read/written in tile units;
         if logical sizes are not tile-aligned, padding is handled internally (reads fill zeros; writes skip outside
         logical bounds).
@@ -230,7 +239,8 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("fsdp_cluster_axis") = nb::none(),
             nb::arg("fsdp_multi_device_global_semaphore") = std::vector<GlobalSemaphore>{},
             nb::arg("persistent_weight_buffer") = nb::none(),
-            nb::arg("fsdp_topology") = nb::none()});
+            nb::arg("fsdp_topology") = nb::none(),
+            nb::arg("fuse_swiglu") = false});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

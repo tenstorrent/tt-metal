@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -20,20 +20,20 @@ void kernel_main() {
     constexpr auto input_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(input_args, input_addr);
 
-    CircularBuffer cb_decimal(cb_id_decimal);
-    fill_cb_with_value(cb_decimal, decimal);
+    DataflowBuffer dfb_decimal(cb_id_decimal);
+    fill_cb_with_value(dfb_decimal, decimal);
 
     constexpr uint32_t onetile = 1;
 
     Noc noc;
-    CircularBuffer cb_input(cb_id_input);
+    DataflowBuffer dfb_input(cb_id_input);
     const auto input_tile_bytes = get_tile_size(cb_id_input);
 
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
-        cb_input.reserve_back(onetile);
-        noc.async_read(s, cb_input, input_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
+        dfb_input.reserve_back(onetile);
+        noc.async_read(s, dfb_input, input_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_input.push_back(onetile);
+        dfb_input.push_back(onetile);
     }
 
 }  // void kernel_main()

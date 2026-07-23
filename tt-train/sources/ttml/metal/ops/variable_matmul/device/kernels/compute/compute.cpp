@@ -11,7 +11,10 @@
 #include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+// Renamed from copy_block to avoid an ambiguous overload with ckernel::copy_block (added to
+// api/compute/tile_move_copy.h in #49070), which has the identical (uint32_t, uint32_t, uint32_t,
+// uint32_t) signature and is in scope here. See tt-metal#50386.
+void copy_and_pack_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
@@ -275,8 +278,8 @@ void kernel_main() {
             cb_interm.reserve_back(out_block_num_tiles);
             if (K_num_blocks == 0U) {
                 // Empty K-axis offset (empty expert): K-loop skipped, intermediate_cb would
-                // hold uninitialized state. Zero the FULL M_block × N_block region (copy_block
-                // later reads it whole) so `add_grad` downstream contributes nothing.
+                // hold uninitialized state. Zero the FULL M_block × N_block region
+                // (copy_and_pack_block later reads it whole) so `add_grad` downstream contributes nothing.
                 zero_blocks(intermediate_cb, M_block_tiles, N_block_tiles, N_block_tiles, subblock_h, subblock_w);
             }
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
@@ -355,7 +358,7 @@ void kernel_main() {
 
             cb_out.reserve_back(out_block_num_tiles);
             cb_interm.wait_front(out_block_num_tiles);
-            copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+            copy_and_pack_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
             cb_interm.pop_front(out_block_num_tiles);
         }
     }

@@ -104,8 +104,9 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
 
     auto* mesh_device = input_tensor.device();
 
-    TT_FATAL(
-        operation_attributes.send_coord != operation_attributes.receive_coord, "Can't send/receive to the same device");
+    // Same-device (send_coord == receive_coord) is allowed: it degenerates to a local
+    // on-device copy of the shard into the output tensor — no fabric hop — handled by
+    // the same-device branch in SendReceive::create_workload_descriptor.
 
     TT_FATAL(
         mesh_device->get_view().contains(operation_attributes.send_coord),
@@ -140,12 +141,22 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
 };
 
 PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // !Maybe todo. Support output with different config/layout than input
 
     const auto& input_tensor = tensor_args.input_tensor;
 
     const auto final_output_spec = input_tensor.tensor_spec();
+
+    // Same-device transfer is a local copy with no fabric packetization, so the
+    // intermediate tensor is unused. Return a minimal 1-tile placeholder for it (rather
+    // than a full input-sized, mesh-wide allocation) and skip compute_aligned_packet_dims —
+    // its fabric query (get_tt_fabric_channel_buffer_size_bytes) requires an initialized
+    // fabric context, which a purely local transfer must not depend on.
+    if (operation_attributes.send_coord == operation_attributes.receive_coord) {
+        const tt::tt_metal::TensorSpec placeholder_intermediate_spec(Shape{1, 1}, final_output_spec.tensor_layout());
+        return {placeholder_intermediate_spec, final_output_spec};
+    }
 
     const uint32_t input_num_pages = data_movement::get_num_pages(tensor_args.input_tensor);
 
@@ -161,7 +172,7 @@ PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
 
     Shape intermediate_shape{total_packets, packet_page_dim};
 
-    TensorSpec intermediate_spec(intermediate_shape, final_output_spec.tensor_layout());
+    tt::tt_metal::TensorSpec intermediate_spec(intermediate_shape, final_output_spec.tensor_layout());
 
     return {intermediate_spec, final_output_spec};
 }
@@ -186,6 +197,25 @@ tt::tt_metal::WorkloadDescriptor PointToPointOp::SendReceive::create_workload_de
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    // Same-device transfer (send_coord == receive_coord) is a purely local on-device
+    // copy: no fabric hop, so no cross-device GlobalSemaphore and no mesh-wide
+    // Synchronize are needed. Emit a single copy program on that coordinate and return,
+    // leaving the cross-device path below untouched.
+    if (operation_attributes.send_coord == operation_attributes.receive_coord) {
+        const MeshCoordinate& coord = operation_attributes.send_coord;
+        const auto& coords = tensor_coords.coords();
+        TT_FATAL(
+            std::find(coords.begin(), coords.end(), coord) != coords.end(),
+            "Tensor not present on coordinate: {}",
+            coord);
+
+        tt::tt_metal::WorkloadDescriptor workload_descriptor;
+        workload_descriptor.programs.push_back(
+            {tt::tt_metal::distributed::MeshCoordinateRange(coord),
+             local_copy_program_factory(tensor_args, tensor_return_value)});
+        return workload_descriptor;
+    }
+
     auto* mesh_device = tensor_args.input_tensor.device();
 
     // Allocate the shared GlobalSemaphore used by both endpoint programs and

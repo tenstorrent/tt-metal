@@ -16,7 +16,7 @@ single-galaxy case (no transport). Ranks run decoupled (no per-chunk barrier; on
 after compile). The two modes run identical pipeline mechanics and differ only in the trigger:
 
   * Request mode (default): production serving. rank 0's tokens + per-iter PrefillMetadata arrive over
-    the H2D socket from an external producer (prefill_h2d_producer.py / the scheduler); the loop is
+    the H2D socket from an external producer (prefill_producer.py / the scheduler); the loop is
     UNBOUNDED. KV-chunk-table migration + per-layer LayerAck are wired for the single-rank case only
     (disabled for the pipeline for now). Shutdown is graceful: the producer/scheduler closes the stream
     with an all -1 PrefillMetadata sentinel that each rank forwards downstream and then exits on; a rank
@@ -41,7 +41,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
-from models.demos.common.prefill.runners.migration import publish_table_and_wait_ready
+from models.demos.common.prefill.runners.migration import publish_table_and_wait_ready, serialize_device_map
 from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
@@ -188,10 +188,41 @@ def _handle_sigterm(signum, frame):
 # ---------------------------------------------------------------------------
 
 
-def compute_layer_split(num_layers: int, num_ranks: int) -> list[tuple[int, int]]:
+def _snap_counts_to_starts(counts, valid_starts, num_layers):
+    """Nudge an even split's interior rank boundaries onto the nearest valid start (preserving
+    sum == num_layers), for models that constrain where a rank may begin (layer_split_boundaries).
+    Nearest by |distance| then lower index; each boundary is used at most once and stays increasing."""
+    valid = sorted(valid_starts)
+    boundaries, s = [], 0
+    for c in counts[:-1]:
+        s += c
+        boundaries.append(s)
+    snapped, prev = [], 0
+    for b in boundaries:
+        cand = min(
+            (v for v in valid if prev < v < num_layers and v not in snapped),
+            key=lambda v: (abs(v - b), v),
+            default=None,
+        )
+        if cand is None:
+            raise ValueError(f"cannot place {len(counts)} pipeline ranks on valid layer boundaries {valid}")
+        snapped.append(cand)
+        prev = cand
+    out, prev = [], 0
+    for b in [*snapped, num_layers]:
+        out.append(b - prev)
+        prev = b
+    return out
+
+
+def compute_layer_split(num_layers: int, num_ranks: int, valid_starts=None) -> list[tuple[int, int]]:
     """Contiguous (first_layer_idx, count) per rank. PREFILL_PP_LAYER_COUNTS, a
     comma-separated count list summing to num_layers, overrides the default even
-    split (remainder handed to the earlier ranks)."""
+    split (remainder handed to the earlier ranks).
+
+    ``valid_starts`` (from the adapter's ``layer_split_boundaries``): layer indices at which a rank may
+    begin. None => unconstrained. When set, the default even split is auto-snapped onto valid
+    boundaries, and any split (explicit or snapped) whose rank starts fall off them is rejected early."""
     override = os.environ.get("PREFILL_PP_LAYER_COUNTS")
     if override:
         counts = [int(x) for x in override.split(",")]
@@ -203,12 +234,24 @@ def compute_layer_split(num_layers: int, num_ranks: int) -> list[tuple[int, int]
     else:
         base, rem = divmod(num_layers, num_ranks)
         counts = [base + (1 if r < rem else 0) for r in range(num_ranks)]
+        if valid_starts is not None:
+            counts = _snap_counts_to_starts(counts, valid_starts, num_layers)
 
     ranges = []
     start = 0
     for count in counts:
         ranges.append((start, count))
         start += count
+
+    if valid_starts is not None:
+        for first_idx, _ in ranges:
+            if first_idx not in valid_starts:
+                near = sorted(b for b in valid_starts if abs(b - first_idx) <= 4)
+                raise ValueError(
+                    f"pipeline rank starts at layer {first_idx}, not a valid boundary for this model "
+                    f"(nearest valid: {near}). Set PREFILL_PP_LAYER_COUNTS so every cumulative boundary "
+                    f"is a valid start."
+                )
     return ranges
 
 
@@ -402,8 +445,8 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
         d2d_in.release_fabric_links()
 
 
-def _compute_and_send(runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d_out) -> float:
-    """Run one chunk: prefill into the engine-owned kv_cache, forward the output downstream (non-last
+def _compute_and_send(runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2d_out) -> float:
+    """Run one chunk: prefill into the engine-owned kv_caches, forward the output downstream (non-last
     rank) and grant the outbound sender so it ships over fabric. Returns the compute-start epoch
     (NTP-comparable). CHUNK_START is logged BEFORE the forward, with this chunk's metadata, so the
     slot/KV-range is visible per rank even if prefill_chunk hangs. The trailing metadata is kept after
@@ -414,7 +457,7 @@ def _compute_and_send(runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d
         f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     )
     out = runtime.prefill_chunk(
-        inp, kv_cache, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
+        inp, kv_caches, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
     )
     if SYNC_PER_CHUNK:
         # Block on device completion so the delta is this rank's forward alone, not the downstream-start
@@ -442,13 +485,18 @@ def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done:
 
 
 def run_request_loop(
-    runtime, kv_cache, rank: int, num_ranks: int, *, hidden_size: int, h2d_service=None, d2d_in=None, d2d_out=None
-) -> None:
+    runtime, kv_caches, rank: int, num_ranks: int, *, hidden_size: int, h2d_service=None, d2d_in=None, d2d_out=None
+):
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
     closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
     as a hard fallback, until SIGTERM/SIGKILL. No fixed NUM_CHUNKS bound, no trace input, no PCC — see
-    run_standalone_loop for those."""
+    run_standalone_loop for those.
+
+    Exception: in migration-validation mode (PREFILL_VALIDATE_MIGRATION=1) the scheduler driver never
+    pushes the shutdown sentinel — it pushes PREFILL_STANDALONE_CHUNKED_NCHUNKS chunks, migrates, then
+    writes the DONE sentinel for the runner to poll. So the loop exits after that many chunks and returns
+    to validate_after_prefill. Returns (chunks_per_slot, real_end_per_slot, total_chunks)."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
@@ -459,6 +507,16 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+    # Per-slot bookkeeping for the optional post-loop migration validation (validate_after_prefill):
+    # how many chunks each slot received and its highest real (non-pad) end position.
+    chunks_per_slot: dict = {}
+    real_end_per_slot: dict = {}
+    # If we run prefill validation, we need to know the expected number of chunks to exit the loop.
+    _expected_chunks = (
+        int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "0"))
+        if os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1"
+        else 0
+    )
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
@@ -473,14 +531,26 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
-        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out)
+        slot = meta["slot_id"]
+        chunks_per_slot[slot] = chunks_per_slot.get(slot, 0) + 1
+        real_end_per_slot[slot] = max(real_end_per_slot.get(slot, 0), meta["actual_end"])
+        t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
         if first is None:
             first = t
         c += 1
+        if _expected_chunks and c >= _expected_chunks:
+            logger.info(
+                f"[pp rank {rank}] processed {c}/{_expected_chunks} chunks "
+                "(PREFILL_STANDALONE_CHUNKED_NCHUNKS reached); exiting request loop for migration validation"
+            )
+            if d2d_out is not None:
+                _forward_shutdown(d2d_out, rank, hidden_size)
+            break
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
+    return chunks_per_slot, real_end_per_slot, c
 
 
-def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
+def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
     """Bring-up / benchmark loop — BOUNDED, golden-trace input. rank 0 drives NUM_CHUNKS chunks from the
     trace; downstream ranks receive the same count over D2D. Every rank knows NUM_CHUNKS (propagated via
     global_env), so each loops a fixed range independently — no end-of-stream marker needed. With
@@ -516,7 +586,7 @@ def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=
         else:
             inp, meta = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
-        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out)
+        t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
         if first is None:
             first = t
     # Every rank must finish receiving + forwarding the final chunk before any rank reclaims its
@@ -540,7 +610,7 @@ def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=
             )
         # Pass the raw trace path; the validation helper resolves it (descends the vllm hash subdir).
         pcc_check(
-            kv_cache,
+            kv_caches,
             slot_id=slot_id,
             n_chunks=n_chunks,
             trace_dir=os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default),
@@ -586,6 +656,7 @@ def _print_config() -> None:
             os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0"),
         ),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
+        ("PREFILL_MOCK_MIGRATION", os.environ.get("PREFILL_MOCK_MIGRATION", "0")),
         (
             "PREFILL_MIGRATION_TABLE_PATH",
             os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
@@ -613,7 +684,7 @@ def main() -> None:
     rank = int(ttnn.distributed_context_get_rank())
     num_ranks = int(ttnn.distributed_context_get_size())
 
-    layer_split = compute_layer_split(NUM_LAYERS, num_ranks)
+    layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS))
     first_layer_idx, num_my_layers = layer_split[rank]
     is_first_rank = rank == 0
     is_last_rank = rank == num_ranks - 1
@@ -648,15 +719,18 @@ def main() -> None:
     )
 
     runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    # The engine owns the KV cache: allocate it once (the adapter defines the layout), pass it into
-    # every runtime call, and let it free with the mesh at shutdown.
-    kv_cache = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    runtime.compile(kv_cache)
+    # The engine owns the KV cache(s): allocate them once (the adapter defines the layout) as an opaque
+    # KvCaches, hand that container to every runtime call, and let it free with the mesh at shutdown. The
+    # runner stays model-agnostic — it never unpacks the container; the (model-specific) runtime pulls out
+    # the primary cache and any secondary cache (e.g. a sparse/DSA model's index cache) it needs, and folds
+    # both into the merged migration table (see build_kv_chunk_table).
+    kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    runtime.compile(kv_caches)
 
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
-        _serve_standalone(runtime, kv_cache, mesh_device, hf_config, rank, num_ranks, is_first_rank)
+        _serve_standalone(runtime, kv_caches, mesh_device, hf_config, rank, num_ranks, is_first_rank)
     else:
-        _serve_request(runtime, kv_cache, mesh_device, hf_config, rank, num_ranks, is_first_rank)
+        _serve_request(runtime, kv_caches, mesh_device, hf_config, rank, num_ranks, is_first_rank)
 
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)
@@ -664,7 +738,7 @@ def main() -> None:
 
 
 def _serve_standalone(
-    runtime, kv_cache, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool
+    runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool
 ) -> None:
     """Bring-up / benchmark path: golden-trace input on rank 0, D2D-socket transport between ranks,
     per-rank KV PCC. Self-contained (no external producer); covers num_ranks 1..N."""
@@ -686,7 +760,7 @@ def _serve_standalone(
         ttnn.distributed_context_barrier()
 
     logger.info(f"[pp rank {rank}] setup complete, entering standalone loop")
-    run_standalone_loop(runtime, kv_cache, rank, num_ranks, d2d_in=d2d_in, d2d_out=d2d_out)
+    run_standalone_loop(runtime, kv_caches, rank, num_ranks, d2d_in=d2d_in, d2d_out=d2d_out)
 
     if d2d_in is not None or d2d_out is not None:
         # Free the services while the mesh + command queues are still alive (their dtors free a command
@@ -697,9 +771,9 @@ def _serve_standalone(
         gc.collect()
 
 
-def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
+def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
     """Production serving: token chunks + PrefillMetadata arrive over the H2D socket from an external
-    producer (prefill_h2d_producer.py / the scheduler); unbounded (runs to SIGTERM). Same pipeline
+    producer (prefill_producer.py / the scheduler); unbounded (runs to SIGTERM). Same pipeline
     mechanics as standalone (num_ranks 1..N over D2D); the only difference is the trigger (H2D input)
     and that it runs forever.
 
@@ -736,7 +810,7 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         descriptor_path = h2d_service.export_descriptor(service_id)
         logger.info(
             f"[pp rank {rank}] [h2d] descriptor service_id={service_id!r} -> {descriptor_path}; "
-            f"drive it with prefill_h2d_producer.py / the scheduler."
+            f"drive it with prefill_producer.py / the scheduler."
         )
 
     # D2D pipeline transport for num_ranks>1 (same as standalone).
@@ -759,14 +833,32 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
             # Full migration bring-up: the runtime builds the model-specific KV chunk table from
             # its device cache layout; the runner publishes it (+ device map) to the worker and blocks
             # on WORKER_READY before the request loop opens (the worker gates on SetTable + AssignDevMap).
+            # A sparse model's KvCaches carries its index cache too, so the table describes BOTH caches
+            # in one (merged); a dense model's is a single-config table.
             table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
             wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
-            runtime.build_kv_chunk_table(kv_cache, path=table_path)
+            runtime.build_kv_chunk_table(kv_caches, path=table_path)
             publish_table_and_wait_ready(
                 mesh_device=mesh_device,
                 mesh_shape=GLOBAL_MESH_SHAPE,
                 table_path=table_path,
                 wait_ready_timeout_ms=wait_ready_ms,
+            )
+        elif os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1":
+            # Mock integration (prefill_producer.py): serialize the KV chunk table so an external
+            # producer can read it back via ttnn.experimental.disaggregation.import_from_protobuf_file
+            # and locate each chunk — WITHOUT the migration_endpoint worker (no MigrationLayerClient,
+            # no WORKER_READY). One galaxy => one complete table spanning all NUM_LAYERS / NUM_USERS
+            # (both caches, merged, for a sparse model).
+            table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+            runtime.build_kv_chunk_table(kv_caches, path=table_path)
+            # Also publish the fabric_node -> ASIC unique_id device map so the producer can resolve chips
+            # for its device-less UMD read (read_dram_umd) without touching the ControlPlane.
+            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            serialize_device_map(mesh_device, device_map_path)
+            logger.info(
+                f"[mock-migration] KV chunk table -> {table_path}, device map -> {device_map_path} "
+                f"(no migration worker); prefill_producer can import them"
             )
 
         # Per-layer LayerAck: the runner bumps a counter once per layer; the scheduler reads the delta.
@@ -781,9 +873,9 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
-    run_request_loop(
+    chunks_per_slot, real_end_per_slot, total_chunks = run_request_loop(
         runtime,
-        kv_cache,
+        kv_caches,
         rank,
         num_ranks,
         hidden_size=hf_config.hidden_size,
@@ -791,6 +883,21 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         d2d_in=d2d_in,
         d2d_out=d2d_out,
     )
+
+    # Post-loop KV validation (bring-up / migration accuracy; never in production serving). Single-rank
+    # only: only the last/single rank owns the whole cache. By now the scheduler has migrated the slots
+    # out-of-band and written the DONE sentinel; the validator waits for it and PCCs the migrated pairs.
+    if single_rank and os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1":
+        from models.demos.common.prefill.runners.validation import validate_after_prefill
+
+        validate_after_prefill(
+            runtime,
+            kv_caches,
+            chunks_per_slot=chunks_per_slot,
+            real_end_per_slot=real_end_per_slot,
+            num_users=NUM_USERS,
+            total_chunks=total_chunks,
+        )
 
     # Release services while the mesh + command queues are still alive (their dtors free a command
     # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
@@ -804,4 +911,15 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
 
 
 if __name__ == "__main__":
+    # Best-effort: some galaxies ship a small RLIMIT_NPROC soft limit that starves the runner's threads, so
+    # raise it to the hard limit. Guarded — get/setrlimit can raise OSError/ValueError when the limit is
+    # immutable or the process lacks permission, and that must not crash the runner before main().
+    try:
+        import resource
+
+        _, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+        resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
+    except (OSError, ValueError) as e:
+        logger.warning(f"[prefill] could not raise RLIMIT_NPROC to the hard limit: {e}")
+
     main()

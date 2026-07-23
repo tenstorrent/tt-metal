@@ -3,8 +3,6 @@
 
 import torch
 
-import ttnn
-
 
 def create_balanced_chunk_order(sp_factor: int) -> list[int]:
     """Create balanced chunk order for sequence reordering.
@@ -143,39 +141,6 @@ def blockcyclic_cache_host(
     valid = p < prior_len
     out[valid] = kv_natural[p[valid]]
     return out.reshape(1, 1, seq_len_cache, kvpe_dim)
-
-
-def blockcyclic_to_natural(t, sp: int, seq_len_local: int, end_pos: int):
-    """Reorder a gathered full-cache tensor from the cache's block-cyclic SP layout into natural
-    token order, on device — the inverse of blockcyclic_positions. t is [1, 1, seq_len_cache, 576]
-    ROW_MAJOR (block-cyclic); returns [1, 1, end_pos, 576] natural order. Identity order at sp==1."""
-    seq_len_cache, d = t.shape[2], t.shape[3]
-    chunk_local = seq_len_local  # = chunk_size_global / sp
-    slabs = seq_len_cache // (sp * chunk_local)  # chunks written into the cache
-    if sp == 1:
-        return ttnn.slice(t, (0, 0, 0, 0), (1, 1, end_pos, d))  # identity order
-    # Reorder block-cyclic [chip, slab, off] → natural [slab, chip, off]. A reshape+permute leaves
-    # the result physically NON-contiguous (a strided view): to_torch honours the strides, but the
-    # sparse_sdpa reader consumes raw physical order and silently reads garbage. Concatenating
-    # contiguous per-(slab,chip) slabs materialises a fresh contiguous tensor instead.
-    seq_local_cache = slabs * chunk_local  # rows held by one chip
-    blocks = [
-        ttnn.slice(
-            t,
-            (0, 0, c * seq_local_cache + s * chunk_local, 0),
-            (1, 1, c * seq_local_cache + (s + 1) * chunk_local, d),
-        )
-        for s in range(slabs)
-        for c in range(sp)
-    ]
-    flat = ttnn.concat(blocks, dim=2)
-    for b in blocks:
-        ttnn.deallocate(b)
-    if end_pos == seq_len_cache:
-        return flat
-    out = ttnn.slice(flat, (0, 0, 0, 0), (1, 1, end_pos, d))
-    ttnn.deallocate(flat)  # the slice is a fresh tensor; free the full concat
-    return out
 
 
 def global_to_local_token_id(

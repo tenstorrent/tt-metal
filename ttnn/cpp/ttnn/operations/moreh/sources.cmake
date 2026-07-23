@@ -149,3 +149,46 @@ set(TTNN_OP_MOREH_API_HEADERS
     moreh_softmax_backward/moreh_softmax_backward.hpp
     moreh_sum/moreh_sum.hpp
 )
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/moreh/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_MOREH_NANOBIND_SRCS
+    moreh_nanobind.cpp
+    moreh_abs_pow/moreh_abs_pow_nanobind.cpp
+    moreh_adam/moreh_adam_nanobind.cpp
+    moreh_adamw/moreh_adamw_nanobind.cpp
+    moreh_arange/moreh_arange_nanobind.cpp
+    moreh_bmm/moreh_bmm_nanobind.cpp
+    moreh_bmm_backward/moreh_bmm_backward_nanobind.cpp
+    moreh_clip_grad_norm/moreh_clip_grad_norm_nanobind.cpp
+    moreh_cumsum/moreh_cumsum_nanobind.cpp
+    moreh_dot/moreh_dot_nanobind.cpp
+    moreh_dot/moreh_dot_nanobind.cpp
+    moreh_dot_backward/moreh_dot_backward_nanobind.cpp
+    moreh_fold/fold_nanobind.cpp
+    moreh_getitem/moreh_getitem_nanobind.cpp
+    moreh_group_norm/moreh_group_norm_nanobind.cpp
+    moreh_group_norm_backward/moreh_group_norm_backward_nanobind.cpp
+    moreh_layer_norm/moreh_layer_norm_nanobind.cpp
+    moreh_layer_norm_backward/moreh_layer_norm_backward_nanobind.cpp
+    moreh_linear/moreh_linear_nanobind.cpp
+    moreh_linear_backward/moreh_linear_backward_nanobind.cpp
+    moreh_matmul/moreh_matmul_nanobind.cpp
+    moreh_matmul_backward/moreh_matmul_backward_nanobind.cpp
+    moreh_mean/moreh_mean_nanobind.cpp
+    moreh_mean_backward/moreh_mean_backward_nanobind.cpp
+    moreh_nll_loss/moreh_nll_loss_nanobind.cpp
+    moreh_nll_loss_backward/moreh_nll_loss_backward_nanobind.cpp
+    moreh_nll_loss_unreduced_backward/moreh_nll_loss_unreduced_backward_nanobind.cpp
+    moreh_norm/moreh_norm_nanobind.cpp
+    moreh_norm_backward/moreh_norm_backward_nanobind.cpp
+    moreh_sgd/moreh_sgd_nanobind.cpp
+    moreh_softmax/moreh_softmax_nanobind.cpp
+    moreh_softmax/moreh_softmax_nanobind.cpp
+    moreh_softmax_backward/moreh_softmax_backward_nanobind.cpp
+    moreh_sum/moreh_sum_nanobind.cpp
+    moreh_sum_backward/moreh_sum_backward_nanobind.cpp
+)

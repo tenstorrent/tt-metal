@@ -59,10 +59,10 @@ using MeshTensorTest2x4 = MeshDevice2x4Fixture;
 
 TEST(MeshTensorHostTest, ToHostAlreadyOnHost) {
     const ttnn::Shape shape{1, 1, 32, 32};
-    const TensorSpec tensor_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const tt::tt_metal::TensorSpec tensor_spec =
+        tt::tt_metal::TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     Tensor input_host_tensor = Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec);
-    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(input_host_tensor.storage_type() == ttnn::StorageType::HOST);
 
     EXPECT_NO_THROW(cpu(input_host_tensor));
 }
@@ -73,10 +73,12 @@ TEST(MeshTensorHostTest, FromHostShardsDifferentSpecs) {
             std::vector<Tensor> shards = {
                 Tensor::from_vector(
                     std::vector<float>(7),
-                    TensorSpec(ttnn::Shape{7}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
+                    tt::tt_metal::TensorSpec(
+                        ttnn::Shape{7}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
                 Tensor::from_vector(
                     std::vector<float>(10),
-                    TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
+                    tt::tt_metal::TensorSpec(
+                        ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
             };
             from_host_shards(shards, MeshShape(1, 2));
         }),
@@ -89,11 +91,13 @@ TEST_F(MeshTensorTest, FromHostShardsDeviceStorage) {
             std::vector<Tensor> shards = {
                 Tensor::from_vector(
                     std::vector<float>(10),
-                    TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{})),
+                    tt::tt_metal::TensorSpec(
+                        ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{})),
                     mesh_device_.get()),
                 Tensor::from_vector(
                     std::vector<float>(10),
-                    TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{})),
+                    tt::tt_metal::TensorSpec(
+                        ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{})),
                     mesh_device_.get()),
             };
             from_host_shards(shards, MeshShape(1, 2));
@@ -107,10 +111,12 @@ TEST(MeshTensorHostTest, FromHostShardsMeshShapeMismatch) {
             std::vector<Tensor> shards = {
                 Tensor::from_vector(
                     std::vector<float>(7),
-                    TensorSpec(ttnn::Shape{7}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
+                    tt::tt_metal::TensorSpec(
+                        ttnn::Shape{7}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
                 Tensor::from_vector(
                     std::vector<float>(10),
-                    TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
+                    tt::tt_metal::TensorSpec(
+                        ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
             };
             from_host_shards(shards, MeshShape(1, 3));
         }),
@@ -128,16 +134,18 @@ TEST(MeshTensorHostTest, FromHostShards) {
         std::vector<Tensor>{
             Tensor::from_vector(
                 host_data1,
-                TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
+                tt::tt_metal::TensorSpec(
+                    ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
             Tensor::from_vector(
                 host_data2,
-                TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
+                tt::tt_metal::TensorSpec(
+                    ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
         },
         MeshShape(1, 2));
 
     EXPECT_EQ(tensor.tensor_spec().logical_shape(), ttnn::Shape{10});
-    EXPECT_EQ(tensor.storage_type(), StorageType::HOST);
-    EXPECT_EQ(tensor.tensor_topology(), TensorTopology::create_sharded_tensor_topology(MeshShape(1, 2)));
+    EXPECT_EQ(tensor.storage_type(), ttnn::StorageType::HOST);
+    EXPECT_EQ(tensor.tensor_topology(), tt::tt_metal::TensorTopology::create_sharded_tensor_topology(MeshShape(1, 2)));
 
     auto tensors = get_device_tensors(tensor);
     ASSERT_THAT(tensors, SizeIs(2));
@@ -146,10 +154,10 @@ TEST(MeshTensorHostTest, FromHostShards) {
 }
 
 TEST_F(MeshTensorTest, Lifecycle) {
-    const TensorSpec tensor_spec =
-        TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const tt::tt_metal::TensorSpec tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
-    Tensor input_tensor = create_device_tensor(tensor_spec, mesh_device_.get());
+    Tensor input_tensor = ttnn::create_device_tensor(tensor_spec, mesh_device_.get());
 
     EXPECT_TRUE(input_tensor.is_allocated());
 
@@ -175,42 +183,43 @@ TEST_F(MeshTensorTest, Lifecycle) {
 
 TEST_F(MeshTensorTest, ToDeviceMemoryConfigOverride) {
     const ttnn::Shape shape{1, 1, 32, 32};
-    const TensorSpec tensor_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{BufferType::L1}));
+    const tt::tt_metal::TensorSpec tensor_spec = tt::tt_metal::TensorSpec(
+        shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{BufferType::L1}));
 
     std::vector<float> host_data(shape.volume());
     std::iota(host_data.begin(), host_data.end(), 0);
 
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
-    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(input_host_tensor.storage_type() == ttnn::StorageType::HOST);
     EXPECT_EQ(input_host_tensor.tensor_spec().memory_config().buffer_type(), BufferType::L1);
 
-    Tensor device_tensor_default = to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor_default = tt::tt_metal::to_device(input_host_tensor, mesh_device_.get());
     EXPECT_EQ(device_tensor_default.tensor_spec().memory_config().buffer_type(), BufferType::L1);
 
-    Tensor device_tensor_dram = to_device(input_host_tensor, mesh_device_.get(), MemoryConfig{BufferType::DRAM});
+    Tensor device_tensor_dram =
+        tt::tt_metal::to_device(input_host_tensor, mesh_device_.get(), MemoryConfig{BufferType::DRAM});
     EXPECT_EQ(device_tensor_dram.tensor_spec().memory_config().buffer_type(), BufferType::DRAM);
 }
 
 TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
     const ttnn::Shape shape{1, 1, 32, 32};
-    const TensorSpec tensor_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const tt::tt_metal::TensorSpec tensor_spec =
+        tt::tt_metal::TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
     std::vector<float> host_data(shape.volume());
     std::iota(host_data.begin(), host_data.end(), 0);
 
     // Prepare host tensor to offload on device.
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
-    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(input_host_tensor.storage_type() == ttnn::StorageType::HOST);
     EXPECT_EQ(input_host_tensor.tensor_spec().logical_shape(), shape);
 
     // Write host tensor to device.
-    Tensor device_tensor = to_device(input_host_tensor, mesh_device_.get(), MemoryConfig{});
+    Tensor device_tensor = tt::tt_metal::to_device(input_host_tensor, mesh_device_.get(), MemoryConfig{});
     EXPECT_EQ(device_tensor.tensor_spec().logical_shape(), shape);
     EXPECT_EQ(
         device_tensor.tensor_topology(),
-        TensorTopology::create_fully_replicated_tensor_topology(mesh_device_->shape()));
+        tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(mesh_device_->shape()));
 
     const auto& device_storage = device_tensor.device_storage();
     EXPECT_NO_THROW({ device_storage.get_mesh_buffer(); });
@@ -218,7 +227,7 @@ TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
 
     // Read the tensor back, and compare it with input data.
     Tensor output_host_tensor = cpu(device_tensor);
-    EXPECT_TRUE(output_host_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(output_host_tensor.storage_type() == ttnn::StorageType::HOST);
     EXPECT_EQ(output_host_tensor.tensor_spec().logical_shape(), shape);
 
     for (const auto& tensor : get_device_tensors(output_host_tensor)) {
@@ -229,15 +238,15 @@ TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
 
 TEST_F(MeshTensorTest, GetDeviceTensors) {
     const ttnn::Shape shape{1, 1, 32, 32};
-    const TensorSpec tensor_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const tt::tt_metal::TensorSpec tensor_spec =
+        tt::tt_metal::TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
     std::vector<float> host_data(shape.volume());
     std::iota(host_data.begin(), host_data.end(), 0);
 
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
 
-    Tensor device_tensor = to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor = tt::tt_metal::to_device(input_host_tensor, mesh_device_.get());
     const auto& device_storage = device_tensor.device_storage();
     EXPECT_NO_THROW({ device_storage.get_mesh_buffer(); });
     EXPECT_TRUE(device_storage.is_allocated());
@@ -266,16 +275,16 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
 
 TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
     const ttnn::Shape shape{1, 1, 32, 32};
-    const TensorSpec tensor_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const tt::tt_metal::TensorSpec tensor_spec =
+        tt::tt_metal::TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
     std::vector<float> host_data(shape.volume());
     std::iota(host_data.begin(), host_data.end(), 0);
 
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
 
-    Tensor device_tensor1 = to_device(input_host_tensor, mesh_device_.get());
-    Tensor device_tensor2 = to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor1 = tt::tt_metal::to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor2 = tt::tt_metal::to_device(input_host_tensor, mesh_device_.get());
 
     auto device_tensors1 = get_device_tensors(device_tensor1);
     auto device_tensors2 = get_device_tensors(device_tensor2);
@@ -323,16 +332,16 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
 // This is the mini version of MeshTensorTest2x4.CombineDeviceTensors above.
 TEST_F(MeshTensorTest1x2, CombineDeviceTensorsMini) {
     const ttnn::Shape shape{1, 1, 32, 32};
-    const TensorSpec tensor_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const tt::tt_metal::TensorSpec tensor_spec =
+        tt::tt_metal::TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
     std::vector<float> host_data(shape.volume());
     std::iota(host_data.begin(), host_data.end(), 0);
 
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
 
-    Tensor device_tensor1 = to_device(input_host_tensor, mesh_device_.get());
-    Tensor device_tensor2 = to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor1 = tt::tt_metal::to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor2 = tt::tt_metal::to_device(input_host_tensor, mesh_device_.get());
 
     auto device_tensors1 = get_device_tensors(device_tensor1);
     auto device_tensors2 = get_device_tensors(device_tensor2);
@@ -369,14 +378,14 @@ TEST_F(MeshTensorTest1x2, CombineDeviceTensorsMini) {
 
 TEST_F(MeshTensorTest2x4, CombineDeviceTensorsWithDifferentShardDims) {
     const ttnn::Shape shape{1, 1, 32, 32};
-    const TensorSpec tensor_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const tt::tt_metal::TensorSpec tensor_spec =
+        tt::tt_metal::TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
     std::vector<float> host_data(shape.volume());
     std::iota(host_data.begin(), host_data.end(), 0);
 
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
-    Tensor device_tensor = to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor = tt::tt_metal::to_device(input_host_tensor, mesh_device_.get());
     auto device_tensors = get_device_tensors(device_tensor);
     ASSERT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
 
@@ -392,7 +401,7 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensorsWithDifferentShardDims) {
 }
 
 TEST_F(MeshTensorTest, DefaultConstructedDeviceStorageGetters) {
-    tt::tt_metal::DeviceStorage storage;
+    ttnn::DeviceStorage storage;
 
     EXPECT_THAT(([&]() { storage.get_buffer(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
     EXPECT_THAT(([&]() { storage.get_mesh_buffer(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
@@ -409,11 +418,11 @@ TEST_F(MeshTensorTest, DefaultConstructedDeviceStorageGetters) {
 
 TEST_F(MeshTensorTest2x4, CombineDeviceTensorsShardDimValidation) {
     const ttnn::Shape shape{1, 1, 32, 32};
-    const TensorSpec tensor_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const tt::tt_metal::TensorSpec tensor_spec =
+        tt::tt_metal::TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
     Tensor input_host_tensor = Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec);
-    Tensor device_tensor = to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor = tt::tt_metal::to_device(input_host_tensor, mesh_device_.get());
     auto device_tensors = get_device_tensors(device_tensor);
     ASSERT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
 
@@ -458,23 +467,24 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     const auto mapper = GetParam().get_mapper(mesh_device_.get());
 
     // Prepare multi-device host tensor to offload on device.
-    const TensorSpec tensor_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const tt::tt_metal::TensorSpec tensor_spec =
+        tt::tt_metal::TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     std::vector<float> host_data(shape.volume());
     std::iota(host_data.begin(), host_data.end(), 0);
     Tensor input_host_tensor_sharded = distribute_tensor(Tensor::from_vector(host_data, tensor_spec), *mapper);
-    EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(input_host_tensor_sharded.storage_type() == ttnn::StorageType::HOST);
     EXPECT_EQ(input_host_tensor_sharded.tensor_spec().logical_shape(), sharded_shape);
 
     std::vector<Tensor> input_host_shards = get_device_tensors(input_host_tensor_sharded);
 
     auto device_tensor = [&]() {
         if (GetParam().use_pre_allocated_tensor_api) {
-            Tensor device_tensor = create_device_tensor(input_host_shards.at(0).tensor_spec(), mesh_device_.get());
+            Tensor device_tensor =
+                ttnn::create_device_tensor(input_host_shards.at(0).tensor_spec(), mesh_device_.get());
             copy_to_device(input_host_tensor_sharded, device_tensor);
             return device_tensor;
         }
-        return to_device(input_host_tensor_sharded, mesh_device_.get());
+        return tt::tt_metal::to_device(input_host_tensor_sharded, mesh_device_.get());
     }();
 
     EXPECT_EQ(device_tensor.tensor_topology(), input_host_tensor_sharded.tensor_topology());
@@ -612,13 +622,13 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_WritesOnlyFilteredCores) {
     CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
     ShardSpec shard_spec(shard_grid, {kRowsPerShard, kCols});
     MemoryConfig mem_cfg(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec);
-    TensorSpec spec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, mem_cfg));
+    tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, mem_cfg));
     auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
     std::vector<uint32_t> sent_data(shape.volume(), kSentinel);
     std::vector<uint32_t> new_data(shape.volume(), kNew);
     Tensor host_sent = distribute_tensor(Tensor::from_vector(sent_data, spec), *mapper);
     Tensor host_new = distribute_tensor(Tensor::from_vector(new_data, spec), *mapper);
-    Tensor device_tensor = create_device_tensor(spec, mesh_device_.get(), host_new.tensor_topology());
+    Tensor device_tensor = ttnn::create_device_tensor(spec, mesh_device_.get(), host_new.tensor_topology());
     copy_to_device(host_sent, device_tensor);
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     ttnn::experimental::core_subset_write::copy_to_device_filtered(host_new, device_tensor, filter);
@@ -644,13 +654,13 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_EmptyFilter_NoChange) {
     CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
     ShardSpec shard_spec(shard_grid, {32, 32});
     MemoryConfig mem_cfg(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::DRAM, shard_spec);
-    TensorSpec spec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, mem_cfg));
+    tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, mem_cfg));
     auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
     std::vector<uint32_t> sent_data(shape.volume(), 0x55u);
     std::vector<uint32_t> new_data(shape.volume(), 0x66u);
     Tensor host_sent = distribute_tensor(Tensor::from_vector(sent_data, spec), *mapper);
     Tensor host_new = distribute_tensor(Tensor::from_vector(new_data, spec), *mapper);
-    Tensor device_tensor = create_device_tensor(spec, mesh_device_.get(), host_new.tensor_topology());
+    Tensor device_tensor = ttnn::create_device_tensor(spec, mesh_device_.get(), host_new.tensor_topology());
     copy_to_device(host_sent, device_tensor);
     CoreRangeSet empty_filter;
     ttnn::experimental::core_subset_write::copy_to_device_filtered(host_new, device_tensor, empty_filter);
@@ -665,13 +675,13 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_EmptyFilter_NoChange) {
 
 TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_ThrowsOnInterleavedLayout) {
     const ttnn::Shape shape{1, 1, 32, 32};
-    TensorSpec spec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
     std::vector<uint32_t> a(shape.volume(), 1u);
     std::vector<uint32_t> b(shape.volume(), 2u);
     auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
     Tensor host_a = distribute_tensor(Tensor::from_vector(a, spec), *mapper);
     Tensor host_b = distribute_tensor(Tensor::from_vector(b, spec), *mapper);
-    Tensor device_tensor = create_device_tensor(spec, mesh_device_.get(), host_a.tensor_topology());
+    Tensor device_tensor = ttnn::create_device_tensor(spec, mesh_device_.get(), host_a.tensor_topology());
     copy_to_device(host_a, device_tensor);
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     EXPECT_ANY_THROW(ttnn::experimental::core_subset_write::copy_to_device_filtered(host_b, device_tensor, filter));

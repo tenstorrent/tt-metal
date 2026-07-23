@@ -119,7 +119,8 @@ void run_strided_dfb_copy_test(
     auto* device = mesh_device->get_devices().at(0);
 
     MemoryConfig mem_config(TensorMemoryLayout::INTERLEAVED, params.buffer_type);
-    TensorSpec tensor_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
+    tt::tt_metal::TensorSpec tensor_spec(
+        params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
 
     const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
     auto input_tensor = Tensor::from_vector(src, tensor_spec, mesh_device);
@@ -149,8 +150,8 @@ void run_strided_dfb_copy_test(
     const std::string output_cta_str = build_cta_define(output_accessor_args);
 
     // Placeholder kernel specs — filled in by the arch-specific builder lambda
-    KernelSpec reader = MakeMinimalDMKernel("reader");  // overwritten by builder
-    KernelSpec writer = MakeMinimalDMKernel("writer");  // overwritten by builder
+    KernelSpec reader = MakeMinimalGen2DMKernel("reader");  // overwritten by builder
+    KernelSpec writer = MakeMinimalGen2DMKernel("writer");  // overwritten by builder
 
     // Let the arch-specific caller configure kernel specs and DFB bindings
     kernel_builder_fn(reader, writer);
@@ -304,8 +305,8 @@ TEST_P(TensorAccessorStridedDFBTest, QuasarStridedPagesCopy) {
     constexpr uint8_t kNumDMThreads = 3;
 
     auto kernel_builder = [&](KernelSpec& reader, KernelSpec& writer) {
-        reader = MakeMinimalDMKernel("reader", kNumDMThreads);
-        writer = MakeMinimalDMKernel("writer", kNumDMThreads);
+        reader = MakeMinimalGen2DMKernel("reader", kNumDMThreads);
+        writer = MakeMinimalGen2DMKernel("writer", kNumDMThreads);
         // STRIDED with 3 threads: each thread owns every 3rd DFB entry
         reader.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
         writer.dfb_bindings.push_back(ConsumerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));

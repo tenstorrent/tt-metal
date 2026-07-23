@@ -56,14 +56,20 @@ class GLM51Config:
 def glm_hf_config(max_seq: int = 8192):
     """HF-attribute-style config the unified ttMLA reads (GLM dims, no YaRN).
 
-    Built directly rather than via AutoConfig: GLM's model_type (`glm_moe_dsa`) is not
-    registered with transformers, so AutoConfig cannot load it. `rope_scaling.factor=1.0`
-    disables both the YaRN frequency scaling and the mscale² softmax correction → plain
-    RoPE at θ=1e6 with scale = qk_head_dim**-0.5. The four `index_*` attrs configure the
-    DSA indexer (GLM's indexer RoPE is interleaved; DeepSeek's is not).
+    Built directly (not from transformers' GlmMoeDsaConfig, which IS available and AutoConfig-
+    loadable as of transformers 5.10) because ttMLA/the cache-build path read a curated field set
+    this namespace supplies but the stock GlmMoeDsaConfig does not: `rope_scaling` here is the
+    DeepSeek-MLA shape (`factor`/`mscale`/`beta_*`) ttMLA indexes, plus top-level `rope_theta`,
+    `max_seq_len`, `index_rope_interleave`, `first_k_dense_replace`, and `quantization_config`.
+    (The HF *reference* model uses a real GlmMoeDsaConfig instead — see glm_reference_hf_config.)
+    `rope_scaling.factor=1.0` disables both the YaRN frequency scaling and the mscale² softmax
+    correction → plain RoPE at θ=1e6 with scale = qk_head_dim**-0.5. The four `index_*` attrs
+    configure the DSA indexer (GLM's indexer RoPE is interleaved; DeepSeek's is not).
     """
     return types.SimpleNamespace(
+        vocab_size=GLM51Config.VOCAB_SIZE,
         hidden_size=GLM51Config.EMB_SIZE,
+        intermediate_size=GLM51Config.INTERMEDIATE_SIZE,  # dense-FFN (layers 0-2) hidden dim = 12288
         num_attention_heads=GLM51Config.NUM_ATTENTION_HEADS,
         num_key_value_heads=GLM51Config.NUM_ATTENTION_HEADS,
         kv_lora_rank=GLM51Config.KV_LORA_RANK,
@@ -87,4 +93,20 @@ def glm_hf_config(max_seq: int = 8192):
         index_head_dim=GLM51Config.INDEX_HEAD_DIM,
         index_topk=GLM51Config.INDEX_TOPK,
         index_rope_interleave=True,
+        # MoE structure read by the pretrained cache-build path (load_and_compute_layer_by_layer):
+        # first_k_dense_replace = number of leading dense-FFN layers before MoE begins (GLM: 3);
+        # n_routed_experts = routed expert count (GLM: 256).
+        first_k_dense_replace=GLM51Config.NUM_DENSE_LAYERS,
+        n_routed_experts=GLM51Config.NUM_ROUTED_EXPERTS,
+        # GLM-5.1 ships as FP8 block-quant (e4m3, [128,128] blocks). dequantize_state_dict fetches the
+        # block shape UNCONDITIONALLY from here, so the pretrained cache-build path needs it present even
+        # though the hand-built config is otherwise weight-free. Harmless for the bf16 checkout
+        # (zai-org/GLM-5.1): no *_scale_inv tensors -> weights just pass through .to(bfloat16). Random-
+        # weight tests never call dequant, so they're unaffected.
+        quantization_config={
+            "quant_method": "fp8",
+            "fmt": "e4m3",
+            "activation_scheme": "dynamic",
+            "weight_block_size": [128, 128],
+        },
     )

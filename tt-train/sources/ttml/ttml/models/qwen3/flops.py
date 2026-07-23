@@ -33,9 +33,6 @@ def calculate_flops_per_token(config, seq_len: int) -> int:
     q_out = config.num_attention_heads * head_dim
     kv_out = config.num_key_value_heads * head_dim
 
-    # Embedding: vocab_size * hidden_size
-    embed_params = vocab_size * config.hidden_size
-
     # Attention per layer:
     #   q_proj:  hidden_size x q_out
     #   k_proj:  hidden_size x kv_out
@@ -72,15 +69,14 @@ def calculate_flops_per_token(config, seq_len: int) -> int:
     params_per_layer = attention_params + mlp_params
     transformer_params = config.num_hidden_layers * params_per_layer
 
-    # Output head (if not weight-tied)
+    # Output projection (LM head).
     head_params = vocab_size * config.hidden_size
-    if hasattr(config, "weight_tying") and config.weight_tying.name == "Enabled":
-        head_params = 0
 
     # Final layer norm (RMSNorm)
     final_norm_params = config.hidden_size
 
-    N = embed_params + transformer_params + head_params + final_norm_params
+    # Total parameters
+    N = transformer_params + head_params + final_norm_params
 
     L = config.num_hidden_layers
     H = config.num_attention_heads

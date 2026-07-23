@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 import pathlib
 import pickle
 import os
@@ -11,7 +12,11 @@ from typing import Optional, Union
 import yaml
 from loguru import logger
 
-from infra.data_collection.github.workflows import is_job_hanging_from_job_log
+from infra.data_collection.github.workflows import (
+    is_job_hanging_from_job_log,
+    get_civ2_node_name_and_serial_from_annotations,
+    get_civ2_node_name_and_serial_from_job_log,
+)
 from infra.data_collection.models import InfraErrorV1, TestErrorV1, CodeQualityErrorV1
 from infra.data_collection.pydantic_models import CompleteBenchmarkRun
 
@@ -242,16 +247,36 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
     else:
         ubuntu_version = None
 
-    # Clean up ephemeral runner names
-    if host_name and (host_name.startswith("tt-beta") or host_name.startswith("tt-ubuntu")):
-        parts = host_name.split("-")
-        # Issue: https://github.com/tenstorrent/tt-metal/issues/21694
-        # Issue: https://github.com/tenstorrent/tt-metal/issues/26445
-        # Remove non-constant ephemeral runner suffix from tt-beta/tt-ubuntu runner names only if the second last part is "runner"
-        # We don't want to remove the suffix for non-ephemeral runners (e.g. tt-beta-ubuntu-2204-xlarge)
-        # E.g. tt-beta-ubuntu-2204-n150-large-stable-nk6pd-runner-5g5f9 -> tt-beta-ubuntu-2204-n150-large-stable-nk6pd
-        if len(parts) >= 2 and parts[-2] == "runner":
-            host_name = "-".join(parts[:-1])
+    # Resolve the host_name for CIv2 (tt-ubuntu) runners. The ephemeral runner identity is
+    # not useful for data analysis since it changes every pod, so prefer the physical
+    # <node name>_<serial> emitted by the job-start hook annotations, falling back to the
+    # job log when annotations are unavailable (e.g. not downloaded).
+    if host_name and host_name.startswith("tt-ubuntu"):
+        node_name, serial = get_civ2_node_name_and_serial_from_annotations(
+            github_job_id_to_annotations.get(github_job_id)
+        )
+        if not (node_name and serial):
+            log_node_name, log_serial = get_civ2_node_name_and_serial_from_job_log(
+                workflow_outputs_dir, github_job["run_id"], github_job_id
+            )
+            node_name = node_name or log_node_name
+            serial = serial or log_serial
+
+        if node_name and serial:
+            host_name = f"{node_name}_{serial}"
+        elif node_name:
+            # CPU-only runners have no card serial; the node name alone identifies the host
+            host_name = node_name
+        else:
+            # No node/serial info: strip the non-constant ephemeral suffix so host aggregation
+            # stays stable, but only when the second-last part is "runner" so we don't touch
+            # non-ephemeral runners (e.g. tt-ubuntu-2204-xlarge).
+            # E.g. tt-ubuntu-2204-n150-large-stable-nk6pd-runner-5g5f9 -> tt-ubuntu-2204-n150-large-stable-nk6pd
+            # Issues: https://github.com/tenstorrent/tt-metal/issues/21694
+            #         https://github.com/tenstorrent/tt-metal/issues/26445
+            parts = host_name.split("-")
+            if len(parts) >= 2 and parts[-2] == "runner":
+                host_name = "-".join(parts[:-1])
 
     # Cleanup GitHub-hosted runner names because we're sending the whole thing, which is unnecessary
     # and clogs up the data with 1000s of hosts
@@ -266,43 +291,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
         logger.warning(f"{github_job_id} is not completed, skipping this job")
         return None
 
-    # Best effort card type getting
-
-    get_overlap = lambda labels_a, labels_b: set(labels_a) & set(labels_b)
-    labels_have_overlap = lambda labels_a, labels_b: bool(get_overlap(labels_a, labels_b))
-
-    try:
-        detected_config = return_first_string_starts_with("config-", labels).replace("config-", "")
-    except Exception as e:
-        logger.error(e)
-        logger.info("Seems to have no config- label, so assuming no special config requested")
-        detected_config = None
-
-    if labels_have_overlap(["N150", "N300", "wormhole_b0", "arch-wormhole_b0", "config-t3000"], labels):
-        detected_arch = "wormhole_b0"
-    elif labels_have_overlap(["BH", "arch-blackhole"], labels):
-        detected_arch = "blackhole"
-    else:
-        detected_arch = None
-
-    single_cards_list = ("N150", "N300", "BH")
-    single_cards_overlap = get_overlap(single_cards_list, labels)
-
-    # In order of preference
-    if detected_config:
-        if not detected_arch:
-            # This will occur for jobs where runs-on: has a config-* label but doesn't have an arch-* or card-specific label
-            logger.warning(f"No arch label found for config {detected_config} in job label, unable to infer card type")
-            card_type = None
-        else:
-            card_type = f"{detected_config}-{detected_arch}"
-    elif single_cards_overlap:
-        logger.info(f"Detected overlap in single cards: {single_cards_overlap}")
-        card_type = list(single_cards_overlap)[0]
-    elif detected_arch:
-        card_type = detected_arch
-    else:
-        card_type = None
+    card_type = _card_type_from_job_labels(labels)
 
     job_submission_ts = github_job["created_at"]
 
@@ -383,6 +372,174 @@ def get_job_rows_from_github_info(workflow_outputs_dir, github_jobs_json, github
 def _get_repo_root() -> pathlib.Path:
     """Return the repository root directory (parent of infra/)."""
     return pathlib.Path(__file__).resolve().parents[3]
+
+
+@functools.lru_cache(maxsize=1)
+def _load_sku_config_skus() -> dict:
+    sku_config_path = _get_repo_root() / ".github" / "sku_config.yaml"
+    with open(sku_config_path) as f:
+        config = yaml.safe_load(f)
+    return config.get("skus") or {}
+
+
+@functools.lru_cache(maxsize=1)
+def _sku_config_sku_names() -> tuple[str, ...]:
+    return tuple(_load_sku_config_skus().keys())
+
+
+def _is_sku_name_prefix(prefix: str, sku_name: str) -> bool:
+    if sku_name == prefix:
+        return True
+    if len(prefix) >= len(sku_name) or not sku_name.startswith(prefix):
+        return False
+    return sku_name[len(prefix)] in "_-"
+
+
+@functools.lru_cache(maxsize=1)
+def _generic_runner_labels() -> frozenset[str]:
+    """
+    Runner labels from sim_* runs_on entries in sku_config.yaml.
+
+    These are shared CPU pools where strict sku_config matching cannot distinguish
+    sim tests from other jobs on the same label; card_type stores the label itself.
+    """
+    labels: set[str] = set()
+    for sku_name, sku_entry in _load_sku_config_skus().items():
+        if sku_name.startswith("sim_"):
+            labels.update(sku_entry.get("runs_on") or [])
+    return frozenset(labels)
+
+
+# Longest-first suffixes stripped when promoting a variant SKU to its root name.
+_CARD_TYPE_ROOT_SUFFIXES: tuple[str, ...] = (
+    "_civ2_viommu_prio",
+    "_civ2_viommu",
+    "_civ2_prio",
+    "_merge_gate",
+    "_civ2",
+    "_viommu",
+    "_perf",
+    "_prio",
+    "_iommu",
+    "-blitz",
+    "-mgd",
+)
+
+
+def _uses_generic_runner_labels(label_set: set[str]) -> bool:
+    return bool(label_set) and label_set <= _generic_runner_labels()
+
+
+def _card_type_from_generic_runner_labels(label_set: set[str]) -> Optional[str]:
+    """
+    Map sim_* shared CPU pools back to their runner label for card_type.
+
+    When job labels are only pools listed on sim_* SKUs in sku_config.yaml, return
+    the CPU runner label itself rather than a sim_* SKU name.
+    """
+    if not _uses_generic_runner_labels(label_set):
+        return None
+    return sorted(label_set)[0]
+
+
+@functools.lru_cache(maxsize=128)
+def _root_sku_for(sku_name: str) -> str:
+    known_skus = set(_sku_config_sku_names())
+    candidate = sku_name
+
+    while True:
+        promoted = False
+        for suffix in _CARD_TYPE_ROOT_SUFFIXES:
+            if not candidate.endswith(suffix):
+                continue
+            stripped = candidate[: -len(suffix)]
+            if stripped in known_skus:
+                candidate = stripped
+                promoted = True
+                break
+        if not promoted:
+            break
+
+    if candidate in known_skus:
+        return candidate
+
+    candidates = [name for name in known_skus if _is_sku_name_prefix(name, sku_name)]
+    if candidates:
+        return min(candidates, key=lambda name: (len(name), name))
+    return sku_name
+
+
+# Runner labels checked in order when strict sku_config matching fails.
+_CARD_TYPE_LABEL_FALLBACK: tuple[tuple[str, str], ...] = (
+    ("P300-viommu", "bh_p300"),
+    ("P300", "bh_p300"),
+    ("P150", "bh_p150"),
+    ("P100", "bh_p100"),
+    ("N300", "wh_n300"),
+    ("N150", "wh_n150"),
+)
+
+
+def _card_type_from_sku_config(labels: list[str]) -> Optional[str]:
+    """
+    Match job labels to a pipeline SKU from sku_config.yaml.
+
+    Every SKU whose runs_on labels are present on the job is a match (sim_* SKUs are
+    skipped). Matches are promoted to their root SKU via suffix stripping / sku_config
+    prefix lookup.
+    """
+    label_set = set(labels)
+    matching_skus: list[str] = []
+
+    for sku_name, sku_entry in _load_sku_config_skus().items():
+        if sku_name.startswith("sim_"):
+            continue
+
+        runs_on = sku_entry.get("runs_on") or []
+        if not runs_on:
+            continue
+
+        if frozenset(runs_on).issubset(label_set):
+            matching_skus.append(sku_name)
+
+    if not matching_skus:
+        return None
+
+    roots = {_root_sku_for(sku_name) for sku_name in matching_skus}
+    return sorted(roots)[0]
+
+
+def _card_type_fallback_from_job_labels(labels: list[str]) -> Optional[str]:
+    """
+    Best-effort card type when sku_config has no full runs_on match.
+
+    Maps a single hardware runner label to the corresponding root SKU.
+    """
+    label_set = set(labels)
+    for runner_label, card_type in _CARD_TYPE_LABEL_FALLBACK:
+        if runner_label in label_set:
+            return card_type
+    return None
+
+
+def _card_type_from_job_labels(labels: list[str]) -> Optional[str]:
+    label_set = set(labels)
+
+    card_type = _card_type_from_generic_runner_labels(label_set)
+    if card_type is not None:
+        logger.info(f"Matched job labels to generic runner label {card_type!r}")
+        return card_type
+
+    card_type = _card_type_from_sku_config(labels)
+    if card_type is None:
+        card_type = _card_type_fallback_from_job_labels(labels)
+        if card_type is not None:
+            logger.info(f"Matched job labels to SKU {card_type!r} via label fallback")
+            return card_type
+        return None
+
+    logger.info(f"Matched job labels to SKU {card_type!r}")
+    return card_type
 
 
 def get_github_partial_benchmark_data_filenames():

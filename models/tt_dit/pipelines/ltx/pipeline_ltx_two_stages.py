@@ -3,13 +3,9 @@
 
 """LTX-2.3 22B two-stage audio-video pipeline.
 
-Mirrors the reference ``ltx_pipelines.ti2vid_two_stages.TI2VidTwoStagesPipeline``:
-stage 1 denoises half-res AV on the base 22B checkpoint with full MultiModalGuider
-guidance; the stage-1 video latent is x2-upsampled on device; stage 2 refines at full
-res with the distilled LoRA fused in and no guidance, starting from the upsampled
-video + renoised stage-1 audio.
-
-Text-only; image conditioning is not wired here yet.
+Mirrors ``ltx_pipelines.ti2vid_two_stages.TI2VidTwoStagesPipeline``: full-guidance s1
+on the base 22B checkpoint, x2 device upsample, then distilled-LoRA s2 refine.
+Supports text-to-video and image+text-to-video (I2V) conditioning.
 """
 
 from __future__ import annotations
@@ -20,9 +16,9 @@ import time
 import torch
 from loguru import logger
 
-import ttnn
-
+from ...models.vae.vae_ltx import upsample_latent
 from ...utils.fuse_loras import LoraSpec
+from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.video import export_video_audio
 from .pipeline_ltx import DEFAULT_NEGATIVE_PROMPT, SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, latent_grid
@@ -59,12 +55,6 @@ class LTXTwoStagesPipeline(LTXPipeline):
         self._distilled_lora_strength = distilled_lora_strength
         super().__init__(*args, **kwargs)
 
-    @staticmethod
-    def create_pipeline(mesh_device: ttnn.MeshDevice, **kwargs) -> "LTXTwoStagesPipeline":
-        kwargs.setdefault("mode", "av")
-        kwargs["pipeline_class"] = LTXTwoStagesPipeline
-        return LTXPipeline.create_pipeline(mesh_device, **kwargs)
-
     def warmup_buffers(
         self,
         *,
@@ -73,10 +63,7 @@ class LTXTwoStagesPipeline(LTXPipeline):
         width: int,
         num_inference_steps: int = 2,
     ) -> None:
-        """Compile every program both stages will hit. Stage 1: variant 0
-        (base, half-res, full guidance). Stage 2: variant 1 (LoRA-fused,
-        full-res, neutral guidance). Stage 2 is skipped if ``__init__`` was
-        called without a ``distilled_lora_path``."""
+        """Compile both stages' programs (s2 skipped if no ``distilled_lora_path``)."""
         assert height % 64 == 0 and width % 64 == 0, f"H/W must be div by 64 (got {height}x{width})"
         assert num_frames > 0, f"num_frames must be > 0 (got {num_frames})"
 
@@ -88,12 +75,18 @@ class LTXTwoStagesPipeline(LTXPipeline):
         )
 
         s1_h, s1_w = height // 2, width // 2
+
+        # I2V: compile the encoder at both stage resolutions before the DiT loads (it is
+        # coresident-excluded with the transformer, mirroring the generate() ordering).
+        if self.vae_encoder is not None and os.environ.get("LTX_I2V_IMAGE"):
+            logger.info(f"warmup image encoder: {s1_h}x{s1_w} + {height}x{width}")
+            self._warmup_encode(s1_h, s1_w)
+            self._warmup_encode(height, width)
+
         self._prepare_transformer(0)
 
-        # Dummy zero embeddings at the real shapes — warmup only needs to compile the
-        # (shape-driven) call_av kernels, not real prompt content. Avoids loading the
-        # encoder here (it would coresident-evict the DiT just loaded above); the encoder
-        # kernels compile on the first generate().
+        # Zeros at the real shapes compile the shape-driven call_av kernels without loading
+        # the encoder, which would coresident-evict the DiT just loaded above.
         v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
         a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
         v_n, a_n = v_p, a_p
@@ -168,9 +161,11 @@ class LTXTwoStagesPipeline(LTXPipeline):
         prompt: str,
         *,
         output_path: str,
-        # LoRA path / strength are consumed by ``__init__`` (variant 1 is built
-        # there). Optional here for back-compat; if passed they must match what
-        # ``__init__`` saw or generate raises.
+        # I2V conditioning: list of (image_path, frame_idx, strength). Only frame_idx==0
+        # (first-frame image conditioning) is supported. None -> pure text-to-video.
+        images: list[tuple[str, int, float]] | None = None,
+        # Consumed by ``__init__`` (variant 1 is built there); if passed here they
+        # must match what ``__init__`` saw, else generate raises.
         distilled_lora_path: str | None = None,
         distilled_lora_strength: float | None = None,
         negative_prompt: str | None = None,
@@ -218,18 +213,41 @@ class LTXTwoStagesPipeline(LTXPipeline):
         neg = negative_prompt if negative_prompt is not None else DEFAULT_NEGATIVE_PROMPT
 
         total_t0 = time.time()
+        timings: list[tuple[str, float]] = []
 
-        # Encode prompts once — both stages reuse the same context (matching the
-        # reference's shared ``ctx_p``). On-device Gemma encode is coresident-excluded
-        # with the DiT/VAE, so it auto-evicts them; load only on a cache miss.
+        # Both stages reuse the same context. Gemma is coresident-excluded with the
+        # DiT/VAE; load it only on a cache miss.
         t0 = time.time()
         cached = os.path.exists(self._device_embed_cache_path([prompt, neg]))
         if not cached:
             self.gemma_encoder_pair.ensure_loaded()
         enc = self.encode_prompts([prompt, neg])
-        logger.info(f"Encoding ({'cache' if cached else 'device'}): {time.time() - t0:.1f}s")
+        t_encode = time.time() - t0
+        timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
+        logger.info(f"Encoding ({'cache' if cached else 'device'}): {t_encode:.1f}s")
         v_p, a_p = enc[0][0].float(), enc[0][1].float()
         v_n, a_n = enc[1][0].float(), enc[1][1].float()
+
+        # I2V image conditioning: encode the frame-0 image at both stage resolutions before the DiT
+        # loads (the encoder is coresident-excluded with the transformer). The reference re-encodes
+        # per stage; stage 1 uses the half-res latent, stage 2 the full-res latent.
+        s1_cond_latent = full_cond_latent = None
+        cond_strength = 1.0
+        if images:
+            cond_imgs = [img for img in images if img[1] == 0]
+            if len(cond_imgs) != len(images):
+                logger.warning("Two-stage I2V only supports frame_idx==0 conditioning; ignoring keyframe images")
+            if cond_imgs:
+                assert self.vae_encoder is not None, "checkpoint has no VAE encoder; cannot run I2V conditioning"
+                img_path, _, cond_strength = cond_imgs[0]
+                logger.info(f"I2V: encoding conditioning image {img_path} (strength={cond_strength})")
+                t0 = time.time()
+                img_s1 = load_conditioning_image(img_path, s1_h, s1_w)
+                img_full = load_conditioning_image(img_path, height, width)
+                s1_cond_latent = self.encode_image(img_s1)
+                full_cond_latent = self.encode_image(img_full)
+                timings.append(("Image encode", time.time() - t0))
+                logger.info(f"Image encode: {time.time() - t0:.1f}s")
 
         # Stage 1: variant 0 (base), half-res, full guidance.
         self._prepare_transformer(0)
@@ -254,15 +272,22 @@ class LTXTwoStagesPipeline(LTXPipeline):
             stg_block=stg_block,
             seed=seed,
             ge_gamma=ge_gamma,
+            image_cond_latent=s1_cond_latent,
+            image_cond_strength=cond_strength,
         )
-        logger.info(f"Stage 1: {time.time() - t0:.1f}s")
+        t_stage1 = time.time() - t0
+        timings.append(("Stage 1 denoise", t_stage1))
+        logger.info(f"Stage 1: {t_stage1:.1f}s")
 
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_lh, s1_lw = s1_h // SPATIAL_COMPRESSION, s1_w // SPATIAL_COMPRESSION
         s1_spatial = s1_video.reshape(1, latent_frames, s1_lh, s1_lw, 128).permute(0, 4, 1, 2, 3)
         t0 = time.time()
-        upsampled = self._upsample_latent(s1_spatial)
-        logger.info(f"Upsample: {time.time() - t0:.1f}s")
+        self._prepare_upsampler()
+        upsampled = upsample_latent(self.upsampler, s1_spatial, *self._vae_per_channel_stats())
+        t_upsample = time.time() - t0
+        timings.append(("Latent upsample", t_upsample))
+        logger.info(f"Upsample: {t_upsample:.1f}s")
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
             1, latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION), 128
         )
@@ -297,8 +322,12 @@ class LTXTwoStagesPipeline(LTXPipeline):
             initial_video_latent=upsampled_flat,
             initial_audio_latent=s2_audio_init,
             noise_scale=s2_sigma_values[0],
+            image_cond_latent=full_cond_latent,
+            image_cond_strength=cond_strength,
         )
-        logger.info(f"Stage 2: {time.time() - t0:.1f}s")
+        t_stage2 = time.time() - t0
+        timings.append(("Stage 2 denoise", t_stage2))
+        logger.info(f"Stage 2: {t_stage2:.1f}s")
 
         t0 = time.time()
         self._prepare_vae()
@@ -307,11 +336,16 @@ class LTXTwoStagesPipeline(LTXPipeline):
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
         t0 = time.time()
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w)
-        logger.info(f"VAE decode: {time.time() - t0:.1f}s — {video_pixels.shape}")
+        t_vae = time.time() - t0
+        timings.append(("VAE decode", t_vae))
+        logger.info(f"VAE decode: {t_vae:.1f}s — {video_pixels.shape}")
 
+        t0 = time.time()
         audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
+        timings.append(("Audio decode", time.time() - t0))
         export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
 
+        self.last_timings = list(timings)
         total_time = time.time() - total_t0
         logger.info(f"Total: {total_time:.1f}s | Output: {output_path}")
         return output_path

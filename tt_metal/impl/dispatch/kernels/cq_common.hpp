@@ -89,6 +89,18 @@ FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
     return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
 }
 
+#ifdef ARCH_QUASAR
+// Returns a pointer to the L1 worker completion counter for `stream`. Workers signal completion
+// into L1 (DISPATCH_MESSAGE_ADDR) on Quasar rather than NOC stream registers. `completion_counter_offset`
+// selects this CQ's range of counters, when multiple CQs share this dispatch core. `first_stream_used`
+// is the index of the first stream used by this CQ.
+FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
+    uint32_t stream, uint32_t first_stream_used, uint32_t completion_counter_offset) {
+    return uncached_l1_ptr<uint32_t>(
+        DISPATCH_MESSAGE_ADDR + L1_ALIGNMENT * (completion_counter_offset + stream - first_stream_used));
+}
+#endif
+
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
 
 template <
@@ -686,11 +698,10 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
     std::array<uint32_t, max_num_worker_sems>& workers_per_sub_device,
     volatile tt_l1_ptr uint32_t* sub_device_worker_counts_update,
     uintptr_t dispatch_telemetry_base) {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
     uint32_t num_sub_devices = cmd->set_sub_device_worker_counts.num_sub_devices;
     ASSERT(num_sub_devices <= max_num_worker_sems);
-    volatile tt_l1_ptr uint32_t* data_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
+    volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
 
     static uint32_t local_sub_device_worker_counts_update = 0;
 
@@ -698,7 +709,8 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
         uint32_t worker_count = *(data_ptr++);
         workers_per_sub_device[i] = worker_count;
         if constexpr (telemetry_enabled) {
-            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                dispatch_telemetry_base)
                 ->workers_per_sub_device[i] = worker_count;
         }
 #if DEVICE_PRINT_DISPATCH_ENABLED
@@ -708,7 +720,8 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
     for (uint32_t i = num_sub_devices; i < max_num_worker_sems; ++i) {
         workers_per_sub_device[i] = 0;
         if constexpr (telemetry_enabled) {
-            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                dispatch_telemetry_base)
                 ->workers_per_sub_device[i] = 0;
         }
     }

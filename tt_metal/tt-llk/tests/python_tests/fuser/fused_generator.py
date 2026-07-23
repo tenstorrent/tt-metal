@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 from typing import Dict
 
+from helpers.chip_architecture import ChipArchitecture
+
 from .fuser_config import FuserConfig
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
@@ -89,6 +91,26 @@ class MathKernelGenerator:
         return code
 
 
+class SfpuKernelGenerator:
+    def __init__(self, config: FuserConfig):
+        self.config = config
+
+    def generate(self) -> str:
+        if self.config.global_config.architecture != ChipArchitecture.QUASAR:
+            return ""
+
+        return (
+            f"\n"
+            f"#ifdef LLK_TRISC_ISOLATE_SFPU\n"
+            f"\n"
+            f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
+            f"{{\n"
+            f"}}\n"
+            f"\n"
+            f"#endif\n"
+        )
+
+
 class PackKernelGenerator:
     def __init__(self, config: FuserConfig):
         self.config = config
@@ -131,12 +153,14 @@ class FusedKernelGenerator:
         self.unpack_gen = UnpackKernelGenerator(self.config)
         self.math_gen = MathKernelGenerator(self.config)
         self.pack_gen = PackKernelGenerator(self.config)
+        self.sfpu_gen = SfpuKernelGenerator(self.config)
 
     def generate_all(self) -> Dict[str, str]:
         return {
             "unpack": self.unpack_gen.generate(),
             "math": self.math_gen.generate(),
             "pack": self.pack_gen.generate(),
+            "sfpu": self.sfpu_gen.generate(),
         }
 
     def write_kernel(self, test_name: str):
@@ -158,7 +182,6 @@ class FusedKernelGenerator:
             f"#define FUSED_TEST\n"
             f'#include "ckernel.h"\n'
             f'#include "llk_defs.h"\n'
-            f'#include "ckernel_debug.h"\n'
             f'#include "ckernel_defs.h"\n'
             f'#include "ckernel_sfpu.h"\n'
             f'#include "tensix_types.h"\n'
@@ -176,6 +199,7 @@ class FusedKernelGenerator:
             f"\n"
             f"{kernels['unpack']}"
             f"{kernels['math']}"
+            f"{kernels['sfpu']}"
             f"{kernels['pack']}"
         )
 

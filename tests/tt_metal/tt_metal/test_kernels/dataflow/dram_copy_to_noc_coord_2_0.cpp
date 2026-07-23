@@ -70,14 +70,16 @@ void kernel_main() {
     std::uint32_t mcast_dst_end_y = get_arg(args::mcast_dst_end_y);
     bool use_write_with_state = static_cast<bool>(get_arg(args::use_write_with_state));
     bool use_inline_dw_write_from_state = static_cast<bool>(get_arg(args::use_inline_dw_write_from_state));
+    bool use_inline_dw_write_with_state = static_cast<bool>(get_arg(args::use_inline_dw_write_with_state));
 
     // We will assert later. This kernel will hang.
     // Need to signal completion to dispatcher before hanging so that
     // Dispatcher Kernel is able to finish.
     // Device::close() requires fast-dispatch kernels to finish.
     volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
-#if defined(COMPILE_FOR_DM)
-    // SD signaling: Quasar DM requires RUN_MSG_DONE. TODO: remove once FD is enabled on Quasar.
+    // SD enabled on all archs: notify completion via RUN_MSG_DONE to mailbox. FD notify path
+    // posts to a dispatcher absent under SD and wedges the NOC.
+#if defined(WATCHER_KERNEL_SLOW_DISPATCH)
     go_message_in->signal = RUN_MSG_DONE;
 #else
     uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
@@ -149,15 +151,21 @@ void kernel_main() {
             {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
         noc.async_write_barrier();
     } else if (use_inline_dw_write_from_state) {
-        // Mirror cq_noc_inline_dw_write_with_state: program the inline-write destination into the WR_REG
-        // command buffer, then sanitize it straight from those registers via DEBUG_SANITIZE_NOC_ADDR_FROM_STATE
-        // (the macro under test). The destination coordinate is invalid, so the sanitizer must flag the
-        // programmed target. We never issue the write -- the sanitizer hangs first, matching cq's
-        // sanitize-before-send ordering.
+        // set_state programs the inline/atomic command buffer (AT/simple on Quasar); sanitize reads that state back
+        // before issue.
         uint64_t dst = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr);
-        noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(
-            dst, local_buffer[0], 0xF, NCRISC_WR_REG_CMD_BUF, noc_index);
+        noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(dst, local_buffer[0], 0xF);
+        DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_index, write_at_cmd_buf);
+    } else if (use_inline_dw_write_with_state) {
+#if defined(ARCH_WORMHOLE) || defined(ARCH_QUASAR)
+        // with_state mirrors cq_noc_inline_dw_write_with_state: program WR/complex command-buffer state, then
+        // sanitize before issue. CQ_NOC_send is 0, so the write is not issued.
+        uint64_t dst = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr);
+        noc_inline_dw_write_init_state<NCRISC_WR_REG_CMD_BUF, CQ_NOC_mkp>(noc_index, NOC_UNICAST_WRITE_VC);
+        noc_inline_dw_write_with_state<NCRISC_WR_REG_CMD_BUF, CQ_NOC_INLINE_NDVB, CQ_NOC_wait, CQ_NOC_send>(
+            noc_index, dst, local_buffer[0], 0xF);
         DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_index, NCRISC_WR_REG_CMD_BUF);
+#endif
     } else {
         noc.async_write(
             local_buffer,

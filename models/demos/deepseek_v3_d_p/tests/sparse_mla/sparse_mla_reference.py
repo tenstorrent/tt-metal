@@ -70,43 +70,51 @@ def make_hidden(seq_len, hidden_size, seed=42, input_path=None):
 
 
 def run_cpu_reference(config, weights, hidden_states, seq_len, cache_dir, cache_tag):
-    """Single-shot sparse-MLA CPU truth (indexer active). Disk-cached (output + KVPE) under `cache_dir`.
+    """Single-shot sparse-MLA CPU truth (indexer active). Disk-cached (output + KVPE + index) under `cache_dir`.
 
-    Returns (ref_output [1, seq, dim], ref_kvpe [1, 1, seq, kv_lora_rank + rope]).
+    Returns (ref_output [1, seq, dim], ref_kvpe [1, 1, seq, kv_lora_rank + rope],
+    ref_index [1, seq, index_head_dim]).
     """
     cache_path = Path(cache_dir) / f"{cache_tag}_seq{seq_len}.pt"
     if cache_path.exists():
         logger.info(f"Loading cached CPU reference from {cache_path}")
         cached = torch.load(cache_path, weights_only=True)
-        return cached["ref_output"], cached["ref_kvpe"]
+        if "ref_index" in cached:  # pre-index caches lack it — fall through and recompute
+            return cached["ref_output"], cached["ref_kvpe"], cached["ref_index"]
+        logger.info(f"Cached reference at {cache_path} predates the index cache; recomputing")
 
     ref = SparseMLAReference(config, weights, seq_len=seq_len)
     ref_output = ref.forward(hidden_states)
     ref_kvpe = ref.kvpe_cache  # device layout [1, 1, seq, kv_lora_rank + rope]
+    ref_index = ref.index_cache  # [1, seq, index_head_dim]
 
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
-    torch.save({"ref_output": ref_output, "ref_kvpe": ref_kvpe}, cache_path)
+    torch.save({"ref_output": ref_output, "ref_kvpe": ref_kvpe, "ref_index": ref_index}, cache_path)
     logger.info(f"Saved CPU reference to {cache_path}")
-    return ref_output, ref_kvpe
+    return ref_output, ref_kvpe, ref_index
 
 
 def run_cpu_reference_chunked(config, weights, hidden_states, seq_len, chunk, cache_dir, cache_tag):
     """Chunk-loop sparse-MLA CPU truth (decode branch via actual_start). Disk-cached.
 
-    Returns (ref_output [1, seq, dim], ref_kvpe [1, seq, kv_lora_rank + rope]).
+    Returns (ref_output [1, seq, dim], ref_kvpe [1, seq, kv_lora_rank + rope],
+    ref_index [1, seq, index_head_dim]).
     """
     cache_path = Path(cache_dir) / f"chunked_{cache_tag}_seq{seq_len}_c{chunk}.pt"
     if cache_path.exists():
         logger.info(f"Loading cached chunked CPU reference from {cache_path}")
         cached = torch.load(cache_path, weights_only=True)
-        return cached["ref_output"], cached["ref_kvpe"]
+        if "ref_index" in cached:  # pre-index caches lack it — fall through and recompute
+            return cached["ref_output"], cached["ref_kvpe"], cached["ref_index"]
+        logger.info(f"Cached chunked reference at {cache_path} predates the index cache; recomputing")
 
     ref = SparseMLAReference(config, weights, seq_len=seq_len)
     outs = [ref.forward(hidden_states[:, s : s + chunk], actual_start=s) for s in range(0, seq_len, chunk)]
     ref_output = torch.cat(outs, dim=1)
     ref_kvpe = ref.kvpe_cache.squeeze(1)  # [1, seq, kv_lora_rank + rope] (chunked KVPE comparison layout)
+    ref_index = ref.index_cache  # [1, seq, index_head_dim]
 
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
-    torch.save({"ref_output": ref_output, "ref_kvpe": ref_kvpe}, cache_path)
+    torch.save({"ref_output": ref_output, "ref_kvpe": ref_kvpe, "ref_index": ref_index}, cache_path)
     logger.info(f"Saved chunked CPU reference to {cache_path}")
-    return ref_output, ref_kvpe
+    return ref_output, ref_kvpe, ref_index

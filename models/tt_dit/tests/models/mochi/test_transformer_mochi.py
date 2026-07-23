@@ -364,6 +364,7 @@ def test_mochi_transformer_model(
                 subfolder="transformer",
                 parallel_config=parallel_config,
                 mesh_shape=tuple(mesh_device.shape),
+                mesh_device=mesh_device,
             )
         except cache.MissingCacheError as err:
             msg = "Cache path does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
@@ -474,6 +475,7 @@ def test_mochi_transformer_model_caching(
         subfolder="transformer",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
     )
 
     logger.info(f"Cache path {cache_dir}")

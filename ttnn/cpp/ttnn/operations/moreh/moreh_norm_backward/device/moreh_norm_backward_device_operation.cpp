@@ -29,7 +29,7 @@ MorehNormBackwardOperation::spec_return_value_t MorehNormBackwardOperation::comp
     if (tensor_args.input_grad.has_value()) {
         return tensor_args.input_grad->tensor_spec();
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         tensor_args.input.logical_shape(),
         TensorLayout(
             tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));
@@ -51,13 +51,13 @@ ttnn::operations::moreh::moreh_norm_backward::MorehNormBackwardOperation::tensor
     const Tensor& output,
     const Tensor& output_grad,
     float p,
-    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
+    const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim,
     bool keepdim,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::moreh::moreh_norm_backward::MorehNormBackwardOperation;
-    ttnn::SmallVector<int64_t> dims = ttnn::operations::get_dim(dim, input.logical_shape().rank());
+    ttsl::SmallVector<int64_t> dims = ttnn::operations::get_dim(dim, input.logical_shape().rank());
     std::sort(dims.begin(), dims.end());
     auto operation_attributes = OperationType::operation_attributes_t{
         p,

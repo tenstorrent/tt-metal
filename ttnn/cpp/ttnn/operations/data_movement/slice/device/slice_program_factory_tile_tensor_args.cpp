@@ -6,6 +6,7 @@
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
 
 #include <optional>
+#include <span>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -99,13 +100,12 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     accumulated_total_per_dim[0] = num_total_Xt;
     accumulated_total_per_dim[1] = num_total_Yt * num_total_Xt;
 
-    std::vector<uint32_t> reader_common_args(3 + (num_dims * 3));
-    reader_common_args[0] = src_buffer->address();
-    reader_common_args[1] = start_buffer->address();
-    reader_common_args[2] = end_buffer->address();
-    uint32_t* num_unpadded_tiles_per_dim = reader_common_args.data() + 3;
-    uint32_t* num_padded_tiles_per_dim = num_unpadded_tiles_per_dim + num_dims;
-    uint32_t* input_shape_args = num_padded_tiles_per_dim + num_dims;
+    // src/start/end buffer bindings are registered separately below; this vector holds only the per-dim values.
+    std::vector<uint32_t> reader_common_dims(num_dims * 3);
+    std::span<uint32_t> reader_common_dims_view{reader_common_dims};
+    auto num_unpadded_tiles_per_dim = reader_common_dims_view.subspan(0, num_dims);
+    auto num_padded_tiles_per_dim = reader_common_dims_view.subspan(num_dims, num_dims);
+    auto input_shape_args = reader_common_dims_view.subspan(num_dims * 2, num_dims);
     num_unpadded_tiles_per_dim[0] = num_unpadded_Xt;
     num_unpadded_tiles_per_dim[1] = num_unpadded_Yt;
     num_padded_tiles_per_dim[0] = num_padded_Xt;
@@ -125,8 +125,16 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     // Reader per-core runtime args: [start_id, num_tiles, id_per_dim...]
     // Writer per-core runtime args: [dst_addr, num_tiles, start_id]
     constexpr uint32_t start_offset = 0;
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
+
     KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs writer_runtime_args;
     uint32_t num_tiles_written = 0;
     for (const auto& core : corerange_to_cores(all_cores)) {
         uint32_t num_tiles_per_core;
@@ -135,10 +143,10 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            // no-op core
+            // no-op core (num_tiles == 0 → address unused, but bound for a uniform arg layout)
             std::vector<uint32_t> reader_args(2 + num_dims, 0);
             reader_runtime_args.emplace_back(core, std::move(reader_args));
-            writer_runtime_args.emplace_back(core, std::vector<uint32_t>{0, 0, 0});
+            writer_desc.emplace_runtime_args(core, {dst_buffer, 0u, 0u});
             continue;
         }
 
@@ -155,8 +163,7 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
         reader_args[1] = num_tiles_per_core;
 
         reader_runtime_args.emplace_back(core, std::move(reader_args));
-        writer_runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_tiles_per_core, num_tiles_written});
         num_tiles_written += num_tiles_per_core;
     }
 
@@ -168,18 +175,16 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.runtime_args = std::move(reader_runtime_args);
-    reader_desc.common_runtime_args = std::move(reader_common_args);
+    KernelDescriptor::RTArgList reader_common;
+    reader_common.reserve(3 + (num_dims * 3));
+    reader_common.push_back(src_buffer);
+    reader_common.push_back(start_buffer);
+    reader_common.push_back(end_buffer);
+    reader_common.append(reader_common_dims);
+    reader_desc.emplace_common_runtime_args(reader_common);
     reader_desc.config = ReaderConfigDescriptor{};
     desc.kernels.push_back(std::move(reader_desc));
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.runtime_args = std::move(writer_runtime_args);
-    writer_desc.config = WriterConfigDescriptor{};
     desc.kernels.push_back(std::move(writer_desc));
 
     return desc;

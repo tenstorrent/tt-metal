@@ -30,14 +30,24 @@ on:
         description: "Model tier to filter tests (1, 2, or 3)"
     outputs:
       matrix:
-        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
+        description: "Filtered matrix of single-host legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
         value: ${{ jobs.load-test-matrix.outputs.matrix }}
+      matrix_multihost:
+        description: "Filtered matrix of exabox multihost legs that ran."
+        value: ${{ jobs.load-test-matrix.outputs.matrix_multihost }}
+
+# Default to read-only. Only the multihost job needs id-token (ttop OIDC), which it grants on the
+# job itself. Single-host legs pull the dev container image, so packages: read is the default.
+permissions:
+  contents: read
+  packages: read
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
+      matrix_multihost: ${{ steps.apply-filters.outputs.matrix_multihost }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/models_unit_tests.yaml
     steps:
@@ -69,22 +79,46 @@ jobs:
             ./.github/sku_config.yaml
       - name: Apply tier and model filters
         id: apply-filters
+        # Pass values via env rather than inline ${{ }} so arbitrary cmd content in the matrix
+        # (apostrophes, parentheses, etc.) cannot break the shell quoting of the assignment.
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          TIER: ${{ inputs.tier }}
+          MODEL: ${{ inputs.model }}
+          SKUS: ${{ inputs.enabled-skus }}
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
           # Filter by tier
-          FILTERED=$(echo "$MATRIX" | jq -c --argjson tier ${{ inputs.tier }} '[.[] | select(.tier == $tier)]')
-          # Filter by model (substring match, case-insensitive)
-          if [ "${{ inputs.model }}" != "all" ]; then
-            FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model | test($m; "i"))]')
+          FILTERED=$(echo "$MATRIX" | jq -c --argjson tier "$TIER" '[.[] | select(.tier == $tier)]')
+          # Filter by model (substring match, case-insensitive; comma-separated OR-list)
+          if [ "$MODEL" != "all" ]; then
+            FILTERED=$(echo "$FILTERED" | jq -c --arg m "$MODEL" '
+              ($m | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
+              | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
           fi
-          if [ "$FILTERED" = "[]" ]; then
-            echo "::warning::No tests found for tier=${{ inputs.tier }}, model=${{ inputs.model }}. Pipeline will be skipped."
-            echo "matrix=[]" >> $GITHUB_OUTPUT
-          else
-            echo "matrix<<EOF" >> $GITHUB_OUTPUT
-            echo "$FILTERED" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+          # Split into single-host (container) and multihost (exabox ttop) legs. Multihost legs are
+          # tagged with "multihost": true by prepare_test_matrix.py when their SKU carries an
+          # `allocation` block in sku_config.yaml (i.e. runs_on exabox-multihost-with-nfs).
+          SINGLE=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost != true)]')
+          MULTI=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost == true)]')
+          emit() {  # $1 = output name, $2 = compact JSON array
+            if [ -z "$2" ] || [ "$2" = "[]" ]; then
+              echo "$1=[]" >> $GITHUB_OUTPUT
+            else
+              {
+                echo "$1<<EOF"
+                echo "$2"
+                echo "EOF"
+              } >> $GITHUB_OUTPUT
+            fi
+          }
+          if [ "$SINGLE" = "[]" ] && [ "$MULTI" = "[]" ]; then
+            # No leg matched the requested SKU(s). Common when a dispatch picks an exabox SKU
+            # (e.g. bh_sc4/bh_sc16) that no test entry defines yet: both jobs skip silently
+            # otherwise, so name the SKUs to make the empty dispatch actionable.
+            echo "::warning::No tests found for tier=${TIER}, model=${MODEL}, skus=[${SKUS}]. No test entry declares any of these SKUs; both single-host and multihost jobs will be skipped."
           fi
+          emit matrix "$SINGLE"
+          emit matrix_multihost "$MULTI"
 
   models-unit-tests:
     needs: load-test-matrix
@@ -128,7 +162,7 @@ jobs:
         # rw-ness: per-runner caches are :rw so first-use HF downloads can populate them;
         # shared NFS honors mlperf-read-only.
         - ${{ matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && format('/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
-      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
+      options: "--device /dev/tenstorrent --privileged -v /sys:/sys -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
@@ -179,3 +213,27 @@ jobs:
           job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  # Multihost (exabox) model-unit tests. Extracted into its own reusable workflow so the exabox
+  # ttop allocation/reset/teardown lifecycle lives in one file (candidate for a future shared
+  # setup/cleanup step, and to de-dup against demo-sp-multihost-impl.yaml) without touching the
+  # single-host pipeline. Legs are selected purely by SKU: an entry is routed here (rather than to
+  # models-unit-tests) when its SKU carries an `allocation` block in sku_config.yaml, which
+  # prepare_test_matrix.py surfaces as "multihost": true and load-test-matrix collects into
+  # matrix_multihost.
+  models-unit-tests-multihost:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix_multihost != '[]' }}
+    # OIDC (ttop cluster auth) is needed only by this leg; grant it here rather than
+    # workflow-wide. Job-level permissions replace inherited defaults, so restate reads too.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    secrets: inherit
+    uses: ./.github/workflows/models-unit-tests-multihost-impl.yaml
+    with:
+      docker-image: ${{ inputs.docker-image }}
+      build-artifact-name: ${{ inputs.build-artifact-name }}
+      wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      matrix: ${{ needs.load-test-matrix.outputs.matrix_multihost }}

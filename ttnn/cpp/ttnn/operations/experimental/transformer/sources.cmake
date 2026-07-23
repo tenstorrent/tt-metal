@@ -92,3 +92,37 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_API_HEADERS
     nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp
     rotary_embedding_llama/rotary_embedding_llama.hpp
 )
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/experimental/transformer/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_NANOBIND_SRCS
+    all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp
+    concatenate_heads/concatenate_heads_nanobind.cpp
+    create_qkv_heads/create_qkv_heads_nanobind.cpp
+    create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors_nanobind.cpp
+    nlp_concat_heads/nlp_concat_heads_nanobind.cpp
+    nlp_concat_heads_decode/nlp_concat_heads_decode_nanobind.cpp
+    nlp_concat_heads_boltz/nlp_concat_heads_boltz_nanobind.cpp
+    nlp_create_qkv_heads/nlp_create_qkv_heads_nanobind.cpp
+    nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_nanobind.cpp
+    nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_nanobind.cpp
+    nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer_nanobind.cpp
+    nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit_nanobind.cpp
+    nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_nanobind.cpp
+    nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_nanobind.cpp
+    fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.cpp
+    dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.cpp
+    dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.cpp
+    dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.cpp
+    dit_rms_norm_unary_fused/dit_rms_norm_unary_fused_nanobind.cpp
+    rotary_embedding/rotary_embedding_nanobind.cpp
+    rotary_embedding_llama/rotary_embedding_llama_nanobind.cpp
+    rotary_embedding_hf/rotary_embedding_hf_nanobind.cpp
+    rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.cpp
+    rotate_half/rotate_half_nanobind.cpp
+    split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
+    all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp
+)

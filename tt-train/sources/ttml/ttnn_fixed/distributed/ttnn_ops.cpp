@@ -82,8 +82,7 @@ ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
 
 }  // namespace
 
-tt::tt_metal::Tensor all_gather(
-    const tt::tt_metal::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();
     auto num_devices = mesh_device->num_devices();
     if (num_devices == 1U) {
@@ -111,7 +110,7 @@ tt::tt_metal::Tensor all_gather(
         /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
 }
 
-tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, const std::optional<uint32_t> cluster_axis) {
+ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();
     auto num_devices = mesh_device->num_devices();
     if (num_devices == 1U) {
@@ -163,8 +162,7 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, const std::o
     }
 }
 
-tt::tt_metal::Tensor reduce_scatter(
-    const tt::tt_metal::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
     auto& mesh_device = ttml::autograd::ctx().get_device();
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(mesh_device, /* cluster_axis */ cluster_axis);
@@ -187,10 +185,8 @@ tt::tt_metal::Tensor reduce_scatter(
         /* cluster_axis */ cluster_axis);
 }
 
-tt::tt_metal::Tensor ring_shift(
-    const tt::tt_metal::Tensor& tensor,
-    const std::optional<uint32_t> cluster_axis,
-    const RingShiftDirection direction) {
+ttnn::Tensor ring_shift(
+    const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis, const RingShiftDirection direction) {
     auto& ctx = ttml::autograd::ctx();
     auto& socket_manager = ctx.get_socket_manager();
     auto distributed_ctx = ctx.get_distributed_context();

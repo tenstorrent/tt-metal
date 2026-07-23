@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -29,11 +29,11 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     Noc noc;
-    CircularBuffer cb_out(cb_output);
+    DataflowBuffer dfb_out(cb_output);
 
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_out.wait_front(onetile);
+        dfb_out.wait_front(onetile);
         uint32_t n = i / Wf;
         uint32_t w = (i % Wf) * FACE_WIDTH;
         uint32_t nt = n / TILE_HEIGHT;
@@ -44,13 +44,13 @@ void kernel_main() {
         get_noc_offset(n, w, element_size, noc_offset);
 
         noc.async_write(
-            cb_out,
+            dfb_out,
             output_addrg,
             NOC_MINIMUM_READ_SIZE,
             {.offset_bytes = 0},
             {.page_id = noc_id, .offset_bytes = noc_offset});
         noc.async_write_barrier();
 
-        cb_out.pop_front(onetile);
+        dfb_out.pop_front(onetile);
     }
 }

@@ -17,8 +17,11 @@ namespace ttnn::operations::experimental::deepseek_prefill::zero_padded_kv_cache
 // pad_align-1 tokens (1-4 tiles) and may straddle a chip boundary -- each chip zeroes its own share,
 // derived from valid_global + chunk_size_global + the device's coordinate along cluster_axis.
 //
-// The boundary (partial) tile is read, multiplied by an in-kernel row-mask and written back; the
-// fully-pad tiles are written from the L1 zeros buffer.
+// Cache must be DRAM-backed. TILE layout uses the existing mask/compute path: the boundary
+// (partial) tile is read, multiplied by an in-kernel row-mask and written back; fully-pad tiles are
+// written from an L1 zeros buffer. ROW_MAJOR layout supports BF16 and FP8_E4M3 and uses a
+// dataflow-only path that writes zeroed token rows directly, so its payload never enters the
+// unpack/compute engine.
 //
 // Cache slot is addressed users-outer, layers-inner: batch_idx = slot_idx * num_layers + layer_idx.
 // valid_global and slot_idx are per-call scalars (patched on cache hits, out of the program hash).

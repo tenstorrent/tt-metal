@@ -96,7 +96,7 @@ void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto shape = input_tensor.padded_shape();
@@ -126,13 +126,13 @@ TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
         }
         auto mem_config = tt::tt_metal::MemoryConfig(
             args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), shard_spec);
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));

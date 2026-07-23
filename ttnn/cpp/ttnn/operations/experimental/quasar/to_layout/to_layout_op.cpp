@@ -33,8 +33,8 @@ bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
         page_config = tt::tt_metal::PageConfig(layout, tensor.tensor_spec().tile());
     }
 
-    // Padded shape only (dtype-independent). Use TensorLayout, not a TensorSpec: TensorSpec rejects
-    // FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input.
+    // Padded shape only (dtype-independent). Use TensorLayout, not a tt::tt_metal::TensorSpec: tt::tt_metal::TensorSpec
+    // rejects FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input.
     const auto padded_shape = tt::tt_metal::TensorLayout(tensor.dtype(), page_config, tensor.memory_config())
                                   .compute_padded_shape(tensor.padded_shape());
     return tensor.padded_shape() != padded_shape;
@@ -95,9 +95,9 @@ Tensor to_layout_impl(
     if (tensor_arg.layout() == Layout::TILE) {
         page_config = tt::tt_metal::PageConfig(Layout::TILE, tensor_arg.tensor_spec().tile());
     }
-    // Padded shape only (dtype-independent). Use TensorLayout, not a TensorSpec: TensorSpec rejects
-    // FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input; the real output dtype
-    // flows through `dtype` into tilize()/untilize() below.
+    // Padded shape only (dtype-independent). Use TensorLayout, not a tt::tt_metal::TensorSpec: tt::tt_metal::TensorSpec
+    // rejects FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input; the real output dtype flows
+    // through `dtype` into tilize()/untilize() below.
     auto padded_output_shape = tt::tt_metal::TensorLayout(tensor_arg.dtype(), page_config, output_memory_config)
                                    .compute_padded_shape(tensor_arg.logical_shape());
     auto original_rank = tensor_arg.logical_shape().rank();
@@ -112,13 +112,14 @@ Tensor to_layout_impl(
                 "produces a shard height of 1. Move to interleaved first, then tilize.",
                 tensor.padded_shape().size());
             const bool is_scalar = tensor.padded_shape().size() == 0;
-            SmallVector<uint32_t> new_padded_shape =
-                is_scalar ? SmallVector<uint32_t>{1, 1} : SmallVector<uint32_t>{1, tensor.padded_shape()[-1]};
+            ttsl::SmallVector<uint32_t> new_padded_shape =
+                is_scalar ? ttsl::SmallVector<uint32_t>{1, 1}
+                          : ttsl::SmallVector<uint32_t>{1, tensor.padded_shape()[-1]};
             tensor = ttnn::experimental::view(tensor, tensor.logical_shape(), Shape(new_padded_shape));
         }
     }
 
-    if (tt::tt_metal::is_device_tensor(tensor_arg)) {
+    if (ttnn::is_device_tensor(tensor_arg)) {
         bool use_multicore_untilize = true;
         bool use_multicore_tilize = true;
 
@@ -169,7 +170,7 @@ Tensor to_layout_impl(
                 output_memory_config =
                     memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
             }
-            Shape output_tensor_end(SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
+            Shape output_tensor_end(ttsl::SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
             int logical_rank = tensor.logical_shape().rank();
             for (int index = -1; index >= -logical_rank; --index) {
                 output_tensor_end[index] = tensor.logical_shape()[index] - 1;
@@ -181,7 +182,7 @@ Tensor to_layout_impl(
             if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
-                SmallVector<std::array<uint32_t, 2>> padding = {
+                ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
                     {0, 0},
                     {0, 0},
                     {0, padded_output_shape[2] - output_shape[2]},
@@ -247,7 +248,7 @@ Tensor to_layout_impl(
             sub_core_grids);
     }
     if (layout == ttnn::TILE_LAYOUT) {
-        SmallVector<uint32_t> padded_input_start;
+        ttsl::SmallVector<uint32_t> padded_input_start;
         for (int index = 0; index < padded_output_shape.rank(); ++index) {
             padded_input_start.push_back(0);
         }

@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -25,20 +25,20 @@ void kernel_main() {
     const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr);
 
     Noc noc;
-    CircularBuffer cb_input_grad(cb_id_input_grad);
+    DataflowBuffer dfb_input_grad(cb_id_input_grad);
     const auto input_grad_tile_bytes = get_tile_size(cb_id_input_grad);
 
     auto input_grad_tile_idx = tile_offset;
     for (uint32_t idx = 0; idx < num_input_tiles_per_core; ++idx) {
-        cb_input_grad.wait_front(1);
+        dfb_input_grad.wait_front(1);
         noc.async_write(
-            cb_input_grad,
+            dfb_input_grad,
             input_grad_addrg,
             input_grad_tile_bytes,
             {.offset_bytes = 0},
             {.page_id = input_grad_tile_idx});
         noc.async_write_barrier();
-        cb_input_grad.pop_front(1);
+        dfb_input_grad.pop_front(1);
         input_grad_tile_idx++;
     }
 

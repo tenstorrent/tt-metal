@@ -106,6 +106,19 @@ def interleaved_to_halfsplit_perm(rope_dim: int = 64) -> torch.Tensor:
     return torch.cat([torch.arange(0, rope_dim, 2), torch.arange(1, rope_dim, 2)])
 
 
+def interleaved_perm_matrix(rope_dim: int = 64) -> torch.Tensor:
+    """``[rope_dim, rope_dim]`` permutation matrix that reorders a half-split rope layout into the
+    interleaved one (``out = in @ P``). Purpose: run a half-split (DeepSeek) q/k through the
+    interleaved-only ``rotary_embedding_indexed`` op — applied to BOTH q and k the permutation cancels
+    in ``q·k`` (score/top-k unchanged), while letting the interleaved op pair the right dims with each
+    frequency. Built from ``interleaved_to_halfsplit_perm`` (its inverse), the canonical convention:
+    ``interleaved = halfsplit[argsort(p)]``, so ``P[argsort(p)[j], j] = 1``."""
+    src = torch.argsort(interleaved_to_halfsplit_perm(rope_dim))  # out[j] = in[src[j]]
+    perm = torch.zeros(rope_dim, rope_dim)
+    perm[src, torch.arange(rope_dim)] = 1.0
+    return perm
+
+
 class RotarySetup:
     """Rotary positional embedding setup for MLA prefill with SP sharding and balanced reordering."""
 

@@ -11,6 +11,8 @@
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"  // generate_bcast_col_scalar
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
+#include "dataflow_common.hpp"         // fill_neginf_tile (persistent causal -inf mask tile)
+#include "block_cyclic_remap.hpp"      // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
 
 constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; generate_bcast_col_scalar uses >>16
 
@@ -36,7 +38,16 @@ void kernel_main() {
     constexpr uint32_t cb_kack = get_compile_time_arg_val(15);
     constexpr uint32_t k_tile_bytes = get_compile_time_arg_val(16);
     constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(17);
-    constexpr auto out_args = TensorAccessorArgs<18, 0>();
+    constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(18) != 0;
+    constexpr uint32_t cb_neginf = get_compile_time_arg_val(19);
+
+    // Block-cyclic ("slab") cache remap in BLOCK units; same constants as the reader (see its comment).
+    constexpr bool block_cyclic = get_compile_time_arg_val(20) != 0;
+    constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(21);
+    constexpr uint32_t bc_sp = get_compile_time_arg_val(22);
+    constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(23);
+    constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(24);
+    constexpr auto out_args = TensorAccessorArgs<25, 0>();
     // K/V use RuntimeTensorShape so T can vary without recompilation.
     constexpr auto k_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
@@ -70,6 +81,14 @@ void kernel_main() {
     // Col-identity for final row-sum reduction.
     generate_bcast_col_scalar(experimental::CB(cb_col_identity), one_bf16_packed);
 
+    // Persistent all -inf tile for the causal mask
+    if constexpr (CAUSAL_MASK_ENABLED) {
+        constexpr uint32_t mask_tile_bytes = get_tile_size(cb_neginf);
+        experimental::CB(cb_neginf).reserve_back(1);
+        fill_neginf_tile<mask_tile_bytes>(cb_neginf, 0);
+        experimental::CB(cb_neginf).push_back(1);
+    }
+
     uint32_t tok = work_start;
     uint32_t kv_group = 0;
     if constexpr (n_kv > 1) {
@@ -89,8 +108,13 @@ void kernel_main() {
                 last = rq[1] != 0;
             }
             kreq_cb.pop_front(1);
-            uint32_t k_tile0 = k_batch_tile_offset + block_id * k_tiles_per_block;
-            uint32_t v_tile0 = v_batch_tile_offset + block_id * v_tiles_per_block;
+            // Block-cyclic cache: remap the logical block id (from the reader) to its physical block (invP).
+            // Identity for a natural-order cache (block_cyclic false).
+            const uint32_t phys_block = tt::block_cyclic::
+                logical_to_physical_page<block_cyclic, bc_chunk_local, bc_sp, bc_shard_stride_gap, bc_slab_stride_gap>(
+                    block_id);
+            uint32_t k_tile0 = k_batch_tile_offset + phys_block * k_tiles_per_block;
+            uint32_t v_tile0 = v_batch_tile_offset + phys_block * v_tiles_per_block;
             if constexpr (n_kv > 1) {
                 k_tile0 += kv_group * k_group_tile_stride;
                 v_tile0 += kv_group * v_group_tile_stride;

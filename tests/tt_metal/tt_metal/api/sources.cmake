@@ -20,12 +20,19 @@ set(UNIT_TESTS_API_SOURCES
     core_coord/test_CoreRangeSet_intersects.cpp
     core_coord/test_CoreRangeSet_merge.cpp
     dataflow_buffer/test_alias_dataflow_buffer.cpp
-    dataflow_buffer/test_dataflow_buffer.cpp
+    dataflow_buffer/test_dataflow_buffer_apis.cpp
+    dataflow_buffer/test_dataflow_buffer_base.cpp
+    dataflow_buffer/test_dataflow_buffer_multinode.cpp
+    dataflow_buffer/test_dataflow_buffer_intra.cpp
+    dataflow_buffer/test_dataflow_buffer_edge_cases.cpp
+    dataflow_buffer/test_dataflow_buffer_overrides.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
+    metal2_host_api/test_mesh_workload_factories_hw.cpp
     metal2_host_api/test_program_spec.cpp
     metal2_host_api/test_program_spec_hw.cpp
+    metal2_host_api/test_scratchpad_hw.cpp
     metal2_host_api/test_program_run_args.cpp
     metal2_host_api/test_table.cpp
     test_kernel_thread_sync.cpp
@@ -68,20 +75,17 @@ set(UNIT_TESTS_API_SOURCES
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp
     test_zero_memory_api.cpp
-    test_alignment_writes.cpp
-    test_cb_leak.cpp
-    test_cb_pages.cpp
-    test_host_alignment.cpp
-    test_metadata_size.cpp
-    test_noc_without_barrier.cpp
-    test_padded_write.cpp
-    test_semaphore_write.cpp
-    test_tensor_bad_access.cpp
-    test_valid_mem_wrong_alloc.cpp
-    test_write_beyond_res_pages.cpp
-    test_write_outside_tensor.cpp
     disaggregation/test_kv_chunk_address_table.cpp
 )
+
+# tt-emule ASAN sanitizer tests. Their source list is emule-team-owned (see
+# CODEOWNERS for tests/tt_metal/tt_metal/api/emule/) and lives in that dir's
+# sources.cmake, so adding a new emule api test needs only an emule review — not an
+# infra review of this shared file. They build/pass only under the emule backend, so
+# they're gated here and stay out of the non-emule unit_tests_api binary.
+if(TT_METAL_USE_EMULE)
+    include(${CMAKE_CURRENT_LIST_DIR}/emule/sources.cmake)
+endif()
 
 # Runtime tensor tests build into their own executable (unit_tests_tensor),
 # mirroring unit_tests_ttnn_tensor, so they stay out of the tt-metalium smoke binary.
@@ -90,6 +94,9 @@ set(UNIT_TESTS_API_TENSOR_SOURCES
     tensor/test_tensor_sharding.cpp
     tensor/test_host_tensor.cpp
     tensor/test_host_tensor_to_layout.cpp
+    tensor/test_host_tensor_to_dtype.cpp
+    tensor/test_host_tensor_spec_preservation.cpp
+    tensor/test_host_tensor_to_tensor_spec.cpp
     tensor/test_mesh_tensor.cpp
     tensor/test_tensor_types.cpp
     tensor/test_tensor_layout.cpp
