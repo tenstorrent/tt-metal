@@ -35,7 +35,7 @@ MeshTensor mesh_tensor_from_buffer_with_topology(
 }
 
 MeshTensor allocate_mesh_tensor_on_device_with_topology(
-    distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology) {
+    distributed::MeshDevice& mesh_device, TensorSpec spec, TensorTopology topology) {
     // Catch-all guard: FP8_E4M3 is only supported on Blackhole. Op-level validators may also
     // check this, but we enforce it here at the device-binding boundary so any path that
     // produces an FP8 tensor on unsupported hardware fails loudly rather than silently
@@ -47,7 +47,7 @@ MeshTensor allocate_mesh_tensor_on_device_with_topology(
             mesh_device.arch());
     }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
-    return mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), spec, topology);
+    return mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), std::move(spec), std::move(topology));
 }
 
 // ======================================================================================

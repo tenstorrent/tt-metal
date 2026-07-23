@@ -170,7 +170,7 @@ public:
 
 private:
     friend MeshTensor allocate_mesh_tensor_on_device_with_topology(
-        distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology);
+        distributed::MeshDevice& mesh_device, TensorSpec spec, TensorTopology topology);
     friend MeshTensor mesh_tensor_from_buffer_with_topology(
         distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology);
 
