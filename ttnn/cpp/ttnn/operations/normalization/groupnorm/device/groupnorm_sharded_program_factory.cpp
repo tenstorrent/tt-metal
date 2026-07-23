@@ -780,13 +780,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_29) : static_cast<uint32_t>(tt::CBIndex::c_0);
     const uint32_t cb_in_welford_arg =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_31) : static_cast<uint32_t>(tt::CBIndex::c_1);
-    // True when any reconfig-relevant operand is fp32, so the compute kernel must run its per-group
-    // reconfig_data_format calls. When all are bf16 they're no-ops and the kernel skips them.
-    const bool enable_fp32_reconfig =
-        !(in_data_format == tt::DataFormat::Float16_b && out_data_format == tt::DataFormat::Float16_b &&
-          cb_data_format == tt::DataFormat::Float16_b && gamma_beta_cb_data_format == tt::DataFormat::Float16_b &&
-          in_mask_cb_data_format == tt::DataFormat::Float16_b &&
-          in_negative_mask_cb_data_format == tt::DataFormat::Float16_b);
+    const bool enable_fp32_reconfig = groupnorm_needs_fp32_reconfig(
+        {in_data_format,
+         out_data_format,
+         cb_data_format,
+         gamma_beta_cb_data_format,
+         in_mask_cb_data_format,
+         in_negative_mask_cb_data_format});
     // enable_fp32_reconfig is read by both compute kernels; the alias args only by the welford one.
     KernelDescriptor::NamedCompileTimeArgs compute_named_compile_time_args = {
         {"enable_fp32_reconfig", static_cast<uint32_t>(enable_fp32_reconfig)},

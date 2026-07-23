@@ -15,6 +15,11 @@ namespace {
 using ttnn::operations::normalization::compute_num_virtual_cols;
 using ttnn::operations::normalization::find_expected_dram_grid;
 
+// Stats/intermediate CB format: fp32 input uses fp32 stats, bf16 input uses bf16.
+ttnn::DataType group_norm_im_data_format(ttnn::DataType input_dtype) {
+    return input_dtype == ttnn::DataType::FLOAT32 ? ttnn::DataType::FLOAT32 : ttnn::DataType::BFLOAT16;
+}
+
 // Validates that the requested core grid satisfies the DRAM group-norm constraints.
 // If the requested grid is invalid, fatals with an error suggesting the largest valid sub-grid.
 void validate_dram_grid(
@@ -260,8 +265,6 @@ Tensor group_norm(
     const auto fp32_acc = use_welford || (input_tensor.dtype() == DataType::FLOAT32);
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
-    // When DEST is fp32, keep the stats/intermediate CBs fp32 instead of round-tripping through bf16.
-    const bool fp32_dest_acc_en = get_fp32_dest_acc_en(kernel_config_val);
 
     // Reciprocals must be sharded to L1 via the legacy ShardSpec representation:
     // the program factory reads shard_spec().value().numel() as the compile-time
@@ -381,11 +384,7 @@ Tensor group_norm(
     if (input_tensor.is_sharded()) {
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-            // fp32 stats when the fp32 intake path is active: legacy fp32 always, welford fp32-input
-            // with fp32 DEST. bf16 input keeps bf16 stats (bf16-input + fp32-stats needs a retune).
-            .im_data_format = (input_tensor.dtype() == DataType::FLOAT32 && (!use_welford || fp32_dest_acc_en))
-                                  ? DataType::FLOAT32
-                                  : DataType::BFLOAT16,
+            .im_data_format = group_norm_im_data_format(input_tensor.dtype()),
             .out_data_format = out_dtype,
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout())};
@@ -408,11 +407,7 @@ Tensor group_norm(
     // Otherwise honor the explicit num_out_blocks (defaulting to 1 = no chunking).
     const ttnn::prim::GroupNormMultiCoreProgramConfig program_config = {
         .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-        // fp32 stats when the fp32 intake path is active (mirrors the sharded branch): legacy fp32
-        // always, welford fp32-input with fp32 DEST. bf16 input keeps bf16 stats (fp32-stats needs a retune).
-        .im_data_format = (input_tensor.dtype() == DataType::FLOAT32 && (!use_welford || fp32_dest_acc_en))
-                              ? DataType::FLOAT32
-                              : DataType::BFLOAT16,
+        .im_data_format = group_norm_im_data_format(input_tensor.dtype()),
         .out_data_format = out_dtype,
         .inplace = inplace.value_or(false),
         .output_layout = output_layout.value_or(input_tensor.layout()),

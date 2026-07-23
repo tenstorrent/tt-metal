@@ -263,13 +263,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
     const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
 
-    // True when any reconfig-relevant operand is fp32, so the compute kernel must run its per-tile
-    // reconfig_data_format calls. When all are bf16 they're no-ops and the kernel skips them.
     // cb_reciprocals is excluded: it's fp32 here but the reconfigs never touch it.
-    const bool enable_fp32_reconfig =
-        !(in_data_format == tt::DataFormat::Float16_b && out_data_format == tt::DataFormat::Float16_b &&
-          cb_data_format == tt::DataFormat::Float16_b && gamma_beta_cb_data_format == tt::DataFormat::Float16_b &&
-          in_mask_cb_data_format == tt::DataFormat::Float16_b);
+    const bool enable_fp32_reconfig = groupnorm_needs_fp32_reconfig(
+        {in_data_format, out_data_format, cb_data_format, gamma_beta_cb_data_format, in_mask_cb_data_format});
 
     const uint32_t cb_in0_welford_index =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);

@@ -9,6 +9,12 @@
 
 namespace ttnn::prim {
 
+bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats) {
+    return std::any_of(reconfig_formats.begin(), reconfig_formats.end(), [](tt::DataFormat format) {
+        return format != tt::DataFormat::Float16_b;
+    });
+}
+
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     if (n <= max_subblock_w) {
         return n;
