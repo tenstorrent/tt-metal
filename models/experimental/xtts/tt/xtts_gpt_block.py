@@ -101,7 +101,7 @@ class TtXttsGptBlock(LightweightModule):
         return q, k, v
 
     def _attn_out(self, attn):  # [b, heads, s, head_dim] -> [b, s, hidden]
-        out = ttnn.transformer.concatenate_heads(attn)  # fused permute + reshape
+        out = ttnn.transformer.concatenate_heads(attn, memory_config=L1)  # fused permute + reshape
         ttnn.deallocate(attn)
         proj = ttnn.linear(out, self.attn_c_proj_weight, bias=self.attn_c_proj_bias, memory_config=L1)
         ttnn.deallocate(out)
@@ -174,7 +174,7 @@ class TtXttsGptBlock(LightweightModule):
         # mask + softmax + ·V) instead of permute+matmul+mul+add+softmax+matmul. ``add_mask``
         # [1, 1, 1, MAX] is 0 for cached positions, -inf ahead (broadcasts over heads and the 1 query).
         attn = ttnn.transformer.scaled_dot_product_attention(
-            q, k_cache, v_cache, attn_mask=add_mask, is_causal=False, scale=1.0 / math.sqrt(HEAD_DIM)
+            q, k_cache, v_cache, attn_mask=add_mask, is_causal=False, scale=1.0 / math.sqrt(HEAD_DIM), memory_config=L1
         )  # [1, heads, 1, head_dim]
         ttnn.deallocate(q)
         ao = self._attn_out(attn)
