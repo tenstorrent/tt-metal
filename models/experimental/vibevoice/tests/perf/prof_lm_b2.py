@@ -13,7 +13,7 @@ import torch
 import ttnn
 import pytest
 
-from models.experimental.vibevoice.tests.pcc.lm_pcc_common import build_tt_lm
+from models.experimental.vibevoice.tests.pcc.pcc_helpers import build_tt_lm
 
 
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
