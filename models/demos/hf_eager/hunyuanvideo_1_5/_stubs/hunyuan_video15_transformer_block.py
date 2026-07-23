@@ -362,7 +362,8 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         if cos_b.dtype != x4.dtype:  # bf16 fast path: match the fp32 freqs to activations
             cos_b = ttnn.typecast(cos_b, x4.dtype)
             sin_b = ttnn.typecast(sin_b, x4.dtype)
-        return ttnn.add(ttnn.multiply(x4, cos_b), ttnn.multiply(rot4, sin_b))
+        # x*cos + rot*sin fused: mul + addcmul (2 ops) instead of mul + mul + add (3).
+        return ttnn.addcmul(ttnn.multiply(x4, cos_b), rot4, sin_b)
 
     def _joint_attention(nh, ne, freqs_cis=None, attn_bias=None, logical_n=None):
         """Joint (dual-stream) attention via the fused flash-attention-style
