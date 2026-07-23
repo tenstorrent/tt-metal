@@ -8,9 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -18,7 +16,6 @@
 #include <span>
 #include <string>
 #include <thread>
-#include <unistd.h>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -26,27 +23,19 @@
 #if defined(__linux__)
 #include <sys/prctl.h>
 #endif
-#if defined(__x86_64__) || defined(__i386__)
-#include <immintrin.h>  // _mm_clflush / _mm_lfence for the hugepage-fallback ACK poll
-#endif
 
 #include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt_metal.hpp>
-#include <umd/device/chip_helpers/tlb_manager.hpp>
-#include <umd/device/driver_atomics.hpp>
-#include <umd/device/pcie/tlb_window.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
@@ -65,57 +54,11 @@
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/dispatch/data_collector.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
-#include "tt_metal/impl/realtime_profiler/realtime_profiler_host_clock.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal::distributed {
 
 namespace {
-
-// Minimum wall time between full init calibrations (frequency fit + first offset anchor) and reuse of a cached
-// calibration across a MeshDevice reopen, per physical chip.
-constexpr auto kRtProfilerMinSyncInterval = std::chrono::seconds(60);
-
-// Cadence of the free-running host<->device offset re-anchor servo. The init fit is taken at idle; under sustained
-// load the device clock shifts ~9ppm (thermal/DVFS), so the fixed slope goes stale and the mapped host time drifts
-// by staleness*(time since last re-anchor). Re-anchoring this often bounds that to ~2µs, vs the ~100µs a 60s
-// interval accrued. Cheap: the one-shot device sync keeps each re-anchor drop-free even under peak record load.
-constexpr auto kServoInterval = std::chrono::milliseconds(50);
-// Hung-device backstop for the round-trip probe's busy-poll (measure_sync_rtt_ticks). A wall clock (relative to
-// host_before) so it does not vary with a host's PCIe read latency, but the probe skips the clock read for the first
-// kRttProbeHealthyPolls reads — far above any healthy handshake (a few to tens of reads) — so a real measurement never
-// reads the clock inside the round trip it is timing; only a stalled device (which yields no measurement) reaches the
-// checked region.
-constexpr double kRttProbeTimeoutNs = 300'000.0;
-constexpr uint32_t kRttProbeHealthyPolls = 128;
-
-// A re-anchor is only worth taking while its placement error (half the handshake RTT) is smaller than the drift a
-// re-anchor corrects; past this bound, carrying the previous anchor forward is more accurate than re-anchoring off a
-// degraded handshake. Well above the ~1-2µs healthy half-RTT, so only clearly-bad handshakes (PCIe congestion) reject.
-constexpr int64_t kMaxReanchorHalfRttNs = 25'000;
-// ...but never hold a stale anchor longer than this: past it a loose anchor beats unbounded drift, and it keeps the
-// reported sync_error honest (a rejected re-anchor leaves sync_error reflecting the last accepted handshake).
-constexpr auto kMaxReanchorStaleness = std::chrono::seconds(2);
-
-// Host sync-ACK buffer layout, in 32-bit words: [token, device_time_lo, device_time_hi]. The device NOC-writes
-// device_time first, then the token, so once the host observes the token the device_time already landed (see
-// realtime_profiler_service_sync). device_time is at word 1 (host offset 4) because its L1 source sits at 4 mod 16 and
-// NOC PCIe writes require src and dst to share the low 4 bits (NOC_PCIE_WRITE_ALIGNMENT_BYTES=16); the token source is
-// 16-aligned, so the token is word 0. All three words share one 64-byte line, so a single hugepage clflush covers them.
-constexpr uint32_t kSyncAckWords = 3;
-constexpr uint32_t kSyncAckTokenWord = 0;
-
-// Per-physical-chip calibration, cached across MeshDevice open/close so a rapid reopen can reuse the recent fit instead
-// of re-running the expensive host-device sync. The device WALL_CLOCK is free-running (not reset on close), so the
-// fitted frequency and device_cycle_offset stay valid; updated_at gates reuse to a recent-enough sync.
-struct CachedCalibration {
-    std::chrono::steady_clock::time_point updated_at;
-    double sync_frequency = 0.0;
-    int64_t device_cycle_offset = 0;
-    int64_t sync_rtt_ticks = 0;
-};
-std::mutex g_rt_profiler_init_sync_mu;
-std::unordered_map<uint32_t, CachedCalibration> g_rt_profiler_calibration_by_chip;
 
 // Real-time profiler runtime constants. On-device L1 layout sizes are reused from
 // realtime_profiler_ring_buffer.hpp so host and device share a single source of truth.
@@ -359,12 +302,8 @@ size_t RealtimeProfilerManager::publish_pages(
     auto is_record = [](const uint32_t* page) { return page[2] != 0; };
     records.clear();
     const uint32_t chip_id = dev_state.chip_id;
-    const double sync_frequency = dev_state.sync_frequency;
-    const int64_t half_rtt_ns = std::llround(static_cast<double>(dev_state.sync_rtt_ticks) * 0.5);
-    // Sync uncertainty is the anchor-placement bound (half the handshake RTT); drift over a re-anchor interval stays
-    // well below it.
-    const uint64_t sync_error_ns = static_cast<uint64_t>(half_rtt_ns);
-    const tt::tt_metal::experimental::ProgramRealtimeClockSync clock_sync{dev_state.device_cycle_offset, sync_error_ns};
+    const double sync_frequency = dev_state.clock_sync.frequency();
+    const tt::tt_metal::experimental::ProgramRealtimeClockSync clock_sync = dev_state.clock_sync.mapping();
     const DataCollector* const data_collector = data_collector_;
     for (uint32_t page = 0; page < num_pages; ++page) {
         const uint32_t* rp = page_buf + page * kPageWords;
@@ -389,198 +328,9 @@ size_t RealtimeProfilerManager::publish_pages(
     return records.size();
 }
 
-void RealtimeProfilerManager::write_sync_timestamp(RealtimeProfilerManager::DeviceState& dev_state, uint32_t value) {
-    if (dev_state.sync_tlb != nullptr) {
-        dev_state.sync_tlb->write32(dev_state.sync_host_ts_addr, value);
-        tt_driver_atomics::sfence();
-    } else {
-        // Allocation-free single-word MMIO straight to the profiler core's L1: no std::vector and no general
-        // WriteToDeviceL1 path. write_core_immediate bypasses write-combining and the sfence flushes it, so the token
-        // lands on the device promptly (mirrors the Blackhole fast path minus the cached-TLB window WH can't hold).
-        const CoreCoord vcore =
-            dev_state.device->virtual_core_from_logical_core(dev_state.realtime_profiler_core, CoreType::WORKER);
-        MetalContext::instance(context_id_)
-            .get_cluster()
-            .write_core_immediate(
-                &value, sizeof(value), tt_cxy_pair(dev_state.device->id(), vcore), dev_state.sync_host_ts_addr);
-        tt_driver_atomics::sfence();
-    }
-}
-
-void RealtimeProfilerManager::configure_sync_write_path(DeviceState& dev_state, IDevice* device) {
-    // Blackhole maps the full device address space through static TLBs, so the profiler core's window is resolved
-    // once and stays valid for the manager's lifetime -- hold it to write the sync timestamp with one MMIO store.
-    // Other archs use dynamic TLBs (reconfigured per access), so sync_tlb stays null and write_sync_timestamp uses a
-    // direct write_core_immediate. get_tlb_window only looks up the pre-mapped window (throws if absent), so guard it.
-    if (MetalContext::instance(context_id_).hal().get_arch() != tt::ARCH::BLACKHOLE) {
-        return;
-    }
-    try {
-        const CoreCoord rt_virtual =
-            device->virtual_core_from_logical_core(dev_state.realtime_profiler_core, CoreType::WORKER);
-        auto* tlb_manager =
-            MetalContext::instance(context_id_).get_cluster().get_driver()->get_chip(device->id())->get_tlb_manager();
-        if (tlb_manager != nullptr) {
-            dev_state.sync_tlb = tlb_manager->get_tlb_window(tt_xy_pair(rt_virtual.x, rt_virtual.y));
-        }
-    } catch (const std::exception& e) {
-        log_debug(
-            tt::LogMetal,
-            "[Real-time profiler] Device {}: no TLB window for the profiler core ({}); sync uses write_core_immediate",
-            device->id(),
-            e.what());
-    }
-}
-
-void RealtimeProfilerManager::configure_sync_ack_word(
-    DeviceState& dev_state,
-    IDevice* device,
-    const std::shared_ptr<MeshDevice>& mesh_device,
-    uint32_t enc_addr,
-    uint32_t lo_addr,
-    uint32_t hi_addr) {
-    // The device NOC-writes the handshake token into this host word (device->host, bypassing the record FIFO) so the
-    // host times the round trip by polling its own memory. Default is a coherent host-pinned buffer; the no-IOMMU
-    // fallback uses a CQ-sysmem word (like the D2H socket's own state) reachable over the profiler's PCIe-NOC path,
-    // whose device PCIe writes may be non-snooped (read_sync_ack evicts the line). Setup failure leaves ack_host_ptr
-    // null (no fast probe) rather than aborting the device.
-    const uint32_t device_id = device->id();
-    const auto write_field = [&](uint32_t addr, uint32_t val) {
-        std::vector<uint32_t> data = {val};
-        tt::tt_metal::detail::WriteToDeviceL1(device, dev_state.realtime_profiler_core, addr, data, CoreType::WORKER);
-    };
-    try {
-        if (d2h_hugepage_fallback_) {
-            auto [ack_host, ack_dev_addr] = device->sysmem_manager().allocate_region(kSyncAckWords * sizeof(uint32_t));
-            if (ack_host == nullptr) {
-                return;
-            }
-            dev_state.ack_host_ptr = static_cast<volatile uint32_t*>(ack_host);
-            for (uint32_t w = 0; w < kSyncAckWords; ++w) {
-                const_cast<uint32_t*>(dev_state.ack_host_ptr)[w] = 0;
-            }
-
-            const auto& cluster = MetalContext::instance(context_id_).get_cluster();
-            const auto& hal = MetalContext::instance(context_id_).hal();
-            const auto& soc = cluster.get_soc_desc(cluster.get_associated_mmio_device(device_id));
-            const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
-            TT_FATAL(!pcie_cores.empty(), "No PCIe core found for RT-profiler sync ACK");
-            write_field(enc_addr, hal.noc_xy_pcie64_encoding(pcie_cores.front().x, pcie_cores.front().y));
-            write_field(lo_addr, ack_dev_addr);
-            write_field(hi_addr, 0);
-        } else {
-            const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
-            std::shared_ptr<uint32_t[]> backing(
-                static_cast<uint32_t*>(std::aligned_alloc(page, page)), [](uint32_t* p) { std::free(p); });
-            if (!backing) {
-                return;
-            }
-            for (uint32_t w = 0; w < kSyncAckWords; ++w) {
-                backing[w] = 0;
-            }
-            tt::tt_metal::HostBuffer view(
-                ttsl::Span<uint32_t>(backing.get(), kSyncAckWords), tt::tt_metal::MemoryPin(backing));
-            MeshCoordinateRangeSet range;
-            range.merge(MeshCoordinateRange(dev_state.mesh_coord));
-            auto pinned = tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, range, view, true);
-            if (!pinned) {
-                return;
-            }
-            const auto noc = pinned->get_noc_addr(device_id);
-            if (!noc.has_value()) {
-                return;
-            }
-            dev_state.ack_host_backing = backing;
-            dev_state.ack_pinned = pinned;
-            dev_state.ack_host_ptr = backing.get();
-            write_field(enc_addr, noc->pcie_xy_enc);
-            write_field(lo_addr, static_cast<uint32_t>(noc->addr & 0xFFFFFFFFull));
-            write_field(hi_addr, static_cast<uint32_t>(noc->addr >> 32));
-        }
-    } catch (const std::exception& e) {
-        log_debug(
-            tt::LogMetal,
-            "[Real-time profiler] Device {}: host-ACK setup failed ({}); sync round-trip bound disabled",
-            device_id,
-            e.what());
-    }
-}
-
-uint32_t RealtimeProfilerManager::read_sync_ack(const DeviceState& dev_state) const {
-#if defined(__x86_64__) || defined(__i386__)
-    // Hugepage fallback: device PCIe writes to the CQ-sysmem slot may be non-snooped, so evict the cache line to read
-    // from memory instead of a stale cached copy. All ACK words share one line, so this covers device_time too. The
-    // coherent pinned default skips this.
-    if (d2h_hugepage_fallback_) {
-        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(dev_state.ack_host_ptr)));
-        _mm_lfence();
-    }
-#endif
-    return dev_state.ack_host_ptr[kSyncAckTokenWord];
-}
-
-uint64_t RealtimeProfilerManager::read_sync_device_time(const DeviceState& dev_state) const {
-#if defined(__x86_64__) || defined(__i386__)
-    if (d2h_hugepage_fallback_) {
-        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(dev_state.ack_host_ptr)));
-        _mm_lfence();
-    }
-#endif
-    // The device writes device_time before the token, so once read_sync_ack has matched the token these two words are
-    // this handshake's device WALL_CLOCK. device_time is at words 1,2 (word 0 is the token).
-    return (static_cast<uint64_t>(dev_state.ack_host_ptr[2]) << 32) | static_cast<uint64_t>(dev_state.ack_host_ptr[1]);
-}
-
 void RealtimeProfilerManager::service_offset_servo(std::chrono::steady_clock::time_point now) {
     for (auto& dev_state : devices_) {
-        // No host ACK word means no sync probe, so there is nothing to service.
-        if (dev_state.ack_host_ptr == nullptr) {
-            continue;
-        }
-        const bool interval_elapsed =
-            !dev_state.last_reanchor_at.has_value() || now - *dev_state.last_reanchor_at >= kServoInterval;
-        if (!interval_elapsed) {
-            continue;
-        }
-        try {
-            const int64_t host_before = realtime_profiler_host_timestamp();
-            if (++dev_state.sync_seq == 0) {
-                dev_state.sync_seq = 1;
-            }
-            const uint32_t host_time_id = dev_state.sync_seq;
-            write_sync_timestamp(dev_state, host_time_id);
-            const int64_t rtt_ticks = measure_sync_rtt_ticks(dev_state, host_before, host_time_id);
-            if (rtt_ticks < 0) {
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {} sync round-trip probe timed out; keeping previous mapping",
-                    dev_state.chip_id);
-                continue;
-            }
-            // A re-anchor off a degraded handshake would be less accurate than carrying the previous anchor forward, so
-            // keep the previous mapping (the servo retries next tick) — unless it has already gone stale, where a loose
-            // anchor beats unbounded drift.
-            const bool prev_anchor_fresh =
-                dev_state.last_reanchor_at.has_value() && now - *dev_state.last_reanchor_at < kMaxReanchorStaleness;
-            if (rtt_ticks / 2 > kMaxReanchorHalfRttNs && prev_anchor_fresh) {
-                continue;
-            }
-            // Token observed; the device pushed device_time into the ACK buffer just before the token, so read it from
-            // host memory and re-anchor at the round-trip midpoint (minimax placement, error <= RTT/2 without assuming
-            // symmetry).
-            const uint64_t device_time = read_sync_device_time(dev_state);
-            dev_state.sync_rtt_ticks = rtt_ticks;
-            reanchor_device_cycle_offset(dev_state, host_before + rtt_ticks / 2, device_time);
-            cache_calibration(dev_state);
-            dev_state.last_reanchor_at = now;
-        } catch (const std::exception& e) {
-            log_warning(
-                tt::LogMetal,
-                "[Real-time profiler] Failed to start sync for device {}: {}",
-                dev_state.chip_id,
-                e.what());
-            continue;
-        }
+        dev_state.clock_sync.service_servo(now);
     }
 }
 
@@ -723,10 +473,6 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             continue;
         }
 
-        dev_state.sync_host_ts_addr = realtime_profiler_base_addr + sync_host_timestamp_offset;
-
-        configure_sync_write_path(dev_state, device);
-
         // Write real-time profiler core info into the dispatch carve-out for termination signaling.
         if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, 0, 0)) {
             const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, 0, 0);
@@ -817,9 +563,14 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                 device, realtime_profiler_core, realtime_profiler_base_addr, zero_msg, CoreType::WORKER);
         }
 
-        configure_sync_ack_word(
-            dev_state,
+        dev_state.clock_sync.configure(
+            context_id_,
             device,
+            dev_state.chip_id,
+            dev_state.realtime_profiler_core,
+            dev_state.mesh_coord,
+            d2h_hugepage_fallback_,
+            realtime_profiler_base_addr + sync_host_timestamp_offset,
             mesh_device,
             realtime_profiler_base_addr + sync_ack_enc_offset,
             realtime_profiler_base_addr + sync_ack_lo_offset,
@@ -908,42 +659,15 @@ void RealtimeProfilerManager::run_init_sync() {
     constexpr auto kInitSyncRetryDelay = std::chrono::milliseconds(500);
     constexpr auto kConstructorSyncCheckDelay = std::chrono::milliseconds(10);
     const auto init_throttle_now = std::chrono::steady_clock::now();
-    std::vector<bool> skip_init_sync_check(devices_.size(), false);
     std::vector<size_t> init_run_sync_indices;
     init_run_sync_indices.reserve(devices_.size());
 
-    // Run our own host-device sync (device profiler's SyncInfo masks the high word to 12 bits, shifting RT zones by
-    // hours); skip recently init-synced chips.
+    // Reuse a recent cached fit where possible (device profiler's SyncInfo masks the high word to 12 bits, shifting RT
+    // zones by hours, so the profiler runs its own sync); the rest get a fresh fit below.
     for (size_t di = 0; di < devices_.size(); ++di) {
-        auto& dev_state = devices_[di];
-        std::optional<CachedCalibration> cached;
-        {
-            std::lock_guard<std::mutex> lock(g_rt_profiler_init_sync_mu);
-            const auto it = g_rt_profiler_calibration_by_chip.find(dev_state.chip_id);
-            if (it != g_rt_profiler_calibration_by_chip.end() &&
-                init_throttle_now - it->second.updated_at < kRtProfilerMinSyncInterval) {
-                cached = it->second;
-            }
+        if (!devices_[di].clock_sync.try_restore_from_cache(init_throttle_now)) {
+            init_run_sync_indices.push_back(di);
         }
-
-        if (cached.has_value()) {
-            // Reuse the recent fit instead of re-syncing: WALL_CLOCK is free-running across reopen, so both the fitted
-            // frequency and device_cycle_offset stay valid. Skips the init frequency fit and first anchor entirely (no
-            // device traffic); the periodic servo still re-anchors and refreshes the cache during the session.
-            dev_state.sync_frequency = cached->sync_frequency;
-            dev_state.device_cycle_offset = cached->device_cycle_offset;
-            dev_state.sync_rtt_ticks = cached->sync_rtt_ticks;
-            dev_state.last_reanchor_at = init_throttle_now;
-            skip_init_sync_check[di] = true;
-            log_debug(
-                tt::LogMetal,
-                "[Real-time profiler] Device {}: reusing cached calibration (last sync within {}s), skipping init sync",
-                dev_state.chip_id,
-                static_cast<int>(kRtProfilerMinSyncInterval.count()));
-            continue;
-        }
-
-        init_run_sync_indices.push_back(di);
     }
 
     parallel_for_each_device_index(init_run_sync_indices, [&](size_t di) {
@@ -958,55 +682,28 @@ void RealtimeProfilerManager::run_init_sync() {
                     kInitSyncMaxRetries);
                 std::this_thread::sleep_for(kInitSyncRetryDelay);
             }
-            if (run_sync(dev_state, 100)) {
+            // Undefined bytes on a fresh MeshDevice (or SHM-recovered stale pages) would otherwise be decoded by the
+            // receiver as bogus records.
+            const uint32_t stale_pages = dev_state.socket->discard_pending_pages();
+            if (stale_pages > 0) {
+                log_debug(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {} discarded {} stale pages before sync",
+                    dev_state.chip_id,
+                    stale_pages);
+            }
+            if (dev_state.clock_sync.run_fit(100)) {
                 break;
             }
         }
     });
 
-    std::vector<size_t> init_sync_check_indices;
-    init_sync_check_indices.reserve(devices_.size());
-    for (size_t di = 0; di < devices_.size(); ++di) {
-        if (!skip_init_sync_check[di]) {
-            init_sync_check_indices.push_back(di);
-        }
-    }
-    parallel_for_each_device_index(init_sync_check_indices, [&](size_t di) {
-        auto& dev_state = devices_[di];
-
+    // First real-record offset anchor for the freshly-fitted devices (run_fit sets the slope and a rough anchor);
+    // cached devices already carry a valid anchor and are skipped. The first servo tick is that anchor: it is due
+    // (never anchored yet) and cannot be rejected (no fresh previous anchor to prefer).
+    parallel_for_each_device_index(init_run_sync_indices, [&](size_t di) {
         std::this_thread::sleep_for(kConstructorSyncCheckDelay);
-
-        const int64_t sync_check_host_anchor = realtime_profiler_host_timestamp();
-        if (dev_state.ack_host_ptr == nullptr) {
-            return;
-        }
-        if (++dev_state.sync_seq == 0) {
-            dev_state.sync_seq = 1;
-        }
-        const uint32_t host_time_id = dev_state.sync_seq;
-        write_sync_timestamp(dev_state, host_time_id);
-        const int64_t rtt_ticks = measure_sync_rtt_ticks(dev_state, sync_check_host_anchor, host_time_id);
-
-        if (rtt_ticks >= 0) {
-            const uint64_t device_time = read_sync_device_time(dev_state);
-
-            // First offset real records use (run_sync fits only the slope); midpoint anchor, see the servo re-anchor.
-            reanchor_device_cycle_offset(dev_state, sync_check_host_anchor + rtt_ticks / 2, device_time);
-            dev_state.sync_rtt_ticks = rtt_ticks;
-            cache_calibration(dev_state);
-            dev_state.last_reanchor_at = std::chrono::steady_clock::now();
-
-            log_debug(
-                tt::LogMetal,
-                "[Real-time profiler] Device {} sync check: device_time={} cycles",
-                dev_state.chip_id,
-                device_time);
-        } else {
-            log_warning(
-                tt::LogMetal,
-                "[Real-time profiler] Device {} sync check round-trip probe timed out, skipping",
-                dev_state.chip_id);
-        }
+        devices_[di].clock_sync.service_servo(std::chrono::steady_clock::now());
     });
 }
 
@@ -1040,6 +737,7 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
     std::vector<tt::ProgramRealtimeRecord> record_buf;
     record_buf.reserve(kMaxSocketPagesPerRead);
     constexpr std::chrono::microseconds kReceiverMaxBackoff{100};
+    constexpr auto kServoPumpInterval = std::chrono::milliseconds(50);
     std::chrono::microseconds backoff{1};
     uint64_t num_pages_received = 0;
     auto last_servo_tick = std::chrono::steady_clock::now();
@@ -1051,7 +749,7 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
         if (!TTTracyConnected()) {
             return;
         }
-        constexpr double kServoSecs = std::chrono::duration<double>(kServoInterval).count();
+        constexpr double kServoSecs = std::chrono::duration<double>(kServoPumpInterval).count();
         const uint64_t records = num_published_records_.load(std::memory_order_relaxed);
         TTTracyPlotD(
             RT_PROFILER,
@@ -1061,8 +759,8 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
         fifo_pages_window_max_ = 0;
         int64_t worst_sync_error_ns = 0;
         for (const auto& dev_state : devices_) {
-            const int64_t half_rtt_ns = std::llround(static_cast<double>(dev_state.sync_rtt_ticks) * 0.5);
-            worst_sync_error_ns = std::max(worst_sync_error_ns, half_rtt_ns);
+            worst_sync_error_ns =
+                std::max(worst_sync_error_ns, static_cast<int64_t>(dev_state.clock_sync.mapping().sync_error_ns));
         }
         TTTracyPlotD(RT_PROFILER, "RT sync error (us)", static_cast<double>(worst_sync_error_ns) / 1000.0);
         last_diagnostics_records = records;
@@ -1071,7 +769,7 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
 #endif
     while (!stop_.load(std::memory_order_acquire)) {
         const auto now = std::chrono::steady_clock::now();
-        const bool servo_ticked = now - last_servo_tick >= kServoInterval;
+        const bool servo_ticked = now - last_servo_tick >= kServoPumpInterval;
         if (servo_ticked) {
             last_servo_tick = now;
         }
@@ -1227,187 +925,6 @@ void RealtimeProfilerManager::shutdown() {
     }
 
     devices_.clear();
-}
-
-bool RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samples) {
-    constexpr auto kRunSyncSettleDelay = std::chrono::milliseconds(50);
-    constexpr auto kRunSyncSampleInterval = std::chrono::milliseconds(5);
-    constexpr uint32_t kRunSyncMaxConsecutiveTimeouts = 3;
-    auto& cluster = MetalContext::instance(context_id_).get_cluster();
-    const int64_t host_start_time = realtime_profiler_host_timestamp();
-
-    struct SyncSample {
-        int64_t host_time;     // Full 64-bit host TSC ticks relative to host_start_time
-        uint64_t device_time;  // Device wall clock cycles
-    };
-    std::vector<SyncSample> samples;
-
-    if (dev_state.ack_host_ptr == nullptr) {
-        log_warning(
-            tt::LogMetal,
-            "[Real-time profiler] Device {} has no host ACK word; skipping sync (using default frequency)",
-            dev_state.chip_id);
-    } else {
-        // Discard pre-existing pages before sync (their PCIe-mapped bytes can be undefined on a fresh MeshDevice);
-        // discard_pending_pages rebases bytes_acked and notifies the device.
-        uint32_t stale_pages = dev_state.socket->discard_pending_pages();
-        if (stale_pages > 0) {
-            log_debug(
-                tt::LogMetal,
-                "[Real-time profiler] Device {} discarded {} stale pages before sync",
-                dev_state.chip_id,
-                stale_pages);
-        }
-
-        std::this_thread::sleep_for(kRunSyncSettleDelay);
-
-        uint32_t consecutive_timeouts = 0;
-        for (uint32_t i = 0; i < num_samples + 1; i++) {
-            std::this_thread::sleep_for(kRunSyncSampleInterval);
-
-            const int64_t host_before = realtime_profiler_host_timestamp();
-            if (++dev_state.sync_seq == 0) {
-                dev_state.sync_seq = 1;
-            }
-            const uint32_t host_time_id = dev_state.sync_seq;
-            write_sync_timestamp(dev_state, host_time_id);
-
-            const int64_t rtt_ticks = measure_sync_rtt_ticks(dev_state, host_before, host_time_id);
-            if (rtt_ticks < 0) {
-                consecutive_timeouts++;
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {} sync sample {}/{} round-trip probe timed out "
-                    "(consecutive timeouts: {}/{})",
-                    dev_state.chip_id,
-                    i,
-                    num_samples,
-                    consecutive_timeouts,
-                    kRunSyncMaxConsecutiveTimeouts);
-                if (consecutive_timeouts >= kRunSyncMaxConsecutiveTimeouts) {
-                    log_warning(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {} sync aborted: {} consecutive timeouts. "
-                        "Device kernel may not be responding (check DPRINT output).",
-                        dev_state.chip_id,
-                        consecutive_timeouts);
-                    break;
-                }
-                continue;
-            }
-            consecutive_timeouts = 0;
-
-            const uint64_t device_time = read_sync_device_time(dev_state);
-
-            // Discard first sample - can be very off due to cold PCIe path.
-            if (i == 0) {
-                continue;
-            }
-            samples.emplace_back(host_before - host_start_time, device_time);
-        }
-    }
-
-    // Mean-centered linear regression for slope (device cycles per TSC tick); centering avoids catastrophic
-    // cancellation at absolute-timestamp magnitudes.
-    uint64_t device_anchor = 0;  // device cycle count at host_time 0 (the fit intercept); seeds the offset anchor
-    bool sync_ok = false;
-    if (samples.size() >= 2) {
-        const double n = static_cast<double>(samples.size());
-
-        double host_mean = 0.0;
-        double device_mean = 0.0;
-        for (const auto& s : samples) {
-            host_mean += static_cast<double>(s.host_time);
-            device_mean += static_cast<double>(s.device_time);
-        }
-        host_mean /= n;
-        device_mean /= n;
-
-        double num = 0.0;
-        double den = 0.0;
-        for (const auto& s : samples) {
-            double dx = static_cast<double>(s.host_time) - host_mean;
-            double dy = static_cast<double>(s.device_time) - device_mean;
-            num += dx * dy;
-            den += dx * dx;
-        }
-
-        if (std::abs(den) > 1e-10) {
-            dev_state.sync_frequency = num / den;
-        } else {
-            dev_state.sync_frequency = cluster.get_device_aiclk(dev_state.chip_id) / 1000.0;
-        }
-
-        // Intercept via means: intercept = ȳ - slope * x̄ = device cycle count at host_time = 0.
-        const double intercept = device_mean - dev_state.sync_frequency * host_mean;
-        device_anchor = static_cast<uint64_t>(intercept);
-        sync_ok = true;
-
-        // Residual of each handshake sample vs the fitted line, in host ns — the per-sample sync jitter.
-        double residual_sumsq_ns = 0.0;
-        double residual_max_ns = 0.0;
-        for (const auto& s : samples) {
-            const double predicted_device =
-                device_mean + dev_state.sync_frequency * (static_cast<double>(s.host_time) - host_mean);
-            const double residual_ns =
-                (static_cast<double>(s.device_time) - predicted_device) / dev_state.sync_frequency;
-            residual_sumsq_ns += residual_ns * residual_ns;
-            residual_max_ns = std::max(residual_max_ns, std::abs(residual_ns));
-        }
-        const double residual_rms_ns = std::sqrt(residual_sumsq_ns / n);
-
-        log_info(
-            tt::LogMetal,
-            "[Real-time profiler] Device {} sync complete: {} samples, frequency={:.6f} GHz, "
-            "device_time_at_sync={} cycles, fit residual rms={:.0f} ns max={:.0f} ns",
-            dev_state.chip_id,
-            samples.size(),
-            dev_state.sync_frequency,
-            device_anchor,
-            residual_rms_ns,
-            residual_max_ns);
-    } else {
-        dev_state.sync_frequency = cluster.get_device_aiclk(dev_state.chip_id) / 1000.0;
-        log_warning(
-            tt::LogMetal,
-            "[Real-time profiler] Device {} sync failed - not enough samples, using default frequency",
-            dev_state.chip_id);
-    }
-    reanchor_device_cycle_offset(dev_state, host_start_time, device_anchor);
-    return sync_ok;
-}
-
-void RealtimeProfilerManager::reanchor_device_cycle_offset(
-    DeviceState& dev_state, int64_t host_anchor, uint64_t device_anchor) {
-    dev_state.device_cycle_offset =
-        std::llround(static_cast<double>(device_anchor) - dev_state.sync_frequency * static_cast<double>(host_anchor));
-}
-
-int64_t RealtimeProfilerManager::measure_sync_rtt_ticks(
-    const DeviceState& dev_state, int64_t host_before, uint32_t host_time_id) {
-    if (dev_state.ack_host_ptr == nullptr) {
-        return 0;
-    }
-    // Poll our own pinned host word, which the device NOC-writes the token into (bypassing the record FIFO). Skip the
-    // deadline check for the first kRttProbeHealthyPolls reads so a healthy handshake (far fewer) never reads a clock
-    // inside the round trip it is timing; the endpoint below is read fresh, so the measurement stays exact.
-    const int64_t deadline = host_before + static_cast<int64_t>(kRttProbeTimeoutNs);
-    uint32_t polls = 0;
-    while (read_sync_ack(dev_state) != host_time_id) {
-        if (++polls > kRttProbeHealthyPolls && realtime_profiler_host_timestamp() > deadline) {
-            return -1;  // ACK never observed: not a valid round trip, so the caller keeps the previous bound
-        }
-    }
-    return realtime_profiler_host_timestamp() - host_before;
-}
-
-void RealtimeProfilerManager::cache_calibration(const DeviceState& dev_state) {
-    std::lock_guard<std::mutex> lock(g_rt_profiler_init_sync_mu);
-    auto& entry = g_rt_profiler_calibration_by_chip[dev_state.chip_id];
-    entry.updated_at = std::chrono::steady_clock::now();
-    entry.sync_frequency = dev_state.sync_frequency;
-    entry.device_cycle_offset = dev_state.device_cycle_offset;
-    entry.sync_rtt_ticks = dev_state.sync_rtt_ticks;
 }
 
 }  // namespace tt::tt_metal::distributed
