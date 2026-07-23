@@ -543,3 +543,11 @@
 - A naïve shard of globally fused `[Q|K|V]` or `[f_a|g_a|beta]` is incorrect because it assigns projection families rather than corresponding heads. The loader now groups each device payload before applying `ShardTensorToMesh`.
 - Eight-device layout test: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 1/1 in 7.15 s. It compares the physical tensor on every device against the exact expected host slice for fused QKV, fused auxiliary, output projection, and convolution taps.
 - Single-device composed regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 7/7 in 8.19 s. Existing output/state PCC is unchanged; target decode output/state remained `0.999970` / `0.999968`.
+
+
+### 2026-07-23 10:09:26 UTC — TP=8 local recurrence and output reduce-scatter
+
+- The composed layer now derives a local config from the global head count, keeps Q/K/V, convolution, gates, recurrent state, norm, and output gating device-local, and requires caller-owned `TT_CCL` resources for TP execution.
+- The row-parallel output projection produces one full-hidden partial per device. The current correctness path applies the existing minimal reduce-scatter and returns hidden-sharded `[B,T,hidden/TP]`; it is the unfused baseline for the planned matmul-reduce-scatter optimization.
+- Eight-device command: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 2/2 in 22.92 s. The distributed layer matched torch at output PCC `0.999955`, recurrent-state PCC `0.999892`, and convolution-state PCC `0.999997`.
+- Single-device regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 7/7 in 8.02 s. Target decode output/state PCC remained `0.999970` / `0.999968`.
