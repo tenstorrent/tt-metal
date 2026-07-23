@@ -768,6 +768,43 @@ def _sibling_component_perf_ref(root, task: str) -> str:
         return ""
 
 
+def _shard_slice_directive(root, task: str) -> str:
+    """When the module graduated TP-sharded, per-module optimize measures ONE rank on a single chip.
+    Build every sharded weight/input at its per-chip 1/degree slice along the module's shard dim (NOT
+    the full unsharded shape, which may not fit on one chip) and keep the collective a single-device
+    no-op. The shard dim is encoded in the module's graduated sharded stub (cluster_axis /
+    ShardTensorToMesh(dim=...) / mesh_shape); include it so the generator slices the right axis. Empty
+    for a non-sharded (degree<=1) module."""
+    try:
+        degree = int(os.environ.get("TT_PERF_SHARD_DEGREE", "1") or "1")
+    except Exception:
+        degree = 1
+    if degree <= 1 or root is None:
+        return ""
+    snap = ""
+    try:
+        p = root / "_stubs" / ("%s.py.last_good_sharded" % task)
+        if p.is_file():
+            snap = p.read_text(errors="ignore")[:8000]
+    except Exception:
+        snap = ""
+    out = (
+        "\n\nTP-SHARDED MODULE (shard degree=%d): this module runs tensor-parallel across %d chips in the "
+        "real pipeline, so its FULL unsharded shape may not fit on one chip. For this SINGLE-CHIP "
+        "per-module measurement build ONE rank's slice: size every sharded weight/input to 1/%d along the "
+        "module's shard dim, keep the collective (all_reduce/all_gather) a single-device no-op, and stay on "
+        "the single `device` fixture (NO mesh, NO fabric_config). Optimizing this per-chip slice yields the "
+        "levers that transfer to the sharded deployment." % (degree, degree, degree)
+    )
+    if snap:
+        out += (
+            "\nThe module's graduated TP-sharded stub below shows the shard dim (cluster_axis / "
+            "ShardTensorToMesh(dim=...) / mesh_shape) — slice that SAME axis:\n"
+            "<sharded_stub path='%s.py.last_good_sharded'>\n%s\n</sharded_stub>" % (task, snap)
+        )
+    return out
+
+
 def _component_prompt(
     out_rel: str, src_label: str, demo_src: str, task: str, cache_instr: str = "", agentic: bool = False, root=None
 ) -> str:
@@ -812,7 +849,10 @@ def _component_prompt(
         f"ttnn.to_torch / .item() / .cpu() / torch tensor construction / python shape or control-flow "
         f"decisions inside `_forward()`. If the module's own forward has an irreducible host op, print "
         f"TRACE_NOT_TRACE_CAPABLE=1 and skip the trace so it falls back to the eager number:\n"
-        f"{_SKELETON_COMPONENT}\n\n" + _sibling_component_perf_ref(root, task) + tail
+        f"{_SKELETON_COMPONENT}\n\n"
+        + _sibling_component_perf_ref(root, task)
+        + _shard_slice_directive(root, task)
+        + tail
     )
 
 

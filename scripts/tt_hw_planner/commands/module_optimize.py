@@ -172,8 +172,7 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
         for _m in mods:
             try:
                 (
-                    Path(tempfile.gettempdir())
-                    / ("perf_mcp_orig_baseline_%s_%s.json" % (Path(demo_dir).name, _m))
+                    Path(tempfile.gettempdir()) / ("perf_mcp_orig_baseline_%s_%s.json" % (Path(demo_dir).name, _m))
                 ).unlink()
             except OSError:
                 pass
@@ -210,6 +209,9 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
         os.environ["PERF_MCP_REPORT_PCC"] = node
         os.environ["PERF_MCP_REPORT_INDEX"] = idx
         os.environ["PERF_MCP_TASK"] = m
+        _shard_snap = Path(demo_dir) / "_stubs" / ("%s.py.last_good_sharded" % m)
+        _tp = int(os.environ.get("TT_PERF_MESH_COLS") or os.environ.get("TT_HW_PLANNER_SHARD_TP") or "1")
+        os.environ["TT_PERF_SHARD_DEGREE"] = str(_tp if (_shard_snap.is_file() and _tp > 1) else 1)
         try:
             result = run_cc(
                 demo_dir,
@@ -228,6 +230,7 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
                 "PERF_MCP_REPORT_PCC",
                 "PERF_MCP_REPORT_INDEX",
                 "PERF_MCP_TASK",
+                "TT_PERF_SHARD_DEGREE",
             ):
                 os.environ.pop(_k, None)
         status = _module_status(result)
