@@ -135,6 +135,7 @@ def CreateDevices(
 
 CloseDevice = ttnn._ttnn.device.CloseDevice
 CloseDevices = ttnn._ttnn.device.CloseDevices
+ReleaseOwnership = ttnn._ttnn.device.ReleaseOwnership
 
 
 def ReadDeviceProfiler(device):
