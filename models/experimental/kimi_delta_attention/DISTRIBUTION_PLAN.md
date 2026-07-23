@@ -147,6 +147,12 @@ A controlled 1x3 fused-output subblock test also retains 1x1: slowest-chip
 matmul + reduce-scatter regressed from 146.778 us to 147.706 us. The remaining
 CCL gap is not solved by widening the local matmul subblock.
 
+Fusing the aligned chunk decay bias into its projection reduces traced latency
+to 0.855 ms without changing tensor ownership or core allocation. It removes
+one binary program/device; softplus remains separate. This is further evidence
+to retain the 80-core prep, 16-core scan, and 8x8 output/row-8 Ring
+reduce-scatter map while pursuing launch and dataflow reductions.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence
