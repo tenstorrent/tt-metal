@@ -61,6 +61,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/debug/assert.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
@@ -679,7 +680,7 @@ void kernel_main() {
     // num_chunks times. Reader/writer feed/drain chunk-N+1 while compute is
     // still on chunk N via the existing CBs.
     constexpr uint32_t num_chunks = get_compile_time_arg_val(30);
-    constexpr uint32_t local_expert_id = get_compile_time_arg_val(31);
+    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(31);
     constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(32);
     // x_is_row_major: tilize cb_x_rm -> cb_in0_x before the gate/up matmul.
     // 0 => x already TILE in cb_in0_x.
@@ -716,42 +717,18 @@ void kernel_main() {
     CircularBuffer counts_scratch_cb(cb_counts_scratch);
     CircularBuffer idx_scratch_cb(cb_idx_scratch);
 
-    // Wait for the reader (BRISC) to push the per-expert counts/idx into
-    // shared L1. UNPACK reads the L1 via LocalCBInterface and broadcasts
-    // count_value to MATH and PACK via the inter-thread mailbox (MATH cannot
-    // access get_local_cb_interface symbols at link time). Production matmul
-    // uses the same UNPACK→mailbox→MATH/PACK pattern (see
-    // circular_buffer.h::read_tile_value).
+    // Wait for the reader (BRISC) to push the counts/idx into shared L1. They
+    // are pushed ONCE and stay resident, so UNPACK can re-index them per expert.
     counts_scratch_cb.wait_front(1);
     idx_scratch_cb.wait_front(1);
-    uint32_t count_value = 0;
-    UNPACK(({
-        const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
-        const uint32_t idx_l1_addr = get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4;
-        const volatile tt_l1_ptr uint32_t* counts_ptr =
-            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counts_l1_addr);
-        const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
-        const uint32_t global_expert_id = idx_ptr[local_expert_id];
-        count_value = counts_ptr[global_expert_id];
-        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
-        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
-    }));
-    MATH(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-    PACK(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-    // count is in TOKEN rows; convert to tile rows (ceil) and then to chunks.
-    const uint32_t count_tiles = (count_value + 31) / 32;
-    const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
-    const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
 
-    // SiLU is now applied as a MATH-thread SFPU pass on dst (silu_tile)
-    // between copy_tile and pack_tile — not packer-fused via
-    // apply_activation_from_pack. Empirically the packer-fused variant
-    // serialises the pack pipeline against the SFPU, slowing down the
-    // gate-intermed write. silu_tile_init() configures the MATH-side SFPU
-    // for silu; the pack then runs plain (no per-tile SFPU on the pack
-    // thread). Same total compute, better pipelining.
+    // SiLU is applied as a MATH-thread SFPU pass on dst (silu_tile) between
+    // copy_tile and pack_tile — not packer-fused via apply_activation_from_pack.
+    // Empirically the packer-fused variant serialises the pack pipeline against
+    // the SFPU. silu_tile_init() configures the MATH-side SFPU for silu once;
+    // the pack then runs plain. SwiGLU-OAI uses the binary swiglu SFPU op.
+    // Init once — shared across all experts.
 #ifdef SWIGLU_OAI
-    // SwiGLU-OAI uses the binary swiglu SFPU op (sigmoid/recip table init).
     MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()));
 #else
     silu_tile_init();
@@ -759,42 +736,69 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
 
-    for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
-        // matmul_block_init only re-programs addressing, not SrcA/SrcB formats. On
-        // chunk >= 1 the unpacker is left on multiply_phase's operands, so reset it
-        // to the gate/up inputs here (in1 -> SrcA, in0 -> SrcB).
-        reconfig_data_format(cb_in1_gate, cb_in0_x);
-        matmul_block_init(
-            cb_in0_x,
-            cb_in1_gate,
-            /*transpose=*/0,
-            gu_out_subblock_w,
-            gu_out_subblock_h,
-            g_in0_block_w);
+    // ======================= per-local-expert loop =======================
+    // Run the full gate/up/down FFN for every local expert in this program.
+    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+        // This expert's token count via the UNPACK→{MATH,PACK} mailbox (MATH/PACK
+        // cannot read the counts/idx L1 via the CB interface).
+        // count -> effective_chunks bounds this expert's chunk loop; count=0 => the
+        // loop body is skipped entirely.
+        uint32_t count_value = 0;
+        UNPACK(({
+            const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
+            const uint32_t idx_l1_addr = get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4;
+            const volatile tt_l1_ptr uint32_t* counts_ptr =
+                reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counts_l1_addr);
+            const volatile tt_l1_ptr uint32_t* idx_ptr =
+                reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
+            const uint32_t global_expert_id = idx_ptr[local_expert_id];
+            count_value = counts_ptr[global_expert_id];
+            ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
+            ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
+        }));
+        MATH(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        PACK(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        // count is in TOKEN rows; convert to tile rows (ceil) and then to chunks.
+        const uint32_t count_tiles = (count_value + 31) / 32;
+        const uint32_t effective_chunks = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
+        ASSERT(effective_chunks <= num_chunks);
 
-        // Phases 1 & 2 fused: gate matmul + up matmul share the same per-K-block
-        // x push from the reader, so x DRAM mcast bytes are halved (one x read
-        // per K-block feeds both matmuls). Both matmuls accumulate into their
-        // own partials CB; after the K-loop, partials_gu -> gate_intermed (with
-        // silu) and partials_up -> up_intermed are produced by the same fused
-        // function.
-        matmul_phase_fused_gu<
-            g_in0_block_w,
-            g_in0_num_subblocks,
-            g_in0_block_num_tiles,
-            g_in0_subblock_num_tiles,
-            g_in1_num_subblocks,
-            g_in1_block_num_tiles,
-            g_in1_per_core_w,
-            g_num_blocks,
-            gu_out_subblock_h,
-            gu_out_subblock_w,
-            gu_out_subblock_num_tiles,
-            gu_out_block_num_tiles,
-            /*x_cb_id=*/cb_in0_x,
-            /*x_rm_cb_id=*/cb_x_rm,
-            /*tilize_x=*/(x_is_row_major != 0)>(
-            cb_in1_gate, cb_in1_up, cb_partials_gu, cb_partials_up, cb_gate_intermed, cb_up_intermed);
+        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+            // matmul_block_init only re-programs addressing, not SrcA/SrcB formats. On
+            // chunk >= 1 the unpacker is left on multiply_phase's operands, so reset it
+            // to the gate/up inputs here (in1 -> SrcA, in0 -> SrcB).
+            reconfig_data_format(cb_in1_gate, cb_in0_x);
+            matmul_block_init(
+                cb_in0_x,
+                cb_in1_gate,
+                /*transpose=*/0,
+                gu_out_subblock_w,
+                gu_out_subblock_h,
+                g_in0_block_w);
+
+            // Phases 1 & 2 fused: gate matmul + up matmul share the same per-K-block
+            // x push from the reader, so x DRAM mcast bytes are halved (one x read
+            // per K-block feeds both matmuls). Both matmuls accumulate into their
+            // own partials CB; after the K-loop, partials_gu -> gate_intermed (with
+            // silu) and partials_up -> up_intermed are produced by the same fused
+            // function.
+            matmul_phase_fused_gu<
+                g_in0_block_w,
+                g_in0_num_subblocks,
+                g_in0_block_num_tiles,
+                g_in0_subblock_num_tiles,
+                g_in1_num_subblocks,
+                g_in1_block_num_tiles,
+                g_in1_per_core_w,
+                g_num_blocks,
+                gu_out_subblock_h,
+                gu_out_subblock_w,
+                gu_out_subblock_num_tiles,
+                gu_out_block_num_tiles,
+                /*x_cb_id=*/cb_in0_x,
+                /*x_rm_cb_id=*/cb_x_rm,
+                /*tilize_x=*/(x_is_row_major != 0)>(
+                cb_in1_gate, cb_in1_up, cb_partials_gu, cb_partials_up, cb_gate_intermed, cb_up_intermed);
 
 #ifdef SWIGLU_OAI
         // Phase 3 (SwiGLU-OAI): fused clamp + alpha-sigmoid + (up+1) directly on
@@ -844,5 +848,13 @@ void kernel_main() {
             d_out_block_num_tiles,
             /*apply_silu_on_final=*/false,
             /*d_per_core_N=*/d_in1_per_core_w>(cb_in0_down_full, cb_in1_down, cb_partials_d, cb_out, cb_down_bias);
-    }  // end chunk loop
+        }  // end chunk loop
+
+#ifdef FUSE_BIAS
+        // Pop this expert's biases so the reader can refill for the next expert.
+        CircularBuffer(cb_gate_bias).pop_front(g_in1_per_core_w);
+        CircularBuffer(cb_up_bias).pop_front(g_in1_per_core_w);
+        CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
+#endif
+    }  // end per-local-expert loop
 }
