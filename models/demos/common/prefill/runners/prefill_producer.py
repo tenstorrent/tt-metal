@@ -226,6 +226,36 @@ def _decode_bf16_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
     return torch.from_numpy(np.ascontiguousarray(decoded))
 
 
+def _decode_bf16_row_major_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
+    """Decode a ``[32, head_dim]`` bf16 ROW_MAJOR chunk (raw device bytes) to float32, device-less. Unlike
+    ``_decode_bf16_chunk`` there is NO tile de-swizzle: a ROW_MAJOR cache stores 32 tokens x head_dim
+    contiguously, so element (token, dim) is a plain reshape (uint16 -> float32 via a 16-bit left shift,
+    exact). This is the layout the GLM sparse adapter allocates for the uncompressed KVPE cache."""
+    TILE = 32  # tokens per DRAM-bank chunk (NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK)
+    u16 = np.frombuffer(raw, dtype="<u2").reshape(TILE, head_dim)
+    f32 = (u16.astype(np.uint32) << 16).view(np.float32)
+    return torch.from_numpy(np.ascontiguousarray(f32))
+
+
+def _decoder_for_config(table, config_id: int, head_dim: int):
+    """Device-less chunk decoder for one config of the merged MLA table, inferred from its recorded
+    chunk_size_bytes so ONE reader serves GLM, DeepSeek and Kimi:
+      * bf8_b TILE     -> (head_dim / 32) tiles x 1088 B  (dense KVPE on DeepSeek/Kimi, and the index cache)
+      * bf16 ROW_MAJOR -> 32 tokens x head_dim x 2 B      (GLM's uncompressed KVPE)
+    NOTE: chunk_size_bytes alone can't tell bf16 ROW_MAJOR from bf16 TILE (same byte count); in the MLA
+    path the only bf16 cache is GLM's ROW_MAJOR KVPE, so a bf16-sized chunk here always means ROW_MAJOR."""
+    TILE = 32
+    chunk = table.config(config_id).chunk_size_bytes
+    if chunk == (head_dim // TILE) * 1088:
+        return _decode_bfp8_chunk
+    if chunk == TILE * head_dim * 2:
+        return _decode_bf16_row_major_chunk
+    raise ValueError(
+        f"config {config_id}: chunk_size_bytes={chunk} matches neither bf8 TILE "
+        f"({(head_dim // TILE) * 1088}) nor bf16 ROW_MAJOR ({TILE * head_dim * 2}) for head_dim={head_dim}"
+    )
+
+
 def _resolve_unique_id(fabric_node_ids, device_map: dict) -> int:
     """ASIC unique_id for any replica fabric node present in the device map (replicas hold identical KV,
     and add_device_group sorts the ids so index 0 is not a fixed chip). Raises if none are mapped."""
@@ -502,9 +532,11 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
 
 
 def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
-    """Read slot `slot_id`'s KV over [0, real_len) via the table and PCC-check it against the golden
-    trace (DeepSeek/Kimi MLA merged-kvpe single-config table). Returns the min PCC across layers."""
-    from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post
+    """Read slot `slot_id`'s KV over [0, real_len) via the table and validate it. Config 0 (the KVPE
+    cache) is PCC'd vs the golden trace. For a sparse/DSA model the merged table also carries config 1
+    (the index-key cache), which is PCC'd vs the golden indexer key. Returns the min PCC across both
+    caches / all layers; raises on an index-cache read failure."""
+    from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_index_k, _load_golden_kv_post
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -513,15 +545,23 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     tokens_per_block = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block  # round up to a block
 
+    # KVPE decoder generalized across models: bf8 TILE on DeepSeek/Kimi (dense), bf16 ROW_MAJOR on GLM
+    # (uncompressed). Picked from the config's recorded chunk size instead of hardcoding a dtype.
+    kvpe_decode = _decoder_for_config(table, 0, HEAD_DIM)
+    logger.info(
+        f"[producer] slot {slot_id} kvpe: decoder={kvpe_decode.__name__} "
+        f"chunk_size_bytes={table.config(0).chunk_size_bytes} HEAD_DIM={HEAD_DIM} NUM_LAYERS={NUM_LAYERS}"
+    )
+
     min_pcc = 1.0
     for layer in range(NUM_LAYERS):
-        # Read this layer's KV block by block over UMD, decode each bfp8 chunk, concat to [real_len, 576].
+        # Read this layer's KV block by block over UMD, decode each chunk, concat to [real_len, HEAD_DIM].
         decoded_rows = []
         for pos in range(0, read_len, tokens_per_block):
             loc = table.lookup(layer, pos, slot_id)
             unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
             raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
-            decoded_rows.append(_decode_bfp8_chunk(raw, HEAD_DIM))
+            decoded_rows.append(kvpe_decode(raw, HEAD_DIM))
         device_kv = torch.cat(decoded_rows, dim=0)[:real_len]  # natural order (table un-rotates block-cyclic)
 
         golden = _load_golden_kv_post(trace_dir, layer, real_len)
@@ -534,8 +574,40 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         _, pcc_pe = comp_pcc(golden_pe, device_kv[:, KV_LORA:])
 
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
+        logger.info(f"[producer] slot {slot_id} layer {layer:>2} KV PCC: nope={pcc_nope:.5f} pe={pcc_pe:.5f}")
 
     logger.info(f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> {min_pcc:.6f}")
+
+    # config 1: index cache (sparse/DSA only). Validated the SAME way as config 0 — read block-by-block
+    # via the table, decode, and PCC vs the golden indexer key. Config 1 holds all layers on GLM-5.1 and
+    # only the full-indexer layers on GLM-5.2, so iterate its OWN layer count, not NUM_LAYERS. The index
+    # cache is bf8 TILE, and the golden is already in the device rope frame (no re-interleave, unlike pe).
+    if table.num_configs() > 1:
+        index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
+        n_index_layers = table.config(1).num_layers
+        index_decode = _decoder_for_config(table, 1, index_head_dim)  # bf8 TILE on GLM-5.1/5.2
+        min_index = 1.0
+        for layer in range(n_index_layers):
+            decoded_rows = []
+            for pos in range(0, read_len, tokens_per_block):
+                loc = table.lookup(layer, pos, slot_id, 1)  # config 1 = index cache
+                unique_id = _resolve_unique_id(
+                    table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
+                )
+                raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
+                decoded_rows.append(index_decode(raw, index_head_dim))
+            dev_ik = torch.cat(decoded_rows, dim=0)[:real_len]
+
+            golden_ik = _load_golden_index_k(trace_dir, layer, real_len)
+            _, pcc_index = comp_pcc(golden_ik, dev_ik)
+            min_index = min(min_index, pcc_index)
+            logger.info(f"[producer] slot {slot_id} layer {layer:>2} index PCC: {pcc_index:.5f}")
+
+        logger.info(
+            f"[producer] slot {slot_id} index PCC over [0,{real_len}) across {n_index_layers} layers -> {min_index:.6f}"
+        )
+        min_pcc = min(min_pcc, min_index)
+
     return min_pcc
 
 

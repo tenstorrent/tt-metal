@@ -32,14 +32,14 @@ namespace {
 
 using ::testing::ElementsAre;
 using ::testing::Eq;
-using ::tt::tt_metal::experimental::xtensor::from_xtensor;
-using ::tt::tt_metal::experimental::xtensor::get_shape_from_xarray;
-using ::tt::tt_metal::experimental::xtensor::span_to_xtensor_view;
-using ::tt::tt_metal::experimental::xtensor::to_xtensor;
-using ::tt::tt_metal::experimental::xtensor::xtensor_to_span;
+using ttnn::experimental::xtensor::from_xtensor;
+using ttnn::experimental::xtensor::get_shape_from_xarray;
+using ttnn::experimental::xtensor::span_to_xtensor_view;
+using ttnn::experimental::xtensor::to_xtensor;
+using ttnn::experimental::xtensor::xtensor_to_span;
 
-TensorSpec get_tensor_spec(const ttnn::Shape& shape) {
-    return TensorSpec(
+tt::tt_metal::TensorSpec get_tensor_spec(const ttnn::Shape& shape) {
+    return tt::tt_metal::TensorSpec(
         shape, TensorLayout(tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::ROW_MAJOR, MemoryConfig{}));
 }
 

@@ -50,7 +50,7 @@ std::optional<SMCRuntimeTelemetryBuffer> discover_smc_dispatch_telemetry_control
 
     auto size = firmware_info_provider->get_runtime_telemetry_buffer_size();
     if (!size.has_value()) {
-        log_warning(tt::LogMetal, "Dispatch telemetry SMC buffer is unavailable");
+        log_debug(tt::LogMetal, "Dispatch telemetry SMC buffer is unavailable");
         return std::nullopt;
     }
     if (size.value() < sizeof(dispatch_telemetry_types::SMCDispatchTelemetryControl)) {

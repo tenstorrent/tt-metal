@@ -236,8 +236,8 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
         if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
             input_tensor_shape[3] == 960 && input_tensor_memory_config.buffer_type() == ttnn::BufferType::L1 &&
             output_mem_config.buffer_type() == ttnn::BufferType::L1 &&
-            input_tensor_memory_config.memory_layout() == ttnn::TensorMemoryLayout::WIDTH_SHARDED &&
-            output_mem_config.memory_layout() == ttnn::TensorMemoryLayout::WIDTH_SHARDED &&
+            input_tensor_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
+            output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
             input_tensor_memory_config.shard_spec()->shape[0] == 32 &&
             input_tensor_memory_config.shard_spec()->shape[1] == 32 && output_mem_config.shard_spec()->shape[0] == 32 &&
             output_mem_config.shard_spec()->shape[1] == 160 && input_shard_num_cores == 30 &&
@@ -252,8 +252,8 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
         if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 8 && input_tensor_shape[2] == 32 &&
             input_tensor_shape[3] == 128 && input_tensor_memory_config.buffer_type() == ttnn::BufferType::L1 &&
             output_mem_config.buffer_type() == ttnn::BufferType::L1 &&
-            input_tensor_memory_config.memory_layout() == ttnn::TensorMemoryLayout::HEIGHT_SHARDED &&
-            output_mem_config.memory_layout() == ttnn::TensorMemoryLayout::HEIGHT_SHARDED &&
+            input_tensor_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+            output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
             input_tensor_memory_config.shard_spec()->shape[0] == 32 &&
             input_tensor_memory_config.shard_spec()->shape[1] == 128 &&
             output_mem_config.shard_spec()->shape[0] == 32 && output_mem_config.shard_spec()->shape[1] == 128 &&
@@ -266,8 +266,8 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
         if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
             input_tensor_shape[3] == 32 && input_tensor_memory_config.buffer_type() == ttnn::BufferType::L1 &&
             output_mem_config.buffer_type() == ttnn::BufferType::L1 &&
-            input_tensor_memory_config.memory_layout() == ttnn::TensorMemoryLayout::WIDTH_SHARDED &&
-            output_mem_config.memory_layout() == ttnn::TensorMemoryLayout::WIDTH_SHARDED &&
+            input_tensor_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
+            output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
             input_tensor_memory_config.shard_spec()->shape[0] == 32 &&
             input_tensor_memory_config.shard_spec()->shape[1] == 32 && output_mem_config.shard_spec()->shape[0] == 32 &&
             output_mem_config.shard_spec()->shape[1] == 128 && input_shard_num_cores == 1 &&
@@ -333,9 +333,9 @@ bool use_composite_all_to_all(
     bool use_native =
         (input_tensor.layout() == ttnn::Layout::TILE &&
          input_tensor.buffer()->buffer_type() == ttnn::BufferType::DRAM &&
-         input_tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED &&
+         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
          (!memory_config.has_value() ||
-          memory_config.value().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED) &&
+          memory_config.value().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) &&
          is_tiled_and_tile_aligned);
 
     return !use_native;

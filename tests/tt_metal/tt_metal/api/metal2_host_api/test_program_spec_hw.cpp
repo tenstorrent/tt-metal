@@ -592,7 +592,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_producer.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"only_sem"}, .accessor_name = "signal"}},
-        .hw_config = CreateWriter1xxDataMovementConfig(),
+        .hw_config = CreateWriterGen1DataMovementConfig(),
     };
     KernelSpec consumer{
         .unique_id = KernelSpecName{"consumer"},
@@ -601,7 +601,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_consumer.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"only_sem"}, .accessor_name = "waiter"}},
-        .hw_config = CreateReader1xxDataMovementConfig(),
+        .hw_config = CreateReaderGen1DataMovementConfig(),
     };
 
     // A WorkUnitSpec describes the kernels that run on a shared set of nodes.

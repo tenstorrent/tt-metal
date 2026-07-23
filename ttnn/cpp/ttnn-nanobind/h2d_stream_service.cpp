@@ -77,7 +77,7 @@ void py_module_types(nb::module_& mod) {
 
                 Args:
                     mesh_device (MeshDevice): The mesh device this service runs on.
-                    global_spec (TensorSpec): Spec of the un-sharded source tensor.
+                    global_spec (tt::tt_metal::TensorSpec): Spec of the un-sharded source tensor.
                         Drives the mapper input shape and (after distribution) the
                         per-device tensor's layout.
                     fifo_size_bytes (int, optional): Size of each H2D socket's host
@@ -144,9 +144,7 @@ void py_module_types(nb::module_& mod) {
             // `metadata` must be exactly `metadata_size_bytes` bytes long when the
             // service was constructed with metadata enabled; empty otherwise. An
             // empty bytes object always satisfies the disabled case.
-            [](tt::tt_metal::H2DStreamService& self,
-               const tt::tt_metal::Tensor& host_tensor,
-               const nb::bytes& metadata) {
+            [](tt::tt_metal::H2DStreamService& self, const ttnn::Tensor& host_tensor, const nb::bytes& metadata) {
                 auto meta_span = ttsl::Span<const std::byte>(
                     reinterpret_cast<const std::byte*>(metadata.c_str()), metadata.size());
                 self.forward_to_tensor(host_tensor, meta_span);
@@ -223,7 +221,7 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::H2DStreamService::get_per_shard_spec,
             nb::rv_policy::reference_internal,
             R"doc(
-                The per-coord TensorSpec produced by the mapper at construction time.
+                The per-coord tt::tt_metal::TensorSpec produced by the mapper at construction time.
                 Same as `get_backing_tensor().tensor_spec()`.
             )doc")
         .def(

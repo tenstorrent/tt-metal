@@ -633,10 +633,10 @@ class NUM_GUARD_TILES(RuntimeParameter):
 
 @dataclass
 class INPUT_TILE_CNT(RuntimeParameter):
-    tile_cnt: int = 0
+    input_tile_cnt: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int INPUT_TILE_CNT = {self.tile_cnt};"
+        return f"constexpr int INPUT_TILE_CNT = {self.input_tile_cnt};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "int INPUT_TILE_CNT;", "i"
@@ -644,10 +644,10 @@ class INPUT_TILE_CNT(RuntimeParameter):
 
 @dataclass
 class OUTPUT_TILE_CNT(RuntimeParameter):
-    tile_cnt: int = 0
+    output_tile_cnt: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int OUTPUT_TILE_CNT = {self.tile_cnt};"
+        return f"constexpr int OUTPUT_TILE_CNT = {self.output_tile_cnt};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "int OUTPUT_TILE_CNT;", "i"
