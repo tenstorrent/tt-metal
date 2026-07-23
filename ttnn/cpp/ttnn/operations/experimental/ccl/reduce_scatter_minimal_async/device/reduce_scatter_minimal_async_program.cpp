@@ -949,24 +949,12 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 }
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                if (normalized_dim == 0) {
-                    // Indices match the dim_zero writer_rt_args layout below, which now carries the
-                    // opposite-direction core (x,y) at [4],[5] -- so the semaphores shifted to [6],[7],[9].
-                    worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
-                    worker_writer_sender_runtime_args[1] = output.buffer()->address();
-                    worker_writer_sender_runtime_args[6] = semaphore.at(dir).address();
-                    worker_writer_sender_runtime_args[7] = semaphore.at(num_directions_per_link).address();
-                    if (barrier_semaphore.has_value()) {
-                        worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
-                    }
-                } else {
-                    worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
-                    worker_writer_sender_runtime_args[1] = output.buffer()->address();
-                    worker_writer_sender_runtime_args[6] = semaphore.at(dir).address();
-                    worker_writer_sender_runtime_args[7] = semaphore.at(num_directions_per_link).address();
-                    if (barrier_semaphore.has_value()) {
-                        worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
-                    }
+                worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
+                worker_writer_sender_runtime_args[1] = output.buffer()->address();
+                worker_writer_sender_runtime_args[6] = semaphore.at(dir).address();
+                worker_writer_sender_runtime_args[7] = semaphore.at(num_directions_per_link).address();
+                if (barrier_semaphore.has_value()) {
+                    worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
                 }
             }
         }
