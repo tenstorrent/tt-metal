@@ -154,16 +154,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // unmatched clear token, causing the ~2048-cycle stall.
             _perf_math_loop_clear_valid<true, true>(src_handshake_iters);
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
-        {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-            {
-                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
-                {
-                    _llk_math_eltwise_binary_broadcast_(i);
-                }
-            }
-        }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -172,7 +162,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_math_eltwise_binary_broadcast_(i);
                 }
-                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
+                {
+                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                }
             }
         }
         PROFILER_SYNC();

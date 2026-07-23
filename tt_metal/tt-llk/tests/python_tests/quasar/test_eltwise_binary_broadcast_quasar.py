@@ -44,9 +44,10 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
 )
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.utils import passed_test
 
-TILE_ELEMS = 32 * 32
+TILE_ELEMS = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 FACE_ELEMS = 16 * 16
 
 BINARY_BROADCAST_FORMATS = input_output_formats(
@@ -85,7 +86,7 @@ def binary_broadcast_input_dimensions(dest_acc, dest_sync_mode, *, is_perf=False
     if is_perf:
         # Nested list: parametrize treats a flat list as multiple values, so
         # [32, 32] would become input_dimensions=32 (int) and break generate_stimuli.
-        return [[32, 32]]
+        return [[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]]
     return generate_unary_input_dimensions(dest_acc, dest_sync_mode)
 
 
@@ -206,7 +207,6 @@ def test_eltwise_binary_broadcast_quasar(
         ),
         "unpack_to_dest": False,
         "dest_acc": dest_acc,
-        "boot_mode": boot_mode,
         "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
@@ -220,6 +220,7 @@ def test_eltwise_binary_broadcast_quasar(
             **test_config_kwargs,
             "templates": test_config_kwargs["templates"]
             + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+            "boot_mode": boot_mode,
         },
     )
     res_from_L1 = configuration.run().result
