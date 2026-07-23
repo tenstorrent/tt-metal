@@ -327,6 +327,31 @@ class TtIndexer:
             cluster_axis=self.tp_axis,
         )
 
+    def _tp_all_reduce_via_gather(self, t):
+        """All-reduce over TP via gather (dim 1) + local reduce, instead of _tp_rs_ag's reduce-scatter
+        (dim 3) + all-gather. For a narrow dim-3 width (e.g. wts' H_idx=32) that doesn't divide evenly
+        into tile-sized TP shards, _tp_rs_ag's reduce-scatter hits ttnn's composite fallback
+        (use_composite_reduce_scatter) and balloons into ~30 tilize/pad/slice ops. Gathering on dim 1 —
+        the batch/placeholder axis, always size 1 here — has no tile-alignment constraint, so it always
+        takes the fused fast path; fast_reduce_nc then sums the gathered TP axis locally (pure on-device
+        compute, no fabric traffic). Mirrors ttMLA._kv_stem's kv_a_proj_with_mqa all-reduce (mla.py:
+        917-929), measured cheaper even on an 18x-wider tensor than wts."""
+        if self.tp_factor == 1:
+            return t
+        t = ttnn.experimental.all_gather_async(
+            t,
+            dim=1,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.tp_ccl_topology,
+            cluster_axis=self.tp_axis,
+        )
+        return ttnn.experimental.fast_reduce_nc(
+            t, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
+        )
+
     def _sp_all_gather(self, t, dim):
         """All-gather across the SP axis (sequence) → full-S replicated on SP. sp=1: no-op."""
         if self.sp_factor == 1:
@@ -562,7 +587,10 @@ class TtIndexer:
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        wts = self._tp_rs_ag(wts)  # full all-reduce (RS+AG) over tp -> all H_idx head-weights, replicated
+        # H_idx=32 doesn't divide evenly into tile-sized TP=4 shards (8 < tile width), so _tp_rs_ag's
+        # dim-3 reduce-scatter would hit ttnn's composite fallback (~30 extra tilize/pad/slice ops, see
+        # use_composite_reduce_scatter). Gather-then-local-reduce on dim 1 has no such tile constraint.
+        wts = self._tp_all_reduce_via_gather(wts)  # full all-reduce over tp -> all H_idx head-weights, replicated
         # Indexer softmax scale = index_head_dim**-0.5 (NO mscale), matching the reference IndexerCPU
         # (model.py: softmax_scale = head_dim**-0.5). Distinct from MLA's qk_head_dim*mscale**2 scale —
         # though as a uniform positive multiplier it cannot change the top-k selection regardless.
