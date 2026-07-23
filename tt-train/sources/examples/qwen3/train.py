@@ -810,8 +810,9 @@ def main():
             t0 = _tlog(step, "forward", t0)
 
             # Memory snapshot after forward pass (only during first iteration)
-            if args.track_memory and not is_everything_compiled and micro_step == 0:
-                MemoryUsageTracker.snapshot("FORWARD_PASS")
+            if args.track_memory and not is_everything_compiled:
+                fwd_name = f"FORWARD_PASS_micro_{micro_step}" if accum_steps > 1 else "FORWARD_PASS"
+                MemoryUsageTracker.snapshot(fwd_name)
 
             # Cross-entropy loss
             target_tensor = create_target_tensor(y_np, dp_mapper)
@@ -835,8 +836,9 @@ def main():
             t0 = _tlog(step, "backward", t0)
 
             # Memory snapshot after backward pass (only during first iteration)
-            if args.track_memory and not is_everything_compiled and micro_step == 0:
-                MemoryUsageTracker.snapshot("BACKWARD_PASS")
+            if args.track_memory and not is_everything_compiled:
+                bwd_name = f"BACKWARD_PASS_micro_{micro_step}" if accum_steps > 1 else "BACKWARD_PASS"
+                MemoryUsageTracker.snapshot(bwd_name)
 
             ctx.reset_graph()
             t0 = _tlog(step, "reset_graph", t0)
