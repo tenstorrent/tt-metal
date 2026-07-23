@@ -657,3 +657,11 @@
 - Ten replays reduced median device span 0.84802 -> 0.84038 ms (0.90%) and program count 42 -> 41/device/layer. Typecast count across the mesh fell 160 -> 80.
 - The FP32 multiply is slower: summed per-op kernel maxima rose 0.79339 -> 0.80205 ms/device. Prep and fused collective remained 84.05 and 146.31 us, while the serialized device span improved from the removed program boundary.
 - Mesh throughput is 70.45 TFLOP/s or 5.79% of peak. Full hardware regression passed 9/9 in 10.26 s; TP output/recurrent/convolution PCC was 0.999952/0.999903/0.999997.
+
+### 2026-07-23 12:00:29 UTC — Make convolution layout dataflow explicit
+
+- Hypothesis: explicitly untilizing QKV and carry once, then concatenating row-major inputs, avoids concat/native-conv internal layout round-trips without requiring a custom kernel.
+- Report: `/tmp/kda_tp_layer_t640_conv_rm_r10/reports/2026_07_23_12_00_29/ops_perf_results_2026_07_23_12_00_29.csv`; control: `/tmp/kda_tp_layer_t640_fp32_decay_r10/reports/2026_07_23_11_55_48/ops_perf_results_2026_07_23_11_55_48.csv`.
+- Ten replays reduced median device span 0.84038 -> 0.70788 ms (15.8%), active time 0.80205 -> 0.67051 ms/device, and programs 41 -> 38/device/layer.
+- Untilize-with-unpadding fell from three programs and 81.35 us/device/layer to one 2.67 us carry conversion; tilize-with-padding fell from two programs and 56.56 us to one 4.24 us carry conversion. The remaining QKV untilize is 39.04 us.
+- Mesh throughput is 83.64 TFLOP/s or 6.88% of peak. Full hardware regression passed 9/9 in 10.47 s; TP output/recurrent/convolution PCC was 0.999952/0.999903/0.999997.

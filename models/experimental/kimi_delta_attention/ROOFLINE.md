@@ -264,3 +264,24 @@ slower, and summed per-op kernel maxima rise 0.79339 -> 0.80205 ms/device.
 The serialized start-to-end device span nevertheless improves because one
 program boundary is removed. Prep and fused-collective medians remain 84.05
 and 146.31 us, so the retained work distribution is unaffected.
+
+## Row-major convolution-dataflow result
+
+Profile:
+`/tmp/kda_tp_layer_t640_conv_rm_r10/reports/2026_07_23_12_00_29/ops_perf_results_2026_07_23_12_00_29.csv`.
+Explicitly untilizing QKV and carry once, slicing the next carry from that
+row-major QKV, and concatenating in row-major form removes three
+programs/device/layer and the two large internal layout round-trips.
+
+Against the FP32-decay control, median device span falls 0.84038 -> 0.70788 ms
+(15.8%) and median active time falls 0.80205 -> 0.67051 ms/device. The
+untilize-with-unpadding group falls from three programs/device/layer and
+81.35 us aggregate to one 2.67 us carry conversion; tilize-with-padding falls
+from two programs and 56.56 us to one 4.24 us carry conversion. Mesh
+throughput is 83.64 TFLOP/s or 6.88% of eight-chip HiFi4 peak.
+
+The remaining convolution boundary is one 39.04 us QKV untilize, 10.99 us
+concat, 5.49 us shard, 11.59 us halo, 25.88 us convolution, 7.21 us
+unshard, and about 12.9 us SiLU. A custom tile-to-tile causal kernel remains
+a candidate, but its target is now this measured residual rather than the
+eliminated wrapper traffic.
