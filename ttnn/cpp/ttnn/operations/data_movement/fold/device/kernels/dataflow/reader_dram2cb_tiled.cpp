@@ -5,26 +5,25 @@
 #include <stdint.h>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
-    constexpr uint32_t tiles_per_channel_dim = get_compile_time_arg_val(0);
-    constexpr uint32_t tiles_per_width_dim = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(2);
+    constexpr uint32_t tiles_per_channel_dim = get_arg(args::tiles_per_channel_dim);
+    constexpr uint32_t tiles_per_width_dim = get_arg(args::tiles_per_width_dim);
 
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_block_id = get_arg_val<uint32_t>(1);
-    uint32_t num_blocks = get_arg_val<uint32_t>(2);
-
-    constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    uint32_t start_block_id = get_arg(args::start_block_id);
+    uint32_t num_blocks = get_arg(args::num_blocks);
 
     // Initialize interleaved address generator for DRAM access
-    constexpr auto src_args = TensorAccessorArgs<3>();
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
-    experimental::CB cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(dfb::in0);
+
+    const uint32_t tile_bytes = cb_in0.get_tile_size();
 
     // Process each block of data
     uint32_t end_block_id = start_block_id + num_blocks;

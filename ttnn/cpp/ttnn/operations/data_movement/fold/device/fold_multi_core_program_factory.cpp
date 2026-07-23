@@ -5,10 +5,10 @@
 #include "fold_device_op.hpp"
 
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_align.hpp>
 
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -16,8 +16,25 @@
 namespace ttnn::operations::data_movement {
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
-ProgramDescriptor Fold::MultiCore::create_descriptor(
+namespace {
+
+// Metal 2.0 named resource handles for the sharded fold ProgramSpec.
+// Prefixed to stay distinct under unity builds.
+const DFBSpecName FOLD_SH_SRC0{"fold_sh_src0"};
+const DFBSpecName FOLD_SH_DST0{"fold_sh_dst0"};
+const TensorParamName FOLD_SH_INPUT{"fold_sh_input"};
+const TensorParamName FOLD_SH_OUTPUT{"fold_sh_output"};
+const KernelSpecName FOLD_SH_WRITER{"fold_sh_writer"};
+const KernelSpecName FOLD_SH_READER{"fold_sh_reader"};
+
+constexpr const char* FOLD_SH_KERNEL =
+    "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp";
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -42,86 +59,105 @@ ProgramDescriptor Fold::MultiCore::create_descriptor(
     uint32_t num_dst_rows = num_pixels / (width * stride_h);
     uint32_t pixels_per_dst_row = stride_h * width;
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
-
-    ProgramDescriptor desc;
-
-    // Input CB — globally allocated to the sharded input buffer.
-    // The descriptor framework patches the CB address on cache hits via cb.buffer.
-    const uint32_t cb_src0_index = tt::CBIndex::c_0;
     const uint32_t aligned_pixel_size = tt::align(pixel_size, hal::get_l1_alignment());
-    {
-        CBDescriptor cb_src0;
-        cb_src0.total_size = num_pixels * aligned_pixel_size;
-        cb_src0.core_ranges = all_cores;
-        cb_src0.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_src0_index),
-            .data_format = cb_data_format,
-            .page_size = aligned_pixel_size,
-        });
-        cb_src0.buffer = src_buffer;
-        desc.cbs.push_back(std::move(cb_src0));
-    }
-
-    // Output CB — globally allocated to the sharded output buffer.
-    const uint32_t cb_dst0_index = tt::CBIndex::c_16;
     const uint32_t aligned_dst_pixel_size = tt::align(dst_pixel_size, hal::get_l1_alignment());
-    {
-        CBDescriptor cb_dst0;
-        cb_dst0.total_size = num_dst_pixels * aligned_dst_pixel_size;
-        cb_dst0.core_ranges = all_cores;
-        cb_dst0.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_dst0_index),
-            .data_format = cb_data_format,
-            .page_size = aligned_dst_pixel_size,
-        });
-        cb_dst0.buffer = dst_buffer;
-        desc.cbs.push_back(std::move(cb_dst0));
-    }
 
-    std::vector<uint32_t> compile_time_args = {
-        cb_src0_index,
-        cb_dst0_index,
-        pixel_size,
-        aligned_pixel_size,
-        aligned_dst_pixel_size,
-        stride_w * aligned_pixel_size,
-        width * aligned_pixel_size,
-        stride_h,
-        stride_w,
-        num_dst_rows,
-        width / stride_w,
-        pixels_per_dst_row * aligned_pixel_size,
-        input.element_size(),
-        true,  // is_reader (overwritten below for the writer kernel)
+    // Input DFB — borrowed onto the sharded input buffer (formerly a globally-allocated CB).
+    // The backing L1 address resolves at runtime from the FOLD_SH_INPUT tensor argument.
+    DataflowBufferSpec src0_dfb{
+        .unique_id = FOLD_SH_SRC0,
+        .entry_size = aligned_pixel_size,
+        .num_entries = num_pixels,
+        .data_format_metadata = cb_data_format,
+        .borrowed_from = FOLD_SH_INPUT,
     };
 
-    // Writer kernel: shares the same source as the reader (a single kernel file selects
-    // its role from the last compile-time arg). Build optimization level Os was faster
-    // than O2 when this kernel was originally tuned.
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = compile_time_args;
-    writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.opt_level = KernelBuildOptLevel::Os;
-    desc.kernels.push_back(std::move(writer_desc));
+    // Output DFB — borrowed onto the sharded output buffer.
+    DataflowBufferSpec dst0_dfb{
+        .unique_id = FOLD_SH_DST0,
+        .entry_size = aligned_dst_pixel_size,
+        .num_entries = num_dst_pixels,
+        .data_format_metadata = cb_data_format,
+        .borrowed_from = FOLD_SH_OUTPUT,
+    };
 
-    compile_time_args[13] = false;  // is_reader = false for the reader-data-movement variant
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.opt_level = KernelBuildOptLevel::Os;
-    desc.kernels.push_back(std::move(reader_desc));
+    TensorParameter input_param{.unique_id = FOLD_SH_INPUT, .spec = input.tensor_spec()};
+    TensorParameter output_param{.unique_id = FOLD_SH_OUTPUT, .spec = output.tensor_spec()};
 
-    return desc;
+    // Named compile-time args shared by both instances. The legacy `is_reader` CTA (a per-instance
+    // literal that splits the output columns between the two same-source instances) is appended
+    // per instance below. The two magic CB-index CTAs are gone — replaced by DFB bindings.
+    const KernelSpec::CompileTimeArgs common_cta{
+        {"pixel_size", pixel_size},
+        {"aligned_pixel_size", aligned_pixel_size},
+        {"aligned_dst_pixel_size", aligned_dst_pixel_size},
+        {"aligned_chunk_size", stride_w * aligned_pixel_size},
+        {"aligned_row_size", width * aligned_pixel_size},
+        {"stride_h", stride_h},
+        {"stride_w", stride_w},
+        {"num_dst_rows", num_dst_rows},
+        {"num_dst_cols", width / stride_w},
+        {"dst_row_offset", pixels_per_dst_row * aligned_pixel_size},
+        {"element_size", input.element_size()},
+    };
+
+    // Dual-instance work-split: one kernel source instantiated twice over the same grid,
+    // splitting the output columns. Both instances raw-touch both borrowed DFBs (no FIFO ops),
+    // so the endpoints are role-free — assign 1P+1C per DFB (cosmetic on Gen1), not multi-binding.
+    // Build optimization level Os was faster than O2 when this kernel was originally tuned.
+    auto make_cta = [&](uint32_t is_reader) {
+        KernelSpec::CompileTimeArgs cta = common_cta;
+        cta.insert({"is_reader", is_reader});
+        return cta;
+    };
+
+    KernelSpec writer_spec{
+        .unique_id = FOLD_SH_WRITER,
+        .source = std::filesystem::path{FOLD_SH_KERNEL},
+        .compiler_options = {.opt_level = KernelBuildOptLevel::Os},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = FOLD_SH_SRC0, .accessor_name = "src0", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = FOLD_SH_DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .compile_time_args = make_cta(/*is_reader=*/1),
+        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
+    };
+
+    KernelSpec reader_spec{
+        .unique_id = FOLD_SH_READER,
+        .source = std::filesystem::path{FOLD_SH_KERNEL},
+        .compiler_options = {.opt_level = KernelBuildOptLevel::Os},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = FOLD_SH_SRC0, .accessor_name = "src0", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = FOLD_SH_DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .compile_time_args = make_cta(/*is_reader=*/0),
+        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+    };
+
+    ProgramSpec spec{
+        .name = "fold_multi_core_sharded",
+        .kernels = {writer_spec, reader_spec},
+        .dataflow_buffers = {src0_dfb, dst0_dfb},
+        .tensor_parameters = {input_param, output_param},
+        .work_units = {WorkUnitSpec{
+            .name = "main",
+            .kernels = {FOLD_SH_WRITER, FOLD_SH_READER},
+            .target_nodes = all_cores,
+        }},
+    };
+
+    ProgramRunArgs run_args;
+    // No runtime args on either kernel; provide empty entries so every kernel has a KernelRunArgs.
+    run_args.kernel_run_args = {KernelRunArgs{.kernel = FOLD_SH_WRITER}, KernelRunArgs{.kernel = FOLD_SH_READER}};
+    run_args.tensor_args = {
+        {FOLD_SH_INPUT, TensorArgument{input.mesh_tensor()}},
+        {FOLD_SH_OUTPUT, TensorArgument{output.mesh_tensor()}},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::operations::data_movement
