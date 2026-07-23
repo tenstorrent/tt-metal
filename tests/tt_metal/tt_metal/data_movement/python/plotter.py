@@ -53,6 +53,10 @@ class Plotter:
             # For direct write tests, use one plot (1x1 grid)
             config["nrows_per_figure"] = 1
             config["ncols_per_figure"] = 1
+        if "Quasar Cache Write" in test_name:
+            # Single duration-vs-size plot (two path series); avoid a blank second panel
+            config["nrows_per_figure"] = 1
+            config["ncols_per_figure"] = 1
         return config
 
     def get_bandwidth_mode(self, test_id):

@@ -5,6 +5,12 @@
 """Reconstruct and plot Quasar cache-write results (test id 912) directly from the
 profiler device CSV, without relying on ``run_host_id``.
 
+TEMPORARY: this is a stopgap script. Its CSV-order reconstruction is meant to be
+folded into the shared dm pipeline (``stats_collector.aggregate_performance``) as
+an order-based fallback for when ``run_host_id`` collides, at which point
+``test_data_movement.py --plot`` plots these curves directly and this standalone
+script should be removed.
+
 Why this exists
 ---------------
 On the ``emu-quasar-1x3`` target there are no fast-dispatch cores, so the test
