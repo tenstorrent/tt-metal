@@ -20,14 +20,7 @@
 #include "context/context_types.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/realtime_profiler/realtime_profiler_service.hpp"
-
-namespace tt::umd {
-class TlbWindow;
-}
-
-namespace tt::tt_metal::experimental {
-class PinnedMemory;
-}
+#include "tt_metal/distributed/realtime_profiler_clock_sync.hpp"
 
 namespace tt::tt_metal {
 
@@ -83,28 +76,7 @@ private:
         std::unique_ptr<Program> realtime_profiler_program;
         RealtimeProfilerCoreL1Addrs core_l1;
         bool fifo_reached_capacity = false;
-        double sync_frequency = 0.0;
-        // Device cycle at host time 0: device_cycle = sync_frequency * host_ns + device_cycle_offset. Set from the fit
-        // in run_sync and re-anchored (slope held fixed) by the servo every kServoInterval so its motion tracks drift.
-        int64_t device_cycle_offset = 0;
-        // Round trip of the most recent handshake, host ticks; the re-anchor places device_time at the midpoint
-        // (+RTT/2), and half of it is the reported sync uncertainty (clock_sync.sync_error_ns).
-        int64_t sync_rtt_ticks = 0;
-        uint32_t sync_host_ts_addr = 0;
-        uint32_t sync_seq = 0;  // monotonic per-handshake token (never 0); distinct so a stale ACK can't false-match
-        // Host-memory sync-ACK buffer (kSyncAckWords words: [token, device_time_lo, device_time_hi]) the device
-        // NOC-writes into (device->host, bypassing the record FIFO); the host polls the token locally to time the round
-        // trip, then reads device_time from the same buffer. Backing + PinnedMemory held for the manager's lifetime.
-        std::shared_ptr<uint32_t[]> ack_host_backing;
-        std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> ack_pinned;
-        volatile uint32_t* ack_host_ptr = nullptr;
-        // Cached UMD TLB window to this device's profiler core, resolved once at init on architectures that map L1
-        // statically (Blackhole). When set, the sync timestamp is written with a single MMIO store instead of
-        // WriteToDeviceL1; null elsewhere (see write_sync_timestamp). Owned by UMD's TLBManager, not us.
-        tt::umd::TlbWindow* sync_tlb = nullptr;
-        // Updated after each successful re-anchor; paces the servo to at most one re-anchor per kServoInterval per
-        // device.
-        std::optional<std::chrono::steady_clock::time_point> last_reanchor_at;
+        RealtimeProfilerClockSync clock_sync;
 
         DeviceState();
         ~DeviceState();
@@ -117,22 +89,7 @@ private:
     // Set up the D2H socket and launch the BRISC/NCRISC kernels on each eligible local device. Devices failing the
     // eligibility gate or socket creation are skipped.
     void initialize_devices(const std::shared_ptr<MeshDevice>& mesh_device);
-    bool run_sync(DeviceState& dev_state, uint32_t num_samples);
     void run_init_sync();
-
-    // Re-anchor dev_state.device_cycle_offset from a fresh (host_anchor, device_anchor) sync point, holding the fitted
-    // slope fixed. Run every servo tick; a plain offset re-anchor beat a 2-state Kalman on the p99 tail in ablation
-    // (the filter rang on AICLK excursions), so the mapping tracks drift purely by re-anchoring often.
-    void reanchor_device_cycle_offset(DeviceState& dev_state, int64_t host_anchor, uint64_t device_anchor);
-
-    // Round trip of a sync handshake: after write_sync_timestamp(host_time_id), busy-poll the pinned host word the
-    // device NOC-writes the token into (bypassing the record FIFO) until it reads host_time_id, timed from
-    // host_before. Upper-bounds the one-way host->device latency by causality. Returns 0 if no host ACK word.
-    int64_t measure_sync_rtt_ticks(const DeviceState& dev_state, int64_t host_before, uint32_t host_time_id);
-
-    // Publish dev_state's current calibration to the process-wide per-chip cache so a rapid MeshDevice reopen can
-    // reuse it (see kRtProfilerMinSyncInterval) instead of re-running the host-device sync.
-    void cache_calibration(const DeviceState& dev_state);
 
     // Receiver thread entry point: drain every device socket, run the sync servo, and publish decoded records to the
     // context-wide service's ring readers.
@@ -154,24 +111,6 @@ private:
         const uint32_t* page_buf,
         uint32_t num_pages,
         std::vector<tt::ProgramRealtimeRecord>& records);
-    // Writes the 32-bit host timestamp to the profiler core for a sync handshake, via the cached TLB window when
-    // available (one MMIO store) or WriteToDeviceL1 otherwise. The host->device latency of this write is the
-    // sync-error floor, so the fast path measurably tightens it (~3x lower jitter on Blackhole).
-    void write_sync_timestamp(DeviceState& dev_state, uint32_t value);
-    // Arch/IOMMU-specific host<->device sync transport, established at init and used per handshake; the per-handshake
-    // paths branch on dev_state.sync_tlb and d2h_hugepage_fallback_.
-    void configure_sync_write_path(DeviceState& dev_state, IDevice* device);
-    void configure_sync_ack_word(
-        DeviceState& dev_state,
-        IDevice* device,
-        const std::shared_ptr<MeshDevice>& mesh_device,
-        uint32_t enc_addr,
-        uint32_t lo_addr,
-        uint32_t hi_addr);
-    uint32_t read_sync_ack(const DeviceState& dev_state) const;
-    // Device WALL_CLOCK the servicing kernel pushed into the ACK buffer alongside the token; valid only once
-    // read_sync_ack has observed the current handshake's token.
-    uint64_t read_sync_device_time(const DeviceState& dev_state) const;
     void service_offset_servo(std::chrono::steady_clock::time_point now);
 
     // Owning MeshDevice's ContextId; all MetalContext access must go through instance(context_id_) so a non-default

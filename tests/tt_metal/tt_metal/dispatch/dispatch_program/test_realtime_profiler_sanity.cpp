@@ -47,7 +47,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 
-#include "tt_metal/impl/realtime_profiler/realtime_profiler_host_clock.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -566,12 +565,16 @@ TEST(RealtimeProfilerSanity, RecordHostTimeFallsInDispatchWindow) {
         int64_t after_ticks;
     };
     std::map<uint32_t, HostWindow> windows;
+    const auto host_ns = [] {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    };
     constexpr uint32_t kFirstMeasured = 2;
     constexpr uint32_t kNumMeasured = 8;
     for (uint32_t runtime_id = kFirstMeasured; runtime_id < kFirstMeasured + kNumMeasured; ++runtime_id) {
-        const int64_t before = realtime_profiler_host_timestamp();
+        const int64_t before = host_ns();
         enqueue_blocking(runtime_id);  // blocks until the program completes on device
-        const int64_t after = realtime_profiler_host_timestamp();
+        const int64_t after = host_ns();
         windows[runtime_id] = {before, after};
     }
 

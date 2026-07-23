@@ -22,7 +22,6 @@
 #include <common/TracyTTDeviceData.hpp>
 
 #include "context/metal_context.hpp"
-#include "realtime_profiler_host_clock.hpp"
 #include "tt_metal/impl/profiler/profiler.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include "tt_metal/impl/profiler/profiler_state_manager.hpp"
@@ -178,14 +177,18 @@ int64_t RealtimeProfilerTracyConsumer::HostMonoNsToTracyCpuTicks(int64_t host_mo
     // interrupt landing between the two mono reads stretches the bracket and skews the midpoint, so keep the tightest
     // of several attempts (the NTP/PTP correlation trick) — this drops the rare ~µs excursion to a ~ns floor. The
     // anchor is recent, so applying Tracy's ns/tick over the small delta adds no long-baseline ppm error.
+    const auto mono_ns = [] {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    };
     constexpr int kCorrelationAttempts = 8;
     int64_t best_gap = std::numeric_limits<int64_t>::max();
     int64_t mono_now = 0;
     int64_t tracy_now = 0;
     for (int i = 0; i < kCorrelationAttempts; ++i) {
-        const int64_t mono_before = realtime_profiler_host_timestamp();
+        const int64_t mono_before = mono_ns();
         const int64_t tracy = TracyGetCpuTime();
-        const int64_t mono_after = realtime_profiler_host_timestamp();
+        const int64_t mono_after = mono_ns();
         const int64_t gap = mono_after - mono_before;
         if (gap < best_gap) {
             best_gap = gap;
