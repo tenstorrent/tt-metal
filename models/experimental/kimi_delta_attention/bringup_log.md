@@ -665,3 +665,11 @@
 - Ten replays reduced median device span 0.84038 -> 0.70788 ms (15.8%), active time 0.80205 -> 0.67051 ms/device, and programs 41 -> 38/device/layer.
 - Untilize-with-unpadding fell from three programs and 81.35 us/device/layer to one 2.67 us carry conversion; tilize-with-padding fell from two programs and 56.56 us to one 4.24 us carry conversion. The remaining QKV untilize is 39.04 us.
 - Mesh throughput is 83.64 TFLOP/s or 6.88% of peak. Full hardware regression passed 9/9 in 10.47 s; TP output/recurrent/convolution PCC was 0.999952/0.999903/0.999997.
+
+### 2026-07-23 12:07:07 UTC — Keep the convolution cache row-major
+
+- Hypothesis: the layer-owned 3-token cache can stay row-major across aligned prefill and eliminate its untilize/re-tilize pair.
+- The first full suite failed at recurrent T=1 because the reused FIR helper concat requires tile inputs (`ttnn_gated_deltanet.py:104`). TP chunk tests had passed. Converting at the legacy FIR boundary localized that requirement; the rerun passed 9/9 in 13.96 s with TP PCC 0.999952/0.999903/0.999997.
+- Report: `/tmp/kda_tp_layer_t640_rm_cache_r10/reports/2026_07_23_12_07_07/ops_perf_results_2026_07_23_12_07_07.csv`; control: `/tmp/kda_tp_layer_t640_conv_rm_r10/reports/2026_07_23_12_00_29/ops_perf_results_2026_07_23_12_00_29.csv`.
+- Ten replays reduced median device span 0.70788 -> 0.69876 ms (1.29%), active time 0.67051 -> 0.66295 ms/device, and programs 38 -> 36/device/layer.
+- Mesh throughput is 84.73 TFLOP/s or 6.97% of peak. Prep/scan/fused-output medians remained 84.30/96.99/146.36 us.

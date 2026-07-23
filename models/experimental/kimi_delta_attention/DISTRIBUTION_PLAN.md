@@ -179,6 +179,11 @@ unchanged. This removes layout traffic without changing ownership: retain the
 same TP and core map. Revisit a private tile-to-tile causal kernel only against
 the remaining measured conv boundary.
 
+The layer-owned convolution cache is row-major to match aligned prefill; the
+legacy FIR fallback alone adapts it to tile layout. This removes two more
+target-path programs and reduces traced latency 0.70788 -> 0.69876 ms without
+changing tensor ownership, prep/scan workers, or collective placement.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence

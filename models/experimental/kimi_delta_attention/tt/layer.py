@@ -97,7 +97,7 @@ class KimiDeltaAttention:
                 self._convolution_width,
             ),
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -185,10 +185,12 @@ class KimiDeltaAttention:
             (0, sequence - (config.conv_kernel_size - 1), 0),
             (1, sequence, channels),
         )
-        new_state = ttnn.to_memory_config(
-            ttnn.to_layout(new_state, ttnn.TILE_LAYOUT),
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if self.convolution_state.layout != ttnn.ROW_MAJOR_LAYOUT:
+            new_state = ttnn.to_layout(
+                new_state,
+                self.convolution_state.layout,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         conv_input = ttnn.concat(
             [state_row_major, qkv_row_major],
             dim=1,
@@ -275,6 +277,13 @@ class KimiDeltaAttention:
         if mode == "chunk" and batch == 1 and sequence >= ttnn.TILE_SIZE:
             qkv, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence)
         else:
+            convolution_state = self.convolution_state
+            if convolution_state.layout != ttnn.TILE_LAYOUT:
+                convolution_state = ttnn.to_layout(
+                    convolution_state,
+                    ttnn.TILE_LAYOUT,
+                    memory_config=memory_config,
+                )
             qkv, new_convolution_state = _causal_conv1d_fir(
                 qkv,
                 None,
@@ -282,7 +291,7 @@ class KimiDeltaAttention:
                 config.conv_kernel_size,
                 self.device,
                 memory_config=memory_config,
-                conv_state=self.convolution_state,
+                conv_state=convolution_state,
                 weight_taps=weights.convolution_taps,
             )
         q = _slice_width(qkv, 0, config.q_dim)
@@ -418,6 +427,12 @@ class KimiDeltaAttention:
 
         if self.use_inplace_state:
             ttnn.copy(new_recurrent_state, self.recurrent_state)
+            if new_convolution_state.layout != self.convolution_state.layout:
+                new_convolution_state = ttnn.to_layout(
+                    new_convolution_state,
+                    self.convolution_state.layout,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
             ttnn.copy(new_convolution_state, self.convolution_state)
         else:
             self.recurrent_state = new_recurrent_state
