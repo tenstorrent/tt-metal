@@ -1494,6 +1494,17 @@ Result conv2d_DRAM(
         conv_config.weights_dtype = weight_tensor.dtype();
     }
 
+    // [#48552] padded_slice (run_sliced_op's per-slice input gather) selects its factory by INPUT LAYOUT:
+    // ROW_MAJOR -> PaddedSliceRMProgramFactory (data-movement only, Quasar-safe); TILE ->
+    // PaddedSliceTileProgramFactory, whose untilize ComputeKernel is UNPORTED on Quasar and throws
+    // "ComputeKernel is not supported on Quasar. Use QuasarComputeKernel instead." The conv im2col reader
+    // consumes ROW_MAJOR sticks and tilizes internally (Program A), so force the sliced source to ROW_MAJOR
+    // here. This is inside conv2d_DRAM so it covers BOTH callers -- the conv2d_L1 DFB-ring guard and the
+    // top-level determine_conv2d_execution_path DRAM route. No-op for the already-RM stem.
+    if (input_tensor_on_device.layout() != Layout::ROW_MAJOR) {
+        input_tensor_on_device =
+            ttnn::operations::experimental::quasar::to_layout(input_tensor_on_device, Layout::ROW_MAJOR);
+    }
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
     input_tensor_on_device = ttnn::operations::experimental::quasar::reshape(
         input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
@@ -1526,7 +1537,7 @@ Result conv2d_DRAM(
         padding_n4,
         dilation,
         groups,
-        input_tensor.layout(),
+        input_tensor_on_device.layout(),  // ROW_MAJOR (forced above) so the per-slice conv matches the RM padded_slice
         input_tensor.dtype(),
         output_dtype,
         std::ref(weight_tensor_on_device),
