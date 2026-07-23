@@ -410,3 +410,19 @@ throughput is 88.72 TFLOP/s or 7.29%.
 The fused output collective is unchanged at approximately 148 us. This
 epilogue removes local passes after recurrence; it does not change head
 ownership or collective placement.
+
+
+## Fused decay Softplus-multiply
+
+Profile:
+`/tmp/kda_tp_layer_t640_fused_softplus_mul_r10/reports/2026_07_23_12_57_57/ops_perf_results_2026_07_23_12_57_57.csv`.
+BinaryNg applies parameterized Softplus to the projected decay operand while
+multiplying by the decay scale. Against the gated-RMS control, median
+slowest-device span falls 667.330 -> 658.960 us (1.25%), active time falls
+639.418 -> 633.656 us/device, and programs fall 31 -> 30/device/layer.
+Unary time falls 20.702 -> 15.403 us while BinaryNg rises only
+20.940 -> 21.976 us.
+
+The 67.594 GFLOP executed path reaches 102.58 TFLOP/s or 8.43% of eight-chip
+peak. Conservative factorized-work throughput is 89.85 TFLOP/s or 7.39%.
+Prep, scan, and collective medians are unchanged within run variance.

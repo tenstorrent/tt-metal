@@ -320,10 +320,10 @@ class KimiDeltaAttention:
                 decay_rank,
                 weights.decay_output_projection,
                 bias=decay_bias,
-                activation="softplus",
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_config,
             )
+            gate_activations = [ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)]
         else:
             raw_gate = ttnn.linear(
                 decay_rank,
@@ -336,9 +336,11 @@ class KimiDeltaAttention:
             decay_scale = weights.decay_scale
             gate = ttnn.add(raw_gate, decay_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             gate = ttnn.softplus(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            gate_activations = []
         gate = ttnn.multiply(
             decay_scale,
             gate,
+            input_tensor_b_activations=gate_activations,
             dtype=ttnn.float32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

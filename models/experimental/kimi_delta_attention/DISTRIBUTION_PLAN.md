@@ -232,3 +232,9 @@ token-major output directly, removing separate RMSNorm and head-concat
 programs and reducing layer span 0.67934 -> 0.66733 ms. It preserves
 four-head/device ownership and leaves the 80-core prep, 16-core scan, and
 8x8 output/Ring reduce-scatter distribution unchanged.
+
+
+Fusing decay Softplus into its consuming scale multiply removes one local
+program and reduces layer span 0.66733 -> 0.65896 ms. Prep, scan, and
+collective medians remain 84.15, 97.31, and 148.78 us, respectively. This is
+another launch-chain reduction; retain the existing head, core, and CCL map.
