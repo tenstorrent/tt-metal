@@ -772,6 +772,8 @@ class VAEDecoderTTNN(Module):
         super().__init__()
         self.mesh_device = mesh_device
         self.dtype = dtype
+        self.latent_h = int(latent_h)
+        self.latent_w = int(latent_w)
         self.conv_in = ConvInTTNN(mesh_device, dtype=dtype, t=latent_t, h=latent_h, w=latent_w)
         self.mid = MidBlockTTNN(mesh_device, dtype=dtype, t=latent_t, h=latent_h, w=latent_w)
         self.decoder_up = DecoderUpTTNN(
