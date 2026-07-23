@@ -73,7 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         num_faces,
         num_faces);
 
-    const std::uint32_t tilize_num_faces = _llk_unpack_tilize_num_faces_wrapper_(num_faces);
+    const std::uint32_t tilize_num_faces = num_faces;
     const std::uint32_t block_ct_dim     = _llk_unpack_tilize_block_ct_dim_wrapper_(params.BLOCK_CT_DIM);
 
     _llk_unpack_tilize_init_wrapper_(
