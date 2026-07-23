@@ -23,8 +23,8 @@ permissions:
   packages: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
-    github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.architecture || 'all' }}-${{
+    github.ref_protected && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
