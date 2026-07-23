@@ -247,6 +247,7 @@ void kernel_main() {
 #endif
 
 #endif
+#ifndef GN_READER_PROBE
                     if (cur_read_iteration == 0 || cur_read_iteration == 1) {
                         //Section for waiting for local reduce to be pushed to a cb_ex_partial
                         reduce_sender_sem.set(INVALID);
@@ -307,9 +308,11 @@ void kernel_main() {
                         cb_reread_out.push_back(out_block_hw_normal);
 #endif
                     }
+#endif
                     out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                 }
 
+#ifndef GN_READER_PROBE
                 if (cur_read_iteration == 0 || cur_read_iteration == 1) {
                     reduce_sender_sem.set(INVALID);
                     if (cur_read_iteration == 0) {
@@ -322,6 +325,7 @@ void kernel_main() {
                         cb_ex2_global.push_back(1);
                     }
                 }
+#endif
             }
 
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {

@@ -277,6 +277,22 @@ void kernel_main() {
         cb_ex_external_tiles_required++;
     }
 
+#ifdef GN_READER_PROBE
+    // Pure-reader probe: the reader gathers the ROW_MAJOR input into cb_in0 (iteration 0 only,
+    // out_block_hw_normal tiles per out-block, for every group of every batch) and skips all
+    // reduction/mcast. Do no math -- just drain cb_in0 at that exact cadence so the reader never
+    // stalls on cb_reserve_back, then exit. Isolates the DRAM-gather cost for profiling.
+    for (uint32_t b = 0; b < batch; ++b) {
+        for (uint32_t g = 0; g < group; ++g) {
+            for (uint32_t ob = 0; ob < num_out_blocks_padded; ++ob) {
+                cb_in0.wait_front(out_block_hw_normal);
+                cb_in0.pop_front(out_block_hw_normal);
+            }
+        }
+    }
+    return;
+#endif
+
     // Start Batch Loop
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;

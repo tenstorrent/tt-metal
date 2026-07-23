@@ -14,6 +14,11 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
+#ifdef GN_READER_PROBE
+    // Pure-reader probe: compute produces no output, so the writer has nothing to write. Exit
+    // immediately so only the reader's DRAM gather contributes to the profiled kernel time.
+    return;
+#endif
     constexpr bool is_mcast_sender = get_named_compile_time_arg_val("is_mcast_sender") == 1;
     constexpr bool fuse_gamma = get_named_compile_time_arg_val("fuse_gamma") == 1;
     constexpr bool fuse_beta = get_named_compile_time_arg_val("fuse_beta") == 1;

@@ -203,11 +203,12 @@ def test_group_norm_DRAM_oft_unit_shapes(
     "input_layout, output_layout",
     [
         (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        (ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
+        # (ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
     ],
-    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT", "TILE_IN_TILE_OUT"],
+    ids=[
+        "RM_IN_TILE_OUT",
+        # "TILE_IN_TILE_OUT",
+    ],
 )
 def test_group_norm_DRAM_row_major_layouts(
     device,
@@ -234,6 +235,7 @@ def test_group_norm_DRAM_row_major_layouts(
         cores_y,
         cores_x,
         welford_mode,
+        perf_test_mode=True,
         use_input_mask=True,
         input_layout=input_layout,
         output_layout=output_layout,

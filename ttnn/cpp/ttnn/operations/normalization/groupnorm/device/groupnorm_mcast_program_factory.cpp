@@ -7,6 +7,7 @@
 #include "kernels/groupnorm_constants.hpp"
 
 #include <bit>
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <optional>
@@ -225,6 +226,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
+    // Pure-reader probe (opt-in via env GN_READER_PROBE): strip the readers down to just the
+    // ROW_MAJOR input gather and turn compute/writer into no-op CB drains, so a profiler run
+    // isolates the cost of the tiny-transaction DRAM gather. Only meaningful on the TILIZE_IN
+    // (ROW_MAJOR-input) path; unset -> normal behavior, so it never affects CI or real runs.
+    const bool gn_reader_probe = tilize_in && (std::getenv("GN_READER_PROBE") != nullptr);
+
     // ROW_MAJOR output with tile-straddling groups (block_w_last != block_w) requires out_block_h == 1;
     // cross-group untilize corrupts mt > 0 tile-rows otherwise.
     if (!use_welford && untilize_out && block_wt_last != block_wt) {
@@ -425,6 +432,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         reader_mcast_sender_defines["UNTILIZE_OUT"] = "1";
         reader_mcast_receiver_defines["UNTILIZE_OUT"] = "1";
     }
+    if (gn_reader_probe) {
+        reader_mcast_sender_defines["GN_READER_PROBE"] = "1";
+        reader_mcast_receiver_defines["GN_READER_PROBE"] = "1";
+    }
 
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1 = {};
     std::unordered_map<std::string, uint32_t> reader_mcast_sender_named_compile_time_args = {
@@ -596,6 +607,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     if (untilize_out) {
         writer_defines["UNTILIZE_OUT"] = "1";
     }
+    if (gn_reader_probe) {
+        writer_defines["GN_READER_PROBE"] = "1";
+    }
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = writer_kernel;
@@ -618,6 +632,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     }
     if (untilize_out) {
         eltwise_binary_defines["UNTILIZE_OUT"] = "1";
+    }
+    if (gn_reader_probe) {
+        eltwise_binary_defines["GN_READER_PROBE"] = "1";
     }
 
     std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_1 = {};

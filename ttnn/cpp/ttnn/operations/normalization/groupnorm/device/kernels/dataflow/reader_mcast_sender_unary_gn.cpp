@@ -320,8 +320,10 @@ void kernel_main() {
                 //Definition: num_read_of_input = 3
                 for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
                     uint32_t out_block_start_id_offset = 0;
+#ifndef GN_READER_PROBE
                     cb_ex_external.reserve_back(cb_ex_external_tiles_required);
                     uint32_t l1_write_addr_external = cb_ex_external.get_write_ptr();
+#endif
 
                     for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                         uint32_t out_block_h_actual, out_block_hw_actual;
@@ -373,6 +375,7 @@ void kernel_main() {
                         cb_in0.push_back(out_block_hw_normal);
 #endif
 #endif
+#ifndef GN_READER_PROBE
                         if (cur_read_iteration== 0 || cur_read_iteration== 1) {
                             if (cur_read_iteration== 0) {
                                 cb_ex_partial.wait_front(1);
@@ -486,8 +489,10 @@ void kernel_main() {
                             cb_reread_out.push_back(out_block_hw_normal);
 #endif
                         }
+#endif
                         out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                     }
+#ifndef GN_READER_PROBE
                     if (cur_read_iteration== 0 || cur_read_iteration == 1) {
                         cb_ex_external.push_back(cb_ex_external_tiles_required);
 
@@ -566,6 +571,7 @@ void kernel_main() {
                             }
                         }
                     }
+#endif
                 }
                 if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
                     if (row_offset == tile_width) {
