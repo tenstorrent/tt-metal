@@ -50,7 +50,44 @@ inline WelfordStats<float> combine(const WelfordStats<float>& a, const WelfordSt
 }
 
 /**
+ * @brief Combine two sets of Welford stats where both subgroups have equal count.
+ *        Uses precomputed reciprocals to avoid runtime FP divisions.
+ *        Equivalent to combine(a, b) when a.count == b.count, but division-free.
+ * @tparam COUNT_PER_SUBGROUP Number of elements in each subgroup (compile-time known).
+ * @param a First WelfordStats (must have count == COUNT_PER_SUBGROUP).
+ * @param b Second WelfordStats (must have count == COUNT_PER_SUBGROUP).
+ * @return Combined WelfordStats with count == 2 * COUNT_PER_SUBGROUP.
+ */
+template <std::uint32_t COUNT_PER_SUBGROUP>
+inline WelfordStats<float> combine_equal_count(const WelfordStats<float>& a, const WelfordStats<float>& b) {
+    // Both subgroups have COUNT_PER_SUBGROUP elements, so combined count is 2*COUNT_PER_SUBGROUP.
+    // Precompute reciprocals at compile time — no runtime FP divisions.
+    constexpr float inv_combined = 1.0f / static_cast<float>(2 * COUNT_PER_SUBGROUP);
+
+    const float delta = b.mean - a.mean;
+    // mean = a.mean + delta * (b.count / (a.count + b.count)) = a.mean + delta * 0.5f
+    // but we use the precomputed form for consistency:
+    const float b_ratio = static_cast<float>(COUNT_PER_SUBGROUP) * inv_combined;  // = 0.5f
+
+    WelfordStats<float> result;
+    result.count = 2 * COUNT_PER_SUBGROUP;
+    result.mean = a.mean + delta * b_ratio;
+
+    const float m2_a = a.variance * static_cast<float>(COUNT_PER_SUBGROUP);
+    const float m2_b = b.variance * static_cast<float>(COUNT_PER_SUBGROUP);
+    // variance = (m2_a + m2_b + delta^2 * (a.count * b.count / (a.count + b.count))) / (a.count + b.count)
+    // = (m2_a + m2_b + delta^2 * COUNT_PER_SUBGROUP * 0.5f) * inv_combined
+    result.variance =
+        (m2_a + m2_b + delta * delta * (static_cast<float>(COUNT_PER_SUBGROUP) * static_cast<float>(COUNT_PER_SUBGROUP) * inv_combined)) * inv_combined;
+
+    return result;
+}
+
+/**
  * @brief Combine ARRAY_SIZE subgroup stats into overall mean and variance (float version).
+ *        Uses the equal-count optimization: all subgroups have COUNT_PER_VALUE elements,
+ *        so we accumulate centered sums and compute the result with a precomputed
+ *        reciprocal, avoiding all runtime FP divisions.
  * @tparam ARRAY_SIZE Number of subgroups.
  * @tparam COUNT_PER_VALUE Number of elements per subgroup.
  * @tparam STRIDE Stride between elements in input arrays.
@@ -62,18 +99,31 @@ template <std::uint32_t ARRAY_SIZE, std::uint32_t COUNT_PER_VALUE, std::uint32_t
 inline WelfordStats<float> combine_welford_stats(const float* means, const float* vars) {
     static_assert(ARRAY_SIZE > 0, "ARRAY_SIZE must be greater than 0");
 
-    WelfordStats<float> result;
-    result.mean = means[0];
-    result.variance = vars[0];
-    result.count = COUNT_PER_VALUE;
+    // Equal-count optimization: center around first mean, accumulate deltas,
+    // then compute combined stats with a precomputed reciprocal (no runtime divisions).
+    const float base_mean = means[0];
+    float mean_delta_sum = 0.0f;
+    float mean_delta_sq_sum = 0.0f;
+    float var_sum = vars[0];
 
     for (std::uint32_t i = 1; i < ARRAY_SIZE; ++i) {
-        WelfordStats<float> next;
-        next.mean = means[i * STRIDE];
-        next.variance = vars[i * STRIDE];
-        next.count = COUNT_PER_VALUE;
-        result = combine(result, next);
+        const float delta = means[i * STRIDE] - base_mean;
+        mean_delta_sum += delta;
+        mean_delta_sq_sum += delta * delta;
+        var_sum += vars[i * STRIDE];
     }
+
+    // Equal-sized populations: total variance = avg subgroup variance + variance of means.
+    // Centering around the first mean avoids cancellation from absolute magnitude:
+    // M2(means) = sum(delta^2) - sum(delta)^2 / ARRAY_SIZE.
+    constexpr float inv_size = 1.0f / static_cast<float>(ARRAY_SIZE);
+    const float mean_delta = mean_delta_sum * inv_size;
+    const float means_m2 = mean_delta_sq_sum - mean_delta_sum * mean_delta;
+
+    WelfordStats<float> result;
+    result.mean = base_mean + mean_delta;
+    result.variance = (var_sum + means_m2) * inv_size;
+    result.count = ARRAY_SIZE * COUNT_PER_VALUE;
 
     return result;
 }

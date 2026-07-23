@@ -6,17 +6,17 @@
 //
 // Phase 1 (per output): Reads Wt partial (mean, var) tile pairs from
 // cb_partial (written by the compute kernel using
-// welford_finalize_to_row), combines them across W using the parallel
-// Welford merge formula, applies Bessel's correction, and writes the
-// combined scalar into cb_combined for the compute kernel to apply
-// sqrtf (if std) and re-pack in the output format. cb_combined is
-// normally fp32, but for variance output to bf16 the program
-// factory may declare it as bf16 to save SRAM with no precision loss
+// welford_finalize_to_row), combines their equal-sized populations across W
+// using the equal-count Welford formula (no runtime FP divisions), applies
+// Bessel's correction, and writes the combined scalar into cb_combined
+// for the compute kernel to apply sqrtf (if std) and re-pack in the output
+// format. cb_combined is normally fp32, but for variance output to bf16 the
+// program factory may declare it as bf16 to save SRAM with no precision loss
 // since data is packed to bf16 output anyways and there is no math before
 // the final pack. combined_is_bf16 compile-time arg selects the path.
 //
 // Phase 2 (per output): Waits for the compute kernel to pack the
-// output tile into cb_out (in the correct output data format), then
+// output tile into cb_out (in the correct data format), then
 // NOC-writes it to DRAM.
 
 #include <cstdint>
@@ -28,7 +28,6 @@
 #include "api/numeric/bfloat16.h"
 #include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
-#include "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_combine.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -60,6 +59,12 @@ void kernel_main() {
     constexpr uint32_t FACE_ELEMENTS = FACE_W * FACE_W;
     constexpr uint32_t last_tile_cols = (W % tile_width == 0) ? tile_width : W % tile_width;
 
+    // Total number of equal-sized partials per output. Each partial summarizes H
+    // samples, and all have the same count, so we can use the equal-count
+    // Welford formula (precomputed reciprocals, no runtime FP divisions).
+    constexpr uint32_t num_partials = reduce_batch_size * W;
+    constexpr float inv_num_partials = 1.0f / static_cast<float>(num_partials);
+
     const uint32_t partial_tile_size_bytes = get_tile_size(cb_partial);
     const uint32_t out_tile_size_bytes = get_tile_size(cb_out);
 
@@ -77,7 +82,14 @@ void kernel_main() {
 
     for (uint32_t out = 0; out < num_outputs; ++out) {
         // --- Phase 1: W-combine all per-column partials into one scalar ---
-        WelfordStats<float> running = {0.0f, 0.0f, 0};
+        // Equal-count optimization: every partial has the same count H, so we
+        // accumulate centered deltas and compute the result with a precomputed
+        // reciprocal. No runtime FP divisions.
+        float base_mean = 0.0f;
+        float mean_delta_sum = 0.0f;
+        float mean_delta_sq_sum = 0.0f;
+        float var_sum = 0.0f;
+        uint32_t partial_count = 0;
 
         for (uint32_t b = 0; b < reduce_batch_size; ++b) {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
@@ -95,21 +107,40 @@ void kernel_main() {
                     // In tile row format, columns 0-15 are in Face 0 and
                     // columns 16-31 are in Face 1 (offset by FACE_ELEMENTS).
                     uint32_t idx = (c < FACE_W) ? c : (FACE_ELEMENTS + c - FACE_W);
-                    WelfordStats<float> partial;
-                    partial.mean = means_ptr[idx];
-                    partial.variance = vars_ptr[idx];
-                    partial.count = H;
-                    running = combine(running, partial);
+                    const float partial_mean = means_ptr[idx];
+                    const float partial_var = vars_ptr[idx];
+
+                    if (partial_count == 0) {
+                        base_mean = partial_mean;
+                        mean_delta_sum = 0.0f;
+                        mean_delta_sq_sum = 0.0f;
+                        var_sum = partial_var;
+                    } else {
+                        const float delta = partial_mean - base_mean;
+                        mean_delta_sum += delta;
+                        mean_delta_sq_sum += delta * delta;
+                        var_sum += partial_var;
+                    }
+                    ++partial_count;
                 }
 
                 cb_partial_obj.pop_front(2);
             }
         }
 
-        float final_var = running.variance;
+        // Combine using equal-count formula: all partials have the same count H.
+        // Total variance = avg subgroup variance + variance of means.
+        // M2(means) = sum(delta^2) - sum(delta)^2 / N, computed with inv_num_partials.
+        const float mean_delta = mean_delta_sum * inv_num_partials;
+        const float means_m2 = mean_delta_sq_sum - mean_delta_sum * mean_delta;
+        const float combined_mean = base_mean + mean_delta;
+        const float combined_var = (var_sum + means_m2) * inv_num_partials;
+
+        float final_var = combined_var;
         if constexpr (correction) {
-            uint32_t N = running.count;
-            final_var = final_var * static_cast<float>(N) / static_cast<float>(N - 1);
+            constexpr uint32_t N = num_partials * H;
+            constexpr float correction_scale = static_cast<float>(N) / static_cast<float>(N - 1);
+            final_var = final_var * correction_scale;
         }
 
         // Write the combined scalar into a tile in cb_combined.  The compute
