@@ -88,6 +88,33 @@ ttnn::Tensor tilize(
                 use_low_perf,
                 tile,
                 sub_core_grids);
+            // For L1-sharded targets the shard grid directly names worker
+            // cores.  Under a non-default dispatch axis some of those cores
+            // may be reserved for dispatch (e.g. column x=7 under COL
+            // dispatch on Wormhole).  to_memory_config onto such cores hangs
+            // the device.  Fall back to interleaved output when the L1 shard
+            // grid exceeds the compute grid.
+            // DRAM-sharded grids enumerate DRAM banks, not worker cores, so
+            // the check does not apply to them.
+            if (target_memory_config.is_sharded() && (target_memory_config.buffer_type() == BufferType::L1 ||
+                                                      target_memory_config.buffer_type() == BufferType::L1_SMALL)) {
+                const auto& shard_grid = target_memory_config.shard_spec().has_value()
+                                             ? target_memory_config.shard_spec()->grid
+                                             : target_memory_config.nd_shard_spec()->grid;
+                auto bb = shard_grid.bounding_box();
+                auto compute_grid = input_tensor.device()->compute_with_storage_grid_size();
+                if (bb.end_coord.x >= compute_grid.x || bb.end_coord.y >= compute_grid.y) {
+                    log_warning(
+                        tt::LogOp,
+                        "ttnn::tilize: target L1 shard grid ({},{}) exceeds compute grid ({},{}), "
+                        "returning DRAM interleaved output instead of hanging (#48776)",
+                        bb.end_coord.x,
+                        bb.end_coord.y,
+                        compute_grid.x,
+                        compute_grid.y);
+                    return interleaved_tile;
+                }
+            }
             return ttnn::to_memory_config(interleaved_tile, target_memory_config);
         }
         return ttnn::prim::tilize(
