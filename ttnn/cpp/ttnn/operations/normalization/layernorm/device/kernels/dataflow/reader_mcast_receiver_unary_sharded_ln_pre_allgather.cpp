@@ -178,22 +178,27 @@ void kernel_main() {
                             reduce_second_stage_sem.set(0);
                         }
                         // read data from other cores - second stage reduce
-
+                        // Mirror the sender and the first-stage block above: reserve/read/push
+                        // num_tiles_per_partial_result tiles per block (E[x] and E[x^2] interleaved),
+                        // not one -- the compute consumer pops num_tiles_per_partial_result * num_blocks_reduce.
+                        cb_external_obj.reserve_back(num_tiles_per_partial_result * (num_blocks_second_stage - 1));
                         write_offset = 0;
                         for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
-                            noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-                                remote_ep,
-                                cb_external_obj,
-                                single_tile_size_bytes,
-                                {.noc_x = remote_coords_second_stage[block + 1].x,
-                                 .noc_y = remote_coords_second_stage[block + 1].y,
-                                 .addr = l1_read_addr_ex},
-                                {.offset_bytes = write_offset});
-                            write_offset += single_tile_size_bytes;
+                            for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; ++tile_idx) {
+                                noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                                    remote_ep,
+                                    cb_external_obj,
+                                    single_tile_size_bytes,
+                                    {.noc_x = remote_coords_second_stage[block + 1].x,
+                                     .noc_y = remote_coords_second_stage[block + 1].y,
+                                     .addr = l1_read_addr_ex + tile_idx * single_tile_size_bytes},
+                                    {.offset_bytes = write_offset});
+                                write_offset += single_tile_size_bytes;
+                            }
                         }
                         l1_read_addr_ex += single_tile_size_bytes;
                         noc.async_read_barrier();
-                        cb_external_obj.push_back(num_blocks_second_stage - 1);
+                        cb_external_obj.push_back(num_tiles_per_partial_result * (num_blocks_second_stage - 1));
                     }
                 }
             }
