@@ -448,53 +448,6 @@ _BLOCKINGS = {
     (4, 8, 1024, 4096, (1, 3, 3), 19, 5, 4): (256, 64, 1, 4, 4),  # ups_ups (kT=1) — 1235us
     (4, 8, 1024, 1024, (3, 3, 3), 21, 10, 8): (128, 64, 5, 4, 8),  # ups_post_res — 2012us
     (4, 8, 1024, 128, (3, 3, 3), 21, 10, 8): (128, 64, 7, 8, 4),  # ups_final — 277us
-    # ===================================================================
-    # BH 2x2, FIBO image decode (1024x1024, latent T=1, full-T uncached). h_factor=2, w_factor=2.
-    # Per-device output (H,W): stage0(64) 1(128) 2(256) 3(512). These convs previously MISSED the
-    # table and fell back to the generic (256,32,1,1,1) default (H=W=1, ~one pixel/core). Swept
-    # 2026-07-13 via bruteforce_conv3d_sweep.py -k "h2w2_1024_t1" (HiFi2, hw_product=32). us = HiFi2
-    # per-op trace time (fallback -> best). The residual (3,3,3) T=3 convs dominate decode compute.
-    # ===================================================================
-    (2, 2, 1024, 1024, (3, 3, 3), 3, 64, 64): (64, 256, 1, 4, 8),  # mid/up res — 104743us -> 4161us (25.2x)
-    (2, 2, 1024, 1024, (3, 3, 3), 3, 128, 128): (64, 256, 1, 2, 16),  # up1 res — 443503us -> 16030us (27.7x)
-    (2, 2, 512, 512, (3, 3, 3), 3, 256, 256): (64, 256, 1, 8, 4),  # up1 res — 321797us -> 8283us (38.9x)
-    (2, 2, 256, 256, (3, 3, 3), 3, 512, 512): (64, 256, 1, 8, 4),  # up2 res — 124012us -> 8354us (14.8x)
-    (2, 2, 64, 1024, (3, 3, 3), 3, 64, 64): (32, 512, 1, 8, 4),  # first up res — 5072us -> 176us (28.9x)
-    (2, 2, 1024, 512, (3, 3, 3), 3, 256, 256): (64, 256, 1, 8, 4),  # up1 chg — 907057us -> 21657us (41.9x)
-    (2, 2, 512, 256, (3, 3, 3), 3, 512, 512): (64, 256, 1, 8, 4),  # up2 chg — 627329us -> 16453us (38.1x)
-    (2, 2, 256, 12, (3, 3, 3), 3, 512, 512): (128, 32, 1, 16, 2),  # conv_out — 16414us -> 4715us (3.5x)
-    (2, 2, 1024, 1024, (1, 3, 3), 1, 128, 128): (256, 128, 1, 4, 8),  # up0 spatial — 183709us -> 2273us (80.8x)
-    (2, 2, 1024, 1024, (1, 3, 3), 1, 256, 256): (256, 128, 1, 4, 8),  # up1 spatial — 743060us -> 8626us (86.1x)
-    (2, 2, 512, 512, (1, 3, 3), 1, 512, 512): (256, 128, 1, 8, 4),  # up2 spatial — 501869us -> 7323us (68.5x)
-    # Temporal-upsample convs (3,1,1): 1x1 spatial patch, so the generic fallback (256,32,1,1,1)
-    # processes one output pixel per core (H_out_block=W_out_block=1) -> pathologically slow.
-    # Runtime key T=2 (causal-padded); swept at T_in=3 (T=2<kT=3 gives a 0-frame valid conv).
-    # T_out_block=1 in the winner is valid for any output T. Swept 2026-07-13, same run as above.
-    (2, 2, 1024, 2048, (3, 1, 1), 2, 64, 64): (256, 512, 1, 2, 16),  # up0 tconv — 39184us -> 637us (61.6x)
-    (2, 2, 1024, 2048, (3, 1, 1), 2, 128, 128): (256, 512, 1, 4, 8),  # up1 tconv — 156624us -> 1964us (79.8x)
-    # ===================================================================
-    # BH Galaxy 4x8, FIBO image decode (1024x1024, latent T=1, full-T uncached). h_factor=8, w_factor=4.
-    # (FIBO's VaeHWParallelConfig on 4x8: height=(tp=8,axis1), width=(sp=4,axis0) -> the mirror of the
-    # video h4w8.) Per-device output (H,W): stage0(16,32) 1(32,64) 2(64,128) 3(128,256). These convs
-    # previously MISSED the table and fell back to the generic (256,32,1,1,1) default (H=W=1, ~one
-    # pixel/core). Swept 2026-07-15 via bruteforce_conv3d_sweep.py -k "h8w4_1024_t1" (HiFi2,
-    # hw_product=32). us = HiFi2 per-op trace time (fallback -> best).
-    # ===================================================================
-    (8, 4, 1024, 1024, (3, 3, 3), 3, 16, 32): (64, 256, 1, 8, 4),  # mid/stage0 res — 13353us -> 765us (17.5x)
-    (8, 4, 1024, 1024, (3, 3, 3), 3, 32, 64): (64, 256, 1, 8, 4),  # up1 res — 52115us -> 2220us (23.5x)
-    (8, 4, 512, 512, (3, 3, 3), 3, 64, 128): (64, 256, 1, 4, 8),  # up1 res — 37491us -> 1536us (24.4x)
-    (8, 4, 256, 256, (3, 3, 3), 3, 128, 256): (64, 256, 1, 16, 2),  # up2 res — 17649us -> 1071us (16.5x)
-    (8, 4, 64, 1024, (3, 3, 3), 3, 16, 32): (64, 256, 1, 8, 4),  # first up res — 736us -> 52us (14.1x)
-    (8, 4, 1024, 512, (3, 3, 3), 3, 64, 128): (64, 256, 1, 8, 4),  # up1 chg — 104106us -> 3163us (32.9x)
-    (8, 4, 512, 256, (3, 3, 3), 3, 128, 256): (64, 256, 1, 16, 2),  # up2 chg — 70186us -> 2644us (26.5x)
-    (8, 4, 256, 12, (3, 3, 3), 3, 128, 256): (128, 32, 1, 16, 2),  # conv_out — 2114us -> 540us (3.9x)
-    (8, 4, 1024, 1024, (1, 3, 3), 1, 32, 64): (256, 128, 1, 4, 8),  # up0 spatial — 22797us -> 453us (50.4x)
-    (8, 4, 1024, 1024, (1, 3, 3), 1, 64, 128): (256, 128, 1, 2, 16),  # up1 spatial — 90913us -> 1337us (68.0x)
-    (8, 4, 512, 512, (1, 3, 3), 1, 128, 256): (128, 256, 1, 2, 16),  # up2 spatial — 57225us -> 1333us (42.9x)
-    # Temporal-upsample convs (3,1,1): runtime key T=2 (causal-padded); swept at T_in=3. T_out_block=1
-    # in the winner is valid for any output T. Swept 2026-07-15, same run as above.
-    (8, 4, 1024, 2048, (3, 1, 1), 2, 16, 32): (256, 256, 1, 2, 16),  # up0 tconv — 4956us -> 184us (26.9x)
-    (8, 4, 1024, 2048, (3, 1, 1), 2, 32, 64): (256, 512, 1, 16, 2),  # up1 tconv — 19613us -> 416us (47.1x)
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
@@ -522,21 +475,6 @@ _DEFAULT_BLOCKINGS = {
     (128, 48, (3, 3, 3)): (128, 32, 1, 8, 8),  # s4_out
     (1024, 4096, (1, 3, 3)): (256, 32, 1, 1, 1),  # upsampler (kT=1)
     (1024, 128, (3, 3, 3)): (256, 32, 1, 1, 1),  # upsampler final_conv
-    # Wan 2.2 high-compression (TI2V) residual VAE decoder (FIBO: decoder_base_dim=256,
-    # z_dim=48, out_channels=12, dim_mult=[1,2,4,4], 16x spatial). These channel combos have no
-    # swept exact _BLOCKINGS entries; conservative full-Cin defaults OOM L1 at the decoder's
-    # 1024-channel convs. Small C_in_block/C_out_block keep the CB within the 1.5 MB L1 budget
-    # (correctness-first fallback; perf sweep deferred — see sp3 spec open items).
-    (64, 1024, (3, 3, 3)): (64, 32, 1, 1, 1),  # conv_in (z_dim aligned 48->64)
-    (1024, 1024, (3, 3, 3)): (256, 32, 1, 1, 1),  # mid/up0/up1 res
-    (1024, 1024, (1, 3, 3)): (256, 32, 1, 1, 1),  # up0/up1 upsampler spatial conv
-    (1024, 2048, (3, 1, 1)): (256, 32, 1, 1, 1),  # up0/up1 upsampler time_conv
-    (1024, 512, (3, 3, 3)): (256, 32, 1, 1, 1),  # up2 res0 (channel change)
-    (512, 512, (3, 3, 3)): (256, 32, 1, 1, 1),  # up2 res
-    (512, 512, (1, 3, 3)): (256, 32, 1, 1, 1),  # up2 upsampler spatial conv
-    (512, 256, (3, 3, 3)): (256, 32, 1, 1, 1),  # up3 res0 (channel change)
-    (256, 256, (3, 3, 3)): (256, 32, 1, 8, 8),  # up3 res
-    (256, 12, (3, 3, 3)): (256, 32, 1, 8, 8),  # conv_out
 }
 
 
@@ -586,20 +524,28 @@ _FP32_BLOCKINGS: dict = {
 def register_conv3d_configs(configs: dict) -> None:
     """Register additional conv3d blocking configs from external models.
 
-    Entries are added to the fallback table keyed by ``(in_channels, out_channels, kernel_size)``.
-
-    Args:
-        configs: Mapping from ``(in_channels, out_channels, kernel_size)``
-            to ``(C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)``.
+    Keys with 3 elements ``(in_channels, out_channels, kernel_size)`` are added to the fallback
+    table (``_DEFAULT_BLOCKINGS``). Keys with 8 elements
+    ``(h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)`` are added to the
+    exact-match table (``_BLOCKINGS``). Values are
+    ``(C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)``.
 
     Example::
 
         register_conv3d_configs({
-            (32, 96, (3, 3, 3)): (32, 96, 1, 8, 16),
-            (384, 768, (3, 1, 1)): (384, 384, 1, 16, 4),
+            (32, 96, (3, 3, 3)): (32, 96, 1, 8, 16),                 # fallback (channel) key
+            (2, 2, 1024, 1024, (3, 3, 3), 3, 64, 64): (64, 256, 1, 4, 8),  # exact key
         })
     """
-    _DEFAULT_BLOCKINGS.update({(c_in, c_out, _ntuple(ks, 3)): tuple(v) for (c_in, c_out, ks), v in configs.items()})
+    for key, value in configs.items():
+        if len(key) == 3:
+            c_in, c_out, ks = key
+            _DEFAULT_BLOCKINGS[(c_in, c_out, _ntuple(ks, 3))] = tuple(value)
+        elif len(key) == 8:
+            h, w, c_in, c_out, ks, T, H, W = key
+            _BLOCKINGS[(h, w, c_in, c_out, _ntuple(ks, 3), T, H, W)] = tuple(value)
+        else:
+            raise ValueError(f"register_conv3d_configs: key must have 3 or 8 elements, got {len(key)}: {key}")
 
 
 def get_conv3d_config(

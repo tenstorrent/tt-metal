@@ -25,6 +25,7 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
+from ...pipelines.bria_fibo.fibo_conv3d_configs import register_fibo_conv3d_configs
 from ...utils import cache
 from ...utils.conv3d import (
     ConvDims,
@@ -39,6 +40,8 @@ from ...utils.conv3d import (
     count_convs,
     get_conv3d_config,
 )
+
+register_fibo_conv3d_configs()
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import (
     fast_device_to_host,
