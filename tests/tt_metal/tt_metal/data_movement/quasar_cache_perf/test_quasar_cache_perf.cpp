@@ -83,11 +83,21 @@ bool run_cache_write(
 
 class QuasarCacheWrite : public QuasarMeshDeviceSingleCardFixture {};
 
-TEST_F(QuasarCacheWrite, SpikeSingleRun) {
+namespace unit_tests::dm::quasar_cache_perf {
+static const std::vector<std::uint32_t> kSizesBytes = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048};
+}  // namespace unit_tests::dm::quasar_cache_perf
+
+TEST_F(QuasarCacheWrite, SizeSweep) {
     if (unit_tests::dm::quasar_cache_perf::should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
-    EXPECT_TRUE(unit_tests::dm::quasar_cache_perf::run_cache_write(devices_[0], 256, /*uncached*/ 0));
+    bool pass = true;
+    for (std::uint32_t write_path : {0u, 1u}) {  // 0=uncached, 1=cached+flush
+        for (std::uint32_t size_bytes : unit_tests::dm::quasar_cache_perf::kSizesBytes) {
+            pass &= unit_tests::dm::quasar_cache_perf::run_cache_write(devices_[0], size_bytes, write_path);
+        }
+    }
+    EXPECT_TRUE(pass);
 }
 
 }  // namespace tt::tt_metal
