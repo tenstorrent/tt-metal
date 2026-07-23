@@ -201,10 +201,13 @@ ttnn::Tensor all_reduce_async(
 
         // AllGather (1, B, C, H, W) -> (num_devices, B, C, H, W)
         composite_dim = 0;
+        // TODO(#30798): pass topology=nullopt for best perf (there's multiple places in this file).
+        // Needs to be verified.
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
             resolved_num_links,
+            ttnn::ccl::Topology::Linear,
             out_memory_config,
             worker_subdevice_id_opt,
             std::nullopt);
@@ -328,6 +331,7 @@ ttnn::Tensor all_reduce_async(
             reshaped_tensor,
             composite_dim,
             resolved_num_links,
+            ttnn::ccl::Topology::Linear,
             change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             worker_subdevice_id_opt,
             cluster_axis);

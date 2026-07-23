@@ -11,6 +11,56 @@ from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
+    "ag_output_shape, dim",
+    [
+        ([1, 1, 128, 256], 3),
+        ([1, 1, 128, 64], 3),
+    ],
+    ids=["native", "composite"],
+)
+@pytest.mark.parametrize("cluster_axis", [None, 1], ids=["both_axes", "axis_1"])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("ag_input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("mem_config_input, mem_config_ag", [(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)])
+@pytest.mark.parametrize("enable_trace, num_iters", [(False, 3)], ids=["no_trace"])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112},
+    ],
+    indirect=True,
+    ids=["fabric_2d"],
+)
+def test_all_gather_2d(
+    mesh_device,
+    ag_output_shape,
+    dim,
+    cluster_axis,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    num_iters,
+):
+    run_all_gather_impl(
+        mesh_device,
+        ag_output_shape,
+        dim,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
+        use_persistent_buffers=False,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype",
     [
         # Gather on dim 0

@@ -118,16 +118,10 @@ ttnn::Tensor all_gather(
     auto [use_composite, composite_reason] = use_composite_all_gather(input_tensor, dim, memory_config);
     if (use_composite) {
         log_info(tt::LogOp, "Using slower composite all_gather: {}", composite_reason);
-
-        // Query the Fabric setup
-        auto* mesh_device = input_tensor.device();
-        TT_FATAL(mesh_device != nullptr, "Input tensor should be on device for all_gather operation");
-        uint32_t num_links_ = ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis);
-
         // NOTE: persistent_output_tensor and sub_core_grid have no equivalent in the composite
         // path and are ignored here for now.
         return composite_common::composite_all_gather(
-            input_tensor, dim, num_links_, memory_config, subdevice_id, cluster_axis);
+            input_tensor, dim, std::nullopt, std::nullopt, memory_config, subdevice_id, cluster_axis);
     }
 
     return ttnn::prim::all_gather(

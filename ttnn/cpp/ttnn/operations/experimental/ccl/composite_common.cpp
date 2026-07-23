@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include "ttnn/operations/ccl/all_broadcast/all_broadcast.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -344,7 +345,8 @@ bool use_composite_all_to_all(
 ttnn::Tensor composite_all_gather(
     ttnn::Tensor input_tensor,
     const int32_t dim,
-    const uint32_t num_links,
+    std::optional<uint32_t> num_links,
+    std::optional<ttnn::ccl::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
@@ -387,13 +389,13 @@ ttnn::Tensor composite_all_gather(
         input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
     }
 
-    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::prim::all_broadcast(
+    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::all_broadcast(
         input_tensor,
         cluster_axis,
         subdevice_id,
         input_tensor.memory_config(),
         num_links,
-        ttnn::ccl::Topology::Linear,
+        topology,
         use_l1_small_for_semaphores);
 
     // Do the gather itself
@@ -414,7 +416,8 @@ ttnn::Tensor composite_all_gather(
 std::vector<ttnn::Tensor> composite_all_gather(
     const std::vector<ttnn::Tensor>& input_tensors,
     const int32_t dim,
-    const uint32_t num_links,
+    std::optional<uint32_t> num_links,
+    std::optional<ttnn::ccl::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
@@ -423,7 +426,14 @@ std::vector<ttnn::Tensor> composite_all_gather(
     output_tensors.reserve(input_tensors.size());
     for (const auto& input_tensor : input_tensors) {
         output_tensors.push_back(composite_all_gather(
-            input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis, use_l1_small_for_semaphores));
+            input_tensor,
+            dim,
+            num_links,
+            topology,
+            memory_config,
+            subdevice_id,
+            cluster_axis,
+            use_l1_small_for_semaphores));
     }
     return output_tensors;
 }
