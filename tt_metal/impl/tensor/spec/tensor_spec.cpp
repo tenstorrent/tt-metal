@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 
 #include "layout/page_config_impl.hpp"
