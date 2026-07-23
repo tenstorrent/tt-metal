@@ -38,6 +38,7 @@
 
 - name: Llama 3.2-1B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_MODEL=meta-llama/Llama-3.2-1B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-1B-Instruct
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
@@ -51,6 +52,7 @@
 
 - name: Llama 3.2-3B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_MODEL=meta-llama/Llama-3.2-3B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-3B-Instruct
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
@@ -122,6 +124,7 @@
 
 - name: Qwen3-32B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     pytest --timeout 900 models/tt_transformers/tests/test_attention.py
     pytest --timeout 900 models/tt_transformers/tests/test_attention_prefill.py
@@ -157,6 +160,7 @@
 
 - name: Qwen2.5-Coder-32B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
     pytest --timeout 900 models/tt_transformers/tests/test_attention.py
     pytest --timeout 900 models/tt_transformers/tests/test_attention_prefill.py
@@ -217,6 +221,7 @@
 
 - name: Gemma-3-4B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "4b"
   model: gemma-3-4b
   skus:
@@ -228,6 +233,7 @@
 
 - name: Gemma-3-27B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "27b"
   model: gemma-3-27b
   skus:
@@ -240,6 +246,7 @@
 # Janus Pro unit tests: Blackhole only (P150).
 - name: Janus Pro-7B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     pytest --timeout 600 models/experimental/janus_pro/tests/test_ci_dispatch.py
   model: janus-pro-7b
   skus:
@@ -256,6 +263,7 @@
 
 - name: Gemma-4-E2B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-E2B-it
     # test_lm_head, test_packed_verify (spec-decode packed verify, #46755) and
@@ -423,6 +431,7 @@
 
 - name: Shallow UNet unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     pytest --timeout 600 models/experimental/functional_unet/tests/test_unet_model.py
   model: shallow-unet
   skus:
@@ -569,6 +578,7 @@
 
 - name: Whisper unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub HF_DATASETS_CACHE=/tmp/huggingface/datasets
     pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_modules.py
     pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_streaming_detok.py
@@ -588,6 +598,7 @@
 
 - name: QwQ-32B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_MODEL=Qwen/QwQ-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/QwQ-32B
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py
@@ -601,6 +612,7 @@
 
 - name: Falcon-7B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     pytest --timeout 300 models/demos/ttnn_falcon7b/tests/test_falcon_decoder.py
   model: falcon-7b
   skus:
@@ -612,6 +624,7 @@
 
 - name: Falcon-40B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     pytest --timeout 300 models/demos/t3000/falcon40b/tests/test_falcon_decoder.py
   model: falcon-40b
   skus:
@@ -623,6 +636,7 @@
 
 - name: Qwen2.5-7B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_MODEL=Qwen/Qwen2.5-7B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-7B-Instruct
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
@@ -650,6 +664,7 @@
 
 - name: Qwen2.5-VL-72B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/qwen25_vl/requirements.txt
     export HF_MODEL=Qwen/Qwen2.5-VL-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-72B-Instruct MESH_DEVICE=T3K
     pytest --timeout 600 models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
@@ -663,6 +678,7 @@
 
 - name: Qwen2.5-VL-32B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/qwen25_vl/requirements.txt
     export HF_MODEL=Qwen/Qwen2.5-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-32B-Instruct MESH_DEVICE=T3K
     pytest --timeout 300 models/demos/qwen25_vl/tests/test_model.py
@@ -676,6 +692,7 @@
 
 - name: Qwen3-VL-32B unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/qwen3_vl/requirements.txt
     export HF_MODEL=Qwen/Qwen3-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-VL-32B-Instruct MESH_DEVICE=T3K PYTEST_ADDOPTS="--tb=short"
     pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen3_vl/tests/conftest.py
@@ -689,6 +706,7 @@
 
 - name: Phi-3-mini unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_MODEL=microsoft/Phi-3-mini-128k-instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/Phi-3-mini-128k-instruct
     pytest --timeout 240 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 240 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
@@ -818,6 +836,7 @@
 
 - name: Stable Diffusion XL VAE unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/vae/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/vae/tests/pcc/test_welford_state_leak_regression.py
   model: sdxl
@@ -971,7 +990,7 @@
   team: models
 
 - name: panoptic-deeplab unit tests
-  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/ --timeout=420
+  cmd: TT_METAL_WATCHER=30 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/ --timeout=420
   model: panoptic-deeplab
   skus:
     bh_p150b_civ2:
@@ -981,7 +1000,7 @@
   team: shield
 
 - name: bevformer unit tests
-  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/ --timeout=660
+  cmd: TT_METAL_WATCHER=30 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/ --timeout=660
   model: bevformer
   skus:
     bh_p150b_civ2:
