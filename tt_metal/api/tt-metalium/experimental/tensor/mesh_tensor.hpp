@@ -20,7 +20,6 @@ namespace tt::tt_metal {
 
 // Implementation details for MeshTensor
 class MeshTensorImpl;
-struct DeviceStorage;
 class TensorTopology;
 
 namespace distributed {

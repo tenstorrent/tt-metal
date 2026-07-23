@@ -84,10 +84,7 @@ std::pair<UnpackedBfp, PackedBfp> generate_float_to_bfp4_dataset(const Shape& sh
 
 template <typename T>
 HostTensor make_host_tensor(std::vector<T> data, const TensorSpec& spec) {
-    auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    dist_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 0), [data = std::move(data)]() mutable { return HostBuffer(std::move(data)); });
-    return HostTensor::from_buffer(std::move(dist_buffer), spec, TensorTopology{});
+    return HostTensor::from_buffer(HostBuffer(std::move(data)), spec);
 }
 
 bool exact_spec_match(const TensorSpec& a, const TensorSpec& b) {
@@ -340,10 +337,7 @@ TEST(HostTensorToDtype, OversizedBufferToDtype) {
     auto oversized_data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume() + 100);
 
     // Create tensor from buffer (from_buffer accepts oversized buffers if they are large enough)
-    auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    dist_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<float>(oversized_data)); });
-    auto host_tensor = HostTensor::from_buffer(std::move(dist_buffer), spec, TensorTopology{});
+    auto host_tensor = HostTensor::from_buffer(HostBuffer(std::vector<float>(oversized_data)), spec);
 
     // Currently to_dtype asserts on exact packed size, so it will fail if it's oversized.
     EXPECT_ANY_THROW(to_dtype(host_tensor, DataType::BFLOAT16));
@@ -359,12 +353,8 @@ TEST(HostTensorToDtype, UndersizedBufferToDtypeThrows) {
     // Create an undersized buffer
     auto undersized_data = std::vector<uint32_t>(10, 0);  // Much smaller than required
 
-    auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    dist_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<uint32_t>(undersized_data)); });
-
     // from_buffer doesn't check size, so this succeeds
-    auto host_tensor = HostTensor::from_buffer(std::move(dist_buffer), spec, TensorTopology{});
+    auto host_tensor = HostTensor::from_buffer(HostBuffer(std::vector<uint32_t>(undersized_data)), spec);
 
     EXPECT_ANY_THROW(to_dtype(host_tensor, DataType::FLOAT32));
 }
@@ -379,11 +369,7 @@ TEST(HostTensorToDtype, MalformedBfpBufferToDtypeThrows) {
     size_t expected_size_bytes = spec.compute_packed_buffer_size_bytes();
     auto malformed_data = std::vector<uint32_t>((expected_size_bytes / sizeof(uint32_t)) - 1, 0);
 
-    auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    dist_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<uint32_t>(malformed_data)); });
-
-    auto host_tensor = HostTensor::from_buffer(std::move(dist_buffer), spec, TensorTopology{});
+    auto host_tensor = HostTensor::from_buffer(HostBuffer(std::vector<uint32_t>(malformed_data)), spec);
 
     EXPECT_ANY_THROW(to_dtype(host_tensor, DataType::FLOAT32));
 }
