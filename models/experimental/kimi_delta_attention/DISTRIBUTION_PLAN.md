@@ -238,3 +238,8 @@ Fusing decay Softplus into its consuming scale multiply removes one local
 program and reduces layer span 0.66733 -> 0.65896 ms. Prep, scan, and
 collective medians remain 84.15, 97.31, and 148.78 us, respectively. This is
 another launch-chain reduction; retain the existing head, core, and CCL map.
+
+
+Scalar BinaryNg fusion of beta sigmoid and typecast is rejected: it reduced
+program count but regressed layer span 0.65896 -> 0.69050 ms with unchanged
+active time. It provides no evidence for changing prep ownership or core count.
