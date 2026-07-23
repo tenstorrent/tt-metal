@@ -313,6 +313,16 @@ header h1 {
     color: #fff;
 }
 
+.freq-note {
+    margin-bottom: 12px;
+    padding: 8px 14px;
+    background: var(--bg-surface);
+    border: 1px solid var(--accent-dim);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
 .chart-controls {
     display: flex;
     flex-wrap: wrap;

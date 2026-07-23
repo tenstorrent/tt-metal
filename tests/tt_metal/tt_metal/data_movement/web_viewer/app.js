@@ -52,6 +52,11 @@ const X_AXIS_PRIORITY = [
     "Subordinate Grid Dimensions",
 ];
 
+const ARCH_FREQ_GHZ = {
+    blackhole: 1.35,
+    wormhole_b0: 1.0,
+};
+
 const SERIES_COLORS = [
     "#7b68ee",
     "#ff6b6b",
@@ -357,13 +362,43 @@ function formatBytes(value) {
     return String(value);
 }
 
+function cyclesToTime(cycles, freqGHz) {
+    const ns = cycles / freqGHz;
+    if (ns >= 1e6) return { value: ns / 1e6, unit: "ms" };
+    if (ns >= 1e3) return { value: ns / 1e3, unit: "us" };
+    return { value: ns, unit: "ns" };
+}
+
+function formatTimeLabel(rows, config, freqGHz) {
+    const latencyCol = config.latencyCol;
+    if (!latencyCol || !freqGHz) return { label: "Latency", unit: "ns" };
+
+    let maxCycles = 0;
+    for (const row of rows) {
+        const v = row[latencyCol];
+        if (typeof v === "number" && v > maxCycles) maxCycles = v;
+    }
+    const { unit } = cyclesToTime(maxCycles || 1, freqGHz);
+    return { label: `Latency (${unit})`, unit };
+}
+
 function getPlotData(rows, config) {
+    const isLatencyTime = state.yAxisMode === "latency_time";
     const yCol =
         state.yAxisMode === "bandwidth"
             ? config.bandwidthCol
             : config.latencyCol;
 
     if (!yCol) return new Map();
+
+    const freqGHz = ARCH_FREQ_GHZ[state.selectedArch];
+    let timeUnit = "ns";
+    if (isLatencyTime) {
+        const info = formatTimeLabel(rows, config, freqGHz);
+        timeUnit = info.unit;
+    }
+
+    const unitDivisor = { ns: 1, us: 1e3, ms: 1e6 };
 
     const series = new Map();
     for (const row of rows) {
@@ -386,7 +421,13 @@ function getPlotData(rows, config) {
         }
         const s = series.get(seriesKey);
         s.x.push(row[config.xAxis]);
-        s.y.push(row[yCol]);
+
+        let yVal = row[yCol];
+        if (isLatencyTime && freqGHz) {
+            const ns = yVal / freqGHz;
+            yVal = ns / unitDivisor[timeUnit];
+        }
+        s.y.push(yVal);
     }
 
     for (const s of series.values()) {
@@ -396,6 +437,19 @@ function getPlotData(rows, config) {
     }
 
     return series;
+}
+
+function updateFreqNote() {
+    const el = document.getElementById("freq-note");
+    if (state.yAxisMode === "latency_time" && state.selectedArch) {
+        const freqGHz = ARCH_FREQ_GHZ[state.selectedArch];
+        el.textContent = freqGHz
+            ? `Latency converted from cycles using an assumed clock frequency of ${freqGHz} GHz for ${state.selectedArch}.`
+            : `No clock frequency defined for ${state.selectedArch}; showing raw cycles.`;
+        el.style.display = "";
+    } else {
+        el.style.display = "none";
+    }
 }
 
 function renderChart(rows, config) {
@@ -437,10 +491,21 @@ function renderChart(rows, config) {
         colorIdx++;
     }
 
-    const isLatency = state.yAxisMode === "latency";
-    const yLabel = isLatency
-        ? config.latencyCol || "Latency (cycles)"
-        : config.bandwidthCol || "Bandwidth (bytes/cycle)";
+    const isLatency = state.yAxisMode === "latency" || state.yAxisMode === "latency_time";
+    const isLatencyTime = state.yAxisMode === "latency_time";
+
+    let yLabel;
+    if (isLatencyTime) {
+        const freqGHz = ARCH_FREQ_GHZ[state.selectedArch];
+        const info = formatTimeLabel(rows, config, freqGHz);
+        yLabel = info.label;
+    } else if (state.yAxisMode === "latency") {
+        yLabel = config.latencyCol || "Latency (cycles)";
+    } else {
+        yLabel = config.bandwidthCol || "Bandwidth (bytes/cycle)";
+    }
+
+    updateFreqNote();
 
     const xIsNumeric = traces.length > 0 &&
         traces[0].x.length > 0 &&
@@ -787,6 +852,7 @@ function setupYAxisListeners() {
         radio.parentNode.replaceChild(newRadio, radio);
         newRadio.addEventListener("change", handler);
     }
+    updateFreqNote();
 }
 
 // ── Init ───────────────────────────────────────────────────────────
