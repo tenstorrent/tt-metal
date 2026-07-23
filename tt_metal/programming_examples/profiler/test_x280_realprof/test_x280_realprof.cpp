@@ -399,17 +399,27 @@ int main(int argc, char** argv) {
         std::vector<uint64_t> fl_mk, fl_start, fl_end, fl_prog_ok, fl_ts_bad, fl_unbal, fl_stall, fl_pages;
     };
     std::vector<NodeCtx> node(nodes);
-    // Column-band split of the drained rectangle [cx0..cx1] x [cy0..cy1] into `nodes` contiguous bands. Node n
-    // takes columns [cx0 + n*W ..], W = ceil(cols/nodes); the last node takes the remainder. Each band spans the
-    // FULL cy range. (nodes==1 -> single band == the full rectangle.)
-    uint32_t band_w = (rgx + (uint32_t)nodes - 1) / (uint32_t)nodes;
+    // ROW-band split of the drained rectangle [cx0..cx1] x [cy0..cy1] into `nodes` contiguous bands. Node n
+    // takes rows [cy0 + n*H ..], H = ceil(rows/nodes); the last node takes the remainder. Each band spans the
+    // FULL cx range. (nodes==1 -> single band == the full rectangle.)
+    //
+    // Each band is drained by the L2CPU cluster nearest it in y: the four clusters sit in NoC column 8 at
+    // y=3,5,7,9, so sorting x280_l2cpu_tile indices by tile-y gives top->bottom order {0,2,3,1}. The i-th row
+    // band (top->bottom) is drained by the i-th cluster (top->bottom), so each cluster reads a y-LOCAL band.
+    // This decontends the reads: with the old column split every cluster read the full y-range and their NoC
+    // read paths overlapped heavily (measured ~1.8x cyc/word penalty for 2 concurrent clusters); a row split
+    // puts each cluster's read traffic in a disjoint, short-hop y-region. For nodes=2 that picks idx0 (tile
+    // 8,3, "CPU 0-3", top rows) + idx1 (tile 8,9, "CPU 12-15", bottom rows) -- the y-extreme pair.
+    static const int kL2cpuByY[4] = {0, 2, 3, 1};  // x280_l2cpu_tile idx sorted by ascending tile-y (3,5,7,9)
+    uint32_t rgy = (uint32_t)(cy1 - cy0 + 1);
+    uint32_t band_h = (rgy + (uint32_t)nodes - 1) / (uint32_t)nodes;
     for (int n = 0; n < nodes; n++) {
         NodeCtx& nc = node[n];
-        nc.l2cpu = (nodes == 1) ? l2cpu : n;  // single node uses --l2cpu; multi-node uses clusters 0..N-1
-        nc.bcx0 = (uint32_t)cx0 + (uint32_t)n * band_w;
-        nc.bcx1 = (n == nodes - 1) ? (uint32_t)cx1 : std::min<uint32_t>((uint32_t)cx1, nc.bcx0 + band_w - 1);
-        nc.bcy0 = (uint32_t)cy0;
-        nc.bcy1 = (uint32_t)cy1;
+        nc.l2cpu = (nodes == 1) ? l2cpu : kL2cpuByY[n];  // single: --l2cpu; multi: n-th cluster top->bottom by y
+        nc.bcx0 = (uint32_t)cx0;
+        nc.bcx1 = (uint32_t)cx1;
+        nc.bcy0 = (uint32_t)cy0 + (uint32_t)n * band_h;
+        nc.bcy1 = (n == nodes - 1) ? (uint32_t)cy1 : std::min<uint32_t>((uint32_t)cy1, nc.bcy0 + band_h - 1);
     }
 
     // VIRTUAL coords for host UMD access; TRANSLATED for the X280 read-window table; NOC0 for the Tracy
@@ -556,7 +566,11 @@ int main(int argc, char** argv) {
         bcfg.ndrain = ndrain;
         bcfg.coords = nc.coords.data();
         bcfg.coords_bytes = (uint32_t)nc.coords.size();
-        bcfg.read_noc = read_noc;
+        // Per-node read NoC plane: for multi-node, alternate NoC0/NoC1 across nodes (node n -> plane n&1) so
+        // the clusters read on DIFFERENT NoC planes -- decontends the reads that otherwise collide on NoC0
+        // (measured ~2x cyc/word penalty, 4.5->8, when two clusters read the same plane concurrently). For
+        // nodes=2: node0(idx0, top rows) -> NoC0, node1(idx1, bottom rows) -> NoC1. Single node keeps --noc.
+        bcfg.read_noc = (nodes > 1) ? (uint64_t)(n & 1) : read_noc;
         bcfg.direct = direct;
         bcfg.split_noc = split_noc;
         bcfg.wnoc1 = wnoc1;
