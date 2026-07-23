@@ -10,6 +10,7 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.hunyuan_image_3_0.tt.parallel_utils import resid_mem_config
 
 
 class HunyuanTtWte(LightweightModule):
@@ -68,7 +69,9 @@ class HunyuanTtWte(LightweightModule):
             bsz, seq = input_ids.shape[0], input_ids.shape[-1]
             ids_tt = input_ids
             owns_ids = False
-        emb = ttnn.embedding(ids_tt, self.embed_weight, layout=ttnn.TILE_LAYOUT)
+        # Match HunyuanTtModel.embed: DRAM above RESID_L1_MAX_SEQ avoids L1 residual
+        # vs SDPA/matmul CB clashes at long prefill.
+        emb = ttnn.embedding(ids_tt, self.embed_weight, layout=ttnn.TILE_LAYOUT, memory_config=resid_mem_config(seq))
         if owns_ids:
             ttnn.deallocate(ids_tt)
         return ttnn.reshape(emb, [bsz, seq, self.hidden_size])
