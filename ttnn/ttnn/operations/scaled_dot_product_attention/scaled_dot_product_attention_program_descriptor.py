@@ -25,9 +25,34 @@ import ttnn
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 # ---- Block-size / buffer-depth knobs (parameters, never inlined downstream) ----
-Q_CHUNK_TILES = 4  # Sq_chunk_t upper bound (tiles of 32 query rows)
-K_CHUNK_TILES = 4  # Sk_chunk_t upper bound (tiles of 32 key/value rows)
-KV_BUFFER_FACTOR = 2  # double-buffer K/V/mask to overlap DRAM read with compute
+# Base block factors (Refinements 0–2): the grid-fill-neutral pair. `_pick_chunks`
+# selects the coarsest divisor pair <= these that fits L1 (D<=256 keep (4,4); large
+# head_dim shrinks to fit). This is the byte-identical prior-phase behavior.
+Q_CHUNK_TILES = 4  # Sq_chunk_t base upper bound (tiles of 32 query rows)
+K_CHUNK_TILES = 4  # Sk_chunk_t base upper bound (tiles of 32 key/value rows)
+
+# Refinement 3b (perf, compute-side amortization): the online-softmax kv_step runs
+# ~7 sequential helper phases per KV-block, each paying an init/dst-sync/format-
+# reconfig tax; on the flagged profile (~74 KV-blocks × ~7 Q-blocks/core) that fixed
+# per-block cost dominates (the shape is compute/dataflow-latency bound, not read-
+# bound — Refinement 3 proved this on device). COARSENING the chunk pair amortizes the
+# fixed per-phase overhead over more tiles per call (master.md `compute_block_size` —
+# the win grows with the phase count, which is exactly SDPA's many-phase kv_step).
+# MEASURED on the flagged shape (1,10,9472,128) bf16 @ fp32_dest_acc_en=False: the win
+# is NON-MONOTONIC — only the (8,8) PAIR beats the (4,4) baseline (11.04→10.24 ms,
+# 1.078×); coarsening one axis alone is SLOWER ((4,8)=12.31 ms, (8,4)=12.10 ms). So
+# 3b is a binary regime switch to the coarse pair, taken ONLY when it (a) is a real
+# divisor pair, (b) fits L1, and (c) keeps the grid filled (q-coarsening shrinks the
+# flat Q-block work-list). Any shape that doesn't qualify stays byte-identical to the
+# Refinement-2 baseline pick — no correctness OR grid-fill regression by construction.
+Q_CHUNK_COARSE = 8  # Sq_chunk_t coarse (amortization) block factor
+K_CHUNK_COARSE = 8  # Sk_chunk_t coarse (amortization) block factor
+# kv_buffer_factor: double-buffer K/V/mask (overlap DRAM read with compute). Refinement
+# 3b measured depth 3 on the flagged shape at 10.29 ms vs 10.24 ms at depth 2 — no gain
+# (slightly worse from L1 pressure): reads are OFF the critical path here (R3 proved the
+# shape is compute/dataflow-latency bound, not read-bound), so a deeper read buffer is a
+# no-op. Kept at the double-buffer default (a live tunable for any future read-bound shape).
+KV_BUFFER_FACTOR = 2
 Q_BUFFER_FACTOR = 1  # Q held resident across the whole KV loop
 
 # ---- Per-core L1 budget (Refinement 2) ----------------------------------------
@@ -113,13 +138,33 @@ def _cb_footprint_bytes(specs):
     return sum(num_pages * ttnn.tile_size(df) for _, num_pages, df in specs)
 
 
-def _pick_chunks(sqt, skvt, dht, has_mask, in_df, out_df, interm_df, scaler_df):
-    """Coarsest (largest-footprint) block-factor pair (sq_chunk_t, sk_chunk_t)
-    whose per-core CB footprint fits the L1 budget. When the design-default pair
-    (Q_CHUNK_TILES, K_CHUNK_TILES) already fits (all D<=256 and the D=128 perf
-    shape), it is the max-footprint candidate and is chosen unchanged — so no
-    currently-passing cell regresses. Falls back to (1,1) if even that OOMs
-    (D-blocking is the next refinement's scope, not reached for D<=1024)."""
+def _fits_l1(sq, sk, dht, has_mask, in_df, out_df, interm_df, scaler_df):
+    return _cb_footprint_bytes(_cb_specs(sq, sk, dht, has_mask, in_df, out_df, interm_df, scaler_df)) <= L1_CB_BUDGET
+
+
+def _pick_chunks(sqt, skvt, dht, has_mask, in_df, out_df, interm_df, scaler_df, bh=1, num_cores=1):
+    """Block-factor pair (sq_chunk_t, sk_chunk_t) for this shape.
+
+    Refinement 3b — compute-side amortization: FIRST try the coarse pair
+    (Q_CHUNK_COARSE, K_CHUNK_COARSE). The measured win on the flagged profile is
+    NON-MONOTONIC — only the full coarse PAIR beats the baseline; coarsening one
+    axis alone is slower — so this is a binary regime switch, taken only when the
+    coarse pair (a) is a real divisor pair of (sqt, skvt), (b) fits the L1 budget,
+    and (c) keeps the flat Q-block work-list filling the grid after q-coarsening
+    (`bh · sqt/Q_CHUNK_COARSE >= num_cores`). If any condition fails the shape falls
+    through to the Refinement-2 baseline below — byte-identical to prior phases, so
+    no correctness or grid-fill regression is possible for a non-qualifying shape.
+
+    Baseline (Refinements 0–2): the coarsest (largest-footprint) divisor pair
+    <= (Q_CHUNK_TILES, K_CHUNK_TILES) whose per-core CB footprint fits L1 (D<=256
+    keep (4,4); large head_dim shrinks to fit). Falls back to (1,1) if even that OOMs.
+    """
+    fits = lambda sq, sk: _fits_l1(sq, sk, dht, has_mask, in_df, out_df, interm_df, scaler_df)
+
+    cq, ck = Q_CHUNK_COARSE, K_CHUNK_COARSE
+    if sqt % cq == 0 and skvt % ck == 0 and fits(cq, ck) and bh * (sqt // cq) >= num_cores:
+        return cq, ck
+
     best = None  # (footprint, sq, sk)
     for sq in _divisors_leq(sqt, Q_CHUNK_TILES):
         for sk in _divisors_leq(skvt, K_CHUNK_TILES):
@@ -191,13 +236,24 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     interm_df = ttnn.float32 if in_df == ttnn.float32 else ttnn.bfloat16
     scaler_df = ttnn.bfloat16
 
-    # ---- L1-budget cap on the block factors (Refinement 2) ----
+    # Grid is needed before the block-factor pick (the grid-fill guard on sq keeps
+    # the flat Q-block work-list from underfilling the grid when sq is coarsened).
+    device = query.device()
+    grid = device.compute_with_storage_grid_size()
+    grid_cols, grid_rows = grid.x, grid.y
+    num_cores = grid_cols * grid_rows
+
+    # ---- L1-budget cap on the block factors (Refinement 2) + coarsening (3b) ----
     # sq_chunk_t/sk_chunk_t are the design's block-factor knobs; pick the coarsest
-    # divisor pair whose CB footprint fits L1. Knob-turn only — the kernel is
-    # already parameterized on (sq, sk, dht); shrinking the chunk just adds more
-    # (fully-full) Q/KV chunks to the flat work-list. D<=256 / the D=128 perf shape
-    # keep the (4,4) default (byte-identical to Phase-0); D∈{512,1024} shrink to fit.
-    sq_chunk_t, sk_chunk_t = _pick_chunks(sqt, skvt, dht, has_mask, in_df, out_df, interm_df, scaler_df)
+    # divisor pair whose CB footprint fits L1 AND (for sq) keeps the grid filled.
+    # Knob-turn only — the kernel is already parameterized on (sq, sk, dht); shrinking
+    # the chunk just adds more (fully-full) Q/KV chunks to the flat work-list, and
+    # coarsening it (Refinement 3b) amortizes the per-helper reconfig/init tax over
+    # more tiles per call. D<=256 keep the fitted chunk; the D=128 perf shape (huge L1
+    # headroom, 740 Q-blocks) coarsens to fill compute; D∈{512,1024} shrink to fit L1.
+    sq_chunk_t, sk_chunk_t = _pick_chunks(
+        sqt, skvt, dht, has_mask, in_df, out_df, interm_df, scaler_df, bh=b * h_q, num_cores=num_cores
+    )
     q_num_chunks = sqt // sq_chunk_t
     k_num_chunks = skvt // sk_chunk_t
 
@@ -206,10 +262,6 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     pv_sb_h, pv_sb_w, pv_in0_sb, pv_in1_sb = _pick_subblock(sq_chunk_t, dht, dst_limit)
 
     total_q_blocks = b * h_q * q_num_chunks
-
-    device = query.device()
-    grid = device.compute_with_storage_grid_size()
-    grid_cols, grid_rows = grid.x, grid.y
 
     # ---- Refinement 3: K/V reuse-multicast gate (perf, scheme-change) ----------
     # K/V do not vary along S_q, so every core owning a Q-block of the same

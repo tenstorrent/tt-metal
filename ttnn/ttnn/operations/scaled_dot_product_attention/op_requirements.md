@@ -198,9 +198,34 @@ suite runs to completion: **1061 passed / 848 xfailed / 103.65s / no hang**; acc
 refinement tests pass; zero regression. Gate bullets all hold.
 
 **Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
-### [ ] Refinement 3b — Compute-side amortization on the perf-flagged profile (Refinement 3's real lever)
+### [~] Refinement 3b — Compute-side amortization on the perf-flagged profile (Refinement 3's real lever)
 
 **Type**: perf
+
+**Outcome (2026-07-23)**: All three named compute-side knobs measured on device against the
+flagged shape; the amortization lever is **correct and wins, but modestly** — the util-0.35
+premise is only partially borne out. **Chunk coarsening** is the win: raising the block pair
+`(4,4)→(8,8)` gives **11.04 ms → 10.24 ms = 1.078× (stable, ±0.03% over 3 runs)**, util
+~0.14 → ~0.15. The win is **NON-MONOTONIC — only the full (8,8) PAIR beats baseline**;
+coarsening one axis alone is *slower* ((4,8)=12.31 ms, (8,4)=12.10 ms), so 3b ships a binary
+regime switch to the coarse pair, gated on (real divisor pair) ∧ (fits L1) ∧ (grid stays
+filled after q-coarsening). Program-descriptor only; kernel already parameterized on (sq,sk,dht)
+— zero kernel change. The other two named knobs have no headroom: **matmul output-subblock** is
+already at the DEST ceiling (8 tiles, `fp32_dest_acc_en=False`) in both regimes;
+**kv_buffer_factor** at depth 3 measured 10.29 ms (no gain — reads are off the critical path,
+exactly as R3's ablations showed), parked at the double-buffer default. Golden suite
+**1061 passed / 848 xfailed / no hang** (byte-identical to R2 for every non-qualifying shape);
+unit dir 81 passed / 8 skipped; perf-test PCC 0.997 holds.
+
+**Why [~] not [x]**: the stated goal is util ≥ 0.35; the compute-side *block knobs* — turned
+to their ceiling — reach only ~0.15. The 4× reduction in kv_step count buying just 7% is itself
+the diagnosis: the fixed per-block reconfig tax is NOT the dominant cost — the residual is the
+**sequential FPU-matmul / SFPU-softmax phase structure** (the ~7 kv_step phases each own all 3
+TRISCs and cannot overlap, so the FPU idles through softmax and the SFPU idles through the two
+matmuls). Closing the gap to 0.35 needs FPU/SFPU **phase overlap / pipelining** — a scheme-change,
+outside the block-surface knob set this refinement names. Filed as **Refinement 3c**. The winning
+coarsening lever is kept (not reverted); R5's block-size/buffer-depth co-tune is now largely
+absorbed by this pass.
 
 **Goal**: Refinement 3 proved on-device that the flagged shape `(1,10,9472,128)` bf16 @
 `fp32_dest_acc_en=False` is **compute / per-core dataflow-latency bound, not
@@ -227,6 +252,33 @@ future shape that IS read-bound.
 
 **Done when**: measured device-ns improves materially on the flagged shape (toward the
 0.35 math-util floor) via compute-side knobs, golden suite green, PCC 0.997 holds, no
+regression on the config-spanning guard set.
+
+### [ ] Refinement 3c — FPU/SFPU phase overlap on the perf-flagged profile (the residual after 3b)
+
+**Type**: perf
+
+**Goal**: Refinement 3b turned every compute-side *block knob* to its ceiling and reached only
+util ~0.15 (from ~0.14) on the flagged shape `(1,10,9472,128)` bf16 @ `fp32_dest_acc_en=False`.
+3b's own measurement diagnoses the residual: a 4× cut in kv_step count bought just 7%, so the
+fixed per-block reconfig tax is second-order — the dominant cost is that the ~7 online-softmax
+kv_step phases run **strictly sequentially**, each owning all 3 TRISCs. The two `matmul_block`
+phases (QKᵀ, PV) use the FPU; the rowmax/exp/rowsum/rescale phases use the SFPU + reduce. Today
+the FPU idles through softmax and the SFPU idles through the matmuls → util pinned near ~0.15.
+The lever toward the 0.35 floor is **overlapping the FPU-matmul work of one KV-block with the
+SFPU-softmax work of the adjacent block** (software-pipeline the recurrence), and/or restructuring
+so the two engines are not mutually blocked per phase.
+
+**Verifier notes**: This is a **scheme-change**, not a knob-turn — it rewrites the kv_step
+scheduling (a cross-phase pipeline with the running (m,l,O) carried across the software-pipeline
+stages), so it stands alone as a perf phase. `/perf-measure` ablation first (stub each matmul vs
+each softmax phase, keep CB scaffolding) to quantify the exact FPU-idle / SFPU-idle split and set
+the realistic ceiling before building. Keep 3b's coarsened (8,8) regime and R3's gated mcast path
+as-is (both correct, no-regression, orthogonal). The two matmuls already hold their DEST subblock
+at the ceiling, so no further subblock headroom exists to fold in.
+
+**Done when**: measured device-ns improves materially beyond 3b's 10.24 ms on the flagged shape
+(toward the 0.35 math-util floor) via phase overlap, golden suite green, PCC 0.997 holds, no
 regression on the config-spanning guard set.
 
 ### [ ] Refinement 4 — Causal masking (mask_mode=causal)

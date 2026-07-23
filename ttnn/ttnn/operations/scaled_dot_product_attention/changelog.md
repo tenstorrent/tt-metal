@@ -248,3 +248,50 @@
   next queued refinement.
 - Tests added: None (reused the golden suite + acceptance + precision matrix + perf test as
   the regression net).
+
+## Refinement 3b — Compute-side amortization on the perf-flagged profile (Refinement 3's real lever) (partial)
+- Date: 2026-07-23
+- What was done: Chased R3's diagnosed lever — compute-side amortization — with the block-surface
+  knobs the planner already exposes. **Program-descriptor only; zero kernel change** (reader/compute/
+  writer are already parameterized on (sq, sk, dht); coarsening just makes each helper call do more
+  tiles per invocation, amortizing the per-phase init/dst-sync/format-reconfig tax over the ~7-phase
+  kv_step — master.md `compute_block_size`, whose win grows with phase count). Measured all three
+  named knobs on device against the flagged shape `(1,10,9472,128)` bf16 @ `fp32_dest_acc_en=False`:
+  * **Chunk coarsening (the win)**: added a coarse block pair `Q_CHUNK_COARSE`/`K_CHUNK_COARSE` = (8,8)
+    alongside the base (4,4). `_pick_chunks` FIRST tries the coarse pair, taken only when it (a) is a
+    real divisor pair of (sqt, skvt), (b) fits the R2 L1 budget, and (c) keeps the flat Q-block
+    work-list filling the grid after q-coarsening (`b·H_q·(sqt/8) >= num_cores`); otherwise it falls
+    through to the exact R2 baseline pick. The win is **NON-MONOTONIC** — only the full (8,8) PAIR
+    beats baseline: **(4,4)=11.04 ms → (8,8)=10.24 ms = 1.078×** (stable ±0.03% over 3 runs), while
+    (4,8)=12.31 ms and (8,4)=12.10 ms are both *slower* — so the gate is a binary regime switch to the
+    pair, not a per-axis picker. util ~0.14 → ~0.15.
+  * **matmul output-subblock**: already at the DEST ceiling (8 tiles, `fp32_dest_acc_en=False` → 8-tile
+    DEST) in BOTH the (4,4) and (8,8) regimes (`_pick_subblock` maxes it) — no headroom to turn.
+  * **kv_buffer_factor**: depth 3 measured 10.29 ms — no gain (marginally worse from L1 pressure);
+    reads are OFF the critical path (R3's ablations), so a deeper read buffer is a no-op here. Parked
+    at the double-buffer default (a live tunable for any future read-bound shape).
+- Grid/L1 gating (no-regression by construction): the coarse pair is emitted ONLY for shapes that
+  qualify — on this 110-core grid the golden universe that means the flagged loose case plus
+  `(1,8,4096,128)` (bf16/bf8b; fp32 (8,8) OOMs → stays baseline) and `(1,71,2048,64)` (bf16/fp32).
+  Every other cell — including the small `(*,*,256,64)` bf8b cases and all large-head-dim / underfilling
+  shapes — takes the byte-identical R2 pick. (A first cut used a grid-fill guard that forced `sq=1` on
+  underfilling shapes; it regressed `B1_H4_S256_D64 bf8b` PCC 0.975 by changing (4,4)→(1,8). Replaced
+  with the binary coarse-pair gate above, which leaves those shapes at (4,4).)
+- Accuracy achieved: flagged shape PCC ≥ 0.997 (soft gate) holds on the (8,8) path; golden PCC
+  tolerances all cleared on the two large qualifying shapes at every coarsened dtype.
+- Golden test progress: **1061 passed / 848 xfailed** (104.79s, no hang) — identical to Refinement 2/3b;
+  zero regression, zero xpass drift. Unit dir 81 passed / 8 skipped; perf test PCC 0.997.
+- Perf result: **11.04 ms → 10.24 ms = 1.078×** DEVICE FW DURATION, flagged shape, 110 cores.
+- Decision: **[~] partial**. The compute-side *block knobs* are turned to their ceiling and the winning
+  one is kept (not reverted). But the util-0.35 goal is not reached (~0.15): a 4× cut in kv_step count
+  buying only 7% is itself the diagnosis — the fixed per-block tax is second-order; the dominant cost is
+  the **sequential FPU-matmul / SFPU-softmax phase structure** (the ~7 kv_step phases each own all 3
+  TRISCs → the FPU idles through softmax, the SFPU idles through the matmuls). Closing to 0.35 needs
+  FPU/SFPU **phase overlap / pipelining** — a scheme-change outside the block-knob set — filed as
+  **Refinement 3c**, ordered immediately after this one. (R5's block-size/buffer-depth co-tune is now
+  largely absorbed by this pass.)
+- Issues encountered: The non-monotonic curve (only the pair wins) was the surprise; caught by the
+  per-axis sweep (measure, don't guess). The bf8b grid-fill-guard regression above, caught by the unit
+  dir and fixed before the golden run.
+- Tests added: None (reused test_scaled_dot_product_attention_perf.py + the golden suite + acceptance +
+  precision matrix as the regression net).
