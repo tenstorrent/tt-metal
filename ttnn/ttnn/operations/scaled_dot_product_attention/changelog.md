@@ -170,3 +170,42 @@
   (no mask) already passed at (4,4); only bf16 D=1024 and D=512+custom OOMed for bf16.
 - Tests added: None (reused the R1 precision matrix + acceptance + golden suite as the
   regression net; added exploratory probes probe_005/006 documenting the exact L1 model).
+
+## Refinement 3 — Speed up the perf-flagged profile (K/V reuse multicast) (partial)
+- Date: 2026-07-23
+- What was done: Built the requested K/V reuse-multicast scheme-change and measured it on
+  device. A compile-time-gated `USE_MCAST` regime (Reused the existing reader/writer/compute
+  + program descriptor; compute kernel UNCHANGED; Added a gated branch): when the (batch,head)
+  groups map one-per-grid-row (`b·H_q == grid_rows`) and there is no mask, one injector per
+  row (col 0) reads each KV-block once from DRAM and NoC-multicasts it across its row via
+  `ttnn.Mcast1D` PerRow (host) + `mcast_pipe` `SenderPipe`/`ReceiverPipe` (kernel, one family,
+  Flag signal, sequential K-then-V sends). All cores in a row process
+  `rounds = ceil(q_num_chunks / grid_cols)` Q-blocks in perfect cb_k_in/cb_v_in lockstep;
+  ragged-edge "dummy" slots re-run Q-chunk 0 (a bit-identical redundant output, so the mcast
+  landing address stays identical across the row and correctness is preserved with no discard
+  path). Grid on this box = 11×10 = 110, and `b·H_q = 10 = grid_rows` for the flagged shape, so
+  it maps to one head per row, 11 cols splitting 74 Q-blocks, injector col 0. **Gate is
+  zero-regression by construction**: no golden/acceptance INPUTS shape has `b·H_q == 10`, so
+  only the flagged LOOSE_CASE takes the mcast path; every other cell keeps the byte-identical
+  per-core DRAM path (`USE_MCAST=0`).
+- Accuracy achieved: flagged shape `(1,10,9472,128)` bf16 @ fp32_dest_acc_en=False — PCC ≥ 0.997
+  (soft gate) holds on the mcast path (golden `test_op_loose` green). No RMSE regression.
+- Golden test progress: **1061 passed / 0 failed / 848 xfailed** (104s, no hang) — identical to
+  Refinement 2; zero regression. Acceptance 32/32. Non-mcast debug 4/4.
+- Perf result: **baseline 11.05 ms → mcast 10.97 ms = 1.007× (FLAT)**, DEVICE FW DURATION,
+  110 cores. The lever is CORRECT but does not win. Two on-device ablations pin the cause:
+  (1) ~10× fewer total DRAM K/V reads → time flat; (2) cutting the injector's DRAM read volume
+  ~16× (1 tile/block) → 0.1% change. **Conclusion: the flagged shape is NOT DRAM-read-bound**
+  (the refinement's premise is refuted by measurement) — it is compute / per-core
+  dataflow-latency bound (util ~0.14). No read-strategy change (fixed injector, distributed/
+  rotating injector, store-and-forward) can win, because reads are not the critical path.
+- Decision: **[~] partial**. Per "keep a correct lever," the gated mcast path is retained
+  (correct, exercised by test_scaled_dot_product_attention_perf.py, zero regression, and
+  re-enabled for free on any future shape that IS read-bound). Filed **Refinement 3b** naming
+  the real lever: compute-side amortization (per-helper reconfig tax over the ~7-phase kv_step,
+  matmul subblock, chunk coarsening, CB depth) — which overlaps Refinement 5's scope.
+- Issues encountered: The mcast came up correct on the first --dev run (no hang) — the lockstep
+  dummy-slot design and one-family sequential K/V handshake held. The only surprise was the flat
+  perf, resolved by the two ablations above (measure, don't guess).
+- Tests added: test_scaled_dot_product_attention_perf.py (flagged-shape device-ns + PCC 0.997
+  gate; the baseline/target harness for Refinements 3/3b/5).

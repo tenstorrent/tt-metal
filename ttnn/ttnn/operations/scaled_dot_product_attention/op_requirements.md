@@ -123,9 +123,23 @@ The flagged perf shape (D=128) fits already, so this does not touch the perf pat
 **Done when**: every Phase-0 cell currently in the `OOM` category (the 6
 `supported_fail`) passes, at every supported dtype; no regression on the D≤256 cells.
 
-### [ ] Refinement 3 — Speed up the perf-flagged profile (K/V reuse multicast)
+### [~] Refinement 3 — Speed up the perf-flagged profile (K/V reuse multicast)
 
 **Type**: perf
+
+**Outcome (2026-07-23)**: The mcast scheme-change was **built, correct, and measured** —
+but it does **not** win on the flagged shape, because the shape is **not DRAM-read-bound**
+(the refinement's premise is refuted by measurement). A compile-time-gated `USE_MCAST`
+PerRow path (one head per grid row, injector col 0 reads each KV-block once and
+NoC-multicasts it across its row via `ttnn.Mcast1D` PerRow + `mcast_pipe`
+`SenderPipe`/`ReceiverPipe`; lockstep dummy-slot padding) lands and passes the golden
+suite (1061/1061) + PCC 0.997. Device-ns: **baseline 11.05 ms → mcast 10.97 ms (1.007×,
+flat)**. Two ablations pin the cause: (1) ~10× fewer total DRAM K/V reads → flat; (2)
+cutting the injector's DRAM read volume ~16× → 0.1% change. So neither the total read
+volume nor the injector read is the critical path — the shape is **compute / per-core
+dataflow-latency bound**, not redundant-read bound. The correct lever is kept (gated,
+exercised by `test_scaled_dot_product_attention_perf.py`, zero regression); the win must
+come from the compute side. See Refinement 3b.
 
 **Goal**: `feature_spec.LOOSE_CASES` flags `(1,10,9472,128)` bf16 @
 `fp32_dest_acc_en=False`, mask none, auto scale, self/MHA as the mandatory perf
@@ -152,6 +166,37 @@ read count here makes this the high-confidence lever.
 0.35 math-util floor), its soft PCC gate (0.997) still holds, the golden suite is
 green, and no regression across the config-spanning guard set (one representative per
 distinct kernel path × layout × placement).
+
+### [ ] Refinement 3b — Compute-side amortization on the perf-flagged profile (Refinement 3's real lever)
+
+**Type**: perf
+
+**Goal**: Refinement 3 proved on-device that the flagged shape `(1,10,9472,128)` bf16 @
+`fp32_dest_acc_en=False` is **compute / per-core dataflow-latency bound, not
+redundant-read bound** (10× read reduction → flat; 16× injector-read cut → 0.1%). So the
+path from util ~0.14 (11.0 ms) toward the ≥0.35 floor is the **compute-side amortization**
+lever, not any read-strategy change. Chase it with the block-surface knobs the planner
+already exposes (this is exactly Refinement 5's toolbox, pulled forward because R3's
+read-relief premise is retired):
+- **Per-helper reconfig/init overhead** — the online-softmax `kv_step` runs ~7 sequential
+  helper phases per KV-block (QKᵀ matmul → rowmax → exp → rowsum → PV matmul → rescale),
+  each paying init/dst-sync/format-reconfig. At 74 KV-blocks × ~7 Q-blocks/core this fixed
+  per-block cost dominates. Coarsen `k_chunk_tiles` (fewer, larger KV-blocks) and
+  `q_chunk_tiles` to amortize it — the design's block-factor knobs, currently (4,4).
+- **matmul output-subblock size** (`matmul_output_subblock`, cap 4 under fp32-DEST — here
+  DEST is 8 since `fp32_dest_acc_en=False`) and the QKᵀ/PV subblock decomposition.
+- **CB buffer depth** (`kv_buffer_factor`) to overlap read with compute now that compute is
+  the critical path.
+
+**Verifier notes**: `/perf-measure` ablation (stub the compute payload, keep CB scaffolding)
+to confirm the compute/dataflow split and quantify the per-block reconfig tax before
+turning knobs. This overlaps Refinement 5's scope — R5 may absorb it. Keep R3's gated
+mcast path as-is (correct, no-regression); it is orthogonal and re-enabled for free on any
+future shape that IS read-bound.
+
+**Done when**: measured device-ns improves materially on the flagged shape (toward the
+0.35 math-util floor) via compute-side knobs, golden suite green, PCC 0.997 holds, no
+regression on the config-spanning guard set.
 
 ### [ ] Refinement 4 — Causal masking (mask_mode=causal)
 
