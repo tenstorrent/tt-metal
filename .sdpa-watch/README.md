@@ -20,6 +20,24 @@ The watcher has two locations, and the distinction matters:
 
 You can delete the repo snapshot and the service keeps running. You cannot delete `~/.sdpa-watch/` without breaking it.
 
+### Keep the two in sync (do this every time)
+
+The runtime is where you actually edit; the snapshot only stays useful if you mirror your edits back. **Whenever you change a tracked source file in `~/.sdpa-watch/` (`config.sh`, `watch.sh`, `agent_prompt.txt`, `dryrun.sh`, `ensure-cron.sh`, `README.md`, `SETUP.md`), copy it to the branch snapshot and commit** — otherwise the next machine set up from the repo, and anyone reviewing the branch, gets stale behavior.
+
+```bash
+# after editing a file in ~/.sdpa-watch/, e.g. agent_prompt.txt:
+cp ~/.sdpa-watch/agent_prompt.txt /localdev/skrstic/tt-metal/.sdpa-watch/agent_prompt.txt
+cd /localdev/skrstic/tt-metal
+git add .sdpa-watch/agent_prompt.txt && git commit -m "sdpa-watch: <what changed>" && git push
+```
+
+Never copy secrets or state to the repo (`oauth_token`, `slack_webhook`, `state.json`, `watch.log`) — those are runtime-only by design. To confirm nothing drifted, diff the two dirs:
+
+```bash
+diff -qr ~/.sdpa-watch /localdev/skrstic/tt-metal/.sdpa-watch \
+  | grep -v -E 'oauth_token|slack_webhook|state.json|watch.log|\.credentials'
+```
+
 ---
 
 ## First-time setup on a new machine
