@@ -26,6 +26,8 @@ struct Config {
         std::filesystem::path tmp_dir = "/tmp/ttnn";
         bool enable_model_cache = false;
         bool enable_fast_runtime_mode = true;
+        // Validate Metal 2.0 ProgramRunArgs on Set/UpdateProgramRunArgs. Off by default; CI turns it on.
+        bool validate_program_run_args = false;
         bool throw_exception_on_fallback = false;
         bool enable_logging = false;
         bool enable_graph_report = false;
