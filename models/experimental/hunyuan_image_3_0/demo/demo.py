@@ -150,6 +150,52 @@ _OPEN = {}
 
 # --- lightweight per-stage timing -------------------------------------------
 _TIMINGS = []
+_AR_METRICS = []  # (label, ttft_seconds, tps, end_of_cot_seconds) per AR decode stage
+_DENOISE_METRICS = []  # (label, ms_per_step, num_steps, total_seconds)
+_VAE_METRICS = []  # (label, seconds)
+
+
+def _record_ar_metrics(label, recap_result):
+    if recap_result.ttft is not None:
+        _AR_METRICS.append((label, recap_result.ttft, recap_result.tps, recap_result.total_seconds))
+
+
+def _record_denoise_metrics(label, total_seconds, num_steps):
+    ms_per_step = (total_seconds / num_steps * 1000) if num_steps else None
+    _DENOISE_METRICS.append((label, ms_per_step, num_steps, total_seconds))
+
+
+def _record_vae_metrics(label, total_seconds):
+    _VAE_METRICS.append((label, total_seconds))
+
+
+def _print_perf_summary(images: int, e2e_seconds: float):
+    if _AR_METRICS:
+        print("\n-------------------- AR text (think/recaption) --------------------", flush=True)
+        for label, ttft, tps, cot_time in _AR_METRICS:
+            tps_str = f"{tps:.2f} tok/s" if tps is not None else "n/a"
+            cot_str = f"{cot_time:.2f}s" if cot_time is not None else "n/a"
+            print(f"[perf] {label:20s} ttft={ttft:.2f}s  tps={tps_str}  end_of_cot={cot_str}", flush=True)
+
+    if _DENOISE_METRICS:
+        print("\n-------------------- Diffusion / flow denoise --------------------", flush=True)
+        for label, ms_per_step, num_steps, total_seconds in _DENOISE_METRICS:
+            ms_str = f"{ms_per_step:.1f} ms/step" if ms_per_step is not None else "n/a"
+            print(
+                f"[perf] {label:20s} {ms_str}  ({num_steps} steps)  total={total_seconds:.2f}s",
+                flush=True,
+            )
+
+    if _VAE_METRICS:
+        print("\n-------------------- VAE decode --------------------", flush=True)
+        for label, total_seconds in _VAE_METRICS:
+            print(f"[perf] {label:20s} decode_latency={total_seconds:.2f}s", flush=True)
+
+    print("\n-------------------- End-to-end --------------------", flush=True)
+    s_per_image = e2e_seconds / images if images else e2e_seconds
+    images_per_hour = (images / e2e_seconds * 3600) if e2e_seconds > 0 else float("inf")
+    print(f"[perf] prompt -> final image: {s_per_image:.2f} s/image  ({images_per_hour:.2f} images/hour)", flush=True)
+    print("---------------------------------------------------------------------", flush=True)
 
 
 def _mark(name, since):
@@ -603,6 +649,7 @@ def _run_recaption_instruct_on_mesh(
         image_size=IMAGE_BASE_SIZE,
     )
     del lm_head
+    _record_ar_metrics("recaption(instruct)", recap_result)
     cot_text, image_size = _finalize_recaption_cot(tok, prompt, recap_result.cot_text[0], recap_result.image_size)
     return cot_text, image_size, backbone
 
@@ -686,6 +733,7 @@ def _run_recaption(mesh_device, ccl, c, tok, proc, wte, prompt, generator, *, ba
         image_size=IMAGE_BASE_SIZE,
     )
     del lm_head
+    _record_ar_metrics("recaption(base)", recap_result)
     cot_text, image_size = _finalize_recaption_cot(tok, prompt, recap_result.cot_text[0], recap_result.image_size)
     return cot_text, image_size, backbone
 
@@ -894,6 +942,7 @@ def main():
                 guidance_scale=GUIDANCE,
             )
             print(f"[demo] host denoise done ({time.time() - t0:.0f}s), latent {tuple(latent.shape)}")
+            _record_denoise_metrics("denoise(host)", time.time() - t0, STEPS)
             t = _mark("5_denoise_loop", t)
         else:
             if backbone is not None and getattr(backbone, "embed_weight", None) is not None:
@@ -1034,7 +1083,9 @@ def main():
                 emb,
             )
             release_stage_resources(mesh_device)
+            denoise_seconds = time.time() - t
             t = _mark("5_denoise_loop", t)
+            _record_denoise_metrics("denoise", denoise_seconds, STEPS)
 
         if SAVE_LATENT:
             payload = {
@@ -1054,6 +1105,7 @@ def main():
             print(f"[demo] saved latent -> {save_path.resolve()}", flush=True)
 
         print("[demo] VAE decode (TTNN, on device, 2x2 H/W-spatial-parallel) ...")
+        vae_t0 = time.time()
         img = decode_latent(
             mesh_device,
             latent,
@@ -1063,6 +1115,7 @@ def main():
             h_mesh_axis=0,
             w_mesh_axis=1,
         )
+        _record_vae_metrics("vae_decode", time.time() - vae_t0)
         t = _mark("6_vae_decode", t)
         img = img[0]  # [3, 1024, 1024]
     finally:
@@ -1080,7 +1133,9 @@ def main():
         preview = recaption_written if len(recaption_written) <= 240 else recaption_written[:237] + "..."
         print(f"[demo] recaption written prompt (preview): {preview}", flush=True)
     t = _mark("7_save_png", t)
-    _print_timing_summary(time.time() - t_start)
+    e2e_seconds = time.time() - t_start
+    _print_timing_summary(e2e_seconds)
+    _print_perf_summary(images=1, e2e_seconds=e2e_seconds)
 
 
 if __name__ == "__main__":
