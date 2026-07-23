@@ -372,15 +372,16 @@ jobs:
           TTRUN_DIR=/etc/ttop
           PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
 
-          # bh_sc1 has no MGD, so ttop does not generate /etc/ttop/mgd.textproto.
-          # Point the test at the single-galaxy descriptor shipped in the pinned
-          # image (the one --config 4x8 uses) via TT_MESH_GRAPH_DESC_PATH.
-          MGD=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+          # bh_sc1 ships no MGD, so ttop does not generate /etc/ttop/mgd.textproto
+          # (which the workers expect via the rank bindings). Place the single-
+          # galaxy descriptor there ourselves (/etc/ttop is the ttop shared volume).
+          SRC="$GITHUB_WORKSPACE/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+          cp "$SRC" "${TTRUN_DIR}/mgd.textproto" 2>/dev/null || sudo cp "$SRC" "${TTRUN_DIR}/mgd.textproto"
 
           set -o pipefail
           tt-run --skip-mgd-check --skip-executable-check \
             --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
-            --mpi-args "--tag-output -x TT_MESH_GRAPH_DESC_PATH=${MGD} --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir /home/user/tt-metal" \
+            --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir /home/user/tt-metal" \
             /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric \
             --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_neighbor_exchange.yaml \
             --filter name.2DTorusXYNeighborExchange 2>&1 | tee dc_result.log
