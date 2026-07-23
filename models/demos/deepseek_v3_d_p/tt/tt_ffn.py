@@ -66,8 +66,8 @@ class TtFfn(TtSharedExpert):
             compute_kernel_config=compute_kernel_config,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=cache_name_prefix,
-            # subdevice_id / subdevice_cores intentionally left as defaults (None) —
-            # TtFfn's overridden forward() does not use them.
+            # subdevice_id intentionally left as default (None) —
+            # TtFfn's overridden forward() does not use it.
         )
 
     @staticmethod

@@ -678,6 +678,28 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     }
     CoreRangeSet untilizer_core_grid(untilizer_ranges_set);
 
+    // ---- Per-forward reset of the routed-expert overlap semaphore ----
+    // One leader untilizer core (all_untilizer_cores[0]) zeroes the routed-expert global semaphore
+    // after EVERY untilizer core has cleared its final wait_min. `reset_barrier_semaphore` counts the
+    // per-core "done waiting" signals so the leader never zeroes a core that is still blocked;
+    uint32_t reset_barrier_semaphore_id = add_sema(untilizer_core_grid);
+    const CoreCoord reset_leader_logical = all_untilizer_cores[0];
+    const auto reset_leader_noc =
+        mesh_device->virtual_core_from_logical_core(reset_leader_logical, tt::CoreType::WORKER);
+    const uint32_t reset_leader_noc_x = reset_leader_noc.x;
+    const uint32_t reset_leader_noc_y = reset_leader_noc.y;
+    // The reset multicast must cover EVERY core that holds the routed-expert semaphore = the whole
+    // combine line `all_row_cores` (== the dm sub-device row the global semaphore is created on).
+    uint32_t reset_mcast_start_x = ~0u, reset_mcast_start_y = ~0u, reset_mcast_end_x = 0u, reset_mcast_end_y = 0u;
+    for (const auto& c : all_row_cores) {
+        const auto n = mesh_device->virtual_core_from_logical_core(c, tt::CoreType::WORKER);
+        reset_mcast_start_x = std::min(reset_mcast_start_x, (uint32_t)n.x);
+        reset_mcast_start_y = std::min(reset_mcast_start_y, (uint32_t)n.y);
+        reset_mcast_end_x = std::max(reset_mcast_end_x, (uint32_t)n.x);
+        reset_mcast_end_y = std::max(reset_mcast_end_y, (uint32_t)n.y);
+    }
+    const uint32_t reset_num_combine_cores = total_row_cores;
+
     // TILE_LAYOUT semaphores for sender <-> untilizer core handshake
     uint32_t counter_ready_semaphore_id = 0;
     std::vector<std::vector<uint32_t>> data_ready_semaphore_ids(num_cores);
@@ -1331,10 +1353,16 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     // Set runtime args for untilizer cores (both layouts — reader_untilize kernel).
     // Layout: counter_ready_sem, dispatched_buffer_addr, expert_start, expert_end,
-    //         dispatched_metadata_addr.
+    //         dispatched_metadata_addr, routed_expert_sem_addr.
     // Sender NOC coords and per-sender data_ready/start semaphores are now consumed by
     // writer_untilize on the same core (which owns the untilized-data send).  The compute
     // kernel exists only in TILE_LAYOUT, so its runtime args are set under that guard below.
+    //
+    // routed_expert_sem_addr: absolute L1 address of the routed-expert global semaphore used to
+    // overlap the routed expert with the combine.
+    uint32_t routed_expert_sem_addr = operation_attributes.global_semaphore.has_value()
+                                          ? static_cast<uint32_t>(operation_attributes.global_semaphore->address())
+                                          : 0u;
     {
         for (uint32_t j = 0; j < num_untilizer_cores; j++) {
             uint32_t s = untilizer_sender_map[j];
@@ -1352,9 +1380,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                     local_core_id++;
                 }
             }
-            // Reader_untilize RT args (7):
+            // Reader_untilize RT args (8):
             //   [0]: counter_ready_sem, [1]: dispatched_buffer*, [2]: expert_start,
-            //   [3]: expert_end,        [4]: dispatched_metadata*, [5]: sender_idx, [6]: num_senders.
+            //   [3]: expert_end,        [4]: dispatched_metadata*, [5]: untilizer_global_pos,
+            //   [6]: total_untilizers (G), [7]: routed_expert_sem_addr.
             // Buffers pushed as Buffer* so the framework records BufferBindings for the
             // cache-hit fast path.
             tt::tt_metal::KernelDescriptor::RTArgList untilizer_rt_args;
@@ -1365,6 +1394,22 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             untilizer_rt_args.push_back(dispatched_metadata.buffer());
             untilizer_rt_args.push_back(untilizer_global_pos[j]);  // global batch start
             untilizer_rt_args.push_back(num_untilizer_cores);      // global batch stride (G)
+            // Absolute L1 address of the routed-expert global semaphore for the combine/routed-expert
+            // overlap. 0 when no semaphore was provided — reader_untilize then skips the wait.
+            untilizer_rt_args.push_back(routed_expert_sem_addr);
+            // Routed-expert semaphore per-forward reset (see reader_untilize.cpp). Leader is
+            // all_untilizer_cores[0] (j == 0). num_untilizer_cores "done waiting" signals are
+            // collected on the leader before it broadcasts 0 over the combine-core bounding box.
+            untilizer_rt_args.push_back(j == 0 ? 1u : 0u);  // is_reset_leader
+            untilizer_rt_args.push_back(reset_leader_noc_x);
+            untilizer_rt_args.push_back(reset_leader_noc_y);
+            untilizer_rt_args.push_back(reset_barrier_semaphore_id);
+            untilizer_rt_args.push_back(num_untilizer_cores);
+            untilizer_rt_args.push_back(reset_mcast_start_x);
+            untilizer_rt_args.push_back(reset_mcast_start_y);
+            untilizer_rt_args.push_back(reset_mcast_end_x);
+            untilizer_rt_args.push_back(reset_mcast_end_y);
+            untilizer_rt_args.push_back(reset_num_combine_cores);
             desc.kernels[reader_untilize_kernel_ids[j]].emplace_runtime_args(
                 untilizer_row_cores[j], untilizer_rt_args);
 

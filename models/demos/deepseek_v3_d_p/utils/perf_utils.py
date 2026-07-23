@@ -457,6 +457,7 @@ def run_moe_perf_with_approximation(
     margin: float = 0.03,
     comments_8x1: str = "",
     comments_2x4: str = "",
+    extra_env: dict | None = None,
 ):
     """
     Run 8x1 + 2x4 MoE proxies once each, perf-validate both against baselines,
@@ -487,6 +488,7 @@ def run_moe_perf_with_approximation(
             batch_size=batch_size,
             margin=margin,
             comments=comments_8x1,
+            extra_env=extra_env,
         )
     except AssertionError as e:
         logger.warning(f"8x1 perf check FAILED but continuing to 2x4: {e}")
@@ -521,6 +523,7 @@ def run_moe_perf_with_approximation(
                 batch_size=batch_size,
                 margin=margin,
                 comments=comments_2x4,
+                extra_env=extra_env,
             )
         except AssertionError as e:
             logger.warning(f"2x4 perf check FAILED: {e}")

@@ -339,9 +339,12 @@ def test_deepseek_v3_prefill_block_perf(
     if "torus" in model_name and (os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ):
         pytest.skip("subtorus/torus perf entry: no wrap-cabled CI runner (would hang on bh-glx)")
 
+    # Force both MoE overlaps (shared/dispatch and routed/combine) off for every case, so the
+    # device-perf baselines are measured with overlaps disabled (honored in test_prefill_block_loop.py).
+    extra_env = {"TT_DS_MOE_DISABLE_OVERLAP": "1"}
+
     # 4x4 sub-torus variants need 16 specific chips carved out + the Ring-4-on-Y descriptor.
     # These must reach the worker via os.environ (extra_env), not the command string.
-    extra_env = None
     if "_4x4_" in model_name:
         # Pick the carve descriptor by the exact `_torus_<axis>` token. A regex on the delimited
         # token (not a raw substring) avoids the "torus_x" ⊂ "torus_xy" trap and tolerates a trailing
@@ -349,7 +352,8 @@ def test_deepseek_v3_prefill_block_perf(
         _carve_env_by_axis = {"x": _SUBTORUS_X4_ENV, "xy": _SUBTORUS_XY4_ENV, "y": _SUBTORUS_Y4_ENV}
         m = re.search(r"_torus_(xy|x|y)(?:_|$)", model_name)
         assert m is not None, f"4x4 perf entry {model_name!r} has no _torus_<axis> token"
-        extra_env = dict(_carve_env_by_axis[m.group(1)])
+        # update() (not reassignment) so the TT_DS_MOE_DISABLE_OVERLAP flag set above is preserved.
+        extra_env.update(_carve_env_by_axis[m.group(1)])
         # 4x4 layer3 entries measure the 128-expert / HOST-gate path. Clear DS_4X4_FULL_EXPERTS for
         # the worker so the result is deterministic regardless of any value left in the launching
         # shell — the loop test then halves to 128 experts and forces HOST_ALL. (Forcing 256 experts

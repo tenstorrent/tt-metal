@@ -40,6 +40,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reverse_reorder_tensor_chunks,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import MOE_L1_SMALL_REGION_SIZE
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
@@ -98,7 +99,12 @@ def run_model(
     determinism_check: bool = False,
     num_iterations: int = 1,
     use_pretrained: bool = False,
+    overlap_shared_expert_with_dispatch: bool = True,
+    overlap_routed_expert_with_combine: bool = True,
 ):
+    # The routed-expert / combine overlap is only supported on Blackhole.
+    if overlap_routed_expert_with_combine and not is_blackhole():
+        pytest.skip("overlap_routed_expert_with_combine=True is only supported on Blackhole")
     if (is_ci_env or is_ci_v2_env) and pcc_validation == False and not determinism_check:
         pytest.skip("Skip non-PCC test in CI to save time")
     # Kimi's parametrize has no `balanced` entry today (only non_balanced).
@@ -339,6 +345,8 @@ def run_model(
         tp_axis=tp_axis,
         weight_cache_path=cache_dir,
         is_balanced=is_balanced,
+        overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -517,6 +525,7 @@ def run_model(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             1,
             ttnn.Topology.Linear,
@@ -530,6 +539,7 @@ def run_model(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,
@@ -544,6 +554,7 @@ def run_model(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             1,
             ttnn.Topology.Linear,
@@ -558,6 +569,7 @@ def run_model(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,
@@ -572,6 +584,7 @@ def run_model(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             1,
             # Per-axis topology (SP-axis-0, TP-axis-1). FABRIC_2D_TORUS_Y wraps ONLY the SP axis
@@ -628,6 +641,7 @@ def run_model(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             # 4x4 sub-torus: Ring-4 on the SP axis (dim 0), Linear on the 4-wide TP axis (dim 1).
@@ -644,6 +658,7 @@ def run_model(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             # 4x4 full 2D sub-torus: Ring-4 on BOTH axes (dim 0 = SP/Y, dim 1 = TP/X). Both axes have
@@ -678,6 +693,8 @@ def run_model(
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
+@pytest.mark.parametrize("overlap_shared_expert_with_dispatch", [True], ids=["overlap_shared"])
+@pytest.mark.parametrize("overlap_routed_expert_with_combine", [True], ids=["overlap_routed"])
 @pytest.mark.timeout(750)
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 def test_ds_prefill_block(
@@ -700,6 +717,8 @@ def test_ds_prefill_block(
     determinism_check,
     num_iterations,
     use_pretrained,
+    overlap_shared_expert_with_dispatch,
+    overlap_routed_expert_with_combine,
     request,
 ):
     # FABRIC_2D on the 2x4 mesh regresses the MoE/device-gate PCC ~3 points below the 0.992 gate.
@@ -740,6 +759,8 @@ def test_ds_prefill_block(
         num_iterations=num_iterations,
         thresholds=DSV3_THRESHOLDS,
         use_pretrained=use_pretrained,
+        overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
     )
 
 
@@ -769,6 +790,7 @@ def test_ds_prefill_block(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,
@@ -781,6 +803,8 @@ def test_ds_prefill_block(
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
+@pytest.mark.parametrize("overlap_shared_expert_with_dispatch", [True], ids=["overlap_shared"])
+@pytest.mark.parametrize("overlap_routed_expert_with_combine", [True], ids=["overlap_routed"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
@@ -804,6 +828,8 @@ def test_kimi_prefill_block(
     determinism_check,
     num_iterations,
     use_pretrained,
+    overlap_shared_expert_with_dispatch,
+    overlap_routed_expert_with_combine,
     request,
 ):
     run_model(
@@ -828,6 +854,8 @@ def test_kimi_prefill_block(
         num_iterations=num_iterations,
         thresholds=KIMI_THRESHOLDS,
         use_pretrained=use_pretrained,
+        overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
     )
 
 
@@ -938,6 +966,7 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
                 "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,

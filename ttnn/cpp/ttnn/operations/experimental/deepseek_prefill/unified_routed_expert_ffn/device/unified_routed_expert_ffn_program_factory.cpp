@@ -16,6 +16,8 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -138,6 +140,33 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // the adaptive L1-budget guard below may shrink per_core_M / in0_block_w_gu
     // (and hence chunk_M_tiles) to fit the device's per-core L1.
     const uint32_t per_core_M_max = chunk_M_tiles / GRID_Y;
+
+    // Place the GRID_X x GRID_Y compute block at the origin of the provided
+    // sub-device's worker cores, or at grid origin (0, 0) when no
+    // sub-device is given. NOC mcast topology is derived from
+    // worker_core_from_logical_core() of the (offset) logical coords below, so
+    // shifting the origin keeps every sender/receiver rectangle correct.
+    uint32_t origin_x = 0;
+    uint32_t origin_y = 0;
+    if (op.subdevice_id.has_value()) {
+        const auto sd_cores =
+            t.x.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, *op.subdevice_id);
+        const auto bbox = sd_cores.bounding_box();
+        origin_x = bbox.start_coord.x;
+        origin_y = bbox.start_coord.y;
+        const uint32_t sd_width = bbox.end_coord.x - bbox.start_coord.x + 1;
+        const uint32_t sd_height = bbox.end_coord.y - bbox.start_coord.y + 1;
+        TT_FATAL(
+            sd_width >= GRID_X && sd_height >= GRID_Y,
+            "unified_routed_expert_ffn: sub-device worker grid ({}x{} at origin ({},{})) is too small for the "
+            "{}x{} compute block",
+            sd_width,
+            sd_height,
+            origin_x,
+            origin_y,
+            GRID_X,
+            GRID_Y);
+    }
     TT_FATAL(
         per_core_M_max * GRID_Y == chunk_M_tiles && per_core_M_max >= 1,
         "chunk_M_tiles ({}) must be a positive multiple of GRID_Y ({})",
@@ -444,7 +473,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t d_out_block_num_tiles = per_core_M * per_core_N_d;
 
     // -------------------------- compute grid ------------------------------
-    const CoreRange core_range({0, 0}, {GRID_X - 1, GRID_Y - 1});
+    const CoreRange core_range({origin_x, origin_y}, {origin_x + GRID_X - 1, origin_y + GRID_Y - 1});
     const CoreRangeSet core_range_set{core_range};
 
     auto* x_buffer = t.x.buffer();
@@ -521,6 +550,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // slot reserved) and up_done (writer -> reader: up in L1). Monotonic.
     const uint32_t up_go_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
     const uint32_t up_done_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+
+    // Leader-completion sync semaphore (init 0). At the end of the writer kernel
+    // every non-leader core increments the leader core's copy; the leader waits
+    // for num_non_leader signals so it is guaranteed to be the last core to
+    // finish, then multicast-increments the global semaphore.
+    const uint32_t leader_sync_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
 
     // -------------------------- circular buffers --------------------------
     // Double-buffered DRAM-streamed inputs.
@@ -924,15 +959,64 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // M-row groups using in0_{ready,valid}_sem, and activated mcast within
     // M-row groups (rotating sender per phase-4 K-block) using
     // act_{ready,valid}_sem. No global cross-grid barrier is needed.
+    // Logical cores are offset by the sub-device origin; (gx, gy) below remain
+    // block-relative indices [0, GRID_X) x [0, GRID_Y) used for matmul tiling and
+    // mcast topology, while the physical/logical core is (origin_x+gx, origin_y+gy).
     std::vector<CoreCoord> cores;
     cores.reserve(GRID_X * GRID_Y);
     for (uint32_t gy = 0; gy < GRID_Y; ++gy) {
         for (uint32_t gx = 0; gx < GRID_X; ++gx) {
-            cores.push_back(CoreCoord{gx, gy});
+            cores.push_back(CoreCoord{origin_x + gx, origin_y + gy});
         }
     }
 
     auto* device = t.x.device();
+
+    // Leader-completion sync setup. Leader = first scheduled core; the other
+    // (num_cores - 1) cores increment its leader_sync sem at the end of their
+    // writer kernels, and the leader waits for that many signals before doing
+    // the (optional) global-semaphore multicast inc.
+    const CoreCoord leader_logical = cores.front();
+    const auto leader_phys = device->worker_core_from_logical_core(leader_logical);
+    const uint32_t leader_noc_x = leader_phys.x;
+    const uint32_t leader_noc_y = leader_phys.y;
+    const uint32_t num_non_leader_cores = static_cast<uint32_t>(cores.size() - 1);
+
+    // Optional global semaphore: after the leader confirms every non-leader is
+    // done, it multicast-increments every instance of the global semaphore.
+    uint32_t has_global_sem = 0;
+    uint32_t global_sem_mcast_start_x = 0;
+    uint32_t global_sem_mcast_start_y = 0;
+    uint32_t global_sem_mcast_end_x = 0;
+    uint32_t global_sem_mcast_end_y = 0;
+    uint32_t global_sem_num_dests = 0;
+    uint32_t global_sem_l1_addr = 0;
+    if (op.global_semaphore.has_value()) {
+        const auto& gsem = op.global_semaphore.value();
+        const auto gsem_attrs = gsem.attribute_values();
+        const auto& gsem_cores = std::get<0>(gsem_attrs);
+        bool first_phys = true;
+        for (const auto& range : gsem_cores.ranges()) {
+            for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; ++x) {
+                for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; ++y) {
+                    const auto phys = device->worker_core_from_logical_core(CoreCoord{x, y});
+                    if (first_phys) {
+                        global_sem_mcast_start_x = global_sem_mcast_end_x = phys.x;
+                        global_sem_mcast_start_y = global_sem_mcast_end_y = phys.y;
+                        first_phys = false;
+                    } else {
+                        global_sem_mcast_start_x = std::min(global_sem_mcast_start_x, (uint32_t)phys.x);
+                        global_sem_mcast_end_x = std::max(global_sem_mcast_end_x, (uint32_t)phys.x);
+                        global_sem_mcast_start_y = std::min(global_sem_mcast_start_y, (uint32_t)phys.y);
+                        global_sem_mcast_end_y = std::max(global_sem_mcast_end_y, (uint32_t)phys.y);
+                    }
+                }
+            }
+        }
+        has_global_sem = 1;
+        global_sem_num_dests = gsem_cores.num_cores();
+        global_sem_l1_addr = static_cast<uint32_t>(gsem.address());
+    }
 
     for (uint32_t idx = 0; idx < cores.size(); ++idx) {
         const auto& core = cores[idx];
@@ -948,11 +1032,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // multicast destination rectangle is a single NoC column spanning
         // those receiver rows.
         const bool is_in1_sender = (gy == 0);
-        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
+        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{origin_x + gx, origin_y + 0});
         // GRID_Y == 1: no receivers — point the unused receiver coords at the
-        // sender row (gy=1 doesn't exist); the reader skips the mcast.
-        const CoreCoord first_recv_logical = (GRID_Y > 1) ? CoreCoord{gx, 1} : CoreCoord{gx, 0};
-        const CoreCoord last_recv_logical = (GRID_Y > 1) ? CoreCoord{gx, GRID_Y - 1} : CoreCoord{gx, 0};
+        // sender row (gy=1 doesn't exist); the reader skips the mcast. Logical
+        // coords are offset by the sub-device origin (origin = (0,0) when none).
+        const CoreCoord first_recv_logical =
+            (GRID_Y > 1) ? CoreCoord{origin_x + gx, origin_y + 1} : CoreCoord{origin_x + gx, origin_y + 0};
+        const CoreCoord last_recv_logical =
+            (GRID_Y > 1) ? CoreCoord{origin_x + gx, origin_y + GRID_Y - 1} : CoreCoord{origin_x + gx, origin_y + 0};
         const auto first_recv_noc = device->worker_core_from_logical_core(first_recv_logical);
         const auto last_recv_noc = device->worker_core_from_logical_core(last_recv_logical);
         const uint32_t in1_num_receivers = GRID_Y - 1;
@@ -966,9 +1053,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // x (in0) multicast topology: per M-row, sender at gx=0, receivers
         // at gx=1..GRID_X-1.
         const bool is_in0_sender = (gx == 0);
-        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{0, gy});
-        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{1, gy});
-        const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, gy});
+        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{origin_x + 0, origin_y + gy});
+        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{origin_x + 1, origin_y + gy});
+        const auto in0_last_recv_noc =
+            device->worker_core_from_logical_core(CoreCoord{origin_x + GRID_X - 1, origin_y + gy});
         const uint32_t in0_num_receivers = GRID_X - 1;
         const uint32_t in0_mcast_nx_start = in0_first_recv_noc.x;
         const uint32_t in0_mcast_ny_start = in0_first_recv_noc.y;
@@ -1030,7 +1118,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's
         // NoC addr and to build the M-row mcast rectangle.
         for (uint32_t gxi = 0; gxi < GRID_X; ++gxi) {
-            const auto noc = device->worker_core_from_logical_core(CoreCoord{gxi, gy});
+            const auto noc = device->worker_core_from_logical_core(CoreCoord{origin_x + gxi, origin_y + gy});
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
@@ -1053,6 +1141,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         //      out_buffer, unused by the kernel)
         //   4: up_addr  5: my_nt_gu  6: is_up_sender (gy==0)
         //   7: up_go_sem_id  8: up_done_sem_id  (UP_SPLIT local same-core handshake)
+        //   Leader-sync trailing args (read at the end of the writer kernel):
+        //   9: is_leader  10: leader_noc_x  11: leader_noc_y
+        //  12: leader_sync_sem_id  13: num_non_leader_cores
+        //   Global-sem trailing args (only consumed on the leader path):
+        //  14: has_global_sem  15..18: global_sem mcast bbox (start_x, start_y, end_x, end_y)
+        //  19: global_sem_num_dests  20: global_sem_l1_addr
         std::vector<uint32_t> writer_args = {
             out_buffer->address(),                 // 0
             my_mt,                                 // 1
@@ -1063,6 +1157,18 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             static_cast<uint32_t>(is_in1_sender),  // 6 is_up_sender
             up_go_sem_id,                          // 7
             up_done_sem_id,                        // 8
+            (core == leader_logical) ? 1u : 0u,    // 9 is_leader
+            leader_noc_x,                          // 10
+            leader_noc_y,                          // 11
+            leader_sync_sem_id,                    // 12
+            num_non_leader_cores,                  // 13
+            has_global_sem,                        // 14
+            global_sem_mcast_start_x,              // 15
+            global_sem_mcast_start_y,              // 16
+            global_sem_mcast_end_x,                // 17
+            global_sem_mcast_end_y,                // 18
+            global_sem_num_dests,                  // 19
+            global_sem_l1_addr,                    // 20
         };
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
     }

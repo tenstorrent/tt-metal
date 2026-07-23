@@ -38,6 +38,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_f
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import MOE_L1_SMALL_REGION_SIZE
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
@@ -367,6 +368,7 @@ def run_chunked_block(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,
@@ -547,6 +549,7 @@ def run_chunked_block_multiuser(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,
@@ -834,6 +837,7 @@ def run_chunked_block_padded(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,
@@ -888,6 +892,7 @@ def test_ds_prefill_block_chunked_padded(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,
@@ -939,6 +944,7 @@ def test_kimi_prefill_block_chunked(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,
