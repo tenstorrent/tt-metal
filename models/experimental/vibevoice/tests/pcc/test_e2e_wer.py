@@ -118,7 +118,7 @@ def _transcribe(asr, audio_24k: torch.Tensor) -> str:
     return result["text"].strip()
 
 
-@pytest.mark.timeout(0)
+@pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_e2e_wer_teacher_forced(mesh_device):
