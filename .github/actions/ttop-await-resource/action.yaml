@@ -124,5 +124,3 @@ runs:
           fi
           sleep "$POLL_INTERVAL"
         done
-
-
