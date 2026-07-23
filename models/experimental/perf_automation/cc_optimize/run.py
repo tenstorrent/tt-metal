@@ -1502,6 +1502,23 @@ def _baseline_ms() -> float | None:
         return None
 
 
+def _last_committed_ms(kernel_log_path) -> float | None:
+    """device_ms of the most recently banked win (last beat_baseline record carrying a measured ms)
+    = the current committed state. The report's 'final' comes from this, not from the rolling
+    perf_mcp_baseline.json — that file is only refreshed by profile_model, so on a module where
+    profile_model was not re-run after the wins it stays at the stale initial baseline and the
+    headline reads +0.0% despite real committed wins."""
+    try:
+        rows = json.loads(Path(kernel_log_path).read_text())
+    except Exception:  # noqa: BLE001
+        return None
+    ms = None
+    for r in rows if isinstance(rows, list) else []:
+        if isinstance(r, dict) and r.get("beat_baseline") and r.get("measured_ms") is not None:
+            ms = float(r["measured_ms"])
+    return ms
+
+
 def _original_baseline_ms(model_name: str, task: str) -> float | None:
     try:
         import tempfile
@@ -1589,7 +1606,8 @@ def _emit_summary(
         render_kernel = _cum
     except Exception:
         render_kernel = kernel_log
-    _cur_ms = _baseline_ms()
+    _lc = _last_committed_ms(render_kernel)
+    _cur_ms = _lc if _lc is not None else _baseline_ms()
     text = mod.render_summary(
         render_kernel,
         _cur_ms,
