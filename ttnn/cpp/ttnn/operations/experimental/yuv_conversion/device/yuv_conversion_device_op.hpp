@@ -16,7 +16,7 @@ namespace ttnn::experimental::prim {
 struct YUVConversionDeviceOperation {
     using operation_attributes_t = YUVConversionParams;
     using tensor_args_t = YUVConversionInputs;
-    using spec_return_value_t = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
+    using spec_return_value_t = std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
     using program_factory_t = std::variant<YUVConversionProgramFactory>;
 
