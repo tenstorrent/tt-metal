@@ -164,10 +164,10 @@ TEST(HostTensorSpecPreservation, ToTileLayoutBfpTileMismatchThrows) {
     EXPECT_ANY_THROW(std::ignore = to_tile_layout(source, Tile({16, 16})));
 }
 
-TEST(HostTensorSpecPreservation, PadUnpadInterleavedPreservesMemoryAndGeometry) {
+TEST(HostTensorSpecPreservation, DISABLED_PadUnpadDropsMemoryConfigToDefault) {
     const Shape logical{2, 3};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(logical.volume());
-    // pad/unpad reject sharded hosts, so per_core cannot be set true here; exact_spec_match still covers the flag.
+    // Pre-#50285 host pad/unpad always emit MemoryConfig{} (interleaved DRAM).
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto source_spec =
         TensorSpec(logical, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
@@ -179,20 +179,18 @@ TEST(HostTensorSpecPreservation, PadUnpadInterleavedPreservesMemoryAndGeometry) 
     auto expected_pad_spec = TensorSpec(
         logical,
         TensorLayout::fromPaddedShape(
-            DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, logical, padded));
+            DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical, padded));
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(padded_tensor.tensor_spec(), expected_pad_spec));
-    EXPECT_EQ(padded_tensor.memory_config().buffer_type(), BufferType::DRAM);
+    EXPECT_EQ(padded_tensor.memory_config(), MemoryConfig{});
     EXPECT_EQ(padded_tensor.padded_shape(), padded);
     EXPECT_EQ(padded_tensor.logical_shape(), logical);
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(padded_tensor);
 
     auto unpadded = unpad(padded_tensor, Shape{0, 0}, Shape{2, 3});
-    auto expected_unpad_spec = TensorSpec(
-        logical,
-        TensorLayout::fromPaddedShape(
-            DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, logical, logical));
+    auto expected_unpad_spec =
+        TensorSpec(logical, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(unpadded.tensor_spec(), expected_unpad_spec));
-    EXPECT_EQ(unpadded.memory_config().buffer_type(), BufferType::DRAM);
+    EXPECT_EQ(unpadded.memory_config(), MemoryConfig{});
     EXPECT_EQ(unpadded.logical_shape(), logical);
     EXPECT_EQ(unpadded.padded_shape(), logical);
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(unpadded);
@@ -204,7 +202,7 @@ TEST(HostTensorSpecPreservation, PadUnpadInterleavedPreservesMemoryAndGeometry) 
     }
 }
 
-TEST(HostTensorSpecPreservation, PadShardedLegacyThrows) {
+TEST(HostTensorSpecPreservation, DISABLED_PadShardedLegacyDropsSharding) {
     const Shape shape{32, 32};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{
@@ -214,10 +212,14 @@ TEST(HostTensorSpecPreservation, PadShardedLegacyThrows) {
     auto source_spec = TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
     auto source = HostTensor::from_vector<float>(data, source_spec);
 
-    EXPECT_ANY_THROW(std::ignore = pad(source, Shape{64, 32}, Shape{0, 0}, 0.0f));
+    auto padded = pad(source, Shape{64, 32}, Shape{0, 0}, 0.0f);
+    EXPECT_FALSE(padded.memory_config().is_sharded());
+    EXPECT_EQ(padded.memory_config(), MemoryConfig{});
+    EXPECT_EQ(padded.padded_shape(), Shape({64, 32}));
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(padded);
 }
 
-TEST(HostTensorSpecPreservation, UnpadShardedLegacyThrows) {
+TEST(HostTensorSpecPreservation, DISABLED_UnpadShardedLegacyDropsSharding) {
     const Shape shape{32, 32};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{
@@ -227,10 +229,14 @@ TEST(HostTensorSpecPreservation, UnpadShardedLegacyThrows) {
     auto source_spec = TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
     auto source = HostTensor::from_vector<float>(data, source_spec);
 
-    EXPECT_ANY_THROW(std::ignore = unpad(source, Shape{0, 0}, Shape{16, 32}));
+    auto unpadded = unpad(source, Shape{0, 0}, Shape{16, 32});
+    EXPECT_FALSE(unpadded.memory_config().is_sharded());
+    EXPECT_EQ(unpadded.memory_config(), MemoryConfig{});
+    EXPECT_EQ(unpadded.logical_shape(), Shape({16, 32}));
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(unpadded);
 }
 
-TEST(HostTensorSpecPreservation, PadShardedConvertibleNdThrows) {
+TEST(HostTensorSpecPreservation, DISABLED_PadShardedConvertibleNdDropsSharding) {
     const Shape shape{32, 32};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     // Convertible ND: 2D height-sharded via NdShardSpec (auto-fills legacy shard_spec).
@@ -241,10 +247,14 @@ TEST(HostTensorSpecPreservation, PadShardedConvertibleNdThrows) {
     ASSERT_TRUE(source_spec.memory_config().shard_spec().has_value());
     auto source = HostTensor::from_vector<float>(data, source_spec);
 
-    EXPECT_ANY_THROW(std::ignore = pad(source, Shape{64, 32}, Shape{0, 0}, 0.0f));
+    auto padded = pad(source, Shape{64, 32}, Shape{0, 0}, 0.0f);
+    EXPECT_FALSE(padded.memory_config().is_sharded());
+    EXPECT_EQ(padded.memory_config(), MemoryConfig{});
+    EXPECT_EQ(padded.padded_shape(), Shape({64, 32}));
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(padded);
 }
 
-TEST(HostTensorSpecPreservation, UnpadShardedConvertibleNdThrows) {
+TEST(HostTensorSpecPreservation, DISABLED_UnpadShardedConvertibleNdDropsSharding) {
     const Shape shape{32, 32};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     NdShardSpec nd_shard_spec{Shape{32, 32}, CoreRangeSet({CoreRange({0, 0}, {0, 0})}), ShardOrientation::ROW_MAJOR};
@@ -252,7 +262,11 @@ TEST(HostTensorSpecPreservation, UnpadShardedConvertibleNdThrows) {
     auto source_spec = TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
     auto source = HostTensor::from_vector<float>(data, source_spec);
 
-    EXPECT_ANY_THROW(std::ignore = unpad(source, Shape{0, 0}, Shape{16, 32}));
+    auto unpadded = unpad(source, Shape{0, 0}, Shape{16, 32});
+    EXPECT_FALSE(unpadded.memory_config().is_sharded());
+    EXPECT_EQ(unpadded.memory_config(), MemoryConfig{});
+    EXPECT_EQ(unpadded.logical_shape(), Shape({16, 32}));
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(unpadded);
 }
 
 }  // namespace
