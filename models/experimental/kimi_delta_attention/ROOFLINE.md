@@ -389,3 +389,24 @@ The unchanged 67.594 GFLOP executed path reaches 99.50 TFLOP/s or 8.18% of
 eight-chip peak. Conservative factorized-work throughput is 87.15 TFLOP/s or
 7.16%. The fused output collective remains approximately 147 us, so this
 launch-chain reduction does not alter the core or CCL distribution.
+
+
+## Fused gated-RMS epilogue
+
+Profile:
+`/tmp/kda_tp_layer_t640_fused_gated_rms_r10/reports/2026_07_23_12_49_34/ops_perf_results_2026_07_23_12_49_34.csv`.
+The KDA-local epilogue combines per-head RMS normalization, norm-weight
+broadcast, gate sigmoid, multiplication, and head-major to token-major layout
+conversion. Against the fused sigmoid-multiply control, median slowest-device
+span falls 679.336 -> 667.330 us (1.77%) and programs fall
+33 -> 31/device/layer.
+
+The fused kernel costs 19.213 us/device/layer while removing the 12.015 us
+LayerNorm and 10.269 us NLP head-concat programs. Aggregate BinaryNg time also
+falls 30.110 -> 20.941 us. The 67.594 GFLOP executed path reaches
+101.29 TFLOP/s or 8.33% of eight-chip peak; conservative factorized-work
+throughput is 88.72 TFLOP/s or 7.29%.
+
+The fused output collective is unchanged at approximately 148 us. This
+epilogue removes local passes after recurrence; it does not change head
+ownership or collective placement.

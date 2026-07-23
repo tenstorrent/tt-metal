@@ -717,3 +717,16 @@
 - Report: `/tmp/kda_tp_layer_t640_fused_sigmoid_mul_r10/reports/2026_07_23_12_35_26/ops_perf_results_2026_07_23_12_35_26.csv`; control: `/tmp/kda_tp_layer_t640_direct_aux_slices_r10/reports/2026_07_23_12_25_10/ops_perf_results_2026_07_23_12_25_10.csv`.
 - Ten replays reduced median slowest-device span 683.463 -> 679.336 us (0.60%), active time 650.942 -> 646.984 us/device, and programs 34 -> 33/device/layer. Unary time fell 25.447 -> 20.773 us while binary time rose 29.277 -> 30.110 us.
 - Executed-work throughput is 99.50 TFLOP/s or 8.18% of peak; conservative factorized-work throughput is 87.15 TFLOP/s or 7.16%. Distribution is unchanged.
+
+
+### 2026-07-23 12:49:34 UTC — Fuse the gated-RMS epilogue
+
+- Hypothesis: a KDA-local kernel can combine per-head RMS normalization, norm-weight broadcast, gate sigmoid/multiply, and head-major to token-major conversion, replacing three serialized programs without changing ownership.
+- Full build passed: `./build_metal.sh --build-tests --build-type Release` -> exit 0, 379 targets and install completed.
+- Final incremental build passed, followed by the nine-test TP/layer hardware gate: `SAFE_PYTEST_RESULT: PASS`, 9/9 in 13.61 s.
+- Focused TP=8 hardware test passed at output/recurrent/convolution PCC `0.999964/0.999903/0.999997`. All functional KDA tests passed: the safe-pytest command over the six non-perf test files ended `SAFE_PYTEST_RESULT: PASS`, 27/27 in 21.23 s.
+- The broader tests-directory run passed five fixtures before the single-device layer perf fixture failed inside Conv1d before the new epilogue: it requested 1,572,864 B per L1 bank with 1,436,800 B available. This profiler-fixture resource limit is recorded separately from functional coverage.
+- Report: `/tmp/kda_tp_layer_t640_fused_gated_rms_r10/reports/2026_07_23_12_49_34/ops_perf_results_2026_07_23_12_49_34.csv`; control: `/tmp/kda_tp_layer_t640_fused_sigmoid_mul_r10/reports/2026_07_23_12_35_26/ops_perf_results_2026_07_23_12_35_26.csv`.
+- Ten replays reduced median slowest-device span `679.336 -> 667.330 us` (1.77%) and programs `33 -> 31/device/layer`. The fused kernel costs 19.213 us; it removes LayerNorm at 12.015 us and NLP head concat at 10.269 us, while aggregate BinaryNg time falls 30.110 -> 20.941 us.
+- Executed-work throughput is 101.29 TFLOP/s or 8.33% of peak; conservative factorized-work throughput is 88.72 TFLOP/s or 7.29%.
+- The target epilogue distributes 80 `(head, 32-token block)` work items/device, with each core processing all four value tiles. TP head ownership, prep/scan mapping, and fused-output collective placement are unchanged.

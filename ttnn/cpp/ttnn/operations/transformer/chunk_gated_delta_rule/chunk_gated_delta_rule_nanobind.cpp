@@ -100,6 +100,19 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
         nb::arg("masks") = nb::none());
+
+    ttnn::bind_function<"kda_gated_rms_norm", "ttnn.transformer.">(
+        mod,
+        "Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill.",
+        &ttnn::transformer::kda_gated_rms_norm,
+        nb::arg("input").noconvert(),
+        nb::arg("gate").noconvert(),
+        nb::arg("weight").noconvert(),
+        nb::arg("num_heads"),
+        nb::kw_only(),
+        nb::arg("epsilon") = 1e-5f,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::transformer

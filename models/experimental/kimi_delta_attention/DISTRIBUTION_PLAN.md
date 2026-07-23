@@ -223,3 +223,12 @@ dependency chain.
 - End-to-end report separates compute, DRAM/layout, and CCL time.
 - The 60% compute and 40% CCL goals remain aspirations; measurements are not
   renormalized when they miss.
+
+
+The gated-RMS epilogue maps one work item to each `(head, 32-token block)`.
+At the target shape this is `4 heads * 20 blocks = 80` independent work items
+per device, each processing all four value tiles for its head. It writes
+token-major output directly, removing separate RMSNorm and head-concat
+programs and reducing layer span 0.67934 -> 0.66733 ms. It preserves
+four-head/device ownership and leaves the 80-core prep, 16-core scan, and
+8x8 output/Ring reduce-scatter distribution unchanged.
