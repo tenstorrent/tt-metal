@@ -1422,7 +1422,7 @@ bool is_bfp_dtype(DataType dtype) { return dtype == DataType::BFLOAT8_B || dtype
 
 bool is_integral_dtype(DataType dtype) {
     return dtype == DataType::UINT8 || dtype == DataType::UINT16 || dtype == DataType::UINT32 ||
-           dtype == DataType::INT32;
+           dtype == DataType::INT32 || dtype == DataType::INT8;
 }
 
 template <typename DestInt, typename PadT>
@@ -1449,6 +1449,7 @@ void validate_pad_for_integral_dest(PadT pad_value, DataType dest_dtype) {
     }
     switch (dest_dtype) {
         case DataType::UINT8: validate_float_pad_against_integral<uint8_t>(pad_value); break;
+        case DataType::INT8: validate_float_pad_against_integral<int8_t>(pad_value); break;
         case DataType::UINT16: validate_float_pad_against_integral<uint16_t>(pad_value); break;
         case DataType::UINT32: validate_float_pad_against_integral<uint32_t>(pad_value); break;
         case DataType::INT32: validate_float_pad_against_integral<int32_t>(pad_value); break;
@@ -1553,6 +1554,7 @@ HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec,
 template HostTensor to_tensor_spec<float>(const HostTensor&, const TensorSpec&, float);
 template HostTensor to_tensor_spec<bfloat16>(const HostTensor&, const TensorSpec&, bfloat16);
 template HostTensor to_tensor_spec<int32_t>(const HostTensor&, const TensorSpec&, int32_t);
+template HostTensor to_tensor_spec<int8_t>(const HostTensor&, const TensorSpec&, int8_t);
 template HostTensor to_tensor_spec<uint32_t>(const HostTensor&, const TensorSpec&, uint32_t);
 template HostTensor to_tensor_spec<uint16_t>(const HostTensor&, const TensorSpec&, uint16_t);
 template HostTensor to_tensor_spec<uint8_t>(const HostTensor&, const TensorSpec&, uint8_t);

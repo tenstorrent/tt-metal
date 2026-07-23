@@ -495,6 +495,46 @@ TEST(HostTensorToTensorSpec, TypedPadUint8AndWrongTFatal) {
     EXPECT_ANY_THROW(to_tensor_spec<float>(source, dest_spec, 0.f));
 }
 
+TEST(HostTensorToTensorSpec, TypedPadInt8AndWrongTFatal) {
+    const Shape shape{20, 20};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<int8_t>(shape.volume());
+
+    data[0] = -128;
+    data[1] = 127;
+    auto src_spec = CMAKE_UNIQUE_NAMESPACE::make_rm_spec(shape, DataType::INT8);
+    auto dest_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::INT8, Tile({16, 16}));
+
+    auto source = HostTensor::from_vector<int8_t>(data, src_spec);
+    auto result = to_tensor_spec<int8_t>(source, dest_spec, /*pad_value=*/int8_t{-2});
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec));
+    EXPECT_THAT(result.to_vector<int8_t>(), Pointwise(Eq(), data));
+    EXPECT_EQ(host_buffer::get_as<int8_t>(result).back(), static_cast<int8_t>(-2));
+
+    // Wrong T vs working encode dtype (source INT8).
+    EXPECT_ANY_THROW(to_tensor_spec<float>(source, dest_spec, 0.f));
+}
+
+TEST(HostTensorToTensorSpec, FloatPadToInt8DestRejectsOor) {
+    const Shape shape{20, 20};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
+    for (size_t i = 0; i < data.size(); ++i) {
+        data[i] = static_cast<float>(static_cast<int8_t>(static_cast<int>(data[i])));
+    }
+    auto src_spec = CMAKE_UNIQUE_NAMESPACE::make_rm_spec(shape, DataType::FLOAT32);
+    auto dest_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::INT8, Tile({16, 16}));
+    auto source = HostTensor::from_vector<float>(data, src_spec);
+
+    EXPECT_ANY_THROW(to_tensor_spec<float>(source, dest_spec, -129.f));
+    EXPECT_ANY_THROW(to_tensor_spec<float>(source, dest_spec, 128.f));
+
+    auto ok = to_tensor_spec<float>(source, dest_spec, -2.f);
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(ok.tensor_spec(), dest_spec));
+    EXPECT_EQ(ok.dtype(), DataType::INT8);
+    EXPECT_EQ(ok.layout(), Layout::TILE);
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(ok);
+    EXPECT_EQ(host_buffer::get_as<int8_t>(ok).back(), static_cast<int8_t>(-2));
+}
+
 TEST(HostTensorToTensorSpec, FloatPadToIntegralDestRejectsNanInfOor) {
     const Shape shape{20, 20};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
