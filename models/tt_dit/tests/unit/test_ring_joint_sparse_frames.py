@@ -365,7 +365,9 @@ def _run_sparse_frames_op(
         frame_allow_packed=frame_allow_packed,
     )
 
-    # Gather output back (sharded seq on sp, heads on tp).
+    # Gather output back (sharded seq on sp, heads on tp). Detilize on device first — host-side
+    # detilize inside to_torch is single-threaded per tensor and slow for 720p (~944 MB output).
+    tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
     out = ttnn.to_torch(
         tt_out,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
