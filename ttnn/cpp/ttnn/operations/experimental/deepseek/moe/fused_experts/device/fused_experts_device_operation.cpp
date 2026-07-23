@@ -205,7 +205,7 @@ FusedExpertsDeviceOperation::spec_return_value_t FusedExpertsDeviceOperation::co
     // H is the hidden size (== down weight output dim == input hidden dim).
     const uint32_t hidden = static_cast<uint32_t>(tensor_args.input_tensor.logical_shape()[-1]);
     const ttnn::Shape output_shape({1, 1, hidden});
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
