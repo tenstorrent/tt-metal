@@ -4,37 +4,36 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "tt-metalium/constants.hpp"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
-    constexpr uint32_t input_width = get_compile_time_arg_val(0);            // Width of input tensor
-    constexpr uint32_t stride_height = get_compile_time_arg_val(1);          // Vertical stride for fold
-    constexpr uint32_t stride_width = get_compile_time_arg_val(2);           // Horizontal stride for fold
-    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(3);           // Size of each stick in bytes
-    constexpr uint32_t aligned_stick_nbytes = get_compile_time_arg_val(4);   // Aligned size of each stick in bytes
-    constexpr uint32_t tiles_per_channel_dim = get_compile_time_arg_val(5);  // Number of tiles per channel dimension
-    constexpr uint32_t tiles_per_width_dim = get_compile_time_arg_val(6);    // Number of tiles per width dimension
-    constexpr uint32_t element_size = get_compile_time_arg_val(7);           // Size of each element in bytes
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(8);            // Input circular buffer ID
-    constexpr auto dst_args = TensorAccessorArgs<9>();
+    constexpr uint32_t input_width = get_arg(args::input_width);                      // Width of input tensor
+    constexpr uint32_t stride_height = get_arg(args::stride_height);                  // Vertical stride for fold
+    constexpr uint32_t stride_width = get_arg(args::stride_width);                    // Horizontal stride for fold
+    constexpr uint32_t stick_nbytes = get_arg(args::stick_nbytes);                    // Size of each stick in bytes
+    constexpr uint32_t aligned_stick_nbytes = get_arg(args::aligned_stick_nbytes);    // Aligned size of each stick
+    constexpr uint32_t tiles_per_channel_dim = get_arg(args::tiles_per_channel_dim);  // Tiles per channel dimension
+    constexpr uint32_t tiles_per_width_dim = get_arg(args::tiles_per_width_dim);      // Tiles per width dimension
+    constexpr uint32_t element_size = get_arg(args::element_size);                    // Size of each element in bytes
 
     // Runtime arguments - Processing parameters
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);        // Base destination address in DRAM
-    const uint32_t start_block_id = get_arg_val<uint32_t>(1);  // Starting block ID for processing
-    const uint32_t num_blocks = get_arg_val<uint32_t>(2);      // Number of blocks to process
-    uint32_t patch_height_offset = get_arg_val<uint32_t>(3);   // Current height offset within patch
-    uint32_t output_offset = get_arg_val<uint32_t>(4);         // Current output offset
+    const uint32_t start_block_id = get_arg(args::start_block_id);      // Starting block ID for processing
+    const uint32_t num_blocks = get_arg(args::num_blocks);              // Number of blocks to process
+    uint32_t patch_height_offset = get_arg(args::patch_height_offset);  // Current height offset within patch
+    uint32_t output_offset = get_arg(args::output_offset);              // Current output offset
 
     // Calculated constants
     constexpr uint32_t output_width = input_width / stride_width;  // Output tensor width
     constexpr uint32_t patch_size = stride_height * stride_width;  // Total elements per patch
     // Initialize DRAM address generator for interleaved memory access
-    const auto dst = TensorAccessor(dst_args, dst_addr);
+    const auto dst = TensorAccessor(tensor::dst);
 
     Noc noc;
-    experimental::CB input_cb(input_cb_id);
+    DataflowBuffer input_cb(dfb::in1);
 
     // Processing loop bounds and state variables
     const uint32_t end_block_id = start_block_id + num_blocks;
@@ -51,14 +50,20 @@ void kernel_main() {
         // Process each tile in the width dimension
         for (uint32_t tile_idx = 0; tile_idx < tiles_per_width_dim; tile_idx++) {
             input_cb.wait_front(tiles_per_channel_dim);
-            auto src = use<experimental::CB::AddrSelector::WRITE_PTR>(input_cb);
+            // Source the write pointer of the input DFB (matches the legacy WRITE_PTR selector).
+            const uint32_t src_base = input_cb.get_write_ptr();
             uint32_t src_offset = 0;
 
             const uint32_t width_limit =
                 (remaining_width < tt::constants::TILE_HEIGHT) ? remaining_width : tt::constants::TILE_HEIGHT;
 
             for (uint32_t stick_idx = 0; stick_idx < width_limit; stick_idx++) {
-                noc.async_write(src, dst, stick_nbytes, {.offset_bytes = src_offset}, {.page_id = output_stick_idx});
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(src_base),
+                    dst,
+                    stick_nbytes,
+                    {.offset_bytes = src_offset},
+                    {.page_id = output_stick_idx});
 
                 // Update pointers and indices
                 src_offset += aligned_stick_nbytes;
