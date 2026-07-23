@@ -14,6 +14,7 @@
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tools/scaleout/validation/utils/ethernet_link_metrics.hpp"
 #include <board/board.hpp>
+#include <factory_system_descriptor/query.hpp>
 #include <factory_system_descriptor/utils.hpp>
 
 // Forward declarations for in-memory validation
@@ -122,5 +123,14 @@ tt_metal::AsicTopology validate_connectivity(
     bool fail_on_warning,
     PhysicalSystemDescriptor& physical_system_descriptor,
     std::optional<uint32_t> min_connections = std::nullopt);
+
+// Filter a missing-connections topology down to the links whose two endpoint hosts sit at the given
+// hierarchy tier (instance_path common-prefix length == depth), per fsd_query. Used to bring the cluster
+// up tier by tier, deepest (closest) first.
+tt_metal::AsicTopology filter_topology_by_tier(
+    const tt_metal::AsicTopology& topology,
+    const FsdQuery& fsd_query,
+    uint32_t depth,
+    const PhysicalSystemDescriptor& physical_system_descriptor);
 
 }  // namespace tt::scaleout_tools
