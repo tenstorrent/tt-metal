@@ -131,6 +131,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         input_ids: Optional[torch.Tensor] = None,
         paged_sliding_pool: ttnn.Tensor | None = None,
         page_table: ttnn.Tensor | None = None,
+        pool_compressor: bool = True,
     ) -> ttnn.Tensor:
         """Single-token decode: ``hidden_streams`` ``[B, 1, hc_mult, D]`` -> same.
 
@@ -155,6 +156,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
                 compress_pos,
                 paged_sliding_pool=paged_sliding_pool,
                 page_table=page_table,
+                pool_compressor=pool_compressor,
             )
         with _region("ATTN_MIX"):
             hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
@@ -181,10 +183,14 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         sliding_pos: ttnn.Tensor,
         compress_pos: ttnn.Tensor,
         hash_token: ttnn.Tensor | None = None,
+        pool_compressor: bool = True,
     ) -> ttnn.Tensor:
         """Trace-safe single-token decode (see :meth:`decode`). Uses the fixed-size
         in-place attention cache + the host-sync-free MoE so the whole block can be
-        captured into a reusable ``ttnn`` trace."""
+        captured into a reusable ``ttnn`` trace.
+
+        ``pool_compressor`` is fixed at capture time: the traced path captures one
+        variant per window phase (see :meth:`DeepSeekV4Model._capture_traces`)."""
         # return ttnn.assign(hidden_streams, memory_config=hidden_streams.memory_config())
         post, comb, collapsed = self.attn_hc(hidden_streams)
         attn_out = self.self_attn.decode_static(
@@ -198,6 +204,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             scache,
             sliding_pos,
             compress_pos,
+            pool_compressor=pool_compressor,
         )
         hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
         post, comb, collapsed = self.ffn_hc(hidden_streams)

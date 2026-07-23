@@ -158,9 +158,6 @@ class LinearDecode(DeepSeekV4Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self.l1_weights is None or not self.l1_weights.is_allocated():
-            print(
-                f"Just-in-Time loading L1 weights is not efficient. Consider fetching weights in advance. Shape = {self.weight.shape}"
-            )
             self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         m = x.shape[-2]
         m_padded = ((m + 31) // 32) * 32
