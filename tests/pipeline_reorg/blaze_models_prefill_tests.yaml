@@ -438,6 +438,7 @@
     export PREFILL_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
     export PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320
+    export PREFILL_RUNNER_LAUNCH=ci
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
