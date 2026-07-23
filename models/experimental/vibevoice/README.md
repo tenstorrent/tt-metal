@@ -34,13 +34,14 @@ vibevoice/
 │   └── text/                # from github .../demo/text_examples
 ├── weights/                 # auto-downloaded HF checkpoint (gitignored content)
 ├── tests/
-│   ├── conftest.py            # pytest: reference/ on PYTHONPATH + shared fixtures
-│   └── pcc/
-│   ├── pcc_helpers.py      # shared LM PCC helpers (HF ref, TT LM builder, PCC utils)
-│   ├── test_decoder_layer_pcc.py  # Devstral-style layer-0 decode (no prefill)
-│   ├── test_prefill.py   # full prefill chain vs HF reference
-│   └── test_decode.py    # post-diffusion decode chain vs pinned ref conditions
-└── tt/                      # TTNN layers (empty initially)
+│   ├── conftest.py              # pytest: reference/ on PYTHONPATH + shared fixtures
+│   ├── pcc/
+│   │   ├── pcc_helpers.py       # shared LM PCC helpers (HF ref, TT LM builder, PCC utils)
+│   │   ├── test_decoder_layer_pcc.py
+│   │   ├── test_prefill.py
+│   │   └── test_decode.py
+│   └── perf/                    # Tracy device-perf + single-step prefill/decode dumps
+└── tt/                          # TTNN port
 ```
 
 ## Dependencies
@@ -154,6 +155,64 @@ pytest models/experimental/vibevoice/tests/pcc/test_prefill.py \
 
 Individual component PCC tests (acoustic/semantic tokenizers, connector, diffusion head, DPM
 scheduler, LM head) live alongside these in `tests/pcc/`.
+
+## Performance tests (Tracy)
+
+`tests/perf/` follows the Voxtral / Seamless pattern: outer drivers spawn Tracy; inner workloads
+warm outside the window, call `ttnn.ReadDeviceProfiler` to clear load markers, then bracket the
+measured region with `start` / `stop` signposts. Run **one at a time** (single device). From
+tt-metal root:
+
+```bash
+source python_env/bin/activate
+export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) ARCH_NAME=blackhole
+```
+
+### 1. Device perf (LM prefill 256 + 2 decode steps)
+
+Eager LM only (no metal trace). Aggregates signposted kernel time via `has_signposts=True`.
+
+```bash
+pytest models/experimental/vibevoice/tests/perf/test_vibevoice_device_perf.py \
+  -v -m models_device_performance_bare_metal
+
+CSV=$(ls -td generated/profiler/ttnn_vibevoice_lm/reports/*/ops_perf_results_*.csv | head -1)
+tt-perf-report "$CSV" --start-signpost start --end-signpost stop
+```
+
+### 2. Single-chunk prefill dump
+
+One warm `forward` chunk (default length **256**). Optional:
+`VV_PREFILL_PERF_SEQ_LEN`, `VV_PREFILL_PERF_START_POS`.
+
+```bash
+python models/experimental/vibevoice/tests/perf/test_device_perf_single_step_prefill.py
+
+CSV=$(ls -td generated/profiler/vibevoice_lm_single_step_prefill/reports/*/ops_perf_results_*.csv | head -1)
+tt-perf-report "$CSV" --start-signpost start --end-signpost stop
+# optional: > models/experimental/vibevoice/lm/prefill_expN.txt
+```
+
+### 3. Single-step decode dump
+
+Untimed prefill, then one `decode_step` inside signposts. Optional:
+`VV_DECODE_PERF_PREFILL_LEN` (default 256).
+
+```bash
+python models/experimental/vibevoice/tests/perf/test_device_perf_single_step_decode.py
+
+CSV=$(ls -td generated/profiler/vibevoice_lm_single_step_decode/reports/*/ops_perf_results_*.csv | head -1)
+tt-perf-report "$CSV" --start-signpost start --end-signpost stop
+# optional: > models/experimental/vibevoice/lm/decode_expN.txt
+```
+
+| Test | Inner workload | Profiler subdir |
+|------|----------------|-----------------|
+| Device perf | `test_device_perf_forwards.py::test_lm` | `generated/profiler/ttnn_vibevoice_lm/` |
+| Prefill dump | `test_profile_single_step_prefill.py` | `generated/profiler/vibevoice_lm_single_step_prefill/` |
+| Decode dump | `test_profile_single_step_decode.py` | `generated/profiler/vibevoice_lm_single_step_decode/` |
+
+Wall-clock demo timings (`VV_PROFILE=1` / `--debug`) are separate from these Tracy op dumps.
 
 ## Porting notes
 
