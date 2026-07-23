@@ -1587,7 +1587,12 @@ class MultichipDecoder(OptimizedDecoder):
     ):
         residual = hidden_states
         normalized = self._decode_norm(hidden_states, weight_name="input_norm")
-        use_long_attention_weights = cache_position >= EMITTED_CACHE_LENGTH - 1
+        # v2 correctness fix (directly prompted): the EmitPy decode graph is ONE uniform, position-generic
+        # path (flat cache, is_causal=False + on-device dynamic causal/sliding mask + uniform sink). The
+        # native-short (<127) control here was incorrect (~0.998 PCC vs 0.9998 manual), which teacher-forcing
+        # hid but self-fed free decode compounded to token-2 divergence. Route ALL decode positions through
+        # the emit-faithful BF16 + manual (dynamic-mask + sink) path that is coherent in the >=127 regime.
+        use_long_attention_weights = True
         # BFP8 projection copies are selected only for the short native-SDPA
         # decode path.  Long trace banks retain the BF16 projection policy:
         # a near-tied sliding-layer router decision at position 130 changes
@@ -1599,7 +1604,7 @@ class MultichipDecoder(OptimizedDecoder):
         )
         projection_kernel = (
             self.long_decode_compute_kernel_config
-            if cache_position >= EMITTED_CACHE_LENGTH - 1
+            if use_long_attention_weights
             else self.decode_compute_kernel_config
         )
         fused = ttnn.linear(
@@ -1679,7 +1684,7 @@ class MultichipDecoder(OptimizedDecoder):
             share_cache=False,
         )
 
-        use_manual_attention = cache_position >= EMITTED_CACHE_LENGTH - 1
+        use_manual_attention = True  # v2 fix (directly prompted): emit-faithful manual attention at all positions
         if use_manual_attention:
             attention = self._manual_paged_decode_attention(
                 query,
