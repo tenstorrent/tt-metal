@@ -291,7 +291,7 @@ def test_full_buffer():
     RISC_COUNT = 5
     ZONE_COUNT = 125
 
-    # Quasar only run 1 OP to saturate the L1 buffer
+    # Quasar runs only 1 OP to saturate the L1 buffer
     QUASAR_OP_COUNT = 1
     QUASAR_RISC_COUNT = 6 + 4 * 4  # DM2-7 + Neo0-3 * TRISC0-3
     QUASAR_ZONE_COUNT = 125
