@@ -53,24 +53,15 @@ inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uin
  *
  * Programs the pack MOP and optionally the packer ReLU (mode and threshold) for Packer 0 via cfg_rmw.
  *
- * @tparam EN_32B_DEST: Set to true when pack reads from the dst register in Float32; controls the
- *         RELU_THRESHOLD register format (32-bit or 16-bit path), values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 16 - 31
- * @param num_tiles: Number of tiles to pack at a time.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
- * @param relu_config: ReLU config (mode + threshold).
+ * @param num_tiles: Number of tiles to pack at a time.
  * @note @ref _llk_pack_ is the matching execute call on this thread.
  */
-template <bool EN_32B_DEST = false>
-inline void _llk_pack_init_(
-    const std::uint8_t buf_desc_id,
-    const TensorShape& tensor_shape,
-    const std::uint32_t num_tiles          = NUM_TILES,
-    const ckernel::ReluConfig& relu_config = ckernel::ReluConfig::none())
+inline void _llk_pack_init_(const std::uint8_t buf_desc_id, const TensorShape& tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
 {
     _llk_pack_mop_config_(buf_desc_id, num_tiles, tensor_shape);
-    _llk_pack_relu_config_<p_pacr::PACK0, EN_32B_DEST>(relu_config);
 }
 
 /**

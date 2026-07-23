@@ -20,6 +20,7 @@
  *
  * @param pack_output The output DataFlow Buffer identifier
  */
+template <bool EN_32BIT_DEST>
 inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
@@ -55,7 +56,7 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     tdma_descriptor_t td_val;
     td_val.reg_data_format = static_cast<std::uint8_t>(pack_src_format[output_id]);
 
-    _llk_pack_hw_configure_<p_pacr::PACK0>(td_val);
+    _llk_pack_hw_configure_<p_pacr::PACK0, EN_32BIT_DEST>(td_val, ckernel::ReluConfig::none());
 }
 
 inline bool should_reconfig_pack_in_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
