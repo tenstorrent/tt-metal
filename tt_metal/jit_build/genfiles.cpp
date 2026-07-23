@@ -139,10 +139,15 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
     // Get the semaphore bindings from the settings callback
     // Sort them to ensure the file output is deterministic, as explained above
-    vector<pair<string, uint16_t>> sem_entries;
+    struct SemEntry {
+        string name;
+        uint16_t id;
+        SemScope scope;
+    };
+    vector<SemEntry> sem_entries;
     settings.process_semaphore_binding_handles(
-        [&sem_entries](const string& name, uint16_t id) { sem_entries.emplace_back(name, id); });
-    sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        [&sem_entries](const string& name, uint16_t id, SemScope scope) { sem_entries.push_back({name, id, scope}); });
+    sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Get the tensor binding handles from the settings callback
     // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
@@ -238,9 +243,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!sem_entries.empty()) {
+            // NOTE: scope is carried through the pipeline but the emit is still a bare id here
+            // (S2b-plumbing). The S2b-flip turns this into a `SemAccessor<id, scope>` token so the
+            // kernel picks the mechanism via CTAD.
             content << "namespace sem {\n";
-            for (const auto& [name, id] : sem_entries) {
-                content << "constexpr std::uint32_t " << name << " = " << id << "u;\n";
+            for (const auto& entry : sem_entries) {
+                content << "constexpr std::uint32_t " << entry.name << " = " << entry.id << "u;\n";
             }
             content << "}  // namespace sem\n";
         }

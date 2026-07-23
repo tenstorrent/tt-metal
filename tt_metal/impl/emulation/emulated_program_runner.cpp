@@ -568,7 +568,7 @@ struct Metal2BindingsSnapshot {
     std::vector<std::string> runtime_arg_names;
     std::vector<std::string> common_runtime_arg_names;
     std::map<std::string, uint32_t> dfb_accessors;
-    std::map<std::string, uint16_t> sem_accessors;
+    std::map<std::string, SemaphoreBindingHandle> sem_accessors;
     std::vector<TaEntry> ta_accessors;
     std::vector<ScratchEntry> scratch_accessors;
 
@@ -580,8 +580,10 @@ struct Metal2BindingsSnapshot {
         for (const auto& [name, id] : dfb_accessors) {
             s += ":dfb:" + name + "=" + std::to_string(id);
         }
-        for (const auto& [name, id] : sem_accessors) {
-            s += ":sem:" + name + "=" + std::to_string(id);
+        for (const auto& [name, h] : sem_accessors) {
+            // Fold the baked scope too: same id under a different scope is a different device
+            // mechanism and must not reuse the first kernel's .so.
+            s += ":sem:" + name + "=" + std::to_string(h.id) + "@" + std::to_string(static_cast<int>(h.scope));
         }
         for (const auto& ta : ta_accessors) {
             s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
@@ -799,7 +801,7 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     kernel.process_dataflow_buffer_binding_handles(
         [&s](const std::string& name, uint16_t id) { s.dfb_accessors[name] = id; });
     kernel.process_semaphore_binding_handles(
-        [&s](const std::string& name, uint16_t id) { s.sem_accessors[name] = id; });
+        [&s](const std::string& name, uint16_t id, SemScope scope) { s.sem_accessors[name] = {id, scope}; });
     kernel.process_tensor_binding_handles(
         // Match the genfiles.cpp pattern: drop num_runtime_field_crta_words. Emule's
         // snapshot doesn't yet model per-binding runtime CRTA words, and the
@@ -895,9 +897,11 @@ static void emit_metal2_namespaces(
         f << "}  // namespace dfb\n";
     }
     if (!s.sem_accessors.empty()) {
+        // S2b-plumbing: scope is carried (cache key) but the emit is still a bare id. The
+        // S2b-flip turns this into a SemAccessor<id, scope> token (CTAD picks the mechanism).
         f << "namespace sem {\n";
-        for (const auto& [name, id] : s.sem_accessors) {
-            f << "constexpr std::uint32_t " << name << " = " << id << "u;\n";
+        for (const auto& [name, h] : s.sem_accessors) {
+            f << "constexpr std::uint32_t " << name << " = " << h.id << "u;\n";
         }
         f << "}  // namespace sem\n";
     }
