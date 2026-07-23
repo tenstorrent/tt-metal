@@ -135,8 +135,8 @@ TEST(HostTensorSpecPreservation, ToLayoutPhysicalMismatchThrows) {
     auto alignment = Alignment({32, 24});
     auto tile = Tile({16, 16});
 
-    auto source_spec = TensorSpec(
-        shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR, tile), memory_config, alignment));
+    auto source_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
     auto source = HostTensor::from_vector<float>(data, source_spec);
 
     EXPECT_ANY_THROW(std::ignore = to_tile_layout(source, tile));
