@@ -78,7 +78,7 @@ SUPPORTED = {
     "alignment": ["tile_aligned"],
     "attention_kind": ["self", "cross"],
     "kv_heads_mode": ["mha", "gqa", "mqa"],
-    "mask_mode": ["none", "custom"],
+    "mask_mode": ["none", "custom", "causal"],
     "scale_mode": ["auto", "explicit"],
 }
 
@@ -87,8 +87,13 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 #
-# causal is not in SUPPORTED[mask_mode], so {causal, cross} is already refused
-# at the axis level; no cell-level EXCLUSION is required for it.
+# Refinement 4 (causal masking):
+#   * {mask_mode: causal, attention_kind: cross} — native causal masking builds
+#     the triangular −inf bias on the S_q×S_kv score grid keyed on the diagonal
+#     (key ≤ query). That is only well-defined when S_q == S_kv (self-attention);
+#     for cross-attention (S_q != S_kv) there is no canonical alignment, so the
+#     op refuses it (xfail via ExcludedCell). is_causal + attn_mask is separately
+#     a hard ValueError (mutual exclusion; re-armed now that causal is reachable).
 #
 # Refinement 1 (numerical configurability):
 #   * {float32, fp32_dest_acc_en=False} — the maxed input dtype paired with the
@@ -100,6 +105,7 @@ SUPPORTED = {
 
 EXCLUSIONS = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+    {"mask_mode": "causal", "attention_kind": "cross"},
 ]
 
 
@@ -268,6 +274,7 @@ def scaled_dot_product_attention(
         attn_mask,
         output_tensor,
         scale=float(scale),
+        is_causal=bool(is_causal),
         compute_kernel_config=compute_kernel_config,
     )
 

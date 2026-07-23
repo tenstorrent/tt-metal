@@ -36,6 +36,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_minmax.hpp"
+#include "scaled_dot_product_attention_causal.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -64,7 +65,6 @@ struct MMParams {
     uint32_t sq, sk, dht, scale_bits;
     uint32_t qk_in0_sb, qk_in1_sb, qk_sb_h, qk_sb_w;
     uint32_t pv_in0_sb, pv_in1_sb, pv_sb_h, pv_sb_w;
-    uint32_t has_mask;
     uint32_t ablate;  // /perf-measure ablation gate: 0=normal, 1=matmul-stub, 2=+reduce-stub, 3=+exp/rescale-stub
 };
 
@@ -78,8 +78,14 @@ struct MMParams {
 // amount of accuracy (flagged shape PCC 0.9997→0.9967), so it is gated on the compute
 // config's `math_approx_mode` (the user's explicit opt-in to approximate SFPU math);
 // the exact default is unchanged.
+// apply_mask (runtime): add the mask block sitting in cb_mask_in to the QKᵀ scores
+// before the row-max. For mask_mode=custom it is always true (streamed additive
+// mask). For mask_mode=causal it is true ONLY on the diagonal-straddling KV-blocks
+// (the reader generates + pushes cb_mask_in exactly for those); fully-past blocks
+// carry no mask and skip the add — the reader pushes nothing for them, so the CB
+// balance holds. For mask_mode=none it is always false.
 template <ckl::Approx ExpMode>
-void kv_step(bool first, const MMParams& p) {
+void kv_step(bool first, bool apply_mask, const MMParams& p) {
     const uint32_t sq = p.sq, sk = p.sk, dht = p.dht;
 
     // ---- 1. S = Q·Kᵀ  (Q retained across the KV loop; K popped) ----
@@ -107,8 +113,8 @@ void kv_step(bool first, const MMParams& p) {
             ckl::MatmulBlockShape::of(p.qk_in0_sb, p.qk_in1_sb, p.qk_sb_h, p.qk_sb_w, dht, 1));
     }
 
-    // ---- 2. + mask (custom) ----
-    if (p.has_mask) {
+    // ---- 2. + mask (custom: always; causal: straddling KV-blocks only) ----
+    if (apply_mask) {
         ckl::add<ckl::input(cb_qk_scores), ckl::input(cb_mask_in), ckl::output(cb_qk_scores)>(
             ckl::EltwiseShape::grid(sq, sk));
     }
@@ -238,7 +244,10 @@ void kernel_main() {
     const uint32_t sq = get_compile_time_arg_val(0);
     const uint32_t sk = get_compile_time_arg_val(1);
     const uint32_t dht = get_compile_time_arg_val(2);
-    const uint32_t has_mask = get_compile_time_arg_val(3);
+    // mask_regime: 0=none, 1=custom (add streamed mask every KV-block),
+    // 2=causal (on-device triangular mask, KV-loop truncated + mask only on the
+    // diagonal-straddling blocks).
+    const uint32_t mask_regime = get_compile_time_arg_val(3);
     const uint32_t scale_bits = get_compile_time_arg_val(4);
     const uint32_t qk_in0_sb = get_compile_time_arg_val(5);
     const uint32_t qk_in1_sb = get_compile_time_arg_val(6);
@@ -252,9 +261,14 @@ void kernel_main() {
     // Refinement 3d — SFPU-floor lever: fast approximate exp_tile. Gated on the
     // compute config's math_approx_mode (CT arg 14); default 0 = exact = byte-identical.
     constexpr uint32_t exp_approx = get_compile_time_arg_val(14);
+    // Refinement 4 — causal masking: Q_NUM_CHUNKS lets compute recover the global
+    // query-chunk index per Q-block (qc = (q_start + qb) % q_num_chunks) so it can
+    // truncate the KV loop + gate the mask add identically to the reader.
+    const uint32_t q_num_chunks = get_compile_time_arg_val(15);
 
     const uint32_t q_count = get_arg_val<uint32_t>(0);
     const uint32_t k_num_chunks = get_arg_val<uint32_t>(1);
+    const uint32_t q_start = get_arg_val<uint32_t>(2);
 
     const MMParams p{
         sq,
@@ -269,7 +283,6 @@ void kernel_main() {
         pv_in1_sb,
         pv_sb_h,
         pv_sb_w,
-        has_mask,
         ablate};
     const uint32_t q_block_tiles = sq * dht;
 
@@ -277,13 +290,22 @@ void kernel_main() {
     mm_block_init(cb_q_in, cb_k_in, cb_qk_scores, 0, 1, 1, dht);
 
     for (uint32_t qb = 0; qb < q_count; ++qb) {
-        for (uint32_t k = 0; k < k_num_chunks; ++k) {
+        // Causal (mask_regime==2): truncate the KV loop to the blocks at/before the
+        // diagonal and stamp the mask only on the straddling blocks — reader agrees
+        // tile-for-tile via the shared sdpa_causal predicates. custom/none run the
+        // full KV loop (kv_end = k_num_chunks); apply_mask = (regime==custom).
+        const uint32_t qc = (mask_regime == 2u) ? (q_start + qb) % q_num_chunks : 0u;
+        const uint32_t kv_end = (mask_regime == 2u) ? sdpa_causal::kc_count(qc, sq, sk, k_num_chunks) : k_num_chunks;
+
+        for (uint32_t k = 0; k < kv_end; ++k) {
+            const bool apply_mask =
+                (mask_regime == 1u) || (mask_regime == 2u && sdpa_causal::needs_mask(qc, k, sq, sk));
             // exp_approx is a compile-time constant → the unused kv_step instantiation
             // is dead-code-eliminated (no binary bloat).
             if constexpr (exp_approx != 0) {
-                kv_step<ckl::Approx::Fast>(k == 0, p);
+                kv_step<ckl::Approx::Fast>(k == 0, apply_mask, p);
             } else {
-                kv_step<ckl::Approx::Exact>(k == 0, p);
+                kv_step<ckl::Approx::Exact>(k == 0, apply_mask, p);
             }
         }
 

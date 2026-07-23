@@ -38,8 +38,69 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "scaled_dot_product_attention_causal.hpp"
 
 using namespace dataflow_kernel_lib;
+
+// ---- Refinement 4 — on-device causal mask generation (dataflow, no host tensor) ----
+// The additive causal mask for a (query-tile, key-tile) pair is: 0 where key ≤ query,
+// −inf where key > query. At tile granularity (self-attention, so tiles align on the
+// same sequence) a mask tile is one of three kinds by global tile index:
+//   q_tile > k_tile  → fully past   → all 0
+//   q_tile < k_tile  → fully future → all −inf
+//   q_tile == k_tile → diagonal     → lower-triangular (col ≤ row → 0, else −inf)
+// The tiles are written straight into cb_mask_in's L1 (same-core writes; cb_push_back
+// provides the producer commit), in the CB's own dtype (interm_df ∈ {bf16, fp32}). A
+// 32×32 tile is stored as 4 faces of 16×16 (face0: r0-15/c0-15, face1: r0-15/c16-31,
+// face2: r16-31/c0-15, face3: r16-31/c16-31); for the diagonal tile face0/face3 carry
+// the lower-triangular pattern, face1 is all −inf, face2 is all 0.
+namespace {
+
+constexpr uint32_t FACE_ELEMS = 256;  // 16×16
+
+FORCE_INLINE void fill_mask_const(uint32_t l1, uint32_t tile_bytes, uint32_t word) {
+    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
+    const uint32_t n = tile_bytes >> 2;
+    for (uint32_t i = 0; i < n; ++i) {
+        p[i] = word;
+    }
+}
+
+FORCE_INLINE void fill_mask_diag(uint32_t l1, bool fp32) {
+    // face0 (offset 0) and face3 (offset 3·256) get the lower-triangular pattern;
+    // face1 (1·256) all −inf; face2 (2·256) all 0.
+    if (fp32) {
+        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
+        constexpr uint32_t Z = 0x00000000u, NI = 0xFF800000u;
+        for (uint32_t r = 0; r < 16; ++r) {
+            for (uint32_t c = 0; c < 16; ++c) {
+                const uint32_t v = (c <= r) ? Z : NI;
+                p[0u * FACE_ELEMS + r * 16u + c] = v;
+                p[3u * FACE_ELEMS + r * 16u + c] = v;
+            }
+        }
+        for (uint32_t i = 0; i < FACE_ELEMS; ++i) {
+            p[1u * FACE_ELEMS + i] = NI;
+            p[2u * FACE_ELEMS + i] = Z;
+        }
+    } else {
+        volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1);
+        constexpr uint16_t Z = 0x0000u, NI = 0xFF80u;
+        for (uint32_t r = 0; r < 16; ++r) {
+            for (uint32_t c = 0; c < 16; ++c) {
+                const uint16_t v = (c <= r) ? Z : NI;
+                p[0u * FACE_ELEMS + r * 16u + c] = v;
+                p[3u * FACE_ELEMS + r * 16u + c] = v;
+            }
+        }
+        for (uint32_t i = 0; i < FACE_ELEMS; ++i) {
+            p[1u * FACE_ELEMS + i] = NI;
+            p[2u * FACE_ELEMS + i] = Z;
+        }
+    }
+}
+
+}  // namespace
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -52,7 +113,11 @@ void kernel_main() {
     constexpr uint32_t SK_CHUNK_T = get_compile_time_arg_val(7);
     constexpr uint32_t Q_NUM_CHUNKS = get_compile_time_arg_val(8);
     constexpr uint32_t K_NUM_CHUNKS = get_compile_time_arg_val(9);
-    constexpr uint32_t HAS_MASK = get_compile_time_arg_val(10);
+    // MASK_MODE: 0=none, 1=custom (read additive mask from DRAM), 2=causal
+    // (generate the triangular mask on-device + truncate the KV loop).
+    constexpr uint32_t MASK_MODE = get_compile_time_arg_val(10);
+    constexpr bool HAS_CUSTOM_MASK = (MASK_MODE == 1u);
+    constexpr bool CAUSAL = (MASK_MODE == 2u);
     constexpr uint32_t MASK_BCAST = get_compile_time_arg_val(11);
     constexpr uint32_t USE_MCAST = get_compile_time_arg_val(12);
     constexpr uint32_t GC = get_compile_time_arg_val(13);
@@ -187,6 +252,16 @@ void kernel_main() {
         return;
     }
 
+    // Causal-mask tile geometry (only meaningful in the CAUSAL regime). cb_mask_in
+    // carries interm_df: bf16 (2048 B/tile) or fp32 (4096 B/tile). The generated
+    // mask tile stride is this size — NOT `tile_bytes` (the Q/K/V input dtype).
+    uint32_t mask_tile_bytes = 0;
+    bool mask_fp32 = false;
+    if constexpr (CAUSAL) {
+        mask_tile_bytes = get_tile_size(cb_mask_in);
+        mask_fp32 = (mask_tile_bytes > 2048u);
+    }
+
     for (uint32_t idx = 0; idx < q_count; ++idx) {
         const uint32_t i = q_start + idx;
         const uint32_t q_chunk = i % Q_NUM_CHUNKS;
@@ -213,7 +288,12 @@ void kernel_main() {
         const uint32_t k_base = (nb * H_KV + kv_head) * SKVT;
         const uint32_t m_base = (nb * MASK_H + mask_head) * SQT;
 
-        for (uint32_t k_chunk = 0; k_chunk < K_NUM_CHUNKS; ++k_chunk) {
+        // Causal: block-skip strictly-future KV-blocks (≈ half the KV work). The
+        // reader and compute derive this bound from the SAME sdpa_causal predicate.
+        const uint32_t kv_end =
+            CAUSAL ? sdpa_causal::kc_count(q_chunk, SQ_CHUNK_T, SK_CHUNK_T, K_NUM_CHUNKS) : K_NUM_CHUNKS;
+
+        for (uint32_t k_chunk = 0; k_chunk < kv_end; ++k_chunk) {
             // ---- K chunk: TRANSPOSED grid (DHT, SK_CHUNK_T) ----
             cb_reserve_back(cb_k_in, k_block_tiles);
             uint32_t l1k = get_write_ptr(cb_k_in);
@@ -241,7 +321,8 @@ void kernel_main() {
             cb_push_back(cb_v_in, k_block_tiles);
 
             // ---- Mask chunk: full (SQ_CHUNK_T, SK_CHUNK_T) ----
-            if constexpr (HAS_MASK) {
+            if constexpr (HAS_CUSTOM_MASK) {
+                // custom: stream the caller's additive mask block from DRAM.
                 cb_reserve_back(cb_mask_in, mask_block_tiles);
                 uint32_t l1m = get_write_ptr(cb_mask_in);
                 for (uint32_t st = 0; st < SQ_CHUNK_T; ++st) {
@@ -254,6 +335,29 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_mask_in, mask_block_tiles);
+            } else if constexpr (CAUSAL) {
+                // causal: only the diagonal-straddling blocks carry a mask; fully-past
+                // blocks are all-zero and are skipped entirely (compute agrees — no
+                // mask add, so cb_mask_in stays balanced). Generate the block on-device.
+                if (sdpa_causal::needs_mask(q_chunk, k_chunk, SQ_CHUNK_T, SK_CHUNK_T)) {
+                    cb_reserve_back(cb_mask_in, mask_block_tiles);
+                    uint32_t l1m = get_write_ptr(cb_mask_in);
+                    for (uint32_t st = 0; st < SQ_CHUNK_T; ++st) {
+                        const uint32_t q_tile = q_chunk * SQ_CHUNK_T + st;
+                        for (uint32_t kt = 0; kt < SK_CHUNK_T; ++kt) {
+                            const uint32_t k_tile = k_chunk * SK_CHUNK_T + kt;
+                            if (q_tile > k_tile) {
+                                fill_mask_const(l1m, mask_tile_bytes, 0u);  // fully past
+                            } else if (q_tile < k_tile) {
+                                fill_mask_const(l1m, mask_tile_bytes, mask_fp32 ? 0xFF800000u : 0xFF80FF80u);
+                            } else {
+                                fill_mask_diag(l1m, mask_fp32);  // diagonal tile
+                            }
+                            l1m += mask_tile_bytes;
+                        }
+                    }
+                    cb_push_back(cb_mask_in, mask_block_tiles);
+                }
             }
         }
     }

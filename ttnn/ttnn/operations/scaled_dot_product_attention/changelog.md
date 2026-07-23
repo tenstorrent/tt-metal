@@ -378,3 +378,47 @@
   reframes the residual as exp-bound.
 - Tests added: test_scaled_dot_product_attention_perf.py extended with a `math_approx_mode` × `pcc_gate`
   parametrization (exact @ 0.997, approx @ 0.996) — both green; documents the lever's measured tradeoff.
+
+## Refinement 4 — Causal masking (mask_mode=causal)
+- Date: 2026-07-23
+- What was done: Added the third compile-time mask regime `causal` (design lamp #1)
+  as a minimal extension of the existing custom-mask path — no new kernel file, no
+  parallel implementation. **Reused**: `cb_mask_in` + the compute-side `add<cb_qk_scores,
+  cb_mask_in, cb_qk_scores>` mask machinery (identical numerics to the custom path,
+  which already handles −inf additive masks). **Added**:
+  * Op file: `SUPPORTED["mask_mode"] += "causal"`; `EXCLUSIONS += {mask_mode: causal,
+    attention_kind: cross}` (causal needs S_q==S_kv; cross refused via ExcludedCell →
+    xfail). The `is_causal + attn_mask` ValueError (already present) is now reachable
+    (mutual exclusion). Entry point threads `is_causal` into the program descriptor.
+  * A shared kernel header `scaled_dot_product_attention_causal.hpp` — the SINGLE
+    source of truth for the two causal predicates used by BOTH reader and compute:
+    `kc_count(qc)` (KV-loop upper bound = `ceil((qc+1)·SQ_CHUNK_T / SK_CHUNK_T)`,
+    block-skipping strictly-future KV-blocks ≈ half the KV work) and `needs_mask(qc,kc)`
+    (a block straddles the diagonal / needs the mask iff `(kc+1)·SK_CHUNK_T > qc·SQ_CHUNK_T`;
+    fully-past blocks are all-zero and skipped entirely). Reader and compute derive
+    the loop bound + mask gating from this header → tile-for-tile CB lockstep.
+  * Reader: on causal, generate the additive triangular bias ON DEVICE (no mask tensor)
+    into cb_mask_in via direct 4-face L1 writes (per tile: q_tile>k_tile → all 0;
+    q_tile<k_tile → all −inf; q_tile==k_tile → lower-triangular col≤row). Written in
+    interm_df (bf16 0xFF80 / fp32 0xFF800000) so the compute `add` sees matching
+    formats. Only straddling blocks are generated + pushed; the KV read loop truncates.
+  * Compute: `kv_step` takes a runtime `apply_mask` (custom→always, causal→straddling
+    blocks only, none→never); the KV loop truncates to `kc_count(qc)` where
+    `qc = (q_start + qb) % q_num_chunks` (new compute RT `q_start`, CT `q_num_chunks`).
+  * Program descriptor: `mask_regime`/`needs_mask_cb`/`mask_df` derived once; cb_mask_in
+    allocated for both custom (in_df) and causal (interm_df); mcast gate excludes causal.
+- Accuracy achieved: PCC ≥ 0.99 (bf16/bf8b), ≥ 0.999 (fp32) on causal self-attention
+  across MHA/GQA/MQA, multi-batch, multi-head, single-tile → 512-seq (many KV chunks),
+  auto + explicit scale. Native causal vs equivalent additive upper-triangular mask
+  agree at PCC ≥ 0.999.
+- Golden test progress: **1511 passed / 398 xfailed / 0 xpassed** (115s, no hang), up
+  from R3d's 1061 passed. 450 causal-self cells moved xfail→pass; the remaining xfailed
+  are {causal, cross} (ExcludedCell) + {fp32, fp32_dest_acc_en=False} (prior EXCLUSION).
+  Zero xpass drift (SUPPORTED matches reality). Acceptance test 32/32 (none/custom) and
+  precision matrix 44 passed / 8 skipped unchanged → no regression.
+- Issues encountered: None. Causal came up correct on the first --dev/probe run; the
+  reuse-the-custom-add strategy meant the only new logic was on-device mask generation
+  + the (reader/compute-shared) truncation predicate.
+- Tests added: tests/.../test_scaled_dot_product_attention_causal.py (dtype × scale ×
+  MHA/GQA/MQA/multi-batch self shapes, causal≈custom equivalence, {causal,cross}
+  ExcludedCell, is_causal+attn_mask ValueError) — 45 passed.

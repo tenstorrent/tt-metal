@@ -415,7 +415,22 @@ R3's gated mcast, and 3d's approx-exp lever + ablation gate untouched.
 guard set — OR the exp-bound-without-approximation conclusion is recorded at depth and the
 `math_approx_mode`-gated 1.44× lever is kept.
 
-### [ ] Refinement 4 — Causal masking (mask_mode=causal)
+### [x] Refinement 4 — Causal masking (mask_mode=causal)
+
+**Outcome (2026-07-23)**: Landed as a third compile-time mask regime (`mask_regime`
+0=none / 1=custom / 2=causal) reusing the existing custom-mask machinery
+(`cb_mask_in` + compute `add`). For causal the reader GENERATES the additive
+triangular bias on-device (per-tile: 0 fully-past, −inf fully-future, lower-triangular
+on the diagonal tile — 4-face L1 writes in interm_df) instead of streaming a mask
+tensor, and BOTH reader and compute truncate the KV loop to
+`ceil((qc+1)·SQ_CHUNK_T / SK_CHUNK_T)` and stamp the mask only on the
+diagonal-straddling blocks (shared `sdpa_causal::{kc_count,needs_mask}` header keeps
+them tile-for-tile in lockstep). `{causal, cross}` armed in EXCLUSIONS (xfail via
+ExcludedCell); `is_causal + attn_mask` ValueError re-armed (now reachable). Golden
+suite **1511 passed / 398 xfailed / 0 xpassed** (no drift), up from R3d's 1061 passed
+— 450 causal-self cells moved xfail→pass; zero regression on none/custom. bf16/fp32/bf8b
+× auto/explicit-scale × MHA/GQA/MQA all pass; causal≈custom(triangular) equivalence
+verified. No new kernel file — extended reader/compute + program descriptor + op file.
 
 **Goal**: add `"causal"` to `SUPPORTED["mask_mode"]`. When `is_causal=True` the op
 generates the triangular −inf bias **on device** (no mask tensor) and truncates the

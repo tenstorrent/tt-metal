@@ -102,10 +102,15 @@ def _divisors_leq(n, cap):
     return [d for d in range(1, min(n, cap) + 1) if n % d == 0]
 
 
-def _cb_specs(sq, sk, dht, has_mask, in_df, out_df, interm_df, scaler_df):
+def _cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df):
     """(index, num_pages, data_format) for every CB — the SINGLE source of truth
     shared by the L1-footprint budget calc and the actual CB build below. Page
-    counts are functions of the block factors sq/sk and DHt (never the full S)."""
+    counts are functions of the block factors sq/sk and DHt (never the full S).
+
+    ``needs_mask`` allocates cb_mask_in for BOTH the custom (streamed DRAM mask)
+    and causal (on-device generated mask) regimes; ``mask_df`` is that CB's
+    format (in_df for custom — the reader byte-copies DRAM mask tiles; interm_df
+    for causal — the reader generates −inf/0 tiles matching the score format)."""
     q_tiles = sq * dht
     k_tiles = sk * dht
     qk_tiles = sq * sk
@@ -129,8 +134,8 @@ def _cb_specs(sq, sk, dht, has_mask, in_df, out_df, interm_df, scaler_df):
         (CB_OUT_NEW, o_tiles, interm_df),
         (CB_OUT_SCALED, o_tiles, interm_df),
     ]
-    if has_mask:
-        specs.append((CB_MASK_IN, qk_tiles * KV_BUFFER_FACTOR, in_df))
+    if needs_mask:
+        specs.append((CB_MASK_IN, qk_tiles * KV_BUFFER_FACTOR, mask_df))
     return specs
 
 
@@ -138,11 +143,14 @@ def _cb_footprint_bytes(specs):
     return sum(num_pages * ttnn.tile_size(df) for _, num_pages, df in specs)
 
 
-def _fits_l1(sq, sk, dht, has_mask, in_df, out_df, interm_df, scaler_df):
-    return _cb_footprint_bytes(_cb_specs(sq, sk, dht, has_mask, in_df, out_df, interm_df, scaler_df)) <= L1_CB_BUDGET
+def _fits_l1(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df):
+    return (
+        _cb_footprint_bytes(_cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df))
+        <= L1_CB_BUDGET
+    )
 
 
-def _pick_chunks(sqt, skvt, dht, has_mask, in_df, out_df, interm_df, scaler_df, bh=1, num_cores=1):
+def _pick_chunks(sqt, skvt, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, bh=1, num_cores=1):
     """Block-factor pair (sq_chunk_t, sk_chunk_t) for this shape.
 
     Refinement 3b — compute-side amortization: FIRST try the coarse pair
@@ -159,7 +167,7 @@ def _pick_chunks(sqt, skvt, dht, has_mask, in_df, out_df, interm_df, scaler_df, 
     <= (Q_CHUNK_TILES, K_CHUNK_TILES) whose per-core CB footprint fits L1 (D<=256
     keep (4,4); large head_dim shrinks to fit). Falls back to (1,1) if even that OOMs.
     """
-    fits = lambda sq, sk: _fits_l1(sq, sk, dht, has_mask, in_df, out_df, interm_df, scaler_df)
+    fits = lambda sq, sk: _fits_l1(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df)
 
     cq, ck = Q_CHUNK_COARSE, K_CHUNK_COARSE
     if sqt % cq == 0 and skvt % ck == 0 and fits(cq, ck) and bh * (sqt // cq) >= num_cores:
@@ -168,7 +176,7 @@ def _pick_chunks(sqt, skvt, dht, has_mask, in_df, out_df, interm_df, scaler_df, 
     best = None  # (footprint, sq, sk)
     for sq in _divisors_leq(sqt, Q_CHUNK_TILES):
         for sk in _divisors_leq(skvt, K_CHUNK_TILES):
-            fp = _cb_footprint_bytes(_cb_specs(sq, sk, dht, has_mask, in_df, out_df, interm_df, scaler_df))
+            fp = _cb_footprint_bytes(_cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df))
             if fp <= L1_CB_BUDGET and (best is None or fp > best[0]):
                 best = (fp, sq, sk)
     if best is None:
@@ -211,7 +219,9 @@ def _resolve_math_fidelity(dtype, requested):
     return requested
 
 
-def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, scale, compute_kernel_config):
+def create_program_descriptor(
+    query, key, value, attn_mask, output_tensor, *, scale, is_causal=False, compute_kernel_config
+):
     b, h_q, s_q, d = tuple(query.shape)
     _, h_kv, s_kv, _ = tuple(key.shape)
 
@@ -219,7 +229,14 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     skvt = s_kv // 32
     dht = d // 32
 
-    has_mask = attn_mask is not None
+    # ---- Mask regime (Refinement 4) ----
+    # 0=none, 1=custom (stream the caller's additive mask from DRAM), 2=causal
+    # (generate the triangular −inf bias on-device + truncate the KV loop). custom
+    # and causal are mutually exclusive (validate() enforces is_causal ⊕ attn_mask).
+    has_mask = attn_mask is not None  # custom regime (streamed DRAM mask tensor)
+    is_causal = bool(is_causal)
+    mask_regime = 2 if is_causal else (1 if has_mask else 0)
+    needs_mask_cb = has_mask or is_causal  # both regimes allocate + consume cb_mask_in
     mask_broadcast_head = 1 if (has_mask and tuple(attn_mask.shape)[1] == 1) else 0
 
     fp32_dest_acc_en = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
@@ -235,6 +252,10 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     out_df = output_tensor.dtype  # follows the input dtype (see entry point)
     interm_df = ttnn.float32 if in_df == ttnn.float32 else ttnn.bfloat16
     scaler_df = ttnn.bfloat16
+    # cb_mask_in format: custom copies DRAM mask tiles (input dtype); causal
+    # generates −inf/0 tiles that must match the score block's format (interm_df)
+    # so the compute-side `add` sees identical formats (no reconfig surprise).
+    mask_df = interm_df if is_causal else in_df
 
     # Grid is needed before the block-factor pick (the grid-fill guard on sq keeps
     # the flat Q-block work-list from underfilling the grid when sq is coarsened).
@@ -252,7 +273,17 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     # more tiles per call. D<=256 keep the fitted chunk; the D=128 perf shape (huge L1
     # headroom, 740 Q-blocks) coarsens to fill compute; D∈{512,1024} shrink to fit L1.
     sq_chunk_t, sk_chunk_t = _pick_chunks(
-        sqt, skvt, dht, has_mask, in_df, out_df, interm_df, scaler_df, bh=b * h_q, num_cores=num_cores
+        sqt,
+        skvt,
+        dht,
+        needs_mask_cb,
+        in_df,
+        out_df,
+        interm_df,
+        scaler_df,
+        mask_df,
+        bh=b * h_q,
+        num_cores=num_cores,
     )
     q_num_chunks = sqt // sq_chunk_t
     k_num_chunks = skvt // sk_chunk_t
@@ -289,8 +320,11 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     # (byte-identical, zero hang, zero regression). The scheme stays fully intact and
     # is re-enabled — for any FUTURE genuinely read-bound shape — by exporting
     # TTNN_SDPA_KV_MCAST=1 (then the shape gate below applies as before).
+    # Causal (needs_mask_cb) never takes the mcast path: the mask varies along S_q,
+    # so K/V are not the only S_q-shared operand, and the mcast reader has no mask
+    # branch. The gate already requires no mask; needs_mask_cb also excludes causal.
     mcast_opt_in = os.environ.get("TTNN_SDPA_KV_MCAST", "0") == "1"
-    use_mcast = mcast_opt_in and (not has_mask) and (b * h_q == grid_rows) and (grid_cols > 1)
+    use_mcast = mcast_opt_in and (not needs_mask_cb) and (b * h_q == grid_rows) and (grid_cols > 1)
 
     semaphores = []
     mcast_ct = [0, 0, 0, 0, 0]  # McastArgs CT block (5 words); inert when !use_mcast
@@ -365,7 +399,7 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     cbs = [
         cb(index, num_pages, data_format)
         for index, num_pages, data_format in _cb_specs(
-            sq_chunk_t, sk_chunk_t, dht, has_mask, in_df, out_df, interm_df, scaler_df
+            sq_chunk_t, sk_chunk_t, dht, needs_mask_cb, in_df, out_df, interm_df, scaler_df, mask_df
         )
     ]
 
@@ -381,7 +415,7 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
         sk_chunk_t,
         q_num_chunks,
         k_num_chunks,
-        1 if has_mask else 0,
+        mask_regime,  # 0=none, 1=custom (DRAM read), 2=causal (on-device generate)
         mask_broadcast_head,
         1 if use_mcast else 0,
         grid_cols,
@@ -421,7 +455,9 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
         # Writer RT: [o_addr, q_start, q_count, row_y, col_x, rounds]
         writer_rt[core.x][core.y] = [o_addr, q_start, q_count, row_y, col_x, rnds]
         # Compute drives off block count: rounds (mcast) or the flat q_count slice.
-        compute_rt[core.x][core.y] = [rnds if use_mcast else q_count, k_num_chunks]
+        # q_start (RT[2]) lets causal recover each Q-block's global query-chunk index
+        # (unused off the causal path; mcast never carries a mask so q_start=0 there).
+        compute_rt[core.x][core.y] = [rnds if use_mcast else q_count, k_num_chunks, q_start]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_reader.cpp"),
@@ -440,7 +476,7 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
         sq_chunk_t,
         sk_chunk_t,
         dht,
-        1 if has_mask else 0,
+        mask_regime,  # 0=none, 1=custom, 2=causal (truncate KV loop + mask straddling blocks)
         _f32_bits(scale),
         qk_in0_sb,
         qk_in1_sb,
@@ -460,6 +496,10 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
         # exact exp → byte-identical to prior phases (zero regression on the exact path,
         # including the flagged perf test which requests math_approx_mode=False).
         1 if bool(getattr(compute_kernel_config, "math_approx_mode", False)) else 0,
+        # Refinement 4 — causal: Q_NUM_CHUNKS lets compute recover each Q-block's
+        # global query-chunk index (qc = (q_start + qb) % q_num_chunks) to truncate
+        # the KV loop + gate the mask add identically to the reader.
+        q_num_chunks,
     ]
     # Rebuild the compute config with the dtype-correct fidelity (never pass a
     # HiFi4 + fp32-DEST + bf16 combo through — issue #38306). fp32_dest_acc_en
