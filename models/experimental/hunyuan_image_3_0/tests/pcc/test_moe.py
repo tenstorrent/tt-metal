@@ -99,8 +99,9 @@ def _router_run(device, seq_len: int):
         x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     tt_w_t, tt_idx_t = tt_gate(x_tt)
-    tt_w = ttnn.to_torch(tt_w_t).reshape(BATCH * seq_len, c["K"])
-    tt_idx = ttnn.to_torch(tt_idx_t).reshape(BATCH * seq_len, c["K"]).long()
+    # Gate pads moe_topk→32 for tile-aligned sums; drop sentinel pad slots (see gate.py).
+    tt_w = ttnn.to_torch(tt_w_t)[..., : c["K"]].reshape(BATCH * seq_len, c["K"])
+    tt_idx = ttnn.to_torch(tt_idx_t)[..., : c["K"]].reshape(BATCH * seq_len, c["K"]).long()
     x_tt.deallocate(True)
 
     ref_sets = [set(r.tolist()) for r in ref_idx]
