@@ -4,11 +4,13 @@ set -e
 
 LOGDIR="."
 LOGFILE="deployment_$(hostname)_$(date +%4Y-%m-%d-%H-%M-%S).log"
-ITERS=5
+ITERS="${ITERS:-5}"
 
 usage() {
 	echo "Usage: $0 [-l logdir]"
 	echo "	-l <logdir>		The directory where to save the log file"
+	echo "	Enironment variable ITERS controls the number of iterations of each test"
+	echo "		(default 5)"
 }
 
 while [ -n "$1" ]
