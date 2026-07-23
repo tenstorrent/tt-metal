@@ -683,3 +683,11 @@
 - Ten replays reduced median slowest-device span 698.758 -> 690.719 us (1.15%), active time 662.921 -> 657.757 us/device, and programs 36 -> 35/device/layer.
 - The fused input matmul grew from logical width 1796 to 2180 and cost 81.004 -> 87.713 us; removing the batched `128 -> 128` gate matmul saved 20.450 us, while extra slicing cost 6.661 us.
 - The retained path executes 67.594 GFLOP across the mesh and reaches 97.86 TFLOP/s or 8.04% of peak; conservative useful throughput from the original factorized 59.205 GFLOP is 85.71 TFLOP/s or 7.05%. Tensor ownership and core/CCL distribution are unchanged.
+
+
+### 2026-07-23 12:21:02 UTC — Reject BF16 partials and two CCL workers/link
+
+- BF16 output partial hypothesis: halving fused reduce-scatter traffic may cross the 40% CCL target. Focused TP=8 hardware correctness rejected it: output PCC collapsed to 0.004862 versus the required 0.98. FP32 partials remain load-bearing.
+- Worker hypothesis: two workers/link may improve fabric throughput enough to offset reserving four CCL rows. The temporary experiment changed the fused op default to two workers/link and paired it with an 8x6 matmul plus CCL offset `(0,6)`; build and TP correctness passed at output/recurrent/convolution PCC 0.999952/0.999903/0.999997.
+- Matched report: `/tmp/kda_tp_layer_t640_rs_workers2_r10/reports/2026_07_23_12_21_02/ops_perf_results_2026_07_23_12_21_02.csv`; control: `/tmp/kda_tp_layer_t640_precomposed_gate_r10/reports/2026_07_23_12_13_23/ops_perf_results_2026_07_23_12_13_23.csv`.
+- Two workers regressed fused-program time 151.333 -> 166.374 us, median layer span 690.719 -> 706.001 us, and active time 657.757 -> 673.180 us/device. Restored and rebuilt the one-worker 8x8 implementation.
