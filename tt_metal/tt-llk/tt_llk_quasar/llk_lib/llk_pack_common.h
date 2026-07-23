@@ -61,7 +61,7 @@ inline void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config = cker
 }
 
 /**
- * @brief Programs the packer input data format (THCON) for the selected packer.
+ * @brief Programs the packer input data format (THCON) for the selected packer and the packer ReLU (mode and threshold).
  *
  * PACK1 instructions require autoloop setup: use _llk_pack_srcs_config_ / _llk_pack_srcs_ in
  * llk_srcs.h — do not drive Packer 1 via the llk_pack.h MOP APIs.
