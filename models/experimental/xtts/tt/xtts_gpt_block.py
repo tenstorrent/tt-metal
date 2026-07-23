@@ -55,6 +55,35 @@ def _to_device_w8(torch_tensor, device):
     )
 
 
+def _to_device_bias(torch_tensor, device):
+    """Matmul bias -> bf16 tile [1, N]. The rank>=2 shape makes the tilized bias's padded
+    penultimate dim == 32, which (with an explicit matmul program_config) is required for ttnn
+    to FUSE the bias into the matmul epilogue instead of emitting a separate broadcast add."""
+    return _to_device(torch_tensor.reshape(1, -1), device)
+
+
+def _mm_1d_config(device, m, k, n, fused_activation=None):
+    """1D-multicast matmul program_config for the GPT linears (mcast the L1 activation, stream the
+    DRAM weight per-core over N). Passing an explicit config is what lets ttnn fuse the bias (and,
+    for c_fc, the GELU) into the epilogue for an L1 output — the auto path post-processes both as
+    separate ops. Built per-forward because prefill M (= seq len) varies; decode M = 1. Measured
+    faster than the auto config on these shapes and validated to PCC ~0.9998."""
+    grid = device.compute_with_storage_grid_size()
+    gx, gy = int(grid.x), int(grid.y)
+    mt, nt = math.ceil(m / 32), math.ceil(n / 32)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=4,  # K-block (tiles); divides Kt for all GPT linears (Kt in {32, 128})
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=mt,
+        per_core_N=math.ceil(nt / (gx * gy)),
+        fuse_batch=True,
+        fused_activation=fused_activation,
+        mcast_in0=True,
+    )
+
+
 class TtXttsGptBlock(LightweightModule):
     def __init__(
         self,
@@ -75,16 +104,17 @@ class TtXttsGptBlock(LightweightModule):
         self.ln_2_bias = _to_device(state_dict[prefix + "ln_2.bias"], device)
 
         # Attention/MLP weights in bfloat8_b (memory-bound decode matmuls — see _to_device_w8);
-        # biases stay bf16 (tiny, added in the fused epilogue).
+        # biases are bf16 [1, N] (see _to_device_bias) so they fuse into the matmul epilogue under
+        # the explicit program_config used in the forwards.
         self.attn_c_attn_weight = _to_device_w8(state_dict[prefix + "attn.c_attn.weight"], device)
-        self.attn_c_attn_bias = _to_device(state_dict[prefix + "attn.c_attn.bias"], device)
+        self.attn_c_attn_bias = _to_device_bias(state_dict[prefix + "attn.c_attn.bias"], device)
         self.attn_c_proj_weight = _to_device_w8(state_dict[prefix + "attn.c_proj.weight"], device)
-        self.attn_c_proj_bias = _to_device(state_dict[prefix + "attn.c_proj.bias"], device)
+        self.attn_c_proj_bias = _to_device_bias(state_dict[prefix + "attn.c_proj.bias"], device)
 
         self.mlp_c_fc_weight = _to_device_w8(state_dict[prefix + "mlp.c_fc.weight"], device)
-        self.mlp_c_fc_bias = _to_device(state_dict[prefix + "mlp.c_fc.bias"], device)
+        self.mlp_c_fc_bias = _to_device_bias(state_dict[prefix + "mlp.c_fc.bias"], device)
         self.mlp_c_proj_weight = _to_device_w8(state_dict[prefix + "mlp.c_proj.weight"], device)
-        self.mlp_c_proj_bias = _to_device(state_dict[prefix + "mlp.c_proj.bias"], device)
+        self.mlp_c_proj_bias = _to_device_bias(state_dict[prefix + "mlp.c_proj.bias"], device)
 
     def _qkv(self, x):  # [b, s, hidden] -> q, k, v each [b, heads, s, head_dim]
         # Split the [b, s, 3*hidden] c_attn output (GPT-2 [Q|K|V] block layout) into per-head Q, K, V.
@@ -93,7 +123,13 @@ class TtXttsGptBlock(LightweightModule):
         # output) — it wants a 4D [b, 1, s, 3*hidden] input, so add the leading singleton dim (a
         # metadata reshape). transpose_k_heads=False keeps K as [b, heads, s, head_dim] (SDPA + the
         # decode KV cache expect that layout, not K^T).
-        qkv = ttnn.linear(x, self.attn_c_attn_weight, bias=self.attn_c_attn_bias, memory_config=L1)
+        qkv = ttnn.linear(
+            x,
+            self.attn_c_attn_weight,
+            bias=self.attn_c_attn_bias,
+            program_config=_mm_1d_config(self.device, x.shape[-2], x.shape[-1], self.attn_c_attn_weight.shape[-1]),
+            memory_config=L1,
+        )
         b, s, three_h = qkv.shape
         qkv = ttnn.reshape(qkv, (b, 1, s, three_h))
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(qkv, num_heads=NUM_HEADS, transpose_k_heads=False)
@@ -103,17 +139,42 @@ class TtXttsGptBlock(LightweightModule):
     def _attn_out(self, attn):  # [b, heads, s, head_dim] -> [b, s, hidden]
         out = ttnn.transformer.concatenate_heads(attn, memory_config=L1)  # fused permute + reshape
         ttnn.deallocate(attn)
-        proj = ttnn.linear(out, self.attn_c_proj_weight, bias=self.attn_c_proj_bias, memory_config=L1)
+        proj = ttnn.linear(
+            out,
+            self.attn_c_proj_weight,
+            bias=self.attn_c_proj_bias,
+            program_config=_mm_1d_config(self.device, out.shape[-2], out.shape[-1], self.attn_c_proj_weight.shape[-1]),
+            memory_config=L1,
+        )
         ttnn.deallocate(out)
         return proj
 
     def _mlp(self, x):
         """c_fc (+ GELU fused into the matmul epilogue) -> c_proj. Consumes ``x``."""
-        # activation="gelu" runs the GELU in the c_fc matmul's fused epilogue instead of a separate
-        # ttnn.gelu op (one fewer op + one fewer intermediate). ~= GPT-2 "gelu_new" (validated by PCC).
-        h = ttnn.linear(x, self.mlp_c_fc_weight, bias=self.mlp_c_fc_bias, activation="gelu", memory_config=L1)
+        # c_fc fuses BOTH bias and GELU into the matmul epilogue via the program_config's
+        # fused_activation. (GELU, False) == the old activation="gelu" (string "gelu" maps to
+        # UnaryOpType.GELU with param False), so the math is unchanged (validated by PCC).
+        h = ttnn.linear(
+            x,
+            self.mlp_c_fc_weight,
+            bias=self.mlp_c_fc_bias,
+            program_config=_mm_1d_config(
+                self.device,
+                x.shape[-2],
+                x.shape[-1],
+                self.mlp_c_fc_weight.shape[-1],
+                fused_activation=(ttnn.UnaryOpType.GELU, False),
+            ),
+            memory_config=L1,
+        )
         ttnn.deallocate(x)
-        out = ttnn.linear(h, self.mlp_c_proj_weight, bias=self.mlp_c_proj_bias, memory_config=L1)
+        out = ttnn.linear(
+            h,
+            self.mlp_c_proj_weight,
+            bias=self.mlp_c_proj_bias,
+            program_config=_mm_1d_config(self.device, h.shape[-2], h.shape[-1], self.mlp_c_proj_weight.shape[-1]),
+            memory_config=L1,
+        )
         ttnn.deallocate(h)
         return out
 
