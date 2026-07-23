@@ -528,6 +528,12 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         gx = 8
         while gx > 1 and Nt % gx != 0:
             gx -= 1
+        # L1-fit guard: width-sharding the whole [M, C/gx] block into each core's L1
+        # OOMs at real video frame counts (M~16k tokens @ 121f -> ~16MB/core >> L1).
+        # It's only a win at the tiny profiled M; fall back to the stock interleaved
+        # LN when the per-core shard won't fit L1.
+        if (Mt * 32) * ((Nt // gx) * 32) * 2 > 700_000:
+            return ttnn.layer_norm(x, epsilon=eps, compute_kernel_config=compute_config)
         padded_m = Mt * 32
         shard_shape = [padded_m, (Nt // gx) * 32]
         grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, 0))})
