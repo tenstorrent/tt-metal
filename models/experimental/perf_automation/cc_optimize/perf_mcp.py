@@ -75,13 +75,63 @@ _CONSEC_CRASH = {"n": 0}
 _TT_SMI = _shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
 
 
-def _device_recover(where: str) -> None:
-    """Best-effort board reset after a likely wedge (2+ consecutive device crashes)."""
+_RUN_MOD = None
+
+
+def _run_module():
+    """Load cc_optimize/run.py by path (stdlib-only import, same as optimize.py does) and cache it, so
+    device recovery reuses run.py's board-aware _reset_devices — the SAME per-board reset (whole
+    board(s) of PERF_MCP_DEVICES) run.py's own watchdog uses. None if it can't be loaded."""
+    global _RUN_MOD
+    if _RUN_MOD is None:
+        try:
+            import importlib.util
+
+            _p = Path(__file__).with_name("run.py")
+            _spec = importlib.util.spec_from_file_location("cc_optimize_run_reset", str(_p))
+            _m = importlib.util.module_from_spec(_spec)
+            _spec.loader.exec_module(_m)
+            _RUN_MOD = _m
+        except Exception:  # noqa: BLE001
+            _RUN_MOD = False
+    return _RUN_MOD or None
+
+
+def _board_reset(where: str, note: str) -> None:
+    """Recover the device via run.py's board-aware _reset_devices (whole board(s) of PERF_MCP_DEVICES —
+    a single-chip `-r 0` half-resets a p300c and breaks its enumeration, and does not reset a Galaxy at
+    all). If that module is unavailable, fall back to agent.probes._reset_arg_sets — the SAME
+    galaxy/board-aware invocations (glx_reset on a Galaxy, full enumerated `-r` elsewhere) — and never a
+    bare single-chip `-r 0`."""
+    _mod = _run_module()
+    if _mod is not None:
+        try:
+            status = _mod._reset_devices(os.environ.get("PERF_MCP_DEVICES", "").strip() or "all")
+            sys.stderr.write(f"[perf-mcp] {note}: {status} at {where}\n")
+            return
+        except Exception as exc:  # noqa: BLE001
+            sys.stderr.write(f"[perf-mcp] board-aware reset unavailable ({exc}) at {where}; probes fallback\n")
     try:
-        _sp.run([_TT_SMI, "-r", "0"], capture_output=True, text=True, timeout=180)
-        sys.stderr.write(f"[perf-mcp] device recovered via tt-smi -r after wedge at {where}\n")
-    except Exception as exc:  # noqa: BLE001
-        sys.stderr.write(f"[perf-mcp] tt-smi reset failed at {where}: {exc}\n")
+        from agent import probes as _pr
+
+        arg_sets = _pr._reset_arg_sets()
+    except Exception:  # noqa: BLE001
+        arg_sets = [["-r"]]
+    for args in arg_sets:
+        try:
+            r = _sp.run([_TT_SMI, *args], capture_output=True, text=True, timeout=300)
+            if r.returncode == 0:
+                sys.stderr.write(f"[perf-mcp] {note} via tt-smi {' '.join(args)} (fallback) at {where}\n")
+                return
+        except Exception:  # noqa: BLE001
+            continue
+    sys.stderr.write(f"[perf-mcp] tt-smi reset failed at {where}\n")
+
+
+def _device_recover(where: str) -> None:
+    """Best-effort reset after a likely wedge (2+ consecutive device crashes), reusing run.py's
+    board-aware per-board reset."""
+    _board_reset(where, "device recovered")
 
 
 def _note_device_crash(where: str) -> None:
@@ -117,11 +167,7 @@ def _is_l1_overflow(msg) -> bool:
 
 
 def _reclaim_mesh(where: str) -> None:
-    try:
-        _sp.run([_TT_SMI, "-r"], capture_output=True, text=True, timeout=420)
-        sys.stderr.write(f"[perf-mcp] full-mesh reset (L1 overflow) at {where}\n")
-    except Exception as exc:  # noqa: BLE001
-        sys.stderr.write(f"[perf-mcp] full-mesh reset failed at {where}: {exc}\n")
+    _board_reset(where, "full-mesh reset (L1 overflow)")
     _CONSEC_CRASH["n"] = 0
 
 
@@ -186,15 +232,52 @@ _KERNEL_LOG_PATH = Path(
     os.environ.get("PERF_MCP_KERNEL_LOG") or (Path(tempfile.gettempdir()) / "perf_mcp_kernel_attempts.json")
 )
 _MATERIAL_GAP_MS = float(os.environ.get("PERF_MCP_MATERIAL_GAP_MS", "0.25"))
+_MATERIAL_GAP_ENV_SET = "PERF_MCP_MATERIAL_GAP_MS" in os.environ
+_MATERIAL_GAP_FRAC = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FRAC", "0.03"))
+_MATERIAL_GAP_FLOOR = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FLOOR", "0.05"))
 _MAX_KNOB_RETRIES = int(os.environ.get("PERF_MCP_MAX_KNOB_RETRIES", "2"))
-_MAX_TRACE_FIX_RETRIES = int(os.environ.get("PERF_MCP_MAX_TRACE_FIX_RETRIES", "3"))
+_MAX_KERNEL_WEDGES = int(os.environ.get("PERF_MCP_MAX_KERNEL_WEDGES", "3"))
+
+
+def _material_gap_ms(device_ms: float) -> float:
+    """Smallest op gap worth optimizing, scale-relative to the workload's total device_ms.
+
+    A fixed 0.25ms threshold is right for a whole-model run (tens of ms, where 0.25ms is
+    noise) but wrong for per-module optimize (device_ms of a few ms), where real matmul
+    gaps of ~0.1-0.2ms — reachable by grid/dtype levers — fall under it and get discarded
+    as noise, so the op is never optimized. Scale to a fraction of total device_ms, clamped
+    to a small absolute floor and never exceeding the 0.25ms whole-model default (so large
+    runs are unchanged). An explicit PERF_MCP_MATERIAL_GAP_MS override is honored verbatim."""
+    if _MATERIAL_GAP_ENV_SET:
+        return _MATERIAL_GAP_MS
+    return min(_MATERIAL_GAP_MS, max(_MATERIAL_GAP_FLOOR, _MATERIAL_GAP_FRAC * float(device_ms or 0.0)))
 _TRACE_SAFE_HINT = (
-    "the kernel WEDGED trace capture — a TRACE-COMPATIBILITY failure of the kernel, NOT a math error "
-    "(check_pcc validates math separately). Make it trace-safe and retry the SAME rung: warm up the "
-    "kernel once so its program is cached before capture; keep shapes/tile-counts/args static "
-    "(compile-time, no runtime host fallback inside the op); ensure it emits profiler zone markers so "
-    "capture completes. This is a fixable implementation issue, not an exhausted rung"
+    "custom generic_op/ttl kernels ARE trace-capturable on this build — verified on device: a "
+    "cached-descriptor + persistent-buffer generic_op traces clean at PCC 1.0. A wedge or wrong-PCC-on-"
+    "replay means the PROVEN trace-safe RECIPE was not applied, NOT that it is impossible or a math error "
+    "(check_pcc validates math separately). Apply the recipe: (1) build the generic_op ProgramDescriptor "
+    "/ ttl op ONCE per shape and CACHE it — never rebuild or call generic_op fresh each call; (2) use a "
+    "PERSISTENT output buffer — allocate once, reuse the same handle, never ttnn.zeros a new output per "
+    "call; (3) use a PERSISTENT input buffer — copy the fresh input into the SAME fixed buffer each call, "
+    "since trace replay re-reads the captured address; (4) warm up once before begin_trace_capture. With "
+    "this recipe generic_op records and replays cleanly under trace; a hang or stale replay means one of "
+    "(1)-(3) is violated — fix the recipe application"
 )
+_ISOLATE_FIRST = (
+    " Optionally smoke-test the kernel in ISOLATION first — ONE eager+trace pass (build persistent inputs "
+    "once; eager run + PCC vs the stock op; then begin/end_trace_capture + execute_trace + PCC vs eager) — "
+    "to catch a wiring mistake in seconds before the full-pipeline run; then wire it into the model with a "
+    "PERSISTENT input buffer and measure_candidate."
+)
+_EAGER_NOTE = (
+    " TT_PERF_TRACE=0 (eager): no trace-safety recipe needed — the kernel runs op-by-op, so just author "
+    "it, record it, and measure_candidate returns the eager number directly."
+)
+
+
+def _trace_on():
+    return os.environ.get("TT_PERF_TRACE", "1") != "0"
+
 
 # kernel-authoring evidence markers, searched in the model source tree (grounds a recorded attempt)
 _KERNEL_MARKERS = ("generic_op", "ProgramDescriptor", "KernelDescriptor", "@ttl.", "ttl.operation", "import ttl")
@@ -512,18 +595,18 @@ def _tp_candidate(open_op: dict, op_code: str) -> bool:
     oc = (op_code or "").lower()
     if "matmul" not in oc and "linear" not in oc:
         return False
-    return (open_op.get("bound_by") or "").lower() in ("memory", "dram", "both")
+    return (open_op.get("bound_by") or "").lower() == "memory"
 
 
-def _rung_state(matches, kind, budget):
+def _rung_state(matches, kind):
     clean = any((a.get("kernel_kind") or "").lower() == kind and not a.get("wedged") for a in matches)
     wedged = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == kind and a.get("wedged"))
-    return (clean or wedged >= budget), wedged
+    return clean, wedged
 
 
 def _trace_compat_feedback(raw_reason: str) -> str:
     rung = (_load_target().get("rung") or "").lower()
-    if rung not in ("tt-lang", "cpp"):
+    if rung not in ("tt-lang", "cpp") or not _trace_on():
         return raw_reason
     return "%s\n%s" % (raw_reason, _TRACE_SAFE_HINT)
 
@@ -543,8 +626,11 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     kinds = {(a.get("kernel_kind") or "").lower() for a in matches}
     grid_tries = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == "grid")
     dtype_tries = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == "dtype")
+    fidelity_tries = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == "fidelity")
+    shard_tries = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == "shard")
     grid = (open_op.get("grid") or "").lower()
     wdtype = (open_op.get("weight_dtype") or "").lower()
+    fidelity = (open_op.get("fidelity") or "").lower()
     bound = (open_op.get("bound_by") or "").lower()
     is_matmul = "matmul" in (op_code or "").lower()
     # BOX (0) HOST / dispatch bucket (GAP-A) — NOT a device op, so the matmul ladder (grid/dtype/
@@ -567,58 +653,88 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     # BOX (1) KNOBS — exhaust the cheap levers IN ORDER before any kernel. A knob is satisfied when
     # the profile tag shows it applied, OR a record_kernel_attempt of that knob-kind is on file (so a
     # PCC-failed/ineffective knob can be marked 'tried' and not loop forever).
-    #  (1a) full core grid — applying a full-grid program_config sets grid=full
     if grid and grid != "full" and grid_tries < _MAX_KNOB_RETRIES:
         return (False, "knob:grid", f"occupy the FULL core grid (grid={grid}) via a full-grid program_config")
-    #  (1b) lower the weight dtype on a memory-bound matmul (the dominant cheap lever there)
-    if is_matmul and bound == "memory" and wdtype in ("fp32", "bf16", "fp16") and dtype_tries < _MAX_KNOB_RETRIES:
+    if bound == "compute" and fidelity_tries < _MAX_KNOB_RETRIES:
+        return (
+            False,
+            "knob:fidelity",
+            f"lower the math fidelity (now {fidelity or 'unknown'}) HiFi4->HiFi2->LoFi on this compute-bound op; "
+            "record_kernel_attempt(...,'fidelity',...) to mark it tried (even on a PCC revert / no-gain)",
+        )
+    if is_matmul and bound == "memory" and wdtype not in ("bf8_b", "bf4_b") and dtype_tries < _MAX_KNOB_RETRIES:
         return (
             False,
             "knob:dtype",
-            f"lower the weight dtype (now {wdtype}) to bf8_b/bf4_b; if PCC fails, record_kernel_attempt(...,'dtype',...) to mark it tried",
+            f"lower the weight dtype (now {wdtype or 'unknown'}) to bf8_b/bf4_b; if PCC fails, record_kernel_attempt(...,'dtype',...) to mark it tried",
         )
-    if _is_kernel_able(op_code):
-        _tl_done, _tl_wedged = _rung_state(matches, "tt-lang", _MAX_TRACE_FIX_RETRIES)
-        if not _tl_done:
-            if _ttl_available():
-                if _tl_wedged:
-                    return (
-                        False,
-                        "tt-lang",
-                        "%s (trace-fix %d/%d)" % (_TRACE_SAFE_HINT, _tl_wedged, _MAX_TRACE_FIX_RETRIES),
-                    )
-                return (
-                    False,
-                    "tt-lang",
-                    "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it",
-                )
-            # tt-lang toolchain unavailable (commonly a Python-version mismatch): DO NOT halt the run
-            # on an un-actionable 'install-required' target. Skip the tt-lang rung and fall through to
-            # the next lever so the run still completes on the levers that DO work. The end-of-run
-            # summary flags that tt-lang was not used this run.
-        _cpp_done, _cpp_wedged = _rung_state(matches, "cpp", _MAX_TRACE_FIX_RETRIES)
-        if not _cpp_done:
-            if _cpp_wedged:
-                return (
-                    False,
-                    "cpp",
-                    "%s (trace-fix %d/%d)" % (_TRACE_SAFE_HINT, _cpp_wedged, _MAX_TRACE_FIX_RETRIES),
-                )
-            return (
-                False,
-                "cpp",
-                "tt-lang tried; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it",
-            )
+    if bound == "memory" and shard_tries < _MAX_KNOB_RETRIES:
+        return (
+            False,
+            "knob:shard",
+            "shard this memory-bound op's weights/activations into L1 (height/width shard) to cut DRAM reads; "
+            "record_kernel_attempt(...,'shard',...) to mark it tried (even on a no-gain)",
+        )
     if _tp_candidate(open_op, op_code) and "tp-fracture" not in kinds:
         return (
             False,
             "tp-fracture",
-            "single-chip levers + both kernels exhausted and this dense matmul is still memory-bound on "
+            "single-chip levers exhausted and this dense matmul is still memory-bound on "
             "a mesh -> tp_pick_degree(M,K,N) to MEASURE the fastest TP degree (best_tp=1 means keep it "
             "single-chip). If best_tp>1, fracture the weight across the TP axis + insert the matching CCL "
             "(GUIDELINES/08 §7), verify_tp_fracture(M,K,N,best_tp) to PROVE PCC, then commit; ALWAYS "
             "record_kernel_attempt(...,'tp-fracture',...) even on a no-gain result",
         )
+    if _is_kernel_able(op_code):
+        _tr = _trace_on()
+        _suffix = _ISOLATE_FIRST if _tr else _EAGER_NOTE
+        _tl_clean, _tl_wedged = _rung_state(matches, "tt-lang")
+        _cpp_clean, _cpp_wedged = _rung_state(matches, "cpp")
+        _tl_done = _tl_clean or _tl_wedged >= _MAX_KERNEL_WEDGES
+        _cpp_done = _cpp_clean or _cpp_wedged >= _MAX_KERNEL_WEDGES
+        if not _tl_done and _ttl_available():
+            if _tl_wedged:
+                if _tr:
+                    _r = (
+                        "apply the PROVEN trace-safe recipe (do NOT switch to cpp — the same recipe applies): %s (attempt %d)"
+                        % (
+                            _TRACE_SAFE_HINT,
+                            _tl_wedged + 1,
+                        )
+                    )
+                else:
+                    _r = (
+                        "the tt-lang kernel crashed in EAGER (TT_PERF_TRACE=0) — a real math/runtime error, not a trace issue; fix it from the traceback/check_pcc and retry (attempt %d)"
+                        % (_tl_wedged + 1)
+                    )
+                return (False, "tt-lang", _r)
+            return (
+                False,
+                "tt-lang",
+                "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it." + _suffix,
+            )
+        if (_tl_done or not _ttl_available()) and not _cpp_done:
+            if _cpp_wedged:
+                if _tr:
+                    _r = (
+                        "apply the PROVEN trace-safe recipe (fix the recipe application, do NOT bounce rungs): %s (attempt %d)"
+                        % (
+                            _TRACE_SAFE_HINT,
+                            _cpp_wedged + 1,
+                        )
+                    )
+                else:
+                    _r = (
+                        "the C++ kernel crashed in EAGER (TT_PERF_TRACE=0) — a real math/runtime error, not a trace issue; fix it from the traceback/check_pcc and retry (attempt %d)"
+                        % (_cpp_wedged + 1)
+                    )
+                return (False, "cpp", _r)
+            return (
+                False,
+                "cpp",
+                "tt-lang measured; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it."
+                + _suffix,
+            )
     # BOX (4) STRUCTURAL (ALWAYS ON, GENERAL — no model/architecture knowledge) — the per-op ladder
     # above (grid+dtype+tt-lang+C++) is exhausted but a MATERIAL GAP REMAINS (this op is in the
     # blocking set, so its gap >= the material threshold). That is the universal, config-free signal
@@ -641,7 +757,11 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             "reducible work, record 'structural' with note='none: <evidence you checked>' to mark it tried.",
         )
     # every box ticked -> genuine irreducible residual -> DONE for this op
-    return (True, "done", "checklist complete (grid+dtype+tt-lang+C++ + structural assessment) -> irreducible")
+    return (
+        True,
+        "done",
+        "checklist complete (grid+fidelity+dtype+shard+tt-lang+C++ + structural assessment) -> irreducible",
+    )
 
 
 class _Run:
@@ -745,6 +865,14 @@ _PROFILE_CACHE_DIR = Path(tempfile.gettempdir()) / "perf_mcp_profile_cache"
 
 
 def _model_source_fingerprint() -> str:
+    """Cache key for a profiling run: hashes the model's stub/tt source AND the identity
+    of the module + perf-test being profiled.
+
+    Module-level optimize runs every module against the SAME source tree but a DIFFERENT
+    per-module perf test, so a source-only key made all modules collide on one entry — a
+    module could be handed another module's cached profile (e.g. di_t_model's matmuls
+    returned for ace_step_attention). Folding PERF_MCP_TASK + the resolved perf-test node
+    into the key scopes the cache per module. Empty string disables caching."""
     h = hashlib.sha256()
     try:
         root = _MODEL_ROOT
@@ -756,6 +884,10 @@ def _model_source_fingerprint() -> str:
             h.update(f.read_bytes())
     except Exception:
         return ""
+    ptr = _MANIFEST.get("perf_test_resolved", {}) or {}
+    for part in (os.environ.get("PERF_MCP_TASK", ""), ptr.get("path", ""), ptr.get("case", "")):
+        h.update(b"\x00")
+        h.update(str(part).encode())
     return h.hexdigest()
 
 
@@ -1245,6 +1377,19 @@ def _mode_rank(mode: str) -> int:
     return _FULLPIPE_MODE_RANK.get(mode, 1)
 
 
+def _track_mode(mode: str, cq: int) -> str:
+    """Collapse a trace+2cq reading down to trace+1cq inside the 1-CQ track (cq<2).
+
+    In the 1-CQ track a 2-CQ replay is not extra fidelity, so recording it as
+    trace+2cq would pin the baseline one rank above the level the track can ever
+    re-reach — a one-off 2-CQ reading would then lock the gate into a permanent
+    'degraded' veto that skips the baseline-rewrite branch and never clears. A real
+    eager fallback (rank 0) is left untouched so genuine trace loss still degrades."""
+    if cq < 2 and mode == "trace+2cq":
+        return "trace+1cq"
+    return mode
+
+
 _SIGNPOST_PREFIX = "PERF_BLOCK_SIGNPOST:"
 
 
@@ -1433,7 +1578,7 @@ def check_full_pipeline_latency() -> dict:
     if ms is None:
         return _emit_fullpipe({"status": "crash", "error": err, "cq": cq})
     metric = "trace_per_token_ms" if method == "trace" else "eager_full_pipeline_ms"
-    mode = _fullpipe_mode(method, path)
+    mode = _track_mode(_fullpipe_mode(method, path), cq)
     base_path = _FULLPIPE_BASELINE_PATH if cq >= 2 else _FULLPIPE_BASELINE_1CQ_PATH
     cq_note = (
         "trace+1cq (robust per-iteration signal): validate/bank compute-op wins here — it always engages "
@@ -1457,7 +1602,7 @@ def check_full_pipeline_latency() -> dict:
         except Exception:  # noqa: BLE001
             base = {}
     best = float(base.get("full_pipeline_ms", 0.0) or 0.0)
-    base_mode = base.get("mode") or _fullpipe_mode(base.get("method", "eager"), None)
+    base_mode = _track_mode(base.get("mode") or _fullpipe_mode(base.get("method", "eager"), None), cq)
     if best > 0 and _mode_rank(mode) < _mode_rank(base_mode):
         return _emit_fullpipe(
             {
@@ -1572,6 +1717,36 @@ def git_head() -> dict:
 
 
 @mcp.tool()
+def _record_committed_win(message: str) -> None:
+    """Log the just-committed lever as a win against the current target.
+
+    git_commit IS the bank-a-verified-win action, but the ✓win marks in RUN_REPORT.md come
+    only from record_kernel_attempt(beat_baseline=true). The agent often records the FOLLOW-UP
+    re-measurements (which no longer beat the already-lowered floor, so beat_baseline=false) and
+    never marks the winning moment, leaving committed wins shown as ·try. Deriving the win mark
+    from the commit itself makes the report reflect what was actually banked. Fail-open: never
+    raises, so it can never break the commit."""
+    try:
+        t = _load_target()
+        op = t.get("op")
+        if not op:
+            return
+        rung = str(t.get("rung") or t.get("next_rung") or "knob").split(":")[-1] or "knob"
+        _append_attempt(
+            {
+                "op_signature": op,
+                "kernel_kind": rung,
+                "measured_ms": t.get("measured_ms"),
+                "beat_baseline": True,
+                "wedged": False,
+                "kernel_detected_in_source": True,
+                "note": "committed: " + " ".join((message or "").split())[:140],
+            }
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def git_commit(message: str) -> dict:
     """Commit the current model-dir changes (scoped to the model dir only — unrelated repo changes
     are left untouched). Use this to BANK a verified win: valid measure + ok pcc (check_pcc) + faster
@@ -1583,6 +1758,8 @@ def git_commit(message: str) -> dict:
     except ValueError:
         pathspec = None
     sha = gitio.commit(repo, message, pathspec)
+    if sha:
+        _record_committed_win(message)
     return {"committed": bool(sha), "sha": sha}
 
 
@@ -1661,6 +1838,8 @@ def record_kernel_attempt(
     _KNOB_KINDS = {
         "grid",
         "dtype",
+        "fidelity",
+        "shard",
         "knob",
         "fusion",
         "fuse",
@@ -1756,8 +1935,8 @@ def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
     NEGATIVE knowledge of what NOT to do, e.g. 'don't bf16 Q/K/V', 'packer_l1_acc must be True'); it
     NEVER lets you skip a rung or stop early. You must still check_pcc + measure_candidate +
     record_kernel_attempt for the rung exactly as termination_check requires. If nothing matches,
-    improvise from principles (cc does not yet auto-distill the win back into the catalog — that
-    write-back currently happens only on the FSM path).
+    improvise from principles, then persist the win yourself with distill_knob (the write-back is a
+    manual agent call on the cc engine).
 
     op_class: one of matmul|attention|reduction|eltwise|datamove|embedding|conv_pool|ccl|
     host_fallback|other (pass next_target.op_class). grid + bound_by (pass next_target.grid +
@@ -1887,14 +2066,12 @@ def distill_knob(
 
 @mcp.tool()
 def _host_gate(prof: dict, blocking: list, attempts: list) -> dict | None:
-    if blocking:
-        return None
     for b in prof.get("buckets") or []:
         if b.get("id") != "host_overhead":
             continue
         hms = round(float(b.get("device_ms") or 0.0), 4)
         src = (b.get("tags") or {}).get("source")
-        if hms < _MATERIAL_GAP_MS or src != "op_gap":
+        if hms < _material_gap_ms(prof.get("device_ms") or 0.0) or src != "op_gap":
             return None
         host_op = {
             "op_code": "host_overhead",
@@ -1959,10 +2136,16 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
         "-> O(capacity) recompute every token EVEN THOUGH it traces; add a KV-cache + single-token "
         "decode_step (recall_knobs(op_class='decode'))"
     )
+    host_ms = 0.0
+    for b in prof.get("buckets") or []:
+        if b.get("id") == "host_overhead":
+            host_ms = float(b.get("device_ms") or 0.0)
+            break
+    gap = max(host_ms, float(prof.get("per_token_ms") or 0.0), _MATERIAL_GAP_MS)
     return {
         "op": "generation_loop",
         "op_class": "decode",
-        "gap_ms": round(float(prof.get("per_token_ms") or _MATERIAL_GAP_MS), 4),
+        "gap_ms": round(gap, 4),
         "bound_by": "host",
         "grid": None,
         "weight_dtype": None,
@@ -1997,9 +2180,10 @@ def termination_check() -> dict:
     at_floor = bool(rep.get("at_floor"))
     attempts = [a for a in _load_attempts() if a.get("kernel_detected_in_source")]
     blocking, cleared = [], []
+    material = _material_gap_ms(dev)
     for o in rep.get("open_ops") or []:
         gap = o.get("gap_ms") or 0.0
-        if gap < _MATERIAL_GAP_MS:
+        if gap < material:
             continue
         op_code = o.get("op_code") or o.get("bucket") or ""
         entry = {
@@ -2024,6 +2208,7 @@ def termination_check() -> dict:
     decode_block = _decode_gate(prof, attempts)
     if decode_block:
         blocking.append(decode_block)
+    blocking.sort(key=lambda b: -(b.get("gap_ms") or 0.0))
     can_stop = not blocking
     halt = next((b for b in blocking if b.get("next_rung") == "tt-lang:install-required"), None)
     # DETERMINISTIC SELECTION: the single op+rung the agent must work next (largest-gap blocking op).
@@ -2048,7 +2233,7 @@ def termination_check() -> dict:
         "device_ms": dev,
         "at_floor": at_floor,
         "residual_gap_ms": rep.get("residual_gap_ms"),
-        "material_gap_threshold_ms": _MATERIAL_GAP_MS,
+        "material_gap_threshold_ms": round(material, 4),
         "next_target": next_target,
         "blocking_ops": blocking,
         "cleared_ops": cleared,
@@ -2062,8 +2247,8 @@ def termination_check() -> dict:
             "catalogued knob (heed its negative knowledge); improvise from scratch ONLY if nothing "
             "matches — a recalled knob still requires check_pcc + measure + record_kernel_attempt (it "
             "never skips a rung). Ladder ORDER: "
-            "knob:grid -> knob:dtype -> tt-lang -> cpp. record_kernel_attempt for EACH rung (knobs too: "
-            "kind='grid'/'dtype'; kernels: 'tt-lang'/'cpp'). A later rung does NOT clear an op while an "
+            "knob:grid -> knob:fidelity -> knob:dtype -> knob:shard -> tt-lang -> cpp. record_kernel_attempt for EACH rung (knobs too: "
+            "kind='grid'/'fidelity'/'dtype'/'shard'; kernels: 'tt-lang'/'cpp'). A later rung does NOT clear an op while an "
             "earlier rung is untried. WRITE-BACK: after you COMMIT a win you IMPROVISED (recall_knobs "
             "had no match), call distill_knob to persist it for reuse; if the win re-used a provisional "
             "lever from another model, pass its id to distill_knob to graduate it. Re-run "

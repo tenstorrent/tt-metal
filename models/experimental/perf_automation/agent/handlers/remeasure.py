@@ -53,17 +53,26 @@ def _comparable(baseline, iter_profile, tol=0.25, floor_ms=None, floor_margin=0.
     if ratio > (1 + tol):
         return False, f"op_count_inflated: iter {i_ops} vs baseline {b_ops} ops ({ratio:.2f}x)"
 
-    bfw = baseline.get("forward_wall_ms")
-    ifw = iter_profile.get("forward_wall_ms")
+    b_pt = float(baseline.get("per_token_ms") or 0.0)
+    i_pt = float(iter_profile.get("per_token_ms") or 0.0)
+    bfw = float(baseline.get("forward_wall_ms") or 0.0)
+    ifw = float(iter_profile.get("forward_wall_ms") or 0.0)
     b_dev = float(baseline.get("device_ms") or 0.0)
     i_dev = float(iter_profile.get("device_ms") or 0.0)
-    if bfw and ifw and b_dev > 0:
+    if b_pt > 0 and i_pt > 0:
+        ref_base, ref_iter, ref_kind = b_pt, i_pt, "trace per-token"
+    elif bfw > 0 and ifw > 0:
+        ref_base, ref_iter, ref_kind = bfw, ifw, "end-to-end forward wall"
+    else:
+        ref_base = ref_iter = 0.0
+        ref_kind = ""
+    if ref_base > 0 and b_dev > 0:
         device_drop = (b_dev - i_dev) / b_dev
-        wall_drop = (bfw - ifw) / bfw
-        if device_drop > 0.25 and wall_drop < 0.05:
+        ref_drop = (ref_base - ref_iter) / ref_base
+        if device_drop > 0.25 and ref_drop < 0.05:
             return False, (
                 f"capture_incomplete: device_ms dropped {device_drop:.0%} ({b_dev:.2f}->{i_dev:.2f}) but "
-                f"end-to-end forward wall held flat ({bfw:.2f}->{ifw:.2f}ms, {wall_drop:.0%}) -- "
+                f"{ref_kind} held flat ({ref_base:.2f}->{ref_iter:.2f}ms, {ref_drop:.0%}) -- "
                 f"partial profiler capture, not a real speedup"
             )
 

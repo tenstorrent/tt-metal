@@ -75,3 +75,30 @@ def test_forward_wall_absent_degrades_gracefully():
     partial = _prof(74.0, 3400)
     ok, reason = _comparable(BASE, partial, floor_ms=15.3)
     assert ok is True and reason is None
+
+
+def _profpt(device_ms, matmul_count, forward_wall_ms, per_token_ms):
+    p = _profw(device_ms, matmul_count, forward_wall_ms)
+    p["per_token_ms"] = per_token_ms
+    return p
+
+
+BASEPT = _profpt(28.72, 4026, 300.0, 5.0)
+
+
+def test_per_token_preferred_host_bound_win_accepted():
+    win = _profpt(10.62, 4026, 299.0, 2.2)
+    ok, reason = _comparable(BASEPT, win, floor_ms=8.0)
+    assert ok is True and reason is None
+
+
+def test_per_token_flat_partial_capture_still_rejected():
+    partial = _profpt(10.62, 3400, 299.0, 4.98)
+    ok, reason = _comparable(BASEPT, partial, floor_ms=8.0)
+    assert ok is False and "capture_incomplete" in reason and "trace per-token" in reason
+
+
+def test_forward_wall_fallback_when_per_token_absent():
+    partial = _profw(74.0, 3400, 300.0)
+    ok, reason = _comparable(BASEW, partial, floor_ms=15.3)
+    assert ok is False and "capture_incomplete" in reason and "forward wall" in reason

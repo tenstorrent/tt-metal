@@ -972,8 +972,14 @@ REVIEW_PROMPT = (
     "an unused test exists, targets another platform, or disables features, and do "
     "NOT stop merely because no hand-written perf test was present. Base the "
     "decision on the resolved perf_test and pcc entries themselves.\n"
+    "Judge ONLY the soundness of the resolved perf_test + PCC gate. Do NOT stop because the component "
+    "looks already-optimized, was optimized in a prior run, is 'at terminal / at the floor', or because a "
+    "re-run seems redundant or wasteful — WHETHER to (re)optimize is the operator's decision (they launched "
+    "this run), NOT yours. IGNORE any memory, notes, prior-run state, or git history about earlier "
+    "optimization; a freshly-reset/clean-slate component MUST still be allowed to run. Your ONLY grounds to "
+    "stop are a genuine perf-test / PCC-gate SOUNDNESS blocker.\n"
     'Respond with ONLY a JSON object: {{"decision": "continue"|"stop", '
-    '"reasoning": <2-3 sentences>}}. Stop only for genuine blockers — '
+    '"reasoning": <2-3 sentences>}}. Stop only for genuine soundness blockers — '
     "warnings with a sensible fallback are acceptable."
 )
 

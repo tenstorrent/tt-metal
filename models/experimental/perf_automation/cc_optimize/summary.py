@@ -7,11 +7,12 @@ overall old->new runtime with the percentage speedup. Pure stdlib; additive (tou
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 from pathlib import Path
 
-_LEVEL_COLS = ("grid", "dtype", "tt-lang", "cpp", "host")
+_LEVEL_COLS = ("grid", "fidelity", "dtype", "shard", "tt-lang", "cpp", "host")
 _HOST_KINDS = {"trace", "2cq", "structural", "fusion", "fuse", "gather", "sparse", "cache", "kv-cache"}
 
 _REPORT_NAME = "RUN_REPORT.md"
@@ -70,11 +71,24 @@ def module_optimize_block(
 
 def _level_of(kind: str) -> str:
     k = (kind or "").lower()
-    if k in ("grid", "dtype", "tt-lang", "cpp"):
+    if k in ("grid", "dtype", "fidelity", "shard", "tt-lang", "cpp"):
         return k
     if k in _HOST_KINDS:
         return "host"
     return "host"
+
+
+def _ttl_absent() -> bool:
+    """True when the tt-lang (ttl) toolchain is not installed in this env. Rendering runs in the same
+    env as the run, so this reflects the real availability the agent had."""
+    return importlib.util.find_spec("ttl") is None
+
+
+def _disp_level(label: str) -> str:
+    """DISPLAY-only relabel: a tt-lang rung with no ttl toolchain is really a ttnn implementation the
+    agent improvised, so show it as 'ttnn'. Internal column keys / kernel_kind stay 'tt-lang' — this
+    changes nothing in the ladder or credit logic."""
+    return "ttnn" if label == "tt-lang" and _ttl_absent() else label
 
 
 def _op_label(sig: str, width: int = 34) -> str:
@@ -196,7 +210,9 @@ def render_summary(
     lines.append(title)
     lines.append("=" * len(title))
     if not finalized:
-        lines.append("optimizing… — baseline->final speedup is finalized when the module converges (per-attempt detail below is live)")
+        lines.append(
+            "optimizing… — baseline->final speedup is finalized when the module converges (per-attempt detail below is live)"
+        )
     elif hdr_base and final_ms and hdr_base > 0:
         pct = (hdr_base - final_ms) / hdr_base * 100.0
         spd = hdr_base / final_ms if final_ms > 0 else 1.0
@@ -227,7 +243,7 @@ def render_summary(
         lines.append("")
 
     if by_op:
-        hdr = f"{'op':<34} " + " ".join(f"{c:>7}" for c in _LEVEL_COLS) + f" {'best ms':>9}"
+        hdr = f"{'op':<34} " + "  ".join(f"{_disp_level(c):<8}" for c in _LEVEL_COLS) + f"  {'best ms':>9}"
         lines.append(hdr)
         lines.append("-" * len(hdr))
         for sig in sorted(by_op):
@@ -237,15 +253,15 @@ def render_summary(
             for c in _LEVEL_COLS:
                 cell = op[c]
                 if cell is None:
-                    cells.append(f"{'—':>7}")
+                    cells.append(f"{'—':<8}")
                 else:
                     st, ms = cell
                     mark = "✓win" if st == "win" else ("·wedge" if st == "wedge" else "·try")
-                    cells.append(f"{mark:>7}")
+                    cells.append(f"{mark:<8}")
                     if ms is not None and (best is None or ms < best):
                         best = ms
             best_s = f"{best:.2f}" if best is not None else "—"
-            lines.append(f"{_op_label(sig):<34} " + " ".join(cells) + f" {best_s:>9}")
+            lines.append(f"{_op_label(sig):<34} " + "  ".join(cells) + f"  {best_s:>9}")
     else:
         lines.append("(no kernel attempts recorded — nothing was tried, or the run stopped before any lever)")
 
@@ -258,14 +274,14 @@ def render_summary(
     if attempts:
         lines.append("")
         lines.append("Per-attempt detail (every optimization tried — win OR fail — with gain vs baseline and WHY):")
-        ah = f"{'op':<34} {'lever':>10} {'ms':>9} {'gain vs base':>13}  {'result':<10} why tried / why it won or failed"
+        ah = f"{'op':<34} {'lever':>12} {'ms':>9} {'gain vs base':>13}  {'result':<10} why tried / why it won or failed"
         lines.append(ah)
         lines.append("-" * min(len(ah), 120))
         for a in attempts:
             if not isinstance(a, dict):
                 continue
             sig = _op_label(a.get("op_signature", "?"))
-            lever = _level_of(a.get("kernel_kind", "")) or (a.get("kernel_kind") or "?")
+            lever = _disp_level(a.get("kernel_kind") or "?")
             ms = a.get("measured_ms")
             ms_s = f"{ms:.2f}" if isinstance(ms, (int, float)) else "—"
             if baseline_ms and isinstance(ms, (int, float)):
@@ -274,7 +290,7 @@ def render_summary(
                 gain_s = "—"
             res = "✓ win" if a.get("beat_baseline") else ("· wedged" if a.get("wedged") else "· no gain")
             note = " ".join((a.get("note") or "").split())[:200] or "(no reason recorded)"
-            lines.append(f"{sig:<34} {lever:>10} {ms_s:>9} {gain_s:>13}  {res:<10} {note}")
+            lines.append(f"{sig:<34} {lever:>12} {ms_s:>9} {gain_s:>13}  {res:<10} {note}")
 
     # --- Code changes: the actual source diff for EVERY attempt tried (win or fail) ---
     if any(isinstance(a, dict) and (a.get("diff") or "").strip() for a in attempts):
@@ -288,7 +304,7 @@ def render_summary(
             if not d:
                 continue
             sig = _op_label(a.get("op_signature", "?"))
-            lever = _level_of(a.get("kernel_kind", "")) or (a.get("kernel_kind") or "?")
+            lever = _disp_level(a.get("kernel_kind") or "?")
             res = "win" if a.get("beat_baseline") else ("wedged" if a.get("wedged") else "no gain")
             ms = a.get("measured_ms")
             gain = f"  {baseline_ms - ms:+.2f} ms" if (baseline_ms and isinstance(ms, (int, float))) else ""
@@ -357,6 +373,6 @@ def render_summary(
 
     lines.append("")
     lines.append(
-        "levels: grid -> dtype -> tt-lang -> cpp -> host   |   ✓win = beat baseline, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
+        f"levels: grid -> fidelity -> dtype -> shard -> {_disp_level('tt-lang')} -> cpp -> host   |   ✓win = beat baseline, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
     )
     return "\n".join(lines)

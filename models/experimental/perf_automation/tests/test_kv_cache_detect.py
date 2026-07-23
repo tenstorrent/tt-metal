@@ -79,3 +79,19 @@ def test_decode_gate_scaling_overrides_static(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "_decode_is_recompute", lambda root: True)
     prof = {"decode_status": "traced", "decode_ms_at_c": 10.0, "decode_ms_at_2c": 10.2, "per_token_ms": 5.0}
     assert m._decode_gate(prof, []) is None
+
+
+def test_decode_gate_priced_at_host_gap_not_per_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("TT_PERF_MODULE_LEVEL", raising=False)
+    monkeypatch.setattr(m, "_decode_is_recompute", lambda root: True)
+    prof = {"decode_status": "traced", "per_token_ms": 5.0, "buckets": [{"id": "host_overhead", "device_ms": 29.0}]}
+    out = m._decode_gate(prof, [])
+    assert out is not None and out["gap_ms"] == 29.0
+
+
+def test_decode_gate_falls_back_to_per_token_when_no_host(tmp_path, monkeypatch):
+    monkeypatch.delenv("TT_PERF_MODULE_LEVEL", raising=False)
+    monkeypatch.setattr(m, "_decode_is_recompute", lambda root: True)
+    prof = {"decode_status": "traced", "per_token_ms": 5.0}
+    out = m._decode_gate(prof, [])
+    assert out is not None and out["gap_ms"] == 5.0
