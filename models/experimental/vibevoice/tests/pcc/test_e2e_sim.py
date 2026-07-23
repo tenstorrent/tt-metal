@@ -182,7 +182,7 @@ def _sanity_check(name: str, speech: torch.Tensor) -> None:
     assert (speech.abs() > 1e-3).float().mean().item() > 0.3, f"{name} audio is mostly silent"
 
 
-@pytest.mark.timeout(0)
+@pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_e2e_sim_tt_voice_clone(mesh_device):
@@ -277,7 +277,7 @@ def test_e2e_sim_tt_voice_clone(mesh_device):
     )
 
 
-@pytest.mark.timeout(0)
+@pytest.mark.timeout(7200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_e2e_sim_4speaker(mesh_device):
