@@ -284,12 +284,20 @@ jobs:
           TTRUN_DIR=/etc/ttop
           PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
 
+          # mpi-docker launches the test with mpirun-ulfm, which lives in the ULFM
+          # OpenMPI bin dir (not on this runner's default PATH).
+          ULFM_BIN="$(ls -d /opt/openmpi-*-ulfm/bin 2>/dev/null | head -1 || true)"
+          [ -n "$ULFM_BIN" ] && export PATH="$ULFM_BIN:$PATH"
+          set -o pipefail
           ./tools/scaleout/exabox/run_fabric_tests.sh \
             --hosts "$PIPELINE_HOSTS" \
             --image ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.76.0-dev20260719-4-g7361a7ac160 \
             --config 4x32 \
             --test-config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_neighbor_exchange.yaml \
-            --filter name.2DTorusXYNeighborExchange
+            --filter name.2DTorusXYNeighborExchange 2>&1 | tee dc_result.log
+          # run_fabric_tests.sh exits 0 even on failure; enforce a real pass/fail.
+          grep -q "ALL FABRIC TESTS PASSED" dc_result.log && ! grep -q "DID NOT FULLY PASS" dc_result.log \
+            || { echo "::error::DC validation (quad) did not pass"; exit 1; }
 
   cleanup:
     name: Cleanup
@@ -421,12 +429,20 @@ jobs:
       - name: DC validation - 2D Torus XY Neighbor Exchange (BH, pinned image)
         timeout-minutes: 20
         run: |
+          # mpi-docker launches the test with mpirun-ulfm, which lives in the ULFM
+          # OpenMPI bin dir (not on this runner's default PATH).
+          ULFM_BIN="$(ls -d /opt/openmpi-*-ulfm/bin 2>/dev/null | head -1 || true)"
+          [ -n "$ULFM_BIN" ] && export PATH="$ULFM_BIN:$PATH"
+          set -o pipefail
           ./tools/scaleout/exabox/run_fabric_tests.sh \
             --hosts "$(hostname)" \
             --image ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.76.0-dev20260719-4-g7361a7ac160 \
             --config 4x8 \
             --test-config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_neighbor_exchange.yaml \
-            --filter name.2DTorusXYNeighborExchange
+            --filter name.2DTorusXYNeighborExchange 2>&1 | tee dc_result.log
+          # run_fabric_tests.sh exits 0 even on failure; enforce a real pass/fail.
+          grep -q "ALL FABRIC TESTS PASSED" dc_result.log && ! grep -q "DID NOT FULLY PASS" dc_result.log \
+            || { echo "::error::DC validation (single galaxy) did not pass"; exit 1; }
 
   cleanup-dc:
     name: Cleanup DC validation
