@@ -198,6 +198,10 @@ at PCC 0.004862. Two workers/link require four CCL rows; the resulting
 span 0.69072 -> 0.70600 ms. Keep FP32 partials, one worker/link, the 8x8
 matmul grid, and two CCL rows at offset `(0,8)`.
 
+Direct projected offsets for decay, gate, and beta remove one local slice
+program and reduce layer span 0.69072 -> 0.68346 ms. This is another
+launch/dataflow reduction with no ownership or core-map change.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence
