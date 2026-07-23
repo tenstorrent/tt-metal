@@ -1,90 +1,200 @@
-# Kokoro (experimental)
+# Kokoro TTS: Summary and Key Information
 
-Repo-owned **Kokoro-82M** bring-up under `reference/` (HF weights) and **TTNN** ports under `tt/`.
+## Overview
 
-## Full TTNN stack
+Kokoro-82M is [hexgrad](https://huggingface.co/hexgrad/Kokoro-82M)'s open-weights text-to-speech
+model — an 82 M-parameter StyleTTS2 / ISTFTNet architecture producing 24 kHz speech. The
+Tenstorrent TTNN implementation consists of four main components: a **PL-BERT text/prosody
+backbone**, a **prosody predictor** (duration + F0/energy), an **ASR-style text encoder**, and an
+**ISTFTNet decoder/vocoder** that turns aligned features into waveform samples.
 
-- **PL-BERT + predictor** on device: `ttnn_kokoro_plbert`, `ttnn_kokoro_predictor`, `ttnn_kokoro_albert`, etc.
-- **ISTFTNet vocoder** on device: `KokoroDecoderTt` / `KokoroIstftNetTt` (generator uses device `KokoroTtnnSineGen` by default).
-- **End-to-end module**: `KokoroFullTtnn` in `tt/ttnn_kokoro_full_pipeline.py` composes the above with **no host torch vocoder**; discrete duration/alignment indices still use small CPU tensors (same as the PyTorch reference predictor).
+The repo holds the HF reference under `reference/` and the TTNN port under `tt/`, wired together by
+`TTKModel` (`tt/tt_kmodel.py`). The full forward runs on-device with no host torch vocoder; two
+opt-in CPU float32 fallbacks are available for maximum numerical parity (see
+[Numerical accuracy & CPU fallbacks](#numerical-accuracy--cpu-fallbacks)).
 
----
+### Model configuration
 
-## How to run the demo
+Configuration is taken from the checkpoint's `config.json` (not hardcoded); repo-level constants live
+in `KokoroConfig` (`tt/tt_kmodel.py`). Key values for Kokoro-82M:
 
-From the **tt-metal** repo root:
+| parameter | value | notes |
+|-----------|:-----:|-------|
+| `repo_id` | `hexgrad/Kokoro-82M` | HF weights source |
+| sample rate | 24 000 Hz | output waveform |
+| `n_token` (vocab) | 178 | phoneme symbols |
+| `hidden_dim` | 512 | text/prosody hidden |
+| `style_dim` | 128 | style/ref embedding |
+| PLBERT hidden | 768 | 12 layers, 12 heads, intermediate 2048 |
+| `context_length` (`max_position_embeddings`) | **512** | hard cap on phonemes per chunk (≤ 510 after BOS/EOS) |
+
+## Architecture Pipeline
+
+```mermaid
+flowchart TD
+    P["phonemes — G2P (CPU)"] --> IDS["input_ids"]
+
+    subgraph A["Trace A · device · keyed by token count"]
+        direction TB
+        IDS --> BERT["TTCustomAlbert — PL-BERT (12 layers)"]
+        BERT --> BE["bert_encoder (linear)"]
+        BE --> PP["TTProsodyPredictor:<br/>TTDurationEncoder → duration BiLSTM → duration_proj"]
+        PP --> PD["pred_dur"]
+    end
+
+    PD --> HOST["host step:<br/>T_aligned = sum(pred_dur); build alignment"]
+    HOST --> ALN
+
+    subgraph B["Trace B · device · runs at exact mel length"]
+        direction TB
+        ALN["alignment"] --> F0N["F0Ntrain → F0 + N contours"]
+        ALN --> TE["TTTextEncoder → asr"]
+        F0N --> DEC["TTDecoder / TTGenerator"]
+        TE --> DEC
+        DEC --> SRC["SineGen → SourceModuleHnNSF"]
+        SRC --> UPS["AdaINResBlocks (8x upsample)"]
+        UPS --> STFT["STFT / iSTFT<br/>(TTTorchSTFT or TTCustomSTFT)"]
+        STFT --> WAV["24 kHz waveform"]
+    end
+```
+
+**Stages:**
+1. **PL-BERT backbone** (`TTCustomAlbert`) — contextual token features; `bert_encoder` linear projects into duration space.
+2. **Prosody predictor** (`TTProsodyPredictor`) — duration BiLSTM + projection → per-phoneme frame counts (`pred_dur`); alignment matrix expands to mel length; `F0Ntrain` predicts F0 (pitch) and N (energy).
+3. **ASR text encoder** (`TTTextEncoder`) — CNN + BiLSTM → `asr` features, aligned to mel length.
+4. **ISTFTNet decoder** (`TTDecoder` / `TTGenerator`) — AdaIN-conditioned upsampling generator with a harmonic-plus-noise source (`SineGen` → `SourceModuleHnNSF`) and an STFT/iSTFT head → 24 kHz waveform.
+
+A single **host step** sits between stages 2 and 3: `T_aligned = sum(pred_dur)` (the output length) is
+data-dependent and only known after reading `pred_dur` back to the host to build the alignment
+matrix. This splits the traceable device graph into **Trace A** (input → `pred_dur`) and **Trace B**
+(alignment → audio). See [Notable implementation details](#notable-implementation-details).
+
+## Modules & file paths
+
+All implementation lives under `models/experimental/kokoro/`. Each TTNN module is a separate class
+and has a matching PCC test and reference.
+
+| module | TTNN class / file | reference | test |
+|--------|-------------------|-----------|------|
+| Full model | `TTKModel` — `tt/tt_kmodel.py` | `reference/model.py` | `test_tt_kmodel_pcc.py` |
+| PL-BERT | `TTCustomAlbert` — `tt/tt_custom_albert.py` | `reference/plbert` (Albert) | `test_tt_custom_albert_pcc.py` |
+| Prosody predictor | `TTProsodyPredictor` — `tt/tt_prosody_predictor.py` | `reference/istftnet.py` | `test_tt_prosody_predictor_pcc.py` |
+| Duration encoder | `TTDurationEncoder` — `tt/tt_duration_encoder.py` | `reference/istftnet.py` | `test_tt_duration_encoder_pcc.py` |
+| BiLSTM | `tt_bilstm_nlc` — `tt/tt_lstm.py` | torch `nn.LSTM` | `test_tt_lstm_pcc.py` |
+| Text encoder (ASR) | `TTTextEncoder` — `tt/tt_text_encoder.py` | `reference/models.py` | `test_tt_text_encoder_pcc.py` |
+| Decoder | `TTDecoder` — `tt/tt_decoder.py` | `reference/istftnet.py` | `test_tt_decoder_pcc.py` |
+| Generator | `TTGenerator` — `tt/tt_generator.py` | `reference/istftnet.py` | `test_tt_generator_pcc.py` |
+| AdaIN blocks | `TTAdaIN1d` / `TTAdainResBlk1d` / `TTAdaINResBlock1` — `tt/tt_adain_*.py` | `reference/istftnet.py` | `test_tt_adain_*_pcc.py` |
+| AdaLayerNorm | `TTAdaLayerNorm` — `tt/tt_ada_layer_norm.py` | `reference/istftnet.py` | `test_tt_ada_layer_norm_pcc.py` |
+| LinearNorm | `TTLinearNorm` — `tt/tt_linear_norm.py` | `reference/models.py` | `test_tt_linear_norm_pcc.py` |
+| UpSample1d | `TTUpSample1d` — `tt/tt_upsample_1d.py` | torch `F.interpolate` | `test_tt_upsample_1d_pcc.py` |
+| SineGen | `TTSineGen` — `tt/tt_sinegen.py` | `reference/istftnet.py` | `test_tt_sinegen_pcc.py` |
+| Source module | `TTSourceModuleHnNSF` — `tt/tt_source_module_hn_nsf.py` | `reference/istftnet.py` | `test_tt_source_module_hn_nsf_pcc.py` |
+| STFT (torch-formulation) | `TTTorchSTFT` — `tt/tt_torch_stft.py` | `reference/istftnet.py` TorchSTFT | `test_tt_torch_stft_pcc.py` |
+| STFT (custom, no fallback) | `TTCustomSTFT` — `tt/tt_custom_stft.py` | `reference/istftnet.py` CustomSTFT | `test_tt_custom_stft_pcc.py` |
+| Trace manager | `TraceManager` — `tt/tt_trace_manager.py` | — | `test_tt_trace_manager.py` |
+| Demo | `demo/ttnn_kokoro_full_demo.py` | — | — |
+
+## Supported Devices
+
+| device | status | notes |
+|--------|:------:|-------|
+| **Blackhole (BH)** single device | ✅ supported (target) | P150-class; all PCC/perf numbers below are BH |
+
+- PL-BERT / predictor tests use the `mesh_device` fixture; vocoder PCC tests use the root `device`
+  fixture (`tests/conftest.py`).
+
+
+## Dependencies & versions
+
+Validated with:
+
+| dependency | version / commit |
+|------------|------------------|
+| TT-Metal / TTNN | `v0.73.0-dev20260612-1477-ge61fe04efc4` (this repo checkout) |
+| Python | 3.10.19 |
+| torch | 2.11.0+cpu |
+| kokoro (upstream G2P + pipeline) | 0.9.4 (`pip install "kokoro>=0.9.2"`) |
+| transformers | 5.10.2 |
+| soundfile | 0.14.0 |
+| librosa | 0.10.0 (demo mel-PCC + perceptual metric tests) |
+| numpy | 1.26.4 |
+| HF weights | `hexgrad/Kokoro-82M`, snapshot `f3ff3571791e39611d31c381e3a41a3af07b4987` (`kokoro-v1_0.pth`) |
+| system | `espeak-ng` on PATH (G2P) |
+
+## Installation
+
+From the **tt-metal** repo root, using the venv that matches your Metal build:
 
 ```bash
 export PYTHONPATH=$(pwd)
-source python_env/bin/activate   # use the repo venv that matches your Metal build
+source python_env/bin/activate
 
-# Full TTNN pipeline (default: on-device SineGen + on-device STFT)
-python models/experimental/kokoro/demo/ttnn_kokoro_full_demo.py \
-  --text "Hello from Tenstorrent." \
-  --voice af_heart \
-  --output out_ttnn.wav
-
-# Recommended production parity (both CPU fallbacks — config E)
-python models/experimental/kokoro/demo/ttnn_kokoro_full_demo.py \
-  --text "Hello from Tenstorrent." \
-  --voice af_heart \
-  --torch-stft-fallback \
-  --torch-phase-fallback \
-  --output out_ttnn_config_e.wav
+pip install "kokoro>=0.9.2" soundfile librosa
+# espeak-ng must be on PATH for grapheme-to-phoneme (G2P)
 ```
 
-**Requirements:** `pip install "kokoro>=0.9.2" soundfile` and `espeak-ng` on PATH for G2P. Place `kokoro-v1_0.pth` locally or let `KModel` download from HuggingFace. Pass `--checkpoint /path/to/kokoro-v1_0.pth` to override auto-detection.
+Place a local `kokoro-v1_0.pth` checkpoint or let `KModel` download from HuggingFace; override
+auto-detection with `--checkpoint /path/to/kokoro-v1_0.pth`.
 
----
+## Sequence-length support
 
-## How to run full-model tests
+| aspect | value |
+|--------|-------|
+| Max phonemes per chunk | **510** (`context_length` 512 − BOS/EOS); enforced by an assert in `TTKModel.forward` |
+| Longer text | auto-chunked by upstream `KPipeline` at sentence boundaries, synthesized per chunk, concatenated |
+| Optimized range | **short/medium chunks (≈ 20–150 phonemes)** — the demo default and all quality gates are measured here |
 
-From the **tt-metal** repo root (requires a local Kokoro-82M checkpoint):
+## Performance
 
-```bash
-export PYTHONPATH=$(pwd)
+The full forward is **dispatch-bound**, not compute-bound (device time ≪ wall-clock), so metal
+**tracing** is the primary wall-clock lever. The demo (`--trace`, on by default) captures Trace B
+(and optionally Trace A under `KOKORO_TRACE_A=1`) in a warmup pass and replays it in the measured
+loop; the program cache (`device.enable_program_cache()`) removes cold host-side program build.
 
-# Full-pipeline PCC — recommended config E (STFT + phase fallbacks)
-pytest -s models/experimental/kokoro/tests/test_tt_kmodel_pcc.py \
-  -k test_tt_kmodel_stft_and_phase_fallback_pcc -v --timeout=600
+**Reported metrics (per the demo's summary):**
 
-# Full-pipeline PCC — no fallbacks (shows the BH-BF16 ceiling)
-pytest -s models/experimental/kokoro/tests/test_tt_kmodel_pcc.py \
-  -k test_tt_kmodel_generator_no_torch_fallback_pcc -v --timeout=600
+| metric | definition |
+|--------|------------|
+| latency (s) | wall-clock per chunk forward |
+| time-to-first-audio (s) | wall from loop start to first chunk's audio |
+| real-time factor (RTF) | `infer_s / audio_s` (< 1 = faster than real time) |
+| throughput (char/s) | input characters synthesized per second |
 
-# All kmodel PCC tests
-pytest models/experimental/kokoro/tests/test_tt_kmodel_pcc.py -v --timeout=600
+### ISL sweep (Blackhole, `af_heart`, seed 0, deterministic)
 
-# Entire kokoro test suite
-pytest models/experimental/kokoro/tests/ -v --timeout=600
-```
+Measured by `perf/isl_sweep.py` (`KOKORO_ISL_TRACE=1`, capture→release per length). **`warm (s)`** is the
+metal-trace **replay** latency — the steady-state per-chunk cost once the trace is captured; **`cold (s)`**
+is the one-time first-forward capture (kernel compile + eager warmup + host prosody loop).
 
-**Fallback proof suite** — run with `-s` to print per-stage PCC tables:
+| phonemes | audio (s) | warm-replay (s) | RTF (warm) | cold-capture (s) | trace speedup |
+|:--------:|:---------:|:---------------:|:----------:|:----------------:|:-------------:|
+| 44 | 2.95 | **1.68** | **0.571** | 506.8 | 301× |
+| 195 | 11.70 | **4.85** | **0.415** | 359.3 | 74× |
+| 293 | 17.15 | **8.21** | **0.479** | 750.0 | 91× |
+| 440 | 24.65 | **13.54** | **0.549** | 1525.5 | 113× |
+| 489 (≈max) | 26.93 | **15.18** | **0.564** | 2348.4 | 155× |
 
-```bash
-pytest -s \
-  models/experimental/kokoro/tests/test_sinegen_phase_fallback_proof.py \
-  models/experimental/kokoro/tests/test_tt_kmodel_pcc_degradation.py \
-  models/experimental/kokoro/tests/test_sinegen_voicing_input_not_op_proof.py \
-  models/experimental/kokoro/tests/test_stft_atan2_sensitivity_proof.py
-```
+**Warm-replay RTF stays 0.42–0.57 across all lengths that fit — i.e. faster than real time — and the
+trace replay is 74–301× faster than the un-traced (eager) forward.** Warm latency scales ~linearly with
+audio length (≈ 0.55 s of compute per second of audio).
 
-PL-BERT / predictor tests use the `mesh_device` fixture in `tests/conftest.py`. Vocoder PCC tests use the root `device` fixture.
+## Quality / PCC validation (Blackhole)
 
----
+Sample-wise waveform PCC is a poor free-run gate for a TTS vocoder (a tiny phase/source drift
+collapses it while speech is perceptually identical), so the pipeline is scored with four perceptual
+/ intelligibility metrics. All generate audio on BH and compare against the matched torch CPU
+reference `KModel` for the same text/voice/seed:
 
-## End-to-end quality metrics
+| metric | measures | gate | test |
+|--------|----------|------|------|
+| **ASR WER** ↓ | intelligibility (Whisper-small transcribes TT audio) | < 30% | `test_tt_kmodel_asr_wer.py` |
+| **mel PCC** ↑ | spectral parity (80-band log-mel, phase-invariant) | > 0.95 | `test_tt_kmodel_mel_pcc.py` |
+| **speaker cosine (SECS)** ↑ | speaker-identity parity (x-vector cosine) | > 0.95 | `test_tt_kmodel_speaker_cosine.py` |
+| **cFW2VD** ↓ | perceptual parity (Fréchet wav2vec2 distance) | < 8.0 | `test_tt_kmodel_cfw2vd.py` |
 
-Sample-wise waveform PCC is a poor free-run gate for a TTS vocoder (a tiny phase/source drift collapses it while the speech is perceptually identical), so the pipeline is scored with four perceptual / intelligibility metrics. All four generate audio on the Blackhole device and compare against the matched torch CPU-reference `KModel` for the same text/voice/seed:
-
-| metric | what it measures | gate | test |
-|--------|------------------|------|------|
-| **ASR WER** | intelligibility — Whisper-small transcribes the TT audio; word error rate vs the prompt | < 30% | `test_tt_kmodel_asr_wer.py` |
-| **mel PCC** | spectral parity — Pearson corr of the 80-band log-mel spectrogram vs the reference (phase-invariant) | > 0.95 | `test_tt_kmodel_mel_pcc.py` |
-| **speaker cosine (SECS)** | speaker-identity parity — cosine of WavLM x-vector embeddings vs the reference (phase- & duration-invariant) | > 0.95 | `test_tt_kmodel_speaker_cosine.py` |
-| **cFW2VD** ↓ | perceptual parity — Fréchet (Wasserstein-2) distance between the wav2vec2 feature distributions of the two utterances (lower is better, 0 = identical) | < 8.0 | `test_tt_kmodel_cfw2vd.py` |
-
-Measured on `af_heart`, text `"Hello world this is a speech synthesis test."`, seed 0, deterministic (2.95 s audio, 44 phonemes), across the full vocoder-fallback / STFT-formulation matrix:
+Measured on `af_heart`, `"Hello world this is a speech synthesis test."`, seed 0, deterministic
+(2.95 s audio, 44 phonemes):
 
 | config | disable_complex | stft fb | phase fb | ASR WER ↓ | mel PCC ↑ | SECS ↑ | cFW2VD ↓ |
 |--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -94,187 +204,214 @@ Measured on `af_heart`, text `"Hello world this is a speech synthesis test."`, s
 | `dc_phase_fallback` | True | off | on | 0.00% | 0.9932 | 0.9960 | 0.91 |
 | `dc_no_fallback` | True | off | off | 0.00% | 0.9724 | 0.9686 | 4.84 |
 
-All 20 runs PASS every gate. WER is 0.00% for every config (Whisper transcribes the audio verbatim) — speech stays fully intelligible even on the degraded `no_fallback` path, which is why ASR WER is a far more meaningful free-run gate than waveform PCC (≈0.28 there). mel PCC, SECS and cFW2VD are tighter, frame-/distribution-level metrics: the CPU-fallback configs sit at ~0.993 mel / ~0.99 SECS / ~1-2 cFW2VD, while the no-fallback configs drop to ~0.972 mel / ~0.957 SECS / ~3.6-4.8 cFW2VD — the residual BH-BF16 harmonic-source degradation surfaces here but every config stays comfortably inside its gate.
+Every config PASSES every gate. WER is 0.00% for all configs — speech stays intelligible even on the
+degraded `no_fallback` path. Component-level module PCC tests hold **> 0.999** against the float32 reference.
 
-**What cFW2VD evaluates and whether the port is in range.** cFW2VD is the *conditional* (paired, per-utterance) Fréchet wav2vec Distance: each utterance's frame-wise wav2vec2 hidden states are modelled as a Gaussian `N(μ, Σ)`, and the metric is the Wasserstein-2 distance between the reference and generated Gaussians — i.e. how far the TT audio's self-supervised *feature distribution* drifts from the reference's. It is phase-invariant and, being conditioned on matched content, meaningful for a single utterance pair (unlike corpus-level FAD/FW2VD). Lower is better; 0 means identical feature distributions. The ported Kokoro is well in range: the production fallback configs land at **0.91–2.06**, and even the fully on-device configs stay at **3.64–4.84** — all far below the `< 8.0` gate. The ordering mirrors mel PCC / SECS (phase-fallback paths best, fully on-device worst), confirming cFW2VD tracks the same underlying harmonic-source degradation rather than adding noise.
+### Full-pipeline audio PCC by fallback config (`test_tt_kmodel_pcc.py`)
 
-**Choosing the threshold.** cFW2VD is a distance, so a similarity-style floor (`> 0.95`) does not apply — the gate is a ceiling. The worst observed config (`dc_no_fallback`) is 4.84 and the recommended config E is 2.06. The gate is set to **8.0**: ~1.65× headroom over the worst observed config (absorbing the run-to-run variance of the per-utterance Gaussian fit) while still catching a real perceptual regression — a value of ~5+ on a fallback config would flag a genuine divergence.
+| config | audio PCC | test floor |
+|--------|:---------:|:----------:|
+| `none` (all on-device) | ≈ 0.28 | > 0.25 |
+| `stft_only` | ≈ 0.29 | — |
+| `phase_only` | ≈ 0.84 | — |
+| `stft + phase` (config E) | ≈ 0.88 | > 0.84 |
+| teacher-forced prosody (`prosody_injection`) | ≈ 0.94 | > 0.80 |
 
-Run them with:
+## Test coverage
+
+All modules have a PCC test at **full HF configuration** (real Kokoro-82M weights, not random),
+runnable independently. The suite is 145 tests; **the module PCC tests all hold their PCC gates**.
+Known exceptions (documented, not regressions) are listed under [Limitations](#limitations-caveats--wip).
+
+| test file | one-line detail | gate |
+|-----------|-----------------|------|
+| `test_tt_kmodel_pcc.py` | TTKModel vs reference KModel — full on-device pipeline, real weights | see table above |
+| `test_tt_kmodel_mel_pcc.py` | E2E spectral parity via log-mel PCC | > 0.95 |
+| `test_tt_kmodel_asr_wer.py` | E2E intelligibility via Whisper ASR WER | < 30% |
+| `test_tt_kmodel_speaker_cosine.py` | E2E speaker-identity parity (SECS) | > 0.95 |
+| `test_tt_kmodel_cfw2vd.py` | E2E perceptual parity (cFW2VD) | < 8.0 |
+| `test_tt_kmodel_prosody_injection_pcc.py` | teacher-forced waveform PCC | > 0.80 |
+| `test_tt_custom_albert_pcc.py` | PL-BERT encoder vs Albert (small / padding / kokoro config) | > 0.99 |
+| `test_tt_prosody_predictor_pcc.py` | prosody predictor vs reference | > 0.99 |
+| `test_tt_duration_encoder_pcc.py` | duration encoder (full & variable length) | > 0.99 |
+| `test_tt_lstm_pcc.py` | BiLSTM vs torch `nn.LSTM` | > 0.99 |
+| `test_tt_text_encoder_pcc.py` | ASR text encoder | > 0.99 |
+| `test_tt_decoder_pcc.py` | decoder (encode / F0-N conv / decode / full forward) | > 0.99 (sub-blocks) |
+| `test_tt_generator_pcc.py` | generator + per-stage isolation (m_source, ups, resblocks, conv_post, stft) | > 0.99 (sub-blocks) |
+| `test_tt_adain_1d_pcc.py` / `_resblk_1d` / `_resblock1` | AdaIN norm / resblock configs | > 0.99 |
+| `test_tt_ada_layer_norm_pcc.py` | AdaLayerNorm | > 0.99 |
+| `test_tt_linear_norm_pcc.py` | LinearNorm | > 0.99 |
+| `test_tt_upsample_1d_pcc.py` | UpSample1d vs `F.interpolate` | > 0.99 |
+| `test_tt_sinegen_pcc.py` | SineGen | > 0.99 (with phase fallback) |
+| `test_tt_source_module_hn_nsf_pcc.py` | harmonic-plus-noise source | see caveats |
+| `test_tt_torch_stft_pcc.py` | STFT (torch formulation) fwd/inverse/round-trip | > 0.99 (recon) |
+| `test_tt_custom_stft_pcc.py` | on-device CustomSTFT (conv2d/conv_transpose2d) | > 0.99 (recon) |
+| `test_tt_kokoro_reference_math_pcc.py` | math-decomposed ops with Kokoro weights | > 0.99 |
+| `test_tt_kmodel_trace_e2e.py` / `_two_trace_e2e.py` / `_two_trace_faithful.py` | E2E trace orchestration & eager parity | equal |
+| `test_tt_trace_manager.py` | TraceManager capture-once / replay-new-inputs | equal |
+| `test_tt_kmodel_pcc_degradation.py` | proof: deficit needs CPU fallbacks (phase dominant) | assertions |
+| `test_sinegen_phase_fallback_proof.py` | proof: phase fallback required at Kokoro scale | assertions |
+| `test_sinegen_voicing_input_not_op_proof.py` | proof: low `rad_frac` PCC is F0 input, not the op | assertions |
+| `test_stft_atan2_sensitivity_proof.py` | proof: STFT phase = atan2 near-zero-bin sensitivity | assertions |
+| `test_bf16_accumulation_hardware_limit_proof.py` | proof: SineGen collapse is a BF16 hardware limit | assertions |
+
+### Running tests
 
 ```bash
 export PYTHONPATH=$(pwd)
-# Full fallback / STFT-formulation matrix (all 5 configs each)
+
+# Entire suite
+pytest models/experimental/kokoro/tests/ -v --timeout=900
+
+# Full-pipeline PCC — recommended config E
+pytest -s models/experimental/kokoro/tests/test_tt_kmodel_pcc.py \
+  -k test_tt_kmodel_stft_and_phase_fallback_pcc -v --timeout=600
+
+# Perceptual metric matrix (all configs)
 pytest -s models/experimental/kokoro/tests/test_tt_kmodel_asr_wer.py        --timeout=3600
 pytest -s models/experimental/kokoro/tests/test_tt_kmodel_mel_pcc.py        --timeout=3600
 pytest -s models/experimental/kokoro/tests/test_tt_kmodel_speaker_cosine.py --timeout=3600
 pytest -s models/experimental/kokoro/tests/test_tt_kmodel_cfw2vd.py         --timeout=3600
 
-# Single config (recommended config E only): add -k stft_and_phase_fallback
+# Fallback proof suite (per-stage PCC tables)
+pytest -s \
+  models/experimental/kokoro/tests/test_sinegen_phase_fallback_proof.py \
+  models/experimental/kokoro/tests/test_tt_kmodel_pcc_degradation.py \
+  models/experimental/kokoro/tests/test_sinegen_voicing_input_not_op_proof.py \
+  models/experimental/kokoro/tests/test_stft_atan2_sensitivity_proof.py
 ```
 
----
+## Demo
 
-## Why CPU fallbacks are required (and why PCC degrades)
+```bash
+export PYTHONPATH=$(pwd)
+source python_env/bin/activate
 
-On Blackhole (BH), MAC ops round `float32 → bfloat16`. That is harmless across the prosody stack (PLBERT → predictor → TextEncoder, PCC > 0.998) but fatal in **two spots** on the vocoder harmonic-source path:
+# Full TTNN pipeline (default: trace on, on-device SineGen + STFT, PCC check on)
+python models/experimental/kokoro/demo/ttnn_kokoro_full_demo.py \
+  --text "Hello from Tenstorrent." --voice af_heart --output out_ttnn.wav
+
+# Recommended production parity (both CPU fallbacks — config E)
+python models/experimental/kokoro/demo/ttnn_kokoro_full_demo.py \
+  --text "Hello from Tenstorrent." --voice af_heart \
+  --torch-stft-fallback --torch-phase-fallback --output out_ttnn_config_e.wav
+```
+
+**Example input:** `--text "Hello from Tenstorrent." --voice af_heart --lang-code a`
+**Expected output:** a 24 kHz `.wav` (`out_ttnn.wav`); with `--pcc-check` (default on) the demo also
+runs the reference `KModel` on CPU, prints per-chunk and mean/min **mel-PCC** vs the TT audio, and
+writes the reference audio to `out_ttnn_ref.wav` for A/B validation. On short text the mel PCC lands
+in the ~0.97–0.99 band (matching the quality table).
+
+**Parameters:**
+
+| flag | default | effect |
+|------|:---:|--------|
+| `--text` / `--voice` / `--lang-code` / `--speed` | — / `af_heart` / `a` / `1.0` | input text, voice pack, language, speed |
+| `--trace` / `--no-trace` | on | metal-trace the decoder; warmup captures, measured loop replays |
+| `--torch-stft-fallback` | off | CPU `torch.stft` for higher STFT parity |
+| `--torch-phase-fallback` | off | CPU float32 SineGen phase for higher parity |
+| `--disable-complex` | off | on-device CustomSTFT formulation (conv2d/conv_transpose2d, no fallback) |
+| `--l1-activations` | off | keep generator loop activations L1-resident (faster short utterances; may OOM long) |
+| `--pcc-check` / `--no-pcc-check` | on | run reference `KModel`, report mel PCC, save `*_ref.wav` |
+| `--checkpoint` | auto | path to `kokoro-v1_0.pth` |
+| `--trace-region-size` | 200 MB | DRAM trace region when tracing |
+
+## Notable implementation details
+
+- **Reference fidelity.** The TTNN modules follow the reference forward exactly (verified by the
+  per-module PCC tests > 0.999). Deviations are documented: (1) the two CPU fallbacks below;
+  (2) the decoder runs at a *bucketed* mel length under trace (inputs zero-padded, audio trimmed) so
+  one trace is reused across nearby lengths; (3) minor perf-driven reorderings that stay bit-close.
+- **Independent execution.** Every module has a standalone PCC test constructing it from real weights
+  — modules can be exercised in isolation without the full pipeline.
+- **Metal trace (A + B).** Split at the data-dependent alignment step: Trace A (prosody + ASR, keyed
+  by token count) and Trace B (decoder, keyed by bucketed mel length). `TraceManager`
+  (`tt/tt_trace_manager.py`) captures on first call, replays after; the demo warmup primes them.
+  `KOKORO_TRACE_A=1` enables the two-CQ two-trace path.
+- **Program cache** — `device.enable_program_cache()` removes cold program build.
+- **On-device STFT** — `--disable-complex` / `use_custom_stft` runs a pure conv2d/conv_transpose2d
+  STFT (`tt/tt_custom_stft.py`) with no fallback anywhere.
+- **Deterministic RNG** — tracing forces the deterministic source-noise path so replays are exact.
+
+## Numerical accuracy & CPU fallbacks
+
+On Blackhole, MAC ops round `float32 → bfloat16`. Harmless across the prosody stack (PCC > 0.998) but
+ill-conditioned in **two spots** on the vocoder harmonic-source path:
 
 | failure point | mechanism | symptom without fallback |
 |---------------|-----------|--------------------------|
-| **SineGen phase chain** | tiny cumsum (~3×10⁻⁵ cycles) × `2π × upsample_scale` (≈ 1885) amplifies BF16 rounding into ~0.06–0.25 rad phase error per frame; `sin()` nonlinearly worsens it | `sine_wavs` PCC collapses to ~0.31; full audio PCC ≈ 0.28 |
-| **STFT magnitude/phase** | near-zero off-frequency bins (~1e-5) get sign-flipped by BF16 `atan2` SFPU | `cos(phase)` PCC ≈ 0.6–0.8 on harmonic input |
+| **SineGen phase chain** | tiny cumsum (~3×10⁻⁵ cycles) × `2π × upsample_scale` (≈ 1885) amplifies BF16 rounding into ~0.06–0.25 rad phase error per frame; `sin()` worsens it nonlinearly | `sine_wavs` PCC → ~0.31; full audio PCC ≈ 0.28 |
+| **STFT magnitude/phase** | near-zero off-frequency bins (~1e-5) get sign-flipped by BF16 `atan2` | `cos(phase)` PCC ≈ 0.6–0.8 |
 
-Two CPU fallbacks recover these: `use_torch_phase_fallback` (SineGen phase accumulation on CPU float32) and `use_torch_stft_fallback` (STFT via `torch.stft` on CPU). Toggle them on `TTKModel`, `KokoroFullTtnn`, or the demo flags `--torch-phase-fallback` / `--torch-stft-fallback`.
+Two opt-in CPU fallbacks recover these (both default **OFF**), settable on `TTKModel` or via demo flags:
 
-**Recommended config E** (`stft + phase` fallbacks, reference built `disable_complex=False`):
+- `use_torch_phase_fallback` (`--torch-phase-fallback`) — SineGen phase accumulation on CPU float32. **The dominant lever** (recovers ~0.55 PCC alone).
+- `use_torch_stft_fallback` (`--torch-stft-fallback`) — STFT via CPU `torch.stft` (adds ~+0.04 on top).
 
-| config | full-forward audio PCC | what it shows |
-|--------|------------------------|---------------|
-| `none` (all on-device) | ≈ 0.28 | BH-BF16 ceiling — badly degraded |
-| `stft_only` | ≈ 0.29 | STFT fix alone is **not** enough; SineGen phase chaos still poisons audio |
-| `phase_only` | ≈ 0.84 | phase fallback **alone** recovers the bulk — the dominant single lever |
-| `stft + phase` (config E) | ≈ 0.88 (> 0.84 floor) | both fallbacks clear the production floor; STFT adds ~+0.04 on top of phase |
+The iSTFT reconstruction itself is exact on-device (PCC 0.999997); the residual gap is the harmonic
+source / F0 path at full sequence length, which is **not fixable purely on-device** at Kokoro scale.
 
-The degradation is **not fixable purely on-device** at Kokoro scale. The phase (SineGen) fallback is the one that matters most; STFT alone leaves the pipeline degraded, while phase alone recovers most of the deficit.
+## Limitations, caveats
 
-The residual ~0.10–0.15 gap to PCC 1.0 (config E ≈ 0.85–0.88) lives in the on-device harmonic source / F0 path at full sequence length, not in the prosody stack or the iSTFT reconstruction.
-
----
+- **On-device full-forward PCC ceiling** — without fallbacks, waveform PCC ≈ 0.28 (BH BF16
+  harmonic-source ceiling); config E reaches ≈ 0.88. Speech stays fully intelligible (WER 0%) at all
+  configs. This is the documented exception to a blanket ">0.99 PCC" rule.
+- **CPU fallbacks** — SineGen phase and STFT optionally run on CPU float32 for parity. Impact:
+  device→host→host round-trips that break the decoder trace when enabled (so trace + fallbacks are
+  mutually exclusive on that segment) and add host time. Default-off; on-device is the shipped path.
+- **Max-length pred_dur drift** — for single chunks ≳ 500 phonemes, on-device duration
+  prediction diverges (rel. error up to ~0.45 at T=512), warping the audio length/timeline. Mitigation
+  today is chunking; a CPU prosody fallback is a possible future lever. Covered by the (currently
+  failing-by-design) `test_tt_kmodel_max_input_length_*` cases.
+- **Cold trace-capture cost** — capturing a trace re-runs the full eager forward once (minutes at long
+  lengths — 2348 s at 489 phonemes). One-time per distinct length, amortised by replay; the demo warmup
+  pays it up front. Not a per-inference cost.
 
 ## Detailed proof tests
 
-The four proof tests below isolate each failure mode. Run them together (see command above) and read the printed PCC tables.
+The four proof tests isolate each numerical failure mode. Run with `-s` to read the printed PCC tables.
 
 ### Proof 1 — SineGen phase fallback (`test_sinegen_phase_fallback_proof.py`)
 
-**What it proves:** at Kokoro scale (`upsample_scale=300`, `T=48600`) the TTNN phase chain degrades on-device; `use_torch_phase_fallback=True` restores it.
-
-**Method:** captures per-stage PCC/MAE in device execution order on the **same synthetic F0** against a float32 reference (measured PCC from the run above shown for the pure-TTNN path):
-
-| step | stage | pure TTNN (BH BF16) | with `use_torch_phase_fallback` |
-|------|-------|---------------------|----------------------------------|
-| 00–07 | pre-phase + accumulation (`uv`, `fn`, `rad_frac`, `rad_rand_ini`, `rad_down`, `phase_cumsum`, `phase_up`) | **> 0.99** (phase_up PCC 0.99999) | > 0.99 |
-| 08–10 | nonlinear sine (`sin`, `sine×amp`, `sine_wavs`) | **collapses to ~0.31** (sin PCC 0.307) | **> 0.99 (restored, sin PCC 0.999)** |
-
-The collapse appears **only at `sin`**, not before it: `phase_up` keeps PCC ≈ 1.0 even though its MAE is already ~1.3 rad, because PCC is scale-invariant and the per-frame phase error is still a near-linear function of the reference at that point. The nonlinear `sin()` is what turns that error into decorrelation.
-
-**Why it fails on-device:** the lerp upsample multiplies a tiny cumsum (~3×10⁻⁵ cycles) by `2π × upsample_scale ≈ 1885`. A BF16 rounding error of ~3×10⁻⁵ becomes ~0.06–0.25 rad of phase error per frame — comparable to `sine_amp = 0.1` — and `sin()` nonlinearly amplifies it further. Moving only the phase **accumulation** (`rad_down` → `cumsum` → lerp upsample → `× 2π`) to CPU float32 (while `sin`, `× amp`, and uv-mix stay on device) restores sine PCC from 0.307 to 0.999, a recovery of **+0.69 PCC** at full length.
-
-**Key assertions:**
-- pre-phase stages stay tight (PCC > 0.99) on pure TTNN
-- `sin` and `sine×amp` PCC < 0.99 on pure TTNN at T=48600
-- all phase-chain stages PCC > 0.99 with torch phase fallback
-- `sin` PCC is worse than `phase_up` PCC (nonlinear amplification)
-
-Note: this test uses synthetic F0 where `rad_frac` stays ≈ 1.0; modulo behaviour on real kmodel input is covered in Proof 3.
-
----
+At Kokoro scale (`upsample_scale=300`, `T=48600`) the TTNN phase chain degrades on-device;
+`use_torch_phase_fallback=True` restores it. The collapse appears **only at `sin`** (phase_up keeps
+PCC ≈ 1.0 with MAE ~1.3 rad — PCC is scale-invariant; the nonlinear `sin()` turns error into
+decorrelation). Moving only the phase **accumulation** to CPU float32 restores sine PCC 0.307 → 0.999.
 
 ### Proof 2 — Full-pipeline degradation (`test_tt_kmodel_pcc_degradation.py`)
 
-**What it proves:** the Kokoro vocoder PCC deficit cannot be closed on-device without the CPU fallbacks; the phase (SineGen) fallback is the dominant lever.
-
-**Method:** runs the identical full `TTKModel` pipeline (text `"Hello from Tenstorrent."`, reference built `disable_complex=False` so it uses `TorchSTFT`, matching the TT `use_torch_stft_fallback` formulation) under four fallback configurations and compares full-forward audio PCC:
-
 ```
 config          audio PCC    what it shows
-─────────────────────────────────────────────────────────────────────────
 none            0.275        BH-BF16 harmonic-source ceiling
 stft_only       0.286        STFT fix alone does NOT recover — SineGen phase still broken
 phase_only      0.842        phase fallback alone recovers the bulk
 stft+phase      0.880        both fallbacks clear the production floor (> 0.84)
-
-recovery (stft+phase − none)       = +0.604
-phase-only vs stft-only            = +0.556   (phase is the dominant lever)
-stft-on-top-of-phase increment     = +0.038   (STFT adds the final touch)
 ```
+Phase is the dominant lever (+0.556 over stft-only); STFT on top of phase adds +0.038.
 
-**Key assertions:**
-1. no fallback: PCC < 0.6 (badly degraded)
-2. STFT-only: PCC < 0.7 (phase chain still on-device poisons audio)
-3. phase-only recovers > 0.2 PCC over no-fallback and beats stft-only
-4. stft+phase: PCC > 0.84 and recovery > 0.3 over no-fallback
-5. adding phase on top of STFT moves PCC by > 0.2 — proving phase fallback is necessary, not optional
+### Proof 3 — Low `rad_frac` PCC is the F0 input, not any op (`test_sinegen_voicing_input_not_op_proof.py`)
 
-**Interpretation:** the deficit is irreducible on-device. STFT fallback alone leaves the pipeline degraded because the SineGen phase chaos still corrupts the harmonic source. Phase fallback alone recovers ~0.55 PCC over stft-only; STFT on top of phase adds only ~+0.04.
-
----
-
-### Proof 3 — A low `rad_frac` score is the F0 input, not any op (`test_sinegen_voicing_input_not_op_proof.py`)
-
-**Vocabulary** (SineGen turns the pitch contour into a sine wave):
-
-| name | meaning |
-|------|---------|
-| `f0` | per-sample pitch in Hz; `0` = unvoiced (silence) |
-| `uv` | voiced/unvoiced mask, the boolean `f0 > 0` |
-| `fn` | `f0 × harmonic numbers` |
-| `rad_frac` | `(fn / sample_rate) % 1` — per-sample phase step, wrapped to `[0, 1)` |
-| PCC | correlation of the on-device tensor vs the CPU-float32 reference; `1.0` = identical |
-
-**What it proves:** `rad_frac` shows a low PCC (~0.54) end-to-end, which looks like a broken `% 1` (modulo) or `> 0` (threshold) op. Both ops are faithful — the drop is a sub-Hz disagreement in the **input** `f0_upsampled`. Note that `uv` is **not** an input to `rad_frac` (`rad_frac = (f0·harmonics / sr) % 1` depends only on `f0`); the two are *siblings* of the same `f0`. `rad_frac` is exactly `0` wherever `f0 ≤ 0` and small-positive where `f0 > 0`, so its zero/nonzero support pattern coincides with `uv`'s mask. The same `f0`-sign flips that move `uv` therefore move `rad_frac` at the **same frames** — a shared upstream cause, not `uv` feeding into `rad_frac`.
-
-**Method — three checks on the real kmodel `f0_upsampled`** (text `"Hello from Tenstorrent."`):
-
-**A. Path-faithful** (ref stages on `f0u_ref`, TT stages on `f0u_tt`) — locates where the drop appears:
-
-| step | PCC | what happens |
-|------|-----|--------------|
-| `f0_input` | 0.99995 | ref vs TT F0 correlate tightly (sub-Hz disagreement) |
-| `fn_harmonics` | 0.99996 | smooth op — the F0 error is not amplified |
-| `uv_mask` | **0.57** | `f0 > 0` flips near the voicing boundary (a discontinuous step) |
-| `rad_frac` | **0.54** | ≈0 on unvoiced frames, so the same `f0`-sign flips that move `uv` move it too (common cause, **not** a `uv` input) — no new cliff at the modulo |
-
-**B. Shared-input** (both paths fed `f0u_ref`) — isolates the modulo: `rad_frac` PCC = **1.0000** (MAE ~1e-5). On matched input `ttnn.remainder` is bit-faithful; at Kokoro scale `fn/sr ≈ 0.008` sits far from any wrap point, so `% 1` is a near-identity. This also confirms the path-faithful drop in A is **not** modulo sensitivity: feed matched `f0` and `rad_frac` is perfect, so the only thing moving it is the `f0`-sign support flipping (the same cause as `uv`).
-
-**C. Threshold torch vs device** — isolates `ttnn.gt`. Building `uv = f0 > 0` on the same `f0u_tt` both ways gives `PCC(uv_device, uv_torch) = 1.0`, and both score the **same 0.567506** against `uv_ref`:
-
-| mask | built with | PCC vs `uv_ref` |
-|------|------------|-----------------|
-| `uv_device` | `ttnn.gt(f0u_tt, 0)` (on device) | **0.567506** |
-| `uv_torch` | `f0u_tt > 0` (torch) | **0.567506** |
-
-Moving `>` to torch changes the score by `+0.000000` — the op backend is irrelevant.
-
-**Interpretation:** a low `rad_frac` PCC points upstream to F0 / voicing disagreements, not to `ttnn.remainder` or `ttnn.gt`. Both ops are faithful at Kokoro values, so a torch fallback for either recovers nothing — which is why the only fallbacks that move full-pipeline PCC are the SineGen **phase** and **STFT** ones (Proofs 1, 2, 4), not anything around `uv` / `rad_frac`.
-
-**What it would take to recover this contribution:** the input divergence is seeded by the on-device prosody predictor — `f0_upsampled` is the upsampled predicted F0 (`_device_forward_prosody_stages`), computed in BF16, so it differs sub-Hz from the float32 reference. Since the SineGen ops downstream are exact, the *only* way to shrink this specific contribution is a **CPU fallback on the F0 prediction in the prosody predictor** (so `f0_upsampled` matches the reference), not any change around `uv` / `rad_frac`. This is a **secondary** lever, though: the prosody stages are individually high-PCC (> 0.998) and the dominant full-pipeline recovery comes from the phase and STFT fallbacks (Proof 2) — an F0 fallback would only tighten the residual harmonic-source gap, not move the headline number.
-
----
+`rad_frac`/`uv` show low PCC (~0.54/0.57) end-to-end. Both ops are bit-faithful at Kokoro values
+(shared-input `rad_frac` PCC = 1.0000; `ttnn.gt` vs torch `>` differ by +0.000000). The drop is a
+sub-Hz disagreement in the input `f0` from the BF16 prosody predictor — a torch fallback around
+`uv`/`rad_frac` recovers nothing.
 
 ### Proof 4 — STFT atan2 sensitivity (`test_stft_atan2_sensitivity_proof.py`)
 
-**What it proves:** STFT phase decorrelation is `atan2` sensitivity on near-zero-magnitude bins, not broken conv or a broken `ttnn.atan2` SFPU.
-
-**Method:** on Kokoro harmonic input (`n_fft=20`, `hop=5`, `sine_amp=0.1`, `L=1500`) compares the on-device STFT conv path against `torch.stft`:
-
 | metric | PCC | notes |
 |--------|-----|-------|
-| `X_real` (conv bins) | ≈ 1.0 | strided-conv STFT agrees with `torch.stft` |
-| `X_imag` (conv bins) | ≈ 1.0 | same |
-| `magnitude` | > 0.99 | `sqrt(x² + y²)` is faithful |
+| `X_real` / `X_imag` (conv bins) | ≈ 1.0 | strided-conv STFT agrees with `torch.stft` |
+| `magnitude` | > 0.99 | faithful |
 | `phase` (`atan2`) | ≈ 0.6–0.8 | decorrelates despite tight xy bins |
-| `cos(phase)` | < 0.90 | phase error concentrated on near-zero bins |
-| `atan2` on **identical** fp32 (x, y) inputs | > 0.99 | `ttnn.atan2` matches `torch.atan2` — not an SFPU bug |
-| audio round-trip (transform → inverse) | > 0.999 | reconstruction is ~lossless despite low phase PCC |
+| `atan2` on identical fp32 inputs | > 0.99 | geometric sensitivity, not an SFPU bug |
+| audio round-trip | > 0.999 | bad phase on ~zero-energy bins never reaches the audio |
 
-Phase PCC by `|z|` region (measured, 3311 bins total):
-- **high-|z| bins** (n=579): phase PCC ≈ 0.88 (faithful)
-- **near-origin bins** (`|z| < 0.05`, n=2732): phase PCC ≈ 0.75 (ill-conditioned angle)
-
-The near-origin bins are the **majority** (2732 of 3311), so the ~zero-energy ill-conditioned angles drag the overall phase PCC down to ≈ 0.79 even though every bin that carries real energy is faithful — which is exactly why the round-trip audio PCC stays at 0.999998.
-
-**Key assertions:**
-- `X_real` and `X_imag` PCC > 0.99 (conv is faithful)
-- phase PCC well below xy PCC (degradation lives in `_magnitude_phase_from_xy`, not conv)
-- `ttnn.atan2` on shared inputs PCC > 0.99 (sensitivity is geometric, not implementation)
-- near-origin phase PCC worse than high-magnitude phase PCC
-- audio round-trip PCC > 0.999 (bad phase on ~zero-energy bins never reaches the audio)
-
-**Interpretation:** xy PCC ≈ 1.0 but phase PCC is low → the degradation is `atan2` near the origin, where the angle is ill-defined. Those bins carry negligible energy (`mag·e^{jφ} ≈ 0`), so the round-trip audio stays ~lossless. This is why `use_torch_stft_fallback` (CPU `torch.stft` with float64-precision atan2) adds ~+0.04 on top of the phase fallback in config E, and why raw phase PCC is a misleading proxy — reconstruction PCC is the metric that matters.
+Near-origin bins (`|z| < 0.05`) are the majority and drag phase PCC to ≈ 0.79, but carry negligible
+energy, so round-trip audio stays at 0.999998 — reconstruction PCC, not raw phase PCC, is what matters.
 
 ---
 
-## Other tests
-
-The `tests/` directory also holds per-module PCC tests (`test_tt_*_pcc.py`), additional injection proofs (`test_stft_refxy_injection_kmodel_proof.py`, `test_source_linear_tanh_fallback_proof.py`), and end-to-end ASR WER (`test_tt_kmodel_asr_wer.py`). Shared helpers live in `tests/kokoro_checkpoint.py`; config E kwargs are `STFT_PHASE_FALLBACK_KWARGS`.
+See also `docs/generator_perf_optimizations.md` and
+`Kokoro_Architecture_and_TextEncoder_Optimizations.md`. Shared test helpers live in
+`tests/kokoro_checkpoint.py`; config E kwargs are `STFT_PHASE_FALLBACK_KWARGS`.
