@@ -1728,6 +1728,24 @@ tt::tt_metal::AsicTopology generate_asic_topology_from_connections(
     return asic_topology;
 }
 
+tt::tt_metal::AsicTopology filter_topology_by_tier(
+    const tt::tt_metal::AsicTopology& topology,
+    const FsdQuery& fsd_query,
+    uint32_t depth,
+    const PhysicalSystemDescriptor& physical_system_descriptor) {
+    tt::tt_metal::AsicTopology filtered;
+    for (const auto& [src_asic_id, edges] : topology) {
+        const std::string src_host = physical_system_descriptor.get_host_name_for_asic(src_asic_id);
+        for (const auto& [dst_asic_id, eth_connections] : edges) {
+            const std::string dst_host = physical_system_descriptor.get_host_name_for_asic(dst_asic_id);
+            if (fsd_query.hierarchy_depth(src_host, dst_host) == depth) {
+                filtered[src_asic_id].push_back({dst_asic_id, eth_connections});
+            }
+        }
+    }
+    return filtered;
+}
+
 tt::tt_metal::AsicTopology build_reset_topology(
     const std::string& reset_host,
     uint32_t reset_tray_id,
