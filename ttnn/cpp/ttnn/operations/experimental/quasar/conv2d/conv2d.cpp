@@ -682,6 +682,17 @@ Result conv2d_L1(
                     tt::tt_metal::MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM},
                     std::nullopt);
             }
+            // padded_slice (the per-slice input gather in run_sliced_op) picks its program factory by INPUT
+            // LAYOUT: ROW_MAJOR -> PaddedSliceRMProgramFactory (data-movement only, Quasar-safe); TILE ->
+            // PaddedSliceTileProgramFactory, whose untilize ComputeKernel is UNPORTED on Quasar and throws
+            // "ComputeKernel is not supported on Quasar. Use QuasarComputeKernel instead." The stem's input
+            // was ROW_MAJOR (fold output) so it took the RM path; the layer1-4 3x3 convs feed a TILE
+            // activation (prior conv/matmul output) and would hit the unported TILE factory. The conv im2col
+            // reader consumes RM sticks and tilizes internally (Program A), so untilizing here is correct and
+            // routes every sliced conv through the working RM padded_slice.
+            if (dram_input.layout() != Layout::ROW_MAJOR) {
+                dram_input = ttnn::operations::experimental::quasar::to_layout(dram_input, Layout::ROW_MAJOR);
+            }
 
             const Conv2dSliceConfig height_slice_cfg{
                 .slice_type = Conv2dSliceConfig::SliceType::DRAM_HEIGHT, .num_slices = num_slices};
