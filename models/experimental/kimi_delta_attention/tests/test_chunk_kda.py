@@ -32,13 +32,17 @@ def _assert_pcc(name: str, golden: torch.Tensor, actual: torch.Tensor, threshold
     assert passed, f"{name} PCC {pcc:.6f} < {threshold}"
 
 
-@pytest.mark.parametrize("sequence,heads,key_dim,value_dim", [(32, 2, 32, 32), (64, 32, 128, 128)])
+@pytest.mark.parametrize(
+    "sequence,heads,key_dim,value_dim,flat_v",
+    [(32, 2, 32, 32, False), (64, 32, 128, 128, False), (64, 32, 128, 128, True)],
+)
 def test_chunk_kda_pcc(
     device: ttnn.Device,
     sequence: int,
     heads: int,
     key_dim: int,
     value_dim: int,
+    flat_v: bool,
 ) -> None:
     generator = torch.Generator().manual_seed(401 + sequence + heads)
     shape = (1, sequence, heads)
@@ -52,7 +56,8 @@ def test_chunk_kda_pcc(
 
     q_tt = _to_device(l2_norm_reference(q), device, ttnn.bfloat16)
     k_tt = _to_device(l2_norm_reference(k), device, ttnn.bfloat16)
-    v_tt = _to_device(v, device, ttnn.bfloat16)
+    v_input = v.reshape(1, sequence, heads * value_dim) if flat_v else v
+    v_tt = _to_device(v_input, device, ttnn.bfloat16)
     gate_tt = _to_device(gate, device, ttnn.float32)
     beta_tt = _to_device(beta, device, ttnn.float32)
     state_tt = _to_device(state, device, ttnn.float32)
@@ -71,6 +76,6 @@ def test_chunk_kda_pcc(
 
     actual_output = ttnn.to_torch(output_tt)
     actual_state = ttnn.to_torch(final_state_tt)
-    label = f"H={heads},K={key_dim},V={value_dim},T={sequence}"
+    label = f"H={heads},K={key_dim},V={value_dim},T={sequence},flat_v={flat_v}"
     _assert_pcc(f"{label} output", golden_output, actual_output)
     _assert_pcc(f"{label} state", golden_state, actual_state)

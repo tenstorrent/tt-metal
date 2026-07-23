@@ -183,10 +183,9 @@ class KimiDeltaAttention:
             _slice_width(qkv, config.q_dim, config.q_dim + config.k_dim),
             (batch, sequence, config.num_heads, config.head_k_dim),
         )
-        v = ttnn.reshape(
-            _slice_width(qkv, config.q_dim + config.k_dim, self._convolution_width),
-            (batch, sequence, config.num_heads, config.head_v_dim),
-        )
+        v = _slice_width(qkv, config.q_dim + config.k_dim, self._convolution_width)
+        if mode == "recurrent" or sequence % ttnn.TILE_SIZE != 0:
+            v = ttnn.reshape(v, (batch, sequence, config.num_heads, config.head_v_dim))
 
         auxiliary = ttnn.linear(
             hidden_states,

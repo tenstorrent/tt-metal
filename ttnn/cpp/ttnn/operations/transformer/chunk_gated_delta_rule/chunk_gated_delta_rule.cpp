@@ -220,7 +220,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
         k = pad_time_tile(k, BH, K, pad, dev);
     }
     if (!flat_v) {
-        v = pad_time_tile(v, BH, V, pad, dev);
+        TT_FATAL(!flat_v || pad == 0, "chunk_kda flat v requires T to be divisible by chunk_size");
+        if (!flat_v) {
+            v = pad_time_tile(v, BH, V, pad, dev);
+        }
     }
     // g, beta are [BH, T] TILE; pad along dim 1.
     if (pad > 0) {
@@ -406,11 +409,16 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     const auto& qs = q_in.logical_shape();
     const auto& vs = v_in.logical_shape();
     const auto& gs = g_in.logical_shape();
-    TT_FATAL(qs.rank() == 4 && vs.rank() == 4 && gs.rank() == 4, "chunk_kda expects rank-4 q/k/v/g");
-    const uint32_t B = qs[0], T = qs[1], H = qs[2], K = qs[3], V = vs[3];
+    const bool flat_v = vs.rank() == 3;
+    TT_FATAL(
+        qs.rank() == 4 && (flat_v || vs.rank() == 4) && gs.rank() == 4,
+        "chunk_kda expects rank-4 q/k/g and rank-3 or rank-4 v");
+    const uint32_t B = qs[0], T = qs[1], H = qs[2], K = qs[3];
+    TT_FATAL(!flat_v || vs[2] % H == 0, "chunk_kda flat v width {} must be divisible by H={}", vs[2], H);
+    const uint32_t V = flat_v ? (vs[2] / H) : vs[3];
     TT_FATAL(chunk_size == 32, "chunk_kda currently requires chunk_size=32, got {}", chunk_size);
     TT_FATAL(
-        k_in.logical_shape() == qs && vs[0] == B && vs[1] == T && vs[2] == H,
+        k_in.logical_shape() == qs && vs[0] == B && vs[1] == T && (flat_v ? vs[2] == H * V : vs[2] == H),
         "chunk_kda q/k/v shapes are inconsistent");
     TT_FATAL(gs[0] == B && gs[1] == T && gs[2] == H && gs[3] == K, "chunk_kda g must be [B,T,H,K]");
     TT_FATAL(
@@ -428,7 +436,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
 
     ttnn::Tensor q = ttnn::multiply(head_split_tile(q_in, B, T, H, K), scale);
     ttnn::Tensor k = head_split_tile(k_in, B, T, H, K);
-    ttnn::Tensor v = head_split_tile(v_in, B, T, H, V);
+    ttnn::Tensor v = flat_v ? (v_in.dtype() == DataType::BFLOAT16 ? v_in : ttnn::typecast(v_in, DataType::BFLOAT16))
+                            : head_split_tile(v_in, B, T, H, V);
     ttnn::Tensor g = head_split_float_tile(g_in, B, T, H, K);
     ttnn::Tensor beta = headvec_split_tile(beta_in, B, T, H);
     q = pad_time_tile(q, BH, K, pad, dev);
@@ -442,7 +451,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     }
     q = ttnn::reshape(q, ttnn::Shape({BH, NC, C, K}));
     k = ttnn::reshape(k, ttnn::Shape({BH, NC, C, K}));
-    v = ttnn::reshape(v, ttnn::Shape({BH, NC, C, V}));
+    if (!flat_v) {
+        v = ttnn::reshape(v, ttnn::Shape({BH, NC, C, V}));
+    }
     g = ttnn::reshape(g, ttnn::Shape({BH, NC, C, K}));
     beta = ttnn::reshape(beta, ttnn::Shape({BH, NC, C, 1}));
 
@@ -486,7 +497,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         C,
         out_mem,
         kernel_cfg,
-        false,
+        flat_v,
         H,
         false,
         scale,
