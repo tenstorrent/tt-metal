@@ -295,3 +295,42 @@
   dir and fixed before the golden run.
 - Tests added: None (reused test_scaled_dot_product_attention_perf.py + the golden suite + acceptance +
   precision matrix as the regression net).
+
+## Refinement 3c — FPU/SFPU phase overlap on the perf-flagged profile (the residual after 3b) (partial)
+- Date: 2026-07-23
+- What was done: Ran the verifier-mandated `/perf-measure` ablation FIRST (before any restructuring)
+  to quantify the exact FPU-idle / SFPU-idle split and set the realistic ceiling. Added a free,
+  defaulted-off compile-time ablation gate to the compute kernel (CT arg 13, driven by
+  `TTNN_SDPA_ABLATE`: 0=normal, 1=matmul-stub keeping every CB reserve/wait/pop/push scaffold,
+  2 reserved for softmax-stub) + one `int(os.environ.get(...))` line in the program descriptor.
+  Measured on the flagged shape `(1,10,9472,128)` bf16 @ `fp32_dest_acc_en=False`, 110 cores:
+  * **Baseline (full): 10.24 ms.**
+  * **Matmul-stub (SFPU/softmax + dataflow floor): 8.28 ms.**
+  * ⇒ **FPU (both matmuls) = 1.96 ms = 19.1 % of the wall; SFPU/softmax + overhead = 8.28 ms = 80.9 %.**
+  The shape is **SFPU/softmax-bound, not FPU/SFPU-balanced** — this refutes the refinement's premise by
+  measurement, exactly as Refinement 3's ablations refuted the read-bound premise.
+- Why the named lever is dead: (1) **Ceiling is 1.24×, not util 0.35** — even perfectly hiding ALL FPU
+  work behind SFPU bottoms out at the 8.28 ms SFPU floor (util 0.15 → ~0.185); the FPU is only 19 % of
+  the time. (2) **Literal FPU/SFPU concurrency is architecturally unavailable on a single Tensix core** —
+  both engines are issued by the one MATH RISC (TRISC1) and time-share; a full survey of the
+  examples/master.md measured-perf catalog found **no pattern that runs both engines in the same
+  wall-clock window** (the closest levers all *reduce SFPU cost*, i.e. attack the floor, not overlap the
+  engines). (3) Recurrence software-pipelining (block k's PV while block k+1's QK) is additionally
+  blocked by the running-(m,l,O) data dependency. There is **no code lever that realizes the heading's
+  mechanism**.
+- Decision: **[~] partial** (mirrors Refinement 3). The diagnostic work landed (the mandated ablation,
+  the exact 81/19 split, and the reusable gate) and the real next lever is named + filed as
+  **Refinement 3d — reduce the 8.28 ms SFPU/softmax floor** (DEST-resident fusion `compute_fusion`;
+  SFPU-finalize reduces `reduce_accumulate`/`reduce_block`; one-axis epilogue scoping `sfpu_tile_scope`).
+  Per "keep a correct lever at its trivial byte-identical default," the ablation gate is kept (defaulted
+  off) as reusable measurement infrastructure for 3d/5; nothing was reverted. 3b's (8,8) regime and R3's
+  gated mcast path are untouched.
+- Accuracy achieved: PCC ≥ 0.997 (soft gate) holds on the default path (byte-identical to R3b/3b);
+  shape `(1,10,9472,128)` bf16 @ fp32_dest_acc_en=False.
+- Golden test progress: **1061 passed / 848 xfailed** (104.9 s, no hang) — identical to R2/3b, zero
+  regression, zero xpass drift. Unit dir 81 passed / 8 skipped. Default (ablate=0) device-ns 10.25 ms
+  (+0.11 %, run noise) — the compile-time-constant branch folds → free.
+- Issues encountered: None. The ablation came up clean (no hang) on the first --profile run; the only
+  "surprise" was the decisive 81/19 SFPU/FPU split, which reframes the target for 3d.
+- Tests added: None (reused test_scaled_dot_product_attention_perf.py + the golden suite + unit dir as
+  the regression net; the ablation gate is env-driven, no new test file).

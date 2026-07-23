@@ -254,9 +254,43 @@ future shape that IS read-bound.
 0.35 math-util floor) via compute-side knobs, golden suite green, PCC 0.997 holds, no
 regression on the config-spanning guard set.
 
-### [ ] Refinement 3c — FPU/SFPU phase overlap on the perf-flagged profile (the residual after 3b)
+### [~] Refinement 3c — FPU/SFPU phase overlap on the perf-flagged profile (the residual after 3b)
 
 **Type**: perf
+
+**Outcome (2026-07-23)**: Ran the verifier-mandated `/perf-measure` ablation FIRST (matmul-stub:
+keep every CB reserve/wait/pop/push scaffold, do no FPU work → measures the SFPU/softmax + dataflow
+floor) on the flagged shape `(1,10,9472,128)` bf16 @ `fp32_dest_acc_en=False`. **The ablation refutes
+this refinement's premise by measurement** (exactly as Refinement 3's ablations refuted the read-bound
+premise): baseline **10.24 ms** → matmul-stub **8.28 ms**, so the **two FPU matmuls contribute only
+1.96 ms = 19.1 % of the wall; the SFPU/softmax + overhead floor is 8.28 ms = 80.9 %**. The shape is
+**SFPU/softmax-bound, not FPU/SFPU-balanced.** Consequences that kill the named lever:
+- **The overlap ceiling is 1.24×, not 0.35 util.** Even the *impossible ideal* of perfectly hiding
+  ALL FPU work behind SFPU work bottoms out at the 8.28 ms SFPU floor (util 0.15 → ~0.185) — the
+  0.35 goal is unreachable via FPU/SFPU overlap because the FPU is only 19 % of the time.
+- **Literal FPU/SFPU concurrency is architecturally unavailable on a single Tensix core.** The FPU
+  (matmul) and SFPU (exp/reduce/eltwise) are both issued by the **one MATH RISC (TRISC1)** — they
+  time-share, they cannot run in the same wall-clock window on one core. The examples/master.md perf
+  catalog was surveyed end-to-end: **no measured pattern achieves simultaneous FPU+SFPU execution**
+  (the closest levers — `compute_fusion`, `reduce_accumulate`, `sfpu_tile_scope` — all *reduce SFPU
+  cost*, i.e. attack the 8.28 ms floor, not overlap the engines). The recurrence-pipelining variant
+  (block k's PV while block k+1's QK) is additionally blocked by the running-(m,l,O) data dependency.
+- **Net**: there is no code lever that realizes the heading's mechanism. The productive lever is
+  **reducing the 8.28 ms SFPU/softmax floor**, which is a *different* scheme-change (SFPU-cost
+  reduction, not phase overlap) → filed as **Refinement 3d**, ordered immediately after this one.
+
+**Landed (kept, byte-identical default)**: a free, defaulted-off `/perf-measure` ablation gate
+(compute-kernel CT arg 13 + `TTNN_SDPA_ABLATE` env: 0=normal, 1=matmul-stub, 2 reserved for
+softmax-stub), so the FPU/SFPU split is re-measurable by 3d/5. At the default (0) the branch folds on
+the compile-time-constant CT arg → measured **10.25 ms (+0.11 %, run noise)**, PCC 0.997 holds; golden
+suite **1061 passed / 848 xfailed** (no hang), unit dir 81 passed / 8 skipped — zero regression. 3b's
+coarsened (8,8) regime and R3's gated mcast path are untouched.
+
+**Why [~] not [x]**: the named mechanism (FPU/SFPU phase overlap) is refuted at depth by the mandated
+ablation and is architecturally void on a single MATH thread — no code lever can reach it, so it is not
+"landed." Real diagnostic work landed (the ablation + the exact 81/19 split + the re-usable gate), and
+the exact next lever is named and filed (3d: attack the 8.28 ms SFPU floor). Per "keep a correct lever
+at its trivial byte-identical default," the gate stays; nothing was reverted.
 
 **Goal**: Refinement 3b turned every compute-side *block knob* to its ceiling and reached only
 util ~0.15 (from ~0.14) on the flagged shape `(1,10,9472,128)` bf16 @ `fp32_dest_acc_en=False`.
@@ -279,6 +313,43 @@ at the ceiling, so no further subblock headroom exists to fold in.
 
 **Done when**: measured device-ns improves materially beyond 3b's 10.24 ms on the flagged shape
 (toward the 0.35 math-util floor) via phase overlap, golden suite green, PCC 0.997 holds, no
+regression on the config-spanning guard set.
+
+### [ ] Refinement 3d — Reduce the SFPU/softmax floor on the perf-flagged profile (3c's real lever)
+
+**Type**: perf
+
+**Goal**: Refinement 3c's mandated ablation proved on device that the flagged shape
+`(1,10,9472,128)` bf16 @ `fp32_dest_acc_en=False` is **SFPU/softmax-bound, not FPU/SFPU-balanced**:
+matmul-stub drops the wall from **10.24 ms → 8.28 ms**, so the two FPU matmuls are only **19 %** of the
+wall and the **SFPU/softmax + per-phase overhead floor is 81 % (8.28 ms)**. FPU/SFPU phase overlap is
+therefore refuted (ceiling 1.24×) AND architecturally void on the single MATH thread. The path toward
+util 0.35 is to **shrink the 8.28 ms SFPU floor itself**. Chase it with the measured SFPU-cost levers
+from `ttnn/ttnn/operations/examples/master.md` (re-measure the split with the kept `TTNN_SDPA_ABLATE=1`
+gate to attribute each win):
+- **DEST-resident fusion of the softmax chain** (`compute_fusion`, T2, 1.03–1.12× when the consumer is
+  an SFPU op): keep rowmax→exp→rowsum→rescale resident in DEST across ops instead of packing each to an
+  L1 CB and unpacking it back. Do **not** fuse across the QKᵀ/PV FPU boundaries (DEST-reuse loses when
+  the consumer is the FPU). Today the kv_step already fuses sub→mul→exp; the untapped seams are the
+  rowmax/rowsum reduces and the l/O rescale-add epilogue.
+- **SFPU-finalize reduces** (`reduce_accumulate` / `reduce_block`, T2, row 2.9–5.4× isolated past the
+  crossover): replace the FPU matmul-reduce library on rowmax/rowsum with accumulate + `sfpu_reduce`
+  finalize that reads DEST in place, so the reduces share a dst-sync window with the exp/rescale
+  eltwise instead of paying an L1 round-trip (bf16-accumulation precision → keep fp32 DEST).
+- **One-axis SFPU epilogue scoping** (`sfpu_tile_scope`, T2/T3): the `1/rowsum` reciprocal + the
+  col-broadcast rescale produce a per-row (column-0) result; scope the SFPU to just those vectors
+  (isolation 3.8–7.3×, dilutes in a full op — measure the real delta).
+
+**Verifier notes**: This is a **scheme-change** (restructures the kv_step compute datapath / dst-sync
+windows), so it stands alone as a perf phase. It is the lever 3c's ablation actually points at (the
+"reduce per-phase reconfig/init/dst-sync drains" family), distinct from 3b's block-knob coarsening
+(already at its ceiling) and from 3c's refuted engine-overlap. Re-use the `TTNN_SDPA_ABLATE` gate to
+set the realistic ceiling per sub-lever before building each. Keep 3b's (8,8) regime and R3's gated
+mcast path as-is (correct, orthogonal, no-regression). PCC 0.997 is a soft gate — the SFPU-finalize
+reduces change the reduction datapath, so re-check PCC on every dtype in the guard set.
+
+**Done when**: measured device-ns improves materially below 3b's 10.24 ms on the flagged shape
+(toward the 0.35 math-util floor) via SFPU-floor reduction, golden suite green, PCC 0.997 holds, no
 regression on the config-spanning guard set.
 
 ### [ ] Refinement 4 — Causal masking (mask_mode=causal)

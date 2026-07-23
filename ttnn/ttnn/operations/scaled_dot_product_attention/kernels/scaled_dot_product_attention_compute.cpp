@@ -65,6 +65,7 @@ struct MMParams {
     uint32_t qk_in0_sb, qk_in1_sb, qk_sb_h, qk_sb_w;
     uint32_t pv_in0_sb, pv_in1_sb, pv_sb_h, pv_sb_w;
     uint32_t has_mask;
+    uint32_t ablate;  // /perf-measure ablation gate: 0=normal, 1=matmul-stub, 2=softmax-stub
 };
 
 // One online-softmax KV-step, updating the running (m,l,O) CBs in place.
@@ -72,7 +73,14 @@ void kv_step(bool first, const MMParams& p) {
     const uint32_t sq = p.sq, sk = p.sk, dht = p.dht;
 
     // ---- 1. S = Q·Kᵀ  (Q retained across the KV loop; K popped) ----
-    {
+    if (p.ablate == 1) {
+        // matmul-stub: keep CB scaffolding, no FPU work (measures SFPU/softmax floor).
+        cb_wait_front(cb_q_in, sq * dht);  // Q present (retained; final pop frees it)
+        cb_wait_front(cb_k_in, sk * dht);
+        cb_pop_front(cb_k_in, sk * dht);
+        cb_reserve_back(cb_qk_scores, sq * sk);
+        cb_push_back(cb_qk_scores, sq * sk);
+    } else {
         CircularBuffer q_buf(cb_q_in), k_buf(cb_k_in), qk_buf(cb_qk_scores);
         ckl::matmul_block<
             /*transpose=*/true,
@@ -152,7 +160,15 @@ void kv_step(bool first, const MMParams& p) {
         ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::of(sq, sk));
 
     // ---- 6. O_new = P·V  (P popped, V popped) ----
-    {
+    if (p.ablate == 1) {
+        // matmul-stub: keep CB scaffolding, no FPU work.
+        cb_wait_front(cb_qk_scores, sq * sk);
+        cb_pop_front(cb_qk_scores, sq * sk);
+        cb_wait_front(cb_v_in, sk * dht);
+        cb_pop_front(cb_v_in, sk * dht);
+        cb_reserve_back(cb_out_new, sq * dht);
+        cb_push_back(cb_out_new, sq * dht);
+    } else {
         CircularBuffer p_buf(cb_qk_scores), v_buf(cb_v_in), o_buf(cb_out_new);
         ckl::matmul_block<
             /*transpose=*/false,
@@ -205,6 +221,7 @@ void kernel_main() {
     const uint32_t pv_in1_sb = get_compile_time_arg_val(10);
     const uint32_t pv_sb_h = get_compile_time_arg_val(11);
     const uint32_t pv_sb_w = get_compile_time_arg_val(12);
+    const uint32_t ablate = get_compile_time_arg_val(13);
 
     const uint32_t q_count = get_arg_val<uint32_t>(0);
     const uint32_t k_num_chunks = get_arg_val<uint32_t>(1);
@@ -222,7 +239,8 @@ void kernel_main() {
         pv_in1_sb,
         pv_sb_h,
         pv_sb_w,
-        has_mask};
+        has_mask,
+        ablate};
     const uint32_t q_block_tiles = sq * dht;
 
     compute_kernel_hw_startup(cb_q_in, cb_k_in, cb_out);

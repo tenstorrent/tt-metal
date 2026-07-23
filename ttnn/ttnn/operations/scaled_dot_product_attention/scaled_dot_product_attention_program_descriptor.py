@@ -450,6 +450,7 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
         pv_in1_sb,
         pv_sb_h,
         pv_sb_w,
+        int(os.environ.get("TTNN_SDPA_ABLATE", "0")),  # /perf-measure ablation gate (0=normal)
     ]
     # Rebuild the compute config with the dtype-correct fidelity (never pass a
     # HiFi4 + fp32-DEST + bf16 combo through — issue #38306). fp32_dest_acc_en
