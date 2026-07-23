@@ -78,6 +78,8 @@ def reconstruct_runs(csv_path):
             val = int(r[COL_DATA])
             if zone == "Transaction size in bytes":
                 cur["size"] = val
+            elif zone == "Number of transactions":
+                cur["iters"] = val
             elif zone == "Write path":
                 cur["mode"] = val
             elif zone == "Test id":
@@ -90,10 +92,15 @@ def reconstruct_runs(csv_path):
 
 
 def series_by_mode(runs):
-    """{mode: {'sizes':[...], 'dur':[...], 'bw':[...]}} for each write mode present."""
+    """{mode: {'sizes':[...], 'dur':[...], 'bw':[...]}} for each write mode present.
+
+    ``dur`` is the amortized per-iteration duration (zone total / iteration count),
+    and ``bw`` is bytes/cycle = size / per-iteration duration."""
     by_mode = {}
     for r in runs:
-        by_mode.setdefault(r["mode"], {})[r["size"]] = r["dur"]
+        iters = r.get("iters", 1) or 1
+        per_iter_dur = r["dur"] / iters
+        by_mode.setdefault(r["mode"], {})[r["size"]] = per_iter_dur
     out = {}
     for mode, size_to_dur in by_mode.items():
         sizes = sorted(size_to_dur)
@@ -136,15 +143,9 @@ def main():
     series = series_by_mode(runs)
 
     fig, axes = plt.subplots(2, 2, figsize=(15, 11))
-    _draw(axes[0][0], series, "dur", lambda s: True, "Duration - full range", "Duration (cycles)")
-    _draw(
-        axes[0][1],
-        series,
-        "dur",
-        lambda s: s <= args.zoom_max,
-        f"Duration - zoom <= {args.zoom_max}B",
-        "Duration (cycles)",
-    )
+    dur_label = "Duration per write (cycles, amortized)"
+    _draw(axes[0][0], series, "dur", lambda s: True, "Duration - full range", dur_label)
+    _draw(axes[0][1], series, "dur", lambda s: s <= args.zoom_max, f"Duration - zoom <= {args.zoom_max}B", dur_label)
     _draw(axes[1][0], series, "bw", lambda s: True, "Bandwidth - full range", "Bandwidth (bytes/cycle)")
     _draw(
         axes[1][1],
@@ -155,7 +156,9 @@ def main():
         "Bandwidth (bytes/cycle)",
     )
     fig.suptitle(
-        f"Quasar Cache Write Sizes (test {TEST_ID}) - uncached 1B vs uncached 8B vs cached+flush", fontweight="bold"
+        f"Quasar Cache Write Sizes (test {TEST_ID}) - amortized over {runs[0].get('iters', '?')} iters "
+        f"- uncached 1B vs uncached 8B vs cached+flush",
+        fontweight="bold",
     )
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)

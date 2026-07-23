@@ -20,6 +20,9 @@ namespace unit_tests::dm::quasar_cache_perf {
 
 constexpr std::uint32_t QUASAR_CACHE_WRITE_TEST_ID = 912;
 constexpr std::uint32_t BASE_ADDR = 100 * 1024;
+// Repeat the timed write(+flush) region this many times per run and divide the
+// zone duration by it, to amortize fixed per-run overhead (April used 100).
+constexpr std::uint32_t NUM_ITERATIONS = 100;
 
 bool should_skip_test() { return std::getenv("TT_METAL_SIMULATOR") == nullptr; }
 
@@ -42,7 +45,7 @@ bool run_cache_write(
         .num_threads = 1,
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"base_addr", "size_bytes", "write_path", "test_id"},
+                .runtime_arg_names = {"base_addr", "size_bytes", "write_path", "num_iterations", "test_id"},
             },
         .hw_config = experimental::DataMovementGen2Config{},
     };
@@ -58,6 +61,7 @@ bool run_cache_write(
             {{"base_addr", BASE_ADDR},
              {"size_bytes", size_bytes},
              {"write_path", write_path},
+             {"num_iterations", NUM_ITERATIONS},
              {"test_id", QUASAR_CACHE_WRITE_TEST_ID}}),
     }};
     experimental::SetProgramRunArgs(program, params);

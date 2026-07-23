@@ -14,10 +14,15 @@ Comparing Uncached (1B) vs Uncached (8B) isolates the effect of store width on t
 uncached port; comparing Uncached (8B) vs Cached+Flush (8B) isolates the cache +
 flush effect at a fixed store width.
 
-The kernel times each `write(+flush)` region with `DeviceZoneScopedN` and stamps
-`Test id`, `Number of transactions` (=1), `Transaction size in bytes` (=N), and
-`Write path` (the mode: 0=Uncached 1B, 1=Uncached 8B, 2=Cached+Flush 8B). Results
-are plotted as both duration (cycles) and bandwidth (bytes/cycle) vs data size.
+To measure steady-state (not one-shot) cost, the kernel repeats the timed
+`write(+flush)` region `num_iterations` times (default 100) inside a single
+`DeviceZoneScopedN`, and the host divides the zone duration by the iteration
+count. This amortizes fixed per-run overhead (zone entry/exit, prologue, cold
+pipeline), matching the April two-phase measurement method. It stamps `Test id`,
+`Number of transactions` (= iteration count), `Transaction size in bytes` (=N),
+and `Write path` (the mode: 0=Uncached 1B, 1=Uncached 8B, 2=Cached+Flush 8B).
+Results are plotted as amortized per-write duration (cycles) and bandwidth
+(bytes/cycle) vs data size.
 
 ## Requirements
 

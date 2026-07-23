@@ -290,18 +290,29 @@ class Plotter:
             ybase=10,
         )
 
-    # Quasar Cache Write: Total Data Size vs Write Duration (one line per path)
+    # Quasar Cache Write: Total Data Size vs amortized per-write Duration (one line per mode).
+    # The timed zone repeats the write num_transactions (=iteration count) times, so the
+    # per-write duration is duration_cycles / num_transactions.
     def plot_quasar_cache_write_duration(self, ax, data):
+        per_iter_data = {}
+        for riscv, runs in data.items():
+            new_runs = []
+            for run in runs:
+                r = run.copy()
+                iters = run.get("num_transactions", 1) or 1
+                r["per_iter_duration"] = run["duration_cycles"] / iters
+                new_runs.append(r)
+            per_iter_data[riscv] = new_runs
         self._plot_series(
             ax=ax,
-            data=data,
-            x_key="transaction_size",  # holds total bytes written (N)
-            y_key="duration_cycles",
+            data=per_iter_data,
+            x_key="transaction_size",  # holds total bytes written per iteration (N)
+            y_key="per_iter_duration",
             series_keys=["write_path"],
             label_format=lambda combo, keys: f"{combo[0]}",
-            title="Data Size vs Write Duration",
+            title="Data Size vs Write Duration (amortized)",
             xlabel="Total Data Size (bytes)",
-            ylabel="Duration (cycles)",
+            ylabel="Duration per write (cycles)",
             xscale="log",
             xbase=2,
         )
@@ -311,8 +322,8 @@ class Plotter:
         self._plot_series(
             ax=ax,
             data=data,
-            x_key="transaction_size",  # holds total bytes written (N)
-            y_key="bandwidth",  # num_transactions(=1) * size / duration = bytes/cycle
+            x_key="transaction_size",  # holds total bytes written per iteration (N)
+            y_key="bandwidth",  # num_transactions * size / duration = per-iteration bytes/cycle
             series_keys=["write_path"],
             label_format=lambda combo, keys: f"{combo[0]}",
             title="Data Size vs Bandwidth",
