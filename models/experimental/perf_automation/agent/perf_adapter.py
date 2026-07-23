@@ -207,7 +207,7 @@ class PipelineStageAdapter:
                 continue
             setup = getattr(p, "%s_trace_setup" % name, None)
             if callable(setup):
-                self._call_with_inputs(setup, None)  # host prep + pre-upload, OUTSIDE the trace
+                self._call_with_inputs(setup, None)
             write = getattr(p, "%s_write_inputs" % name, None)
             stages.append(_Stage(name, step, write if callable(write) else None))
         if stages:
