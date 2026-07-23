@@ -69,9 +69,12 @@ constexpr uint32_t dl = decayfac;  // scan reads dl into this slot
 
 namespace {
 
-ComputeConfigDescriptor compute_cfg() {
+ComputeConfigDescriptor compute_cfg(tt::ARCH arch, const DeviceComputeKernelConfig& config) {
+    const auto args = get_compute_kernel_config_args(arch, config);
     return ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true, .math_approx_mode = false};
+        .math_fidelity = std::get<0>(args),
+        .fp32_dest_acc_en = std::get<2>(args),
+        .math_approx_mode = std::get<1>(args)};
 }
 
 // Chunk-parallel work distribution for PREP: split `total` independent (head, chunk) work-items
@@ -294,7 +297,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     compute_ct.push_back(f32_bits(attrs.scale));
     compute_ct.push_back(f32_bits(1e-6f));
     compute.compile_time_args = compute_ct;
-    compute.config = compute_cfg();
+    compute.config = compute_cfg(device->arch(), attrs.compute_kernel_config);
     compute.runtime_args.reserve(n_used);
 
     auto* q_buf = in.q.buffer();
@@ -449,7 +452,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     compute.compile_time_args = ct_args;
-    compute.config = compute_cfg();
+    compute.config = compute_cfg(device->arch(), attrs.compute_kernel_config);
     compute.runtime_args.reserve(n_used);
 
     auto* vb_buf = in.v_beta.buffer();
