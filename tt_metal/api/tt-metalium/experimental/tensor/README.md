@@ -31,8 +31,6 @@ The following headers were migrated from TTNN to this directory. Forward headers
 | `ttnn/api/ttnn/tensor/layout/page_config.hpp` | `spec/layout/page_config.hpp` |
 | `ttnn/api/ttnn/tensor/layout/tensor_layout.hpp` | `spec/layout/tensor_layout.hpp` |
 | `ttnn/api/ttnn/tensor/memory_config/memory_config.hpp` | `spec/memory_config/memory_config.hpp` |
-| `ttnn/api/ttnn/distributed/distributed_configs.hpp` | `../distributed_tensor/topology/distributed_tensor_configs.hpp` |
-| `ttnn/api/ttnn/distributed/tensor_topology.hpp` | `../distributed_tensor/topology/tensor_topology.hpp` |
 
 ## Life-time
 
