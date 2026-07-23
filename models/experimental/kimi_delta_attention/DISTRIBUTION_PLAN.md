@@ -243,3 +243,21 @@ another launch-chain reduction; retain the existing head, core, and CCL map.
 Scalar BinaryNg fusion of beta sigmoid and typecast is rejected: it reduced
 program count but regressed layer span 0.65896 -> 0.69050 ms with unchanged
 active time. It provides no evidence for changing prep ownership or core count.
+
+
+At `T=5120` (160 chunks), head ownership and sequence replication remain
+unchanged. Prep and the gated-RMS epilogue each expose 640 independent
+`(head,chunk)` or `(head,token-block)` items/device. Their shared row-major
+distributor uses all 110 compute cores: the first 90 cores receive six
+contiguous items and the remaining 20 receive five. Scan remains 16 cores
+(four V blocks for each of four local heads), with each core processing all
+160 chunks sequentially. Measured prep/scan times are 335.954/677.885 us.
+
+The output map also remains 8x8 matmul plus two Ring reduce-scatter rows at
+offset `(0,8)`, FP32 partials, and one worker/link. Its 1043.920 us measured
+time reaches 39.55% of the effective two-link roofline, 11.728 us short of the
+40% target. This near-target result does not justify sacrificing matmul cores
+for more CCL workers; the matched T=640 two-worker experiment already
+regressed. Long-sequence work should instead preserve this placement and
+reduce the scan serial chunk chain or overlap within the fused output
+program.
