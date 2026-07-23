@@ -6,35 +6,47 @@
 #include "embedding_program_factory_common.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim {
 
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
-tt::tt_metal::ProgramDescriptor EmbeddingsFusedProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_program_artifacts(
     const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value) {
+    // Metal 2.0 named resource handles (function-local so the three factory TUs never collide under
+    // unity build).
+    const DFBSpecName SRC0_DFB{"src0"};            // legacy c_0: weights-in
+    const DFBSpecName IDX_DFB{"index_scratch"};    // legacy c_1
+    const DFBSpecName OUT_DFB{"out"};              // legacy c_2
+    const DFBSpecName WCACHE_DFB{"weight_cache"};  // legacy c_3 (PADDED / BINARY only)
+    const TensorParamName INPUT{"input"};
+    const TensorParamName WEIGHTS{"weights"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_G1{"compute_g1"};
+    const KernelSpecName COMPUTE_G2{"compute_g2"};
+
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
     auto& output = tensor_return_value;
     const auto& embeddings_type = operation_attributes.embeddings_type;
     const auto& pad_token = operation_attributes.pad_token;
 
-    ProgramDescriptor desc;
+    const auto& input_mt = a.mesh_tensor();
+    const auto& weights_mt = weights.mesh_tensor();
+    const auto& output_mt = output.mesh_tensor();
 
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt::tt_metal::Buffer* out_buffer = output.buffer();
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
-    ////////////////////////////////////////////////////////////////////////////
-    // This should allocate a DRAM buffer on the device
     IDevice* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -83,8 +95,12 @@ tt::tt_metal::ProgramDescriptor EmbeddingsFusedProgramFactory::create_descriptor
     }
     uint32_t g1_numcores = core_group_1.num_cores();
 
-    // Create Buffers
+    // Data formats
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
+    uint32_t weights_single_tile_size = tt::tile_size(weights_cb_data_format);
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
@@ -93,12 +109,7 @@ tt::tt_metal::ProgramDescriptor EmbeddingsFusedProgramFactory::create_descriptor
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
-    uint32_t weights_single_tile_size = tt::tile_size(weights_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
-
-    // Hardcoded limit to reduce L1 usage. Should be updated to be tuned based on overall L1 usage
+    // Hardcoded limit to reduce SRAM usage. Should be updated to be tuned based on overall SRAM usage
     constexpr uint32_t max_double_buffer_tiles = 64;
 
     constexpr uint32_t max_l1_budget_bytes = 1024 * 1024;  // 1MB budget for embedding CB
@@ -130,74 +141,6 @@ tt::tt_metal::ProgramDescriptor EmbeddingsFusedProgramFactory::create_descriptor
         buffering = num_tiles_per_block > max_double_buffer_tiles ? 1 : 2;
     }
 
-    constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t cb0_size = buffering * tiles_per_chunk * weights_single_tile_size;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = cb0_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
-            .data_format = weights_cb_data_format,
-            .page_size = weights_single_tile_size,
-        }}},
-    });
-
-    constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = TILE_HEIGHT * input_element_size_bytes,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src1_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = TILE_HEIGHT * input_element_size_bytes,
-        }}},
-    });
-
-    constexpr uint32_t output_cb_index = tt::CBIndex::c_2;
-    uint32_t output_cb_size;
-    if (output_sharded) {
-        output_cb_size = output.buffer()->aligned_size_per_bank();
-    } else {
-        output_cb_size = buffering * tiles_per_chunk * output_single_tile_size;
-    }
-    CBDescriptor output_cb_desc{
-        .total_size = output_cb_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size,
-        }}},
-    };
-    if (output_sharded) {
-        output_cb_desc.buffer = out_buffer;
-    }
-    desc.cbs.push_back(std::move(output_cb_desc));
-
-    constexpr uint32_t src2_cb_index = tt::CBIndex::c_3;
-    if (embeddings_type == EmbeddingsType::PADDED) {
-        uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = cache_page_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = src2_cb_index,
-                .data_format = weights_cb_data_format,
-                .page_size = cache_page_size,
-            }}},
-        });
-    } else if (embeddings_type == EmbeddingsType::BINARY) {
-        uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 2 * cache_page_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = src2_cb_index,
-                .data_format = weights_cb_data_format,
-                .page_size = cache_page_size,
-            }}},
-        });
-    }
     uint32_t weight_block_size;
     if (output_sharded) {
         weight_block_size = output.shard_spec().value().shape[1] * weights_element_size_bytes;
@@ -207,104 +150,167 @@ tt::tt_metal::ProgramDescriptor EmbeddingsFusedProgramFactory::create_descriptor
 
     // TODO: Can increase size for larger reads
     uint32_t input_block_size_bytes = TILE_HEIGHT * input_element_size_bytes;
-    // Create Kernels
-    // reader
-    std::vector<uint32_t> embedding_compile_time_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)src2_cb_index,
-        (std::uint32_t)input_page_size,
-        (std::uint32_t)weight_page_size,
-        (std::uint32_t)weight_block_size,
-        (std::uint32_t)tiles_per_chunk,
-        (std::uint32_t)input_block_size_bytes,
-        (std::uint32_t)num_chunks,
-        (std::uint32_t)last_chunk_tiles};
-    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
-    KernelDescriptor::Defines embedding_defines = {
+    ////////////////////////////////////////////////////////////////////////////
+    //                 DataflowBuffers
+    ////////////////////////////////////////////////////////////////////////////
+    const bool has_weight_cache =
+        embeddings_type == EmbeddingsType::PADDED || embeddings_type == EmbeddingsType::BINARY;
+
+    std::vector<DataflowBufferSpec> dfbs;
+
+    // c_0 weights-in (reader produces, compute consumes)
+    dfbs.push_back(DataflowBufferSpec{
+        .unique_id = SRC0_DFB,
+        .entry_size = weights_single_tile_size,
+        .num_entries = buffering * tiles_per_chunk,
+        .data_format_metadata = weights_cb_data_format,
+    });
+
+    // c_1 index scratch (single toucher, reader-only)
+    dfbs.push_back(DataflowBufferSpec{
+        .unique_id = IDX_DFB,
+        .entry_size = TILE_HEIGHT * input_element_size_bytes,
+        .num_entries = 1,
+        .data_format_metadata = input_cb_data_format,
+    });
+
+    // c_2 output. On sharded output the buffer is the resident output shard (borrowed memory) and no
+    // writer runs; on interleaved output the compute produces into it and the writer drains it.
+    uint32_t output_cb_num_entries;
+    if (output_sharded) {
+        output_cb_num_entries = output.buffer()->aligned_size_per_bank() / output_single_tile_size;
+    } else {
+        output_cb_num_entries = buffering * tiles_per_chunk;
+    }
+    DataflowBufferSpec out_dfb{
+        .unique_id = OUT_DFB,
+        .entry_size = output_single_tile_size,
+        .num_entries = output_cb_num_entries,
+        .data_format_metadata = output_cb_data_format,
+    };
+    if (output_sharded) {
+        out_dfb.borrowed_from = OUTPUT;
+    }
+    dfbs.push_back(out_dfb);
+
+    // c_3 weight cache (single toucher, reader-only), PADDED / BINARY only
+    if (has_weight_cache) {
+        uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = WCACHE_DFB,
+            .entry_size = cache_page_size,
+            .num_entries = embeddings_type == EmbeddingsType::BINARY ? 2u : 1u,
+            .data_format_metadata = weights_cb_data_format,
+        });
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                 Kernels
+    ////////////////////////////////////////////////////////////////////////////
+    KernelSpec::CompilerOptions::Defines embedding_defines = {
         {enchantum::to_string(embeddings_type).data(), "1"}, {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(embedding_compile_time_args);
-    reader_desc.defines = embedding_defines;
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    // Compute kernels: split across the two core groups, each with its own
-    // per_core_block_cnt compile-time arg. We must build them as separate
-    // KernelDescriptors because their compile_time_args / core_ranges differ.
-    std::optional<KernelDescriptor> compute_desc_1;
-    std::optional<KernelDescriptor> compute_desc_2;
-    const char* compute_kernel_path =
-        use_chunked_processing ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"
-                               : "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp";
-
-    if (num_blocks_per_core_group_1 > 0) {
-        std::vector<uint32_t> compute_args_1 = {
-            uint32_t(src0_cb_index),                // input embeddings_cb_index
-            uint32_t(output_cb_index),              // output_cb_index
-            uint32_t(num_blocks_per_core_group_1),  // per_core_block_cnt
-            uint32_t(tiles_per_chunk),              // tiles_per_chunk
-            uint32_t(num_chunks),                   // num_chunks per block
-            uint32_t(last_chunk_tiles)              // last_chunk_tiles
-        };
-        KernelDescriptor compute_desc;
-        compute_desc.kernel_source = compute_kernel_path;
-        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc.core_ranges = core_group_1;
-        compute_desc.compile_time_args = std::move(compute_args_1);
-        compute_desc.config = ComputeConfigDescriptor{};
-        compute_desc_1 = std::move(compute_desc);
+    // reader
+    Group<DFBBinding> reader_dfb_bindings;
+    reader_dfb_bindings.push_back(
+        DFBBinding{.dfb_spec_name = SRC0_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER});
+    reader_dfb_bindings.push_back(
+        DFBBinding{.dfb_spec_name = IDX_DFB, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER});
+    reader_dfb_bindings.push_back(
+        DFBBinding{.dfb_spec_name = IDX_DFB, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER});
+    if (has_weight_cache) {
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WCACHE_DFB, .accessor_name = "weight_cache", .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = WCACHE_DFB, .accessor_name = "weight_cache", .endpoint_type = DFBEndpointType::CONSUMER});
     }
 
-    if (num_blocks_per_core_group_2 > 0) {
-        std::vector<uint32_t> compute_args_2 = {
-            uint32_t(src0_cb_index),                // input embeddings_cb_index
-            uint32_t(output_cb_index),              // output_cb_index
-            uint32_t(num_blocks_per_core_group_2),  // per_core_block_cnt
-            uint32_t(tiles_per_chunk),              // tiles_per_chunk
-            uint32_t(num_chunks),                   // num_chunks per block
-            uint32_t(last_chunk_tiles)              // last_chunk_tiles
-        };
-        KernelDescriptor compute_desc;
-        compute_desc.kernel_source = compute_kernel_path;
-        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc.core_ranges = core_group_2;
-        compute_desc.compile_time_args = std::move(compute_args_2);
-        compute_desc.config = ComputeConfigDescriptor{};
-        compute_desc_2 = std::move(compute_desc);
+    Group<std::string> reader_rta_names = {"input_start_id", "input_start_offset", "weight_offset", "num_blocks"};
+    if (embeddings_type == EmbeddingsType::PADDED) {
+        reader_rta_names.push_back("pad_token");
     }
 
-    // TODO: We can use the second risc to do more work in parallel
-    std::optional<KernelDescriptor> writer_desc;
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            std::filesystem::path{"ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp"},
+        .compiler_options = {.defines = embedding_defines},
+        .dfb_bindings = std::move(reader_dfb_bindings),
+        .tensor_bindings =
+            {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
+             TensorBinding{.tensor_parameter_name = WEIGHTS, .accessor_name = "weights"}},
+        .compile_time_args =
+            {{"input_page_size", input_page_size},
+             {"weight_block_size", weight_block_size},
+             {"tiles_per_chunk", tiles_per_chunk},
+             {"input_block_size_bytes", input_block_size_bytes},
+             {"num_chunks", num_chunks},
+             {"last_chunk_tiles", last_chunk_tiles}},
+        .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+
+    // compute: one KernelSpec per non-empty core group, same source (chunked own kernel or the Metal 2.0
+    // tilize fork), differing only in the per_core_block_cnt CTA.
+    const std::filesystem::path compute_source =
+        use_chunked_processing
+            ? std::filesystem::path{"ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"}
+            : std::filesystem::path{
+                  "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_metal2.cpp"};
+
+    auto make_compute = [&](const KernelSpecName& unique_id, uint32_t per_core_block_cnt) {
+        Group<DFBBinding> compute_dfb_bindings = {
+            DFBBinding{.dfb_spec_name = SRC0_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}};
+        if (output_sharded) {
+            // Single-toucher borrowed output: self-loop the producing compute kernel.
+            compute_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER});
+        }
+        KernelSpec::CompileTimeArgs compute_cta;
+        if (use_chunked_processing) {
+            compute_cta = {
+                {"per_core_block_cnt", per_core_block_cnt},
+                {"tiles_per_chunk", tiles_per_chunk},
+                {"num_chunks", num_chunks},
+                {"last_chunk_tiles", last_chunk_tiles}};
+        } else {
+            compute_cta = {{"per_core_block_cnt", per_core_block_cnt}, {"per_core_block_tile_cnt", tiles_per_chunk}};
+        }
+        return KernelSpec{
+            .unique_id = unique_id,
+            .source = compute_source,
+            .dfb_bindings = std::move(compute_dfb_bindings),
+            .compile_time_args = std::move(compute_cta),
+            .hw_config = ComputeHardwareConfig{ComputeGen1Config{}},
+        };
+    };
+
+    // writer (interleaved output only): Metal 2.0 fork of the shared interleaved writer.
+    std::optional<KernelSpec> writer;
     if (!output_sharded) {
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-        tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
-
-        // Tilized writer
-        KernelDescriptor w;
-        w.kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-        w.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        w.core_ranges = all_cores;
-        w.compile_time_args = std::move(writer_compile_time_args);
-        w.config = WriterConfigDescriptor{};
-        writer_desc = std::move(w);
+        writer = KernelSpec{
+            .unique_id = WRITER,
+            .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                            "writer_unary_interleaved_start_id_metal2.cpp"},
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+            .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        };
     }
 
+    ////////////////////////////////////////////////////////////////////////////
+    //                 Runtime args (per node)
+    ////////////////////////////////////////////////////////////////////////////
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
 
-    auto* a_buffer = a.buffer();
-    auto* weights_buffer = weights.buffer();
-    auto* output_buffer = output.buffer();
-
-    reader_desc.runtime_args.reserve(cores.size());
-    if (writer_desc.has_value()) {
-        writer_desc->runtime_args.reserve(cores.size());
+    KernelRunArgs reader_kra{.kernel = READER};
+    std::optional<KernelRunArgs> writer_kra;
+    if (!output_sharded) {
+        writer_kra = KernelRunArgs{.kernel = WRITER};
     }
 
     uint32_t input_offset = 0;
@@ -316,24 +322,23 @@ tt::tt_metal::ProgramDescriptor EmbeddingsFusedProgramFactory::create_descriptor
         uint32_t local_num_blocks = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
         // Reader
-        {
-            KernelDescriptor::RTArgList reader_args;
-            reader_args.push_back(a_buffer);
-            reader_args.push_back(weights_buffer);
-            reader_args.push_back(input_offset / num_blocks_per_batch);
-            reader_args.push_back(input_offset % num_blocks_per_batch * input_block_size_bytes);
-            reader_args.push_back(weight_offset);
-            reader_args.push_back(local_num_blocks);
-            if (embeddings_type == EmbeddingsType::PADDED) {
-                reader_args.push_back(pad_token.value());
-            }
-            reader_desc.emplace_runtime_args(core, reader_args);
+        AddRuntimeArgsForNode(
+            reader_kra.runtime_arg_values,
+            core,
+            {{"input_start_id", input_offset / num_blocks_per_batch},
+             {"input_start_offset", input_offset % num_blocks_per_batch * input_block_size_bytes},
+             {"weight_offset", weight_offset},
+             {"num_blocks", local_num_blocks}});
+        if (embeddings_type == EmbeddingsType::PADDED) {
+            AddRuntimeArgsForNode(reader_kra.runtime_arg_values, core, {{"pad_token", pad_token.value()}});
         }
 
         // Writer
         if (!output_sharded) {
-            writer_desc->emplace_runtime_args(
-                core, {output_buffer, static_cast<uint32_t>(num_tiles_per_block * local_num_blocks), tile_offset});
+            AddRuntimeArgsForNode(
+                writer_kra->runtime_arg_values,
+                core,
+                {{"num_pages", num_tiles_per_block * local_num_blocks}, {"start_id", tile_offset}});
             tile_offset += local_num_blocks * num_tiles_per_block;
             input_offset += local_num_blocks;
         } else {
@@ -345,18 +350,57 @@ tt::tt_metal::ProgramDescriptor EmbeddingsFusedProgramFactory::create_descriptor
         }
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    if (writer_desc.has_value()) {
-        desc.kernels.push_back(std::move(*writer_desc));
-    }
-    if (compute_desc_1.has_value()) {
-        desc.kernels.push_back(std::move(*compute_desc_1));
-    }
-    if (compute_desc_2.has_value()) {
-        desc.kernels.push_back(std::move(*compute_desc_2));
+    ////////////////////////////////////////////////////////////////////////////
+    //                 Assemble
+    ////////////////////////////////////////////////////////////////////////////
+    Group<KernelSpec> kernels;
+    kernels.push_back(std::move(reader));
+    if (writer.has_value()) {
+        kernels.push_back(std::move(*writer));
     }
 
-    return desc;
+    // WorkUnits: reader (and writer) run on all_cores (they appear in both groups' work units); each
+    // compute KernelSpec covers one disjoint core group. Per node this yields exactly one reader, one
+    // compute and (interleaved) one writer instance.
+    std::vector<WorkUnitSpec> work_units;
+    if (num_blocks_per_core_group_1 > 0) {
+        kernels.push_back(make_compute(COMPUTE_G1, num_blocks_per_core_group_1));
+        Group<KernelSpecName> wu_kernels = {READER, COMPUTE_G1};
+        if (writer_kra.has_value()) {
+            wu_kernels.push_back(WRITER);
+        }
+        work_units.push_back(
+            WorkUnitSpec{.name = "wu_g1", .kernels = std::move(wu_kernels), .target_nodes = core_group_1});
+    }
+    if (num_blocks_per_core_group_2 > 0) {
+        kernels.push_back(make_compute(COMPUTE_G2, num_blocks_per_core_group_2));
+        Group<KernelSpecName> wu_kernels = {READER, COMPUTE_G2};
+        if (writer_kra.has_value()) {
+            wu_kernels.push_back(WRITER);
+        }
+        work_units.push_back(
+            WorkUnitSpec{.name = "wu_g2", .kernels = std::move(wu_kernels), .target_nodes = core_group_2});
+    }
+
+    ProgramSpec spec{
+        .name = "embedding_fused",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dfbs),
+        .tensor_parameters =
+            {TensorParameter{.unique_id = INPUT, .spec = input_mt.tensor_spec()},
+             TensorParameter{.unique_id = WEIGHTS, .spec = weights_mt.tensor_spec()},
+             TensorParameter{.unique_id = OUTPUT, .spec = output_mt.tensor_spec()}},
+        .work_units = std::move(work_units),
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(reader_kra));
+    if (writer_kra.has_value()) {
+        run_args.kernel_run_args.push_back(std::move(*writer_kra));
+    }
+    run_args.tensor_args = {{INPUT, input_mt}, {WEIGHTS, weights_mt}, {OUTPUT, output_mt}};
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

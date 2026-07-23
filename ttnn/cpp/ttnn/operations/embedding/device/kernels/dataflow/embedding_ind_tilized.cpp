@@ -4,59 +4,51 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_common.hpp"
 #include "api/debug/dprint.h"
 
 void kernel_main() {
     Noc noc;
 
-    const std::uint32_t input_buffer_src_addr = get_arg_val<uint32_t>(0);
-    const std::uint32_t weight_buffer_src_addr = get_arg_val<uint32_t>(1);
-    const std::uint32_t tile_offset = get_arg_val<uint32_t>(2);
-    const std::uint32_t face_offset = get_arg_val<uint32_t>(3);
-    const std::uint32_t num_rows = get_arg_val<uint32_t>(4);
+    const auto tile_offset = get_arg(args::tile_offset);
+    const auto face_offset = get_arg(args::face_offset);
+    const auto num_rows = get_arg(args::num_rows);
 
-    const std::uint32_t curr_col = get_arg_val<uint32_t>(5);
-    const std::uint32_t starting_index = get_arg_val<uint32_t>(6);
+    const auto curr_col = get_arg(args::curr_col);
+    const auto starting_index = get_arg(args::starting_index);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
+    constexpr auto weight_stick_size = get_arg(args::weight_stick_size);
+    constexpr auto row_length = get_arg(args::row_length);
 
-    constexpr uint32_t weight_stick_size = get_compile_time_arg_val(4);
-    constexpr uint32_t row_length = get_compile_time_arg_val(5);
-    constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(6);
-
-    constexpr auto input_args = TensorAccessorArgs<7>();
-    constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    const auto input = TensorAccessor(input_args, input_buffer_src_addr);
-    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr);
+    const auto input = TensorAccessor(tensor::input);
+    const auto weights = TensorAccessor(tensor::weights);
 
     constexpr uint32_t face_size = 16;
     constexpr uint32_t tile_height = 32;
     constexpr uint32_t face_hw = face_size * face_size;
 
-    prepare_local_cache(noc, cb_id_in2, weights, weight_stick_size, /*pad_token_arg_idx=*/6);
+    prepare_local_cache(noc, weights, weight_stick_size);
 
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
 
-    cb_in1.reserve_back(1);
-    uint32_t input_l1_addr = cb_in1.get_write_ptr();
+    dfb_in1.reserve_back(1);
+    uint32_t input_l1_addr = dfb_in1.get_write_ptr();
     volatile tt_l1_ptr input_token_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(input_l1_addr);
 
     const uint32_t input_page_size = input.get_aligned_page_size();
 
     auto read_block = [&](const uint32_t& token_idx, const uint32_t& width_size, const uint32_t& offset = 0) {
-        cb_in0.reserve_back(1);
-        uint32_t weight_l1_addr = cb_in0.get_write_ptr();
+        dfb_in0.reserve_back(1);
+        uint32_t weight_l1_addr = dfb_in0.get_write_ptr();
         input_token_t token = static_cast<input_token_t>(input_l1_ptr[token_idx + offset]);
         read_token_async(noc, token, weights, weight_l1_addr, width_size);
         noc.async_read_barrier();
-        cb_in0.push_back(1);
+        dfb_in0.push_back(1);
     };
 
     uint32_t curr_tile = tile_offset;
@@ -123,7 +115,7 @@ void kernel_main() {
             }
         }
     }
-    // cb_in1 is reserved once as an index scratch buffer (no downstream consumer); commit the
-    // reservation so the CB is left balanced.
-    cb_in1.push_back(1);
+    // dfb_in1 is reserved once as an index scratch buffer (no downstream consumer); commit the
+    // reservation so the DFB is left balanced.
+    dfb_in1.push_back(1);
 }
