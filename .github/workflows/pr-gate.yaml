@@ -158,7 +158,7 @@ jobs:
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
   find-changed-files:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
@@ -277,7 +277,7 @@ jobs:
   model-charts-sync:
     needs: [find-changed-files]
     if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
     - name: Checkout repo
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -331,7 +331,7 @@ jobs:
          needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
          needs.find-changed-files.outputs.llk-quasar-changed == 'true')
       }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Sync LLK labels based on changes
         uses: actions/github-script@v7
@@ -391,7 +391,7 @@ jobs:
       issues: write
       pull-requests: write
       copilot-requests: write
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: tenstorrent/tt-github-actions/.github/actions/copilot-pr-labeler@629b4727fa0dff3d43895601dd538e303880ecbc # main (tt-github-actions#144)
 
@@ -479,7 +479,7 @@ jobs:
       - build-docs
       - llk-smoke-tests
       - llk-build-quasar
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 5

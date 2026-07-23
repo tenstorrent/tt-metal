@@ -265,6 +265,10 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None):
             sku_entry = sku_config[concrete_sku]
             if "weights-cache-mode" in sku_entry:
                 entry["weights-cache-mode"] = sku_entry["weights-cache-mode"]
+            # SKUs carrying an `allocation` block are exabox multihost SKUs (runs_on
+            # exabox-multihost-with-nfs) that need the ttop allocation/reset lifecycle rather than
+            # the single-host container path. Mark the leg so consumers can route it accordingly.
+            entry["multihost"] = "allocation" in sku_entry
             substitute_cmd_placeholders(entry)
             filtered_tests.append(entry)
 

@@ -289,8 +289,17 @@ public:
     void write_barrier(const Noc &noc) const { write_barrier_impl(noc); }
 #endif
 
+    // Peek current FIFO cursors (byte address / arch units). Use for local entry data access —
+    // prefer with scoped_lock when poking L1. Prefer noc.h for Class 1 transfers (pass the DFB).
     uint32_t get_write_ptr() const { return get_write_ptr_impl(); }
-    uint32_t get_read_ptr()  const { return get_read_ptr_impl(); }
+    uint32_t get_read_ptr() const { return get_read_ptr_impl(); }
+
+#ifndef ARCH_QUASAR
+    // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
+    // Not for peeks: use get_*_ptr. Not declared on Quasar (redesign Classes 2–5).
+    void evil_set_write_ptr(uint32_t addr);
+    void evil_set_read_ptr(uint32_t addr);
+#endif
 
     [[nodiscard]] auto scoped_lock() {
         // TODO: Register with the debugger to track the lock
@@ -314,7 +323,7 @@ private:
     void handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index);
 
 #ifndef COMPILE_FOR_TRISC
-    friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_* implicit-sync helpers
+    friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_*
 
     uint32_t prepare_implicit_read();
     void commit_implicit_read();

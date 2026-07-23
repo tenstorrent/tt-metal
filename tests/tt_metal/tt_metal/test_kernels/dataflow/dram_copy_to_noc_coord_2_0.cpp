@@ -77,8 +77,9 @@ void kernel_main() {
     // Dispatcher Kernel is able to finish.
     // Device::close() requires fast-dispatch kernels to finish.
     volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
-#if defined(COMPILE_FOR_DM)
-    // SD signaling: Quasar DM requires RUN_MSG_DONE. TODO: remove once FD is enabled on Quasar.
+    // SD enabled on all archs: notify completion via RUN_MSG_DONE to mailbox. FD notify path
+    // posts to a dispatcher absent under SD and wedges the NOC.
+#if defined(WATCHER_KERNEL_SLOW_DISPATCH)
     go_message_in->signal = RUN_MSG_DONE;
 #else
     uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);

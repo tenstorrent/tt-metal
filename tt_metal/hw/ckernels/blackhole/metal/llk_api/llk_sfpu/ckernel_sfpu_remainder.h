@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel {
@@ -14,6 +15,7 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE>
 inline void init_remainder(const uint value, const uint recip) {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = Converter::as_float(value);
     sfpi::vConstFloatPrgm1 = Converter::as_float(recip);
 }

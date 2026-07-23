@@ -74,16 +74,11 @@ transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LIN
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 #else
-    // Quasar has no unpack-to-dest transpose path (TODO: tt-llk#1559) and no int-FPU 8-bit integer
-    // reconstruct path; reject formats that would otherwise silently take the wrong path. UInt32 is
-    // treated as unpack-to-dest on WH/BH and Int8/UInt8 (low nibble 0xE) need the int-FPU path.
-    const bool is_8bit_int = (src_format & 0xf) == (std::uint32_t)DataFormat::Int8;
-    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+    // Quasar has no unpack-to-dest transpose path (TODO: tt-llk#1559)
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     LLK_ASSERT(
         !enable_unpack_to_dest, "32-bit (unpack-to-dest) transpose not supported on Quasar");  // TODO: tt-llk#1559
-    LLK_ASSERT(!is_8bit_int, "8-bit integer transpose not supported on Quasar");
     UNPACK((llk_unpack_hw_configure(icb)));
     UNPACK((llk_unpack_A_init<
             BroadcastType::NONE,

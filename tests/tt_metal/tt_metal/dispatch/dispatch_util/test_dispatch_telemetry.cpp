@@ -126,8 +126,10 @@ protected:
 
     template <typename TelemetryType>
     void write_telemetry(CoreType core_type, const CoreCoord& core, const TelemetryType& telemetry) {
+        // write to cq_id 0's slot to match the cq_id=0 default that read_dispatch_core_telemetry() uses at every call
+        // site in this file.
         auto telemetry_addr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-            CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
+            CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0);
         auto bytes = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&telemetry), sizeof(TelemetryType));
         ASSERT_TRUE(detail::WriteToDeviceL1(device(), core, telemetry_addr, bytes, core_type));
     }
@@ -385,8 +387,9 @@ TEST_F(DispatchTelemetryReadApiTest, SMCControlIsInitialized) {
     auto control = read_smc_dispatch_telemetry_control(tt_device());
     ASSERT_TRUE(control.has_value());
 
+    // TODO: When dispatch telemetry is supported on Quasar, we'll need to pass in the command queue id(s) here.
     auto expected_addr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
+        CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0);
     const uint32_t control_version = control->version;
     const uint32_t control_signature = control->signature;
     const uint8_t control_flags = control->flags;
@@ -474,8 +477,9 @@ TEST_F(DispatchTelemetrySlowDispatchTest, SMCControlIsInitialized) {
     auto control = read_smc_dispatch_telemetry_control(tt_device());
     ASSERT_TRUE(control.has_value());
 
+    // TODO: When dispatch telemetry is supported on Quasar, we'll need to pass in the command queue id(s) here.
     auto expected_addr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
+        CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0);
     const uint32_t control_version = control->version;
     const uint32_t control_signature = control->signature;
     const uint8_t control_flags = control->flags;

@@ -34,7 +34,7 @@ uint32_t default_c_in_block(uint32_t kernel_vol) {
 }
 
 template <typename T, typename Fn>
-Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
+Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const tt::tt_metal::TensorSpec& output_spec) {
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
     auto transformed_buffer = input_tensor.host_storage().buffer().transform(
         compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
@@ -110,7 +110,7 @@ static Tensor conv_group_weight_zero_pad_helper(
         return tt::tt_metal::HostBuffer(std::move(output_buffer));
     };
 
-    const TensorSpec output_spec(
+    const tt::tt_metal::TensorSpec output_spec(
         output_weight_shape,
         tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     return convert_tensor<T>(weight, pad_weight, output_spec);
@@ -138,15 +138,15 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
                 {DataType::BFLOAT4_B, &conv_group_weight_zero_pad_helper<uint32_t>},
             };
 
-    if (tt::tt_metal::is_device_tensor(conv_weight_tensor)) {
+    if (ttnn::is_device_tensor(conv_weight_tensor)) {
         log_warning(
             tt::LogOp,
             "Prepare weights for Conv3D with groups > 1 expects weights on host, but they are on device. The op will "
             "move them back to host.");
     }
     return convert_tensor_to_tiled_layout_common(
-        tt::tt_metal::is_device_tensor(conv_weight_tensor) ? ttnn::operations::core::from_device(conv_weight_tensor)
-                                                           : conv_weight_tensor,
+        ttnn::is_device_tensor(conv_weight_tensor) ? ttnn::operations::core::from_device(conv_weight_tensor)
+                                                   : conv_weight_tensor,
         output_dtype,
         to_w_tile_layout_map,
         original_conv_weight_tensor_shape,

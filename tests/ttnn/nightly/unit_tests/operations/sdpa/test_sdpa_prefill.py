@@ -2116,3 +2116,62 @@ def test_sdpa_noncausal_partial_k_reduce_trigger(device, sk, d):
     # the partial-tile mask stamp. Coverage for that interaction (the row-max reduce only sets the
     # softmax stability offset, so the partial mask need not gate the trigger); must stay correct.
     run_sdpa_noncausal_partial_k_near_uniform(device, sk, d, q_chunk_size=256, k_chunk_size=256)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
+@pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
+@pytest.mark.parametrize("is_causal", [True, False], ids=["causal", "noncausal"])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
+@pytest.mark.parametrize("b, nh, s, d", ([1, 8, 2048, 128],), ids=["nh8_s2048"])
+def test_sdpa_large_score_precision(
+    device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype, is_causal, fp32_dest_acc_en
+):
+    torch.manual_seed(0)
+
+    Q = fa_rand(b, nh, s, d)
+    K = fa_rand(b, nh, s, d)
+    V = fa_rand(b, nh, s, d)
+
+    # Large k bias which is the same for every key. Mirrors Qwen2.5-VL, which first exposed this.
+    K = K + torch.randn([b, nh, 1, d]) * 100.0
+
+    Q = Q.bfloat16().float()
+    K = K.bfloat16().float()
+    V = V.bfloat16().float()
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=False,
+    )
+
+    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_back = ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=is_causal,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    tt_back = ttnn.to_torch(tt_back)
+
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=is_causal)
+
+    pcc_threshold = 0.998 if fp32_dest_acc_en else 0.92
+    out_pass, out_pcc = comp_pcc(gt, tt_back, pcc_threshold)
+    logger.debug(f"python vs pytorch: {out_pcc}")
+    rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
+    logger.debug(f"rmse: {rmse}")
+    assert out_pass

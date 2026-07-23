@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_log.h"
+#include "cmath_common.h"
 
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_log.h"
@@ -164,6 +165,7 @@ inline void calculate_lgamma_stirling_fp32(
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void lgamma_stirling_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     // init for sfpu_reciprocal_iter<2> for Blackhole
     sfpi::vConstFloatPrgm0 = 2.0f;
 }

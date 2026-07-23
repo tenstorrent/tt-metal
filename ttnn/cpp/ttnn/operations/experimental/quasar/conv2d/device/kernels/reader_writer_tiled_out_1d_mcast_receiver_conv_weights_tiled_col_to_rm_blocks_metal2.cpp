@@ -23,10 +23,8 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "conv_reader_common.hpp"
-#include "api/debug/dprint.h"  // DEBUG: conv2d layer3 hang localization (remove after)
 
 void kernel_main() {
-    DPRINT("WR start\n");  // DEBUG: conv2d layer3 hang
     constexpr uint32_t num_blocks_weight_h = get_arg(args::num_blocks_weight_h);
     constexpr uint32_t weight_block_num_tiles = get_arg(args::weight_block_num_tiles);
 
@@ -134,7 +132,7 @@ void kernel_main() {
         if constexpr (split_reader_enabled) {
             if constexpr (activation_reuse_enabled) {
                 l1_write_addr_act = cb_start_addr;
-                get_local_cb_interface(dfb::act_second_reader).fifo_wr_ptr = l1_write_addr_act;
+                cb_act_second_obj.evil_set_write_ptr(l1_write_addr_act);
             }
             reader_offset = act_l1_read_addr;
         }
@@ -248,5 +246,4 @@ void kernel_main() {
     // the legacy runtime did, so returning with an un-acked atomic leaves the core "running" and it
     // never signals program completion -> dispatch process_wait hangs.
     noc.async_full_barrier();
-    DPRINT("WR end\n");  // DEBUG: conv2d layer3 hang
 }

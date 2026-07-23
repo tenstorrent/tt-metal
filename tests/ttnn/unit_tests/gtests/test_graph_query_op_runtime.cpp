@@ -55,22 +55,24 @@ protected:
     void TearDown() override { ttnn::close_device(*device_); }
 
 public:
-    static const ttnn::TensorSpec m_interleaved_1_3_1024_1024_tiled;
+    static const tt::tt_metal::TensorSpec m_interleaved_1_3_1024_1024_tiled;
 };
 
-const ttnn::TensorSpec TTNNFixtureWithTraceEnabledDevice::m_interleaved_1_3_1024_1024_tiled = ttnn::TensorSpec(
-    ttnn::Shape({1, 3, 1024, 1024}),
-    tt::tt_metal::TensorLayout(
-        tt::tt_metal::DataType::BFLOAT16,
-        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-        ttnn::L1_MEMORY_CONFIG));
+const tt::tt_metal::TensorSpec TTNNFixtureWithTraceEnabledDevice::m_interleaved_1_3_1024_1024_tiled =
+    tt::tt_metal::TensorSpec(
+        ttnn::Shape({1, 3, 1024, 1024}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
 
 // ============================================================================
 // Binary Eltwise Op tests
 // ============================================================================
 
-class BinaryOpTraceRuntime : public TTNNFixtureWithTraceEnabledDevice,
-                             public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>> {};
+class BinaryOpTraceRuntime
+    : public TTNNFixtureWithTraceEnabledDevice,
+      public testing::WithParamInterface<std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>> {};
 
 TEST_P(BinaryOpTraceRuntime, Add) {
     const auto& [input_spec_a, input_spec_b] = GetParam();

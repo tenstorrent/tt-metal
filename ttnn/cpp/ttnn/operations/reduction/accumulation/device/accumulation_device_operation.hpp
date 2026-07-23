@@ -26,7 +26,7 @@ using namespace ttsl;
 struct AccumulationDeviceOperation {
     using operation_attributes_t = AccumulationParams;
     using tensor_args_t = AccumulationInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct AccumulationProgramFactory {

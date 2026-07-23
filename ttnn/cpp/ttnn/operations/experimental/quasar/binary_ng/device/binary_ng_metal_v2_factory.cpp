@@ -8,7 +8,7 @@
 // This is a generic, faithful port of the descriptor factory's NONE-tiled path
 // (binary_ng_program_factory.cpp::create_descriptor). It inherits that factory's logic — per-operand
 // layout, FPU/SFPU OpConfig, the full lhs/rhs/post activation machinery, fp32_dest_acc_en,
-// unpack_to_dest_mode, num_tiles_per_cycle, and the per-core arg derivation — and differs from it ONLY
+// unpack_modes, num_tiles_per_cycle, and the per-core arg derivation — and differs from it ONLY
 // in the CB->DFB translation:
 //   - CBDescriptor -> DataflowBufferSpec (one per CB index the NONE path allocates: c_0->in0/pre_lhs,
 //     c_1->in1/pre_rhs, c_2->out, c_3->post_lhs, c_4->post_rhs).
@@ -240,7 +240,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     // path is correct for any layout mix; borrowing is a throughput optimization for the fully co-resident
     // case (a block-sharded residual add). ---
     const auto shard_volumes =
-        get_shard_volumes(a.tensor_spec(), std::optional<TensorSpec>{b.tensor_spec()}, c.tensor_spec());
+        get_shard_volumes(a.tensor_spec(), std::optional<tt::tt_metal::TensorSpec>{b.tensor_spec()}, c.tensor_spec());
     const bool native = shard_volumes.has_value();
     const bool a_sharded = native && shard_volumes->a_shard_volume.has_value();
     const bool b_sharded = native && shard_volumes->b_shard_volume.has_value();
@@ -441,15 +441,15 @@ ProgramArtifacts create_no_bcast_artifacts(
                                   (a_df == tt::DataFormat::Int32 && b_df == tt::DataFormat::Int32) ||
                                   (a_df == tt::DataFormat::UInt32 && b_df == tt::DataFormat::UInt32);
 
-    // unpack_to_dest_mode: the descriptor sets UnpackToDestFp32 on all SFPU consumer CBs, but that is
-    // inert for non-Float32 entries (and the DFB validator rejects UnpackToDestFp32 unless
-    // fp32_dest_acc_en is true). So set it only on compute-consumer DFBs whose format is Float32 (which
-    // forces fp32_dest_acc_en true). A Float32 FPU consumer must still carry an explicit entry, which
-    // is Default. compute consumers: in0(pre_lhs), in1(pre_rhs), post_lhs, post_rhs.
-    m2::ComputeUnpackToDestModes unpack_to_dest_mode;
+    // unpack_modes: the descriptor sets UnpackToDest on all SFPU consumer CBs, but that is inert for
+    // non-Float32 entries (and the DFB validator rejects UnpackToDest on a 32-bit format unless
+    // enable_32_bit_dest is true). So set it only on compute-consumer DFBs whose format is Float32
+    // (which forces fp32_dest_acc_en true). A Float32 FPU consumer must still carry an explicit entry,
+    // which is UnpackToSrc. compute consumers: in0(pre_lhs), in1(pre_rhs), post_lhs, post_rhs.
+    m2::ComputeUnpackModes unpack_modes;
     auto set_unpack_mode = [&](const m2::DFBSpecName& dfb, tt::DataFormat df) {
         if (df == tt::DataFormat::Float32) {
-            unpack_to_dest_mode.emplace(dfb, is_sfpu ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default);
+            unpack_modes.emplace(dfb, is_sfpu ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc);
         }
     };
     set_unpack_mode(IN0, a_df);
@@ -555,7 +555,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     }
 
     // to_compute_hardware_config maps the common knobs and picks the arch's variant (ComputeGen1Config on
-    // Wormhole, ComputeGen2Config on Quasar); it deliberately leaves the per-DFB unpack_to_dest_mode
+    // Wormhole, ComputeGen2Config on Quasar); it deliberately leaves the per-DFB unpack_modes
     // default, so set it here via std::visit — the arch-agnostic pattern main's quasar untilize factories use.
     auto compute_hw = ttnn::to_compute_hardware_config(
         a.device()->arch(),
@@ -564,7 +564,7 @@ ProgramArtifacts create_no_bcast_artifacts(
             .math_approx_mode = false,
             .fp32_dest_acc_en = fp32_dest_acc_en,
         });
-    std::visit([&](auto& cfg) { cfg.unpack_to_dest_mode = unpack_to_dest_mode; }, compute_hw);
+    std::visit([&](auto& cfg) { cfg.unpack_modes = unpack_modes; }, compute_hw);
 
     m2::KernelSpec compute_spec{
         .unique_id = COMPUTE,

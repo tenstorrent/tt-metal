@@ -66,12 +66,13 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 // common to both generations; `arch` selects the matching alternative (ComputeGen2Config on Quasar,
 // else ComputeGen1Config) — the config's generation must match the target platform.
 // packer_l1_acc and throttle_level are op-side concerns, not translated.
-// The result's per-DFB unpack_to_dest_mode is left default for the program factory to set.
-// (As is bfp8_pack_precise, but that is rarely to never set non-default.)
 //
-// Please note that the following TEMPORARY fields are not set from this helper:
-// enable_2x_src_format, unpack_to_dest_en, unpack_to_dest_mode
-// If specialization is desired, use site should update them instead.
+// The result's per-DFB unpack_modes table is left default for the program factory to set.
+// bfp_pack_precision_mode is likewise left default (rarely set non-default).
+//
+// The following Gen2-only TEMPORARY fields are also not set here; a use site that needs
+// them should set them on the returned config instead:
+//   enable_2x_src_register, unpack_to_dest_en
 tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
     tt::ARCH arch, const ComputeKernelConfig& config);
 

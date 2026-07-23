@@ -423,6 +423,7 @@ def dispatch_combine_shape_params():
 )
 def test_ttnn_dispatch_combine(
     mesh_device,
+    device_params,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
@@ -435,6 +436,11 @@ def test_ttnn_dispatch_combine(
     is_ci_env,
     is_ci_v2_env,
 ):
+    if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D and tuple(mesh_device.shape) == (4, 2):
+        pytest.skip(
+            "fabric2d mesh-4x2 all-gather hang. Revert this skip when "
+            "https://github.com/tenstorrent/tt-metal/issues/50559 is closed."
+        )
     run_dispatch_combine(
         mesh_device,
         seq_len_per_chip,

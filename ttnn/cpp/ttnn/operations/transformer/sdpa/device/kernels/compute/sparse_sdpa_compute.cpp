@@ -93,8 +93,8 @@ void kernel_main() {
 
     const uint32_t tok_count = get_arg_val<uint32_t>(1);
 
+    // Q tilize is the first operation, so startup must configure raw-Q -> tiled-Q.
     compute_kernel_hw_startup(cb_q_rm, cb_q_in);
-    mm_init(cb_q_in, cb_k_in, cb_out_im);  // one-time full matmul init; the no_mop matmuls reinit off this
 
     scale_cb.wait_front(1);  // persistent reduce scaler; the streaming reduce assumes it is ready
 
@@ -119,9 +119,9 @@ void kernel_main() {
             // tilize K rows -> [Skt, DHt] (waits on reader cb_k_rm -> absorbs the K-read stall)
             compute_kernel_lib::tilize<DHt, cb_k_rm, cb_k_in>(
                 /*num_blocks=*/Skt, /*total_input_pages=*/Skt * tt::constants::TILE_HEIGHT);
-            // fp8 K tilize leaves srcA in fp8. QK reads K (transposed -> srcA) and Q (srcB), so restore
-            // srcA=cb_k_in (bfp8 for fp8 K), srcB=cb_q_in. No-op for bf16; mm_no_mop_init_short does not reconfig.
-            reconfig_data_format(cb_k_in, cb_q_in);
+            // QK reads K (transposed -> srcA) and Q (srcB). Reconfigure both formats and the tiled descriptor
+            // geometry/strides; mm_no_mop_init_short only programs the matmul MOP.
+            reconfig_data_format<false /* to_from_int8 */, true /* is_tile_dim_reconfig_en */>(cb_k_in, cb_q_in);
             // K tilize also leaves the packer in cb_k_in's format+strides (bfp8 for fp8). Restore bf16 once per
             // chunk for the downstream packs (cb_qk_im/max/sum/out share its geometry); configure_pack_width in
             // the qg loop refreshes only the MOP. No-op for bf16.

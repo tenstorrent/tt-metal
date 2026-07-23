@@ -524,12 +524,13 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     };
 
     // Append a kernel's scratchpad CRTA section to `out`, in binding order: one word per scratchpad
-    // binding, holding the scratchpad's allocated L1 base address. The address is 0 here on the first
-    // SetProgramRunArgs (the scratchpad is allocated later, at program-compile time, and the slot is
-    // then patched in place — see ProgramImpl::allocate_scratchpads); on any later re-assembly the
-    // handle already carries the allocated address, so it is filled directly. The section is always
-    // present (sized by the kernel's scratchpad bindings), so the buffer's word count is stable across
-    // re-set calls (install_crtas asserts that).
+    // binding, holding the scratchpad's allocated L1 base address. On the factory path,
+    // reserve_runtime_arg_buffers + allocate_scratchpads may already have filled this; on the
+    // legacy order (SetProgramRunArgs before allocate_scratchpads) the address is 0 here and is
+    // patched later. On any re-assembly the handle already carries the allocated address, so it
+    // is filled directly. The section is always present (sized by the kernel's scratchpad
+    // bindings), so the buffer's word count is stable across re-set calls (install_crtas asserts
+    // that).
     auto append_scratchpad_crtas = [](const auto& scratchpad_handles, std::vector<uint32_t>& out) {
         for (const auto& handle : scratchpad_handles) {
             out.push_back(handle.allocated_address);
@@ -770,15 +771,19 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     }
     program_impl.apply_dfb_size_overrides(size_overrides);
     AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
+    program_impl.mark_program_run_args_initialized();
 }
 
 void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args) {
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
+    detail::ProgramImpl& program_impl = program.impl();
+    TT_FATAL(
+        program_impl.program_run_args_initialized(),
+        "UpdateTensorArgs called on Program before SetProgramRunArgs. Call SetProgramRunArgs at least once first.");
+
     // Validate the TensorArgument list (shared with the full-path validator).
     ValidateTensorArgs(program, tensor_args);
-
-    detail::ProgramImpl& program_impl = program.impl();
 
     // Build a tensor_parameter_name -> MeshTensor lookup.
     // As in SetProgramRunArgs, this assumes lockstep mesh allocation:
@@ -1134,11 +1139,15 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
     log_debug(tt::LogMetal, "Updating ProgramRunArgs (partial fast-path)");
 
+    detail::ProgramImpl& program_impl = program.impl();
+    TT_FATAL(
+        program_impl.program_run_args_initialized(),
+        "UpdateProgramRunArgs: CRTA buffer not allocated because SetProgramRunArgs has not been called. Call "
+        "SetProgramRunArgs at least once before a partial update.");
+
     if (!skip_validation) {
         ValidateUpdateProgramRunArgs(program, params);
     }
-
-    detail::ProgramImpl& program_impl = program.impl();
 
     // Patch the supplied args in place. Omitted (enqueue-invariant) named args and tensor params
     // are left untouched, retaining the value installed by the most recent SetProgramRunArgs.

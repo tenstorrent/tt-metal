@@ -42,6 +42,7 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 | Running tests | `run-test` (`.claude/skills/run-test/SKILL.md`) | Dispatches llk-test-runner with correct scenario flags |
 | Debugging kernel errors | `debug-kernel` (`.claude/skills/debug-kernel/SKILL.md`) | Dispatches llk-debugger with inferred arch/kernel type |
 | Porting kernels between architectures | `port-kernel` (`.claude/skills/port-kernel/SKILL.md`) | Launches source + target sages, reads test harness |
+| Creating or repairing Quasar perf tests | `quasar-perf-test` (`.claude/skills/quasar-perf-test/SKILL.md`) | Reuses correctness tests, wires `PerfConfig`, and implements balanced `PerfRunType` paths |
 | TensorShape / tile-size API conversion or coverage | `tensor-shape` (`.claude/skills/tensor-shape/SKILL.md`) | Plumbs `TensorShape` through lib/API, TRISC coverage, review checklist |
 
 Trigger examples for `arch-lookup`:

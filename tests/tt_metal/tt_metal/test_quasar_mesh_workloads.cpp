@@ -201,3 +201,62 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestMultipleWorkloadsNonBlockingEnqueu
         EXPECT_EQ(compute_output, kExpectedComputeValues);
     }
 }
+
+TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, TestInterleavedWorkloadsAcrossTwoCQs) {
+    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
+    }
+
+    auto mesh_device = devices_[0];
+    IDevice* dev = mesh_device->get_devices()[0];
+    const experimental::NodeCoord node{0, 0};
+
+    const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+
+    constexpr uint32_t num_workloads = 8;
+
+    // Distinct DM base value per workload so a cross-CQ clobber shows up as a mismatch.
+    auto dm_base_value_for = [](uint32_t w) { return 0xa0000000u + (w << 16); };
+
+    // Each workload's DM and compute outputs live on separate 64-byte cache lines so the DM cache
+    // flush can't clobber the compute kernel's uncached writes.
+    auto dm_base_addr_for = [&](uint32_t w) { return base_address + w * 2 * kL1CacheLineBytes; };
+    auto compute_addr_for = [&](uint32_t w) { return dm_base_addr_for(w) + kL1CacheLineBytes; };
+
+    std::vector<uint32_t> zeros(num_workloads * 2 * kL1CacheLineBytes / sizeof(uint32_t), 0);
+    tt_metal::detail::WriteToDeviceL1(dev, node, base_address, zeros);
+
+    distributed::MeshCommandQueue& cq0 = mesh_device->mesh_command_queue(0);
+    distributed::MeshCommandQueue& cq1 = mesh_device->mesh_command_queue(1);
+
+    std::vector<distributed::MeshWorkload> workloads;
+    workloads.reserve(num_workloads);
+    for (uint32_t w = 0; w < num_workloads; w++) {
+        const std::string kernel_id = "k" + std::to_string(w + 1);
+        workloads.push_back(create_workload(
+            mesh_device, node, dm_base_addr_for(w), dm_base_value_for(w), compute_addr_for(w), kernel_id));
+    }
+
+    // Interleave: w even -> CQ0, w odd -> CQ1, so consecutive enqueues alternate queues.
+    for (uint32_t w = 0; w < num_workloads; w++) {
+        distributed::EnqueueMeshWorkload(w % 2 == 0 ? cq0 : cq1, workloads[w], true);
+    }
+
+    for (uint32_t w = 0; w < num_workloads; w++) {
+        const uint32_t dm_base_addr = dm_base_addr_for(w);
+        const uint32_t compute_addr = compute_addr_for(w);
+
+        std::vector<uint32_t> dm_output(kNumUserDMThreads, 0);
+        tt_metal::detail::ReadFromDeviceL1(dev, node, dm_base_addr, kNumUserDMThreads * sizeof(uint32_t), dm_output);
+        for (uint32_t i = 0; i < kNumUserDMThreads; i++) {
+            EXPECT_EQ(dm_output[i], dm_base_value_for(w) + i);
+        }
+
+        std::vector<uint32_t> compute_output(kNumComputeNEOs * kNumTRISCsPerNEO, 0);
+        tt_metal::detail::ReadFromDeviceL1(
+            dev, node, compute_addr, kNumComputeNEOs * kNumTRISCsPerNEO * sizeof(uint32_t), compute_output);
+        EXPECT_EQ(compute_output, kExpectedComputeValues);
+    }
+}

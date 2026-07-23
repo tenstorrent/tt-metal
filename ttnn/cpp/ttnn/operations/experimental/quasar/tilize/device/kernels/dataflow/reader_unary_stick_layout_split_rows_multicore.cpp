@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -34,17 +33,17 @@ void kernel_main() {
 
     auto read_tiles = [&](const uint32_t& num_tiles, uint32_t page_id) {
         cb_in0.reserve_back(num_tiles);
-        uint32_t l1_write_addr = cb_in0.get_write_ptr();
+        uint32_t dst_offset = 0;
         for (uint32_t k = 0; k < tile_height; k++) {
             // Need an inner loop for pages within row. Only relevant for ND-sharded case on multicore
             // (otherwise this loop only has 1 iteration).
             for (uint32_t l = 0; l < num_pages_in_row; l++) {
                 uint32_t width_size =
                     (l == num_pages_in_row - 1) ? size_of_valid_data_in_last_page_in_row : block_width_size;
-                CoreLocalMem<uint32_t> dst(l1_write_addr);
-                noc.async_read(s, dst, width_size, {.page_id = page_id, .offset_bytes = 0}, {.offset_bytes = 0});
+                noc.async_read(
+                    s, cb_in0, width_size, {.page_id = page_id, .offset_bytes = 0}, {.offset_bytes = dst_offset});
                 page_id++;
-                l1_write_addr += width_size;
+                dst_offset += width_size;
             }
         }
         noc.async_read_barrier();

@@ -22,6 +22,8 @@ on:
           - gemma-4-26b-a4b
           - gemma-4-31b
           - dit-common
+          - wan-2.2-t2v
+          - wan-2.2-i2v
           # llama3.3-70b-galaxy: disabled — see #42139
           - flux.1-schnell
           - flux.1-dev
@@ -42,6 +44,14 @@ on:
           - "bh_p300 (P300)"
           - "bh_quietbox_2 (BH QB2)"
           - "bh_galaxy (BH Galaxy)"
+          # Exabox multihost SKUs - routed to the models-unit-tests-multihost job. Dispatch-only:
+          # deliberately excluded from the scheduled ALL_SKUS set so cron runs don't allocate
+          # scarce exabox hardware.
+          - "bh_sc1 (BH Single Galaxy)"
+          - "bh_sc4 (BH Supercluster 4)"
+          - "bh_sc4-blitz (BH Supercluster 4 / Blitz)"
+          - "bh_sc4-mgd (BH Supercluster 4 / MGD)"
+          - "bh_sc16 (BH Supercluster 16)"
       platform:
         required: false
         type: choice
@@ -82,7 +92,7 @@ jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
       model: ${{ steps.resolve.outputs.model }}
@@ -122,6 +132,12 @@ jobs:
   models-unit-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
     secrets: inherit
+    # OIDC only on this caller (the reusable workflow's multihost job needs ttop auth), not
+    # workflow-wide. Job-level permissions replace inherited defaults, so restate what tests need.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
