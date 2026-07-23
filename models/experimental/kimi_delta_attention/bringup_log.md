@@ -618,3 +618,10 @@
 - T=32 PCC and TP=8 T=64 trace smoke passed. The TP weight test now checks the exact fused physical payload; dead separate QKV/auxiliary tensors were removed.
 - Report: `/tmp/kda_tp_layer_t640_fused_input_r10/reports/2026_07_23_11_13_49/ops_perf_results_2026_07_23_11_13_49.csv`. Ten replays reduced device span 0.890 -> 0.874 ms and host time 0.924 -> 0.913 ms/layer. Matmul active time fell 51.3 us while slicing added 12.6 us; active kernels are 0.806-0.807 ms/device.
 - Mesh throughput is 67.71 TFLOP/s or 5.57% of peak. Full hardware regression passed 9/9 in 15.37 s.
+
+### 2026-07-23 11:22:50 UTC — Reject wider fused-output subblock
+
+- Hypothesis: KDA T=640, local K=512, and `per_core_N=9` may benefit from a legal 1x3 output subblock despite Qwen traced-8k evidence favoring 1x1.
+- The first mechanical A/B did not wire the parameter into the intended program and was discarded; its numbers are intentionally absent. A function-scoped diff was inspected before rerunning.
+- Corrected report: `/tmp/kda_tp_layer_t640_outsub3_actual_r10/reports/2026_07_23_11_22_50/ops_perf_results_2026_07_23_11_22_50.csv`. Against matched 1x1, median device span regressed 0.87433 -> 0.87484 ms, slowest-chip fused time regressed 146.778 -> 147.706 us, and active time was unchanged.
+- Restored 1x1. Qwen overlap diagnosis transfers to KDA; closing the CCL gap requires a different fused dataflow, not a wider matmul subblock.

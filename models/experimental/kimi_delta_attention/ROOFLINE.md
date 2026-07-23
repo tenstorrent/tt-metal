@@ -207,3 +207,7 @@ Median device latency falls 0.890 -> 0.874 ms (1.8%), host latency is
 
 Mesh throughput is 67.71 TFLOP/s or 5.57% of eight-chip peak by device span;
 host-observed throughput is 64.86 TFLOP/s or 5.33%.
+
+The KDA-specific fused-output 1x3 subblock sweep was negative. Against the
+matched 1x1 profile above, median device span changed 0.87433 -> 0.87484 ms and
+slowest-chip fused time changed 146.778 -> 147.706 us. Retain 1x1.
