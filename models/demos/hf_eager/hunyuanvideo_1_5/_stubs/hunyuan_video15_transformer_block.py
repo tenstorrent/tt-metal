@@ -334,7 +334,7 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
             ttnn.slice(p, (0, i * C), (Bp, (i + 1) * C)) for i in range(6)
         )
         B = int(x.shape[0])
-        nx = ttnn.layer_norm(x, epsilon=eps, compute_kernel_config=compute_config)  # no affine
+        nx = _wln(x, eps)  # no affine; width-sharded (shard knob) — same lever as norm2
         scale_r = ttnn.reshape(scale_msa, (B, 1, C))  # already (1+scale): +1 baked into bias
         shift_r = ttnn.reshape(shift_msa, (B, 1, C))
         # Fused shift + norm*scale in ONE ternary launch (was add(mul(norm,scale),shift)).
