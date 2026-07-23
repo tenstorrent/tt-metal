@@ -383,6 +383,10 @@ void kernel_main() {
             const auto s_slot = TensorAccessor(meta_args, slot_id_addr);
             meta_noc.async_read(s_slot, CoreLocalMem<uint32_t>(meta_l1 + kSlotDstOffset), 4, {.page_id = 0}, {});
             meta_noc.async_read_barrier();
+            // Metadata tensor is at a FIXED DRAM address reused every chunk; the RISC data cache may hold
+            // the prior chunk's value for this L1 line (barrier orders the DMA, volatile still reads cache).
+            // Force a refetch of the freshly-DMA'd value, else an intermittently stale slot read corrupts.
+            invalidate_l1_cache();
             const uint32_t slot_id = CoreLocalMem<volatile uint32_t>(meta_l1 + kSlotDstOffset)[0];
             // The KV-cache batch dim is (user, layer)-major:
             //   cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx
@@ -404,6 +408,7 @@ void kernel_main() {
             const auto s_kv_actual = TensorAccessor(kv_meta_args, kv_actual_isl_addr);
             meta_noc.async_read(s_kv_actual, CoreLocalMem<uint32_t>(meta_l1 + kKvDstOffset), 4, {.page_id = 0}, {});
             meta_noc.async_read_barrier();
+            invalidate_l1_cache();  // fresh-metadata refetch (fixed DRAM addr reused per chunk; see slot read above)
             const uint32_t kv_actual_isl = CoreLocalMem<volatile uint32_t>(meta_l1 + kKvDstOffset)[0];
             const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
             const uint32_t chunk_global = chunk_size_t * 32;
