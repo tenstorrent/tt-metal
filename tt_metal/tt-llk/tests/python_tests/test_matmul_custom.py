@@ -31,11 +31,17 @@ from helpers.utils import passed_test
 # Throttle levels supported by the no-mop matmul math LLK. Throttle only inserts
 # NOPs between MVMULs to cap compute throughput, so the numeric result is IDENTICAL
 # for every level -> the golden is the same MatmulGolden as the non-throttled path.
-# Blackhole implements run_throttled_sequence_no_mop<1..5>; Wormhole B0 static_asserts
-# THROTTLE_LEVEL == 0, so only level 0 is valid there.
-THROTTLE_LEVELS = (
-    [0, 1, 2, 3, 4, 5] if get_chip_architecture() == ChipArchitecture.BLACKHOLE else [0]
-)
+#
+# Blackhole implements run_throttled_sequence_no_mop<1..5>, so it sweeps 0-5.
+# Wormhole B0's LLK static_asserts THROTTLE_LEVEL == 0 (llk_math_matmul_custom_no_mop.h:
+# "Wormhole custom no-mop matmul only supports THROTTLE_LEVEL == 0") -- levels 1-5 have no
+# throttle sequences and do not compile there. Any non-Blackhole arch is therefore level 0
+# only; throttle 1-5 on WH is unsupported by design, not an untested gap. This gate is
+# arch-explicit (not a bare else) so a future arch that gains throttle sequences must opt in.
+if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
+    THROTTLE_LEVELS = [0, 1, 2, 3, 4, 5]
+else:
+    THROTTLE_LEVELS = [0]
 
 
 def generate_format_aware_matmul_combinations(

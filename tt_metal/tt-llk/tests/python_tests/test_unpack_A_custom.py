@@ -43,7 +43,12 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
-# _llk_unpack_A_custom_ always unpacks a full 4-face 32x32 tile.
+# _llk_unpack_A_custom_ always unpacks a full 4-face 32x32 tile: it hardcodes
+# TTI_SETADCXX(p_setadc::UNP_A, 1023, 0x0) (llk_unpack_A_custom.h), i.e. 1024 datums =
+# 4 faces of 16x16. A 1- or 2-face unpack is not expressible without changing the LLK, so
+# num_faces is NOT swept here (fixed at 4) -- the issue #50562 "num_faces 1/2/4" item is
+# N/A for this LLK by contract. Meaningful coverage is instead the format x tile-count /
+# source-L1-address sweep below.
 NUM_FACES_FULL_TILE = 4
 
 # The custom kernel hardcodes 16-bit destination (dest_acc=No), so drop any
