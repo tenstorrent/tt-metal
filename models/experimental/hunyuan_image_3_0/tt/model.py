@@ -42,20 +42,24 @@ from .cache import cache_file, resolve_transformer_cache
 _BD = BACKBONE_KWARGS
 
 
-def _disk_expert_loader(layer_idx: int, moe_prefix: str):
+def _disk_expert_loader(layer_idx: int, moe_prefix: str, model_dir=None):
     """Return ``loader(expert_idx) -> state_dict`` reading one expert from safetensors.
 
     Cast to float32 to match ``load_prefixed_state_dict`` (the path used for
     gate/shared/attention upload); native bf16→as_tensor can diverge enough to
-    flip MoE top-k on single-token decode.
+    flip MoE top-k on single-token decode. ``model_dir`` must be the SAME checkpoint
+    the rest of the backbone (layer_loader) was built from — resolving it
+    independently risks picking a different (e.g. base vs. instruct) checkpoint when
+    both are cached, silently corrupting MoE output.
     """
+    src = model_dir if model_dir is not None else resolve_base_model_dir()
 
     def load_one(expert_idx: int) -> dict:
         keys = [
             f"{moe_prefix}.experts.{expert_idx}.gate_and_up_proj.weight",
             f"{moe_prefix}.experts.{expert_idx}.down_proj.weight",
         ]
-        return {k: v.to(torch.float32) for k, v in load_tensors(resolve_base_model_dir(), keys).items()}
+        return {k: v.to(torch.float32) for k, v in load_tensors(src, keys).items()}
 
     return load_one
 
@@ -106,6 +110,7 @@ class HunyuanTtModel(LightweightModule):
         bf16_layers=None,
         weight_cache_path=None,
         model_cache_name: str = "hunyuan-image-3.0",
+        model_dir=None,
     ):
         """
         Args:
@@ -214,7 +219,7 @@ class HunyuanTtModel(LightweightModule):
             # reload one expert at a time from disk on forward (avoids ~200GB RSS).
             if stream_experts and ccl_manager is None and hasattr(layer.mlp, "bind_expert_loader"):
                 moe_prefix = f"model.layers.{i}.mlp"
-                layer.mlp.bind_expert_loader(_disk_expert_loader(i, moe_prefix))
+                layer.mlp.bind_expert_loader(_disk_expert_loader(i, moe_prefix, model_dir))
             self.layers.append(layer)
             del sd
             gc.collect()
