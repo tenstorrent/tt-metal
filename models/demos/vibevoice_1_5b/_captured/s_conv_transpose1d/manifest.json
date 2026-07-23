@@ -1,0 +1,48 @@
+{
+  "component": "s_conv_transpose1d",
+  "submodule_path": "model.acoustic_tokenizer.decoder.upsample_layers.1.0",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          2048,
+          20
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {
+      "cache": {
+        "kind": "none"
+      },
+      "sample_indices": {
+        "kind": "none"
+      },
+      "use_cache": {
+        "kind": "scalar",
+        "type": "bool",
+        "repr": "False"
+      },
+      "debug": {
+        "kind": "scalar",
+        "type": "bool",
+        "repr": "False"
+      }
+    }
+  },
+  "output": {
+    "kind": "tensor",
+    "shape": [
+      1,
+      1024,
+      160
+    ],
+    "dtype": "torch.bfloat16"
+  }
+}

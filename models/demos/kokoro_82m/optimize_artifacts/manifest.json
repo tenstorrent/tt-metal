@@ -1,0 +1,340 @@
+{
+  "config": {
+    "box": null,
+    "case": null,
+    "devices": "0",
+    "direction": "min",
+    "end_signpost": "stop",
+    "input": null,
+    "max_iter": null,
+    "metric": "device_ms",
+    "model_root": "/tmp/tt_hw_planner_hexgrad_Kokoro-82M_1783376840/models/demos/kokoro_82m",
+    "notes": "",
+    "pcc_test": "models/demos/kokoro_82m/tests/e2e/test_e2e_tts.py::test_e2e_tts",
+    "perf_test": null,
+    "runs": 1,
+    "start_signpost": "start",
+    "target": null,
+    "timeout": 10800,
+    "visible_devices": "0"
+  },
+  "discovery_review": {
+    "decision": "continue",
+    "model": "claude-sonnet-4-6",
+    "reasoning": "The end-to-end test (tests/e2e/test_e2e_tts.py::test_e2e_tts) is a genuine full-model correctness gate: it runs the complete phonemes\u219224kHz speech pipeline, enforces a 0.95 log-magnitude-spectrogram PCC (a principled phase-invariant metric for this NSF vocoder architecture), plus exact duration match and module-invocation coverage \u2014 this is not a unit test. The perf test (tests/e2e/test_main_perf.py::test_main_perf) is appropriate: it exercises the same single TTS forward pass through the full TTNN pipeline with no correctness assertions, which is exactly what a profiling harness should target. The three warnings are all non-blocking: the spectrogram-vs-waveform PCC choice is architecturally justified, the duplicate perf tests are a housekeeping issue (the selected one uses the proper device fixture), and the 'no_perf_test/fallback' warning is superseded by the valid perf_test path already in the findings.",
+    "usage": {
+      "cost_usd": 0.0436593,
+      "latency_s": 8.01,
+      "tokens_cached": 13956,
+      "tokens_in": 19737,
+      "tokens_out": 272
+    }
+  },
+  "env": {
+    "arch": "blackhole",
+    "card": "p300c",
+    "clock_ghz": 1.35,
+    "device_count": 1,
+    "dram_bw_gbps": 512.0,
+    "dram_capacity_bytes": 34359738368,
+    "grid_x": 13,
+    "grid_y": 10,
+    "peak_tflops_per_core": {
+      "hifi2": 2.7,
+      "hifi3": 1.8,
+      "hifi4": 1.35,
+      "lofi": 5.4
+    },
+    "worker_cores": 130
+  },
+  "pathmap": {
+    "components": {
+      "ada_i_n1d": {
+        "note": "per-component PCC test: tests/pcc/test_ada_i_n1d.py",
+        "path": "_stubs/ada_i_n1d.py"
+      },
+      "ada_i_n_res_block1": {
+        "note": "per-component PCC test: tests/pcc/test_ada_i_n_res_block1.py",
+        "path": "_stubs/ada_i_n_res_block1.py"
+      },
+      "ada_layer_norm": {
+        "note": "per-component PCC test: tests/pcc/test_ada_layer_norm.py",
+        "path": "_stubs/ada_layer_norm.py"
+      },
+      "adain_res_blk1d": {
+        "note": "per-component PCC test: tests/pcc/test_adain_res_blk1d.py",
+        "path": "_stubs/adain_res_blk1d.py"
+      },
+      "adaptive_avg_pool2d": {
+        "note": "per-component PCC test: tests/pcc/test_adaptive_avg_pool2d.py",
+        "path": "_stubs/adaptive_avg_pool2d.py"
+      },
+      "albert_embeddings": {
+        "note": "per-component PCC test: tests/pcc/test_albert_embeddings.py",
+        "path": "_stubs/albert_embeddings.py"
+      },
+      "albert_layer": {
+        "note": "per-component PCC test: tests/pcc/test_albert_layer.py",
+        "path": "_stubs/albert_layer.py"
+      },
+      "albert_layer_group": {
+        "note": "per-component PCC test: tests/pcc/test_albert_layer_group.py",
+        "path": "_stubs/albert_layer_group.py"
+      },
+      "albert_transformer": {
+        "note": "per-component PCC test: tests/pcc/test_albert_transformer.py",
+        "path": "_stubs/albert_transformer.py"
+      },
+      "attend": {
+        "note": "per-component PCC test: tests/pcc/test_attend.py",
+        "path": "_stubs/attend.py"
+      },
+      "attention_block": {
+        "note": "per-component PCC test: tests/pcc/test_attention_block.py",
+        "path": "_stubs/attention_block.py"
+      },
+      "conditioning_encoder": {
+        "note": "per-component PCC test: tests/pcc/test_conditioning_encoder.py",
+        "path": "_stubs/conditioning_encoder.py"
+      },
+      "conv1_d": {
+        "note": "per-component PCC test: tests/pcc/test_conv1_d.py",
+        "path": "_stubs/conv1_d.py"
+      },
+      "custom_albert": {
+        "note": "per-component PCC test: tests/pcc/test_custom_albert.py",
+        "path": "_stubs/custom_albert.py"
+      },
+      "custom_s_t_f_t": {
+        "note": "per-component PCC test: tests/pcc/test_custom_s_t_f_t.py",
+        "path": "_stubs/custom_s_t_f_t.py"
+      },
+      "decoder": {
+        "note": "per-component PCC test: tests/pcc/test_decoder.py",
+        "path": "_stubs/decoder.py"
+      },
+      "dropout1d": {
+        "note": "per-component PCC test: tests/pcc/test_dropout1d.py",
+        "path": "_stubs/dropout1d.py"
+      },
+      "duration_encoder": {
+        "note": "per-component PCC test: tests/pcc/test_duration_encoder.py",
+        "path": "_stubs/duration_encoder.py"
+      },
+      "g_e_g_l_u": {
+        "note": "per-component PCC test: tests/pcc/test_g_e_g_l_u.py",
+        "path": "_stubs/g_e_g_l_u.py"
+      },
+      "g_p_t": {
+        "note": "per-component PCC test: tests/pcc/test_g_p_t.py",
+        "path": "_stubs/g_p_t.py"
+      },
+      "g_p_t2_block": {
+        "note": "per-component PCC test: tests/pcc/test_g_p_t2_block.py",
+        "path": "_stubs/g_p_t2_block.py"
+      },
+      "g_p_t2_inference_model": {
+        "note": "per-component PCC test: tests/pcc/test_g_p_t2_inference_model.py",
+        "path": "_stubs/g_p_t2_inference_model.py"
+      },
+      "g_p_t2_model": {
+        "note": "per-component PCC test: tests/pcc/test_g_p_t2_model.py",
+        "path": "_stubs/g_p_t2_model.py"
+      },
+      "generator": {
+        "note": "per-component PCC test: tests/pcc/test_generator.py",
+        "path": "_stubs/generator.py"
+      },
+      "group_norm32": {
+        "note": "per-component PCC test: tests/pcc/test_group_norm32.py",
+        "path": "_stubs/group_norm32.py"
+      },
+      "hifi_decoder": {
+        "note": "per-component PCC test: tests/pcc/test_hifi_decoder.py",
+        "path": "_stubs/hifi_decoder.py"
+      },
+      "hifigan_generator": {
+        "note": "per-component PCC test: tests/pcc/test_hifigan_generator.py",
+        "path": "_stubs/hifigan_generator.py"
+      },
+      "instance_norm1d": {
+        "note": "per-component PCC test: tests/pcc/test_instance_norm1d.py",
+        "path": "_stubs/instance_norm1d.py"
+      },
+      "l_s_t_m": {
+        "note": "per-component PCC test: tests/pcc/test_l_s_t_m.py",
+        "path": "_stubs/l_s_t_m.py"
+      },
+      "leaky_re_l_u": {
+        "note": "per-component PCC test: tests/pcc/test_leaky_re_l_u.py",
+        "path": "_stubs/leaky_re_l_u.py"
+      },
+      "learned_position_embeddings": {
+        "note": "per-component PCC test: tests/pcc/test_learned_position_embeddings.py",
+        "path": "_stubs/learned_position_embeddings.py"
+      },
+      "linear_norm": {
+        "note": "per-component PCC test: tests/pcc/test_linear_norm.py",
+        "path": "_stubs/linear_norm.py"
+      },
+      "mel_scale": {
+        "note": "per-component PCC test: tests/pcc/test_mel_scale.py",
+        "path": "_stubs/mel_scale.py"
+      },
+      "mel_spectrogram": {
+        "note": "per-component PCC test: tests/pcc/test_mel_spectrogram.py",
+        "path": "_stubs/mel_spectrogram.py"
+      },
+      "parametrization_list": {
+        "note": "per-component PCC test: tests/pcc/test_parametrization_list.py",
+        "path": "_stubs/parametrization_list.py"
+      },
+      "parametrized_conv1d": {
+        "note": "per-component PCC test: tests/pcc/test_parametrized_conv1d.py",
+        "path": "_stubs/parametrized_conv1d.py"
+      },
+      "parametrized_conv_transpose1d": {
+        "note": "per-component PCC test: tests/pcc/test_parametrized_conv_transpose1d.py",
+        "path": "_stubs/parametrized_conv_transpose1d.py"
+      },
+      "perceiver_resampler": {
+        "note": "per-component PCC test: tests/pcc/test_perceiver_resampler.py",
+        "path": "_stubs/perceiver_resampler.py"
+      },
+      "pre_emphasis": {
+        "note": "per-component PCC test: tests/pcc/test_pre_emphasis.py",
+        "path": "_stubs/pre_emphasis.py"
+      },
+      "prosody_predictor": {
+        "note": "per-component PCC test: tests/pcc/test_prosody_predictor.py",
+        "path": "_stubs/prosody_predictor.py"
+      },
+      "q_k_v_attention_legacy": {
+        "note": "per-component PCC test: tests/pcc/test_q_k_v_attention_legacy.py",
+        "path": "_stubs/q_k_v_attention_legacy.py"
+      },
+      "reflection_pad1d": {
+        "note": "per-component PCC test: tests/pcc/test_reflection_pad1d.py",
+        "path": "_stubs/reflection_pad1d.py"
+      },
+      "res_block1": {
+        "note": "per-component PCC test: tests/pcc/test_res_block1.py",
+        "path": "_stubs/res_block1.py"
+      },
+      "res_net_speaker_encoder": {
+        "note": "per-component PCC test: tests/pcc/test_res_net_speaker_encoder.py",
+        "path": "_stubs/res_net_speaker_encoder.py"
+      },
+      "s_e_basic_block": {
+        "note": "per-component PCC test: tests/pcc/test_s_e_basic_block.py",
+        "path": "_stubs/s_e_basic_block.py"
+      },
+      "s_e_layer": {
+        "note": "per-component PCC test: tests/pcc/test_s_e_layer.py",
+        "path": "_stubs/s_e_layer.py"
+      },
+      "sine_gen": {
+        "note": "per-component PCC test: tests/pcc/test_sine_gen.py",
+        "path": "_stubs/sine_gen.py"
+      },
+      "source_module_hn_n_s_f": {
+        "note": "per-component PCC test: tests/pcc/test_source_module_hn_n_s_f.py",
+        "path": "_stubs/source_module_hn_n_s_f.py"
+      },
+      "text_encoder": {
+        "note": "per-component PCC test: tests/pcc/test_text_encoder.py",
+        "path": "_stubs/text_encoder.py"
+      },
+      "up_sample1d": {
+        "note": "per-component PCC test: tests/pcc/test_up_sample1d.py",
+        "path": "_stubs/up_sample1d.py"
+      },
+      "upsample": {
+        "note": "per-component PCC test: tests/pcc/test_upsample.py",
+        "path": "_stubs/upsample.py"
+      },
+      "weight_norm": {
+        "note": "per-component PCC test: tests/pcc/test_weight_norm.py",
+        "path": "_stubs/weight_norm.py"
+      }
+    },
+    "is_multimodal": false,
+    "model_files": [
+      "tt/pipeline.py",
+      "tt/ops.py",
+      "_stubs/custom_albert.py",
+      "_stubs/albert_embeddings.py",
+      "_stubs/albert_transformer.py",
+      "_stubs/albert_layer_group.py",
+      "_stubs/albert_layer.py",
+      "_stubs/text_encoder.py",
+      "_stubs/prosody_predictor.py",
+      "_stubs/duration_encoder.py",
+      "_stubs/l_s_t_m.py",
+      "_stubs/ada_layer_norm.py",
+      "_stubs/linear_norm.py",
+      "_stubs/adain_res_blk1d.py",
+      "_stubs/ada_i_n1d.py",
+      "_stubs/instance_norm1d.py",
+      "_stubs/up_sample1d.py",
+      "_stubs/leaky_re_l_u.py",
+      "_stubs/ada_i_n_res_block1.py",
+      "_stubs/custom_s_t_f_t.py",
+      "_stubs/reflection_pad1d.py",
+      "_stubs/upsample.py"
+    ],
+    "pcc": {
+      "end_to_end": {
+        "note": "",
+        "path": "tests/e2e/test_e2e_tts.py::test_e2e_tts",
+        "threshold": 0.95
+      }
+    },
+    "perf_test": {
+      "case": "test_main_perf",
+      "note": "auto-gen from --pcc-test",
+      "path": "tests/e2e/test_main_perf.py"
+    },
+    "perf_tests": [
+      {
+        "case": "test_main_perf",
+        "note": "auto-gen from --pcc-test",
+        "path": "tests/e2e/test_main_perf.py"
+      }
+    ],
+    "pipelines": [
+      {
+        "pcc_test": "tests/e2e/test_e2e_tts.py::test_e2e_tts",
+        "perf_test": "tests/e2e/test_main_perf.py::test_main_perf",
+        "task": "main"
+      }
+    ],
+    "summary": "Kokoro-82M is a single-workload feed-forward TTS model (phonemes -> 24 kHz speech), not multi-modal: one shared TTNN pipeline in tt/pipeline.py (build_pipeline + run_tts) chains ~20 'graduated' native ttnn stubs (PLBERT text encoder -> duration/prosody predictor -> alignment -> F0/N -> decoder -> ISTFTNet/NSF generator). Both the demo and tests import this single pipeline. Two near-identical dedicated perf tests exist (tests/e2e/test_tts_perf.py which self-opens its device like the demo, and tests/e2e/test_main_perf.py which uses the pytest device fixture); both profile the same one forward pass and assert perf only (no PCC). The end-to-end correctness gate is tests/e2e/test_e2e_tts.py, which enforces a log-magnitude-spectrogram PCC >= 0.95 (SPEC_PCC_TARGET) plus exact duration match and Gate-2 module-invocation coverage. Reviewer note: the e2e test intentionally does NOT gate raw-waveform PCC (only prints it) because the NSF vocoder is chaotically F0-phase sensitive \u2014 the gated metric is the phase-invariant spectrogram PCC at 0.95. Per-component PCC tests under tests/pcc/ each gate at 0.99. Many _stubs also have .best_native/.last_good_native/.preiter_native sidecar snapshots (not source); the runnable decoder/generator are hand-wired in pipeline.py rather than via _stubs/decoder.py and _stubs/generator.py.",
+    "warnings": [
+      {
+        "code": "e2e_gates_spectrogram_not_waveform",
+        "detail": "The end-to-end test gates a log-magnitude-spectrogram PCC (>=0.95) and exact duration match, not raw-waveform PCC (which is printed but ungated due to chaotic F0-phase sensitivity of the NSF vocoder).",
+        "level": "warning"
+      },
+      {
+        "code": "duplicate_perf_tests",
+        "detail": "Two perf tests (test_tts_perf.py self-opening device, test_main_perf.py using the device fixture) profile the same single TTS forward pass; they are duplicate harnesses, not distinct workloads.",
+        "level": "warning"
+      },
+      {
+        "code": "no_perf_test",
+        "detail": "perf_test null; falling back to pcc.end_to_end",
+        "level": "warning"
+      },
+      {
+        "code": "signpost",
+        "detail": "no tracy signposts in /tmp/tt_hw_planner_hexgrad_Kokoro-82M_1783376840/models/demos/kokoro_82m/tests/ -- using default 'start'/'stop' (full capture)"
+      }
+    ]
+  },
+  "perf_test_resolved": {
+    "case": "test_main_perf",
+    "path": "models/demos/kokoro_82m/tests/e2e/test_main_perf.py"
+  },
+  "playbook_sections": 64
+}
