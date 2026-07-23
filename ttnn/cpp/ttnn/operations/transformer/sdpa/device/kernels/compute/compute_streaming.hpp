@@ -2521,6 +2521,60 @@ void sdpa_ring_v2(
             per_q_valid_kv++;
         }
 
+        // Sparse-frames zero-work-iter fast path: this Q chunk has no processed K chunks in
+        // THIS ring iter (either a padded / all-drained Q frame across all iters, or a real Q
+        // frame whose allowed K frames don't land in this iter). We MUST still drain the K/V
+        // that the reader pushed for this Q chunk (reader has no sparse-frames logic — it
+        // pushes every non-OOB chunk). But we CANNOT enter the accumulator machinery: the
+        // restore_from_staging branch below assumes staging CBs were populated, and the post-
+        // loop q_prev.max pop would desync CBs that nothing was written to. Doing everything
+        // inline here and `continue`ing bypasses the entire acc_state state machine for this
+        // Q chunk in this iter — real Q chunks resume normally in their next processing iter,
+        // and zero-total-work Q chunks push placeholder outputs on the last host-mask iter.
+        if constexpr (sparse_frames_enabled) {
+            if (per_q_valid_kv == 0) {
+                for (uint32_t k = 0; k < num_kv_chunks; ++k) {
+                    const bool is_joint_ = (k >= num_local_k_chunks);
+                    if (try_skip_oob_kv(k, is_joint_)) {
+                        continue;
+                    }
+                    CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+                    if constexpr (!kt_inplace_v) {
+                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                    }
+                    KV_chunks_processed_in_iter++;
+                }
+                // Per-iter handshake with writer (multi-Q only; matches writer's cb_signal wait
+                // in ring_joint_writer.cpp:775-778).
+                if (q_per_core > 1) {
+                    CircularBuffer(cb_signal).reserve_back(1);
+                    sdpa_cb_push_back_out_of_line(cb_signal, 1);
+                }
+                // Zero-total-work Q chunk on the mask's last iter: push placeholder outputs so
+                // writer's per-Q-chunk save completes. Contents unspecified — for padded Q frames
+                // (nf_padded > nf_real) the DRAM region is beyond real_n and discarded downstream.
+                if (is_last_ring_iter && q_frame_total_processed[q_frame_for_this_chunk] == 0) {
+                    CircularBuffer(cb_out).reserve_back(Sq_chunk_t * vDHt);
+                    sdpa_cb_push_back_out_of_line(cb_out, Sq_chunk_t * vDHt);
+                    CircularBuffer(cb_max_out).reserve_back(Sq_chunk_t);
+                    sdpa_cb_push_back_out_of_line(cb_max_out, Sq_chunk_t);
+                    CircularBuffer(cb_sum_out).reserve_back(Sq_chunk_t);
+                    sdpa_cb_push_back_out_of_line(cb_sum_out, Sq_chunk_t);
+                }
+                // Pop Q if reader pushed it this iter. For q_per_core > 1, reader pushes Q every
+                // iter (need_q_read=true) — match with a pop every iter. For q_per_core == 1, Q
+                // is fronted across iters and popped only on the last (matches the standard path
+                // below at "Pop Q"). A zero-total-work Q chunk on a single-Q core means the whole
+                // core is zero-work; the last-iter pop suffices.
+                if (q_per_core > 1 || is_last_ring_iter) {
+                    sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
+                }
+                continue;
+            }
+        }
+
         // Use persistent accumulator state from caller (single Q-chunk)
         // or restore from DRAM (multi Q-chunk).
         AccumulatorHalf q_prev = acc_state.prev, q_cur = acc_state.cur;
@@ -2801,38 +2855,12 @@ void sdpa_ring_v2(
             }
         }
 
-        // Sparse-frames per-Q-chunk cb_signal accounting: for q_per_core > 1, the writer's Q-chunk
-        // loop does one cb_signal.wait_front(1) per Q chunk per ring iter (ring_joint_writer.cpp
-        // "!single_q_chunk" gate). Compute pushes cb_signal on is_last_k inside the processing
-        // branch (line 2542) — but a sparse iter where a Q chunk has NO processed K chunks
-        // (either fully drained real Q chunks in windowed patterns, or padded Q chunks with
-        // zero total attention) never enters the processing branch and so never pushes the
-        // signal. That deadlocks the writer. Ensure exactly one signal per Q chunk per iter by
-        // pushing here when the processing branch didn't run this iter.
-        if constexpr (sparse_frames_enabled) {
-            if (q_per_core > 1 && KV_chunks_processed == 0) {
-                CircularBuffer(cb_signal).reserve_back(1);
-                sdpa_cb_push_back_out_of_line(cb_signal, 1);
-            }
-        }
-
-        // Sparse-frames zero-work Q chunk: this Q frame has zero allowed K frames across the
-        // whole ring. All ring iters drained via try_skip_sparse_frames — no output was
-        // pushed. The writer still expects a per-Q-chunk output tile to save (its region is
-        // typically padded/discarded for padded Q frames, but the CB push must happen so the
-        // writer's wait completes). On the last host-mask-active iter, reserve+push placeholder
-        // tiles for cb_out / cb_max_out / cb_sum_out. Contents are unspecified — for padded Q
-        // frames (nf_padded > nf_real) the DRAM region is beyond real_n and discarded downstream.
-        if constexpr (sparse_frames_enabled) {
-            if (is_last_ring_iter && q_frame_total_processed[q_frame_for_this_chunk] == 0) {
-                CircularBuffer(cb_out).reserve_back(Sq_chunk_t * vDHt);
-                sdpa_cb_push_back_out_of_line(cb_out, Sq_chunk_t * vDHt);
-                CircularBuffer(cb_max_out).reserve_back(Sq_chunk_t);
-                sdpa_cb_push_back_out_of_line(cb_max_out, Sq_chunk_t);
-                CircularBuffer(cb_sum_out).reserve_back(Sq_chunk_t);
-                sdpa_cb_push_back_out_of_line(cb_sum_out, Sq_chunk_t);
-            }
-        }
+        // Note: sparse-frames per-iter cb_signal push and zero-total-work placeholder cb_out/max/
+        // sum push are handled by the zero-work-iter fast path above (search "Sparse-frames
+        // zero-work-iter fast path"). This block is reached only when per_q_valid_kv > 0, i.e.
+        // compute actually processed at least one K chunk this iter — the standard is_last_k
+        // guard inside the K loop (line 2542) has already pushed cb_signal via the processing
+        // branch, and cb_out has been pushed by SALAD.
 
         // Pop Q — not popped inside step since ring_mode gates the early Q pop.
         // When q_per_core == 1, Q is identical across ring iterations so we keep it
