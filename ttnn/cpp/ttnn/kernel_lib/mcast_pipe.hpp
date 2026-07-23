@@ -127,7 +127,16 @@ struct McastRect {
     // USE ONLY — never the loopback-mode test (that stays `in_rect_ && src!=dst`). Computed on the
     // normalized corners, so it is order-independent like the containment test. Runtime (the corners
     // are runtime), so the fan-out it feeds is runtime too.
-    constexpr uint32_t area() const { return (xhi_ - xlo_ + 1) * (yhi_ - ylo_ + 1); }
+    constexpr uint32_t area() const {
+        uint32_t width = xhi_ - xlo_ + 1;
+#if defined(ARCH_BLACKHOLE)
+        // Blackhole virtual worker coordinates skip NoC columns 8 and 9. They are occupied by
+        // non-worker cores and do not contribute multicast acknowledgements.
+        width -= static_cast<uint32_t>(xlo_ <= 8 && 8 <= xhi_);
+        width -= static_cast<uint32_t>(xlo_ <= 9 && 9 <= xhi_);
+#endif
+        return width * (yhi_ - ylo_ + 1);
+    }
 
 private:
     uint32_t xlo_, xhi_, ylo_, yhi_;
