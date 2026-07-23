@@ -7,7 +7,8 @@
 #include "dev_mem_map.h"
 #include "api/dataflow/noc.h"
 #include "api/debug/assert.h"
-#include <hostdevcommon/sem_scope.h>  // enum class SemScope (shared host/device, Phase-2 baking)
+#include <hostdevcommon/sem_scope.h>       // enum class SemScope (shared host/device, Phase-2 baking)
+#include "api/dataflow/semaphore_token.h"  // SemAccessor<Id,Scope> baked-sem token (Phase-2 S1)
 
 /**
  * @brief Semaphore synchronization primitive for programmable cores.
@@ -55,6 +56,20 @@ public:
     // l1_offset_ holds the physical L1 offset of the semaphore word (the cached-alias
     // address; MEM_L1_BASE == 0). Local views and NoC addresses are derived from it.
     explicit Semaphore(uint32_t semaphore_id) : l1_offset_(get_semaphore<core_type>(semaphore_id)) {}
+
+    // Construct from a host-baked sem:: accessor token (Phase-2). The Scope comes from
+    // the token via CTAD (deduction guide after the class), so `Semaphore s(sem::x);`
+    // picks the baked mechanism with no explicit <>. The static_assert catches the
+    // mismatch case: an explicit `Semaphore<..., WrongScope>(sem::x)` fails to compile
+    // instead of silently overriding the baked scope.
+    template <uint32_t Id, SemScope TokenScope>
+    explicit Semaphore(SemAccessor<Id, TokenScope>) : l1_offset_(get_semaphore<core_type>(Id)) {
+        static_assert(
+            TokenScope == Scope,
+            "The sem:: accessor's baked SemScope does not match this Semaphore's Scope. Write "
+            "`Semaphore s(sem::x);` and let CTAD pick the baked scope; do not spell "
+            "`Semaphore<...>` explicitly on a baked accessor.");
+    }
 
     /**
      * @brief Increment the semaphore by the specified value (local).
@@ -325,3 +340,9 @@ private:
         return ::get_noc_addr(noc_x, noc_y, get_l1_addr(), noc);
     }
 };
+
+// CTAD guide: `Semaphore s(sem::x)` where sem::x is a SemAccessor<Id, Scope> deduces
+// Semaphore<TENSIX, Scope> — the host-baked scope — with no explicit template args.
+// (Semaphores are TENSIX-scoped; the token carries only Id + SemScope.)
+template <uint32_t Id, SemScope S>
+Semaphore(SemAccessor<Id, S>) -> Semaphore<ProgrammableCoreType::TENSIX, S>;
