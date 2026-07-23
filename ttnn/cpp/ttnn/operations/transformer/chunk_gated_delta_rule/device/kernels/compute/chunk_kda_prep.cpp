@@ -23,6 +23,7 @@
 #include "api/compute/transpose.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 namespace {
 
@@ -269,25 +270,18 @@ void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
     cb_push_back(o, Ct);
 }
 
-// OPT-A/B in-kernel L2-norm over K. rowsum_k: o[Mt,1(broadcast)] = sum over the full K dim of
-// in[Mt,Kt], computed as in @ ones by reusing cb_ones tile 0 as the [K,1] contraction operand
-// (avoids a dedicated ones-column constant). Mirrors the `mm` helper's reconfig/matmul discipline.
-void rowsum_k(uint32_t in, uint32_t o, uint32_t Mt, uint32_t Kt) {
-    cb_reserve_back(o, Mt);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(cb_ones, in);  // matmul(in, cb_ones): in->srcB, cb_ones->srcA
-    matmul_init(in, cb_ones, 0);
-    for (uint32_t mi = 0; mi < Mt; mi++) {
-        tile_regs_acquire();
-        for (uint32_t ki = 0; ki < Kt; ki++) {
-            matmul_tiles(in, cb_ones, mi * Kt + ki, 0, 0);  // reuse ones tile 0 for every ki
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, o, mi);
-        tile_regs_release();
-    }
-    cb_push_back(o, Mt);
+// Exact fp32 row sum for q/k L2 normalization. The shared SFPU reducer avoids four full-tile
+// matrix multiplies and preserves the input for the caller-managed scratch lifetime.
+void rowsum_k(uint32_t Mt, uint32_t Kt) {
+    compute_kernel_lib::reduce<
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW,
+        cb_scr1,
+        cb_ones,
+        cb_scr2,
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+        ReduceFp32Mode::Accurate>(compute_kernel_lib::ReduceInputBlockShape::of(Mt, Kt));
 }
 
 // inv_rms: o[i] = rsqrt(in[i] + eps) [* scale]. in holds per-row sum-of-squares (rowsum_k output);
@@ -350,7 +344,7 @@ void kernel_main() {
         if constexpr (QK_NORM) {
             square_sfpu(cb_q, cb_scr1, ck);
             WAIT(cb_scr1, ck);
-            rowsum_k(cb_scr1, cb_scr2, Ct, Kt);
+            rowsum_k(Ct, Kt);
             WAIT(cb_scr2, Ct);
             POP(cb_scr1, ck);
             inv_rms(cb_scr2, cb_scr3, Ct, EPS_BITS, SCALE_BITS, true);
@@ -363,7 +357,7 @@ void kernel_main() {
 
             square_sfpu(cb_k, cb_scr1, ck);
             WAIT(cb_scr1, ck);
-            rowsum_k(cb_scr1, cb_scr2, Ct, Kt);
+            rowsum_k(Ct, Kt);
             WAIT(cb_scr2, Ct);
             POP(cb_scr1, ck);
             inv_rms(cb_scr2, cb_scr3, Ct, EPS_BITS, SCALE_BITS, false);
