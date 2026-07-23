@@ -368,6 +368,13 @@ jobs:
         run: |
           mpirun --pernode tt-smi -glx_reset || echo "WARNING: glx_reset failed; continuing"
 
+      # HOME (/home/user) must exist and be writable: docker login writes creds
+      # there, and mpi-docker mounts -v $HOME:$HOME into the DC container.
+      - name: Prepare home directory
+        run: |
+          sudo mkdir -p /home/user
+          sudo chown "$(id -u):$(id -g)" /home/user
+
       - name: Log in to GHCR (DC-validation image)
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
