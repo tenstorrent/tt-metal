@@ -30,6 +30,25 @@ void kernel_main() {
     constexpr uint32_t batch_per_core = get_compile_time_arg_val(11);
     constexpr uint32_t half_Wt = Wt / 2;
     (void)Ht;
+    constexpr auto bulk_block_input = [](uint32_t cb) {
+        return ckl::input(cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto held_block_input = [](uint32_t cb) {
+        return ckl::input(
+            cb, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto bulk_output = [](uint32_t cb) {
+        return ckl::output(cb, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto rotated_input = bulk_block_input(rotated_in_interm_cb);
+    constexpr auto in_input = bulk_block_input(in_cb);
+    constexpr auto sin_input = held_block_input(sin_cb);
+    constexpr auto cos_input = held_block_input(cos_cb);
+    constexpr auto sin_interm_input = bulk_block_input(sin_interm_cb);
+    constexpr auto cos_interm_input = bulk_block_input(cos_interm_cb);
+    constexpr auto sin_output = bulk_output(sin_interm_cb);
+    constexpr auto cos_output = bulk_output(cos_interm_cb);
+    constexpr auto rotary_output = bulk_output(out_cb);
 
     binary_op_init_common(in_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
 
@@ -84,23 +103,19 @@ void kernel_main() {
 
             cb_push_back(rotated_in_interm_cb, Wt);
 
-            ckl::mul<
-                ckl::input(rotated_in_interm_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(sin_cb, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
-                ckl::output(sin_interm_cb, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
-                ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+            mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
+            ckl::eltwise_chain<ckl::SetupOwner::Caller>(
+                ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+                ckl::BinaryFpu<rotated_input, sin_input, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Row>{},
+                ckl::PackTile<sin_output>{});
 
-            ckl::mul<
-                ckl::input(in_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(cos_cb, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
-                ckl::output(cos_interm_cb, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
-                ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+            ckl::eltwise_chain<ckl::SetupOwner::Caller>(
+                ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+                ckl::BinaryFpu<in_input, cos_input, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Row>{},
+                ckl::PackTile<cos_output>{});
 
-            ckl::add<
-                ckl::input(cos_interm_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(sin_interm_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::output(out_cb, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
-                ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+            ckl::add<cos_interm_input, sin_interm_input, rotary_output, ckl::BroadcastDim::None>(
+                ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
         }
 
         cb_pop_front(sin_cb, Wt);

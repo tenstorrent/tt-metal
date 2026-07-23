@@ -79,20 +79,11 @@ void kernel_main() {
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         const bool mh = do_mask_h && need_to_do_mask_h(tile_idx, ht, wt);
         const bool mw = do_mask_w && ((tile_idx + 1) % wt) == 0;
-        const auto mask_branch =
-            ckl::runtime_if(
-                mh && mw,
-                CopyMaskH{},
-                ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-                CopyMaskW{mask_w_tile_index},
-                ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{})
-                .else_if(mh, CopyMaskH{}, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{})
-                .else_if(mw, CopyMaskW{mask_w_tile_index}, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{})
-                .otherwise();
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::CopyTile<ckl::input(cb_x, ckl::InputLifecycle::Streaming, data_format_reconfig)>{},
-            mask_branch,
+            ckl::runtime_if(mh, CopyMaskH{}, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
+            ckl::runtime_if(mw, CopyMaskW{mask_w_tile_index}, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
             ckl::Abs<ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(cb_xabs, ckl::OutputLifecycle::Streaming, data_format_reconfig)>{});
 
