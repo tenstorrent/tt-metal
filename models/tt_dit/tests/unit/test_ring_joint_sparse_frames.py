@@ -270,13 +270,16 @@ def _run_sparse_frames_op(
     input_shard_dims[tp_axis] = 1
 
     def _to_dev(t, dims):
-        return ttnn.from_torch(
-            t,
+        # Upload in ROW_MAJOR (skips host tilize), then tilize on device — much faster than
+        # single-threaded host tilize for large tensors (720p Q/K/V are ~944 MB each).
+        rm_tensor = ttnn.from_torch(
+            t.to(torch.bfloat16),  # pre-convert to bf16 to skip f32→bf16 during upload
             dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
         )
+        return ttnn.to_layout(rm_tensor, ttnn.TILE_LAYOUT)
 
     tt_Q = _to_dev(padded_Q, input_shard_dims)
     tt_K = _to_dev(padded_K, input_shard_dims)
@@ -289,22 +292,29 @@ def _run_sparse_frames_op(
     kv_out_shard_dims[sp_axis] = None
     kv_out_shard_dims[tp_axis] = 1
     ag_output_shape = (b, nh, n_pad, d)
-    persistent_output_buffer_k = ttnn.from_torch(
-        torch.zeros(ag_output_shape),
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=dtype,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_out_shard_dims),
-    )
-    persistent_output_buffer_v = ttnn.from_torch(
-        torch.zeros(ag_output_shape),
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=dtype,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_out_shard_dims),
-    )
+
+    # Persistent output buffers are scratch (overwritten by the op's internal AllGather). Their
+    # initial values don't matter. At 720p (nh=40, n_pad=92160, d=128) the naive
+    # `ttnn.from_torch(torch.zeros(...))` allocates ~944 MB of float32 on host, then converts
+    # to bfloat16, tilizes (single-threaded), and DMAs 32 shards to devices — this can take
+    # several minutes per buffer. Speed it up by (a) using bfloat16 zeros to skip the f32→bf16
+    # conversion, and (b) uploading in ROW_MAJOR layout then tilizing on device (much faster
+    # than host tilize for large tensors).
+    def _make_persistent_output_buffer():
+        rm_tensor = ttnn.from_torch(
+            torch.zeros(ag_output_shape, dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_out_shard_dims
+            ),
+        )
+        return ttnn.to_layout(rm_tensor, ttnn.TILE_LAYOUT)
+
+    persistent_output_buffer_k = _make_persistent_output_buffer()
+    persistent_output_buffer_v = _make_persistent_output_buffer()
 
     # Bitpack frame_allow into up to 32 uint32 words — passed to the op as a plain host vector
     # (frame_allow_packed kwarg). No device tensor / no DMA / no CB required.
