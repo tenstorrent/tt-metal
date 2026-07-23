@@ -1510,18 +1510,18 @@ def _assemble_xcore_kernels(
     ), f"stat compaction face offsets assume an fp32 stat tile ({_STAT_TILE_BYTES} B); got {tile_fp32}"
     g_off0, g_len0, g_off1, g_len1 = _gather_runs(stat_compact_mode)
 
-    # ---- Round/compute pipelining (R6b lever 2; parked OFF) ----
+    # ---- Round/compute pipelining (R6b lever 2 → R6f lever 2) ----
     # Issue batch r+1's pass 1 one round ahead so the local reduce overlaps the writer's
-    # synchronous cross-core round. Measured FLAT on BLOCK 8x8 (the master fold stays on the
-    # critical path), so it ships parked OFF (byte-identical to R6a); kept as a validated live
-    # knob. Only meaningful on the multi-round tiled path; a single source of truth constant.
-    # Two-stage (R6c) is single-round (Ht_local==1), so pipelining degenerates anyway; keep it
-    # off on that path so the flat/two-stage compute paths stay cleanly separated.
+    # synchronous cross-core round. R6b measured it FLAT while the master's serial fold sat ON the
+    # round's critical path (the round dwarfed the compute, so overlap bought nothing). R6f lever 2:
+    # R6e distributed that fold off the single master (two-phase, folders own disjoint tile-rows),
+    # so the round is now short enough that overlapping batch r+1's pass 1 under round r WINS on the
+    # multi-round BLOCK path — so pipelining is enabled on the two-phase path too (its own loop
+    # honors PIPELINE_LOOKAHEAD; the writer is serial across rounds and unchanged). Only meaningful
+    # on the multi-round tiled path (num_rounds>1); single-round groups (WIDTH, two-stage C=1)
+    # degenerate byte-identically. Two-stage (R6c, Ht_local==1) stays off (single round anyway).
     pipeline_lookahead = (
-        XCORE_PIPELINE_LOOKAHEAD
-        and (x_zero_copy and (not is_rm) and (not out_to_dram))
-        and (not two_stage)
-        and (not two_phase)  # R6e two-phase has its own fully-synchronous round loop
+        XCORE_PIPELINE_LOOKAHEAD and (x_zero_copy and (not is_rm) and (not out_to_dram)) and (not two_stage)
     )
 
     # ---- Writer (cross-core transport + [logical] out-to-DRAM) ----

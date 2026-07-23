@@ -545,12 +545,38 @@ void kernel_main() {
             cb_push_back(cb_rowpartial, owned);
             cb_pop_front(cb_gather, owned * K);
         };
-        for (uint32_t r = 0; r < num_rounds; ++r) {
-            do_pass1(r * C_ROWS, c_of(r));
-            if (is_folder) {
-                do_fold_owned(owned_max);
+        // Refinement 6f lever 2: overlap the distributed round under compute (the complementary
+        // step to R6e). R6e shipped this loop FULLY SYNCHRONOUS because R6b measured pipelining
+        // flat while the master's serial fold sat ON the round's critical path. R6e distributed
+        // that fold off the single master (folders own disjoint tile-rows), so re-enabling the
+        // R6b lookahead now WINS: issue batch r+1's pass 1 BEFORE batch r's fold/pass 2 so the
+        // local reduce overlaps the writer's synchronous cross-core round. cb_stat_local is 2*C
+        // deep (two rounds in flight); the writer is serial across rounds so cb_gather /
+        // cb_stat_global / cb_rowpartial stay one-round-in-flight; the semaphore/scatter protocol
+        // and the fixed-base addressing are UNCHANGED — only the compute ISSUE order changes, so
+        // the output is byte-identical to the R6e sequential loop. PIPELINE_LOOKAHEAD=0 or a
+        // single-round group (num_rounds==1) degenerates to that sequential loop.
+        if constexpr (PIPELINE_LOOKAHEAD) {
+            if (num_rounds > 0) {
+                do_pass1(0, c_of(0));  // prologue: batch 0's partials
             }
-            do_pass2(r * C_ROWS, c_of(r));
+            for (uint32_t r = 0; r < num_rounds; ++r) {
+                if (r + 1 < num_rounds) {
+                    do_pass1((r + 1) * C_ROWS, c_of(r + 1));  // overlap batch r+1's pass 1 with round r
+                }
+                if (is_folder) {
+                    do_fold_owned(owned_max);
+                }
+                do_pass2(r * C_ROWS, c_of(r));
+            }
+        } else {
+            for (uint32_t r = 0; r < num_rounds; ++r) {
+                do_pass1(r * C_ROWS, c_of(r));
+                if (is_folder) {
+                    do_fold_owned(owned_max);
+                }
+                do_pass2(r * C_ROWS, c_of(r));
+            }
         }
         cb_pop_front(cb_x_in, shard_tiles);
         if constexpr (HAS_GAMMA) {
