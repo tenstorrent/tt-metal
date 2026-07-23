@@ -112,7 +112,9 @@ FusedPrePostDeviceOperation::spec_return_value_t FusedPrePostDeviceOperation::co
     // collapsed = pre[1,H] @ hidden[H,D] -> [1,1,1,D].
     const auto& hidden_shape = hidden_streams.logical_shape();
     const ttnn::Shape collapsed_shape({1, 1, 1, hidden_shape[-1]});
-    return {TensorSpec(post_w.logical_shape(), output_layout), TensorSpec(collapsed_shape, output_layout)};
+    return {
+        tt::tt_metal::TensorSpec(post_w.logical_shape(), output_layout),
+        tt::tt_metal::TensorSpec(collapsed_shape, output_layout)};
 }
 
 FusedPrePostDeviceOperation::tensor_return_value_t FusedPrePostDeviceOperation::create_output_tensors(
