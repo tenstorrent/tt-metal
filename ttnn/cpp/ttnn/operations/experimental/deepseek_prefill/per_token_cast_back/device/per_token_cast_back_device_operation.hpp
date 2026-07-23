@@ -19,8 +19,9 @@ struct PerTokenCastBackDeviceOperation {
     using tensor_args_t = PerTokenCastBackInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    // A single program factory serves both the plain and the masked (token-count-aware) paths; it
-    // branches internally on operation_attributes.masked (kernels are shared, toggled by a MASKED define).
+    // A single program factory serves both the plain and the token-count-aware paths; it branches
+    // internally on operation_attributes.token_count_aware (kernels are shared, toggled by a
+    // TOKEN_COUNT_AWARE define).
     using program_factory_t = std::variant<PerTokenCastBackProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
