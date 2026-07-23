@@ -208,6 +208,11 @@ int main(int argc, char** argv) {
     std::vector<int> l2cpus_list;  // --l2cpus a,b[,c,d]: explicit per-node L2CPU cluster idx (overrides the
                                    // default y-sorted pick). e.g. --colsplit --l2cpus 2,0 = left band on
                                    // idx2 (tile 8,5 / "CPU 4-7"), right band on idx0 (tile 8,3 / "CPU 0-3").
+    bool producer_full = false;    // --producer-full: run the producer kernel on the WHOLE compute grid even
+                                   // when the drain covers only a subrange. Decouple test for the multi-node
+                                   // knee: full producer load, but only one cluster's half drained. WARNING:
+                                   // undrained producing cores back-pressure (lossless) and will hang unless
+                                   // their ring never fills -- keep --nmarkers small (< RING_CAP/2 = 256).
     bool do_reset = false, direct = false;  // --direct: direct drain (no reader/relay split); --ndrain N: N drainers
     bool rr_consumer = false;  // --rrconsumer: one host thread round-robins all rings (else one thread per ring)
     bool split_noc = false;    // --splitnoc: drain hart h reads its slice over NoC (h&1) to relieve read contention
@@ -284,6 +289,8 @@ int main(int argc, char** argv) {
             col_split = true;  // split the multi-node grid by column (default row)
         } else if (a == "--flipnoc") {
             flip_noc = true;  // XOR the per-node read NoC plane
+        } else if (a == "--producer-full") {
+            producer_full = true;  // producer on the whole grid regardless of the drained subrange
         } else if (a == "--l2cpus") {
             std::string s = next();
             for (size_t p = 0; p < s.size();) {
@@ -1347,7 +1354,10 @@ int main(int argc, char** argv) {
     };
     const std::string kdir = "tt_metal/programming_examples/profiler/test_x280_realprof/kernels/";
     Program program = CreateProgram();
-    CoreRange all_cores(CoreCoord{(uint32_t)cx0, (uint32_t)cy0}, CoreCoord{(uint32_t)cx1, (uint32_t)cy1});
+    // --producer-full: producer on the WHOLE grid (0,0)-(gx-1,gy-1); else the drained subrange.
+    CoreRange all_cores(
+        CoreCoord{(uint32_t)(producer_full ? 0 : cx0), (uint32_t)(producer_full ? 0 : cy0)},
+        CoreCoord{producer_full ? (gx - 1) : (uint32_t)cx1, producer_full ? (gy - 1) : (uint32_t)cy1});
     auto defs = mk_defs();
     auto brisc = CreateKernel(
         program,
