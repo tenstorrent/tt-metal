@@ -397,7 +397,7 @@ def pick_backend_with_quality(
     for b in candidates:
         if pt and pt in {t.lower() for t in b.pipeline_tags}:
             return (b, "pipeline")
-    if pt:
+    if pt and (not candidates or category == "Unknown"):
         for b in all_backends():
             if pt in {t.lower() for t in b.pipeline_tags}:
                 return (b, "pipeline")

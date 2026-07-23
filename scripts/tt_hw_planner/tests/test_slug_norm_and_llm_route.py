@@ -138,6 +138,20 @@ def test_backend_category_matches_pipeline_tag():
     assert not mismatches, f"category/pipeline_tag mismatches: {mismatches}"
 
 
+def test_cross_category_pipeline_tag_does_not_override_real_category():
+    # issue #3: an AR-MoE LLM tagged text-to-image must NOT be pulled to a diffusion
+    # (Image) backend via a cross-category pipeline_tag; it falls to its own category
+    # default. The cross-category escape hatch stays only for home-less (Unknown) models.
+    from scripts.tt_hw_planner.family_backends import pick_backend_with_quality
+
+    b, q = pick_backend_with_quality(category="LLM", model_type="hunyuan_ar_img", pipeline_tag="text-to-image")
+    assert q == "category-default", q
+    assert b is not None and "diffusion" not in b.name.lower() and "stable" not in b.name.lower()
+
+    b2, q2 = pick_backend_with_quality(category="Unknown", model_type="novel_x", pipeline_tag="text-to-image")
+    assert q2 == "pipeline", f"Unknown-category escape hatch must still allow cross-category pipeline, got {q2}"
+
+
 def test_xtts_v2_is_in_tts_bucket():
     from scripts.tt_hw_planner.family_backends import backends_for_category
 
