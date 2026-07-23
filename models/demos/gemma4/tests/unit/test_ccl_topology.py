@@ -82,19 +82,48 @@ def test_prefill_progcfg_in0_block_w_divides_kt():
     assert k_tiles % pc.in0_block_w == 0
 
 
-def test_weight_cache_path_qualified_by_mesh():
-    """TP=4 on 1x4 vs 2x4 must not share tensorbin directories."""
-    from pathlib import Path
-
+def test_weight_cache_path_qualified_by_mesh(tmp_path, monkeypatch):
+    """TP=4 on 1x4 vs 2x4 must not share tensorbin directories when mesh dirs are used."""
     import ttnn
     from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
+    monkeypatch.delenv("GEMMA4_WEIGHT_CACHE_MESH_ONLY", raising=False)
     args = Gemma4ModelArgs()
-    args.model_cache_path = Path("/tmp/gemma4_cache_test")
+    args.model_cache_path = tmp_path
+    # Empty caches → write into mesh-qualified paths (cold start).
     p_1x4 = args.weight_cache_path(ttnn.bfloat16, mesh_shape=(1, 4))
     p_2x4 = args.weight_cache_path(ttnn.bfloat16, mesh_shape=(2, 4))
     p_1x1 = args.weight_cache_path(ttnn.bfloat16, mesh_shape=(1, 1))
     assert "mesh1x4" in str(p_1x4)
     assert "mesh2x4" in str(p_2x4)
     assert p_1x4 != p_2x4
-    assert "mesh" not in Path(p_1x1).name
+    assert "mesh" not in p_1x1.name
+
+
+def test_weight_cache_path_reuses_legacy_when_mesh_empty(tmp_path, monkeypatch):
+    """CI MLPerf: empty mesh dir + warm legacy → reuse legacy (avoid cold 31B rebuild)."""
+    import ttnn
+    from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+
+    monkeypatch.delenv("GEMMA4_WEIGHT_CACHE_MESH_ONLY", raising=False)
+    legacy = tmp_path / "tensor_cache_bf16"
+    legacy.mkdir()
+    (legacy / "embed.tensorbin").write_text("x")
+    args = Gemma4ModelArgs()
+    args.model_cache_path = tmp_path
+    assert args.weight_cache_path(ttnn.bfloat16, mesh_shape=(1, 4)) == legacy
+
+
+def test_weight_cache_path_mesh_only_ignores_legacy(tmp_path, monkeypatch):
+    import ttnn
+    from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+
+    monkeypatch.setenv("GEMMA4_WEIGHT_CACHE_MESH_ONLY", "1")
+    legacy = tmp_path / "tensor_cache_bf16"
+    legacy.mkdir()
+    (legacy / "embed.tensorbin").write_text("x")
+    args = Gemma4ModelArgs()
+    args.model_cache_path = tmp_path
+    p = args.weight_cache_path(ttnn.bfloat16, mesh_shape=(1, 4))
+    assert "mesh1x4" in str(p)
+    assert p != legacy
