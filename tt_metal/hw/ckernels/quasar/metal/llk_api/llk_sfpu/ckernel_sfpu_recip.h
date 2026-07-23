@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,12 +62,23 @@ inline void _init_reciprocal_() {
     }
 }
 
-// Calculates RECIP over a full tile. Quasar exposes exactly two implementations:
-//   - approximate reciprocal via the HW nonlinear lookup table (sfpi::approx_recip), and
-//   - full-precision reciprocal (Newton-Raphson refinement on top of the LUT seed).
-// The LUT is ~1 ULP once the result lands in a bf16 Dest, so the Newton path is only worth
-// running for a 32-bit Dest in non-approximate mode; every bf16 case (and any explicit approx
-// request) uses the LUT. EN_32BIT_DEST (is_fp32_dest_acc_en) selects the Newton path.
+/**
+ * @brief Compute the reciprocal (1/x) in-place over a Dest tile.
+ *
+ * Quasar exposes exactly two implementations: an approximate reciprocal from the HW nonlinear
+ * lookup table (sfpi::approx_recip), and a full-precision result that refines the LUT seed with
+ * Newton-Raphson. The LUT is already ~1 ULP once the result lands in a bf16 Dest, so the Newton
+ * path only runs for a 32-bit Dest in non-approximate mode; every bf16 case (and any explicit
+ * approx request) uses the LUT alone.
+ *
+ * @tparam APPROXIMATION_MODE: Force the LUT-only path (skip Newton refinement), values = <true/false>
+ * @tparam EN_32BIT_DEST: is_fp32_dest_acc_en; when true and not APPROXIMATION_MODE, run the
+ *         Newton-Raphson refinement for a full-precision 32-bit Dest result.
+ * @tparam ITERATIONS: Number of SFPU loop iterations over the Dest tile.
+ * @tparam legacy_compat: ABI-parity shim; must be true (enforced by static_assert).
+ * @note Call @ref recip_init with matching template args first — it programs the Newton-Raphson
+ *       constant (vConstFloatPrgm0) that @ref _sfpu_reciprocal_ refines with.
+ */
 template <
     bool APPROXIMATION_MODE,
     bool EN_32BIT_DEST,
