@@ -4,15 +4,16 @@
 // mcast_pipe + mcast_host END-TO-END fixed-sender LINE test kernel.
 //
 // The fixed-mode counterpart of pipe_rotating_line.cpp. Every core on the grid runs this ONE kernel
-// and decodes the host::Mcast1D (fixed edge sender) wire with McastArgs.
+// and decodes the host::Mcast1D fixed-sender wire with McastArgs.
 //
-// This is the 2D dual-mcast matmul in0/in1 shape: one edge sender per line broadcasts to the rest.
+// This is the 2D dual-mcast matmul in0/in1 shape: one fixed sender per line broadcasts to the rest.
 // The sender streams `num_blocks` blocks of its line (the K-block loop of a matmul), each staged from
-// DRAM and multicast; every receiver receives each block. The dest rect the helper emits EXCLUDES the
-// sender, so send() is a plain EXCLUDE_SRC broadcast (no loopback).
+// DRAM and multicast; every receiver receives each block. The helper emits the appropriate
+// destination geometry for each sender, and the in-place send broadcasts the staged block to the
+// other cores on the line.
 //
-// PIPE LIFETIME. A core's role is FIXED for the whole block loop (sender iff grid col 0), so the pipe
-// is built ONCE above the loop and reused every block, rather than reconstructed per iteration.
+// PIPE LIFETIME. A core's role is supplied by the host and FIXED for the whole block loop, so the
+// pipe is built ONCE above the loop and reused every block, rather than reconstructed per iteration.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -52,8 +53,8 @@ void kernel_main() {
     const uint32_t cb_addr = cb_obj.get_write_ptr();
 
     if (is_sender) {
-        // SENDER — built ONCE above the block loop. Its rect EXCLUDES the sender, so send() is a plain
-        // EXCLUDE_SRC broadcast; an inactive single-line family (no receivers) skips send() below.
+        // SENDER — built ONCE above the block loop and reused for every staged block. An inactive
+        // single-line family has no receivers, so it skips send() below.
         auto pipe = mc.sender(noc);
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
             for (uint32_t i = 0; i < payload_pages; ++i) {
