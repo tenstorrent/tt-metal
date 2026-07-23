@@ -8,6 +8,7 @@ on:
 permissions:
   id-token: write
   contents: read
+  packages: read # pull the pinned DC-validation image from GHCR
 
 run-name: Fabric Test on a BH Quad
 jobs:
@@ -281,4 +282,126 @@ jobs:
         uses: ./.github/actions/ttop-delete-allocation
         with:
           allocationName: ci-${{ github.run_id }}-metal
+          namespace: ttop-ci
+
+  # ===========================================================================
+  # DC validation (issue #50505): single BH galaxy, pinned upstream image.
+  #
+  # Runs on its OWN single-galaxy (bh_sc1) allocation so the runtime topology
+  # matches the single-galaxy `--config 4x8` test. The shared quad allocation
+  # above is 32x4 and would mismatch a single-galaxy test. run_fabric_tests.sh
+  # --image keeps the pinned image loaded and runs the test INSIDE it.
+  # ===========================================================================
+  create-allocation-dc:
+    name: Create Allocation for DC validation (single galaxy)
+    needs: build-artifact
+    timeout-minutes: 30
+    runs-on:
+      group: exabox
+      labels: exabox-multihost
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Extract allocation spec from SKU
+        id: extract-spec
+        run: |
+          pip3 install PyYAML
+          {
+            echo "allocation_spec<<EOF"
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_sc1"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Create allocation
+        id: allocation
+        uses: ./.github/actions/ttop-create-allocation
+        with:
+          allocationName: ci-${{ github.run_id }}-dc
+          namespace: ttop-ci
+          spec: ${{ steps.extract-spec.outputs.allocation_spec }}
+
+  run-dc:
+    name: Run DC validation test
+    needs: [build-artifact, create-allocation-dc]
+    runs-on:
+      group: exabox
+      labels: exabox-multihost-with-nfs
+    env:
+      PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      VIRTUAL_ENV: /opt/venv
+      HOME: /home/user
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Parse docker image
+        id: parse-image
+        run: |
+          IMAGE="${{ needs.build-artifact.outputs.dev-docker-image }}"
+          echo "repository=${IMAGE%:*}" >> $GITHUB_OUTPUT
+          echo "tag=${IMAGE##*:}" >> $GITHUB_OUTPUT
+
+      - name: Get Allocation data
+        uses: ./.github/actions/ttop-get-allocation-data
+        with:
+          allocationName: ci-${{ github.run_id }}-dc
+          allocationNamespace: ttop-ci
+
+      - name: Create environment
+        uses: ./.github/actions/ttop-create-environment
+        timeout-minutes: 30
+        with:
+          environmentName: ci-${{ github.run_id }}-dc
+          allocationName: ci-${{ github.run_id }}-dc
+          allocationNamespace: ttop-ci
+          workerRepository: ${{ steps.parse-image.outputs.repository }}
+          workerTag: ${{ steps.parse-image.outputs.tag }}
+          useDevHostMount: 'true'
+          sharedVolumeEnabled: 'true'
+          path: /etc/ttop
+
+      - name: Reset cards (single galaxy)
+        timeout-minutes: 15
+        run: |
+          mpirun --pernode tt-smi -glx_reset || echo "WARNING: glx_reset failed; continuing"
+
+      - name: Log in to GHCR (DC-validation image)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Verbatim BH command from issue #50505; --image keeps the pinned image loaded.
+      - name: DC validation - 2D Torus XY Neighbor Exchange (BH, pinned image)
+        timeout-minutes: 20
+        run: |
+          ./tools/scaleout/exabox/run_fabric_tests.sh \
+            --hosts "$(hostname)" \
+            --image ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.76.0-dev20260719-4-g7361a7ac160 \
+            --config 4x8 \
+            --test-config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_neighbor_exchange.yaml \
+            --filter name.2DTorusXYNeighborExchange
+
+  cleanup-dc:
+    name: Cleanup DC validation
+    needs: [run-dc, create-allocation-dc]
+    if: always()
+    runs-on:
+      group: exabox
+      labels: exabox-multihost
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Delete environment
+        uses: ./.github/actions/ttop-delete-environment
+        with:
+          environmentName: ci-${{ github.run_id }}-dc
+          namespace: ttop-ci
+
+      - name: Delete allocation
+        uses: ./.github/actions/ttop-delete-allocation
+        with:
+          allocationName: ci-${{ github.run_id }}-dc
           namespace: ttop-ci
