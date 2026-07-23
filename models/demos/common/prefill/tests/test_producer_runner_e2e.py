@@ -90,7 +90,9 @@ _PROMPT_FILE = os.environ.get("PREFILL_PROMPT_FILE")
 if _PROMPT_FILE:
     SCENARIOS["prompt_single_user"] = {
         "users": 1,
-        "max_seq_len": CHUNK_SIZE,
+        # A 2-chunk cache though only one chunk is prefilled: the chunked-attention SDPA gate
+        # requires Q.seq < cache-width, so max_seq_len must exceed chunk_size even for a single chunk.
+        "max_seq_len": 2 * CHUNK_SIZE,
         "producer": {"PREFILL_PRODUCER_CHUNKS": "1", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
         "prompt_file": _PROMPT_FILE,
     }
@@ -206,6 +208,9 @@ def _generate_prompt_trace(out_dir: str, isl: int, prompt_file: str) -> None:
         raise RuntimeError(f"reference trace generation failed (rc={result.returncode}):\n{_tail(log_path)}")
 
 
+# The in-test waits (reference-trace gen + runner startup + producer) run to _READY_TIMEOUT_S +
+# two _PRODUCER_TIMEOUT_S, far past pytest.ini's global 300s; override so those bounds govern instead.
+@pytest.mark.timeout(_READY_TIMEOUT_S + 2 * _PRODUCER_TIMEOUT_S + 300)
 @pytest.mark.parametrize("scenario", list(SCENARIOS))
 def test_producer_runner_pcc(scenario, tmp_path):
     """Spin up a fresh runner for the scenario, drive it with the producer, and require the per-slot
@@ -215,7 +220,9 @@ def test_producer_runner_pcc(scenario, tmp_path):
     trace_env = {}
     if "prompt_file" in sc:
         trace_dir = str(tmp_path / "prompt_trace")
-        _generate_prompt_trace(trace_dir, sc["max_seq_len"], sc["prompt_file"])
+        # The prompt is one chunk deep; max_seq_len only sizes the device cache. Generate the reference
+        # at CHUNK_SIZE so the host O(seq^2) forward stays cheap and its length matches what's pushed.
+        _generate_prompt_trace(trace_dir, CHUNK_SIZE, sc["prompt_file"])
         trace_env["PREFILL_TRACE_DIR"] = trace_dir
     with _running_runner(scenario, sc["users"], sc["max_seq_len"], **trace_env) as runner_log:
         env = _transport_env(
