@@ -174,6 +174,22 @@ enum class DstTileShape : std::uint8_t
 };
 
 /**
+ * @brief Calculates the maximum number of tiles that fit in the math destination region.
+ *
+ * DstTileShape values encode the log2 destination-address footprint of each
+ * supported tile shape.
+ */
+template <ckernel::DstSync SYNC_MODE, bool ACCUM_MODE, DstTileShape TILE_SHAPE>
+constexpr std::uint32_t get_dest_max_tiles()
+{
+    constexpr std::uint32_t DEST_REGISTER_SIZE = SYNC_MODE == ckernel::DstSync::SyncHalf
+                                                     ? (ACCUM_MODE ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                                     : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+
+    return DEST_REGISTER_SIZE >> ckernel::to_underlying(TILE_SHAPE);
+}
+
+/**
  * @brief Sets the destination register base address, each Trisc0/1/2/3 has separate
  * registers for setting dest base address.
  * @tparam TRISC_ID: Trisc core which is executing this function, values = [0, 1, 2, 3]
