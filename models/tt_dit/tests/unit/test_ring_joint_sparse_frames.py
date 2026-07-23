@@ -496,6 +496,10 @@ class TestSparseFramesRing:
         )
 
     @_MESH_TOPOLOGY
+    @pytest.mark.parametrize(
+        "sparse_frames_enabled",
+        [pytest.param(True, id="sparse"), pytest.param(False, id="dense")],
+    )
     def test_720p_shape(
         self,
         mesh_device,
@@ -507,9 +511,14 @@ class TestSparseFramesRing:
         device_params,
         all_gather_topology,
         reset_seeds,
+        sparse_frames_enabled,
     ):
         """720p-scale geometry: fsl=3840, nf_real=21 -> nf_padded=sp_multiple, window=5,
         add_last_frame=True. n_head=40, dim=128 — representative of a real video-DiT workload.
+
+        `sparse_frames_enabled` parametrize: sparse routes through the extension; dense routes
+        through the plain ring_joint SDPA. Comparing the two at nh=40 isolates whether hangs
+        are sparse-specific or exist in the base ring_joint path at this shape.
 
         On WH 2x4 (sp=4) nf_padded=24; on sp=8 nf_padded=24 too (21 rounded to 24)."""
         nf_real = 21
@@ -525,13 +534,7 @@ class TestSparseFramesRing:
             num_frames_padded=nf_padded,
             frame_seqlen=3840,
             b=1,
-            # nh=40 is the real production value but slow to iterate on due to host tilize/detilize
-            # of ~944 MB tensors. nh=12 is the smallest value that still exercises the multi-work-
-            # item-per-core code paths (per_core work items ~= (nh/tp) * num_q_chunks / num_cores;
-            # at 720p geometry and BH 4x8's ~99 compute cores, nh=12 gives ~1.1 items/core so
-            # q_per_core > 1 fires on some cores; nh <= 8 gives <1 items/core and misses the path).
-            # Restore to 40 before final validation.
-            nh=12,  # runner shards on tp_axis; nh must divide tp_factor (12/4=3, 12/2=6)
+            nh=40,  # production value; runner shards on tp_axis (nh must divide tp_factor)
             d=128,
             window=5,
             add_last_frame=True,
@@ -542,6 +545,7 @@ class TestSparseFramesRing:
             # shape closely within the sparse-frames divisor constraint (chunk must divide fsl).
             q_chunk_size_tokens=320,  # 320 tokens = 10 tiles; fsl/12 = 3840/12
             k_chunk_size_tokens=384,  # 384 tokens = 12 tiles; fsl/10 = 3840/10
+            sparse_frames_enabled=sparse_frames_enabled,
         )
 
     @_MESH_TOPOLOGY
