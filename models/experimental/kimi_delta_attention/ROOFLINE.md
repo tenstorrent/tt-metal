@@ -285,3 +285,18 @@ concat, 5.49 us shard, 11.59 us halo, 25.88 us convolution, 7.21 us
 unshard, and about 12.9 us SiLU. A custom tile-to-tile causal kernel remains
 a candidate, but its target is now this measured residual rather than the
 eliminated wrapper traffic.
+
+## Row-major convolution-cache result
+
+Profile:
+`/tmp/kda_tp_layer_t640_rm_cache_r10/reports/2026_07_23_12_07_07/ops_perf_results_2026_07_23_12_07_07.csv`.
+Keeping the layer-owned 3-token convolution cache row-major removes its
+untilize and re-tilize from aligned prefill. The legacy FIR boundary converts
+the cache to tile only for recurrent, short, batched, or padded paths.
+
+Against the row-major-dataflow control, median device span falls
+0.70788 -> 0.69876 ms (1.29%), active time falls 0.67051 -> 0.66295 ms/device,
+and program count falls 38 -> 36/device/layer. Mesh throughput is
+84.73 TFLOP/s or 6.97% of eight-chip HiFi4 peak. Prep, scan, and fused-output
+medians remain 84.30, 96.99, and 146.36 us, so the distribution remains
+unchanged.
