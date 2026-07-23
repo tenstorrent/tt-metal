@@ -646,7 +646,7 @@ bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b) { return !(a == b)
 
 }  // namespace tt::tt_metal
 
-auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
+auto fmt::formatter<tt::tt_metal::CoreCoord>::format(const tt::tt_metal::CoreCoord& core_coord, format_context& ctx) const
     -> format_context::iterator {
     std::stringstream ss;
     ss << core_coord.str();
@@ -703,11 +703,11 @@ std::size_t hash<CoreRangeSet>::operator()(const CoreRangeSet& core_range_set) c
 
 namespace ttsl::json {
 
-nlohmann::json to_json_t<CoreCoord>::operator()(const CoreCoord& core_coord) noexcept {
+nlohmann::json to_json_t<tt::tt_metal::CoreCoord>::operator()(const tt::tt_metal::CoreCoord& core_coord) noexcept {
     return {{"x", to_json(core_coord.x)}, {"y", to_json(core_coord.y)}};
 }
 
-CoreCoord from_json_t<CoreCoord>::operator()(const nlohmann::json& json) noexcept {
+tt::tt_metal::CoreCoord from_json_t<tt::tt_metal::CoreCoord>::operator()(const nlohmann::json& json) noexcept {
     return {from_json<uint32_t>(json.at("x")), from_json<uint32_t>(json.at("y"))};
 }
 
@@ -726,7 +726,7 @@ nlohmann::json to_json_t<CoreRange>::operator()(const CoreRange& core_range) noe
 }
 
 CoreRange from_json_t<CoreRange>::operator()(const nlohmann::json& json) noexcept {
-    return {from_json<CoreCoord>(json.at("start")), from_json<CoreCoord>(json.at("end"))};
+    return {from_json<tt::tt_metal::CoreCoord>(json.at("start")), from_json<tt::tt_metal::CoreCoord>(json.at("end"))};
 }
 
 nlohmann::json to_json_t<CoreRangeSet>::operator()(const CoreRangeSet& core_range_set) noexcept {

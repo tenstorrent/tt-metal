@@ -122,6 +122,7 @@ class MathFidelitySetting(Enum):
     HIFI2_FP16 = "hifi2fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
     HIFI2_NOL1ACC = "hifi2nol1acc"  # fp32_dest_acc_en=True but packer_l1_acc=False (issue #36378)
     HIFI4 = "hifi4"
+    HIFI4_FP16 = "hifi4fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
     HIFI4_FP32 = "hifi4fp32"
 
 
@@ -802,6 +803,12 @@ class ModelArgs:
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+            self.compute_kernel_config_hifi4_fp16 = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
             self.compute_kernel_config_hifi4_fp32 = ttnn.WormholeComputeKernelConfig(
@@ -4507,6 +4514,7 @@ class DecodersPrecision:
             MathFidelitySetting.HIFI2_FP16: configuration.compute_kernel_config_hifi2_fp16,
             MathFidelitySetting.HIFI2_NOL1ACC: configuration.compute_kernel_config_hifi2_nol1acc,
             MathFidelitySetting.HIFI4: configuration.compute_kernel_config_hifi4,
+            MathFidelitySetting.HIFI4_FP16: configuration.compute_kernel_config_hifi4_fp16,
             MathFidelitySetting.HIFI4_FP32: configuration.compute_kernel_config_hifi4_fp32,
         }
         return math_fidelity_setting_lookup[self.decoder_optimizations[decoder_id].op_fidelity_settings[op]]
