@@ -389,3 +389,14 @@
 - Full layer command: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s`. Result: `SAFE_PYTEST_RESULT: PASS`; six cases passed in 7.04 s, including chunk prefill, fused decode, cache continuity, exact target decode, and FP32/BF16 external state.
 - CPU reference/factory command: `python_env/bin/python3 -m pytest models/experimental/kimi_delta_attention/tests/test_reference.py models/experimental/kimi_delta_attention/tests/test_factory.py -q`. Result: 11 passed in 2.45 s.
 - Current coverage proves single-device functional correctness through two chunks. It does not yet establish T=640 latency, compute utilization, multi-device tensor parallelism, or CCL utilization.
+
+
+### 2026-07-23 08:05:40 UTC — T=640 chunk baseline
+
+- Added a direct exact-shape profiler harness at B=1,T=640,H=32,K=V=128 with BF16 q/k/v and FP32 vector gate, beta, and initial state.
+- Smoke command: `PERF_REPS=2 scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/perf/test_chunk_kda_perf.py -q -s`. Result: `SAFE_PYTEST_RESULT: PASS`; one test passed in 4.16 s.
+- Tracy command: `PERF_REPS=10 python_env/bin/python3 -m tracy -p -r -o /tmp/kda_chunk_profile --check-exit-code --op-support-count 1000 -t 5000 -a device_kernel_duration -m "pytest models/experimental/kimi_delta_attention/tests/perf/test_chunk_kda_perf.py -q -s"`.
+- Report: `/tmp/kda_chunk_profile/reports/2026_07_23_08_05_40/ops_perf_results_2026_07_23_08_05_40.csv`. Ten warm calls averaged 1.295170 ms of serialized device-kernel time.
+- Mean phased durations were 351.690 us for `ChunkGdnPrepOperation` and 285.298 us for `ChunkGdnScanOperation`; together they account for 49.2 percent of device time.
+- Wrapper costs dominate the remaining 50.8 percent: five transposes total 466.276 us/call, output permute 79.266 us, untilize 56.953 us, scale 30.192 us, and reshape 25.497 us.
+- Decision: preserve the validated prep/scan math and first remove token-major/head-major relayouts via a flat input/output path. Custom-op PM fields report zero/NaN utilization, so compute and CCL utilization require explicit work/traffic accounting after the layout path is reduced.
