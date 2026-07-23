@@ -118,11 +118,12 @@
     # Automapper Phase 1 outputs must land on NFS (same pattern as kimi-decode-ladder).
     cd /ci/tt-metal
 
-    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+    # Keep GH logs readable: 64 ranks x default INFO saturates the Actions log viewer.
+    TT_LOGGER_LEVEL=warn TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "$MGD" \
       --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} -x LOGURU_LEVEL=WARNING" \
       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
@@ -148,11 +149,11 @@
 
     cd /ci/tt-metal
 
-    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+    TT_LOGGER_LEVEL=warn TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "$MGD" \
       --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} -x LOGURU_LEVEL=WARNING" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -177,11 +178,11 @@
 
     cd /ci/tt-metal
 
-    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+    TT_LOGGER_LEVEL=warn TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "$MGD" \
       --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} -x LOGURU_LEVEL=WARNING" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --repeat-generations 2 \
