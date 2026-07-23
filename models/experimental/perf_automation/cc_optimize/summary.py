@@ -204,6 +204,13 @@ def render_summary(
     ]
     final_ms = final_override_ms if final_override_ms is not None else (min(win_ms) if win_ms else baseline_ms)
     hdr_base = original_baseline_ms if original_baseline_ms is not None else baseline_ms
+    if win_ms and final_ms and (not hdr_base or hdr_base <= final_ms):
+        _attempt_max = max(
+            (float(a["measured_ms"]) for a in attempts if isinstance(a, dict) and a.get("measured_ms") is not None),
+            default=0.0,
+        )
+        if _attempt_max > final_ms:
+            hdr_base = _attempt_max
 
     lines = []
     title = f"Optimization summary — {model or 'model'} · {task} ({metric})"
