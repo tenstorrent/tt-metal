@@ -78,11 +78,14 @@ safe-outputs:
     max: 1
   add-labels:
     # Restricted to labels that already exist in the tenstorrent/tt-metal repo.
-    allowed: [bug, feature, feature-request, docs, ci-bug, infra-ci, "performance monitoring", "P0", "P1", "P2", "P3"]
+    # NOTE: Priority labels (P0-P3) are intentionally excluded. The team is
+    # moving to the GitHub Priority field for issue escalation; repo-assist
+    # should not apply or remove priority labels.
+    allowed: [bug, feature, feature-request, docs, ci-bug, infra-ci, "performance monitoring"]
     max: 30
     target: "*"
   remove-labels:
-    allowed: [bug, feature, feature-request, docs, "P0", "P1", "P2", "P3"]
+    allowed: [bug, feature, feature-request, docs]
     max: 5
     target: "*"
 
@@ -145,7 +148,7 @@ Always do Task 8 (Update Monthly Activity Summary Issue) every run. In all comme
 
 Process unlabelled or under-triaged open issues each run. Resume from memory's backlog cursor.
 
-For each item, apply the best-fitting labels from the allowed set, which is restricted to labels that already exist in this repo: `bug`, `feature`, `feature-request`, `docs`, `ci-bug`, `infra-ci`, `performance monitoring`, and the priority labels `P0`–`P3`. Apply multiple labels where appropriate; skip any you are not confident about. Update memory with labels applied and the cursor position.
+For each item, apply the best-fitting labels from the allowed set, which is restricted to labels that already exist in this repo: `bug`, `feature`, `feature-request`, `docs`, `ci-bug`, `infra-ci`, `performance monitoring`. Priority labels (`P0`–`P3`) are intentionally excluded — the team is moving to the GitHub Priority field for issue escalation, and repo-assist should not apply or remove priority labels. Apply multiple labels where appropriate; skip any you are not confident about. Update memory with labels applied and the cursor position.
 
 ### Task 2: Investigate and Comment on Open Issues
 
