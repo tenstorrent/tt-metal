@@ -46,12 +46,12 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
         tensor_args.optional_output_tensor);
 
     // Validate intermediate tensor if provided
+    const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
     if (tensor_args.optional_intermediate_tensor.has_value()) {
         const auto& interm = tensor_args.optional_intermediate_tensor.value();
         // On the contiguous ring fast path the intermediate is a chunk-paged staging tensor (UINT8,
         // row-major, interleaved DRAM), not input-shaped, so the legacy layout check does not apply.
         // Validate against the staging spec instead and point callers at the allocation helper.
-        const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
         auto stage_spec = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_spec(
             input_tensor,
             operation_attributes.topology,
@@ -72,6 +72,31 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
             ttnn::experimental::ccl::validate_intermediate_tensor(
                 input_tensor, interm, operation_attributes.optional_intermediate_mem_config);
         }
+    }
+
+    // Validate shortcut tensor if provided (ring contiguous fast path only; see
+    // reduce_scatter_ring_shortcut_staging_spec).
+    if (tensor_args.optional_shortcut_tensor.has_value()) {
+        const auto& shortcut = tensor_args.optional_shortcut_tensor.value();
+        auto shortcut_spec = ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
+            input_tensor,
+            operation_attributes.topology,
+            operation_attributes.dim,
+            operation_attributes.ring_size,
+            fp32_dest_acc_en);
+        TT_FATAL(
+            shortcut_spec.has_value(),
+            "A persistent shortcut tensor was provided but this configuration does not use the contiguous "
+            "reduce-scatter fast path (Ring topology, scatter dim != 0); the shortcut tensor is not applicable.");
+        TT_FATAL(shortcut.storage_type() == StorageType::DEVICE, "Persistent shortcut tensor must be on device");
+        TT_FATAL(
+            shortcut.logical_shape() == shortcut_spec->logical_shape() &&
+                shortcut.dtype() == shortcut_spec->data_type() && shortcut.layout() == shortcut_spec->layout() &&
+                shortcut.memory_config().buffer_type() == shortcut_spec->memory_config().buffer_type(),
+            "Persistent shortcut tensor does not match the contiguous reduce-scatter shortcut staging layout "
+            "(expected shape {}, UINT8 row-major interleaved DRAM). Allocate it with "
+            "reduce_scatter_minimal_async_create_intermediate_buffer.",
+            shortcut_spec->logical_shape());
     }
 
     // Validate semaphore count
@@ -381,6 +406,7 @@ std::vector<Tensor> reduce_scatter_minimal_async(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<ttnn::Tensor>& optional_shortcut_tensor,
     uint32_t dim,
     uint32_t num_links,
     uint32_t ring_size,
@@ -415,7 +441,8 @@ std::vector<Tensor> reduce_scatter_minimal_async(
         num_workers_per_link,
         num_buffers_per_channel,
         compute_kernel_config};
-    auto tensor_args = OperationType::tensor_args_t{input_tensor, optional_intermediate_tensor, optional_output_tensor};
+    auto tensor_args = OperationType::tensor_args_t{
+        input_tensor, optional_intermediate_tensor, optional_output_tensor, optional_shortcut_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -65,20 +65,25 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod) {
     ttnn::bind_function<"reduce_scatter_minimal_async_create_intermediate_buffer", "ttnn.experimental.">(
         mod,
         R"doc(
-        Allocates the intermediate persistent buffer for the contiguous ring reduce_scatter_minimal_async
+        Allocates the persistent staging buffers for the contiguous ring reduce_scatter_minimal_async
         fast path (Ring topology, scatter dim != 0).
 
         On this path the intermediate is a chunk-paged, row-major, interleaved-DRAM staging tensor rather
-        than an input-shaped tensor, so it must be allocated with the exact layout the op expects. This
-        helper reuses the op's own sizing so the returned tensor is guaranteed to match. Pass it as
-        persistent_output_buffers[0]. The `dim`, `topology`, `cluster_axis`, and `compute_kernel_config`
-        arguments must match those passed to reduce_scatter_minimal_async.
+        than an input-shaped tensor, and the 2nd-last ring iteration stages one direction's contribution
+        into a second, smaller chunk-paged "shortcut" buffer instead of scatter-writing it into the tiled
+        output tensor. Both must be allocated with the exact layout the op expects. This helper reuses the
+        op's own sizing so the returned tensors are guaranteed to match. Pass the result as
+        persistent_output_buffers = [result[0], output_tensor, result[1]] (intermediate at index 0,
+        shortcut at index 2; output_tensor is the caller's own persistent output). The `dim`, `topology`,
+        `cluster_axis`, and `compute_kernel_config` arguments must match those passed to
+        reduce_scatter_minimal_async.
 
         Raises if the configuration does not use the contiguous path; for the legacy path the intermediate
-        has the input tensor's shape and can be allocated directly.
+        has the input tensor's shape and can be allocated directly, and no shortcut buffer is needed.
 
         Returns:
-            ttnn.Tensor: the intermediate staging buffer, allocated on the input tensor's device.
+            List[ttnn.Tensor]: [intermediate_buffer, shortcut_buffer], both allocated on the input
+            tensor's device.
         )doc",
         &ttnn::experimental::reduce_scatter_minimal_async_create_intermediate_buffer,
         nb::arg("input_tensor"),

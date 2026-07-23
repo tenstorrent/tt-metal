@@ -33,9 +33,7 @@ constexpr uint32_t cb_reader_output_id =
 constexpr uint32_t tile_granularity = get_named_compile_time_arg_val("tile_granularity");
 constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
 constexpr uint32_t input_batch_num_pages = get_named_compile_time_arg_val("input_batch_num_pages");
-constexpr uint32_t output_batch_num_pages = get_named_compile_time_arg_val("output_batch_num_pages");
 constexpr uint32_t input_channel_num_pages = get_named_compile_time_arg_val("input_channel_num_pages");
-constexpr uint32_t output_channel_num_pages = get_named_compile_time_arg_val("output_channel_num_pages");
 constexpr uint32_t input_tensor_B = get_named_compile_time_arg_val("input_tensor_B");
 constexpr uint32_t input_tensor_Wt = get_named_compile_time_arg_val("input_tensor_Wt");
 constexpr uint32_t slice_C = get_named_compile_time_arg_val("slice_C");
@@ -56,7 +54,10 @@ void kernel_main() {
     // Load the input tensor spec
     address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
     address_t interm_tensor_address = get_arg_val<address_t>(arg_idx++);
-    address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
+    // Unused here: the 2nd-last-iteration shortcut contribution now lands in shortcut_tensor_address
+    // below instead of output_tensor. Kept for positional-arg parity with the shared reader RT-arg
+    // layout (also consumed by the legacy, non-contiguous ring reader).
+    [[maybe_unused]] address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t out2_ready_sem = get_arg_val<uint32_t>(arg_idx++);  // out_ready_sem from opposite dir
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
@@ -65,6 +66,9 @@ void kernel_main() {
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    // Shortcut staging buffer holding the 2nd-last iteration's direct-to-remote contribution; read
+    // back here as the 3rd term of the final iteration's local reduce. See rs-contiguous-interm-design.
+    address_t shortcut_tensor_address = get_arg_val<address_t>(arg_idx++);
 
     constexpr uint32_t ct_idx = 0;
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
@@ -74,7 +78,9 @@ void kernel_main() {
     auto interm_tensor_accessor = TensorAccessor(interm_tensor_args, interm_tensor_address);
 
     constexpr auto output_tensor_args = TensorAccessorArgs<interm_tensor_args.next_compile_time_args_offset()>();
-    auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
+
+    constexpr auto shortcut_tensor_args = TensorAccessorArgs<output_tensor_args.next_compile_time_args_offset()>();
+    auto shortcut_tensor_accessor = TensorAccessor(shortcut_tensor_args, shortcut_tensor_address);
 
     ReduceScatterOpReceiver matmul_receiver;
     if constexpr (fuse_op) {
@@ -169,21 +175,17 @@ void kernel_main() {
                 return tile_id;
             };
 
-            // address incrementer for output_tensor
-            uint32_t output_tile_id_start = b * output_batch_num_pages;
-            uint32_t output_tiles_read = start_tiles_read;
-            auto get_next_output_tile_id = [&]() -> uint32_t { return output_tile_id_start + (output_tiles_read++); };
-
             uint32_t chunk_count = 0;
             for (uint32_t c = 0; c < slice_C; ++c) {
                 // reset addr counters
                 input_pages_read_in_row = start_pages_read_in_row;
                 input_row_offset = start_row_offset;
-                output_tiles_read = start_tiles_read;
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t total_tiles_to_read = start_tiles_to_read;
                 // Base chunk page id for this (slice, channel) in the chunk-paged intermediate.
                 const uint32_t interm_channel_chunk_base = interm_chunk_base + c * chunks_per_channel;
+                // Shortcut staging buffer has no slice_idx axis (see the writer's shortcut_channel_chunk_base).
+                const uint32_t shortcut_channel_chunk_base = c * chunks_per_channel;
 
                 /**
                  * Interleave forward and backward ring reads
@@ -197,12 +199,11 @@ void kernel_main() {
                         reduce_scatter_common::chunk_ring_parity<tile_granularity>(tiles_read, total_tiles_to_read);
 
                     if ((is_even_chunk && !even_chunks) || (!is_even_chunk && !odd_chunks) || tiles_to_read == 0) {
-                        // Skip this chunk. Advance tiled input/output counters; the intermediate is
-                        // addressed statelessly from tiles_read.
+                        // Skip this chunk. Advance the tiled input counter; the intermediate and
+                        // shortcut buffers are addressed statelessly from tiles_read.
                         tiles_read += tiles_to_read;
                         for (uint32_t k = 0; k < tiles_to_read; ++k) {
                             get_next_input_tile_id();
-                            get_next_output_tile_id();
                         }
                     } else {
                         const bool reduce_interm =
@@ -227,20 +228,23 @@ void kernel_main() {
 
                         cb_in.reserve_back(tile_granularity);
                         uint32_t l1_write_offset = 0;
-                        uint32_t interm_l1_write_offset = 0, interm2_l1_write_offset = 0;
                         if (reduce_interm) {
                             cb_interm.reserve_back(tile_granularity);
                             if (reduce_output) {
                                 cb_interm2.reserve_back(tile_granularity);
                             }
                         }
-                        // Chunk-paged intermediate: whole chunk lives in one page; tile j sits at byte
-                        // offset ((tiles_read % tile_granularity) + j) * page_size within that page.
+                        // Chunk-paged intermediate/shortcut: whole chunk lives in one page; tile j sits
+                        // at byte offset ((tiles_read % tile_granularity) + j) * page_size within that
+                        // page. Same addressing scheme for both, differing only in the channel base
+                        // (shortcut has no slice_idx term).
                         const uint32_t interm_page_id = interm_channel_chunk_base + tiles_read / tile_granularity;
-                        const uint32_t interm_page_base_off = (tiles_read % tile_granularity) * page_size;
+                        const uint32_t shortcut_page_id = shortcut_channel_chunk_base + tiles_read / tile_granularity;
+                        const uint32_t chunk_page_base_off = (tiles_read % tile_granularity) * page_size;
+                        // input_tensor tiles are bank-interleaved (one page each), so they must be read
+                        // per-tile.
                         for (uint32_t j = 0; j < tiles_to_read; ++j) {
                             auto input_tile_id = get_next_input_tile_id();
-                            auto output_tile_id = get_next_output_tile_id();
 
                             // input_tensor from reader -> compute or writer
                             noc_obj.async_read(
@@ -250,27 +254,29 @@ void kernel_main() {
                                 {.page_id = input_tile_id},
                                 {.offset_bytes = l1_write_offset});
                             l1_write_offset += page_size;
+                        }
+                        // The chunk-paged interm/shortcut staging buffers hold the whole chunk contiguously
+                        // in ONE DRAM page (page_bytes is DRAM-aligned == aligned_page_size, and the chunk
+                        // never crosses a tile_granularity boundary), so read all tiles_to_read tiles in a
+                        // single coalesced NoC transaction instead of one per tile. This lifts the
+                        // per-transaction size above the ~2 KB NoC->DRAM bandwidth knee — a ~2x on the bf8
+                        // readback, which the tile-granular read left stuck at ~24.7 GB/s. See rs-perf-model
+                        // (P1); mirrors the writer's contiguous chunk writes (write_contig_chunk).
+                        if (reduce_interm) {
+                            noc_obj.async_read(
+                                interm_tensor_accessor,
+                                cb_interm,
+                                tiles_to_read * page_size,
+                                {.page_id = interm_page_id, .offset_bytes = chunk_page_base_off},
+                                {.offset_bytes = 0});
 
-                            if (reduce_interm) {
-                                // interm_tensor (chunk-paged staging) from reader -> compute
+                            if (reduce_output) {
                                 noc_obj.async_read(
-                                    interm_tensor_accessor,
-                                    cb_interm,
-                                    page_size,
-                                    {.page_id = interm_page_id, .offset_bytes = interm_page_base_off + j * page_size},
-                                    {.offset_bytes = interm_l1_write_offset});
-                                interm_l1_write_offset += page_size;
-
-                                if (reduce_output) {
-                                    // output_tensor from reader -> compute
-                                    noc_obj.async_read(
-                                        output_tensor_accessor,
-                                        cb_interm2,
-                                        page_size,
-                                        {.page_id = output_tile_id},
-                                        {.offset_bytes = interm2_l1_write_offset});
-                                    interm2_l1_write_offset += page_size;
-                                }
+                                    shortcut_tensor_accessor,
+                                    cb_interm2,
+                                    tiles_to_read * page_size,
+                                    {.page_id = shortcut_page_id, .offset_bytes = chunk_page_base_off},
+                                    {.offset_bytes = 0});
                             }
                         }
                         tiles_read += tiles_to_read;
@@ -287,7 +293,6 @@ void kernel_main() {
                 }  // while total_tiles_to_read
 
                 input_tile_id_start += input_channel_num_pages;
-                output_tile_id_start += output_channel_num_pages;
             }
 
             // Next slice idx

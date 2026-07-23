@@ -44,6 +44,10 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    // Unused by Line (the contiguous shortcut path is Ring-only); present only so this builder shares
+    // a call signature with build_ring_reduce_scatter_minimal_async_program_artifacts, which lets
+    // callers pick between them via a single function-pointer/ternary.
+    const std::optional<Tensor>& shortcut_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,

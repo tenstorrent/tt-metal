@@ -184,6 +184,29 @@ std::optional<ttnn::TensorSpec> reduce_scatter_ring_interm_staging_spec(
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM)));
 }
 
+std::optional<ttnn::TensorSpec> reduce_scatter_ring_shortcut_staging_spec(
+    const ttnn::Tensor& input_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t ring_size,
+    bool fp32_dest_acc_en) {
+    const auto params =
+        reduce_scatter_ring_interm_staging_params(input_tensor, topology, dim, ring_size, fp32_dest_acc_en);
+    if (!params.use_contiguous) {
+        return std::nullopt;
+    }
+    // Same chunk-paged layout as the main intermediate, but sized without the ring_size (slice_idx)
+    // axis: total_chunks == ring_size * slice_C * chunks_per_channel, so this region is exactly
+    // slice_C * chunks_per_channel pages, addressed as (c * chunks_per_channel + chunk-in-channel).
+    const uint32_t shortcut_chunks = params.total_chunks / ring_size;
+    return ttnn::TensorSpec(
+        ttnn::Shape({shortcut_chunks, params.page_bytes}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT8,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM)));
+}
+
 std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_nd_to_4d(const ttnn::Shape& shape, uint32_t dim) {
     TT_FATAL(shape.rank() > 2, "Expected rank 3 or greater");
 

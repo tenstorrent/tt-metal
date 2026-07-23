@@ -41,7 +41,8 @@ private:
         const MatmulReduceScatterAsyncParams& args,
         const ttnn::MeshCoordinate& mesh_coord,
         const MatmulReduceScatterAsyncInputs& tensor_args,
-        MatmulReduceScatterAsyncResult& output_tensors);
+        MatmulReduceScatterAsyncResult& output_tensors,
+        const std::optional<Tensor>& shortcut_tensor);
 };
 
 }  // namespace ttnn::experimental::prim

@@ -13,6 +13,8 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 // Import functions from the new namespace
 using ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_artifacts;
@@ -50,6 +52,22 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     tt::tt_metal::distributed::Synchronize(
         mesh_device, std::nullopt, subdevice_ids);  // interaction with subdevice needs to be investigated
 
+    // Ring contiguous fast path only: the "shortcut" staging buffer used by the 2nd-last iteration
+    // (see rs-contiguous-interm-design). Allocated once per program build and reused for the lifetime
+    // of the cached program via shared_variables_t; nullopt when not applicable.
+    const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
+    const uint32_t target_ring_size =
+        ::ttnn::ccl::get_topological_dimension(tensor_args.input_tensor, operation_attributes.cluster_axis);
+    std::optional<Tensor> shortcut_tensor;
+    if (auto shortcut_spec = ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
+            tensor_args.input_tensor,
+            operation_attributes.topology,
+            operation_attributes.dim,
+            target_ring_size,
+            fp32_dest_acc_en)) {
+        shortcut_tensor = create_device_tensor(*shortcut_spec, mesh_device);
+    }
+
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
             operation_attributes,
@@ -58,7 +76,8 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
             tensor_return_value,
             tensor_coords,
             multidevice_semaphores,
-            barrier_semaphore);
+            barrier_semaphore,
+            shortcut_tensor);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -74,7 +93,8 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
     tensor_return_value_t& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/,
     const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
-    const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
+    const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
+    const std::optional<Tensor>& shortcut_tensor) {
     tt::tt_metal::Program program{};
 
     // Get mesh and axis related information
@@ -117,6 +137,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         program,
         tensor_args.input_tensor,
         tensor_return_value.at(0),
+        shortcut_tensor,
         mesh_coordinate,
         forward_coordinate,
         backward_coordinate,
