@@ -71,70 +71,72 @@ MATRIX_OUTPUT_KEYS = ("n150", "n300", "p150b", "p100a", "p300a", "t3k", "galaxy"
 # ``runs_on`` from there via ``_resolve_runs_on(profile["sku"])``. ``arch``,
 # ``runner_label``, ``tt_smi_cmd``, and ``matrix_output_key`` stay here as they are
 # sweep-routing concerns, not general SKU attributes.
+#
+# SKUs are the EXISTING logical SKUs already defined in .github/sku_config.yaml
+# (infra's abstraction layer); sweeps does not add its own SKU entries. Sweeps
+# runs on the shared civ2/viommu runner pools.
 RUNNER_PROFILES = {
     "n150": {
         "arch": "wormhole_b0",
-        "sku": "wh_n150_sweeps",
+        "sku": "wh_n150_civ2",
         "runner_label": "N150",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "n150",
     },
     "n300": {
         "arch": "wormhole_b0",
-        "sku": "wh_n300_sweeps",
+        "sku": "wh_n300_civ2",
         "runner_label": "N300",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "n300",
     },
     "n300-llmbox": {
         "arch": "wormhole_b0",
-        "sku": "wh_n300_llmbox_sweeps",
+        "sku": "wh_llmbox_civ2_viommu",
         "runner_label": "n300-llmbox",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "n300",
     },
     "p150b": {
         "arch": "blackhole",
-        "sku": "bh_p150b_sweeps",
+        "sku": "bh_p150b_civ2_viommu",
         "runner_label": "p150b",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "p150b",
     },
     "p100a": {
         "arch": "blackhole",
-        "sku": "bh_p100a_sweeps",
+        "sku": "bh_p100a_civ2_viommu",
         "runner_label": "p100a",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "p100a",
     },
     "p300a": {
         "arch": "blackhole",
-        # sku bh_p300a_sweeps == [in-service, arch-blackhole, P300-viommu]. A bare
-        # "P300-viommu" label does not match a schedulable runner (no in-service
-        # qualifier), so jobs sit queued forever; the sku_config entry carries the
-        # proven in-service + arch-blackhole + label triple.
-        "sku": "bh_p300a_sweeps",
+        "sku": "bh_p300_viommu",
         "runner_label": "P300",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "p300a",
     },
     "t3k": {
         "arch": "wormhole_b0",
-        "sku": "wh_t3k_sweeps",
+        "sku": "wh_llmbox",
         "runner_label": "config-t3000",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "t3k",
     },
     "galaxy-topology-6u": {
         "arch": "wormhole_b0",
-        "sku": "wh_galaxy_sweeps",
+        "sku": "wh_galaxy",
         "runner_label": "topology-6u",
         "tt_smi_cmd": "tt-smi -glx_reset_auto",
         "matrix_output_key": "galaxy",
     },
     "galaxy-g04glx03": {
         "arch": "wormhole_b0",
-        "sku": "wh_galaxy_g04glx03_sweeps",
+        # Folded onto the shared wh_galaxy SKU; the dedicated g04glx03 host label
+        # is not a separate logical SKU in infra's abstraction layer.
+        "sku": "wh_galaxy",
         "runner_label": "g04glx03",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "galaxy",
@@ -180,6 +182,60 @@ def _resolve_runs_on(sku_name):
     if isinstance(labels, list) and len(labels) == 1:
         return labels[0]
     return labels
+
+
+# ── Per-job timeout from the pipeline-reorg test yaml ─────────────────────────
+# The single source of truth for each job's timeout is
+# tests/pipeline_reorg/ttnn_sweep_tests.yaml, keyed by (target, sku). The same
+# file is checked against .github/time_budget.yaml by verify_time_budget.py. We
+# read the per-(target, sku) timeout here and stamp it onto every matrix entry so
+# the workflow can enforce it at the GitHub job level (timeout-minutes), aligning
+# sweeps with the other pipeline-reorg pipelines (single-source-of-truth timeout).
+DEFAULT_JOB_TIMEOUT_MIN = 60
+
+
+def _sweep_tests_yaml_path():
+    """Locate tests/pipeline_reorg/ttnn_sweep_tests.yaml. Prefer $TT_METAL_HOME;
+    else walk up from this file (tests/sweep_framework/framework/ -> repo root)."""
+    rel = os.path.join("tests", "pipeline_reorg", "ttnn_sweep_tests.yaml")
+    home = os.environ.get("TT_METAL_HOME")
+    if home:
+        candidate = os.path.join(home, rel)
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "..", rel))
+
+
+@functools.lru_cache(maxsize=1)
+def _sweep_timeout_map():
+    """Return {(target, sku): timeout_min} parsed from ttnn_sweep_tests.yaml.
+
+    Missing/unreadable file → empty map (callers fall back to DEFAULT_JOB_TIMEOUT_MIN),
+    so matrix generation never hard-fails on a timeout lookup."""
+    import yaml
+
+    path = _sweep_tests_yaml_path()
+    try:
+        with open(path) as f:
+            entries = yaml.safe_load(f) or []
+    except (OSError, yaml.YAMLError):
+        return {}
+    out = {}
+    for entry in entries if isinstance(entries, list) else []:
+        target = entry.get("target")
+        for sku_name, sku_cfg in (entry.get("skus") or {}).items():
+            if isinstance(sku_cfg, dict) and "timeout" in sku_cfg:
+                out[(target, sku_name)] = sku_cfg["timeout"]
+    return out
+
+
+def get_timeout_for(target, sku, default=DEFAULT_JOB_TIMEOUT_MIN):
+    """Per-job timeout (minutes) for a (target, sku) pair from ttnn_sweep_tests.yaml.
+
+    ``target`` is the run type (``lead_models`` / ``model_traced``). Nightly and
+    comprehensive runs are not budget-tracked in the yaml, so they fall back to the
+    default hard job ceiling."""
+    return _sweep_timeout_map().get((target, sku), default)
 
 
 # ── Logical test groups ───────────────────────────────────────────────────────
@@ -346,6 +402,7 @@ def get_runner_config(test_group_name):
     return {
         "test_group_name": test_group_name,
         "arch": profile["arch"],
+        "sku": profile["sku"],
         "runs_on": _resolve_runs_on(profile["sku"]),
         "runner_label": profile["runner_label"],
         "tt_smi_cmd": profile["tt_smi_cmd"],

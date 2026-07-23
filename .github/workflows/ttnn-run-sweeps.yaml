@@ -965,15 +965,22 @@ jobs:
         timeout-minutes: 20
         with:
           clean: false
-      - id: set-matrix
+      - name: Build unified test matrix based on enabled SKUs
+        id: set-matrix
         shell: bash
         env:
           SWEEP_NAME: ${{ needs.resolve-inputs.outputs.sweep-name }}
           MEASURE_DEVICE_PERF: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
           VECTORS_DIR: /tmp/vectors
         run: |
-          # matrix_runner_config resolves each job's runs_on from
-          # .github/sku_config.yaml, which needs PyYAML in this hosted-runner env.
+          # Sweeps builds a DYNAMIC matrix: modules are discovered from the
+          # generated vector files and batched at runtime, so it uses
+          # compute_sweep_matrix.py rather than the static prepare_test_matrix.py.
+          # Both resolve runs_on from the shared .github/sku_config.yaml (existing
+          # logical SKUs) and stamp each entry's per-job `timeout` from
+          # tests/pipeline_reorg/ttnn_sweep_tests.yaml, so the emitted matrix carries
+          # the same {sku, runs_on, timeout} the workflow enforces at the job level.
+          # matrix_runner_config reads those YAMLs, which needs PyYAML on this hosted runner.
           pip3 install PyYAML > /dev/null 2>&1
           # Compute combined + per-hardware matrices once.
           python3 tests/sweep_framework/framework/compute_sweep_matrix.py \
@@ -990,7 +997,7 @@ jobs:
           jq . /tmp/sweep_matrix.pretty.json
           echo "::endgroup::"
 
-      - name: Verify sweep budget
+      - name: Verify test timeouts against budget
         shell: bash
         run: |
           pip3 install PyYAML > /dev/null 2>&1

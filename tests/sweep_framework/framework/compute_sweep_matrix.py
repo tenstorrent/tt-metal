@@ -42,6 +42,7 @@ from matrix_runner_config import (
     get_mesh_test_group_map,
     get_runner_config,
     get_test_group_name_for_hardware_group,
+    get_timeout_for,
 )
 
 DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/sweep_matrix.json"
@@ -425,6 +426,13 @@ def main():
     else:
         suite_name = None if run_type == "comprehensive" else run_type  # "nightly" or None
         include_entries, batches, ccl_batches = compute_standard_matrix(modules, batch_size, suite_name)
+
+    # Stamp the per-job timeout (minutes) onto every matrix entry so the workflow
+    # enforces it at the GitHub job level (timeout-minutes). Source of truth is
+    # tests/pipeline_reorg/ttnn_sweep_tests.yaml keyed by (target=run_type, sku),
+    # the same file verify_time_budget.py checks against .github/time_budget.yaml.
+    for entry in include_entries:
+        entry["timeout"] = get_timeout_for(run_type, entry.get("sku"))
 
     # Validate GitHub Actions limits
     for label, count in [("batch", len(batches)), ("matrix entry", len(include_entries))]:
