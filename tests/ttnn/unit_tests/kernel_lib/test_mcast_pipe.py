@@ -633,17 +633,28 @@ def test_rotating_line(device, span, payload_tiles):
     _run_rotating_line(device, span=span, payload_tiles=payload_tiles)
 
 
-# ======== FIXED edge-sender LINE via the host helper (Mcast1D) + the unified McastArgs decoder ========
+# ======== FIXED-sender LINE via the host helper (Mcast1D) + the unified McastArgs decoder ========
 # The fixed-mode counterpart of test_rotating_line: the 2D dual-mcast matmul in0 shape. On a GC x GR
-# grid, ttnn.Mcast1D(PerRow, sender_index=0) makes each ROW an independent per-row family -- the col-0 core
-# is the fixed sender, the rest of the row receives. The sender streams `num_blocks` blocks of its row
-# (the matmul K-block loop): each block is staged from DRAM and multicast, and every receiver receives
-# each block. pipe_fixed_line.cpp decodes the wire with ONE McastArgs<1,5> (owns both arg lists;
-# sender() reads its rect off RT, receiver().receive() reads the sender coords off RT) and -- because
-# the role is fixed for the whole loop -- builds the pipe ONCE above the block loop. Each (row Y, block b) holds a distinct constant (Y*NB + b + 1);
+# grid, each ROW is an independent per-row family with one fixed sender. Uniform placement preserves
+# the original same-column sender; diagonal placement advances the sender column once per row and
+# wraps at GC. The sender streams `num_blocks` blocks of its row (the matmul K-block loop): each block
+# is staged from DRAM and multicast, and every receiver receives each block. pipe_fixed_line.cpp
+# decodes the wire with ONE McastArgs<1,5> (owns both arg lists; sender() reads its rect off RT,
+# receiver().receive() reads the sender coords off RT) and -- because the role is fixed for the whole
+# loop -- builds the pipe ONCE above the block loop. Each (row Y, block b) holds a distinct constant
+# (Y*NB + b + 1);
 # the check output[(Y*GC + X)*NB + b] == block(Y, b) proves the data path across the loop AND that the
 # helper emits the right per-row rect / sender coords for every row independently.
-def _run_fixed_line(device, grid_cols, grid_rows, num_blocks, payload_tiles):
+def _run_fixed_line(
+    device,
+    grid_cols,
+    grid_rows,
+    num_blocks,
+    payload_tiles,
+    *,
+    starting_sender_index=0,
+    sender_placement=None,
+):
     GC, GR, NB = grid_cols, grid_rows, num_blocks
     page_bytes = TILE_BYTES
     payload_pages = payload_tiles
@@ -669,8 +680,29 @@ def _run_fixed_line(device, grid_cols, grid_rows, num_blocks, payload_tiles):
     io_tensors = [input_tensor, output_tensor]
 
     # ---- the host helper owns sems + CT + per-core RT for every per-row family at once ----
-    mc = ttnn.Mcast1D(device, grid, ttnn.Mcast1DShape.PerRow, 0, ttnn.McastConfig())  # fixed edge sender
+    if sender_placement is None:
+        # Exercise the original constructor/keyword contract in the existing fixed-line coverage.
+        mc = ttnn.Mcast1D(
+            device,
+            grid,
+            ttnn.Mcast1DShape.PerRow,
+            sender_index=starting_sender_index,
+            config=ttnn.McastConfig(),
+        )
+    else:
+        mc = ttnn.Mcast1D(
+            device,
+            grid,
+            ttnn.Mcast1DShape.PerRow,
+            starting_sender_index=starting_sender_index,
+            sender_placement=sender_placement,
+            config=ttnn.McastConfig(),
+        )
     assert mc.num_senders() == 1, "fixed mode has a single sender per line"
+    if sender_placement == ttnn.Mcast1DSenderPlacement.Diagonal:
+        for Y in range(GR):
+            expected_sender = ttnn.CoreCoord((starting_sender_index + Y) % GC, Y)
+            assert mc.is_sender(expected_sender), f"row {Y}: expected diagonal sender {expected_sender}"
     semaphores = mc.owned_semaphores()
 
     cb = 0
@@ -731,6 +763,35 @@ def _run_fixed_line(device, grid_cols, grid_rows, num_blocks, payload_tiles):
 # build-once hoist is actually exercised.
 def test_fixed_line_smoke(device):
     _run_fixed_line(device, grid_cols=2, grid_rows=1, num_blocks=2, payload_tiles=1)
+
+
+# A 4x4 diagonal places fixed senders at (0,0), (1,1), (2,2), (3,3). Rows 1 and 2 prove that an
+# interior fixed sender can target the full row and rely on SenderPipe's EXCLUDE-source mode, while
+# every receiver acks the row-specific sender coordinates emitted in its RT block.
+def test_fixed_line_diagonal(device):
+    _run_fixed_line(
+        device,
+        grid_cols=4,
+        grid_rows=4,
+        num_blocks=3,
+        payload_tiles=1,
+        starting_sender_index=0,
+        sender_placement=ttnn.Mcast1DSenderPlacement.Diagonal,
+    )
+
+
+# Starting at column 5 on an 8x8 grid wraps the diagonal sender columns as
+# [5, 6, 7, 0, 1, 2, 3, 4], covering interior and both edge sender geometries.
+def test_fixed_line_diagonal_wraparound(device):
+    _run_fixed_line(
+        device,
+        grid_cols=8,
+        grid_rows=8,
+        num_blocks=2,
+        payload_tiles=1,
+        starting_sender_index=5,
+        sender_placement=ttnn.Mcast1DSenderPlacement.Diagonal,
+    )
 
 
 @pytest.mark.parametrize("grid_cols,grid_rows", [(2, 1), (4, 2), (8, 4)])
