@@ -81,9 +81,16 @@ class SmolLM3TextEncoderWrapper:
         ccl_manager: "CCLManager | None",
         parallel_config: "EncoderParallelConfig",
         pad_buckets=(1024,),
+        keep_padding: bool = False,
     ) -> None:
         self._device = device
         self._pad_buckets = tuple(pad_buckets)
+        # keep_padding=True -> fixed-length padding (matches the friedrich/fibo reference approach):
+        # the DiT receives the full bucket length (not the trimmed true length), so the DiT prompt
+        # branch runs at a single fixed M (== bucket) for every prompt -- stable trace, one matmul-
+        # config set -- at the cost of padding compute. keep_padding=False keeps the true-length
+        # (unpadded) behaviour. See pick_bucket / encode_prompt.
+        self._keep_padding = keep_padding
         sp = parallel_config.sequence_parallel
         self._sp_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
         self._sp_factor = sp.factor if (sp is not None) else 1
@@ -147,7 +154,16 @@ class SmolLM3TextEncoderWrapper:
         else:
             stacked = self._forward(tt_ids, tt_cos, tt_sin)
 
-        stacked_host = self._read_seq_sharded(stacked)[:, :seq_len, :]  # [N, seq_len, hidden]
+        stacked_host = self._read_seq_sharded(stacked)  # [N, bucket, hidden] (full padded length)
+        if self._keep_padding:
+            # Fixed-length padding: keep the full bucket and zero the padding tail so the DiT prompt
+            # branch runs at a single fixed M (== bucket). SmolLM3 is causal, so trailing pad positions
+            # never influenced the real-token hidden states; zeroing them mirrors diffusers'
+            # masked_fill. NOTE: the tt DiT has no attention mask, so real tokens still attend to these
+            # zeroed pad rows -- an approximation validated by the PCC/image test.
+            stacked_host[:, seq_len:, :] = 0
+        else:
+            stacked_host = stacked_host[:, :seq_len, :]  # trim to true length (unpadded DiT branch)
         host_hidden_states = [stacked_host[i : i + 1] for i in range(stacked_host.shape[0])]
         # prompt_embeds = cat(last, second-last) -- diffusers pipeline_bria_fibo.py contract.
         host_prompt_embeds = torch.cat([host_hidden_states[-1], host_hidden_states[-2]], dim=-1)

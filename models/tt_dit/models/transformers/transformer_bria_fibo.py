@@ -99,6 +99,13 @@ def _register_fibo_matmul_configs() -> None:
                 (864, 3072, 1536): (3, 6, 4, (1, 4)),  # ff_context.ff1 prompt (fused GELU) — 81504 ns
                 (864, 1536, 3072): (3, 4, 8, (1, 4)),  # ff_context.ff2 prompt — 61876 ns
                 (864, 1920, 3072): (3, 4, 16, (1, 4)),  # single proj_out prompt — 71226 ns
+                # DiT prompt-branch matmuls at M=1024 (keep_padding=True: the JSON caption's 833 tokens pad
+                # to the fixed 1024 bucket instead of the true M=864). The 5 shared (K,N) shapes reuse the
+                # M=1024 spatial entries above; only these 2 are prompt-only (context_embedder K=4096,
+                # caption_projection K=2048 have no spatial twin). Seeded from the M=864 winners (same K,N)
+                # -- RE-SWEEP at M=1024 via sweep_mm_block_sizes.py (bh_4x8_fibo, 12x10).
+                (1024, 4096, 384): (3, 8, 2, (3, 1)),  # context_embedder prompt (seed from M=864)
+                (1024, 2048, 1536): (3, 4, 4, (1, 4)),  # caption_projection prompt (seed from M=864)
                 # SmolLM3 text encoder (tensor-parallel, tp=8) matmuls on the 4x8 Galaxy. M=32 (short
                 # prompt, one tile), K=2048=hidden. Swept 2026-07-15 (bh_4x8_fibo). SmolLM3 has no matmul
                 # registration of its own and FIBO is its only user, so its configs live here (additive,
@@ -139,6 +146,11 @@ def _register_fibo_matmul_configs() -> None:
                 (32, 3072, 2304): (2, 6, 8, (2, 2)),  # norm1 modulation — 71665 ns
                 (128, 2048, 1536): (2, 4, 6, (2, 2)),  # caption_projection — 39750 ns
                 (128, 3072, 1536): (2, 6, 5, (2, 1)),  # dual ff_context.ff1 prompt — 76822 ns
+                # DiT prompt-branch matmuls at M=1024 (keep_padding=True, 11x10 fallback grid). The 5 shared
+                # (K,N) shapes reuse the M=1024 spatial entries above; only these 2 are prompt-only. Seeded
+                # from the 12x10 M=864 winners -- RE-SWEEP at M=1024 (bh_4x8_fibo, 11x10).
+                (1024, 4096, 384): (3, 8, 2, (3, 1)),  # context_embedder prompt (seed from M=864)
+                (1024, 2048, 1536): (3, 4, 4, (1, 4)),  # caption_projection prompt (seed from M=864)
                 (32, 256, 3072): (2, 2, 10, (2, 2)),  # timestep_embedder linear_1 — 15618 ns
                 (32, 3072, 3072): (2, 4, 16, (2, 2)),  # timestep_embedder linear_2 — 89023 ns
                 (32, 3072, 6144): (2, 8, 12, (2, 2)),  # time_embed_out — 164954 ns

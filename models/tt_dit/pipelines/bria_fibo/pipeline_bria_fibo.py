@@ -26,6 +26,7 @@ This first correctness pass runs UNTRACED (tracing is a documented follow-up).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -68,6 +69,14 @@ class BriaFiboPipelineConfig:
     width: int
     checkpoint_name: str
 
+    # Fixed-length padding of the DiT prompt branch (see SmolLM3TextEncoderWrapper.keep_padding).
+    # True -> every prompt runs the DiT prompt branch at the fixed 1024 bucket (stable trace, one
+    # matmul-config set); False -> true-length (unpadded) branch. Env-toggle for A/B: FIBO_KEEP_PADDING.
+    # Default False: padding drops latent PCC to ~92% (the diffusers reference masks pad tokens but the
+    # tt joint SDPA exposes no mask kwarg) and regresses denoise ~25% (M 864->1024). Opt-in experiment
+    # via FIBO_KEEP_PADDING=1; correct padding needs a masked joint-SDPA op (device-op + rebuild).
+    keep_padding: bool = False
+
     @classmethod
     def default(
         cls,
@@ -78,7 +87,11 @@ class BriaFiboPipelineConfig:
         width: int = 1024,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         num_links: int | None = None,
+        keep_padding: bool | None = None,
     ) -> BriaFiboPipelineConfig:
+        # Default to the unpadded (true-length) branch; FIBO_KEEP_PADDING=1 opts into fixed-1024 padding.
+        if keep_padding is None:
+            keep_padding = os.environ.get("FIBO_KEEP_PADDING", "0") == "1"
         mesh = tuple(mesh_shape)
         if len(mesh) != 2:
             msg = f"BriaFiboPipeline expects a 2D mesh, got {mesh}"
@@ -132,6 +145,7 @@ class BriaFiboPipelineConfig:
             height=height,
             width=width,
             checkpoint_name=checkpoint_name,
+            keep_padding=keep_padding,
         )
 
 
@@ -188,6 +202,10 @@ class BriaFiboPipeline:
             ccl_manager=self._encoder_ccl_manager,
             parallel_config=config.encoder_parallel_config,
             pad_buckets=(1024,),
+            keep_padding=config.keep_padding,
+        )
+        logger.info(
+            f"FIBO DiT prompt-branch padding: {'fixed 1024 bucket' if config.keep_padding else 'unpadded (true length)'}"
         )
         ttnn.synchronize_device(self._submesh)
 
