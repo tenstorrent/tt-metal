@@ -114,6 +114,58 @@ PRESETS: dict[str, list[tuple[str, dict[str, object]]]] = {
         ("page2tile", {"--page-size-tiles": "2"}),
         ("page4tile", {"--page-size-tiles": "4"}),
     ],
+    # Kernel-unroll: repeat the whole op N times in ONE program with no barrier between reps.
+    # Delta vs num-programs isolates the op-to-op barrier cost.
+    "kernel-unroll": [
+        ("unroll1", {"--kernel-unroll": "1"}),
+        ("unroll2", {"--kernel-unroll": "2"}),
+        ("unroll4", {"--kernel-unroll": "4"}),
+    ],
+    # Per-core read-start stagger (cycles * core index). Does staggering reads relieve
+    # write-barrier congestion?
+    "reader-stagger": [
+        ("stagger0", {"--reader-stagger-cycles": "0"}),
+        ("stagger200", {"--reader-stagger-cycles": "200"}),
+        ("stagger1000", {"--reader-stagger-cycles": "1000"}),
+    ],
+    # Cheap-read override (reader_mode 2 only): NoC-read only N bytes/page (dummy payload) to
+    # force the output-bound regime. Each entry carries the mode-2 base it requires.
+    "reader-read-bytes": [
+        (
+            "readfull",
+            {
+                "--reader-dbuf-trid": True,
+                "--reader-trid-in-flight": "4",
+                "--input-cb-depth-tiles": "16",
+                "--reader-read-bytes": "0",
+            },
+        ),
+        (
+            "cheap64",
+            {
+                "--reader-dbuf-trid": True,
+                "--reader-trid-in-flight": "4",
+                "--input-cb-depth-tiles": "16",
+                "--reader-read-bytes": "64",
+            },
+        ),
+        (
+            "cheap2048",
+            {
+                "--reader-dbuf-trid": True,
+                "--reader-trid-in-flight": "4",
+                "--input-cb-depth-tiles": "16",
+                "--reader-read-bytes": "2048",
+            },
+        ),
+    ],
+    # Which cores run: skip the first N in fill order, then take a fixed active set (isolate
+    # NoC distance from grid contention). Pair --core-offset with a fixed --num-active-cores.
+    "core-offset": [
+        ("off0-cores8", {"--num-active-cores": "8", "--core-offset": "0"}),
+        ("off8-cores8", {"--num-active-cores": "8", "--core-offset": "8"}),
+        ("off16-cores8", {"--num-active-cores": "8", "--core-offset": "16"}),
+    ],
 }
 
 

@@ -9,8 +9,13 @@
 //   1: n_tiles                (logical tiles to read; must be a multiple of TILES_PER_PAGE)
 //   2: start_tile_id          (in tiles)
 //   3: program_id
+//   4: read_start_delay       (--reader-stagger-cycles * core index; spin this many nops after
+//                              go, before reading, to induce a controlled read-completion skew)
+//   5: workload_repeat        (--kernel-unroll; repeat the whole read this many times inside ONE
+//                              invocation, no barrier between reps; 0/1 = normal single pass)
+//   6: read_progress_every    (mode 2: emit a READ_PROG timestamp every N pages completed; 0=off)
 //
-// Compile-time args (see TensorAccessorArgs<7> for src accessor):
+// Compile-time args (see TensorAccessorArgs<8> for src accessor):
 //   0: cb_in
 //   1: READER_MODE            (0 = reserve N, read+push one-by-one with a global barrier
 //                              1 = reserve N, read all, single barrier, push N
@@ -28,6 +33,9 @@
 //                              must allocate a buffer big enough for all program slices.)
 //   6: PROFILE_DETAIL          (0 = lean CI path: emit no custom markers; 1 = research:
 //                              emit GO/DONE/BARRIER markers for BW/gap decomposition)
+//   7: READ_BYTES_OVERRIDE     (reader_mode 2 only; 0 = read full page. >0 = NoC-read only this
+//                              many bytes per page but still push a full CB page -- "cheap read"
+//                              for the output-bound regime, valid only because payload is dummy.)
 //
 // Profiler on first tile of the slice only: READ_BEFORE_BARRIER / READ_AFTER_BARRIER
 // (research only; gated by PROFILE_DETAIL).
@@ -51,6 +59,13 @@ void kernel_main() {
     const uint32_t n_tiles = get_arg_val<uint32_t>(1);
     const uint32_t start_tile_id = get_arg_val<uint32_t>(2);
     const uint32_t program_id = get_arg_val<uint32_t>(3);
+    // Per-core read-start stagger: spin this many nops AFTER the (synchronized) go but BEFORE
+    // issuing reads (host passes core_index * --reader-stagger-cycles). 0 = off.
+    const uint32_t read_start_delay = get_arg_val<uint32_t>(4);
+    // Kernel-unroll: repeat the whole read workload this many times, no barrier between reps.
+    const uint32_t workload_repeat = get_arg_val<uint32_t>(5) > 0 ? get_arg_val<uint32_t>(5) : 1;
+    // Mode-2 periodic progress marker: emit a READ_PROG timestamp every N pages completed (0=off).
+    const uint32_t read_progress_every = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t READER_MODE = get_compile_time_arg_val(1);
@@ -59,7 +74,10 @@ void kernel_main() {
     constexpr uint32_t TRID_IN_FLIGHT = get_compile_time_arg_val(4);
     constexpr uint32_t CROSS_PROGRAM_OFFSET_TILES = get_compile_time_arg_val(5);
     constexpr uint32_t PROFILE_DETAIL = get_compile_time_arg_val(6);
-    constexpr auto src_args = TensorAccessorArgs<7>();
+    // Cheap-read override (reader_mode 2 only): 0 = read the full page; >0 = NoC-read only this
+    // many BYTES per page but still push a full CB page (dummy payload -> reads ~free).
+    constexpr uint32_t READ_BYTES_OVERRIDE = get_compile_time_arg_val(7);
+    constexpr auto src_args = TensorAccessorArgs<8>();
 
     constexpr uint32_t chunk_size = PUSH_TILE_COUNT > 0 ? PUSH_TILE_COUNT : 1;
     constexpr uint32_t tiles_per_page = TILES_PER_PAGE > 0 ? TILES_PER_PAGE : 1;
@@ -69,6 +87,11 @@ void kernel_main() {
 
     DETAIL_MARK("PROG_ID", program_id);
     DETAIL_MARK("NCRISC_GO", program_id);
+
+    // Induce read stagger: spin AFTER go (so go stays synchronized) before any reads. 0 = off.
+    for (volatile uint32_t d = 0; d < read_start_delay; ++d) {
+        asm volatile("nop");
+    }
 
     // When CROSS_PROGRAM_OFFSET_TILES > 0, each program reads a disjoint tile slice
     // so the DRAM controller sees fresh row opens per program (more app-like).
@@ -116,122 +139,146 @@ void kernel_main() {
         constexpr uint32_t N = trid_in_flight;
         const uint32_t batch_tiles = N * tiles_per_page;
 
-        // Reserve room for both in-flight batches up front (covers prologue + head).
-        cb_reserve_back(cb_in, 2 * batch_tiles);
-        const uint32_t cb_base = get_write_ptr(cb_in);
+        for (uint32_t rep = 0; rep < workload_repeat; ++rep) {  // kernel-unroll: no barrier between reps
+            // Reserve room for both in-flight batches up front (covers prologue + head).
+            cb_reserve_back(cb_in, 2 * batch_tiles);
+            const uint32_t cb_base = get_write_ptr(cb_in);
 
-        DETAIL_MARK("READ_BEFORE_BARRIER", effective_start_tile_id);
+            // Issue one page read into cb_base under the currently-set trid. Normally a full-page
+            // tile read; in cheap-read mode only READ_BYTES_OVERRIDE bytes (dummy payload) so the
+            // read side is ~free and the writer becomes the bottleneck (output-bound).
+            auto issue_read = [&](uint32_t pid) {
+                if constexpr (READ_BYTES_OVERRIDE > 0) {
+                    noc_async_read(src.get_noc_addr(pid), cb_base, READ_BYTES_OVERRIDE);
+                } else {
+                    noc_async_read_tile(pid, src, cb_base);
+                }
+            };
 
-        // Prologue: issue batch 0 on TRID_A.
-        uint32_t issue_trid = TRID_A;
-        uint32_t drain_trid = TRID_A;
-        uint32_t page_id = start_page_id;  // strides across banks, one bump per read
-        uint32_t issued = n_pages < N ? n_pages : N;
-        noc_async_read_set_trid(issue_trid);
-        for (uint32_t i = 0; i < issued; ++i) {
-            noc_async_read_tile(page_id++, src, cb_base);
-        }
-        uint32_t pushed = 0;
+            DETAIL_MARK("READ_BEFORE_BARRIER", effective_start_tile_id);
 
-        // Head: if a second batch exists, prefetch it on the other trid (so two batches
-        // are in flight), then drain batch 0. The first-read marker is emitted here,
-        // once, so it never enters the hot loop.
-        if (issued < n_pages) {
-            issue_trid ^= 1u;
-            const uint32_t remaining = n_pages - issued;
-            const uint32_t nb = remaining < N ? remaining : N;
+            // Prologue: issue batch 0 on TRID_A.
+            uint32_t issue_trid = TRID_A;
+            uint32_t drain_trid = TRID_A;
+            uint32_t page_id = start_page_id;  // strides across banks, one bump per read
+            uint32_t issued = n_pages < N ? n_pages : N;
             noc_async_read_set_trid(issue_trid);
-            for (uint32_t i = 0; i < nb; ++i) {
-                noc_async_read_tile(page_id++, src, cb_base);
+            for (uint32_t i = 0; i < issued; ++i) {
+                issue_read(page_id++);
             }
-            issued += nb;
+            uint32_t pushed = 0;
 
-            noc_async_read_barrier_with_trid(drain_trid);
-            DETAIL_MARK("READ_AFTER_BARRIER", effective_start_tile_id);
-            cb_push_back(cb_in, batch_tiles);
-            pushed += N;
-            drain_trid ^= 1u;
-        }
+            // Head: if a second batch exists, prefetch it on the other trid (so two batches
+            // are in flight), then drain batch 0. The first-read marker is emitted here,
+            // once, so it never enters the hot loop.
+            if (issued < n_pages) {
+                issue_trid ^= 1u;
+                const uint32_t remaining = n_pages - issued;
+                const uint32_t nb = remaining < N ? remaining : N;
+                noc_async_read_set_trid(issue_trid);
+                for (uint32_t i = 0; i < nb; ++i) {
+                    issue_read(page_id++);
+                }
+                issued += nb;
 
-        // Hot loop: uniform prefetch-then-drain, no data-dependent branch. The reserve
-        // gates reuse of the region the oldest batch just vacated.
-        while (issued < n_pages) {
-            issue_trid ^= 1u;
-            const uint32_t remaining = n_pages - issued;
-            const uint32_t nb = remaining < N ? remaining : N;
-            cb_reserve_back(cb_in, batch_tiles);
-            noc_async_read_set_trid(issue_trid);
-            for (uint32_t i = 0; i < nb; ++i) {
-                noc_async_read_tile(page_id++, src, cb_base);
+                noc_async_read_barrier_with_trid(drain_trid);
+                DETAIL_MARK("READ_AFTER_BARRIER", effective_start_tile_id);
+                cb_push_back(cb_in, batch_tiles);
+                pushed += N;
+                if (read_progress_every && pushed % read_progress_every == 0) {
+                    DeviceTimestampedData("READ_PROG", pushed);  // measured pages completed vs time
+                }
+                drain_trid ^= 1u;
             }
-            issued += nb;
 
+            // Hot loop: uniform prefetch-then-drain, no data-dependent branch. The reserve
+            // gates reuse of the region the oldest batch just vacated.
+            while (issued < n_pages) {
+                issue_trid ^= 1u;
+                const uint32_t remaining = n_pages - issued;
+                const uint32_t nb = remaining < N ? remaining : N;
+                cb_reserve_back(cb_in, batch_tiles);
+                noc_async_read_set_trid(issue_trid);
+                for (uint32_t i = 0; i < nb; ++i) {
+                    issue_read(page_id++);
+                }
+                issued += nb;
+
+                noc_async_read_barrier_with_trid(drain_trid);
+                cb_push_back(cb_in, batch_tiles);
+                pushed += N;
+                if (read_progress_every && pushed % read_progress_every == 0) {
+                    DeviceTimestampedData("READ_PROG", pushed);  // measured pages completed vs time
+                }
+                drain_trid ^= 1u;
+            }
+
+            // Tail: drain the final in-flight batch (may be partial). The barrier here
+            // completes the last outstanding reads, so it is the read-bandwidth end point:
+            // BW = bytes_read / (READ_LAST_BARRIER - READ_BEFORE_BARRIER). The interval
+            // spans first-read-issued to last-read-complete, so it still pays the pipeline
+            // fill/drain latency tax at each end (small vs the steady-state middle).
             noc_async_read_barrier_with_trid(drain_trid);
-            cb_push_back(cb_in, batch_tiles);
-            pushed += N;
-            drain_trid ^= 1u;
-        }
-
-        // Tail: drain the final in-flight batch (may be partial). The barrier here
-        // completes the last outstanding reads, so it is the read-bandwidth end point:
-        // BW = bytes_read / (READ_LAST_BARRIER - READ_BEFORE_BARRIER). The interval
-        // spans first-read-issued to last-read-complete, so it still pays the pipeline
-        // fill/drain latency tax at each end (small vs the steady-state middle).
-        noc_async_read_barrier_with_trid(drain_trid);
-        if (pushed == 0) {
-            // n_pages <= N: head never ran, so emit the first-read marker here.
-            DETAIL_MARK("READ_AFTER_BARRIER", effective_start_tile_id);
-        }
-        DETAIL_MARK("READ_LAST_BARRIER", effective_start_tile_id);
-        cb_push_back(cb_in, (n_pages - pushed) * tiles_per_page);
+            if (pushed == 0) {
+                // n_pages <= N: head never ran, so emit the first-read marker here.
+                DETAIL_MARK("READ_AFTER_BARRIER", effective_start_tile_id);
+            }
+            DETAIL_MARK("READ_LAST_BARRIER", effective_start_tile_id);
+            cb_push_back(cb_in, (n_pages - pushed) * tiles_per_page);
+            if (read_progress_every) {
+                DeviceTimestampedData("READ_PROG", n_pages);  // final: all pages completed
+            }
+        }  // end kernel-unroll rep loop
 
         DETAIL_MARK("NCRISC_DONE", program_id);
         return;
     }
 
     // Legacy reader modes (0 = incremental push-1; 1 = batch read+push).
-    for (uint32_t tile_id = effective_start_tile_id; tile_id < end_tile_id;) {
-        const uint32_t tiles_left = end_tile_id - tile_id;
-        const uint32_t chunk = tiles_left < chunk_size ? tiles_left : chunk_size;
+    for (uint32_t rep = 0; rep < workload_repeat; ++rep) {  // kernel-unroll: no barrier between reps
+        for (uint32_t tile_id = effective_start_tile_id; tile_id < end_tile_id;) {
+            const uint32_t tiles_left = end_tile_id - tile_id;
+            const uint32_t chunk = tiles_left < chunk_size ? tiles_left : chunk_size;
 
-        cb_reserve_back(cb_in, chunk);
-        const uint32_t cb_base = get_write_ptr(cb_in);
+            cb_reserve_back(cb_in, chunk);
+            const uint32_t cb_base = get_write_ptr(cb_in);
 
-        if constexpr (READER_MODE == 1) {
-            // Batch: issue the whole chunk, then a single barrier, then push. The
-            // barrier must be outside the per-tile loop or every read serializes
-            // (which would defeat the point of batch mode).
-            for (uint32_t i = 0; i < chunk; ++i) {
-                const uint32_t tid = tile_id + i;
-                const uint32_t l1_write_addr = cb_base + i * tile_bytes;
-                if (tid == effective_start_tile_id) {
-                    DETAIL_MARK("READ_BEFORE_BARRIER", tid);
+            if constexpr (READER_MODE == 1) {
+                // Batch: issue the whole chunk, then a single barrier, then push. The
+                // barrier must be outside the per-tile loop or every read serializes
+                // (which would defeat the point of batch mode).
+                for (uint32_t i = 0; i < chunk; ++i) {
+                    const uint32_t tid = tile_id + i;
+                    const uint32_t l1_write_addr = cb_base + i * tile_bytes;
+                    if (rep == 0 && tid == effective_start_tile_id) {
+                        DETAIL_MARK("READ_BEFORE_BARRIER", tid);
+                    }
+                    noc_async_read_tile(tid, src, l1_write_addr);
                 }
-                noc_async_read_tile(tid, src, l1_write_addr);
-            }
-            noc_async_read_barrier();
-            if (tile_id == effective_start_tile_id) {
-                DETAIL_MARK("READ_AFTER_BARRIER", tile_id);
-            }
-            cb_push_back(cb_in, chunk);
-        } else {
-            for (uint32_t i = 0; i < chunk; ++i) {
-                const uint32_t tid = tile_id + i;
-                const uint32_t l1_write_addr = get_write_ptr(cb_in);
-                if (tid == effective_start_tile_id) {
-                    DETAIL_MARK("READ_BEFORE_BARRIER", tid);
-                }
-                noc_async_read_tile(tid, src, l1_write_addr);
                 noc_async_read_barrier();
-                if (tid == effective_start_tile_id) {
-                    DETAIL_MARK("READ_AFTER_BARRIER", tid);
+                if (rep == 0 && tile_id == effective_start_tile_id) {
+                    DETAIL_MARK("READ_AFTER_BARRIER", tile_id);
                 }
-                cb_push_back(cb_in, 1);
+                cb_push_back(cb_in, chunk);
+            } else {
+                for (uint32_t i = 0; i < chunk; ++i) {
+                    const uint32_t tid = tile_id + i;
+                    const uint32_t l1_write_addr = get_write_ptr(cb_in);
+                    if (rep == 0 && tid == effective_start_tile_id) {
+                        DETAIL_MARK("READ_BEFORE_BARRIER", tid);
+                    }
+                    noc_async_read_tile(tid, src, l1_write_addr);
+                    noc_async_read_barrier();
+                    if (rep == 0 && tid == effective_start_tile_id) {
+                        DETAIL_MARK("READ_AFTER_BARRIER", tid);
+                    }
+                    cb_push_back(cb_in, 1);
+                }
             }
-        }
 
-        tile_id += chunk;
-    }
+            tile_id += chunk;
+        }
+    }  // end kernel-unroll rep loop
 
     DETAIL_MARK("NCRISC_DONE", program_id);
 }

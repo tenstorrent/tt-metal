@@ -49,6 +49,22 @@
 //                           markers and per-tile compute TILE_IDX + MATH zone. Default
 //                           off (lean): only the markers the CI metrics consume are
 //                           emitted, minimizing profiler perturbation of the op2op number.
+//
+// Research characterization knobs (ungated; used by op_to_op_sweep.py, not the CI gate):
+//   --kernel-unroll N        repeat the whole reader/compute/writer workload N times inside
+//                            ONE program invocation with no barrier between reps (default 1).
+//                            The delta vs --num-programs N isolates the op-to-op barrier cost.
+//   --reader-read-bytes N    reader_mode 2 only: NoC-read only N bytes/page (dummy payload)
+//                            but still push a full CB page -> "cheap read", forces output-bound.
+//   --reader-stagger-cycles N  core i spins i*N cycles after go before reading (read-skew study).
+//   --read-progress-every N  reader emits a timestamped cumulative-page marker every N pages.
+//   --write-progress-every N writer emits a timestamped cumulative-page marker every N pages.
+//                            (progress markers are DeviceTimestampedData; not under accumulate.)
+//   --core-offset N          skip the first N cores in the fill order before taking the active set.
+//   --core-list "x,y;x,y"    explicit LOGICAL core set (overrides layout/offset/num-active-cores).
+//   --log-core-map           log each active core's logical->physical(NoC) coord mapping.
+// Note: "--lean-compute" from the research branch == the DEFAULT here; pass --profile-detail
+// for the detailed (non-lean) compute path.
 
 #include <algorithm>
 #include <chrono>
@@ -130,6 +146,25 @@ struct BenchmarkConfig {
     // DRAM page size in tiles. Larger pages = fewer, larger NoC transactions
     // per program. CB pages stay 1 tile each so compute kernel is unchanged.
     uint32_t page_size_tiles = 1;
+    // Reader-only "cheap read" override (reader_mode 2 only). 0 = read the full page (normal).
+    // >0 = NoC-read only this many BYTES per page but still push a full CB page. Since the
+    // payload is dummy, this makes reads ~free to force the OUTPUT-BOUND regime (writer is
+    // the bottleneck). Research characterization knob; ignored in modes 0/1.
+    uint32_t reader_read_bytes = 0;
+    // Deliberate per-core read stagger (experiment). 0 = off. Core i spins i*reader_stagger_cycles
+    // after the (synchronized) go, before issuing reads, to induce a controlled read-completion
+    // skew (does staggering reads relieve write-barrier congestion?).
+    uint32_t reader_stagger_cycles = 0;
+    // Kernel-unroll (experiment). 1 = normal. >1 = each kernel repeats its whole workload this many
+    // times inside ONE program invocation with NO barrier between reps. Compared against
+    // --num-programs N of the same workload run back-to-back, the delta isolates the removed
+    // op-to-op sync-barrier cost. Markers fire per rep, so use 1 for marker-based metrics.
+    uint32_t kernel_unroll = 1;
+    // Reader/writer emit a timestamped cumulative-page count every N pages (0 = off). Gives a
+    // MEASURED bytes-vs-time progress trace per core instead of interpolating between brackets.
+    // These are DeviceTimestampedData markers (research; compiled out under profiler accumulate).
+    uint32_t read_progress_every = 0;
+    uint32_t write_progress_every = 0;
     // Cap active core count. 0 = use full grid (default). Used to test whether
     // brisc_done_to_go scales with core count.
     uint32_t num_active_cores = 0;
@@ -140,6 +175,15 @@ struct BenchmarkConfig {
     // Reverse the core fill order (take the LAST `want` cores instead of the first) -- the
     // mirror-image core set, to test whether which specific cores are used drives results.
     bool core_reverse = false;
+    // Skip the first `core_offset` cores in the fill order before taking `num_active_cores`.
+    // With --core-layout-col this selects an N-core block at a chosen column, so we can sweep
+    // WHICH cores (near vs far from DRAM) run and isolate NoC-distance from grid contention.
+    uint32_t core_offset = 0;
+    // Explicit LOGICAL core coords "x,y;x,y;..." -- overrides layout/offset/num_active_cores.
+    // Lets us run an arbitrary hand-picked set (e.g. the literal slowest stragglers).
+    std::vector<CoreCoord> core_list;
+    // Log each active core's logical->physical(NoC) coord mapping at setup (to match profiler coords).
+    bool log_core_map = false;
     // NoC assignment for reader / writer (0 = NOC0, 1 = NOC1). The two NoCs route opposite
     // directions on the torus; measured read-BW table shows reads scale to ~206 GB/s on
     // NOC0 but cap at ~67 on NOC1, so the defaults are reader=NOC0, writer=NOC1 (the
@@ -211,6 +255,33 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
     if (test_args::has_command_option(args, "--core-reverse")) {
         cfg.core_reverse = true;
     }
+    cfg.core_offset = test_args::get_command_option_uint32(args, "--core-offset", cfg.core_offset);
+    cfg.log_core_map = test_args::has_command_option(args, "--log-core-map");
+    {
+        // --core-list "x,y;x,y;..." (logical coords). Overrides layout/offset; sets active-core count.
+        std::string cl = test_args::get_command_option(args, "--core-list", std::string(""));
+        std::stringstream ss(cl);
+        std::string tok;
+        while (std::getline(ss, tok, ';')) {
+            auto comma = tok.find(',');
+            if (comma != std::string::npos) {
+                cfg.core_list.push_back(CoreCoord{
+                    static_cast<size_t>(std::stoul(tok.substr(0, comma))),
+                    static_cast<size_t>(std::stoul(tok.substr(comma + 1)))});
+            }
+        }
+        if (!cfg.core_list.empty()) {
+            cfg.num_active_cores = static_cast<uint32_t>(cfg.core_list.size());
+        }
+    }
+    cfg.reader_read_bytes = test_args::get_command_option_uint32(args, "--reader-read-bytes", cfg.reader_read_bytes);
+    cfg.reader_stagger_cycles =
+        test_args::get_command_option_uint32(args, "--reader-stagger-cycles", cfg.reader_stagger_cycles);
+    cfg.kernel_unroll = test_args::get_command_option_uint32(args, "--kernel-unroll", cfg.kernel_unroll);
+    cfg.read_progress_every =
+        test_args::get_command_option_uint32(args, "--read-progress-every", cfg.read_progress_every);
+    cfg.write_progress_every =
+        test_args::get_command_option_uint32(args, "--write-progress-every", cfg.write_progress_every);
     cfg.reader_noc = test_args::get_command_option_uint32(args, "--reader-noc", cfg.reader_noc);
     cfg.writer_noc = test_args::get_command_option_uint32(args, "--writer-noc", cfg.writer_noc);
     if (test_args::has_command_option(args, "--swap-nocs")) {
@@ -488,6 +559,11 @@ struct BuiltProgram {
     uint32_t input_cb_depth_tiles = 0;
     uint32_t output_cb_depth_tiles = 2;
     uint32_t page_size_tiles = 1;
+    // Per-launch runtime knobs (see BenchmarkConfig for semantics).
+    uint32_t kernel_unroll = 1;
+    uint32_t reader_stagger_cycles = 0;
+    uint32_t read_progress_every = 0;
+    uint32_t write_progress_every = 0;
 };
 
 // Set reader/writer/compute runtime args (only the truly per-launch ones; kernel knobs
@@ -503,21 +579,39 @@ void set_program_launch_args(
         std::make_pair(built.core_group_1, built.tiles_per_core_group_1),
         std::make_pair(built.core_group_2, built.tiles_per_core_group_2)};
     uint32_t start_tile_id = 0;
+    uint32_t core_idx = 0;  // fill-order index, for the per-core read stagger
     for (const auto& [group, tiles_per_core] : work_groups) {
         if (tiles_per_core == 0) {
             continue;
         }
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
+                // core i spins i*reader_stagger_cycles after go (0 = no stagger).
+                const uint32_t read_delay = core_idx * built.reader_stagger_cycles;
                 SetRuntimeArgs(
-                    program, built.reader_kernel, core, {input_buffer_addr, tiles_per_core, start_tile_id, program_id});
+                    program,
+                    built.reader_kernel,
+                    core,
+                    {input_buffer_addr,
+                     tiles_per_core,
+                     start_tile_id,
+                     program_id,
+                     read_delay,
+                     built.kernel_unroll,
+                     built.read_progress_every});
                 SetRuntimeArgs(
                     program,
                     built.writer_kernel,
                     core,
-                    {output_buffer_addr, tiles_per_core, start_tile_id, program_id});
-                SetRuntimeArgs(program, built.compute_kernel, core, {tiles_per_core, program_id});
+                    {output_buffer_addr,
+                     tiles_per_core,
+                     start_tile_id,
+                     program_id,
+                     built.kernel_unroll,
+                     built.write_progress_every});
+                SetRuntimeArgs(program, built.compute_kernel, core, {tiles_per_core, program_id, built.kernel_unroll});
                 start_tile_id += tiles_per_core;
+                ++core_idx;
             }
         }
     }
@@ -572,8 +666,24 @@ BuiltProgram build_program(
     if (cfg.core_reverse) {
         std::reverse(full_order.begin(), full_order.end());
     }
-    std::vector<CoreCoord> core_list(
-        full_order.begin(), full_order.begin() + std::min<size_t>(want, full_order.size()));
+    // Explicit --core-list overrides layout/offset; otherwise skip `core_offset` cores in the
+    // fill order, then take `want` (lets us select which cores / how far from DRAM run).
+    std::vector<CoreCoord> core_list;
+    if (!cfg.core_list.empty()) {
+        core_list = cfg.core_list;
+    } else {
+        const size_t off = std::min<size_t>(cfg.core_offset, full_order.size());
+        const size_t last = std::min<size_t>(off + want, full_order.size());
+        core_list.assign(full_order.begin() + off, full_order.begin() + last);
+    }
+    if (cfg.log_core_map) {
+        const auto did = mesh_device->get_devices()[0]->id();
+        const auto& sd = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(did);
+        for (const auto& c : core_list) {
+            const auto p = sd.get_physical_tensix_core_from_logical(c);  // matches profiler core_x/core_y
+            log_info(LogTest, "COREMAP logical=({},{}) phys=({},{})", c.x, c.y, p.x, p.y);
+        }
+    }
     const uint32_t num_cores = static_cast<uint32_t>(core_list.size());
     std::vector<CoreRange> ranges;
     ranges.reserve(num_cores);
@@ -685,7 +795,7 @@ BuiltProgram build_program(
     // Compile-time args order MUST match reader_interleaved.cpp:
     //   [0]=cb_in, [1]=READER_MODE, [2]=PUSH_TILE_COUNT, [3]=TILES_PER_PAGE,
     //   [4]=TRID_IN_FLIGHT, [5]=CROSS_PROGRAM_OFFSET_TILES, [6]=PROFILE_DETAIL,
-    //   then TensorAccessorArgs starting at index 7.
+    //   [7]=READ_BYTES_OVERRIDE, then TensorAccessorArgs starting at index 8.
     const uint32_t cross_program_offset_tiles = cfg.cross_program_dram_offset ? total_num_tiles : 0u;
     std::vector<uint32_t> reader_compile_time_args = {
         kInputCbId,
@@ -694,7 +804,8 @@ BuiltProgram build_program(
         page_size_tiles,
         trid_in_flight,
         cross_program_offset_tiles,
-        cfg.profile_detail ? 1u : 0u};
+        cfg.profile_detail ? 1u : 0u,
+        cfg.reader_read_bytes};
     // Defaults: reader=NOC0, writer=NOC1 (measured best). --reader-noc/--writer-noc override.
     // HARD CONSTRAINT: the two data-movement kernels on a core must be on DIFFERENT NoCs.
     // Putting both on the same NoC hangs the device (requires a chip reset), so fail fast.
@@ -754,18 +865,38 @@ BuiltProgram build_program(
         std::make_pair(core_group_1, num_tiles_per_core_group_1),
         std::make_pair(core_group_2, num_tiles_per_core_group_2)};
     uint32_t start_tile_id = 0;
+    uint32_t core_idx = 0;  // fill-order index, for the per-core read stagger
     for (const auto& [group, tiles_per_core] : work_groups) {
         if (tiles_per_core == 0) {
             continue;
         }
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
+                const uint32_t read_delay = core_idx * cfg.reader_stagger_cycles;
                 SetRuntimeArgs(
-                    program, reader_kernel, core, {input_buffer->address(), tiles_per_core, start_tile_id, 0});
+                    program,
+                    reader_kernel,
+                    core,
+                    {input_buffer->address(),
+                     tiles_per_core,
+                     start_tile_id,
+                     0,
+                     read_delay,
+                     cfg.kernel_unroll,
+                     cfg.read_progress_every});
                 SetRuntimeArgs(
-                    program, writer_kernel, core, {output_buffer->address(), tiles_per_core, start_tile_id, 0});
-                SetRuntimeArgs(program, compute_kernel, core, {tiles_per_core, 0});
+                    program,
+                    writer_kernel,
+                    core,
+                    {output_buffer->address(),
+                     tiles_per_core,
+                     start_tile_id,
+                     0,
+                     cfg.kernel_unroll,
+                     cfg.write_progress_every});
+                SetRuntimeArgs(program, compute_kernel, core, {tiles_per_core, 0, cfg.kernel_unroll});
                 start_tile_id += tiles_per_core;
+                ++core_idx;
             }
         }
     }
@@ -790,6 +921,10 @@ BuiltProgram build_program(
     built.input_cb_depth_tiles = input_cb_depth;
     built.output_cb_depth_tiles = output_cb_depth;
     built.page_size_tiles = page_size_tiles;
+    built.kernel_unroll = cfg.kernel_unroll > 0 ? cfg.kernel_unroll : 1;
+    built.reader_stagger_cycles = cfg.reader_stagger_cycles;
+    built.read_progress_every = cfg.read_progress_every;
+    built.write_progress_every = cfg.write_progress_every;
     return built;
 }
 

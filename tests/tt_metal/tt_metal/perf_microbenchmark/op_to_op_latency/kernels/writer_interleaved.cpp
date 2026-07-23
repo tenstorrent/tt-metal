@@ -20,6 +20,9 @@
 //   1: n_tiles
 //   2: start_tile_id
 //   3: program_id
+//   4: workload_repeat   (--kernel-unroll; repeat the write sweep this many times inside ONE
+//                         invocation, end barrier issued only after the last rep; 0/1 = normal)
+//   5: write_progress_every  (emit a WRITE_PROG timestamp every N pages written; 0 = off)
 //
 // Compile-time args (see TensorAccessorArgs<8> for dst accessor):
 //   0: cb_out
@@ -57,6 +60,10 @@ void kernel_main() {
     const uint32_t n_tiles = get_arg_val<uint32_t>(1);
     const uint32_t start_tile_id = get_arg_val<uint32_t>(2);
     const uint32_t program_id = get_arg_val<uint32_t>(3);
+    // Kernel-unroll: repeat the write workload this many times, end barrier only after last rep.
+    const uint32_t workload_repeat = get_arg_val<uint32_t>(4) > 0 ? get_arg_val<uint32_t>(4) : 1;
+    // Periodic progress marker: emit a WRITE_PROG timestamp every N pages written (0 = off).
+    const uint32_t write_progress_every = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t TILES_PER_PAGE = get_compile_time_arg_val(1);
@@ -91,27 +98,36 @@ void kernel_main() {
     DETAIL_MARK("WRITE_BEFORE_BARRIER", last_page_id);
 
     uint32_t writes_since_flush = 0;
-    for (uint32_t page_id = start_page_id; page_id < end_page_id; ++page_id) {
-        cb_wait_front(cb_out, tiles_per_page);
-        if constexpr (READ_ONLY == 0) {
-            const uint32_t l1_read_addr = get_read_ptr(cb_out);
-            noc_async_write_tile(page_id, dst, l1_read_addr);
-            writes_since_flush++;
-            const bool flush_every_page = (WRITER_FLUSH_MODE == 0);
-            const bool flush_on_pressure = (WRITER_FLUSH_MODE != 0) && (writes_since_flush >= max_writes_before_flush);
-            if (flush_every_page || flush_on_pressure) {
-                noc_async_writes_flushed();
-                writes_since_flush = 0;
-            } else {
-                // Pressure mode skipped the periodic flush this iteration. The NoC only
-                // guarantees a write source has departed after noc_async_writes_flushed(),
-                // so flush before cb_pop_front returns this L1 slot to the producer --
-                // otherwise compute can overwrite an in-flight write source and corrupt
-                // the DRAM output when the CB is full.
-                noc_async_writes_flushed();
+    uint32_t pages_written = 0;
+    // Kernel-unroll: replay the whole write sweep with NO barrier between reps (flush cadence
+    // continues across the boundary for CB recycling); the end barrier below runs after the last.
+    for (uint32_t rep = 0; rep < workload_repeat; ++rep) {
+        for (uint32_t page_id = start_page_id; page_id < end_page_id; ++page_id) {
+            cb_wait_front(cb_out, tiles_per_page);
+            if constexpr (READ_ONLY == 0) {
+                const uint32_t l1_read_addr = get_read_ptr(cb_out);
+                noc_async_write_tile(page_id, dst, l1_read_addr);
+                writes_since_flush++;
+                const bool flush_every_page = (WRITER_FLUSH_MODE == 0);
+                const bool flush_on_pressure =
+                    (WRITER_FLUSH_MODE != 0) && (writes_since_flush >= max_writes_before_flush);
+                if (flush_every_page || flush_on_pressure) {
+                    noc_async_writes_flushed();
+                    writes_since_flush = 0;
+                } else {
+                    // Pressure mode skipped the periodic flush this iteration. The NoC only
+                    // guarantees a write source has departed after noc_async_writes_flushed(),
+                    // so flush before cb_pop_front returns this L1 slot to the producer --
+                    // otherwise compute can overwrite an in-flight write source and corrupt
+                    // the DRAM output when the CB is full.
+                    noc_async_writes_flushed();
+                }
+                if (write_progress_every && (++pages_written % write_progress_every == 0)) {
+                    DeviceTimestampedData("WRITE_PROG", pages_written);  // measured pages-vs-time
+                }
             }
+            cb_pop_front(cb_out, tiles_per_page);
         }
-        cb_pop_front(cb_out, tiles_per_page);
     }
 
     if constexpr (READ_ONLY == 0) {
