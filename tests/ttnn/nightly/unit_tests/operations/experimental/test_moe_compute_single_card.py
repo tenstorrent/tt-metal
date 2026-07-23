@@ -566,6 +566,77 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, is_ci_env, is_
     )
 
 
+# ---------------------------------------------------------------------------
+# Regression sweep for tt-metal#50669: moe_compute must be correct for arbitrary
+# (non-tile-aligned) token counts, not only multiples of 16.
+#
+# Root cause (all three original symptoms are the same bug): the tilize metadata
+# path splits each core's tokens NCRISC=floor(tc/2) / BRISC=ceil(tc/2), but BRISC's
+# per-expert e_t scratch stride/capacity was sized floor(tc/2). On odd per-core
+# counts BRISC wrote one entry past expert e into expert e+1's slot (silent E-T
+# corruption; experts 1..E-1 wrong, expert 0 spared), tokens=1 produced a 0-size CB
+# (0%0 SIGFPE at build), and tokens=63 fed a garbage token_id to a NoC read that hung
+# the card (SIGKILL). The floor->ceil fix addresses all three.
+#
+# The helper asserts EXACT per_expert_tokens/activation/e_t and matmul PCC, so a green
+# run == correctness, not merely "no crash". Token counts straddle the boundary: 1 (was
+# SIGFPE), 2 (even small), 3 (odd -> was corruption), 6 (even, but a sub-core lands at
+# tc=3), 16 (one tile), 32 (two tiles), 48 (multiple of 16), 63 (was SIGKILL hang), 64
+# (two full tiles).
+#
+# The bug depends only on token-count x tilize-core split, NOT on weight size, so these
+# use small hidden/N to keep bf4 weight-prep fast (the real DeepSeek/GPT-OSS shapes are
+# already covered at tokens=32 by the tests above; their ~200M-elem weights make a 9-token
+# sweep far too slow for CI). Configs vary tilize_num_cores (= largest divisor of
+# hidden/32 that is <=4): hidden 512->4, 1344->3, 320->2 cores, plus activation/bias/k<E
+# variety. Validated on Blackhole p100: the fix flips E-T FAIL->PASS for odd per-core
+# counts (3/6/63) while even counts are unchanged.
+# ---------------------------------------------------------------------------
+_MOE_50669_SWEEP_CONFIGS = [
+    # 4 tilize cores (the #50669 DeepSeek/Qwen3.6 case), all-experts routing, SILU.
+    dict(name="c4_silu", experts_per_device=4, selected_experts_k=4, N=256, hidden_size=512,
+         activation_type=MoEActivationFunction.SILU, has_bias=False),
+    # 3 tilize cores, SWIGLU + bias (exercises the fix under a different activation/bias path).
+    dict(name="c3_swiglu_bias", experts_per_device=4, selected_experts_k=4, N=256, hidden_size=1344,
+         activation_type=MoEActivationFunction.SWIGLU, has_bias=True),
+    # 2 tilize cores, partial (k<E) routing (not all experts receive every token).
+    dict(name="c2_partial", experts_per_device=8, selected_experts_k=4, N=256, hidden_size=320,
+         activation_type=MoEActivationFunction.SILU, has_bias=False),
+]
+
+_MOE_50669_SWEEP_TOKENS = [1, 2, 3, 6, 16, 32, 48, 63, 64]
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 500000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("tokens_per_device", _MOE_50669_SWEEP_TOKENS)
+@pytest.mark.parametrize("cfg", _MOE_50669_SWEEP_CONFIGS, ids=lambda c: c["name"])
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_single_card_nontile_tokens_sweep(
+    mesh_device, mesh_shape, cfg, tokens_per_device, is_ci_env, is_ci_v2_env
+):
+    """Regression for tt-metal#50669: correctness across non-tile-aligned token counts / configs."""
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=cfg["experts_per_device"],
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=cfg["selected_experts_k"],
+        N=cfg["N"],
+        hidden_size=cfg["hidden_size"],
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(cfg["hidden_size"], matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=cfg["activation_type"],
+        has_bias=cfg["has_bias"],
+        skip_on_ci=is_ci_env or is_ci_v2_env,
+    )
+
+
 # Minimal sanity check that compute_only=True with conflicting CCL kwargs is rejected.
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, expect_error):

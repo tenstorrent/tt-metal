@@ -555,7 +555,9 @@ void kernel_main() {
     uint32_t tokens_this_core = core_token_end - core_token_start;
     uint32_t ncrisc_token_start = core_token_start;
     uint32_t ncrisc_token_end = core_token_start + tokens_this_core / 2;
-    uint32_t brisc_tokens_capacity = tokens_this_core / 2;
+    // ceil, not floor: must match tilize_writer's brisc_tokens_capacity so the merge below reads each
+    // expert's BRISC entries from the correct per-expert offset (tt-metal#50669).
+    uint32_t brisc_tokens_capacity = tokens_this_core - tokens_this_core / 2;
 
     // indices/scores are in CB - drain has shard, non-drain read via NOC in Step 2
     uint32_t num_activated_tokens = 0;
