@@ -34,7 +34,7 @@ void kernel_main() {
             add_bcast_cols_init_short(cb_in1, cb_in0);
             add_tiles_bcast_cols(cb_in1, cb_in0, 0, 0, dst0);
         } else {
-            copy_tile_to_dst_init_short(cb_in0);
+            copy_init(cb_in0);
             copy_tile(cb_in0, 0, dst0);
         }
         tile_regs_commit();

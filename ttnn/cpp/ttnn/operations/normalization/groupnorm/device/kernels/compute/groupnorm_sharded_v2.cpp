@@ -454,7 +454,7 @@ void kernel_main() {
                     uint32_t index_h1_offset = 0;
 
                     if (copy_or_add == true) {
-                        copy_tile_init(cb_x_id);
+                        copy_init(cb_x_id);
                     } else {
                         add_tiles_init(cb_out_id, cb_x_id);
                     }

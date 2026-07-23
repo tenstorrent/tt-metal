@@ -74,7 +74,7 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
                 reconfig_data_format_srca(cb_input);
 #endif
-                copy_tile_to_dst_init_short(cb_input);
+                copy_init(cb_input);
                 copy_tile(cb_input, 0, reduce_dst_idx);
                 copy_tile(cb_mask_w, 0, mask_dst_idx);
                 mask_tile_init();
@@ -101,7 +101,7 @@ void kernel_main() {
                 reconfig_data_format_srca(cb_accum_dst);
 #endif
                 dfb_accum_dst_obj.wait_front(onetile);
-                copy_tile_to_dst_init_short(cb_accum_dst);
+                copy_init(cb_accum_dst);
                 copy_tile(cb_accum_dst, 0, reduce_dst_idx);
             }
 

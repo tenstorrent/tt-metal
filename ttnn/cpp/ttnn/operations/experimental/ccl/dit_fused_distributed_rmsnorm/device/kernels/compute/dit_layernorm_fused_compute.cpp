@@ -182,7 +182,7 @@ void kernel_main() {
             // (mirrors layernorm_large_tensor_welford's fuse_pre_add reload).
             welford_init();
             reconfig_data_format_srca(welford_zero_cb);
-            copy_tile_init(welford_zero_cb);
+            copy_init(welford_zero_cb);
             copy_tile(welford_zero_cb, 0, mean_dst);
             copy_tile(welford_zero_cb, 1, var_dst);
             welford_restore_state(mean_dst);
@@ -311,7 +311,7 @@ void kernel_main() {
             fill_tile_init();
             fill_tile(DMM, 0.f);
             for (uint32_t i = 0; i < ring_size; i++) {
-                copy_tile_to_dst_init_short(stats_gathered_cb);
+                copy_init(stats_gathered_cb);
                 copy_tile(stats_gathered_cb, 2u * i, DT);  // DT = mean_i
                 sub_binary_tile_init();
                 sub_binary_tile(DT, DM, DT);  // DT = mean_i - mean_g

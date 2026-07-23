@@ -66,7 +66,9 @@ ALWI void process_tile(
     DataflowBuffer exp_cb_post_bcast(CB_POST_BCAST);
     DataflowBuffer exp_cb_post_other(CB_POST_OTHER);
 
-    unary_op_init_common(cb_left, cb_out);
+    // compute_kernel_hw_startup is hoisted to kernel_main (must be the first Compute API call and run
+    // exactly once); process_tile is called per iteration, so it only re-inits the copy op here.
+    copy_init(cb_left);
     PREPROCESS(BCAST_OP, DataflowBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
     exp_cb_post_bcast.wait_front(num_tiles_per_cycle);
 
@@ -97,11 +99,13 @@ ALWI void process_tile(
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
-        copy_tile_to_dst_init_short_with_dt(cb_right, cb_left);
+        reconfig_data_format_srca(cb_right, cb_left);
+        copy_init(cb_left);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_left, i, i * 2);
         }
-        copy_tile_to_dst_init_short_with_dt(cb_left, cb_right);
+        reconfig_data_format_srca(cb_left, cb_right);
+        copy_init(cb_right);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_right, i, i * 2 + 1);
 
@@ -158,6 +162,10 @@ void kernel_main() {
     constexpr auto cb_pre_rhs = cb_llk_post;
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
 #endif
+
+    // One-time hardware startup: must be the first Compute API call and run exactly once. cb_left
+    // inside process_tile is always cb_post_lhs, so configure the pipeline for that here.
+    compute_kernel_hw_startup(cb_post_lhs, cb_out);
 
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));

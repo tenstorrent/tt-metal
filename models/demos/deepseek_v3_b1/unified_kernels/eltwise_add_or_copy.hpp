@@ -137,7 +137,7 @@ struct EltwiseAddOrCopy {
             } else {
                 reconfig_data_format<false, true>(cb_in1, cb_in1);
                 pack_reconfig_data_format<true>(cb_out);
-                copy_tile_to_dst_init_short(cb_in1);
+                copy_init(cb_in1);
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < num_tiles; i++) {
                     copy_tile(cb_in1, i, i);

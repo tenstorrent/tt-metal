@@ -58,11 +58,13 @@ ALWI uint32_t batchnorm_bcast_tiles(
     cb_batch_var_obj.wait_front(onetile);
 
     tile_regs_acquire();
-    copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_batch_var);
+    reconfig_data_format_srca(last_srca_cb, cb_batch_var);
+    copy_init(cb_batch_var);
     last_srca_cb = cb_batch_var;
     copy_tile(cb_batch_var, index, index * 2);
     add_binary_tile_init();
-    copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_eps);
+    reconfig_data_format_srca(last_srca_cb, cb_eps);
+    copy_init(cb_eps);
     last_srca_cb = cb_eps;
     copy_tile(cb_eps, index, index * 2 + 1);
     add_binary_tile(index * 2, index * 2 + 1, index * 2);
@@ -91,17 +93,20 @@ ALWI uint32_t batchnorm_bcast_tiles(
 
         // (input - batch_mean) * den
         tile_regs_acquire();
-        copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_other);
+        reconfig_data_format_srca(last_srca_cb, cb_other);
+        copy_init(cb_other);
         last_srca_cb = cb_other;
         copy_tile(cb_other, index, index * 2);
         sub_binary_tile_init();
-        copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_bcast);
+        reconfig_data_format_srca(last_srca_cb, cb_bcast);
+        copy_init(cb_bcast);
         last_srca_cb = cb_bcast;
         copy_tile(cb_bcast, index, index * 2 + 1);
         sub_binary_tile(index * 2, index * 2 + 1, index * 2);
 
         mul_binary_tile_init();
-        copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_den);
+        reconfig_data_format_srca(last_srca_cb, cb_den);
+        copy_init(cb_den);
         last_srca_cb = cb_den;
         copy_tile(cb_den, index, index * 2 + 1);
         mul_binary_tile(index * 2, index * 2 + 1, index * 2);
@@ -119,11 +124,13 @@ ALWI uint32_t batchnorm_bcast_tiles(
             cb_scaled_output_obj.reserve_back(onetile);
 
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_affine_or_out);
+            reconfig_data_format_srca(last_srca_cb, cb_affine_or_out);
+            copy_init(cb_affine_or_out);
             last_srca_cb = cb_affine_or_out;
             copy_tile(cb_affine_or_out, index, index * 2);
             mul_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_weight);
+            reconfig_data_format_srca(last_srca_cb, cb_weight);
+            copy_init(cb_weight);
             last_srca_cb = cb_weight;
             copy_tile(cb_weight, index, index * 2 + 1);
             mul_binary_tile(index * 2, index * 2 + 1, index * 2);
@@ -142,11 +149,13 @@ ALWI uint32_t batchnorm_bcast_tiles(
             cb_output_0_obj.reserve_back(onetile);
 
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp_1);
+            reconfig_data_format_srca(last_srca_cb, cb_tmp_1);
+            copy_init(cb_tmp_1);
             last_srca_cb = cb_tmp_1;
             copy_tile(cb_tmp_1, index, index * 2);
             add_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_bias);
+            reconfig_data_format_srca(last_srca_cb, cb_bias);
+            copy_init(cb_bias);
             last_srca_cb = cb_bias;
             copy_tile(cb_bias, index, index * 2 + 1);
             add_binary_tile(index * 2, index * 2 + 1, index * 2);
@@ -166,7 +175,8 @@ ALWI uint32_t batchnorm_bcast_tiles(
             cb_output_final_obj.reserve_back(onetile);
 
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_output_0);
+            reconfig_data_format_srca(last_srca_cb, cb_output_0);
+            copy_init(cb_output_0);
             last_srca_cb = cb_output_0;
             copy_tile(cb_output_0, index, index * 2);
             typecast_tile_init<TcInFmt, TcOutFmt>();
@@ -224,7 +234,8 @@ void kernel_main() {
     auto cb_bcast = cb_batch_mean;
     auto cb_other = cb_input;
 
-    unary_op_init_common(cb_other, cb_output_0);
+    compute_kernel_hw_startup(cb_other, cb_output_0);
+    copy_init(cb_other);
     uint32_t last_srca_cb = cb_other;
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;

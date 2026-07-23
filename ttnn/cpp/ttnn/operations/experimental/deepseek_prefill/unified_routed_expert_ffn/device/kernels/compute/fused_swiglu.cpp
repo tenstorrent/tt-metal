@@ -225,7 +225,8 @@ FORCE_INLINE void matmul_phase(
     (void)down_bias_cb_id;
     // matmul puts in1 → SrcA, in0 → SrcB. Reconfigure SrcA from in1 to
     // partials so copy_tile reads partials.
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, partials_cb_id);
+    reconfig_data_format_srca(in1_cb_id, partials_cb_id);
+    copy_init(partials_cb_id);
 #endif
 
     for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
@@ -458,7 +459,8 @@ FORCE_INLINE void matmul_phase_fused_gu(
     pack_reconfig_data_format(gate_intermed_cb_id);
     // SrcA was last configured for the up matmul's in1 (up_cb_id). Switch
     // to partials_gu so copy_tile reads the accumulator.
-    copy_tile_to_dst_init_short_with_dt(up_cb_id, partials_gu_cb_id);
+    reconfig_data_format_srca(up_cb_id, partials_gu_cb_id);
+    copy_init(partials_gu_cb_id);
     for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
         partials_gu_cb.wait_front(out_subblock_num_tiles);
@@ -558,7 +560,8 @@ FORCE_INLINE void swiglu_oai_activation_phase(
 #else
     (void)gate_bias_cb_id;
     (void)up_bias_cb_id;
-    copy_tile_to_dst_init_short_with_dt(prev_srcA_cb_id, gate_partials_cb_id);
+    reconfig_data_format_srca(prev_srcA_cb_id, gate_partials_cb_id);
+    copy_init(gate_partials_cb_id);
 #endif
 
     for (uint32_t base = 0; base < out_block_num_tiles; base += kActChunk) {

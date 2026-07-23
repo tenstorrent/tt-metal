@@ -330,7 +330,7 @@ void kernel_main() {
     mul_bcast_cols_init_short(cb_softmax_tmp_id, cb_reduce_scalar_id);
     mul_tiles_bcast<BroadcastType::COL>(cb_softmax_tmp_id, cb_reduce_scalar_id, 0, 0, 0);
 
-    copy_tile_to_dst_init_short(cb_intermed_val_id);
+    copy_init(cb_intermed_val_id);
     copy_tile(cb_intermed_val_id, 0, 1);
     tile_regs_commit();
 

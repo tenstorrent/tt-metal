@@ -51,7 +51,7 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, GATE_DST);
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, up_tile_id, up_n, UP_DST);
 #else
-            copy_tile_to_dst_init_short(in_cb);
+            copy_init(in_cb);
             copy_tile(in_cb, gate_tile_id, GATE_DST);
             copy_tile(in_cb, up_tile_id, UP_DST);
 #endif
@@ -71,7 +71,7 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
 #endif  // FUSE_SWIGLU
 
 void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    copy_tile_to_dst_init_short(in_cb.get_cb_id());
+    copy_init(in_cb.get_cb_id());
     reconfig_data_format_srca(in_cb.get_cb_id());
     pack_reconfig_data_format(out_cb.get_cb_id());
     uint32_t fused_act_dst_id = 0;
@@ -235,7 +235,7 @@ void add_bias_and_addcmul_block(
                 unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
                 unary_bcast<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), n, TERNARY_B_DST_ID);
 
-                copy_tile_to_dst_init_short(intermediate_cb.get_cb_id());
+                copy_init(intermediate_cb.get_cb_id());
                 copy_tile(intermediate_cb.get_cb_id(), tile_id, DST_ID);
 
                 mul_binary_tile_init();
@@ -272,10 +272,10 @@ void add_bias_and_addcmul_block(
                 mul_tiles(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id(), tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                copy_tile_to_dst_init_short(ternary_b_cb.get_cb_id());
+                copy_init(ternary_b_cb.get_cb_id());
                 copy_tile(ternary_b_cb.get_cb_id(), n, TERNARY_B_DST_ID);
 
-                copy_tile_to_dst_init_short(intermediate_cb.get_cb_id());
+                copy_init(intermediate_cb.get_cb_id());
                 copy_tile(intermediate_cb.get_cb_id(), tile_id, DST_ID);
 
                 mul_binary_tile_init();

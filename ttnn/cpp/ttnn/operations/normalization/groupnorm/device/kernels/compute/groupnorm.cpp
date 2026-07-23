@@ -644,7 +644,7 @@ void kernel_main() {
                     uint32_t index_h1_offset = 0;
 
                     if (copy_or_add == true) {
-                        copy_tile_init(cb_xmm_id);
+                        copy_init(cb_xmm_id);
                     } else {
                         add_tiles_init(cb_reread_out_id, cb_xmm_id);
                     }
@@ -705,7 +705,7 @@ void kernel_main() {
                             if (apply_gamma_beta[j]) {
                                 mul_bcast_rows_init_short(cb_reread_write_out_id, cb_gamma_id);
                             } else {
-                                copy_tile_init(cb_reread_write_out_id);
+                                copy_init(cb_reread_write_out_id);
                             }
                             tile_regs_acquire();
                             uint32_t index = j + index_h_offset;
@@ -738,7 +738,7 @@ void kernel_main() {
                             if (apply_gamma_beta[j]) {
                                 add_bcast_rows_init_short(cb_inbeta_id, cb_beta_id);
                             } else {
-                                copy_tile_init(cb_inbeta_id);
+                                copy_init(cb_inbeta_id);
                             }
                             tile_regs_acquire();
                             uint32_t index = j + index_h_offset;

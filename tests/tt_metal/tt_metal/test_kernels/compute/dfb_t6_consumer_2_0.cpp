@@ -36,13 +36,15 @@ void kernel_main() {
 
     // HW requires a copy (unpack) instruction between wait_front and pop_front.
     // This kernel has no output DFB, so configure unpack + pack hw against the
-    // single input DFB (matches the production unary_op_init_common(in, out)
+    // single input DFB (matches the production compute_kernel_hw_startup(in, out);
+    copy_init(in)
     // shape; this is also what programs the buffer-descriptor table the UNPACR
     // reads) and discard the copied tile. copy_tile reads the entry into the
     // math dest register without mutating the DFB L1 ring. The acquire_dst /
     // release_dst pair alone balances the MATH<->PACK dest handshake (no
     // pack_tile required, and packing into the input ring would race the producer).
-    unary_op_init_common(dfb.get_id(), dfb.get_id());
+    compute_kernel_hw_startup(dfb.get_id(), dfb.get_id());
+    copy_init(dfb.get_id());
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; ++tile_id) {
         acquire_dst();

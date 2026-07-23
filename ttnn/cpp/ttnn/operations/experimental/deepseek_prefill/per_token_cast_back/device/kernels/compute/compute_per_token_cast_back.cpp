@@ -59,7 +59,7 @@ void kernel_main() {
             // ----- Phase 1: input_e4m3 row-major -> fp32 row-major (one tile at a time, index 0) -----
             reconfig_data_format_srca(cb_input_e4m3_id);
             pack_reconfig_data_format(cb_in_rm_id);
-            copy_tile_init(cb_input_e4m3_id);
+            copy_init(cb_input_e4m3_id);
             // One input_e4m3 page is one 32x32 row-major tile. A 128-wide block contains
             // tiles_per_block such pages.
             for (uint32_t s = 0; s < tiles_per_block; ++s) {

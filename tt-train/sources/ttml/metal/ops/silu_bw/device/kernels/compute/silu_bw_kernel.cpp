@@ -40,7 +40,7 @@ inline void compute_sigmoid() {
 
     tile_regs_acquire();
     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-        copy_tile_init(cb_input_idx);
+        copy_init(cb_input_idx);
         copy_tile(cb_input_idx, /* tile_index */ block_idx, /* register_idx */ block_idx);
 
         sigmoid_tile_init();
@@ -60,7 +60,7 @@ inline void compute_one_minus_sigmoid() {
 
     tile_regs_acquire();
     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-        copy_tile_init(cb_sigmoid_idx);
+        copy_init(cb_sigmoid_idx);
         copy_tile(cb_sigmoid_idx, /* tile_index */ block_idx, /* register_idx */ block_idx);
 
         binop_with_scalar_tile_init();
@@ -137,7 +137,8 @@ inline void compute_times_grad() {
 }
 
 void kernel_main() {
-    init_sfpu(cb_input_idx, cb_dL_da_idx);
+    compute_kernel_hw_startup(cb_input_idx, cb_dL_da_idx);
+    copy_init(cb_input_idx);
     binary_op_init_common(cb_input_idx, cb_dL_out_idx, cb_dL_da_idx);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         for (uint32_t col = 0; col < Wt; col += block_size) {

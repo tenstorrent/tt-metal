@@ -184,7 +184,8 @@ void kernel_main() {
         // Pack using values_cb format: input_transposed_cb may be bf16 (higher-precision
         // intermediate) while values_cb is the original bfp8/bfp4 output format.
         reconfig_data_format_srca(input_transposed_cb_index);
-        copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
+        reconfig_data_format_srca(index_transposed_cb_index, input_transposed_cb_index);
+        copy_init(input_transposed_cb_index);
         pack_reconfig_data_format(values_cb_index);
 
         // Extract local TopK values (first Kt tiles contain best values)
@@ -208,7 +209,8 @@ void kernel_main() {
 
         // Extract local TopK indices (corresponding to the best values)
         reconfig_data_format_srca(index_transposed_cb_index);
-        copy_tile_to_dst_init_short_with_dt(input_transposed_cb_index, index_transposed_cb_index);
+        reconfig_data_format_srca(input_transposed_cb_index, index_transposed_cb_index);
+        copy_init(index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         index_transposed_cb.wait_front(Kt);
         for (uint32_t i = 0; i < Kt; ++i) {

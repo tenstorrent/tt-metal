@@ -71,7 +71,8 @@ void kernel_main() {
     int seq_per_2tiles = std::max((2 * 32) / K, (uint32_t)2);
 
     // init pack, compute and unpack
-    init_sfpu(input_cb_index, values_cb_index);
+    compute_kernel_hw_startup(input_cb_index, values_cb_index);
+    copy_init(input_cb_index);
     ckernel::topk_tile_init();
 
     CircularBuffer input_cb(input_cb_index);
@@ -106,7 +107,8 @@ void kernel_main() {
         input_cb.pop_front(Wt);  // Release input buffer space
 
         // Copy all received index tiles from local cores to transposed staging buffer
-        copy_tile_to_dst_init_short_with_dt(input_cb_index, index_cb_index);
+        reconfig_data_format_srca(input_cb_index, index_cb_index);
+        copy_init(index_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             tile_regs_acquire();

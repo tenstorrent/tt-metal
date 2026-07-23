@@ -159,7 +159,8 @@ void kernel_main() {
     DataflowBuffer cb_tilize_buf(dfb::cb_tilize);
     DataflowBuffer cb_out(dfb::cb_out);
 
-    unary_op_init_common(dfb::cb_in, dfb::cb_out);
+    compute_kernel_hw_startup(dfb::cb_in, dfb::cb_out);
+    copy_init(dfb::cb_in);
 
     // DEBUG [#47797 WH-transpose compute hang]: localize where the 4 compute TRISCs stall (watcher: all
     // at WFD, reader at RBW). Watcher RING BUFFER markers (safe on Quasar; DPRINT trips an unimplemented

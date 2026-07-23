@@ -36,7 +36,7 @@ ALWI void copy_tile_init_with_dt(DataflowBuffer icb, uint32_t transpose = 0) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format_srca(icb.get_id());
 #endif
-    copy_tile_to_dst_init_short(icb.get_id(), transpose);
+    copy_init(icb.get_id(), transpose);
 }
 
 ALWI void add_tiles_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
@@ -1175,7 +1175,7 @@ ALWI void copy_tile_to_dst(DataflowBuffer icb, uint32_t itile = 0, uint32_t dst 
         icb.wait_front(onetile);
     }
     reconfig_data_format_srca(icb.get_id());
-    copy_tile_to_dst_init_short(icb.get_id());
+    copy_init(icb.get_id());
     copy_tile(icb.get_id(), itile, dst);
     if (cb_wait_and_pop) {
         icb.pop_front(onetile);

@@ -68,14 +68,14 @@ inline void compute_sum() {
     for (uint32_t col = 0; col < Wt; ++col) {
         auto target_register = (col == 0) ? sum_register : working_register;
 
-        copy_tile_init(cb_input_idx);
+        copy_init(cb_input_idx);
         copy_tile(cb_input_idx, col, target_register);
 
         // Mask the tile if needed
         if constexpr (do_mask_w) {
             if (col + 1 == Wt) {
                 const uint32_t mask_register = target_register + 1U;
-                copy_tile_init(cb_mask_w_idx);
+                copy_init(cb_mask_w_idx);
                 copy_tile(cb_mask_w_idx, 0, mask_register);
                 mask_tile_init();
                 mask_tile(target_register, mask_register);
@@ -123,14 +123,14 @@ inline void compute_sum() {
             uint32_t global_col = col + block_idx;
             auto target_register = (global_col == 0) ? sum_register : working_register;
 
-            copy_tile_init(cb_input_idx);
+            copy_init(cb_input_idx);
             copy_tile(cb_input_idx, block_idx, target_register);
 
             // Mask the tile if needed
             if constexpr (do_mask_w) {
                 if (global_col + 1 == Wt) {
                     const uint32_t mask_register = target_register + 1U;
-                    copy_tile_init(cb_mask_w_idx);
+                    copy_init(cb_mask_w_idx);
                     copy_tile(cb_mask_w_idx, 0, mask_register);
                     mask_tile_init();
                     mask_tile(target_register, mask_register);
@@ -180,14 +180,14 @@ inline void compute_variance_reduced_to_one_tile() {
     tile_regs_acquire();
 
     // Load broadcasted mean once
-    copy_tile_init(cb_mean_bcast_idx);
+    copy_init(cb_mean_bcast_idx);
     copy_tile(cb_mean_bcast_idx, 0, mean_register);
 
     for (uint32_t col = 0; col < Wt; ++col) {
         auto target_register = (col == 0) ? sum_register : working_register;
 
         // Load input
-        copy_tile_init(cb_input_idx);
+        copy_init(cb_input_idx);
         copy_tile(cb_input_idx, col, target_register);
 
         // Subtract mean: (x - mean)
@@ -202,7 +202,7 @@ inline void compute_variance_reduced_to_one_tile() {
         if constexpr (do_mask_w) {
             if (col + 1 == Wt) {
                 const uint32_t mask_register = target_register + 1U;
-                copy_tile_init(cb_mask_w_idx);
+                copy_init(cb_mask_w_idx);
                 copy_tile(cb_mask_w_idx, 0, mask_register);
                 mask_tile_init();
                 mask_tile(target_register, mask_register);
@@ -231,7 +231,7 @@ inline void compute_variance_reduced_to_one_tile() {
     tile_regs_acquire();
 
     // Load broadcasted mean once
-    copy_tile_init(cb_mean_bcast_idx);
+    copy_init(cb_mean_bcast_idx);
     copy_tile(cb_mean_bcast_idx, 0, mean_register);
 
     for (uint32_t col = 0; col < Wt; col += block_size) {
@@ -243,7 +243,7 @@ inline void compute_variance_reduced_to_one_tile() {
             auto target_register = (global_col == 0) ? sum_register : working_register;
 
             // Load input
-            copy_tile_init(cb_input_idx);
+            copy_init(cb_input_idx);
             copy_tile(cb_input_idx, block_idx, target_register);
 
             // Subtract mean: (x - mean)
@@ -258,7 +258,7 @@ inline void compute_variance_reduced_to_one_tile() {
             if constexpr (do_mask_w) {
                 if (global_col + 1 == Wt) {
                     const uint32_t mask_register = target_register + 1U;
-                    copy_tile_init(cb_mask_w_idx);
+                    copy_init(cb_mask_w_idx);
                     copy_tile(cb_mask_w_idx, 0, mask_register);
                     mask_tile_init();
                     mask_tile(target_register, mask_register);
@@ -303,7 +303,7 @@ inline void compute_rstd() {
         /* idst */ rstd_register);
 
     // Load epsilon
-    copy_tile_init(cb_eps_idx);
+    copy_init(cb_eps_idx);
     copy_tile(cb_eps_idx, 0, eps_register);
 
     // Add epsilon: variance + eps
@@ -341,7 +341,7 @@ inline void compute_x_hat() {
             sub_tiles(cb_input_idx, cb_mean_bcast_idx, input_tile_idx, 0, x_hat_reg);
 
             // Load broadcasted rstd
-            copy_tile_init(cb_rstd_bcast_idx);
+            copy_init(cb_rstd_bcast_idx);
             copy_tile(cb_rstd_bcast_idx, 0, temp_reg);
 
             // Multiply by rstd: (input - mean) * rstd
@@ -414,7 +414,7 @@ inline void compute_output() {
             sub_tiles(cb_input_idx, cb_mean_bcast_idx, block_idx, 0, x_hat_reg);
 
             // Load broadcasted rstd
-            copy_tile_init(cb_rstd_bcast_idx);
+            copy_init(cb_rstd_bcast_idx);
             copy_tile(cb_rstd_bcast_idx, 0, temp_reg);
 
             // Multiply by rstd: (input - mean) * rstd = x_hat
@@ -464,7 +464,7 @@ inline void copy_mean_to_output() {
         const uint32_t mean_register = 0U;
 
         tile_regs_acquire();
-        copy_tile_init(cb_mean_bcast_idx);
+        copy_init(cb_mean_bcast_idx);
         copy_tile(cb_mean_bcast_idx, 0, mean_register);
 
         tile_regs_commit();
@@ -480,7 +480,7 @@ inline void copy_rstd_to_output() {
         const uint32_t rstd_register = 0U;
 
         tile_regs_acquire();
-        copy_tile_init(cb_rstd_bcast_idx);
+        copy_init(cb_rstd_bcast_idx);
         copy_tile(cb_rstd_bcast_idx, 0, rstd_register);
 
         tile_regs_commit();
@@ -502,7 +502,8 @@ void kernel_main() {
     cb_wait_front(cb_beta_idx, Wt);
 #endif
 
-    init_sfpu(cb_input_idx, cb_output_idx);
+    compute_kernel_hw_startup(cb_input_idx, cb_output_idx);
+    copy_init(cb_input_idx);
     binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_output_idx);
     reconfig_data_format(cb_scaler_idx, cb_sum_idx);
     matmul_init(cb_sum_idx, cb_scaler_idx);

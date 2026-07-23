@@ -25,7 +25,8 @@
 using namespace ckernel;
 
 void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
-    init_sfpu(cb_id, cb_id);
+    compute_kernel_hw_startup(cb_id, cb_id);
+    copy_init(cb_id);
 
     CircularBuffer cb_obj(cb_id);
 
@@ -156,7 +157,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Postcondition: in_cb has num_tiles produced
     CircularBuffer in_cb_obj(in_cb);
 
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     recip_tile_init();
 
     in_cb_obj.wait_front(num_tiles);
@@ -292,12 +293,14 @@ void top_k() {
                 uint32_t right_ind = left_ind + (1 << m_iter);
                 tile_regs_acquire();
 
-                copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
+                reconfig_data_format_srca(index_transposed_cb_index, input_transposed_cb_index);
+                copy_init(input_transposed_cb_index);
                 copy_tile(input_transposed_cb_index, left_ind, input_dest_start);
                 copy_tile(input_transposed_cb_index, right_ind, input_dest_end);
 
                 // unpack indices into dest
-                copy_tile_to_dst_init_short_with_dt(input_transposed_cb_index, index_transposed_cb_index);
+                reconfig_data_format_srca(input_transposed_cb_index, index_transposed_cb_index);
+                copy_init(index_transposed_cb_index);
                 copy_tile(index_transposed_cb_index, left_ind, index_dest_start);
                 copy_tile(index_transposed_cb_index, right_ind, index_dest_end);
 

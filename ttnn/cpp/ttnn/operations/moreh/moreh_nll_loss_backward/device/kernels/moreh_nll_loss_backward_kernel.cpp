@@ -29,7 +29,8 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
 
-    init_sfpu(cb_output_grad, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(cb_output_grad, tt::CBIndex::c_16);
+    copy_init(cb_output_grad);
 
 #if defined(DIVISOR)
     dfb_divisor_obj.wait_front(onetile);

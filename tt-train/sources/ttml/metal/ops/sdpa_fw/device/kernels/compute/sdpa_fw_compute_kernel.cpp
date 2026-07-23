@@ -172,7 +172,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_reserve_back(cb_attention_weights, Sk_chunk_t);
 
             // Unpacker → mask CB (BF16); packer stays on cb_attention_weights (FP32).
-            copy_tile_to_dst_init_short(cb_attn_mask);
+            copy_init(cb_attn_mask);
             pack_reconfig_l1_acc(1);
             for (uint32_t n = diag_pos_in_chunk; n < Sk_chunk_t; ++n) {
                 // n == diag_pos_in_chunk → mask[0] (causal diagonal pattern).
@@ -285,7 +285,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
         // Load mm_out tiles via UnpackToDestFp32 (full FP32 in DST)
         reconfig_data_format(alias_cb_prev_mm_out, alias_cb_prev_mm_out);
-        copy_tile_init(alias_cb_prev_mm_out);
+        copy_init(alias_cb_prev_mm_out);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(alias_cb_prev_mm_out, tile_idx + block_idx, block_idx);
         }
@@ -325,7 +325,8 @@ void kernel_main() {
     const uint32_t num_pairs = get_arg_val<uint32_t>(1);  // Runtime arg for balanced mode
 #endif
 
-    init_sfpu(cb_query, cb_output);
+    compute_kernel_hw_startup(cb_query, cb_output);
+    copy_init(cb_query);
     binary_op_init_common(cb_query, cb_key, cb_value);
     // binary_op_init_common above does the one-time HW config; each matmul site below
     // re-establishes its state with reconfig_data_format + matmul_init.

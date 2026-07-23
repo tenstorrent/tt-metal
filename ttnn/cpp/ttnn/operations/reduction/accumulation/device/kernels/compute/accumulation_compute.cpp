@@ -27,7 +27,8 @@ void kernel_main() {
     CircularBuffer cb_out_obj(CB_OUT);
     CircularBuffer cb_acc_obj(CB_ACC);  // note: only used in compute kernel
 
-    unary_op_init_common(CB_IN, CB_OUT);
+    compute_kernel_hw_startup(CB_IN, CB_OUT);
+    copy_init(CB_IN);
 
     BINARY_OP_INIT();
 
@@ -70,11 +71,11 @@ void kernel_main() {
             cb_in_obj.wait_front(ONE_TILE);
 
             reconfig_data_format(CB_IN, CB_IN);
-            copy_tile_to_dst_init_short(CB_IN);
+            copy_init(CB_IN);
             copy_tile(CB_IN, 0, DST_IN);
 
             reconfig_data_format(CB_ACC, CB_ACC);
-            copy_tile_to_dst_init_short(CB_ACC);
+            copy_init(CB_ACC);
             copy_tile(CB_ACC, 0, DST_ACC);
 
             BINARY_OP(DST_IN, DST_ACC, DST_ACC);

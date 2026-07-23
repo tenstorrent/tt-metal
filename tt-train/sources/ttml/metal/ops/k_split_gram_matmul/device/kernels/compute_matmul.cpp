@@ -123,7 +123,7 @@ void pack_subblock_pernsb(
         }
     }
 #else
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
 

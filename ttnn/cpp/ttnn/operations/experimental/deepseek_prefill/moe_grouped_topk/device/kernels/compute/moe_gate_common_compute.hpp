@@ -47,7 +47,7 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
         // Reconfigure the unpacker for float32 input (a prior top-k iteration may have left it on UInt16).
         reconfig_data_format_srca(cb_in_scores_id);
         // copy tile from scores cb to destination register 0
-        copy_tile_to_dst_init_short(cb_in_scores_id);
+        copy_init(cb_in_scores_id);
         copy_tile(cb_in_scores_id, 0, 0);
         if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
             // sqrt(softplus(x)) with beta=1, threshold=20 (matches torch.nn.functional.softplus defaults).
@@ -209,9 +209,10 @@ void topk_group_scores(
     cb_group_index_template.wait_front(1);
 
     // copy scores tiles to dest reg 0 and index tiles to dest reg 2
-    copy_tile_to_dst_init_short(cb_group_summed_scores_id);
+    copy_init(cb_group_summed_scores_id);
     copy_tile(cb_group_summed_scores_id, 0, 0);
-    copy_tile_to_dst_init_short_with_dt(cb_group_summed_scores_id, cb_group_index_template_id);
+    reconfig_data_format_srca(cb_group_summed_scores_id, cb_group_index_template_id);
+    copy_init(cb_group_index_template_id);
     copy_tile(cb_group_index_template_id, 0, 2);
 
     // llk_topk_sort -> inplace

@@ -21,7 +21,8 @@ void kernel_main() {
     constexpr int dst0 = 0;
     constexpr int dst1 = 1;
 
-    unary_op_init_common(cb_in0, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_out0);
+    copy_init(cb_in0);
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         bool enable_reload = false;
         for (uint32_t j = 0; j < num_input_tiles; ++j) {

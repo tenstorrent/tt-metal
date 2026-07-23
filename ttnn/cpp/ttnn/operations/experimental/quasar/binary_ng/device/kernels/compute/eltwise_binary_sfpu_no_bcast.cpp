@@ -53,11 +53,13 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
 
     tile_regs_acquire();
-    copy_tile_to_dst_init_short_with_dt(cb_post_rhs.get_id(), cb_post_lhs.get_id());
+    reconfig_data_format_srca(cb_post_rhs.get_id(), cb_post_lhs.get_id());
+    copy_init(cb_post_lhs.get_id());
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_lhs.get_id(), i, i * 2);
     }
-    copy_tile_to_dst_init_short_with_dt(cb_post_lhs.get_id(), cb_post_rhs.get_id());
+    reconfig_data_format_srca(cb_post_lhs.get_id(), cb_post_rhs.get_id());
+    copy_init(cb_post_rhs.get_id());
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_rhs.get_id(), i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)
@@ -99,7 +101,8 @@ void kernel_main() {
     constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
     constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
 
-    unary_op_init_common(cb_post_lhs_id, cb_out_id);
+    compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
+    copy_init(cb_post_lhs_id);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif

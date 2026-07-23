@@ -107,7 +107,7 @@ void expc(uint32_t in, uint32_t o, uint32_t n) {
     cb_reserve_back(o, n);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(in);  // unary: in->srcA
-    copy_tile_to_dst_init_short(in);
+    copy_init(in);
     exp_tile_init();
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
@@ -164,7 +164,7 @@ void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o) {
     cb_reserve_back(o, 1);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(src);
-    copy_tile_to_dst_init_short(src);
+    copy_init(src);
     tile_regs_acquire();
     copy_tile(src, src_tile, 0);
     tile_regs_commit();
@@ -230,7 +230,7 @@ void asm4(
     pack_reconfig_data_format(o);
     for (uint32_t i = 0; i < 4; i++) {
         reconfig_data_format_srca(src[i]);
-        copy_tile_to_dst_init_short(src[i]);
+        copy_init(src[i]);
         tile_regs_acquire();
         copy_tile(src[i], tl[i], 0);
         tile_regs_commit();
@@ -338,7 +338,7 @@ void inv_rms(uint32_t in, uint32_t o, uint32_t n, uint32_t eps_bits, uint32_t sc
     cb_reserve_back(o, n);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(in);
-    copy_tile_to_dst_init_short(in);
+    copy_init(in);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
         copy_tile(in, i, 0);

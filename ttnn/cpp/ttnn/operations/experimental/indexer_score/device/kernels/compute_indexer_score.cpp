@@ -206,7 +206,7 @@ template <uint32_t acc_cb, uint32_t mask_cb>
 inline void stamp_mask_tile(uint32_t slot, uint32_t k_tile, uint32_t diag_tile) {
     const bool is_diag = (k_tile == diag_tile);
     const uint32_t midx = is_diag ? 0u : 1u;  // 0 = diag strict-upper -inf, 1 = full -inf
-    copy_tile_to_dst_init_short(mask_cb);
+    copy_init(mask_cb);
     pack_reconfig_l1_acc(is_diag ? 1 : 0);  // diag accumulates (keeps score); full -inf overwrites
     tile_regs_acquire();
     copy_tile(mask_cb, midx, 0);

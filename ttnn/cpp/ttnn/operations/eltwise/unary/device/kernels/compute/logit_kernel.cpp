@@ -28,7 +28,8 @@ void kernel_main() {
     DataflowBuffer dfb_out(cb_output);
     DataflowBuffer dfb_tmp(cb_tmp0);
 
-    init_sfpu(cb_input, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_output);
+    copy_init(cb_input);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         dfb_in.wait_front(1);
         dfb_out.reserve_back(1);
@@ -36,7 +37,7 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        copy_tile_init(cb_input);
+        copy_init(cb_input);
         copy_tile(cb_input, 0, 0);
 #ifdef CLAMP
         clamp_tile_init();
@@ -53,7 +54,7 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        copy_tile_init(cb_tmp0);
+        copy_init(cb_tmp0);
         copy_tile(cb_tmp0, 0, 0);
         copy_tile(cb_tmp0, 0, 1);
 

@@ -41,7 +41,7 @@ void kernel_main() {
 
 #if defined(DST_ACCUM_MODE) || defined(ACC_TO_DEST) || defined(ELTWISE_DEST_REUSE_TYPE)
         dfb_in2.wait_front(per_core_block_size);
-        copy_tile_to_dst_init_short(dfb::in2);
+        copy_init(dfb::in2);
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             copy_tile(dfb::in2, i, i);  // copy from c_in[0] to DST[0]
         }

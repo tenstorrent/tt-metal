@@ -221,7 +221,8 @@ void kernel_main() {
     const uint32_t num_pairs = get_arg_val<uint32_t>(1);
 #endif
 
-    init_sfpu(cb_query, cb_key);
+    compute_kernel_hw_startup(cb_query, cb_key);
+    copy_init(cb_query);
     binary_op_init_common(cb_grad_output, cb_query, cb_key);
 
     cb_wait_front(cb_mat_mul_reduction, onetile);

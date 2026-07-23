@@ -124,10 +124,11 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         // these are c_30/c_31 in UnpackToDestFp32 mode so copy_tile takes the Dst path that
         // preserves the full FP32 precision. Otherwise, cb_ex_welford == cb_ex.
         reconfig_data_format_srca(cb_in, cb_ex_welford);
-        copy_tile_init(cb_ex_welford);
+        copy_init(cb_ex_welford);
         copy_tile(cb_ex_welford, 0, mean_dst);
         reconfig_data_format_srca(cb_ex_welford, cb_ex2_welford);
-        copy_tile_to_dst_init_short_with_dt(cb_ex_welford, cb_ex2_welford);
+        reconfig_data_format_srca(cb_ex_welford, cb_ex2_welford);
+        copy_init(cb_ex2_welford);
         copy_tile(cb_ex2_welford, 0, var_dst);
         welford_restore_state(mean_dst);
 
@@ -193,9 +194,10 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     tile_regs_acquire();
     // Final reload before welford_finalize_to_row: same fp32-via-Dst rationale as the
     // per-block reload above.
-    copy_tile_init(cb_ex_welford);
+    copy_init(cb_ex_welford);
     copy_tile(cb_ex_welford, 0, mean_dst);
-    copy_tile_to_dst_init_short_with_dt(cb_ex_welford, cb_ex2_welford);
+    reconfig_data_format_srca(cb_ex_welford, cb_ex2_welford);
+    copy_init(cb_ex2_welford);
     copy_tile(cb_ex2_welford, 0, var_dst);
     welford_restore_state(mean_dst);
     // Store the mean and variance to the destination registers
@@ -378,7 +380,8 @@ void kernel_main() {
     } else {
         // Init for transpose
         constexpr auto first_out_cb = cb_ex;
-        unary_op_init_common(cb_in, first_out_cb);
+        compute_kernel_hw_startup(cb_in, first_out_cb);
+        copy_init(cb_in);
     }
 
     cb_eps_obj.wait_front(onetile);  // comes from the reader

@@ -48,7 +48,8 @@ void kernel_main() {
     DataflowBuffer cb_inp1 = cb_in1;
 #endif
 
-    unary_op_init_common(cb_in0.get_id(), cb_out0.get_id());
+    compute_kernel_hw_startup(cb_in0.get_id(), cb_out0.get_id());
+    copy_init(cb_in0.get_id());
 
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
@@ -56,7 +57,7 @@ void kernel_main() {
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
 #if PRE_SCALE
-        copy_tile_to_dst_init_short(cb_in0.get_id());  // need to copy from CB to DST to be able to run sfpu math
+        copy_init(cb_in0.get_id());  // need to copy from CB to DST to be able to run sfpu math
 #endif
 
 #ifdef SFPU_OP_INIT_PRE_IN0_0
@@ -108,11 +109,13 @@ void kernel_main() {
 
         tile_regs_acquire();
         tile_regs_wait();
-        copy_tile_to_dst_init_short_with_dt(cb_inp1.get_id(), cb_inp0.get_id());
+        reconfig_data_format_srca(cb_inp1.get_id(), cb_inp0.get_id());
+        copy_init(cb_inp0.get_id());
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             copy_tile(cb_inp0.get_id(), i, i * 2);
         }
-        copy_tile_to_dst_init_short_with_dt(cb_inp0.get_id(), cb_inp1.get_id());
+        reconfig_data_format_srca(cb_inp0.get_id(), cb_inp1.get_id());
+        copy_init(cb_inp1.get_id());
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             copy_tile(cb_inp1.get_id(), i, i * 2 + 1);
 

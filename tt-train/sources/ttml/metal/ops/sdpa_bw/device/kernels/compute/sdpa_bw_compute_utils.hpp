@@ -46,7 +46,7 @@ void apply_mask_on_reg(
 
     const uint32_t mask_register = register_idx + 1U;  // mask register should be next to data register
     cb_wait_front(cb_attn_mask, onetile);
-    copy_tile_init(cb_attn_mask);
+    copy_init(cb_attn_mask);
     copy_tile(
         cb_attn_mask,
         /* tile_idx */ 0,
@@ -278,7 +278,8 @@ void compute_grad_scores(
         /* tile_idx */ 0,
         grad_reg);
 
-    copy_tile_to_dst_init_short_with_dt(cb_grad_attn_weights, cb_attention_weights, /*transpose=*/0);
+    reconfig_data_format_srca(cb_grad_attn_weights, cb_attention_weights);
+    copy_init(cb_attention_weights, /*transpose=*/0);
     copy_tile(cb_attention_weights, /* tile_idx */ 0, /* register idx */ attn_weights_reg);
 
     mul_binary_tile_init();
