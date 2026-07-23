@@ -72,6 +72,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"rsqrt", {{"SFPU_OP_CHAIN_0", "rsqrt_tile_init(); rsqrt_tile(0);"}}},
     {"mul_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); mul_unary_tile(0, 0x40000000u);"}}},  // 2.0f
     {"square", {{"SFPU_OP_CHAIN_0", "square_tile_init(); square_tile(0);"}}},
+    {"negative", {{"SFPU_OP_CHAIN_0", "negative_tile_init(); negative_tile(0);"}}},
     // Comparison-to-zero family (unary): result = 1.0f if predicate(x, 0) else 0.0f.
     {"eqz", {{"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile(0);"}}},
     {"nez", {{"SFPU_OP_CHAIN_0", "nez_tile_init(); nez_tile(0);"}}},
@@ -168,6 +169,9 @@ float sfpu_function(const std::string& op_name, float input) {
     }
     if (op_name == "square") {
         return bfloat16(static_cast<float>(input) * static_cast<float>(input));
+    }
+    if (op_name == "negative") {
+        return -input;
     }
     if (op_name == "eqz") {
         return bfloat16(static_cast<float>(input) == 0.0f ? 1.0f : 0.0f);
@@ -342,7 +346,7 @@ std::tuple<vector<uint32_t>, vector<uint32_t>, vector<uint32_t>> generate_packed
 // Per-op (rtol, atol) for the device-vs-golden comparison. Shared by the bf16
 // and Float32 close-checks so the tolerances live in one place. Defaults match
 // is_close()'s own defaults for the "everything else" bucket.
-std::pair<float, float> sfpu_tolerance(const std::string& op_name) {
+std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_dest = false) {
     if (op_name == "tanh") {
         return {0.175f, 0.1f};
     }
@@ -350,7 +354,9 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name) {
         return {0.15f, 0.001f};
     }
     if (op_name == "exponential") {
-        return {0.1f, 0.1f};
+        // 16-bit Dest runs the approximate (HW LUT) exp; 32-bit Dest runs the fp32-accurate
+        // path, so hold it to a much tighter tolerance.
+        return fp32_dest ? std::pair<float, float>{0.02f, 0.01f} : std::pair<float, float>{0.1f, 0.1f};
     }
     if (op_name == "log") {
         return {0.03f, 0.02f};
@@ -385,7 +391,7 @@ bool is_close_packed_sfpu_output_f32(
     if (vec_a.size() != vec_b.size()) {
         return false;
     }
-    const auto [rtol, atol] = sfpu_tolerance(op_name);
+    const auto [rtol, atol] = sfpu_tolerance(op_name, /*fp32_dest=*/true);
     for (size_t i = 0; i < vec_a.size(); ++i) {
         const float a = std::bit_cast<float>(vec_a[i]);
         const float b = std::bit_cast<float>(vec_b[i]);
@@ -1553,6 +1559,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "lez"),
         std::make_tuple(1, "square"),
         std::make_tuple(4, "square"),
+        std::make_tuple(1, "negative"),
+        std::make_tuple(4, "negative"),
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
@@ -1676,6 +1684,8 @@ INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
     SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture,
     ::testing::Values(
+        std::make_tuple(1, "negative"),
+        std::make_tuple(4, "negative"),
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),

@@ -1885,7 +1885,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
 void RunTimeOptions::ParseFeatureCoreRange(
     RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type) {
     char* str = std::getenv(env_var.c_str());
-    std::vector<CoreCoord> cores;
+    std::vector<tt::tt_metal::CoreCoord> cores;
 
     // Check if "all" is specified, rather than a range of cores.
     feature_targets[feature].all_cores[core_type] = RunTimeDebugClassNoneSpecified;
@@ -1908,7 +1908,7 @@ void RunTimeOptions::ParseFeatureCoreRange(
         } else if (str[0] == '(') {
             if (strchr(str, '-')) {
                 // Assume this is a range
-                CoreCoord start, end;
+                tt::tt_metal::CoreCoord start, end;
                 if (sscanf(str, "(%zu,%zu)", &start.x, &start.y) != 2) {
                     TT_THROW("Invalid {}", env_var);
                 }

@@ -21,7 +21,7 @@ void append_fabric_vc2_connection_rt_args(
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
     ProgramOrDescriptor& worker_program_or_desc,
-    const CoreCoord& worker_core,
+    const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args);
 
 }  // namespace tt::tt_fabric

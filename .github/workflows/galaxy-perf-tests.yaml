@@ -22,7 +22,7 @@ on:
           - deepseek_v3
           - tinyllama_1_1b_ddp32_shakespeare
           - llama_8b_tp8_ddp4_shakespeare
-          - llama_8b_tp4_ddp8_shakespeare
+          # - llama_8b_tp4_ddp8_shakespeare
 
       build-type:
         required: false
