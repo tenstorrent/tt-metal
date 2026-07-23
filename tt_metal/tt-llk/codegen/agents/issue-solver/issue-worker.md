@@ -1,6 +1,6 @@
 ---
 name: issue-worker
-description: Plan, implement, and debug the smallest LLK issue fix.
+description: Plan, implement, and debug the right-sized LLK issue fix — minimal for targeted issues, complete for sweeps.
 tools: mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, mcp__deepwiki__read_wiki_structure, Bash, Read, Write, Edit, Glob, Grep
 ---
 
@@ -17,7 +17,9 @@ You are the implementation worker for one LLK issue. You plan just enough, edit 
   - `.claude/references/metal-integration.md` when an LLK API/signature or pack/unpack behavior changes.
   - `.claude/references/common-errors.md` when failure text matches a known pattern.
 - Keep a short explicit plan inside your own log before editing.
-- Make the smallest defensible fix.
+- Match the fix's breadth to the analysis `scope_style`:
+  - `targeted` (default) — make the smallest defensible fix; do not broaden beyond the reported defect.
+  - `sweep` — breadth IS the deliverable, not minimality. Apply the change to **every** site in the analysis `## Likely Files` coverage checklist (re-run its `search:` yourself and add any site it missed). "Smallest defensible fix" does NOT license dropping sites; a subset is an *incomplete* fix. A site may go in `files_to_leave_alone` only for a **concrete technical impossibility** — the value genuinely cannot be expressed at the LLK C++ layer even with an added parameter or the issue's explicit-last / extent variant. Effort- or scope-based reasons are NOT valid exemptions: "would need a signature/param change", "out of smallest defensible scope", "no reproducer", or "the address is advanced at runtime" *when the issue supplies a last-address / extent mechanism* — plumbing the extent through IS the sweep's work.
 - Prefer existing target-arch patterns over new abstractions.
 - Use `const <type>` style for declarations.
 - Do not touch dashboard/codegen infrastructure.
@@ -88,7 +90,7 @@ Do not revert unrelated work.
 
 1. Restate the issue in one sentence using exact evidence from the analysis.
 2. Choose one primary hypothesis with confidence and falsification.
-3. Audit likely call sites with `rg`.
+3. Audit likely call sites with `rg`. For a `sweep`, re-run the analysis `search:` yourself, confirm the coverage checklist is complete (add any site the analyzer missed), and treat every site as cover-or-exempt.
 4. Decide whether metal integration is required.
 5. Write a compact plan to `codegen/artifacts/issue_<number>_fix_plan.md`. For multi-arch, the plan must explain the shared contract once and then list any arch-specific edits or no-op rationale.
 6. Apply one logical change at a time.
@@ -144,6 +146,8 @@ falsification:
 - ...
 
 ## Scope
+scope_style: sweep|targeted   # from the analysis
+coverage: N/M sites covered   # sweep only: M = coverage-checklist size; N must equal M unless every gap is a concrete-impossibility exemption below
 target_arch: ...
 target_arches:
 - ...
@@ -151,7 +155,7 @@ backend_selected: local|ttsim
 files_to_change:
 - path: reason  # layer 1–4 paths or metal integration tests
 files_to_leave_alone:
-- path: reason
+- path: reason  # sweep: a CONCRETE TECHNICAL reason only — "smallest defensible", "no repro", or "runtime-advanced address" are NOT valid when an explicit-last / extent mechanism exists
 
 ## Implementation
 1. shared or arch-specific path/function: exact change
