@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <map>
 #include <set>
 #include <stdexcept>
 
@@ -87,6 +88,23 @@ uint32_t FsdQuery::hierarchy_depth(uint32_t host_id_a, uint32_t host_id_b) const
 
 uint32_t FsdQuery::hierarchy_depth(const std::string& hostname_a, const std::string& hostname_b) const {
     return lcp_length(host_id_for(hostname_a), host_id_for(hostname_b));
+}
+
+std::vector<std::vector<uint32_t>> FsdQuery::hierarchy_partition(uint32_t depth) const {
+    // Group host_ids by their first `depth` instance_path segments (fewer if the path is shorter).
+    std::map<std::vector<std::string>, std::vector<uint32_t>> groups;
+    const auto num_hosts = static_cast<uint32_t>(fsd_.hosts().size());
+    for (uint32_t id = 0; id < num_hosts; ++id) {
+        const auto& path = fsd_.hosts()[id].instance_path();
+        const int take = std::min(static_cast<int>(depth), path.size());
+        groups[std::vector<std::string>(path.begin(), path.begin() + take)].push_back(id);
+    }
+    std::vector<std::vector<uint32_t>> partition;
+    partition.reserve(groups.size());
+    for (auto& [prefix, ids] : groups) {
+        partition.push_back(std::move(ids));
+    }
+    return partition;
 }
 
 uint32_t FsdQuery::host_id_for(const std::string& hostname) const {

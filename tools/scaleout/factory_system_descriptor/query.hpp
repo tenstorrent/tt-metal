@@ -43,6 +43,12 @@ public:
     // front() == max_hierarchy_depth() when non-empty.
     const std::vector<uint32_t>& hierarchy_tiers_deepest_first() const { return hierarchy_tiers_; }
 
+    // Partition hosts into subgroups by their depth-`depth` instance_path prefix: each returned group is
+    // the host_ids sharing the same first `depth` segments (one hierarchy node at that level). Hosts with
+    // fewer than `depth` segments group by their full path. Groups are ordered deterministically by prefix,
+    // host_ids ascending within a group. This is the subgroup set for per-hierarchy-node phased discovery.
+    std::vector<std::vector<uint32_t>> hierarchy_partition(uint32_t depth) const;
+
 private:
     uint32_t host_id_for(const std::string& hostname) const;
     // Common prefix length of two hosts' instance_paths (shared by longest_common_prefix / hierarchy_depth).

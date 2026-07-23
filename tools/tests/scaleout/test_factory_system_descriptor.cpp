@@ -525,6 +525,66 @@ TEST(FsdQuery, ThrowsOnDuplicateHostname) {
     EXPECT_THROW(FsdQuery{fsd}, std::runtime_error);
 }
 
+TEST(FsdQuery, HierarchyPartition) {
+    auto fsd = make_fsd_with_paths({
+        {"h0", {"root", "sp_0", "node_0"}},
+        {"h1", {"root", "sp_0", "node_1"}},
+        {"h2", {"root", "sp_1", "node_0"}},
+        {"h3", {"root", "sp_1", "node_1"}},
+    });
+    FsdQuery query(fsd);
+
+    // depth 2 -> partition by (root, sp_x): two subgroups.
+    auto p2 = query.hierarchy_partition(2u);
+    ASSERT_EQ(p2.size(), 2u);
+    EXPECT_EQ(p2[0], (std::vector<uint32_t>{0u, 1u}));  // sp_0
+    EXPECT_EQ(p2[1], (std::vector<uint32_t>{2u, 3u}));  // sp_1
+
+    // depth 3 -> each host is its own subgroup.
+    EXPECT_EQ(query.hierarchy_partition(3u).size(), 4u);
+
+    // depth 1 -> all share "root" -> a single subgroup with every host.
+    auto p1 = query.hierarchy_partition(1u);
+    ASSERT_EQ(p1.size(), 1u);
+    EXPECT_EQ(p1[0], (std::vector<uint32_t>{0u, 1u, 2u, 3u}));
+}
+
+TEST(FsdQuery, HierarchyPartitionHandlesShortPaths) {
+    auto fsd = make_fsd_with_paths({
+        {"h0", {"root", "sp_0"}},
+        {"h1", {"root", "sp_0", "node_1"}},
+        {"h2", {"root"}},
+    });
+    FsdQuery query(fsd);
+
+    // depth 3: h0 (len 2) and h2 (len 1) group by their full path; h1 by its full 3 segments.
+    auto p = query.hierarchy_partition(3u);
+    EXPECT_EQ(p.size(), 3u);
+}
+
+// A graph_instance may reference multiple leaf node_descriptors, so several hosts can sit under the same
+// hierarchy node, sharing the instance_path prefix and differing only in the final (leaf) segment. They
+// must land in the same subgroup at the node-level depth (no one-node-per-leaf-level assumption).
+TEST(FsdQuery, HierarchyPartitionGroupsMultipleLeavesUnderOneNode) {
+    auto fsd = make_fsd_with_paths({
+        {"h0", {"sp_0", "node_0", "node_0"}},  // two leaf nodes under sp_0/node_0
+        {"h1", {"sp_0", "node_0", "node_1"}},
+        {"h2", {"sp_0", "node_1", "node_0"}},
+    });
+    FsdQuery query(fsd);
+
+    // depth 2 = the node level: h0 and h1 (both under sp_0/node_0) share a subgroup; h2 is separate.
+    auto p2 = query.hierarchy_partition(2u);
+    ASSERT_EQ(p2.size(), 2u);
+    EXPECT_EQ(p2[0], (std::vector<uint32_t>{0u, 1u}));  // sp_0/node_0 leaves grouped together
+    EXPECT_EQ(p2[1], (std::vector<uint32_t>{2u}));      // sp_0/node_1
+
+    // An intra-node link (h0<->h1) has LCP depth 2, i.e. the same depth at which they co-locate.
+    add_connection(fsd, 0, 1);
+    FsdQuery query_with_conn(fsd);
+    EXPECT_EQ(query_with_conn.hierarchy_depth(0u, 1u), 2u);
+}
+
 TEST(FsdQuery, GetInstancePath) {
     auto fsd = make_fsd_with_paths({
         {"node0", {"root", "sp_0", "node_0"}},
