@@ -385,7 +385,7 @@ void Cluster::get_metal_desc_from_tt_desc() {
     }
 }
 
-const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_profiler_flat_id(ChipId chip_id) const {
+const std::unordered_map<tt::tt_metal::CoreCoord, int32_t>& Cluster::get_virtual_routing_to_profiler_flat_id(ChipId chip_id) const {
     return this->virtual_routing_to_profiler_flat_id_.at(this->get_board_type(chip_id));
 }
 
@@ -642,28 +642,28 @@ void Cluster::generate_virtual_to_profiler_flat_id_mapping() {
 #endif
 }
 
-bool Cluster::is_worker_core(const CoreCoord& core, ChipId chip_id) const {
+bool Cluster::is_worker_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const {
     return this->virtual_worker_cores_.at(chip_id).contains(core);
 }
 
-bool Cluster::is_ethernet_core(const CoreCoord& core, ChipId chip_id) const {
+bool Cluster::is_ethernet_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const {
     return this->virtual_eth_cores_.contains(chip_id) and this->virtual_eth_cores_.at(chip_id).contains(core);
 }
 
-bool Cluster::is_dram_core(const CoreCoord& core, ChipId chip_id) const {
+bool Cluster::is_dram_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const {
     return this->virtual_dram_hw_cores_.contains(chip_id) and this->virtual_dram_hw_cores_.at(chip_id).contains(core);
 }
 
-const std::unordered_set<CoreCoord>& Cluster::get_virtual_worker_cores(ChipId chip_id) const {
+const std::unordered_set<tt::tt_metal::CoreCoord>& Cluster::get_virtual_worker_cores(ChipId chip_id) const {
     return this->virtual_worker_cores_.at(chip_id);
 }
 
-const std::unordered_set<CoreCoord>& Cluster::get_virtual_eth_cores(ChipId chip_id) const {
+const std::unordered_set<tt::tt_metal::CoreCoord>& Cluster::get_virtual_eth_cores(ChipId chip_id) const {
     return this->virtual_eth_cores_.at(chip_id);
 }
 
-CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(
-    ChipId chip_id, CoreCoord logical_coord, const CoreType& core_type) const {
+tt::tt_metal::CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(
+    ChipId chip_id, tt::tt_metal::CoreCoord logical_coord, const CoreType& core_type) const {
     // TBD: Remove when all WORKER are rewritten to TENSIX
     CoreType core_type_to_use = core_type;
     if (core_type_to_use == CoreType::WORKER) {
@@ -688,18 +688,18 @@ CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(
 tt_cxy_pair Cluster::get_virtual_coordinate_from_logical_coordinates(
     tt_cxy_pair logical_coordinate, const CoreType& core_type) const {
     auto xy_virtual_coord = this->get_virtual_coordinate_from_logical_coordinates(
-        logical_coordinate.chip, CoreCoord(logical_coordinate.x, logical_coordinate.y), core_type);
+        logical_coordinate.chip, tt::tt_metal::CoreCoord(logical_coordinate.x, logical_coordinate.y), core_type);
     return tt_cxy_pair(logical_coordinate.chip, xy_virtual_coord);
 }
-CoreCoord Cluster::get_virtual_coordinate_from_physical_coordinates(ChipId chip_id, CoreCoord physical_coord) const {
+tt::tt_metal::CoreCoord Cluster::get_virtual_coordinate_from_physical_coordinates(ChipId chip_id, tt::tt_metal::CoreCoord physical_coord) const {
     const auto& soc_desc = this->get_soc_desc(chip_id);
     tt::umd::CoreCoord translated_coord =
         soc_desc.translate_coord_to(physical_coord, CoordSystem::NOC0, CoordSystem::TRANSLATED);
     return {translated_coord.x, translated_coord.y};
 }
 
-CoreCoord Cluster::get_physical_coordinate_from_logical_coordinates(
-    ChipId chip_id, CoreCoord logical_coord, const CoreType& core_type, bool no_warn) const {
+tt::tt_metal::CoreCoord Cluster::get_physical_coordinate_from_logical_coordinates(
+    ChipId chip_id, tt::tt_metal::CoreCoord logical_coord, const CoreType& core_type, bool no_warn) const {
     if (!no_warn) {
         log_warning(
             tt::LogDevice,
@@ -710,7 +710,7 @@ CoreCoord Cluster::get_physical_coordinate_from_logical_coordinates(
     return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
 }
 
-CoreCoord Cluster::get_logical_ethernet_core_from_virtual(ChipId chip, CoreCoord core) const {
+tt::tt_metal::CoreCoord Cluster::get_logical_ethernet_core_from_virtual(ChipId chip, tt::tt_metal::CoreCoord core) const {
     tt::umd::CoreCoord logical_core =
         get_soc_desc(chip).translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
     return {logical_core.x, logical_core.y};
@@ -801,7 +801,7 @@ void Cluster::write_dram_vec(
         dram_view,
         desc_to_use.get_num_dram_views());
 
-    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view, tt_metal::NOC::NOC_0);
+    tt::tt_metal::CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view, tt_metal::NOC::NOC_0);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
     write_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
@@ -815,7 +815,7 @@ void Cluster::read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_i
         dram_view,
         desc_to_use.get_num_dram_views());
 
-    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view, tt_metal::NOC::NOC_0);
+    tt::tt_metal::CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view, tt_metal::NOC::NOC_0);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
     read_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
@@ -977,7 +977,7 @@ void Cluster::noc_multicast_write(
 }
 
 void Cluster::noc_multicast_write(
-    const void* mem_ptr, uint32_t sz_in_bytes, ChipId chip_id, CoreCoord core_start, CoreCoord core_end, uint64_t addr)
+    const void* mem_ptr, uint32_t sz_in_bytes, ChipId chip_id, tt::tt_metal::CoreCoord core_start, tt::tt_metal::CoreCoord core_end, uint64_t addr)
     const {
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
@@ -1104,9 +1104,9 @@ const std::unordered_set<ChipId>& Cluster::get_devices_controlled_by_mmio_device
     return llrt::get_devices_controlled_by_mmio_device(cluster_desc, mmio_device_id);
 }
 
-std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_grouped_by_connected_chips(
+std::unordered_map<ChipId, std::vector<tt::tt_metal::CoreCoord>> Cluster::get_ethernet_cores_grouped_by_connected_chips(
     ChipId chip_id) const {
-    std::unordered_map<ChipId, std::vector<CoreCoord>> connected_chips;
+    std::unordered_map<ChipId, std::vector<tt::tt_metal::CoreCoord>> connected_chips;
     const auto& all_eth_connections = this->get_cluster_desc()->get_ethernet_connections();
     if (!all_eth_connections.contains(chip_id)) {
         return {};
@@ -1114,7 +1114,7 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_g
     for (const auto& [eth_chan, connected_chip_chan] : all_eth_connections.at(chip_id)) {
         const auto& other_chip_id = std::get<0>(connected_chip_chan);
         if (!connected_chips.contains(other_chip_id)) {
-            std::vector<CoreCoord> active_ethernet_cores;
+            std::vector<tt::tt_metal::CoreCoord> active_ethernet_cores;
 
             for (const auto& channel_pair :
                  this->get_cluster_desc()->get_directly_connected_ethernet_channels_between_chips(chip_id, other_chip_id)) {
@@ -1364,8 +1364,8 @@ std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(
     return fabric_ethernet_channels;
 }
 
-std::vector<CoreCoord> Cluster::get_fabric_ethernet_routers_between_src_and_dest(ChipId src_id, ChipId dst_id) const {
-    std::vector<CoreCoord> fabric_ethernet_channels;
+std::vector<tt::tt_metal::CoreCoord> Cluster::get_fabric_ethernet_routers_between_src_and_dest(ChipId src_id, ChipId dst_id) const {
+    std::vector<tt::tt_metal::CoreCoord> fabric_ethernet_channels;
     const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(src_id);
     TT_FATAL(connected_chips.contains(dst_id), "Dst Chip {} is not connected to Src Chip {}", dst_id, src_id);
     for (const auto& eth_core : connected_chips.at(dst_id)) {
@@ -1376,13 +1376,13 @@ std::vector<CoreCoord> Cluster::get_fabric_ethernet_routers_between_src_and_dest
     return fabric_ethernet_channels;
 }
 
-bool Cluster::is_ethernet_link_up(ChipId chip_id, const CoreCoord& logical_core) const {
+bool Cluster::is_ethernet_link_up(ChipId chip_id, const tt::tt_metal::CoreCoord& logical_core) const {
     const auto& soc_desc = get_soc_desc(chip_id);
     EthernetChannel eth_chan = soc_desc.logical_eth_core_to_chan_map.at(logical_core);
     return this->get_cluster_desc()->ethernet_core_has_active_ethernet_link(chip_id, eth_chan);
 }
 
-std::tuple<ChipId, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<ChipId, CoreCoord> eth_core) const {
+std::tuple<ChipId, tt::tt_metal::CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<ChipId, tt::tt_metal::CoreCoord> eth_core) const {
     const auto& soc_desc = get_soc_desc(std::get<0>(eth_core));
     EthernetChannel eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
     TT_FATAL(
@@ -1405,8 +1405,8 @@ std::tuple<ChipId, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<Ch
 }
 
 // TODO: unify uint64_t with ChipUID
-std::tuple<uint64_t, CoreCoord> Cluster::get_connected_ethernet_core_to_remote_mmio_device(
-    std::tuple<ChipId, CoreCoord> eth_core) const {
+std::tuple<uint64_t, tt::tt_metal::CoreCoord> Cluster::get_connected_ethernet_core_to_remote_mmio_device(
+    std::tuple<ChipId, tt::tt_metal::CoreCoord> eth_core) const {
     const auto& soc_desc = get_soc_desc(std::get<0>(eth_core));
     EthernetChannel eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
     TT_FATAL(
@@ -1430,7 +1430,7 @@ std::tuple<uint64_t, CoreCoord> Cluster::get_connected_ethernet_core_to_remote_m
         soc_desc.get_eth_core_for_channel(std::get<1>(connected_eth_core), CoordSystem::LOGICAL));
 }
 
-std::vector<CoreCoord> Cluster::get_ethernet_sockets(ChipId local_chip, ChipId remote_chip) const {
+std::vector<tt::tt_metal::CoreCoord> Cluster::get_ethernet_sockets(ChipId local_chip, ChipId remote_chip) const {
     const auto& local_ethernet_sockets = this->ethernet_sockets_.at(local_chip);
     TT_FATAL(
         local_ethernet_sockets.contains(remote_chip),
@@ -1440,12 +1440,12 @@ std::vector<CoreCoord> Cluster::get_ethernet_sockets(ChipId local_chip, ChipId r
     return local_ethernet_sockets.at(remote_chip);
 }
 
-CoreCoord Cluster::ethernet_core_from_logical_core(ChipId chip_id, const CoreCoord& logical_core) const {
+tt::tt_metal::CoreCoord Cluster::ethernet_core_from_logical_core(ChipId chip_id, const tt::tt_metal::CoreCoord& logical_core) const {
     const metal_SocDescriptor& soc_desc = get_soc_desc(chip_id);
     return soc_desc.get_physical_ethernet_core_from_logical(logical_core);
 }
 
-CoreCoord Cluster::get_virtual_eth_core_from_channel(ChipId chip_id, int channel) const {
+tt::tt_metal::CoreCoord Cluster::get_virtual_eth_core_from_channel(ChipId chip_id, int channel) const {
     tt::umd::CoreCoord logical_coord =
         this->get_soc_desc(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
     return this->get_virtual_coordinate_from_logical_coordinates(
@@ -1528,7 +1528,7 @@ std::uint32_t Cluster::get_ubb_asic_id(ChipId physical_chip_id) const {
     return ((unique_chip_id >> 56) & 0xFF);
 }
 
-bool Cluster::is_external_cable(ChipId physical_chip_id, CoreCoord eth_core) const {
+bool Cluster::is_external_cable(ChipId physical_chip_id, tt::tt_metal::CoreCoord eth_core) const {
     auto chan_id = this->get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(eth_core);
     bool is_external_cable = false;
     auto board_type = this->get_board_type(physical_chip_id);
