@@ -159,6 +159,13 @@ scan time from 97.387 to 145.942 us and whole-layer latency from 0.85484 to
 0.90400 ms. Keep four independent DRAM readers/head; reducing bytes alone does
 not improve this synchronization-sensitive recurrence.
 
+The output gate retains its local whole-head ownership and BF16 producer
+precision through sigmoid. Its FP32 contract is applied by the consuming
+multiply, eliminating one conversion program/device and reducing traced layer
+latency from 0.85484 to 0.84802 ms. This does not justify any core or tensor
+redistribution; retain the 80-core prep, 16-core independent-reader scan, and
+8x8 output/Ring reduce-scatter map.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence

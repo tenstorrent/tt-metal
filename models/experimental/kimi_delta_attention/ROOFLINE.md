@@ -234,3 +234,18 @@ workers once per chunk. Against the matched no-sharing control, slowest-device
 scan time regressed 97.387 -> 145.942 us and whole-layer median critical path
 regressed 0.85484 -> 0.90400 ms. The synchronization and fan-out cost exceeds
 the avoided DRAM traffic; retain independent reads.
+
+## Mixed-dtype output-gate result
+
+Profile:
+`/tmp/kda_tp_layer_t640_mixed_gate_r10/reports/2026_07_23_11_49_38/ops_perf_results_2026_07_23_11_49_38.csv`.
+Keeping the sigmoid gate in BF16 and requesting FP32 at the consuming multiply
+removes the standalone BF16-to-FP32 conversion. Against the matched no-sharing
+control, the ten-replay median critical path falls 0.85484 -> 0.84802 ms
+(0.80%) and median active time falls 0.80034 -> 0.79339 ms/device.
+
+Across ten replays and eight devices, Typecast programs fall 240 -> 160.
+BinaryNg count remains 160, while its aggregate kernel time falls
+1.294 -> 1.151 ms. Mesh throughput is 69.82 TFLOP/s, or 5.74% of the
+eight-chip HiFi4 peak. This is a pointwise dataflow win; recurrence and
+collective ownership remain unchanged.

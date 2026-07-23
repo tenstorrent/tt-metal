@@ -357,8 +357,13 @@ class KimiDeltaAttention:
             epsilon=config.norm_eps,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        output_gate = ttnn.typecast(ttnn.sigmoid(output_gate), ttnn.float32)
-        output = ttnn.multiply(output, output_gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output_gate = ttnn.sigmoid(output_gate)
+        output = ttnn.multiply(
+            output,
+            output_gate,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         if head_major:
             output = ttnn.reshape(output, (batch, config.num_heads, sequence, config.head_v_dim))
             output = ttnn.experimental.nlp_concat_heads(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
