@@ -120,7 +120,8 @@ class StatsReporter:
                         [
                             k
                             for k in test_metadata.keys()
-                            if k not in standard_fields and k not in ("bandwidth_mode", "bandwidth_unit")
+                            if k not in standard_fields
+                            and k not in ("bandwidth_mode", "bandwidth_unit", "directory", "web_viewer_name")
                         ]
                     )
                     for field in optional_fields:
@@ -229,7 +230,8 @@ class StatsReporter:
                                 [
                                     k
                                     for k in test_metadata.keys()
-                                    if k not in standard_fields and k not in ("bandwidth_mode", "bandwidth_unit")
+                                    if k not in standard_fields
+                                    and k not in ("bandwidth_mode", "bandwidth_unit", "directory", "web_viewer_name")
                                 ]
                             )
                             for field in optional_fields:
