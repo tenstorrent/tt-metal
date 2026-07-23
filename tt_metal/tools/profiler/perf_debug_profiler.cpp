@@ -259,11 +259,32 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
     static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
     uint64_t dbg_iters = 0, dbg_pages = 0, dbg_emit = 0;
 
-    while (!stop_.load(std::memory_order_acquire)) {
+    // Drain-to-empty on stop: after stop_ is set (stop() sends the X280 P_STOP first, so it stops
+    // producing), keep reading until the socket has been empty for a sustained window instead of exiting
+    // on the first stop_ check -- otherwise the last in-flight markers (socket FIFO + host ring, ~the
+    // pipeline depth of zones per lane) are abandoned and the tail of the run is lost from the capture.
+    // A steady-clock deadline backstops the (shouldn't-happen) case where the socket never quiesces.
+    uint32_t quiesce = 0;
+    constexpr uint32_t kQuiesceEmpties = 200;  // ~10 ms sustained-empty at 50 us backoff => pipeline flushed
+    std::chrono::steady_clock::time_point drain_deadline{};
+    bool deadline_set = false;
+    while (true) {
+        const bool stopping = stop_.load(std::memory_order_acquire);
+        if (stopping && !deadline_set) {
+            drain_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            deadline_set = true;
+        }
         uint32_t np = sock->pages_available();
         if (np == 0) {
+            if (stopping && (++quiesce >= kQuiesceEmpties || std::chrono::steady_clock::now() >= drain_deadline)) {
+                break;  // stop signalled AND socket drained (or deadline) => pipeline flushed, exit
+            }
             std::this_thread::sleep_for(backoff);
             continue;
+        }
+        quiesce = 0;
+        if (stopping && std::chrono::steady_clock::now() >= drain_deadline) {
+            break;  // safety: socket still non-empty past the deadline (X280 not honoring P_STOP)
         }
         if (np >= fifo_pages) {
             np = fifo_pages - 1u;  // never read more than the FIFO holds (pages_available can spike)
