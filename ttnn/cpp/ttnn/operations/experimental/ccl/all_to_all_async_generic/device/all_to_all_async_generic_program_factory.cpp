@@ -80,6 +80,8 @@ AllToAllAsyncGenericProgram::create_at(
 
     uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
         tensor_args.input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
+    const uint32_t cluster_axis = operation_attributes.cluster_axis.value_or(0);
+    const auto sender_device_fabric_node_id = tensor_args.input_tensor.device()->get_fabric_node_id(mesh_coordinate);
 
     const std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
         tensor_args.input_tensor, mesh_coordinate, 1, operation_attributes.topology, operation_attributes.cluster_axis);
@@ -258,6 +260,9 @@ AllToAllAsyncGenericProgram::create_at(
         concat_num_tiles,                                      // concat_num_tiles
         (concat_num_half_tiles * device_index) / 2,            // full_block_offset
         static_cast<uint32_t>(operation_attributes.topology),  // topology
+        cluster_axis,                                          // replicate_axis
+        sender_device_fabric_node_id.chip_id,                  // source_chip_id
+        *sender_device_fabric_node_id.mesh_id,                 // source_mesh_id
         is_fabric_2d,                                          // is_fabric_2d
         fabric_direction_mask                                  // fabric_direction_mask
     };
@@ -336,7 +341,6 @@ AllToAllAsyncGenericProgram::create_at(
                 sender_writer_rt_args.push_back(std::abs(device_offset));
             }
         }
-        const auto sender_device_fabric_node_id = device->get_fabric_node_id(mesh_coordinate);
         if (is_fabric_2d) {
             // Append connections in the same {E, W, N, S} order as the compile-time direction mask.
             for (const auto& neighbor_coord : fabric_neighbors) {

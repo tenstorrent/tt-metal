@@ -29,8 +29,12 @@ constexpr uint32_t semaphore_expected_value = get_compile_time_arg_val(8);
 constexpr uint32_t concat_num_tiles = get_compile_time_arg_val(9);
 constexpr uint32_t full_block_offset = get_compile_time_arg_val(10);
 constexpr auto topology = static_cast<tt::tt_fabric::Topology>(get_compile_time_arg_val(11));
-constexpr bool is_fabric_2d = get_compile_time_arg_val(12);
-constexpr uint32_t fabric_direction_mask = get_compile_time_arg_val(13);
+constexpr auto replicate_axis =
+    static_cast<ttnn::operations::ccl::common::ReplicateGroup>(get_compile_time_arg_val(12));
+constexpr uint16_t source_chip_id = get_compile_time_arg_val(13);
+constexpr uint16_t source_mesh_id = get_compile_time_arg_val(14);
+constexpr bool is_fabric_2d = get_compile_time_arg_val(15);
+constexpr uint32_t fabric_direction_mask = get_compile_time_arg_val(16);
 constexpr uint32_t num_fabric_directions = 4;
 constexpr std::array<bool, num_fabric_directions> fabric_directions = {
     (fabric_direction_mask & (1 << 0)) != 0,
@@ -91,8 +95,8 @@ void send_initialization(
     Fabric2DConnections& fabric_connections,
     uint32_t core_id,
     uint32_t link_id,
-    uint32_t local_num_devices,
-    size_t device_offsets_idx,
+    [[maybe_unused]] uint32_t local_num_devices,
+    [[maybe_unused]] size_t device_offsets_idx,
     uint64_t init_semaphore_noc_addr_in_pkt,
     [[maybe_unused]] volatile PacketHeader* pkt_hdr_forward,
     [[maybe_unused]] volatile PacketHeader* pkt_hdr_backward,
@@ -102,33 +106,46 @@ void send_initialization(
     [[maybe_unused]] uint32_t packet_header_buffer_addr_backward,
     uint32_t packet_header_buffer_addr_sema_forward,
     uint32_t packet_header_buffer_addr_sema_backward) {
-    // A 1D hop-count multicast is not meaningful on FABRIC_2D. Have one worker send a
-    // point-to-point arrival to every peer, using the destination node encoded by the host.
+    using ttnn::operations::ccl::common::ReplicateGroup;
+    static_assert(Topology == tt::tt_fabric::Topology::Linear, "FABRIC_2D all-to-all requires Linear topology");
+    static_assert(
+        replicate_axis == ReplicateGroup::COLS || replicate_axis == ReplicateGroup::ROWS,
+        "FABRIC_2D all-to-all requires a concrete cluster axis");
+
     if (core_id != 0 || link_id != 0) {
         return;
     }
 
-    size_t barrier_idx = device_offsets_idx;
-    for (uint32_t did = 0; did < local_num_devices; ++did) {
-        const int32_t device_offset = get_arg_val<int32_t>(barrier_idx++);
-        barrier_idx += 2;  // block start/end
-        const ccl_routing_utils::line_unicast_route_info_t route_info = {
-            .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(barrier_idx++)),
-            .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(barrier_idx++))};
-        if (device_offset == 0) {
-            continue;
-        }
+    constexpr uint32_t positive_range = num_devices - current_device_id - 1;
+    constexpr uint32_t negative_range = current_device_id;
+    constexpr uint32_t positive_direction =
+        replicate_axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
+    constexpr uint32_t negative_direction =
+        replicate_axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
 
-        volatile PacketHeader* pkt_hdr = device_offset > 0 ? pkt_hdr_sema_forward : pkt_hdr_sema_backward;
-        pkt_hdr->to_noc_unicast_atomic_inc(
+    if constexpr (positive_range > 0) {
+        constexpr uint16_t east_range = replicate_axis == ReplicateGroup::ROWS ? positive_range : 0;
+        constexpr uint16_t south_range = replicate_axis == ReplicateGroup::COLS ? positive_range : 0;
+        tt::tt_fabric::fabric_set_mcast_route(
+            pkt_hdr_sema_forward, source_chip_id, source_mesh_id, east_range, 0, 0, south_range);
+        pkt_hdr_sema_forward->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_semaphore_noc_addr_in_pkt, 1});
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, route_info);
-        auto& connection =
-            fabric_connections[get_next_hop_router_direction(route_info.dst_mesh_id, route_info.dst_chip_id)];
+        auto& connection = fabric_connections[positive_direction];
         connection.wait_for_empty_write_slot();
         connection.send_payload_flush_blocking_from_address(
-            device_offset > 0 ? packet_header_buffer_addr_sema_forward : packet_header_buffer_addr_sema_backward,
-            sizeof(PacketHeader));
+            packet_header_buffer_addr_sema_forward, sizeof(PacketHeader));
+    }
+    if constexpr (negative_range > 0) {
+        constexpr uint16_t west_range = replicate_axis == ReplicateGroup::ROWS ? negative_range : 0;
+        constexpr uint16_t north_range = replicate_axis == ReplicateGroup::COLS ? negative_range : 0;
+        tt::tt_fabric::fabric_set_mcast_route(
+            pkt_hdr_sema_backward, source_chip_id, source_mesh_id, 0, west_range, north_range, 0);
+        pkt_hdr_sema_backward->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_semaphore_noc_addr_in_pkt, 1});
+        auto& connection = fabric_connections[negative_direction];
+        connection.wait_for_empty_write_slot();
+        connection.send_payload_flush_blocking_from_address(
+            packet_header_buffer_addr_sema_backward, sizeof(PacketHeader));
     }
 }
 
@@ -295,7 +312,7 @@ void kernel_main() {
     uint32_t sender_core_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t sender_core_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t local_num_devices = get_arg_val<uint32_t>(arg_idx++);
-    constexpr auto output_args = TensorAccessorArgs<14>();
+    constexpr auto output_args = TensorAccessorArgs<17>();
     auto output_addrgen = TensorAccessor(output_args, output_address);
     size_t device_offsets_idx = arg_idx;
     arg_idx += local_num_devices * 5;
