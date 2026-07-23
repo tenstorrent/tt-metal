@@ -320,7 +320,6 @@ extern "C" uint32_t _start1() {
                 // }
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
-                invalidate_l2_cache_range(kernel_config_base, MEM_KERNEL_CONFIG_SIZE);
 
                 // Initialize wait for kernels
                 for (uint32_t i = 0; i < MaxNumKernels; i++) {
@@ -442,7 +441,6 @@ extern "C" uint32_t _start1() {
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
         uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
-        invalidate_l2_cache_range(kernel_config_base, MEM_KERNEL_CONFIG_SIZE);
         int index = hartid;
 
         uintptr_t kernel_lma =

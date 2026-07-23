@@ -111,9 +111,7 @@ extern "C" uint32_t _start1() {
     } else {
         risc_init();
         // Host-populated bank tables live in cached TL1; drop stale L2 lines before the copy.
-        invalidate_l2_cache_range(MEM_BANK_TO_NOC_SCRATCH, MEM_BANK_TO_NOC_SIZE);
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
-        invalidate_l2_cache_range(MEM_BANK_TO_NOC_SCRATCH, MEM_BANK_TO_NOC_SIZE);
         thread_sync_init();
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
@@ -156,7 +154,6 @@ extern "C" uint32_t _start1() {
                 uint32_t enables = launch_msg_address->kernel_config.enables;
                 uintptr_t kernel_config_base =
                     firmware_config_init(mailboxes, ProgrammableCoreType::DISPATCH, hartid);
-                invalidate_l2_cache_range(kernel_config_base, MEM_DISPATCH_KERNEL_CONFIG_SIZE);
 
                 for (uint32_t i = 0; i < MaxNumKernels; i++) {
                     mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
@@ -223,7 +220,6 @@ extern "C" uint32_t _start1() {
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
         uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::DISPATCH, hartid);
-        invalidate_l2_cache_range(kernel_config_base, MEM_DISPATCH_KERNEL_CONFIG_SIZE);
         int index = hartid;
 
         uintptr_t kernel_lma = launch_msg->kernel_config.kernel_text_offset[index];

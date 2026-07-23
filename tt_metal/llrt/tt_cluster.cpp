@@ -691,7 +691,8 @@ tt::tt_metal::CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates
     }
 
     if (core_type == CoreType::DISPATCH) {
-        const CoreCoord noc0_coord = soc_desc.get_physical_dispatch_engine_core_from_logical(logical_coord);
+        const tt::tt_metal::CoreCoord noc0_coord =
+            soc_desc.get_physical_dispatch_engine_core_from_logical(logical_coord);
         tt::umd::CoreCoord translated_coord = soc_desc.translate_coord_to(
             {noc0_coord, CoreType::DISPATCH, CoordSystem::NOC0}, CoordSystem::TRANSLATED);
         return {translated_coord.x, translated_coord.y};
