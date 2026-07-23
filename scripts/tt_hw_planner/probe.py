@@ -70,6 +70,18 @@ PIPELINE_CATEGORY = {
 
 TRANSFORMER_CATEGORIES = {"LLM", "VLM", "STT", "Embed"}
 
+_AMBIGUOUS_PIPELINE_TAGS = {"text-to-audio", "audio-to-audio"}
+
+
+def _is_low_confidence_category(
+    pipeline_tag: Optional[str], model_type_category: Optional[str], arch_changed: bool = False
+) -> bool:
+    """A category is low-confidence when it was derived from an AMBIGUOUS pipeline_tag
+    (e.g. ``text-to-audio`` spans TTS AND music/audio-generation) with no authoritative
+    model_type or architecture signal confirming it. Clean tags (text-generation,
+    text-to-speech, ...) are reliable and never flagged."""
+    return bool(pipeline_tag in _AMBIGUOUS_PIPELINE_TAGS and not model_type_category and not arch_changed)
+
 
 VISION_ONLY_MODEL_TYPES = {
     "sam",
@@ -474,6 +486,12 @@ def _probe_local_model(model_id: str) -> ModelProbe:
         bytes_per_param_on_disk=bytes_per_param,
         raw_config=cfg,
     )
+    if _is_low_confidence_category(pipeline_tag, model_type_category):
+        probe.flags.append(
+            f"LOW-CONFIDENCE category {category!r}: inferred from the AMBIGUOUS pipeline_tag "
+            f"{pipeline_tag!r} with no recognized model_type/architectures — verify. "
+            f"('text-to-audio' spans text-to-speech AND music/audio-generation.)"
+        )
     return probe
 
 
@@ -568,11 +586,20 @@ def probe_model(model_id: str) -> ModelProbe:
         probe.category = model_type_category
 
     _arch_cat = _arch_override_category(probe.category, cfg)
-    if _arch_cat != probe.category:
+    _arch_changed = _arch_cat != probe.category
+    if _arch_changed:
         probe.flags.append(
             f"Reclassified {probe.category} to {_arch_cat} via " f"config.architectures={cfg.get('architectures')!r}"
         )
         probe.category = _arch_cat
+
+    if _is_low_confidence_category(probe.pipeline_tag, model_type_category, _arch_changed):
+        probe.flags.append(
+            f"LOW-CONFIDENCE category {probe.category!r}: inferred from the AMBIGUOUS pipeline_tag "
+            f"{probe.pipeline_tag!r} with no recognized model_type/architectures — verify. "
+            f"('text-to-audio' spans BOTH text-to-speech and music/audio-generation; sibling "
+            f"routing uses the module-tree fingerprint, so a diffusion/DiT trunk still routes correctly.)"
+        )
 
     if probe.category not in TRANSFORMER_CATEGORIES:
         probe.config_status = None

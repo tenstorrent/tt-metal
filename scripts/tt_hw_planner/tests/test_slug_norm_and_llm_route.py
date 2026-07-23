@@ -152,6 +152,18 @@ def test_cross_category_pipeline_tag_does_not_override_real_category():
     assert q2 == "pipeline", f"Unknown-category escape hatch must still allow cross-category pipeline, got {q2}"
 
 
+def test_low_confidence_category_only_for_ambiguous_tags():
+    # issue #8: a config-less music model (text-to-audio) is flagged low-confidence, but
+    # clean tags (text-generation, text-to-speech) and model_type/arch-confirmed models are not.
+    from scripts.tt_hw_planner.probe import _is_low_confidence_category
+
+    assert _is_low_confidence_category("text-to-audio", None, False) is True  # ACE-Step
+    assert _is_low_confidence_category("text-generation", None, False) is False  # DeepSeek (clean)
+    assert _is_low_confidence_category("text-to-speech", None, False) is False  # Kokoro (real TTS)
+    assert _is_low_confidence_category("text-to-audio", "TTS", False) is False  # model_type confirms
+    assert _is_low_confidence_category("text-to-audio", None, True) is False  # arch confirms
+
+
 def test_xtts_v2_is_in_tts_bucket():
     from scripts.tt_hw_planner.family_backends import backends_for_category
 
