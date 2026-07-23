@@ -12,6 +12,7 @@
 #include <string_view>
 #include <unordered_map>
 
+#include <hostdevcommon/sem_scope.h>
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
 #include "api/tt-metalium/device.hpp"
@@ -92,8 +93,15 @@ KernelHandle CreateKernelFromString(
 
 // Metal 2.0: DFB accessor names -> logical DFB ids
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, uint16_t>;
-// Metal 2.0: semaphore accessor names -> semaphore ids
-using SemaphoreBindingHandleMap = std::unordered_map<std::string, uint16_t>;
+// Metal 2.0: semaphore accessor handle -> {semaphore id, host-baked physical scope}.
+// The scope is resolved by the host (ResolveSemaphoreScope) and baked into the kernel via the
+// emitted SemAccessor<id, scope> token so the kernel's Semaphore picks the mechanism via CTAD.
+struct SemaphoreBindingHandle {
+    uint16_t id = 0;
+    SemScope scope = SemScope::LOCAL_NONATOMIC;
+};
+// Metal 2.0: semaphore accessor names -> {semaphore id, scope}
+using SemaphoreBindingHandleMap = std::unordered_map<std::string, SemaphoreBindingHandle>;
 
 // Metal 2.0: per-kernel resolved TensorBinding.
 // Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
@@ -221,7 +229,7 @@ public:
     void process_dataflow_buffer_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
     void process_semaphore_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const override;
+        std::function<void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope)>) const override;
     void process_tensor_binding_handles(std::function<void(
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,

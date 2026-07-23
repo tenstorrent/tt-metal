@@ -13,6 +13,8 @@
 #include <utility>
 #include <vector>
 
+#include <hostdevcommon/sem_scope.h>
+
 namespace tt::tt_metal {
 
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
@@ -99,7 +101,7 @@ public:
     virtual void process_dataflow_buffer_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
     virtual void process_semaphore_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
+        std::function<void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope)>) const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace
