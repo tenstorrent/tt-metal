@@ -172,7 +172,8 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
         for _m in mods:
             try:
                 (
-                    Path(tempfile.gettempdir()) / ("perf_mcp_orig_baseline_%s_%s.json" % (Path(demo_dir).name, _m))
+                    Path(tempfile.gettempdir())
+                    / ("perf_mcp_orig_baseline_%s_%s.json" % (Path(demo_dir).name, _m))
                 ).unlink()
             except OSError:
                 pass
@@ -210,7 +211,15 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
         os.environ["PERF_MCP_REPORT_INDEX"] = idx
         os.environ["PERF_MCP_TASK"] = m
         _shard_snap = Path(demo_dir) / "_stubs" / ("%s.py.last_good_sharded" % m)
-        _tp = int(os.environ.get("TT_PERF_MESH_COLS") or os.environ.get("TT_HW_PLANNER_SHARD_TP") or "1")
+        _tp = 0
+        try:
+            _mani = Path(demo_dir) / "parallelism_manifest.json"
+            if _mani.is_file():
+                _tp = int(json.loads(_mani.read_text()).get("tp") or 0)
+        except Exception:
+            _tp = 0
+        if _tp <= 1:
+            _tp = int(os.environ.get("TT_PERF_MESH_COLS") or os.environ.get("TT_HW_PLANNER_SHARD_TP") or "1")
         os.environ["TT_PERF_SHARD_DEGREE"] = str(_tp if (_shard_snap.is_file() and _tp > 1) else 1)
         try:
             result = run_cc(
