@@ -376,10 +376,8 @@ inline void cache_exponential_section_sizes_in_gprs(const std::uint32_t num_face
 
     if constexpr (!reconfiguring)
     {
-        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = bfp_exp_section_size(2 /* index */, bfp8_row_bytes, num_faces)
-                                                  << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = bfp_exp_section_size(3 /* index */, bfp8_row_bytes, num_faces)
-                                                  << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = bfp_exp_section_size(2 /* index */, bfp8_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = bfp_exp_section_size(3 /* index */, bfp8_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
     }
 
     regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP4] = bfp_exp_section_size(1 /* index */, bfp4_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
@@ -887,8 +885,6 @@ inline void program_packer_destination(std::uint32_t addr, bool restore = true)
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim, bool diagonal = false, std::uint32_t row_num_datums = TILE_C_DIM>
 inline void program_packer_untilized_destination(const std::uint32_t addr, const std::uint32_t pack_dst_format)
 {
-    LLK_ASSERT(is_valid_L1_address(addr), "L1 address must be in valid L1 memory region");
-
     if constexpr (diagonal)
     {
         // Diagonal untilize drives only packers 0 and 1; the offset2/offset3 + packer-2/3 (SEC1) lines below are
@@ -898,6 +894,10 @@ inline void program_packer_untilized_destination(const std::uint32_t addr, const
         const std::uint32_t offset1     = (1 * block_size) / 16;
         // const uint32_t offset2 = (2*block_size)/16;
         // const uint32_t offset3 = (3*block_size)/16;
+
+        // Packers 0 and 1 write to addr + offset0 (base) and addr + offset1; validate the whole burst, not
+        // just the base.
+        LLK_ASSERT_L1_RANGE_BASE_LAST(addr, addr + offset1, "L1 packer destination range must be in valid L1 memory region");
 
         TT_SETDMAREG(0, LOWER_HALFWORD(addr + offset0), 0, LO_16(p_gpr_pack::OUTPUT_ADDR + 0));
         TT_SETDMAREG(0, UPPER_HALFWORD(addr + offset0), 0, HI_16(p_gpr_pack::OUTPUT_ADDR + 0));
@@ -923,6 +923,9 @@ inline void program_packer_untilized_destination(const std::uint32_t addr, const
         const std::uint32_t offset1     = (1 * row_num_datums * block_size) / 16 / TILE_C_DIM;
         const std::uint32_t offset2     = (2 * row_num_datums * block_size) / 16 / TILE_C_DIM;
         const std::uint32_t offset3     = (3 * row_num_datums * block_size) / 16 / TILE_C_DIM;
+
+        // The four packers write to addr + offset0 (base) up through addr + offset3; validate the whole burst.
+        LLK_ASSERT_L1_RANGE_BASE_LAST(addr, addr + offset3, "L1 packer destination range must be in valid L1 memory region");
 
         TT_SETDMAREG(0, LOWER_HALFWORD(addr + offset0), 0, LO_16(p_gpr_pack::OUTPUT_ADDR + 0));
         TT_SETDMAREG(0, UPPER_HALFWORD(addr + offset0), 0, HI_16(p_gpr_pack::OUTPUT_ADDR + 0));
