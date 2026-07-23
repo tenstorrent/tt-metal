@@ -3,6 +3,12 @@ name: "LLK perf impl"
 
 on:
   workflow_call:
+    inputs:
+      architecture:
+        description: "Architecture to run: all, wormhole, or blackhole"
+        required: false
+        default: all
+        type: string
 
 permissions:
   checks: write
@@ -45,11 +51,30 @@ jobs:
             "perf"
       - name: Build test matrix
         id: build-matrix
+        env:
+          ARCHITECTURE: ${{ inputs.architecture }}
         run: |
+          case "$ARCHITECTURE" in
+            all)
+              SKU_ALLOWLIST_ARGS=()
+              ;;
+            wormhole)
+              SKU_ALLOWLIST_ARGS=(--sku-allowlist "wh_n150_civ2")
+              ;;
+            blackhole)
+              SKU_ALLOWLIST_ARGS=(--sku-allowlist "bh_p150b_civ2")
+              ;;
+            *)
+              echo "::error::Unsupported architecture '$ARCHITECTURE'"
+              exit 1
+              ;;
+          esac
+
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "ALL_SKUS_IN_TESTS" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            "${SKU_ALLOWLIST_ARGS[@]}"
 
   llk-perf-exec:
     needs: [load-test-matrix, build-images]
