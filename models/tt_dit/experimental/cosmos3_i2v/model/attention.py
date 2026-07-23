@@ -254,9 +254,13 @@ class Cosmos3JointAttention(Module):
         # class as the trunk's linears, which already use get_matmul_core_grid.
         grid = get_matmul_core_grid(mesh_device)
         # Chunk sizes tile the SDPA over the query/KV sequence; larger chunks trade L1
-        # footprint for fewer iterations. Overridable to sweep throughput at 189f/720p.
-        self.sdpa_q_chunk_size = int(os.environ.get("TT_COSMOS3_SDPA_Q_CHUNK", "128"))
-        self.sdpa_k_chunk_size = int(os.environ.get("TT_COSMOS3_SDPA_K_CHUNK", "128"))
+        # footprint for fewer iterations. 256/384 is ~9% faster end-to-end than 128/128
+        # at 720p/189f (the large-sequence regime where the fewer-iterations win outweighs
+        # the coarser padding); q=512 overflows L1. These defaults are tuned for that
+        # regime — small shapes (T2I / low-frame) may prefer 128 via the env overrides,
+        # since k_chunk also sets the N_gen padding granularity (k_chunk * sp_factor).
+        self.sdpa_q_chunk_size = int(os.environ.get("TT_COSMOS3_SDPA_Q_CHUNK", "256"))
+        self.sdpa_k_chunk_size = int(os.environ.get("TT_COSMOS3_SDPA_K_CHUNK", "384"))
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid,
             q_chunk_size=self.sdpa_q_chunk_size,
