@@ -18,6 +18,15 @@ import torch.nn.functional as F
 
 from .rms_norm import HunyuanRMSNorm
 from .rope_2d import apply_rotary_pos_emb, build_batch_2d_rope
+from models.experimental.hunyuan_image_3_0.ref.model_config import (
+    ATTENTION_HEAD_DIM,
+    HIDDEN_SIZE,
+    MAX_POSITION_EMBEDDINGS,
+    NUM_ATTENTION_HEADS,
+    NUM_KEY_VALUE_HEADS,
+    RMS_NORM_EPS,
+    ROPE_THETA,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -65,17 +74,17 @@ class AttentionConfig:
 
     def __init__(
         self,
-        hidden_size: int = 4096,
-        num_attention_heads: int = 32,
-        attention_head_dim: int = 128,
-        num_key_value_heads: int = 8,
+        hidden_size: int = HIDDEN_SIZE,
+        num_attention_heads: int = NUM_ATTENTION_HEADS,
+        attention_head_dim: int = ATTENTION_HEAD_DIM,
+        num_key_value_heads: int = NUM_KEY_VALUE_HEADS,
         use_qk_norm: bool = True,
         use_rotary_pos_emb: bool = True,
-        rms_norm_eps: float = 1e-6,
+        rms_norm_eps: float = RMS_NORM_EPS,
         attention_bias: bool = False,
         attention_dropout: float = 0.0,
-        max_position_embeddings: int = 2048,
-        rope_theta: float = 10000.0,
+        max_position_embeddings: int = MAX_POSITION_EMBEDDINGS,
+        rope_theta: float = ROPE_THETA,
     ):
         self.hidden_size = hidden_size
         self.num_attention_heads = num_attention_heads
@@ -276,14 +285,7 @@ def build_hunyuan_mixed_mask(
 if __name__ == "__main__":
     torch.manual_seed(7)
     B, S = 1, 256
-    cfg = AttentionConfig(
-        hidden_size=4096,
-        num_attention_heads=32,
-        attention_head_dim=128,
-        num_key_value_heads=8,
-        use_qk_norm=True,
-        use_rotary_pos_emb=True,
-    )
+    cfg = AttentionConfig()
     model = HunyuanImage3SDPAAttention(cfg).eval()
 
     x = torch.randn(B, S, cfg.hidden_size, dtype=torch.bfloat16)

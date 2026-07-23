@@ -386,8 +386,14 @@ class UNetUp(nn.Module):
 # Quick numeric smoke-test
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    from models.experimental.hunyuan_image_3_0.ref.model_config import (
+        HIDDEN_SIZE,
+        PATCH_EMBED_HIDDEN_CHANNELS,
+        VAE_LATENT_CHANNELS,
+    )
+
     torch.manual_seed(0)
-    PATCH, LATENT, HID, HSZ = 1, 32, 1024, 4096
+    PATCH, LATENT, HID, HSZ = 1, VAE_LATENT_CHANNELS, PATCH_EMBED_HIDDEN_CHANNELS, HIDDEN_SIZE
     H = W = 8
     down = UNetDown(PATCH, LATENT, HSZ, HID, HSZ).eval()
     up = UNetUp(PATCH, HSZ, HSZ, HID, LATENT, out_norm=True).eval()

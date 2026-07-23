@@ -13,6 +13,7 @@ from models.experimental.hunyuan_image_3_0.ref.vae.decoder import (
     LATENT_H,
     LATENT_T,
     LATENT_W,
+    MID_CHANNELS,
     NUM_GROUPS,
     NUM_RES_BLOCKS,
     OUT_CHANNELS,
@@ -340,8 +341,6 @@ class ResnetBlockTTNN(Module):
 class AttnBlockTTNN(Module):
     """GroupNorm3D + fused QKV linear + SDPA + proj linear + residual."""
 
-    ATTN_SCALE = 1.0 / math.sqrt(1024)
-
     def __init__(
         self,
         channels: int,
@@ -357,6 +356,7 @@ class AttnBlockTTNN(Module):
         self.mesh_device = mesh_device
         self.dtype = dtype
         self.spatial = h * w
+        self.ATTN_SCALE = 1.0 / math.sqrt(channels)
 
         self.norm = GroupNorm3D(
             num_channels=channels,
@@ -443,9 +443,9 @@ class MidBlockTTNN(Module):
         self.mesh_device = mesh_device
         self.dtype = dtype
 
-        self.block_1 = ResnetBlockTTNN(1024, 1024, mesh_device, dtype=dtype, t=t, h=h, w=w)
-        self.attn_1 = AttnBlockTTNN(1024, mesh_device, dtype=dtype, t=t, h=h, w=w)
-        self.block_2 = ResnetBlockTTNN(1024, 1024, mesh_device, dtype=dtype, t=t, h=h, w=w)
+        self.block_1 = ResnetBlockTTNN(MID_CHANNELS, MID_CHANNELS, mesh_device, dtype=dtype, t=t, h=h, w=w)
+        self.attn_1 = AttnBlockTTNN(MID_CHANNELS, mesh_device, dtype=dtype, t=t, h=h, w=w)
+        self.block_2 = ResnetBlockTTNN(MID_CHANNELS, MID_CHANNELS, mesh_device, dtype=dtype, t=t, h=h, w=w)
         init_mid_block_weights(self)
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:

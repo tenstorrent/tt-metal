@@ -81,6 +81,14 @@ import ttnn
 from models.tt_dit.parallel.manager import CCLManager
 from models.experimental.hunyuan_image_3_0.ref.attention.mask import build_attention_mask, to_additive
 from models.experimental.hunyuan_image_3_0.ref.vae.decoder import Z_CHANNELS
+from models.experimental.hunyuan_image_3_0.ref.model_config import (
+    PRODUCTION_LATENT_GRID,
+    PRODUCTION_TEXT_POST,
+    PRODUCTION_TEXT_PRE,
+    VAE_SCALING_FACTOR,
+    load_config,
+    transformer_cfg,
+)
 from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel, default_bf16_layers
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
 from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
@@ -94,9 +102,9 @@ from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtSchedule
 from models.experimental.hunyuan_image_3_0.ref.image_gen.model_loaders import load_timestep_embedder
 
 B = 1
-GRID = int(os.environ.get("HY_GRID", "64"))
-TEXT_PRE = int(os.environ.get("HY_TEXT_PRE", "32"))
-TEXT_POST = int(os.environ.get("HY_TEXT_POST", "32"))
+GRID = int(os.environ.get("HY_GRID", str(PRODUCTION_LATENT_GRID)))
+TEXT_PRE = int(os.environ.get("HY_TEXT_PRE", str(PRODUCTION_TEXT_PRE)))
+TEXT_POST = int(os.environ.get("HY_TEXT_POST", str(PRODUCTION_TEXT_POST)))
 N_IMG = GRID * GRID
 S = TEXT_PRE + N_IMG + TEXT_POST
 IMG_START = TEXT_PRE
@@ -114,7 +122,7 @@ GUIDANCE = float(os.environ.get("HY_GUIDANCE", "1.0"))
 # >1 enables CFG on the base path; set 1.0 to run a single unguided pass. Unused by
 # the distil path (which uses the guidance TOKEN at cfg_factor=1 instead).
 BASE_GUIDANCE = float(os.environ.get("HY_BASE_GUIDANCE", "5.0"))
-SCALING = 0.562679178327931  # config.json vae.scaling_factor
+SCALING = VAE_SCALING_FACTOR  # config.json vae.scaling_factor
 OUT_PNG = os.environ.get("HY_OUT", "hy_e2e.png")
 
 
@@ -138,23 +146,7 @@ def _load_prefix(prefix):
 
 
 def _cfg():
-    cfg = json.load(open(f"{WEIGHTS}/config.json"))
-    first = lambda v: v if isinstance(v, int) else v[0]
-    return dict(
-        H=cfg["hidden_size"],
-        HEADS=cfg["num_attention_heads"],
-        KV=cfg.get("num_key_value_heads", cfg["num_attention_heads"]),
-        HD=cfg.get("attention_head_dim", cfg["hidden_size"] // cfg["num_attention_heads"]),
-        E=first(cfg["num_experts"]),
-        K=first(cfg["moe_topk"]),
-        INTER=first(cfg["moe_intermediate_size"]),
-        SHARED=first(cfg["num_shared_expert"]),
-        NORM=cfg.get("norm_topk_prob", True),
-        MIXED=cfg.get("use_mixed_mlp_moe", True),
-        QKN=cfg.get("use_qk_norm", True),
-        EPS=cfg.get("rms_norm_eps", 1e-5),
-        MAX_SEQ=int(cfg["max_position_embeddings"]),
-    )
+    return transformer_cfg(load_config(WEIGHTS))
 
 
 def _pe_dims(down_sd):
@@ -168,7 +160,7 @@ def _model_flags():
 
     Base T2I returns (False, False) — the existing text_pre/text_post denoise path.
     Instruct/Distil enable the per-step guidance / timestep_r continuous-token scatter."""
-    cfg = json.load(open(f"{WEIGHTS}/config.json"))
+    cfg = load_config(WEIGHTS)
     return bool(cfg.get("cfg_distilled", False)), bool(cfg.get("use_meanflow", False))
 
 

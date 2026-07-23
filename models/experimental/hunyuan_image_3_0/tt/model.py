@@ -31,12 +31,15 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+from models.experimental.hunyuan_image_3_0.ref.model_config import BACKBONE_KWARGS
 from models.experimental.hunyuan_image_3_0.ref.weights import load_tensors, resolve_base_model_dir
 
 from .transformer_layer import HunyuanTtDecoderLayer
 from .attention.rms_norm import HunyuanTtRMSNorm
 from .parallel_utils import resid_mem_config, sp_gather, sp_shard
 from .cache import cache_file, resolve_transformer_cache
+
+_BD = BACKBONE_KWARGS
 
 
 def _disk_expert_loader(layer_idx: int, moe_prefix: str):
@@ -77,17 +80,17 @@ class HunyuanTtModel(LightweightModule):
         self,
         device,
         *,
-        num_layers: int = 32,
-        hidden_size: int = 4096,
-        num_heads: int = 32,
-        num_kv_heads: int = 8,
-        head_dim: int = 128,
-        num_experts: int = 64,
-        moe_topk: int = 8,
-        use_qk_norm: bool = True,
-        use_mixed_mlp_moe: bool = True,
-        norm_topk_prob: bool = True,
-        rms_norm_eps: float = 1e-5,
+        num_layers: int = _BD["num_layers"],
+        hidden_size: int = _BD["hidden_size"],
+        num_heads: int = _BD["num_heads"],
+        num_kv_heads: int = _BD["num_kv_heads"],
+        head_dim: int = _BD["head_dim"],
+        num_experts: int = _BD["num_experts"],
+        moe_topk: int = _BD["moe_topk"],
+        use_qk_norm: bool = _BD["use_qk_norm"],
+        use_mixed_mlp_moe: bool = _BD["use_mixed_mlp_moe"],
+        norm_topk_prob: bool = _BD["norm_topk_prob"],
+        rms_norm_eps: float = _BD["rms_norm_eps"],
         weight_dtype=ttnn.bfloat16,
         stream_experts: bool = True,
         layer_loader=None,

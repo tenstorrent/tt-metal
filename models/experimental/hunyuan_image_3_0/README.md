@@ -2,6 +2,16 @@
 
 Experimental TTNN port of [Tencent HunyuanImage-3.0](https://huggingface.co/tencent/HunyuanImage-3.0).
 
+## Model configuration
+
+Dims and shapes come from checkpoint / bundled `config.json` via
+[`ref/model_config.py`](ref/model_config.py) — import `transformer_cfg`,
+`backbone_kwargs`, `VAE_SCALING_FACTOR`, `VIT_CONFIG`, `IMAGE_BASE_SIZE`,
+`PRODUCTION_LATENT_GRID`, `PRODUCTION_SEQ`, `PATCH_EMBED_HIDDEN_CHANNELS`, etc.
+instead of hardcoding `4096` / `32` / VAE scaling. TT constructors and demos
+default from those helpers; tests re-export the same loaders through
+`tests/pcc/pcc_common.py`.
+
 ## Tokenizer
 
 Host-side tokenizer code and assets live under `ref/tokenizer/`:
@@ -10,6 +20,7 @@ Host-side tokenizer code and assets live under `ref/tokenizer/`:
 |------|-------------|
 | `ref/tokenizer/hunyuan_tokenizer.py` | Public API (`HunyuanTokenizer`) |
 | `ref/tokenizer/gen_image_inputs.py` | Host preprocess bundle for device upload |
+| `ref/model_config.py` | Centralized dims from `config.json` (backbone / VAE / ViT) |
 | `ref/tokenizer/assets/config.json` | Model config used by the tokenizer stack |
 | `ref/tokenizer/assets/tokenizer_config.json` | HF tokenizer config |
 | `ref/tokenizer/assets/tokenizer.json` | BPE vocab (~24 MB; not in git) |
@@ -106,7 +117,7 @@ Optional AR recaption (`HY_RECAPTION=1`) rewrites the prompt via the text-sampli
 | `HY_BOT_TASK` | `recaption` | `recaption` / `think` / `think_recaption` |
 | `HY_MAX_NEW_TOKENS` | `512` | AR token budget — caps recaption latency |
 | `HY_TEMPERATURE` | `0.6` | sampling temperature |
-| `HY_TOP_K` | `1024` | top-k filter (0 disables) |
+| `HY_TOP_K` / `HY_TOPK` | (Instruct) | top-k filter; see also rows below — **`=32` → device ttnn topk** |
 | `HY_TOP_P` | `0.95` | nucleus top-p (1.0 disables) |
 | `HY_REP_PENALTY` | `1.0` | repetition penalty (1.0 disables) |
 | `HY_DO_SAMPLE` | `1` | `0` = greedy argmax |
@@ -119,9 +130,9 @@ Optional AR recaption (`HY_RECAPTION=1`) rewrites the prompt via the text-sampli
 | `HY_RECAPTION_KV` | `1` | `0` disables KV incremental decode on recaption path (required for recaption trace) |
 | `HY_RECAPTION_PREFILL_CHUNK` | `1024` | Chunk size for long-prefix KV prefill (`0` = one shot) |
 | `HY_KEEP_BACKBONE` | `1` | I2I: cache cond VAE/ViT tokens on host and **reuse** the resident backbone for denoise (skip ~140s reload). `0` = old free/rebuild sandwich |
-| `HY_DEVICE_SAMPLING` | `0` | `1` = device-logits AR. **Default:** D2H full-V → host ``topk`` (Instruct ``top_k``, e.g. **1024**) → host shortlist multinomial. Opt-in ``HY_TTNN_SAMPLING_OP=1`` for pure ``ttnn.topk``+``ttnn.sampling`` (k capped at 32). Falls back to host generate for stage-force / ratio / rep-penalty / greedy |
-| `HY_TTNN_SAMPLING_OP` | `0` | `1` = pure ``ttnn.topk`` + ``ttnn.sampling`` under `HY_DEVICE_SAMPLING` (k≤32; often empty/quad Instruct cot today) |
-| `HY_TOP_K` | (Instruct cfg) | Override sampling top-k. Host shortlist uses this value as-is; only the ``HY_TTNN_SAMPLING_OP=1`` path clamps to ≤32 |
+| `HY_DEVICE_SAMPLING` | `1` | Device-logits AR (**default on**). Alias: `HY_SAMPLE_DEVICE`. `0` = host generate on torch logits. Default sample step: D2H → host ``topk`` (Instruct k, e.g. **1024**) → host multinomial. Falls back to host generate for stage-force / ratio / rep-penalty / greedy |
+| `HY_TOP_K` / `HY_TOPK` | (Instruct cfg) | Override sampling top-k. **`=32`** selects on-device ``ttnn.topk`` + ``ttnn.sampling``; any other value keeps host torch shortlist under device logits |
+| `HY_TTNN_SAMPLING_OP` | `0` | `1` = force pure ``ttnn.topk`` + ``ttnn.sampling`` (same as `HY_TOP_K=32`; k capped ≤32) |
 | `HY_LATENT_RESIDENT` | `1` | `1` = keep DiT latent on device between steps (TILE flat; Euler on device; one final D2H for VAE). `0` = legacy per-step ``to_torch``/``from_torch`` hops (debug) |
 | `HY_SEED` | `0` (T2I) / `42` (I2I) | Seed for on-device ``ttnn.randn`` init noise (demos) and AR sampling. Host ``torch.randn`` only for ``HY_DIT_HOST`` / ``HY_TORCH_BACKBONE`` |
 

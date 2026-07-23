@@ -15,6 +15,7 @@ import torch
 import ttnn
 
 from models.experimental.hunyuan_image_3_0.ref.cond_vae_encode import prepare_vae_encode_input
+from models.experimental.hunyuan_image_3_0.ref.model_config import IMAGE_BASE_SIZE, VAE_SCALING_FACTOR, VIT_CONFIG
 from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import (
     GenImageHostInputs,
     enrich_bundle_attention,
@@ -119,7 +120,7 @@ def build_cond_encode_cache_tt(
         raise ValueError("build_cond_encode_cache_tt requires at least one cond image")
 
     if vae_scaling_factor is None:
-        vae_scaling_factor = 0.562679178327931
+        vae_scaling_factor = VAE_SCALING_FACTOR
 
     enc = encode_cond_images_tt(
         mesh_device,
@@ -315,7 +316,7 @@ def load_tt_vision_stack(
     vision_state_dict: dict,
     aligner_state_dict: dict,
     *,
-    num_layers: int = 27,
+    num_layers: int = VIT_CONFIG["num_hidden_layers"],
     weight_dtype=ttnn.bfloat16,
 ) -> tuple[HunyuanTtSiglip2Vision, HunyuanTtLightProjector]:
     vision_sd = _filter_vision_state_dict(vision_state_dict, num_layers)
@@ -545,7 +546,7 @@ def encode_cond_images_tt(
         return CondVaeEncodeTT(cond_vae_images=None, cond_timesteps=None)
 
     if scaling_factor is None:
-        scaling_factor = 0.562679178327931
+        scaling_factor = VAE_SCALING_FACTOR
 
     batch_latents: list[list[ttnn.Tensor]] = []
     batch_t: list[list[torch.Tensor]] = []
@@ -707,7 +708,7 @@ def build_i2i_inputs_embeds_tt(
         raise ValueError("build_i2i_inputs_embeds_tt requires vae_image_mask on the bundle")
 
     if vae_scaling_factor is None:
-        vae_scaling_factor = 0.562679178327931
+        vae_scaling_factor = VAE_SCALING_FACTOR
 
     hidden_tt = wte_tt.embed(bundle.input_ids)
 
@@ -860,7 +861,7 @@ def prepare_i2i_denoise_bundle_tt(
     cond_patch_embed: HunyuanTtUNetDown,
     cond_time_embed: HunyuanTtTimestepEmbedder,
     cond_timestep_emb: HunyuanTtTimestepEmbedder,
-    image_size: str | int | tuple[int, int] | list[int] = 1024,
+    image_size: str | int | tuple[int, int] | list[int] = IMAGE_BASE_SIZE,
     cfg_factor: int | None = None,
     sequence_template: str | None = None,
     system_prompt: str | None = None,

@@ -25,6 +25,7 @@ from models.experimental.hunyuan_image_3_0.ref.attention.rope_2d import build_ba
 from models.experimental.hunyuan_image_3_0.ref.image_gen.patch_embed import UNetDown as RefDown, UNetUp as RefUp
 from models.experimental.hunyuan_image_3_0.ref.image_gen.timestep_embedder import TimestepEmbedder as RefTimeEmbed
 from models.experimental.hunyuan_image_3_0.ref.image_processor import HunyuanImage3ImageProcessor
+from models.experimental.hunyuan_image_3_0.ref.model_config import IMAGE_BASE_SIZE, load_config, transformer_cfg
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import (
     HunyuanTokenizer,
     build_i2i_cfg_conds,
@@ -35,7 +36,7 @@ from models.experimental.hunyuan_image_3_0.ref.transformer_layer import HunyuanI
 from models.experimental.hunyuan_image_3_0.ref.weights import INSTRUCT_MODEL_DIR, MODEL_DIR
 
 PROMPT = "a cat on a mat"
-I2I_IMAGE_SIZE = int(os.environ.get("HY_I2I_SIZE", "1024"))
+I2I_IMAGE_SIZE = int(os.environ.get("HY_I2I_SIZE", str(IMAGE_BASE_SIZE)))
 NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "2"))
 CFG_FACTOR = int(os.environ.get("HY_CFG", "1"))
 VIT_LAYERS = int(os.environ.get("HY_VIT_LAYERS", "1"))
@@ -74,21 +75,21 @@ def load_prefix(prefix):
 
 
 def model_cfg():
-    cfg = json.load(open(I2I_WEIGHTS / "config.json"))
-    first = lambda v: v if isinstance(v, int) else v[0]
+    """I2I/recaption helper dims from checkpoint config (legacy key names preserved)."""
+    d = transformer_cfg(load_config(I2I_WEIGHTS))
     return dict(
-        H=cfg["hidden_size"],
-        HEADS=cfg["num_attention_heads"],
-        KV_HEADS=cfg.get("num_key_value_heads", cfg["num_attention_heads"]),
-        HEAD_DIM=cfg.get("attention_head_dim", cfg["hidden_size"] // cfg["num_attention_heads"]),
-        NUM_EXPERTS=first(cfg["num_experts"]),
-        MOE_TOPK=first(cfg["moe_topk"]),
-        MOE_INTER=first(cfg["moe_intermediate_size"]),
-        NUM_SHARED=first(cfg["num_shared_expert"]),
-        NORM_TOPK=cfg.get("norm_topk_prob", True),
-        EPS=cfg.get("rms_norm_eps", 1e-5),
-        USE_QK_NORM=cfg.get("use_qk_norm", True),
-        USE_MIXED=cfg.get("use_mixed_mlp_moe", True),
+        H=d["H"],
+        HEADS=d["HEADS"],
+        KV_HEADS=d["KV"],
+        HEAD_DIM=d["HD"],
+        NUM_EXPERTS=d["E"],
+        MOE_TOPK=d["K"],
+        MOE_INTER=d["MOE_INTER"],
+        NUM_SHARED=d["NUM_SHARED"],
+        NORM_TOPK=d["NORM_TOPK"],
+        EPS=d["EPS"],
+        USE_QK_NORM=d["QKN"],
+        USE_MIXED=d["MIXED"],
     )
 
 
