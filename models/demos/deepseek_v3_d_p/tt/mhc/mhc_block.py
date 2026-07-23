@@ -15,8 +15,8 @@ from __future__ import annotations
 import torch
 
 import ttnn
-from models.demos.deepseek_v4.tt.mhc_kernel import build_consts
-from models.demos.deepseek_v4.tt.mhc_ttnn import TtMHC
+from models.demos.deepseek_v3_d_p.tt.mhc.mhc_kernel import build_consts
+from models.demos.deepseek_v3_d_p.tt.mhc.mhc_ttnn import TtMHC
 
 
 class TtMHCBlock:

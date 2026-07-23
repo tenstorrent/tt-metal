@@ -23,9 +23,9 @@ import torch
 from tracy import signpost
 
 import ttnn
-from models.demos.deepseek_v4.reference.mhc_reference import MHCConfig
-from models.demos.deepseek_v4.tt.mhc_kernel import build_consts
-from models.demos.deepseek_v4.tt.mhc_ttnn import TtMHC
+from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig
+from models.demos.deepseek_v3_d_p.tt.mhc.mhc_kernel import build_consts
+from models.demos.deepseek_v3_d_p.tt.mhc.mhc_ttnn import TtMHC
 
 ITERS = 3  # measured dispatches per variant (after a warmup); keep small so the device
 # profiler's marker buffer doesn't overflow on the ~85-op naive path

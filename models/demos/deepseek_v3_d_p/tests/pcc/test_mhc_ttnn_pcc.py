@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: TTNN composite mHC (models/demos/deepseek_v4/tt/mhc_ttnn.py) vs the pure-torch
-ground truth (models/demos/deepseek_v4/reference/mhc_reference.py).
+"""PCC: TTNN composite mHC (models/demos/deepseek_v3_d_p/tt/mhc/mhc_ttnn.py) vs the pure-torch
+ground truth (models/demos/deepseek_v3_d_p/reference/mhc/mhc_reference.py).
 
 Each mHC piece is checked independently so a failure localises immediately:
     project | parametrize (Sinkhorn) | hc_pre | hc_post | hc_head | full block.
@@ -26,10 +26,10 @@ from loguru import logger
 
 import ttnn
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "reference"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "reference", "mhc"))
 from mhc_reference import MHCConfig, MHCHead, MHCWrap, parametrize  # noqa: E402
 
-from models.demos.deepseek_v4.tt.mhc_ttnn import TtMHC, TtMHCHead  # noqa: E402
+from models.demos.deepseek_v3_d_p.tt.mhc.mhc_ttnn import TtMHC, TtMHCHead  # noqa: E402
 
 PCC = 0.999
 PCC_PROJ = 0.998  # TT fp32-matmul ceiling at reduction depth n*C=28672 (see module docstring)

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """PCC: fused mHC kernel (ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn) vs the
-pure-torch ground truth (models/demos/deepseek_v4/reference/mhc_reference.py::parametrize).
+pure-torch ground truth (models/demos/deepseek_v3_d_p/reference/mhc/mhc_reference.py::parametrize).
 
 Unit (B=1,S=1 -> T=1) is issue #40707; T=32 exercises a full tile of tokens.
 """
@@ -13,8 +13,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v4.reference.mhc_reference import MHCConfig, parametrize
-from models.demos.deepseek_v4.tt.mhc_kernel import mhc_split_sinkhorn
+from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig, parametrize
+from models.demos.deepseek_v3_d_p.tt.mhc.mhc_kernel import mhc_split_sinkhorn
 
 PCC = 0.999
 
@@ -74,7 +74,7 @@ def test_mhc_split_sinkhorn_prefill_scale(device):
 @pytest.mark.parametrize("cores_x", [8], ids=["x8"])
 @pytest.mark.parametrize("tiles_per_core", [1, 2], ids=["tpc1", "tpc2"])
 def test_mhc_split_sinkhorn_sharded(device, cores_x, tiles_per_core):
-    from models.demos.deepseek_v4.tt.mhc_kernel import build_consts
+    from models.demos.deepseek_v3_d_p.tt.mhc.mhc_kernel import build_consts
 
     torch.manual_seed(0)
     cfg = MHCConfig(dim=64, n=4)
@@ -110,7 +110,7 @@ def test_mhc_split_sinkhorn_sharded(device, cores_x, tiles_per_core):
 @pytest.mark.parametrize("mesh_device", [(1, 4), (2, 4)], indirect=True, ids=["mesh1x4", "mesh2x4"])
 @pytest.mark.parametrize("T_per_dev", [32, 256], ids=["Td32", "Td256"])
 def test_mhc_split_sinkhorn_multichip(mesh_device, T_per_dev, device_params):
-    from models.demos.deepseek_v4.tt.mhc_kernel import build_consts
+    from models.demos.deepseek_v3_d_p.tt.mhc.mhc_kernel import build_consts
 
     torch.manual_seed(0)
     D = mesh_device.get_num_devices()

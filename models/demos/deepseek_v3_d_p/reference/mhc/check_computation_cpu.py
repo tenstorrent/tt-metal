@@ -7,7 +7,7 @@ those expressions VERBATIM from model.py and asserts our mhc_reference.py matche
 random inputs -- no GPU, no tilelang. Combined with check_sinkhorn_vs_kernel.py (the GPU
 Sinkhorn check), this closes the loop on the entire op.
 
-Run:  python models/demos/deepseek_v4/reference/check_computation_cpu.py
+Run:  python models/demos/deepseek_v3_d_p/reference/mhc/check_computation_cpu.py
 """
 import os
 import sys

@@ -8,7 +8,7 @@ GPU and compares its (pre, post, comb) outputs against models/.../mhc_reference.
     mixes [B,S,(2+n)n], scale [3], base [(2+n)n]  ->  pre, post, comb.
 
 Requires: CUDA GPU + tilelang.  Run:
-    python models/demos/deepseek_v4/reference/check_sinkhorn_vs_kernel.py
+    python models/demos/deepseek_v3_d_p/reference/mhc/check_sinkhorn_vs_kernel.py
 """
 import os
 import sys

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """PCC: mHC-wrapped block (kernel parametrization + composite computation, tt/mhc_block.py)
-vs reference MHCWrap.forward (models/demos/deepseek_v4/reference/mhc_reference.py).
+vs reference MHCWrap.forward (models/demos/deepseek_v3_d_p/reference/mhc/mhc_reference.py).
 
 Exercises the full X' = H_res@X + H_post.T@F(H_pre@X) around an arbitrary sublayer F.
 """
@@ -14,8 +14,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v4.reference.mhc_reference import MHCConfig, MHCWrap
-from models.demos.deepseek_v4.tt.mhc_block import TtMHCBlock
+from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig, MHCWrap
+from models.demos.deepseek_v3_d_p.tt.mhc.mhc_block import TtMHCBlock
 
 PCC = 0.999
 
