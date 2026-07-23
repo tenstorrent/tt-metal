@@ -31,7 +31,7 @@ Op: `ttnn.experimental.all_gather_regime_a_matmul_async`. Branch: `cglagovich/re
 - **No epilogues / tails yet** (bf16, tile-aligned K divisible by D, no bias/activation/addcmul/chunks) — Task 9.
 - Gathered-A is always materialized to DRAM (Phase A). Direct-L1 (Phase B) = Tasks 5-6.
 
-## Environment blockers (why Tasks 4-full, 5-8, 10 can't finish here)
+## Profiler/watcher: usable with workarounds (Task 4 done); Tasks 5-8/10 remain
 
 Per-RISC overlap evidence and the direct-L1 ceiling estimate that the plan gates Tasks 5-8/10 on **cannot be
 captured in this container** — see `agmm-profiler-watcher-blocked` memory:

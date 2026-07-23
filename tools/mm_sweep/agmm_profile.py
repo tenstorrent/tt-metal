@@ -68,17 +68,24 @@ def parse_overlap():
             if d["inj_end"] is None or e > d["inj_end"]:
                 d["inj_end"] = e
                 d["inj_start"] = s
+    # total device span = latest kernel end - earliest kernel start over ALL -KERNEL zones on that device.
+    dev_min = defaultdict(lambda: None)
+    dev_max = defaultdict(lambda: None)
+    for (dev, x, y, zone), (s, e) in spans.items():
+        dev_min[dev] = s if dev_min[dev] is None else min(dev_min[dev], s)
+        dev_max[dev] = e if dev_max[dev] is None else max(dev_max[dev], e)
     out = {}
     for dev, d in per_dev.items():
         if d["n_trisc"] == 0 or d["inj_end"] is None:
             continue
-        overlap_cyc = d["inj_end"] - d["comp_start"]  # >0 => compute started before injector finished gather
         out[dev] = {
             "n_compute_cores": d["n_trisc"],
             "inj_span_us": round((d["inj_end"] - d["inj_start"]) / FREQ * 1e6, 2),
             "compute_span_us": round((d["comp_end"] - d["comp_start"]) / FREQ * 1e6, 2),
-            "compute_start_before_inj_end_us": round(overlap_cyc / FREQ * 1e6, 2),
-            "overlap": overlap_cyc > 0,
+            # total device span is the meaningful streaming-vs-full-gather A/B signal: full-gather serializes
+            # (whole gather then compute), streaming overlaps them, so on fabric-bound shapes streaming's total
+            # is smaller. (Per-kernel TRISC start can't isolate "first math" — the zone includes CB waits.)
+            "total_device_span_us": round((dev_max[dev] - dev_min[dev]) / FREQ * 1e6, 2),
         }
     return out
 
@@ -100,7 +107,8 @@ def main():
         md = full.create_submesh(ttnn.MeshShape(1, D))
         grid = md.compute_with_storage_grid_size()
         crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
-        md.load_sub_device_manager(md.create_sub_device_manager([ttnn.SubDevice([crs])], 0))
+        mgr = md.create_sub_device_manager([ttnn.SubDevice([crs])], 0)
+        md.load_sub_device_manager(mgr)
         md.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
         torch.manual_seed(0)
         t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
@@ -112,7 +120,7 @@ def main():
         b = ttnn.from_torch(t1, layout=ttnn.TILE_LAYOUT, device=md, dtype=ttnn.bfloat16, memory_config=wcfg,
                             mesh_mapper=ttnn.create_mesh_mapper(md, ttnn.MeshMapperConfig(
                                 [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()], ttnn.MeshShape(1, D))))
-        cfg = ttnn.RegimeAMatmulConfig(k_slices=3, n_slices=1, m_slices=1, k_block_tiles=4, n_subblock_tiles=6)
+        cfg = None  # auto-picker (config=None) so any corpus shape, incl. narrow-N, is handled
         sems = [ttnn.create_global_semaphore(md, crs, 0) for _ in range(D + 1)]
         out = None
         for _ in range(6):
@@ -124,21 +132,30 @@ def main():
             ttnn.synchronize_device(md)
         per = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(md, dim=0))
         _, pcc = comp_pcc(ref, per[0].float().reshape(ref.shape), 0.999)
-        try:
-            ttnn.ReadMeshDeviceProfiler(md)
-        except AttributeError:
-            ttnn.ReadDeviceProfiler(md)
-        # Parse + emit BEFORE teardown so a submesh-close hiccup never loses the profiling result.
-        ov = parse_overlap()
+        ttnn.ReadDeviceProfiler(md)  # ReadMeshDeviceProfilerResults; CSV flushes on the following clean close
+        # Clean teardown so the profiler flushes: fully release the submesh's sub-device manager + stall group,
+        # close the SUBMESH, then the parent. (An abort here leaves profile_log_device.csv unwritten.)
+        a = b = out = per = None
+        md.reset_sub_device_stall_group()
+        md.clear_loaded_sub_device_manager()
+        md.remove_sub_device_manager(mgr)
+        ttnn.close_mesh_device(md)
+        md = None
+        gc.collect()
+        ttnn.close_mesh_device(full)
+        full = None
+        gc.collect()
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        ov = parse_overlap()  # parse AFTER close so the device CSV is on disk
         print("PROFJSON " + json.dumps({"mode": mode, "D": D, "shape": [M, K, N], "pcc": float(pcc),
                                         "per_device": ov}))
     finally:
-        a = b = out = per = None
-        md = None
-        gc.collect()  # release the submesh's CQ hold before closing the parent mesh
-        ttnn.close_mesh_device(full)
-        gc.collect()
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        if full is not None:
+            try:
+                ttnn.close_mesh_device(full)
+            except Exception:
+                pass
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 if __name__ == "__main__":
