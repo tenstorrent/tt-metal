@@ -426,3 +426,14 @@ Unary time falls 20.702 -> 15.403 us while BinaryNg rises only
 The 67.594 GFLOP executed path reaches 102.58 TFLOP/s or 8.43% of eight-chip
 peak. Conservative factorized-work throughput is 89.85 TFLOP/s or 7.39%.
 Prep, scan, and collective medians are unchanged within run variance.
+
+
+## Rejected fused beta sigmoid-typecast
+
+Profile:
+`/tmp/kda_tp_layer_t640_fused_beta_sigmoid_cast_r10/reports/2026_07_23_13_06_00/ops_perf_results_2026_07_23_13_06_00.csv`.
+Replacing beta sigmoid plus FP32 typecast with scalar-one BinaryNg passed PCC
+but regressed median span 658.960 -> 690.497 us (4.79%). Programs fell
+30 -> 29 and active time was flat at 633.656 -> 633.211 us, proving that an
+approximately 31 us serialized scheduling gap—not kernel work—caused the
+regression. Retain unary sigmoid followed by typecast.

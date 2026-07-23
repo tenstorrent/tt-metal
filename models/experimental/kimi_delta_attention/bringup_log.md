@@ -740,3 +740,12 @@
 - Report: `/tmp/kda_tp_layer_t640_fused_softplus_mul_r10/reports/2026_07_23_12_57_57/ops_perf_results_2026_07_23_12_57_57.csv`; control: `/tmp/kda_tp_layer_t640_fused_gated_rms_r10/reports/2026_07_23_12_49_34/ops_perf_results_2026_07_23_12_49_34.csv`.
 - Ten replays reduced median slowest-device span `667.330 -> 658.960 us` (1.25%), active time `639.418 -> 633.656 us/device`, and programs `31 -> 30/device/layer`. Unary time fell `20.702 -> 15.403 us`; BinaryNg rose only `20.940 -> 21.976 us`.
 - Executed-work throughput is 102.58 TFLOP/s or 8.43% of peak; conservative factorized-work throughput is 89.85 TFLOP/s or 7.39%. Prep/scan/collective medians are unchanged, so distribution remains unchanged.
+
+
+### 2026-07-23 13:06:00 UTC — Reject fused beta sigmoid-typecast
+
+- Hypothesis: scalar-one BinaryNg can apply sigmoid and produce FP32 in one program, replacing unary sigmoid plus typecast.
+- Focused TP=8 hardware correctness passed at output/recurrent/convolution PCC `0.999963/0.999902/0.999997`.
+- Report: `/tmp/kda_tp_layer_t640_fused_beta_sigmoid_cast_r10/reports/2026_07_23_13_06_00/ops_perf_results_2026_07_23_13_06_00.csv`; control: `/tmp/kda_tp_layer_t640_fused_softplus_mul_r10/reports/2026_07_23_12_57_57/ops_perf_results_2026_07_23_12_57_57.csv`.
+- Ten replays regressed median slowest-device span `658.960 -> 690.497 us` (4.79%) despite programs falling `30 -> 29` and active time remaining flat at `633.656 -> 633.211 us/device`. The approximately 31 us gap is serialized scheduling overhead not represented by summed kernel duration.
+- Restored unary sigmoid plus FP32 typecast. The beta head split still requires transpose because all heads occupy columns of the same source tile; removing it requires in-kernel column selection, not a flat-reader address change.
