@@ -8,6 +8,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tracy/Tracy.hpp>
 
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
@@ -961,8 +962,14 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     const Tensor& intermed,
     const Tensor& output,
     const std::optional<Tensor>& penult_intermediate) {
-    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
+    auto& reader_runtime_args = [&]() -> decltype(auto) {
+        ZoneScopedN("TTNN RS copy reader runtime args");
+        return GetRuntimeArgs(program, reader_kernel_id);
+    }();
+    auto& writer_runtime_args = [&]() -> decltype(auto) {
+        ZoneScopedN("TTNN RS copy writer runtime args");
+        return GetRuntimeArgs(program, writer_kernel_id);
+    }();
 
     // update senders
     for (uint32_t link = 0; link < num_links; link++) {
@@ -971,7 +978,6 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 uint32_t mux_core_offset = (link * num_cores_per_link) +
                                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-
                 // sender reader
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
                 if (normalized_dim == 0) {
@@ -1642,8 +1648,14 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     const Tensor& input,
     const Tensor& intermed,
     const Tensor& output) {
-    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
+    auto& reader_runtime_args = [&]() -> decltype(auto) {
+        ZoneScopedN("TTNN RS copy reader runtime args");
+        return GetRuntimeArgs(program, reader_kernel_id);
+    }();
+    auto& writer_runtime_args = [&]() -> decltype(auto) {
+        ZoneScopedN("TTNN RS copy writer runtime args");
+        return GetRuntimeArgs(program, writer_kernel_id);
+    }();
 
     // update senders
     for (uint32_t link = 0; link < num_links; link++) {
@@ -1652,7 +1664,6 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 uint32_t mux_core_offset = (link * num_cores_per_link) +
                                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-
                 // sender reader
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();

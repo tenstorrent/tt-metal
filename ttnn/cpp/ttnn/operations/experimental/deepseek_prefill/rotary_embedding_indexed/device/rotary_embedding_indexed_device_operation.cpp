@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
+#include <tracy/Tracy.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -635,8 +636,11 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
         run_args.kernel_run_args = {reader_run};
     }
 
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        UpdateProgramRunArgs(program, run_args);
+    {
+        ZoneScopedN("TTNN Rotary indexed patch scalar runtime args");
+        for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+            UpdateProgramRunArgs(program, run_args);
+        }
     }
 }
 
