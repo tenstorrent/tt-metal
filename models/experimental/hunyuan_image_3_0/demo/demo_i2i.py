@@ -106,6 +106,14 @@ from models.experimental.hunyuan_image_3_0.ref.weights import (
     ensure_instruct_weights,
     load_tensors,
 )
+from models.experimental.hunyuan_image_3_0.ref.model_config import (
+    IMAGE_BASE_SIZE,
+    NUM_HIDDEN_LAYERS,
+    VAE_SCALING_FACTOR,
+    VIT_CONFIG,
+    load_config,
+    transformer_cfg,
+)
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
 from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
@@ -139,19 +147,19 @@ from models.experimental.hunyuan_image_3_0.tt.wte import HunyuanTtWte
 from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
 
 STEPS_ENV = os.environ.get("HY_STEPS")
-NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "32"))
+NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", str(NUM_HIDDEN_LAYERS)))
 RECAPTION_LAYERS = int(os.environ.get("HY_RECAPTION_LAYERS", str(NUM_LAYERS)))
 RECAPTION_KV = os.environ.get("HY_RECAPTION_KV", "1") != "0"
 # Keep resident backbone across AR → denoise by caching cond VAE/ViT tokens on host.
 KEEP_BACKBONE = os.environ.get("HY_KEEP_BACKBONE", "1") != "0"
 GUIDANCE = float(os.environ.get("HY_GUIDANCE", "2.5"))
 SEED = int(os.environ.get("HY_SEED", "42"))
-VIT_LAYERS = int(os.environ.get("HY_VIT_LAYERS", "27"))
+VIT_LAYERS = int(os.environ.get("HY_VIT_LAYERS", str(VIT_CONFIG["num_hidden_layers"])))
 MAX_NEW_TOKENS = int(os.environ.get("HY_MAX_NEW_TOKENS", "512"))
 RECAPTION_ON_DEVICE = os.environ.get("HY_RECAPTION_DEVICE", "1") != "0"
 DIT_ON_HOST = os.environ.get("HY_DIT_HOST", "0") == "1"
 USE_DISTIL = os.environ.get("HY_DISTIL", "0") == "1"
-SCALING = 0.562679178327931
+SCALING = VAE_SCALING_FACTOR
 
 # Persist pre-tilized mesh weights across runs (see README § Weight cache).
 if not os.environ.get("TT_DIT_CACHE_DIR"):
@@ -201,7 +209,7 @@ def _default_steps(model_dir: Path, *, distil: bool) -> int:
 
 
 def _model_flags(model_dir: Path) -> tuple[bool, bool]:
-    cfg = json.load(open(model_dir / "config.json"))
+    cfg = load_config(model_dir)
     return bool(cfg.get("cfg_distilled", False)), bool(cfg.get("use_meanflow", False))
 
 
@@ -235,20 +243,7 @@ def _use_tt_recaption() -> bool:
 
 
 def _cfg(model_dir: Path):
-    c = json.load(open(model_dir / "config.json"))
-    first = lambda v: v if isinstance(v, int) else v[0]
-    return dict(
-        H=c["hidden_size"],
-        HEADS=c["num_attention_heads"],
-        KV=c.get("num_key_value_heads", c["num_attention_heads"]),
-        HD=c.get("attention_head_dim", c["hidden_size"] // c["num_attention_heads"]),
-        E=first(c["num_experts"]),
-        K=first(c["moe_topk"]),
-        NORM=c.get("norm_topk_prob", True),
-        MIXED=c.get("use_mixed_mlp_moe", True),
-        QKN=c.get("use_qk_norm", True),
-        EPS=c.get("rms_norm_eps", 1e-5),
-    )
+    return transformer_cfg(load_config(model_dir))
 
 
 def _pe_dims(down_sd):
@@ -409,7 +404,7 @@ def main():
         default=os.environ.get("HY_BOT_TASK", "think_recaption"),
         choices=("image", "recaption", "think_recaption"),
     )
-    parser.add_argument("--image-size", default=os.environ.get("HY_IMAGE_SIZE", "1024"))
+    parser.add_argument("--image-size", default=os.environ.get("HY_IMAGE_SIZE", str(IMAGE_BASE_SIZE)))
     parser.add_argument(
         "--infer-align-image-size",
         action="store_true",
@@ -626,7 +621,16 @@ def main():
 
             print("[demo_i2i] loading LM head ...", flush=True)
             lm_head = HunyuanTtLMHead(mesh_device, {"lm_head.weight": weights.load("lm_head.weight")})
+            from models.experimental.hunyuan_image_3_0.tt.device_sampling import resolve_hy_top_k
+
             recap_config = replace(default_recaption_sampling_config(), max_new_tokens=MAX_NEW_TOKENS)
+            top_k = resolve_hy_top_k()
+            if top_k is not None:
+                recap_config = replace(recap_config, top_k=top_k)
+            if os.environ.get("HY_TEMPERATURE"):
+                recap_config = replace(recap_config, temperature=float(os.environ["HY_TEMPERATURE"]))
+            if os.environ.get("HY_TOP_P"):
+                recap_config = replace(recap_config, top_p=float(os.environ["HY_TOP_P"]))
             recap_result = run_recaption_on_device(
                 backbone,
                 lm_head,

@@ -4,9 +4,9 @@
 # CQ0 ``execute_trace`` capture/replay for denoise CFG steps and VAE decode.
 # CQ1 stages input H2D / output D2H (2CQ trace pattern, ViT/recaption style).
 #
-# Denoise latents default to legacy per-step host NCHW hops (``HY_LATENT_RESIDENT=0``).
-# Opt in to device-resident TILE flat with ``HY_LATENT_RESIDENT=1`` (needs PCC vs host).
+# Denoise latents default to device-resident TILE flat (``HY_LATENT_RESIDENT=1``):
 # seed once, Euler-copy in place between steps, final D2H for VAE only.
+# Set ``HY_LATENT_RESIDENT=0`` for legacy per-step host NCHW hops.
 #
 # Enabled when ``HY_TRACE=1``. Capture failures propagate (no eager fallback).
 

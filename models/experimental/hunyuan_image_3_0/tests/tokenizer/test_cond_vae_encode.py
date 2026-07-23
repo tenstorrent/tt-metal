@@ -13,6 +13,13 @@ from PIL import Image
 
 from models.experimental.hunyuan_image_3_0.ref.cond_vae_encode import encode_cond_images, vae_encode_image
 from models.experimental.hunyuan_image_3_0.ref.cond_vit_encode import encode_cond_vit_images
+from models.experimental.hunyuan_image_3_0.ref.model_config import (
+    HIDDEN_SIZE,
+    IMAGE_BASE_SIZE,
+    PRODUCTION_LATENT_GRID,
+    VAE_LATENT_CHANNELS,
+    VAE_SCALING_FACTOR,
+)
 from models.experimental.hunyuan_image_3_0.ref.image_gen.input_instantiate import (
     instantiate_continuous_tokens,
     instantiate_vae_image_tokens,
@@ -44,26 +51,28 @@ def processor():
 
 @pytest.fixture
 def rgb_image():
-    return Image.new("RGB", (1024, 1024), color=(128, 64, 32))
+    return Image.new("RGB", (IMAGE_BASE_SIZE, IMAGE_BASE_SIZE), color=(128, 64, 32))
 
 
 @pytest.mark.skipif(not HAS_WEIGHTS, reason="Hunyuan checkpoint not available")
 def test_vae_encode_cond_image_shape(processor, rgb_image):
     cond, _ = processor.get_image_with_size(rgb_image, return_type="vae_vit")
     encoder = load_encoder(MODEL_DIR, dtype=torch.float32)
-    t, latents = vae_encode_image(encoder, cond.vae_image, scaling_factor=0.562679178327931)
+    t, latents = vae_encode_image(encoder, cond.vae_image, scaling_factor=VAE_SCALING_FACTOR)
     assert t.shape == (1,)
     assert torch.all(t == 0)
-    assert latents.shape == (1, 32, 64, 64)
+    g = PRODUCTION_LATENT_GRID
+    assert latents.shape == (1, VAE_LATENT_CHANNELS, g, g)
 
 
 @pytest.mark.skipif(not HAS_WEIGHTS, reason="Hunyuan checkpoint not available")
 def test_encode_cond_images_batched(processor, rgb_image):
     cond, _ = processor.get_image_with_size(rgb_image, return_type="vae_vit")
     encoder = load_encoder(MODEL_DIR, dtype=torch.float32)
-    out = encode_cond_images([[cond]], encoder, cfg_factor=1, scaling_factor=0.562679178327931)
+    out = encode_cond_images([[cond]], encoder, cfg_factor=1, scaling_factor=VAE_SCALING_FACTOR)
     assert isinstance(out.cond_vae_images, torch.Tensor)
-    assert out.cond_vae_images.shape == (1, 32, 64, 64)
+    g = PRODUCTION_LATENT_GRID
+    assert out.cond_vae_images.shape == (1, VAE_LATENT_CHANNELS, g, g)
     assert out.cond_timesteps.shape == (1,)
 
 
@@ -104,12 +113,12 @@ def test_encode_cond_vit_images_packed(processor, rgb_image):
 @pytest.mark.skipif(not HAS_WEIGHTS, reason="Hunyuan checkpoint not available")
 def test_instantiate_vit_image_tokens_checkpoint(hunyuan_tokenizer, processor, rgb_image):
     cond, _ = processor.get_image_with_size(rgb_image, return_type="vae_vit")
-    bundle = prepare_i2i_inputs(hunyuan_tokenizer, PROMPT, cond, image_size=1024, cfg_factor=1)
+    bundle = prepare_i2i_inputs(hunyuan_tokenizer, PROMPT, cond, image_size=IMAGE_BASE_SIZE, cfg_factor=1)
     vit_enc = encode_cond_vit_images([[cond]], cfg_factor=1)
     vision_model = load_siglip2_vision(MODEL_DIR, num_layers=1)
     aligner = load_aligner(MODEL_DIR)
 
-    hidden = torch.randn(1, bundle.seq_len, 4096)
+    hidden = torch.randn(1, bundle.seq_len, HIDDEN_SIZE)
     base = hidden.clone()
     mask = bundle.vit_image_mask
 
@@ -128,7 +137,7 @@ def test_instantiate_vit_image_tokens_checkpoint(hunyuan_tokenizer, processor, r
 @pytest.mark.skipif(not HAS_WEIGHTS, reason="Hunyuan checkpoint not available")
 def test_build_i2i_inputs_embeds(hunyuan_tokenizer, processor, rgb_image):
     cond, _ = processor.get_image_with_size(rgb_image, return_type="vae_vit")
-    bundle = prepare_i2i_inputs(hunyuan_tokenizer, PROMPT, cond, image_size=1024, cfg_factor=1)
+    bundle = prepare_i2i_inputs(hunyuan_tokenizer, PROMPT, cond, image_size=IMAGE_BASE_SIZE, cfg_factor=1)
     wte = load_tensors(MODEL_DIR, ["model.wte.weight"])["model.wte.weight"]
     patch_embed = load_patch_embed(MODEL_DIR)
     time_embed = load_timestep_embedder("time_embed", MODEL_DIR)

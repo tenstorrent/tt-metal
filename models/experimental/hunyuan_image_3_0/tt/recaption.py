@@ -12,6 +12,7 @@ import torch
 
 from models.experimental.hunyuan_image_3_0.ref.attention.mask import build_attention_mask, to_additive
 from models.experimental.hunyuan_image_3_0.ref.generate import SamplingConfig
+from models.experimental.hunyuan_image_3_0.ref.model_config import IMAGE_BASE_SIZE
 from models.experimental.hunyuan_image_3_0.ref.recaption import (
     RecaptionResult,
     build_recaption_stage_params,
@@ -46,7 +47,7 @@ def run_recaption_on_device(
     wte_tt=None,
     *,
     wte_weight: torch.Tensor | None = None,
-    image_size: str | int = 1024,
+    image_size: str | int = IMAGE_BASE_SIZE,
     config: SamplingConfig | None = None,
     generator: torch.Generator | None = None,
     drop_think: bool = False,
@@ -58,11 +59,13 @@ def run_recaption_on_device(
     the LM head receives ln_f-normalized hidden states. For I2I, pass a bundle from
     ``prepare_recaption_ar_bundle`` (with ``inputs_embeds`` and ``full_attn_slices``).
 
-    Opt-in on-device sampling: ``HY_DEVICE_SAMPLING=1`` (falls back to
-    host sampler when stage-force / ratio / rep-penalty processors are active).
-    Default device path: D2H logits → host topk (Instruct ``top_k``, e.g. 1024)
-    → host shortlist sample. Set ``HY_TTNN_SAMPLING_OP=1`` for pure
-    ``ttnn.topk`` + ``ttnn.sampling`` (k capped at 32).
+    Device-logits sampling is **on by default** (``HY_DEVICE_SAMPLING`` /
+    ``HY_SAMPLE_DEVICE``; set ``=0`` to disable). Falls back to the host sampler
+    when stage-force / ratio / rep-penalty processors are active.
+
+    Default sample step: D2H logits → host torch topk (Instruct ``top_k``, e.g. 1024)
+    → host shortlist multinomial. Set ``HY_TOP_K=32`` / ``HY_TOPK=32`` (or
+    ``HY_TTNN_SAMPLING_OP=1``) for on-device ``ttnn.topk`` + ``ttnn.sampling``.
     """
     if wte_tt is None and wte_weight is None:
         raise ValueError("run_recaption_on_device requires wte_tt or wte_weight")
@@ -96,17 +99,19 @@ def run_recaption_on_device(
     )
     if device_sampling_enabled() and not use_device_sampling:
         print(
-            "[recaption] HY_DEVICE_SAMPLING=1 but host processors active "
+            "[recaption] device sampling requested but host processors active "
             "(stage transitions / ratio / rep-penalty / greedy) — using host sampler",
             flush=True,
         )
     elif use_device_sampling:
-        if os.environ.get("HY_TTNN_SAMPLING_OP", "0") == "1":
+        from models.experimental.hunyuan_image_3_0.tt.device_sampling import ttnn_sampling_op_enabled
+
+        if ttnn_sampling_op_enabled():
             print("[recaption] on-device sampling (ttnn.topk + ttnn.sampling)", flush=True)
         else:
             print(
-                "[recaption] on-device sampling (D2H + host topk/shortlist; "
-                "set HY_TTNN_SAMPLING_OP=1 for ttnn.sampling)",
+                "[recaption] on-device sampling (D2H + host torch topk/shortlist; "
+                "set HY_TOP_K=32 for ttnn.topk+sampling)",
                 flush=True,
             )
 

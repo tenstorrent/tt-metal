@@ -28,14 +28,19 @@ from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import
     prepare_gen_image_inputs,
 )
 from models.experimental.hunyuan_image_3_0.ref.weights import ensure_base_weights
+from models.experimental.hunyuan_image_3_0.ref.model_config import (
+    IMAGE_BASE_SIZE,
+    NUM_HIDDEN_LAYERS,
+    VAE_SCALING_FACTOR,
+)
 
 PROMPT = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("HY_PROMPT", "a photo of a cat, studio lighting")
 STEPS = int(os.environ.get("HY_STEPS", "50"))
-NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "32"))
+NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", str(NUM_HIDDEN_LAYERS)))
 GUIDANCE = float(os.environ.get("HY_GUIDANCE", "5.0"))
 SEED = int(os.environ.get("HY_SEED", "0"))
-IMAGE_SIZE = int(os.environ.get("HY_IMAGE_SIZE", "1024"))
-OUT_LATENT = os.environ.get("HY_OUT_LATENT", "real_latent_1024.pt")
+IMAGE_SIZE = int(os.environ.get("HY_IMAGE_SIZE", str(IMAGE_BASE_SIZE)))
+OUT_LATENT = os.environ.get("HY_OUT_LATENT", f"real_latent_{IMAGE_BASE_SIZE}.pt")
 
 WEIGHTS = ensure_base_weights()
 os.environ.setdefault("HUNYUAN_MODEL_DIR", str(WEIGHTS))
@@ -150,7 +155,7 @@ def main():
         "guidance": GUIDANCE,
         "image_size": IMAGE_SIZE,
         "grid": grid,
-        "scaling_factor": 0.562679178327931,
+        "scaling_factor": VAE_SCALING_FACTOR,
     }
     out_path = Path(OUT_LATENT)
     out_path.parent.mkdir(parents=True, exist_ok=True)

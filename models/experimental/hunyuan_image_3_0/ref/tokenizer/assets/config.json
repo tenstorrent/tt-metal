@@ -214,6 +214,7 @@
     "vae_type": "hunyuan-image-vae-v1",
     "vae_dtype": "float32",
     "vae_autocast_dtype": "float16",
+    "image_base_size": 1024,
     "vae": {
         "_class_name": "AutoencoderKLConv3D",
         "block_out_channels": [
