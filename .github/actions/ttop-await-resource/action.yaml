@@ -1,0 +1,128 @@
+name: 'ttop await'
+description: 'OIDC-authenticated kubectl loop: poll a resource until ready, or delete it'
+
+inputs:
+  namespace:
+    required: false
+    default: 'ttop-ci'
+  resource: #eg allocation/<allocation_name>
+    required: true
+  mode: #type of action: poll or delete for now
+    description: 'Operation: "poll" (wait until jsonpath == expected) or "delete" (delete until gone).'
+    required: true
+  jsonpath:
+    required: false
+    default: ''
+  expected:
+    required: false
+    default: ''
+  timeoutSeconds:
+    required: false
+    default: '300'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: OIDC kubectl loop
+      shell: bash
+      env:
+        NAMESPACE: ${{ inputs.namespace }}
+        RESOURCE: ${{ inputs.resource }}
+        MODE: ${{ inputs.mode }}
+        JSONPATH: ${{ inputs.jsonpath }}
+        EXPECTED: ${{ inputs.expected }}
+        OVERALL_TIMEOUT: ${{ inputs.timeoutSeconds }}
+      run: |
+        POLL_INTERVAL=5
+        MAX_AUTH_FAILURES=3
+        # Default 5 min: long enough to ride out a token expiry / transient blip,
+        # short enough not to pin a runner. Override via the timeoutSeconds input.
+        OVERALL_TIMEOUT="${OVERALL_TIMEOUT:-300}"
+
+        case "$MODE" in poll|delete) ;; *) echo "::error::mode must be poll or delete"; exit 1 ;; esac
+        if [[ "$MODE" == poll && ( -z "$JSONPATH" || -z "$EXPECTED" ) ]]; then
+          echo "::error::poll mode requires jsonpath and expected"; exit 1
+        fi
+
+        # Mints a fresh OIDC token into IDTOKEN and masks it, so every caller gets
+        # a masked token without having to remember to mask it. Retries in-place so
+        # a brief token-endpoint blip (e.g. a DNS "could not resolve host", exit 6 —
+        # the failure that left allocations dangling) is absorbed.
+        mint_token() {
+          local t
+          for _ in 1 2 3; do
+            t=$(curl -s --max-time 30 \
+              -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL" \
+              -H "Accept: application/json; api-version=2.0" \
+              -H "Content-Type: application/json" -d "{}" | jq -r '.value') || t=""
+            if [[ -n "$t" && "$t" != "null" ]]; then
+              IDTOKEN="$t"
+              echo "::add-mask::${IDTOKEN}"
+              return 0
+            fi
+            sleep 2
+          done
+          IDTOKEN=""
+          return 1
+        }
+
+        mint_token || true
+
+        auth_failures=0
+        start=$SECONDS
+        while true; do
+          if (( SECONDS - start >= OVERALL_TIMEOUT )); then
+            echo "::error::Timed out after $((OVERALL_TIMEOUT / 60))m waiting for ${RESOURCE} to be (${MODE})."
+            exit 1
+          fi
+
+          # A failed mint leaves IDTOKEN empty; kubectl --token "" prints a
+          # confusing "Please enter Username" error that would NOT match the
+          # auth branch below, so we'd never re-mint. Re-mint here instead of
+          # ever calling kubectl with an empty token.
+          if [[ -z "$IDTOKEN" ]]; then
+            echo "::warning::No valid token yet; (re)minting before the ${MODE}."
+            mint_token || true
+            if [[ -z "$IDTOKEN" ]]; then
+              sleep "$POLL_INTERVAL"
+              continue
+            fi
+          fi
+
+          case "$MODE" in
+            delete)
+              output=$(kubectl --token "$IDTOKEN" -n "$NAMESPACE" delete "$RESOURCE" --ignore-not-found 2>&1) && rc=0 || rc=$?
+              if ((rc==0)); then
+                echo "::notice::$RESOURCE is deleted."
+                exit 0
+              fi
+              ;;
+            poll)
+              output=$(kubectl --token "$IDTOKEN" -n "$NAMESPACE" get "$RESOURCE" -o jsonpath="$JSONPATH" 2>&1) && rc=0 || rc=$?
+              if (( rc == 0 )); then
+                auth_failures=0                                  # successful read → auth is fine, reset streak
+                if [[ "$output" == "$EXPECTED" ]]; then
+                  echo "::notice::$RESOURCE is ready ($EXPECTED)."; exit 0
+                fi
+                echo "[info] $RESOURCE not ready (got '${output:-<empty>}', want '$EXPECTED') — waiting..."
+                sleep "$POLL_INTERVAL"; continue                 # <-- the "waiting" case: loop, DON'T fall into errors
+              fi
+              ;;                                                 # rc != 0 falls through to shared auth/transient
+          esac
+
+          if echo "$output" | grep -qiE 'unauthorized|must be logged in|401'; then
+            auth_failures=$((auth_failures + 1))
+            echo "::warning::Auth failure (${auth_failures}/${MAX_AUTH_FAILURES}) on ${RESOURCE}; reissuing token."
+            if (( auth_failures >= MAX_AUTH_FAILURES )); then
+              echo "::error::Repeated auth failures despite token reissue; failing."
+              exit 1
+            fi
+            mint_token || true
+          else
+            echo "::warning::Transient error on ${RESOURCE} (rc=${rc}): ${output}"
+          fi
+          sleep "$POLL_INTERVAL"
+        done
+
+
