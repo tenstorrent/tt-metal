@@ -20,7 +20,7 @@
 
 namespace tt::llrt::internal_ {
 void wait_until_cores_done(
-    ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms);
+    ChipId device_id, int run_state, std::unordered_set<tt::tt_metal::CoreCoord>& not_done_phys_cores, int timeout_ms);
 }  // namespace tt::llrt::internal_
 
 namespace tt::tt_metal {

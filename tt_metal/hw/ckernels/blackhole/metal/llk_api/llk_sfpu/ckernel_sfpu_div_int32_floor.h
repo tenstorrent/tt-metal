@@ -50,7 +50,7 @@ sfpi_inline void calculate_div_int32_body(
     // Initial approximation q = a * 1/b.
     // We add a special mantissa alignment factor 2.0f**(23+10), which shifts
     // the mantissa so that we extract the top 22 bits of the result.
-    sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
+    sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
     sfpi::vInt sign = a_orig ^ b_orig;
     sfpi::vMag q_m = sfpi::exman(q_f);
 

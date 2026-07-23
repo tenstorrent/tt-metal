@@ -162,6 +162,39 @@ inline void _llk_pack_mop_config_(
         const std::uint32_t MOP_INNER_LOOP  = 1;
         const std::uint32_t MOP_OUTER_LOOP  = (num_faces > 1) ? (num_faces >> 1) : 1;
 
+        if (face_r_dim == 1)
+        {
+            // Single-row faces (e.g. a 1x32 tile = two 1x16 faces). The tileize unpacker splits the
+            // single source row into two consecutive DEST rows (row 0 -> face 0, row 1 -> face 1). With
+            // one row per face the two faces are contiguous in L1 ([face 0 | face 1] == one 1x32 row), so
+            // a single PACR with two active read interfaces (interface k reads DEST row base + k) packs
+            // both faces at once - the row-interleave the replay buffer un-swizzles for face_r_dim >= 2
+            // collapses to these two rows. The replay-buffer path cannot express this anyway
+            // (replay_buf_len = face_r_dim - 1 = 0 is an invalid replay length, and num_instrs_per_face
+            // underflows).
+            LLK_ASSERT(num_faces == 2, "Tilize with face_r_dim == 1 supports num_faces == 2 only");
+            ckernel::ckernel_template tmp(
+                MOP_OUTER_LOOP,
+                MOP_INNER_LOOP,
+                // Interfaces 0 and 1 read DEST rows 0 and 1 (face 0 and face 1); ADDR_MOD_2, close the tile.
+                TT_OP_PACR(
+                    p_pacr::CFG_CTXT_0,
+                    p_pacr::NO_ROW_PAD_ZERO,
+                    p_pacr::DST_ACCESS_NORMAL_MODE,
+                    ADDR_MOD_2,
+                    p_pacr::ADDR_CNT_CTXT_0,
+                    ZERO_OUTPUT_FLAG,
+                    p_pacr::TWO_INTFS_ACTIVE,
+                    0,
+                    0,
+                    p_pacr::NO_CTXT_CTRL,
+                    0,
+                    1));
+            tmp.set_end_op(TT_OP_SETADCZW(p_setadc::PAC, 0, num_faces >> 1, 0, 0, 0b0100)); // ch0_z = 0, ch1_z = num_faces >> 1;
+            tmp.program();
+            return;
+        }
+
         // Last row of half-tile (face_r_dim rows) is different between halves, so can't be replayed.
         LLK_ASSERT(face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be 2, 4, 8, or 16 for tilize");
         const std::uint32_t replay_buf_len = face_r_dim - 1;

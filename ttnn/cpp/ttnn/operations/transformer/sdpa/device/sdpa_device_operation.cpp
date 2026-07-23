@@ -491,7 +491,8 @@ SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
     if (attrs.use_mla) {
         shape[3] = attrs.head_dim_v.value_or(shape[3]);
     }
-    return TensorSpec(shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
+    return tt::tt_metal::TensorSpec(
+        shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
 }
 
 SDPAOperation::tensor_return_value_t SDPAOperation::create_output_tensors(

@@ -64,17 +64,35 @@ def _rotated_chip_positions(kv_actual, sp, chunk_local):
     return positions
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
-@pytest.mark.parametrize(
-    "config_name, num_heads_local, new_isl_tiles_per_dev, cache_tokens_per_dev",
-    [
-        ("small", 2, 4, 512),  # small: 2 heads/dev, 4-tile chunk/dev
-        ("repr", 8, 20, 6400),  # representative: 8 heads/dev, 5k new isl + 50k cache on 8x4 (per-dev scaled)
-    ],
-    ids=["small", "repr"],
+_MESHES = [(2, 2), (2, 4), (8, 4)]
+_CONFIGS = [("small", 2, 4, 512), ("repr", 8, 20, 6400)]
+_CASES = [
+    pytest.param(
+        mesh,
+        *config,
+        tensor_kind,
+        scenario,
+        ttnn.bfloat16,
+        id=f"{mesh[0]}x{mesh[1]}-{config[0]}-{tensor_kind}-{scenario}-bf16",
+    )
+    for mesh in _MESHES
+    for config in _CONFIGS
+    for tensor_kind in ("Q", "KV")
+    for scenario in ("non_padded", "padded_partial")
+]
+_CASES.append(
+    pytest.param(
+        (2, 4), "small", 2, 4, 512, "Q", "padded_partial", ttnn.bfloat8_b, id="2x4-small-Q-padded_partial-bfp8"
+    )
 )
-@pytest.mark.parametrize("tensor_kind", ["Q", "KV"], ids=["Q", "KV"])
-@pytest.mark.parametrize("scenario", ["non_padded", "padded_partial"], ids=["non_padded", "padded_partial"])
+
+
+@pytest.mark.parametrize(
+    "mesh_device, config_name, num_heads_local, new_isl_tiles_per_dev, cache_tokens_per_dev, "
+    "tensor_kind, scenario, input_dtype",
+    _CASES,
+    indirect=["mesh_device"],
+)
 @pytest.mark.timeout(0)
 def test_rotary_embedding_indexed_multi_iteration_prefill(
     mesh_device,
@@ -84,6 +102,7 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
     cache_tokens_per_dev,
     tensor_kind,
     scenario,
+    input_dtype,
     is_ci_env,
     is_ci_v2_env,
 ):
@@ -102,7 +121,8 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
 
     Each iteration rotates a random chunk on device and PCCs every (chip, row) against a torch RoPE
     reference applied at that row's true global position. Also asserts program-cache reuse, proving
-    kv_actual_global is a runtime arg (not hashed)."""
+    kv_actual_global is a runtime arg (not hashed). The additional BFP8 Q case uses the same BF16
+    cos/sin and transformation matrix as the production path."""
     if (is_ci_env or is_ci_v2_env) and not (config_name == "small" and scenario == "padded_partial"):
         pytest.skip("CI runs only the small padded_partial case; the others are subsets of it")
 
@@ -129,7 +149,7 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
     assert cum_total <= cache_global, f"valid tokens ({cum_total}) must fit the cache ({cache_global})"
 
     logger.info(
-        f"tensor_kind={tensor_kind} n_heads={n_heads} sp={sp} tp={tp} chunk_local={C} "
+        f"tensor_kind={tensor_kind} dtype={input_dtype} n_heads={n_heads} sp={sp} tp={tp} chunk_local={C} "
         f"chunk_global={chunk_global} cache_global={cache_global}; "
         f"new_isl per iter={new_actual_isls} (cum_total={cum_total})"
     )
@@ -147,22 +167,26 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
     shard_dims[sp_axis] = 2  # SP-shard the seq dim; replicate across TP
     from_torch_kwargs = dict(
         device=mesh_device,
-        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cos_tt = ttnn.from_torch(
         cos_re,
+        dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
         **from_torch_kwargs,
     )
     sin_tt = ttnn.from_torch(
         sin_re,
+        dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
         **from_torch_kwargs,
     )
     trans_tt = ttnn.from_torch(
-        get_rot_transformation_mat(), mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device), **from_torch_kwargs
+        get_rot_transformation_mat(),
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        **from_torch_kwargs,
     )
 
     input_shard_dims = [None, None]
@@ -187,6 +211,7 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
         torch_input = torch.randn(1, n_heads, chunk_global, ROPE_HEAD_DIM, dtype=torch.bfloat16)
         tt_input = ttnn.from_torch(
             torch_input,
+            dtype=input_dtype,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims),
             **from_torch_kwargs,
         )
@@ -201,6 +226,7 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
             kv_actual_global=kv_actual,
             cluster_axis=sp_axis,
         )
+        assert tt_out.dtype == input_dtype
         if entries_after_first is None:
             ttnn.synchronize_device(mesh_device)
             entries_after_first = mesh_device.num_program_cache_entries()
@@ -217,6 +243,7 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
         sin_sel = sin_full[0, 0, flat, :].unsqueeze(0).unsqueeze(0)
         ref = (torch_input * cos_sel) + (rotate_half(torch_input, meta_style=True) * sin_sel)
 
+        assert torch.isfinite(out_host).all()
         _, msg = assert_with_pcc(ref, out_host, 0.99)
         logger.info(f"  iter {it}: PCC {msg}")
         kv_actual += new_actual_isl
