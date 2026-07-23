@@ -335,9 +335,31 @@ def run_sparse_mla_determinism_case(
 
 
 def run_sparse_mla_chunked_case(
-    variant, config, mesh_device, seq_len, chunk, ds_layer, ds_checkpoint, ds_repo, ds_input
+    variant,
+    config,
+    mesh_device,
+    seq_len,
+    chunk,
+    ds_layer,
+    ds_checkpoint,
+    ds_repo,
+    ds_input,
+    verify=True,
+    single_chunk=False,
 ):
-    """Sparse chunked prefill: compare chunked ttMLA against MLACPU sparse chunked truth."""
+    """Sparse chunked prefill: compare chunked ttMLA against MLACPU sparse chunked truth.
+
+    verify=False skips the CPU reference + PCC checks (real device forwards only) — for a device-only
+    profile run (e.g. wrapped in Tracy) where a large seq_len would make the CPU reference impractically
+    slow and correctness isn't the point.
+
+    single_chunk=True (requires verify=False — the caches are left at zero-init, so there is no real
+    prefix to check output against) runs only the FINAL chunk (actual_start=seq_len-chunk) instead of
+    looping from 0: a single steady-state forward over a `seq_len`-deep prefix, not a full cold-fill.
+    Mirrors test_sparse_mla_perf.py's `warm` scenario — only op shapes/timing matter, so an unfilled
+    cache is fine — and keeps the profiled device-program count low enough for Tracy's per-core DRAM
+    profiler buffers (a full cold loop overflows them at Galaxy scale)."""
+    assert not single_chunk or not verify, "single_chunk skips the cache fill, so verify must be False"
     # Anchor mesh (TP>=2) and seq/SP validity are guaranteed by _sparse_cases (no runtime skips).
     #
     # CACHE-QUANTIZATION NOTE: the CPU reference keeps KVPE in bf16 (SparseMLAReference defaults to
@@ -395,8 +417,9 @@ def run_sparse_mla_chunked_case(
     shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
 
     outs = []
-    num_chunks = (seq_len + chunk - 1) // chunk
-    for chunk_idx, s in enumerate(range(0, seq_len, chunk)):
+    starts = [seq_len - chunk] if single_chunk else list(range(0, seq_len, chunk))
+    num_chunks = len(starts)
+    for chunk_idx, s in enumerate(starts):
         logger.info(f"[{variant.name}] sparse MLA chunked TT chunk {chunk_idx + 1}/{num_chunks}: actual_start={s}")
         tt_x = ttnn.from_torch(
             hidden[:, s : s + chunk].unsqueeze(0),
@@ -414,34 +437,36 @@ def run_sparse_mla_chunked_case(
         )
     tt_output = torch.cat(outs, dim=2)
 
-    cache_dir = cpu_ref_cache_dir(variant)
-    logger.info(f"[{variant.name}] sparse MLA chunked: running CPU reference")
-    ref_output, ref_kvpe, ref_index = run_cpu_reference_chunked(
-        config, weights, hidden, seq_len, chunk, cache_dir, cache_tag=f"{src_tag}_funcidx"
-    )
+    if verify:
+        cache_dir = cpu_ref_cache_dir(variant)
+        logger.info(f"[{variant.name}] sparse MLA chunked: running CPU reference")
+        ref_output, ref_kvpe, ref_index = run_cpu_reference_chunked(
+            config, weights, hidden, seq_len, chunk, cache_dir, cache_tag=f"{src_tag}_funcidx"
+        )
 
-    for s in range(0, seq_len, chunk):
-        _, m = comp_pcc(ref_output[:, s : s + chunk], tt_output[0, :, s : s + chunk], 0)
-        logger.info(f"[{variant.name}] chunk@{s}: {m}")
+        for s in range(0, seq_len, chunk):
+            _, m = comp_pcc(ref_output[:, s : s + chunk], tt_output[0, :, s : s + chunk], 0)
+            logger.info(f"[{variant.name}] chunk@{s}: {m}")
 
-    sp = mesh_device.shape[0]
-    logger.debug(f"[{variant.name}] sparse MLA chunked: collecting KVPE cache")
-    cache_sr = ttnn.to_torch(
-        tt_kvpe_cache, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-    ).to(torch.bfloat16)[:, :1]
-    p = blockcyclic_positions(sp, chunk, cache_sr.shape[2])
-    nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
-    nat[p] = cache_sr[0, 0]
-    _, m = comp_pcc(ref_kvpe, nat[:seq_len].unsqueeze(0), 0)
-    logger.info(f"[{variant.name}] kvpe prefix: {m}")
+        sp = mesh_device.shape[0]
+        logger.debug(f"[{variant.name}] sparse MLA chunked: collecting KVPE cache")
+        cache_sr = ttnn.to_torch(
+            tt_kvpe_cache,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+        ).to(torch.bfloat16)[:, :1]
+        p = blockcyclic_positions(sp, chunk, cache_sr.shape[2])
+        nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
+        nat[p] = cache_sr[0, 0]
+        _, m = comp_pcc(ref_kvpe, nat[:seq_len].unsqueeze(0), 0)
+        logger.info(f"[{variant.name}] kvpe prefix: {m}")
 
-    logger.debug(f"[{variant.name}] sparse MLA chunked: collecting indexer key cache")
-    idx_nat = _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk)
-    _, idx_pcc = assert_with_pcc(ref_index[0, :seq_len], idx_nat[:seq_len], SPARSE_INDEX_PCC)
-    logger.info(f"[{variant.name}] Chunked indexer cache PCC: {idx_pcc}")
+        logger.debug(f"[{variant.name}] sparse MLA chunked: collecting indexer key cache")
+        idx_nat = _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk)
+        _, idx_pcc = assert_with_pcc(ref_index[0, :seq_len], idx_nat[:seq_len], SPARSE_INDEX_PCC)
+        logger.info(f"[{variant.name}] Chunked indexer cache PCC: {idx_pcc}")
 
-    _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output, SPARSE_OUTPUT_PCC)
-    logger.info(f"[{variant.name}] Chunked output PCC: {pcc_message}")
+        _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output, SPARSE_OUTPUT_PCC)
+        logger.info(f"[{variant.name}] Chunked output PCC: {pcc_message}")
     ttnn.synchronize_device(mesh_device)
     logger.info(f"[{variant.name}] sparse MLA chunked complete")
 
@@ -690,4 +715,44 @@ def test_sparse_mla_chunked(
 ):
     run_sparse_mla_chunked_case(
         variant, config_only, mesh_device, seq_len, chunk, ds_layer, ds_checkpoint, ds_repo, ds_input
+    )
+
+
+# ---------------------------------------------------------------------------
+# Device-only single-chunk profile (no CPU reference, no cache fill) — marked `perf` so it stays out of
+# the default correctness sweep. ONE forward: a 5120-tok chunk over a 51200-tok-deep cache (zero-init,
+# per test_sparse_mla_perf.py's `warm` scenario — only op shapes/timing matter) on Galaxy SP=8xTP=4.
+# Meant to be wrapped in Tracy for a per-op device-kernel timing overview. Unlike
+# test_sparse_mla_perf.py's realtime-profiler harness, this needs no profiler-activation requirement, so
+# a generic Tracy wrapper (device profiler build) can capture it like any other correctness test. A full
+# cold-fill loop (11 chunks) overflows Tracy's per-core DRAM profiler buffers at Galaxy scale — single
+# forward keeps the profiled device-program count low enough.
+# ---------------------------------------------------------------------------
+TRACY_PROFILE_CHUNK = 5120
+TRACY_PROFILE_CACHE = 51200
+TRACY_PROFILE_MESH = (8, 4)
+
+
+@pytest.mark.perf
+@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm_5_2"])
+@pytest.mark.parametrize("mesh_device", [TRACY_PROFILE_MESH], ids=["galaxy_sp8xtp4"], indirect=True)
+@pytest.mark.parametrize("device_params", SPARSE_DEVICE_PARAMS, ids=SPARSE_DEVICE_IDS, indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.skipif(detect_num_devices() != 32, reason="targets Galaxy SP=8xTP=4 (32 chips)")
+@pytest.mark.timeout(0)
+def test_sparse_mla_chunked_tracy_profile(
+    mesh_device, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo, ds_input
+):
+    run_sparse_mla_chunked_case(
+        variant,
+        config_only,
+        mesh_device,
+        TRACY_PROFILE_CACHE + TRACY_PROFILE_CHUNK,
+        TRACY_PROFILE_CHUNK,
+        ds_layer,
+        ds_checkpoint,
+        ds_repo,
+        ds_input,
+        verify=False,
+        single_chunk=True,
     )
