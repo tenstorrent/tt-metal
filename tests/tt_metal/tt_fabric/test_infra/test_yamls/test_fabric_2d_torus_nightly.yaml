@@ -4,6 +4,25 @@ allocation_policies:
 
 Tests:
 
+# Exercises Fabric Tensix MUX with the effective per-axis torus topology. On systems
+# with a size-two Y dimension, Y is intentionally treated as a mesh axis.
+  - name: "TorusYFabricMuxAllToAll"
+    fabric_setup:
+      topology: Torus
+      torus_config: Y
+      fabric_tensix_config: Mux
+      num_links: 1
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
+        iterations: 1
+
 # ================================================
 # 2D Torus (XY)
 # ================================================
