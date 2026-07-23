@@ -77,6 +77,12 @@ class BriaFiboPipelineConfig:
     # via FIBO_KEEP_PADDING=1; correct padding needs a masked joint-SDPA op (device-op + rebuild).
     keep_padding: bool = False
 
+    # Fixed padding bucket (tokens). Drives BOTH the encoder pad length AND -- when keep_padding is
+    # True -- the DiT prompt-branch M (the prompt is the replicated joint tensor, so DiT M == bucket).
+    # A larger bucket raises the max supported prompt length at proportional compute cost. Env-toggle:
+    # FIBO_PAD_BUCKET. Must be divisible by sp_factor*32 (validated in pick_bucket).
+    pad_bucket: int = 1024
+
     @classmethod
     def default(
         cls,
@@ -88,10 +94,14 @@ class BriaFiboPipelineConfig:
         topology: ttnn.Topology = ttnn.Topology.Linear,
         num_links: int | None = None,
         keep_padding: bool | None = None,
+        pad_bucket: int | None = None,
     ) -> BriaFiboPipelineConfig:
-        # Default to the unpadded (true-length) branch; FIBO_KEEP_PADDING=1 opts into fixed-1024 padding.
+        # Default to the unpadded (true-length) branch; FIBO_KEEP_PADDING=1 opts into fixed padding.
         if keep_padding is None:
             keep_padding = os.environ.get("FIBO_KEEP_PADDING", "0") == "1"
+        # Padding bucket (default 1024); FIBO_PAD_BUCKET overrides (e.g. 4096 to pad everything to 4k).
+        if pad_bucket is None:
+            pad_bucket = int(os.environ.get("FIBO_PAD_BUCKET", "1024"))
         mesh = tuple(mesh_shape)
         if len(mesh) != 2:
             msg = f"BriaFiboPipeline expects a 2D mesh, got {mesh}"
@@ -146,6 +156,7 @@ class BriaFiboPipelineConfig:
             width=width,
             checkpoint_name=checkpoint_name,
             keep_padding=keep_padding,
+            pad_bucket=pad_bucket,
         )
 
 
@@ -177,11 +188,6 @@ class BriaFiboPipeline:
         self._num_blocks = checkpoint._config.num_layers + checkpoint._config.num_single_layers
         ttnn.synchronize_device(self._submesh)
 
-        # Denoise trace: ONE trace per step that runs both CFG forwards + the guidance combine. A
-        # single trace per device is the pattern every tt_dit pipeline uses; two separate traces
-        # sharing this submesh + CCLManager corrupt each other on replay (verified: two-tracer CFG
-        # gave ~0 PCC, one trace is bit-exact). prep_run=True compiles the whole step at the real
-        # prompt shape before capture. See docs/superpowers/specs/2026-07-09-fibo-denoise-trace-design.md.
         self._tracer = Tracer(self._traced_step, device=self._submesh, prep_run=True, clone_prep_inputs=False)
         self._captured_key: tuple | None = None  # (cfg_on, cond_prompt_len, uncond_prompt_len) last captured
 
@@ -201,11 +207,12 @@ class BriaFiboPipeline:
             device=self._submesh,
             ccl_manager=self._encoder_ccl_manager,
             parallel_config=config.encoder_parallel_config,
-            pad_buckets=(1024,),
+            pad_buckets=(config.pad_bucket,),
             keep_padding=config.keep_padding,
         )
         logger.info(
-            f"FIBO DiT prompt-branch padding: {'fixed 1024 bucket' if config.keep_padding else 'unpadded (true length)'}"
+            f"FIBO DiT prompt-branch padding: "
+            f"{f'fixed {config.pad_bucket} bucket' if config.keep_padding else 'unpadded (true length)'}"
         )
         ttnn.synchronize_device(self._submesh)
 

@@ -294,7 +294,7 @@ def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inferen
 #     -k "mesh_device1" -v -s --timeout=1800
 @pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
-@pytest.mark.parametrize("height, width, num_inference_steps, num_measured_runs", [(1024, 1024, 30, 3)])
+@pytest.mark.parametrize("height, width, num_inference_steps, num_measured_runs", [(1024, 1024, 30, 8)])
 @pytest.mark.parametrize("traced", [False, True], ids=["untraced", "traced"])
 def test_fibo_pipeline_perf_breakdown_json(
     *, mesh_device, height, width, num_inference_steps, num_measured_runs, traced
