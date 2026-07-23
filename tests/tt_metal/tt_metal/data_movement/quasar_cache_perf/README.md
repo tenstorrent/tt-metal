@@ -14,6 +14,16 @@ Comparing Uncached (1B) vs Uncached (8B) isolates the effect of store width on t
 uncached port; comparing Uncached (8B) vs Cached+Flush (8B) isolates the cache +
 flush effect at a fixed store width.
 
+## When to use which (write-only to L1)
+
+- **Fire-and-forget writes, any size → uncached port with 8-byte stores.** Fastest
+  at every size in the sweep; cache+flush is never faster for write-only traffic.
+- **< 8 bytes → uncached** (store width is irrelevant below 8B). Cache+flush pays a
+  ~160-cycle `flush_l2_cache_range` floor, 3–10x worse at these sizes.
+- **Cache + flush → only with reuse.** Worth its flush cost when the data is
+  subsequently read back by the core, or when many scattered sub-64B updates
+  coalesce in cache before one flush — cases this write-only test does not measure.
+
 To measure steady-state (not one-shot) cost, the kernel repeats the timed
 `write(+flush)` region `num_iterations` times (default 100) inside a single
 `DeviceZoneScopedN`, and the host divides the zone duration by the iteration
