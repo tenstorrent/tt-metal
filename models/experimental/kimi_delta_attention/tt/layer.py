@@ -170,8 +170,18 @@ class KimiDeltaAttention:
         config = self.config
         channels = self._convolution_width
         input_length = sequence + config.conv_kernel_size - 1
-        new_state = ttnn.slice(
+        qkv_row_major = ttnn.to_layout(
             qkv,
+            ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        state_row_major = ttnn.to_layout(
+            self.convolution_state,
+            ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        new_state = ttnn.slice(
+            qkv_row_major,
             (0, sequence - (config.conv_kernel_size - 1), 0),
             (1, sequence, channels),
         )
@@ -180,13 +190,8 @@ class KimiDeltaAttention:
             ttnn.DRAM_MEMORY_CONFIG,
         )
         conv_input = ttnn.concat(
-            [self.convolution_state, qkv],
+            [state_row_major, qkv_row_major],
             dim=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        conv_input = ttnn.to_layout(
-            conv_input,
-            ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         conv_input = ttnn.reshape(conv_input, (1, input_length, 1, channels))

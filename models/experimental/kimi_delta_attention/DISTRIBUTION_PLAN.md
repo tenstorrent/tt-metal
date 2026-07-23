@@ -172,6 +172,13 @@ to 0.84038 ms while prep and fused-collective medians remain 84.05 and
 146.31 us. Retain the current map; this is launch-chain reduction rather than
 evidence for redistributing recurrence or CCL workers.
 
+The convolution wrapper now converts QKV and carry to row-major exactly once
+before concat and derives the next carry from that row-major QKV. Traced layer
+latency falls 0.84038 -> 0.70788 ms, while prep, scan, and fused output are
+unchanged. This removes layout traffic without changing ownership: retain the
+same TP and core map. Revisit a private tile-to-tile causal kernel only against
+the remaining measured conv boundary.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence
