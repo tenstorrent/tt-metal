@@ -764,9 +764,9 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         (_Path(str(trace_dir)) / "dsa").glob("indexer_k_layer_*")
     )
     if table.num_configs() > 1 and not _index_golden_present:
-        logger.warning(
-            f"[producer] table has an index config but {trace_dir}/dsa has no indexer_k_layer_* golden; "
-            f"skipping index-cache PCC (the device index cache is NOT validated for this slot)."
+        raise FileNotFoundError(
+            f"table has an index config but {trace_dir}/dsa has no indexer_k_layer_* golden; "
+            "cannot validate the device index cache for this slot"
         )
     if table.num_configs() > 1 and _index_golden_present:
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
