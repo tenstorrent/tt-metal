@@ -34,6 +34,10 @@ from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 
+WEIGHT_DTYPE = ttnn.bfloat8_b  # fc / k_proj / v_proj projection weights
+NORM_WEIGHT_DTYPE = ttnn.bfloat16  # k_norm RMSNorm weight
+ROPE_DTYPE = ttnn.bfloat16  # rope cos/sin tables
+
 
 class TtDFlashDrafter:
     # safetensors key templates for the 20-tensor prefill subset.
@@ -131,7 +135,7 @@ class TtDFlashDrafter:
             return ttnn.as_tensor(
                 t,
                 device=self.mesh_device,
-                dtype=ttnn.bfloat16,  # TODO: bfloat8_b for perf
+                dtype=WEIGHT_DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
@@ -143,7 +147,7 @@ class TtDFlashDrafter:
             return ttnn.as_tensor(
                 t,
                 device=self.mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=NORM_WEIGHT_DTYPE,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=replicate,
@@ -227,10 +231,10 @@ class TtDFlashDrafter:
             ttnn.deallocate(self._rope_cos)
             ttnn.deallocate(self._rope_sin)
         self._rope_cos = ttnn.from_torch(
-            cos, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper
+            cos, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ROPE_DTYPE, mesh_mapper=mapper
         )
         self._rope_sin = ttnn.from_torch(
-            sin, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper
+            sin, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ROPE_DTYPE, mesh_mapper=mapper
         )
         self._rope_end = end
 
@@ -405,8 +409,20 @@ class TtDFlashDrafter:
             k = ttnn.experimental.rotary_embedding_hf(
                 k, cos, sin, is_decode_mode=False, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
             )
-            # Write into cache slot `i` (layer as the fill "user" dim). TODO: the migration
-            # writer + SP-sharded seq + bf8 cache replace this seq-replicated fill_cache_for_user_.
+            # Write into cache slot `i` (layer as the fill "user" dim). The cache is bf8 (align w/ the
+            # decode KV cache) while k/v leave the projections in bf16; fill_cache_for_user_ needs the
+            # source dtype to match the cache, so typecast down first — TILE both sides, so no relayout
+            # (mirrors MLA _to_cache_format, mla.py:964). Keyed off *_cache.dtype so a bf16-cache caller
+            # (override) still works. TODO: the migration writer + SP-sharded-seq fill replace this
+            # seq-replicated fill_cache_for_user_.
+            if k.dtype != k_cache.dtype:
+                k_cast = ttnn.typecast(k, k_cache.dtype)
+                ttnn.deallocate(k)
+                k = k_cast
+            if v.dtype != v_cache.dtype:
+                v_cast = ttnn.typecast(v, v_cache.dtype)
+                ttnn.deallocate(v)
+                v = v_cast
             ttnn.kv_cache.fill_cache_for_user_(k_cache, k, i)
             ttnn.kv_cache.fill_cache_for_user_(v_cache, v, i)
             ttnn.deallocate(k)
