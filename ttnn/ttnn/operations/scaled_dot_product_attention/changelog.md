@@ -209,3 +209,42 @@
   perf, resolved by the two ablations above (measure, don't guess).
 - Tests added: test_scaled_dot_product_attention_perf.py (flagged-shape device-ns + PCC 0.997
   gate; the baseline/target harness for Refinements 3/3b/5).
+
+## Refinement 3b — K/V reuse multicast (debug: fix gate violations)
+- Date: 2026-07-23
+- What was done: Fixed the hard golden REGRESSION the completion gate caught in Refinement 3
+  (responsible cells 1060/1061). **Root cause**: the mcast auto-gate
+  (`b·H_q == grid_rows and not has_mask and grid_cols > 1`) fired on the flagged golden
+  `test_op_loose` case `(1,10,9472,128)` — the ONLY golden shape with `b·H_q == 10` on this
+  11×10 Blackhole grid. The mcast SenderPipe/ReceiverPipe handshake has a **rare intermittent
+  hang** (reproduced as non-determinism: my full-suite runs passed 1061/1061 repeatedly, but
+  the harness hit the hang once → suite never completed → the cell counts as "never ran" =
+  regression). The mcast lever delivers **zero measured perf benefit** (Refinement 3: 11.05 →
+  10.97 ms, flat; the shape is compute/dataflow-latency bound, not read-bound).
+- Fix (park a correct-but-flat lever at its trivial byte-identical default as a live knob):
+  gated the mcast auto-fire behind an explicit opt-in `TTNN_SDPA_KV_MCAST=1` (default off),
+  read at program-descriptor build time. Consequences:
+  - **Default (opt-in off)** → `use_mcast=False` for every cell → the whole supported
+    rectangle (including the flagged loose case) runs the proven **R2 per-core DRAM path**,
+    **byte-identical to Refinement 2** → deterministic, zero hang, zero regression by
+    construction. No SUPPORTED / EXCLUSIONS / API change; kernels untouched (the mcast
+    branch is still compiled via `USE_MCAST`, just never selected by the host).
+  - **Opt-in on** → the shape gate applies as before and the mcast scheme re-engages —
+    retained intact and retrievable for any FUTURE genuinely read-bound shape. Verified:
+    with `TTNN_SDPA_KV_MCAST=1` the flagged loose case routes to and completes the mcast path.
+- Golden suite after fix (full run, `--run-all`, no subset): **1061 passed / 848 xfailed**,
+  103.65s, no hang — identical to Refinement 2; zero prior-passing regressions; the flagged
+  `test_op_loose` case passes on the deterministic baseline path.
+- Accuracy: unchanged (the default path is byte-identical to R2). Perf-test PCC gate (0.997)
+  holds on the baseline path.
+- Completion-gate bullets: (1) zero hangs in SUPPORTED — full suite terminated in 103.65s;
+  (2) acceptance 36 + precision matrix 40/8-skipped + baseline + perf all pass (80 passed /
+  8 skipped combined); (3) golden majority (1061/1061 responsible) with no regression.
+- Issues encountered: The hang is rare enough that it did not reproduce in ~6 isolated
+  reruns here; the decisive evidence was the harness's non-deterministic 1060/1061 vs. my
+  repeated 1061/1061. Given the flat perf, chasing the exact race buys nothing for the perf
+  target — the parked-knob fix removes the hang risk from the gate deterministically while
+  preserving the correct scheme. The real perf lever (compute-side amortization) is the
+  next queued refinement.
+- Tests added: None (reused the golden suite + acceptance + precision matrix + perf test as
+  the regression net).

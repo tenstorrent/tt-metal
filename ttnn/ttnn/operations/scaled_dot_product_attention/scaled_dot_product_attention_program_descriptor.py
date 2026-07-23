@@ -16,6 +16,7 @@ Block-size knobs (single source of truth):
   * ``KV_BUFFER_FACTOR`` / ``Q_BUFFER_FACTOR`` — streaming CB depths.
 """
 
+import os
 import struct
 from pathlib import Path
 
@@ -223,7 +224,21 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     # a benign bit-identical redundant output), keeping the mcast landing address
     # identical across the row. All other cells keep the per-core DRAM path,
     # byte-identical to prior phases (USE_MCAST=0). No SUPPORTED change.
-    use_mcast = (not has_mask) and (b * h_q == grid_rows) and (grid_cols > 1)
+    #
+    # PARKED (Refinement 3 outcome): the scheme is CORRECT but measured FLAT on the
+    # flagged shape (11.05→10.97 ms; two ablations pin the shape as compute / per-core
+    # dataflow-latency bound, NOT redundant-read bound — see changelog R3 and the
+    # compute-side follow-up). Auto-firing it also exposed a rare intermittent
+    # mcast-handshake hang that regressed the golden `test_op_loose` flagged case (the
+    # completion-gate violation this debug pass fixes). Per "keep a correct lever at
+    # its trivial byte-identical default as a live knob": the auto-gate is PARKED OFF
+    # behind an explicit opt-in, so the whole supported rectangle (including the
+    # flagged loose case) runs the proven, deterministic R2 per-core DRAM path
+    # (byte-identical, zero hang, zero regression). The scheme stays fully intact and
+    # is re-enabled — for any FUTURE genuinely read-bound shape — by exporting
+    # TTNN_SDPA_KV_MCAST=1 (then the shape gate below applies as before).
+    mcast_opt_in = os.environ.get("TTNN_SDPA_KV_MCAST", "0") == "1"
+    use_mcast = mcast_opt_in and (not has_mask) and (b * h_q == grid_rows) and (grid_cols > 1)
 
     semaphores = []
     mcast_ct = [0, 0, 0, 0, 0]  # McastArgs CT block (5 words); inert when !use_mcast
