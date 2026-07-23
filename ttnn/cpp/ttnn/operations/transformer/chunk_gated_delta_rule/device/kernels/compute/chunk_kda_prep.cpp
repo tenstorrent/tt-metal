@@ -357,6 +357,9 @@ void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
     constexpr uint32_t Vt = get_compile_time_arg_val(2);
+    constexpr uint32_t QK_NORM = get_compile_time_arg_val(3);
+    constexpr uint32_t SCALE_BITS = get_compile_time_arg_val(4);
+    constexpr uint32_t EPS_BITS = get_compile_time_arg_val(5);
     static_assert(Ct == 1, "chunk KDA currently requires chunk_size=32");
     const uint32_t NC = get_arg_val<uint32_t>(0);
 
@@ -377,11 +380,42 @@ void kernel_main() {
         WAIT(cb_g, ck);
         WAIT(cb_beta, Ct);
 
+        uint32_t Q = cb_q, Kk = cb_k;
+        if constexpr (QK_NORM) {
+            ew(cb_q, cb_q, cb_scr1, ck, 2);
+            WAIT(cb_scr1, ck);
+            rowsum_k(cb_scr1, cb_scr2, Ct, Kt);
+            WAIT(cb_scr2, Ct);
+            POP(cb_scr1, ck);
+            inv_rms(cb_scr2, cb_scr3, Ct, EPS_BITS, SCALE_BITS, true);
+            WAIT(cb_scr3, Ct);
+            POP(cb_scr2, Ct);
+            bcast_cols_mul(cb_q, cb_scr3, cb_stmp, Ct, Kt);
+            WAIT(cb_stmp, ck);
+            POP(cb_scr3, Ct);
+            POP(cb_q, ck);
+
+            ew(cb_k, cb_k, cb_scr1, ck, 2);
+            WAIT(cb_scr1, ck);
+            rowsum_k(cb_scr1, cb_scr2, Ct, Kt);
+            WAIT(cb_scr2, Ct);
+            POP(cb_scr1, ck);
+            inv_rms(cb_scr2, cb_scr3, Ct, EPS_BITS, SCALE_BITS, false);
+            WAIT(cb_scr3, Ct);
+            POP(cb_scr2, Ct);
+            bcast_cols_mul(cb_k, cb_scr3, cb_final, Ct, Kt);
+            WAIT(cb_final, ck);
+            POP(cb_scr3, Ct);
+            POP(cb_k, ck);
+            Q = cb_stmp;
+            Kk = cb_final;
+        }
+
         // v_beta and k_beta.
         bcast_cols_mul(cb_v, cb_beta, cb_vbeta, Ct, Vt);
         WAIT(cb_vbeta, cv);
         POP(cb_v, cv);
-        bcast_cols_mul(cb_k, cb_beta, cb_kbeta, Ct, Kt);
+        bcast_cols_mul(Kk, cb_beta, cb_kbeta, Ct, Kt);
         WAIT(cb_kbeta, ck);
         POP(cb_beta, Ct);
 
@@ -419,15 +453,15 @@ void kernel_main() {
         POP(cb_scr1, ck);
 
         // qd=q*exp(G), kd=beta*k*exp(G), kr=k*exp(-G).
-        ew(cb_q, cb_decay_exp, cb_qdecay, ck, 2);
+        ew(Q, cb_decay_exp, cb_qdecay, ck, 2);
         WAIT(cb_qdecay, ck);
-        POP(cb_q, ck);
+        POP(Q, ck);
         ew(cb_kbeta, cb_decay_exp, cb_w, ck, 2);
         WAIT(cb_w, ck);
         POP(cb_kbeta, ck);
-        ew(cb_k, cb_decayfac, cb_scr1, ck, 2);
+        ew(Kk, cb_decayfac, cb_scr1, ck, 2);
         WAIT(cb_scr1, ck);  // kr
-        POP(cb_k, ck);
+        POP(Kk, ck);
         POP(cb_decayfac, ck);
 
         // T_inv = (I + strictly_lower(kd @ kr^T))^-1.
