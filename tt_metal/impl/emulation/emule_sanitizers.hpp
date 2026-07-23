@@ -23,8 +23,11 @@ namespace tt::tt_metal {
 class IDevice;
 }
 
-// Wormhole has 32 CBs; JIT header cb_api.h sizes unpack_tile_size[32].
-static constexpr uint32_t EMULE_NUM_CBS = 32;
+// Max CB count across emule arches: Blackhole has 64 CBs, Wormhole 32. Sized to
+// the max (matches jit_hw cb_api.h's metadata arrays and Core::MAX_CBS); the real
+// per-arch ceiling is enforced upstream by tt-metal's host CircularBufferConfig
+// guard + the per-arch JIT NUM_CIRCULAR_BUFFERS, so WH slots 32..63 go unused.
+static constexpr uint32_t EMULE_NUM_CBS = 64;
 
 // Per-kernel sanitizer thread-local state. The definitions live in
 // emulated_program_runner.cpp (exported via -rdynamic so JIT kernel .so files
@@ -43,14 +46,14 @@ extern thread_local uint32_t __emule_l1_host_ranges_count;
 extern thread_local uint64_t* __emule_l1_resolved_ranges;
 extern thread_local uint32_t* __emule_l1_resolved_ranges_count;
 extern thread_local uint32_t __emule_l1_resolved_ranges_capacity;
-extern thread_local uint32_t __emule_cb_reserved_pages[32];
-extern thread_local uint32_t __emule_cb_waited_pages[32];
-extern thread_local bool __emule_cb_reserve_dangling[32];
-extern thread_local bool __emule_cb_wait_dangling[32];
-extern thread_local const char* __emule_cb_reserve_file[32];
-extern thread_local uint32_t __emule_cb_reserve_line[32];
-extern thread_local const char* __emule_cb_wait_file[32];
-extern thread_local uint32_t __emule_cb_wait_line[32];
+extern thread_local uint32_t __emule_cb_reserved_pages[EMULE_NUM_CBS];
+extern thread_local uint32_t __emule_cb_waited_pages[EMULE_NUM_CBS];
+extern thread_local bool __emule_cb_reserve_dangling[EMULE_NUM_CBS];
+extern thread_local bool __emule_cb_wait_dangling[EMULE_NUM_CBS];
+extern thread_local const char* __emule_cb_reserve_file[EMULE_NUM_CBS];
+extern thread_local uint32_t __emule_cb_reserve_line[EMULE_NUM_CBS];
+extern thread_local const char* __emule_cb_wait_file[EMULE_NUM_CBS];
+extern thread_local uint32_t __emule_cb_wait_line[EMULE_NUM_CBS];
 extern thread_local bool __emule_cb_boundary_strict;
 extern thread_local uint32_t __emule_dram_unreserved_base;
 extern thread_local const uint64_t* __emule_dram_tensor_ranges;
