@@ -5,7 +5,7 @@
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple, Union
 
 import torch
 from loguru import logger
@@ -30,7 +30,9 @@ class TtPrefillRuntimeConfig:
     sp_axis: int = 0
     tp_axis: int = 1
     num_links: int = 1
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    # Scalar applies to both mesh axes; a (sp_axis_0, tp_axis_1) tuple configures each independently.
+    # Derived from the opened fabric via tt_ccl.per_axis_topology() in the runner.
+    topology: Union[ttnn.Topology, Tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear
     capacity_factor: int = 2
     gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL
     routed_expert_activations_dtype: ttnn.DataType = ttnn.bfloat8_b

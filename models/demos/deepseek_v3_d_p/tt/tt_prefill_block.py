@@ -280,7 +280,9 @@ class TtPrefillBlock(LightweightModule):
             seq_len=max_seq_len if max_seq_len is not None else seq_len,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
-            topology=tp_topology,  # MLA's q/kv all-gathers run on the TP axis (cluster_axis=tp_axis)
+            # Pass the full per-axis topology: MLA's q/kv/wo CCLs use the TP element (cluster_axis=
+            # tp_axis), but its ring-attention SDPA runs on the SP axis and needs the SP element.
+            topology=topology,
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
             is_chunked=is_chunked,

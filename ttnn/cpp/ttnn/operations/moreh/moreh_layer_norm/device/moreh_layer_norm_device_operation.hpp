@@ -29,7 +29,7 @@ struct MorehLayerNormOperation {
         const std::optional<const Tensor>& rstd;
     };
 
-    using spec_return_value_t = std::vector<std::optional<TensorSpec>>;
+    using spec_return_value_t = std::vector<std::optional<tt::tt_metal::TensorSpec>>;
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
     struct ProgramFactory {

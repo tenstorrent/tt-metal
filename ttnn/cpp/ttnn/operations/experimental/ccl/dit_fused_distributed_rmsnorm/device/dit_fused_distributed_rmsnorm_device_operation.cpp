@@ -268,7 +268,7 @@ DitFusedDistributedRmsnormDeviceOperation::compute_output_specs(
     const auto& input = tensor_args.input;
     const auto& logical = input.logical_shape();
 
-    std::vector<TensorSpec> specs;
+    std::vector<tt::tt_metal::TensorSpec> specs;
     specs.reserve(2);
 
     // Post-allgather output reshapes to [1, num_heads_per_device, N, H/num_heads_per_device].

@@ -302,7 +302,7 @@ mm_init(
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id)));
 
-    PACK((llk_pack_hw_configure(out_cb_id)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
     PACK((llk_pack_dest_init()));
 #endif
@@ -425,7 +425,7 @@ mm_block_init(
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, ct_dim, rt_dim)));
 
-    PACK((llk_pack_hw_configure(out_cb_id)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
     PACK((llk_pack_dest_init()));
 #endif

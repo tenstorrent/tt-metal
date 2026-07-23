@@ -452,7 +452,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.q;
     const auto q_shape = input.padded_shape();
@@ -497,7 +497,7 @@ TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     if (use_mla) {
         output_shape[3] = operation_attributes.head_dim_v.value();
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
 }
 

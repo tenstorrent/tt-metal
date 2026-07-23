@@ -38,7 +38,7 @@ struct MoeGroupedTopkDeviceOperation {
         std::optional<Tensor> padding_config;
     };
 
-    using spec_return_value_t = std::array<TensorSpec, 2>;
+    using spec_return_value_t = std::array<tt::tt_metal::TensorSpec, 2>;
     using tensor_return_value_t = std::array<Tensor, 2>;
 
     struct ProgramFactory {

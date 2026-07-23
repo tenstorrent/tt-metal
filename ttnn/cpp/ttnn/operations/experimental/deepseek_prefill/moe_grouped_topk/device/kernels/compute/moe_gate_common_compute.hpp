@@ -35,6 +35,31 @@ namespace blocks {
 constexpr uint32_t SCORE_FUNC_SIGMOID = 0;       // DeepSeek-V3 / Kimi
 constexpr uint32_t SCORE_FUNC_SQRTSOFTPLUS = 1;  // DeepSeek-V4: sqrt(softplus(x))
 
+// Widen width_tiles input tiles from their (possibly bf16) source format into an fp32 output CB.
+// The whole gate pipeline computes in fp32, and the downstream two-operand ops (e.g. add_bias) need
+// every operand in a single format, so the bf16 gate logits/bias are upcast here (lossless) instead
+// of by a separate host-side ttnn.typecast op. When the input is already fp32 this is an identity copy.
+void upcast_tiles(uint32_t cb_in_id, uint32_t cb_out_fp32_id, uint32_t width_tiles) {
+    CircularBuffer cb_in(cb_in_id);
+    CircularBuffer cb_out(cb_out_fp32_id);
+    reconfig_data_format_srca(cb_in_id);
+    copy_tile_to_dst_init_short(cb_in_id);
+    pack_reconfig_data_format(cb_out_fp32_id);
+    for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
+        cb_in.wait_front(1);
+        tile_regs_acquire();
+        copy_tile(cb_in_id, 0, 0);
+        tile_regs_commit();
+        cb_in.pop_front(1);
+
+        cb_out.reserve_back(1);
+        tile_regs_wait();
+        pack_tile(0, cb_out_fp32_id);
+        tile_regs_release();
+        cb_out.push_back(1);
+    }
+}
+
 // Applies the selected router affinity activation to each logits tile. The output CB (historically
 // "sigmoid" scores) holds the unbiased activated scores that the writer later gathers for the weights.
 template <uint32_t score_func>

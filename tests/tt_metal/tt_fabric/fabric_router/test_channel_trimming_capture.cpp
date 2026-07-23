@@ -67,7 +67,7 @@ using CaptureResults =
 // ============================================================================
 struct EthCoreCaptureResult {
     ChipId physical_chip_id;
-    CoreCoord logical_eth_core;
+    tt::tt_metal::CoreCoord logical_eth_core;
     chan_id_t channel_id;
     CaptureResults capture;
 };
@@ -76,18 +76,18 @@ struct EthCoreCaptureResult {
 // Helper: Enumerate the ETH cores/channels that participate in the configured
 // fabric topology for a physical chip.
 // ============================================================================
-std::vector<std::pair<CoreCoord, chan_id_t>> get_active_fabric_capture_cores(ChipId physical_chip_id) {
+std::vector<std::pair<tt::tt_metal::CoreCoord, chan_id_t>> get_active_fabric_capture_cores(ChipId physical_chip_id) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
     const auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
-    std::vector<std::pair<CoreCoord, chan_id_t>> capture_cores;
+    std::vector<std::pair<tt::tt_metal::CoreCoord, chan_id_t>> capture_cores;
     capture_cores.reserve(active_channels.size());
     for (const auto& [channel_id, _] : active_channels) {
         auto logical_eth_core = soc_desc.get_eth_core_for_channel(channel_id, CoordSystem::LOGICAL);
-        capture_cores.emplace_back(CoreCoord(logical_eth_core.x, logical_eth_core.y), channel_id);
+        capture_cores.emplace_back(tt::tt_metal::CoreCoord(logical_eth_core.x, logical_eth_core.y), channel_id);
     }
     return capture_cores;
 }
@@ -231,8 +231,8 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     FabricNodeId dst_fabric_node_id,
     uint32_t num_hops,
     uint32_t num_packets = 10) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
+    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -270,7 +270,7 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
 
     auto sender_device = fixture->get_device(src_physical);
     auto receiver_device = fixture->get_device(dst_physical);
-    CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
+    tt::tt_metal::CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
     uint32_t is_2d_fabric = topology == Topology::Mesh;

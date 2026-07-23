@@ -92,7 +92,7 @@ ttnn:
   unit:
     wh_llmbox: 50
     wh_galaxy: 35
-    bh_p100: 780
+    bh_p100: 805
     bh_p150b_civ2: 1045
     wh_n150_civ2: 1185
     wh_n300_civ2: 1175
@@ -299,7 +299,7 @@ models:
     bh_p150b_civ2: 8
     bh_p300: 20
     bh_loudbox: 193
-    bh_quietbox_2: 80
+    bh_quietbox_2: 90
     bh_sc1: 20 # single galaxy MLA chunked prefill
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
   # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
