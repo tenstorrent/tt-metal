@@ -551,3 +551,11 @@
 - The row-parallel output projection produces one full-hidden partial per device. The current correctness path applies the existing minimal reduce-scatter and returns hidden-sharded `[B,T,hidden/TP]`; it is the unfused baseline for the planned matmul-reduce-scatter optimization.
 - Eight-device command: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 2/2 in 22.92 s. The distributed layer matched torch at output PCC `0.999955`, recurrent-state PCC `0.999892`, and convolution-state PCC `0.999997`.
 - Single-device regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 7/7 in 8.02 s. Target decode output/state PCC remained `0.999970` / `0.999968`.
+
+
+### 2026-07-23 10:19:04 UTC — Fused prefill output matmul + reduce-scatter
+
+- Reused the production Qwen3.5 Blackhole `matmul_reduce_scatter_async` wrapper for TP prefill, including shared persistent buffers and disjoint matmul/CCL core rows. Decode retains the separate path.
+- The first H=1,V=32 correctness case hung. Evidence rejected a generic timeout explanation: the same full layer passed with separate matmul + reduce-scatter, and the timeout appeared only when consuming the fused output. That case supplied one local K tile to an eight-column matmul grid, below the fused program mapping used by repository tests, so fusion is now gated on at least eight local K tiles.
+- An eight-tile local-K retry still hung with `Topology.Linear`. Source inspection showed the validated P150x8 Qwen path and fused CCL tests use `Topology.Ring`. Changing only the topology to Ring made the identical shape pass, proving topology mismatch was the deadlock root cause. The safe test wrapper reset all eight devices after each hang.
+- Command: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 1/1 in 4.79 s. Fused output PCC was `0.999949`; recurrent and convolution state PCC were `0.999914` and `0.999997`.

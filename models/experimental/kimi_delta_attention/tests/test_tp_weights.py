@@ -88,7 +88,7 @@ def test_tp_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
         hidden_size=256,
         num_heads=8,
         head_k_dim=32,
-        head_v_dim=32,
+        head_v_dim=256,
         conv_kernel_size=4,
         norm_eps=1e-5,
     )
@@ -115,12 +115,19 @@ def test_tp_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
     recurrent_shards = _host_shards(layer.recurrent_state)
     convolution_shards = _host_shards(layer.convolution_state)
     actual_recurrent = torch.cat(recurrent_shards, dim=1)
-    local_width = config.head_k_dim
+    local_key_width = config.head_k_dim
+    local_value_width = config.head_v_dim
     actual_convolution = torch.cat(
         (
-            torch.cat([shard[..., :local_width] for shard in convolution_shards], dim=-1),
-            torch.cat([shard[..., local_width : 2 * local_width] for shard in convolution_shards], dim=-1),
-            torch.cat([shard[..., 2 * local_width :] for shard in convolution_shards], dim=-1),
+            torch.cat([shard[..., :local_key_width] for shard in convolution_shards], dim=-1),
+            torch.cat([shard[..., local_key_width : 2 * local_key_width] for shard in convolution_shards], dim=-1),
+            torch.cat(
+                [
+                    shard[..., 2 * local_key_width : 2 * local_key_width + local_value_width]
+                    for shard in convolution_shards
+                ],
+                dim=-1,
+            ),
         ),
         dim=-1,
     )
