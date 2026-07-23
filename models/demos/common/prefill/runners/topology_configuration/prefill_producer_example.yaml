@@ -1,0 +1,77 @@
+# prefill_producer — FULL REFERENCE manifest: every supported flag, its PREFILL_* env var, and default.
+#
+# Drive with:
+#   python -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest models/demos/common/prefill/runners/topology_configuration/prefill_producer_example.yaml
+#
+# Precedence (lowest -> highest): typed block below  <  a raw key in the `env:` block  <  a PREFILL_* var
+# exported in the shell  <  a CLI flag (--migrations). The manifest is applied via setdefault, so anything
+# you export still wins. Every field is OPTIONAL — omit it to take the default shown. Fields marked
+# [MATCH RUNNER] MUST equal the runner's values (wire layout / ack counts / IPC paths won't line up else).
+# This file sets everything explicitly for documentation; a real manifest only needs the few you change.
+
+# ---------------------------------------------------------------------------
+model:
+  variant: glm_5_1          # PREFILL_MODEL           (default: deepseek_v3_d_p) registry key in adapter.py
+  num_layers: 78            # PREFILL_NUM_LAYERS      (default: 61)    [MATCH RUNNER] per-layer ack count
+  max_seq_len: 56320        # PREFILL_MAX_SEQ_LEN     (default: 61440) [MATCH RUNNER] per-user cache tokens
+  chunk_size: 5120          # PREFILL_CHUNK_SIZE      (default: 5120)  [MATCH RUNNER] tokens per push
+
+# ---------------------------------------------------------------------------
+transport:
+  sp: 8                     # PREFILL_SP              (default: 8)  [MATCH RUNNER] mesh rows (seq-parallel)
+  tp: 4                     # PREFILL_TP              (default: 4)  [MATCH RUNNER] mesh cols (tensor-parallel)
+  h2d_service_id: ds_prefill # PREFILL_H2D_SERVICE_ID (default: ds_prefill) [MATCH RUNNER] H2D socket name
+  connect_timeout_s: 60     # PREFILL_H2D_CONNECT_TIMEOUT (default: 60) attach/table/devmap poll timeout
+
+# ---------------------------------------------------------------------------
+workload:
+  num_users: 2              # PREFILL_NUM_USERS            (default: 1)   concurrent src cache slots [0,N)
+  chunks: "11"              # PREFILL_PRODUCER_CHUNKS      (default: "11") "N" fixed, or "min,max" random
+  max_requests: 2           # PREFILL_PRODUCER_MAX_REQUESTS (default: 1)  total requests before stopping
+  duration_s: "inf"         # PREFILL_PRODUCER_DURATION_S  (default: inf) wall-clock bound
+  interleave: round_robin   # PREFILL_PRODUCER_INTERLEAVE  (default: random) "random" | "round_robin"
+  p_gap: 0.0                # PREFILL_PRODUCER_P_GAP       (default: 0.0) per-step idle-gap probability
+  p_burst: 0.0              # PREFILL_PRODUCER_P_BURST     (default: 0.0) per-step 2-3 chunk burst probability
+  gap_ms: "200,2000"        # PREFILL_PRODUCER_GAP_MS      (default: "200,2000") idle-gap "min,max" ms
+  mid_end_prob: 0.0         # PREFILL_PRODUCER_MID_END_PROB (default: 0.0) prob a request ends mid-chunk
+  seed: 1234                # PREFILL_PRODUCER_SEED        (default: 1234) RNG seed (deterministic schedule)
+  check_pcc: false          # PREFILL_PRODUCER_CHECK_PCC   (default: false) producer-side per-slot read-back PCC
+  trace_dir: /mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm
+                            # PREFILL_TRACE_DIR (default: the adapter's prefill_trace_default) shared prompt
+  # slot_prompts -> PREFILL_PRODUCER_SLOT_TRACES (default: unset => single shared trace_dir on every slot).
+  # Per-slot prompt (tokens + golden), index = slot_id; depth derived from each prompt's real length.
+  # Overrides trace_dir + chunks for those slots. Cycles by slot % count if fewer entries than num_users.
+  # slot_prompts:
+  #   - /mnt/.../structured_traces/glm_51_55k_vllm             # slot 0
+  #   - /mnt/.../structured_traces/glm_51_code_debug_55k_vllm  # slot 1
+
+# ---------------------------------------------------------------------------
+# Real KV migration issued BY the producer (opt-in). Needs a live migration_endpoint the runner already
+# drove to WORKER_READY. The producer migrates + writes the DONE sentinel; the RUNNER validates KV.
+migration:
+  issue: false              # PREFILL_PRODUCER_ISSUE_MIGRATION (default: false) attach client + migrate
+  dest_endpoint_id: 1       # PREFILL_MIGRATION_DEST_ENDPOINT_ID (default: 1) own id => loopback; other => x-ep
+  dst_slot_offset: 2        # PREFILL_MIGRATION_DST_SLOT_OFFSET (default: num_users) dst = src + offset
+  # pairs -> PREFILL_MIGRATION_PAIRS (default: unset => use dst_slot_offset). Arbitrary any-src -> any-dst;
+  # overrides dst_slot_offset. Each src must be resident; each dst < the RUNNER's slot count. Also --migrations.
+  # pairs:
+  #   - {src: 0, dst: 3}
+  #   - {src: 1, dst: 2}
+  timeout_ms: 3600000       # PREFILL_MIGRATION_TIMEOUT_MS (default: 3600000) per-migration wait_complete ms
+  done_file: /tmp/migration_done.sentinel   # MIGRATION_DONE_FILE (default: /tmp/migration_done.sentinel)
+  client_dir: /path/to/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
+                            # PREFILL_MIGRATION_CLIENT_DIR (default: unset) dir holding _migration_client*.so
+  cmd_queue: /mig_ep1_cmd   # PREFILL_MIGRATION_CMD_QUEUE   (default: /prefill_mig_cmd_1) [MATCH ENDPOINT]
+  table_queue: /mig_ep1_table # PREFILL_MIGRATION_TABLE_QUEUE (default: /prefill_mig_tbl_1) [MATCH ENDPOINT]
+  resp_queue: /mig_ep1_resp # PREFILL_MIGRATION_RESP_QUEUE  (default: /prefill_mig_rsp_1) [MATCH ENDPOINT]
+  table_path: /tmp/prefill_kv_chunk_table.pb    # PREFILL_MIGRATION_TABLE_PATH [MATCH RUNNER] KV addr table
+  device_map_path: /tmp/prefill_kv_device_map.json # PREFILL_MIGRATION_DEVICE_MAP_PATH [MATCH RUNNER] (check_pcc)
+
+# ---------------------------------------------------------------------------
+# Escape hatch: any raw PREFILL_* key (wins over the typed blocks). Also the home for flags with no typed
+# field of their own:
+env:
+  PREFILL_SEND_SHUTDOWN: "0"            # (default: 0) "1" => close the stream with an all -1 sentinel so the
+                                        #   runner drains + tears down after the run (sent last, after KV read).
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.93" # (default: 0.93) producer-side check_pcc pass/fail threshold.
