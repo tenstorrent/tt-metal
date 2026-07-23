@@ -102,7 +102,7 @@ class QuantConfig:
         (residual, gate) are bf16 and must match the weight tile format, so those weights
         stay bf16. ``ffn_ff2`` uses the RowParallel RS-fused addcmul, which Wan runs at bf8
         with no issue, so it is quantized. SDPA stays fully unquantized here (FastVideo kept
-        attention higher precision); ``all_bf8_lofi_sdpa_bf8`` is the separate SDPA-input arm.
+        attention higher precision); the ``LTX_QUANT_SDPA_BF8`` flag casts the SDPA inputs to bf8.
         """
         lc = LinearQuantConfig(
             weight_dtype=ttnn.bfloat8_b,
@@ -129,45 +129,6 @@ class QuantConfig:
             ffn_ff2=lc,
             ring_sdpa=sc,
         )
-
-    @staticmethod
-    def all_bf8_lofi_sdpa_lofi() -> QuantConfig:
-        """all_bf8_lofi plus the self-attention ring SDPA dropped HiFi2 -> LoFi.
-
-        Only the ``sdpa_compute_kernel_config`` fidelity changes; SDPA inputs stay bf16. Ring SDPA
-        is the O(seq^2) self-attention (video seq ~9.7k at stage-2), so if stage-2 is attention-
-        compute-bound this roughly halves those matmul phases. Cross-attention SDPA (attn2,
-        seq x prompt_len) is untouched. Quality-sensitive: gate on PCC / a frame check."""
-        cfg = QuantConfig.all_bf8_lofi()
-        cfg.ring_sdpa = SDPAQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc=False)
-        return cfg
-
-    @staticmethod
-    def all_bf8_lofi_sdpa_bf8() -> QuantConfig:
-        """all_bf8_lofi with the SDPA inputs (Q/K/V) cast to bf8, fidelity left at HiFi2.
-
-        Independent of ``LTX_QUANT_ACTIVATIONS``: that flag gates the *linear* activation cast, this
-        preset carries the SDPA one. On the ring paths K/V are the collective's payload, so this is a
-        bandwidth lever, not just a math one — but SDPA inputs carry the block's widest dynamic range
-        and SDPA-LoFi alone has already been measured failing the PCC bar, so it gates on PCC first.
-
-        Weights are byte-identical to ``all_bf8_lofi``, but the pipeline's tensorbin cache is keyed on
-        the preset *name*, so a pipeline run under this name is a cache MISS and re-materialises the
-        22B checkpoint. The PCC oracle builds from the torch reference and is unaffected; a traced run
-        would need the cache key taught to hash the weight dtypes instead.
-        """
-        cfg = QuantConfig.all_bf8_lofi()
-        cfg.ring_sdpa = SDPAQuantConfig(input_dtype=ttnn.bfloat8_b, math_fidelity=ttnn.MathFidelity.HiFi2)
-        return cfg
-
-    @staticmethod
-    def all_bf8_lofi_sdpa_lofi_fp32acc() -> QuantConfig:
-        """all_bf8_lofi with the ring self-attention SDPA at LoFi and fp32 dest accumulation.
-        fp32 dest keeps SDPA's running softmax max/sum in full precision under LoFi, where the
-        packed-dest path leaves the reduced-mantissa accumulators too coarse."""
-        cfg = QuantConfig.all_bf8_lofi()
-        cfg.ring_sdpa = SDPAQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc=True)
-        return cfg
 
 
 # ---------------------------------------------------------------------------
