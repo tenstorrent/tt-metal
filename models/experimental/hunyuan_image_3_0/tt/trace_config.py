@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import os
 
+from models.experimental.hunyuan_image_3_0.ref.model_config import NUM_HIDDEN_LAYERS
+
 import ttnn
 
 _TRACE_REGION_MB_MIN = 128
@@ -158,7 +160,7 @@ def trace_region_size() -> int:
     override_mb = os.environ.get("HY_TRACE_REGION_MB")
     if override_mb:
         return int(override_mb) * 1024 * 1024
-    num_layers = int(os.environ.get("HY_NUM_LAYERS", "32"))
+    num_layers = int(os.environ.get("HY_NUM_LAYERS", str(NUM_HIDDEN_LAYERS)))
     size_mb = min(
         _TRACE_REGION_MB_MAX,
         max(_TRACE_REGION_MB_MIN, _TRACE_REGION_MB_MIN + num_layers * _TRACE_REGION_MB_PER_LAYER),

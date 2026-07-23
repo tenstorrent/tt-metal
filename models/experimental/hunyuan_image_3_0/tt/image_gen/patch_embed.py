@@ -29,6 +29,12 @@ import os
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.hunyuan_image_3_0.ref.model_config import (
+    HIDDEN_SIZE,
+    PATCH_EMBED_HIDDEN_CHANNELS,
+    VAE_LATENT_CHANNELS,
+    VAE_NUM_GROUPS,
+)
 
 from ..matmul_utils import act_width_sharded_linear, final_layer_emb_matmul_grid
 from .patch_embed_conv_configs import make_layer_conv2d_config
@@ -105,7 +111,7 @@ def _match_shard_to(x: ttnn.Tensor, ref: ttnn.Tensor) -> ttnn.Tensor:
 # GroupNorm(32, C) on flat NHWC [1,1,B*H*W,C] — interleaved TILE manual path only.
 # ---------------------------------------------------------------------------
 class _TtGroupNorm:
-    def __init__(self, device, num_channels, weight, bias, *, num_groups=32, eps=1e-5, dtype=ttnn.bfloat16):
+    def __init__(self, device, num_channels, weight, bias, *, num_groups=VAE_NUM_GROUPS, eps=1e-5, dtype=ttnn.bfloat16):
         assert num_channels % 32 == 0 and num_channels % num_groups == 0
         self.device = device
         self.num_channels = num_channels
@@ -397,10 +403,10 @@ class HunyuanTtUNetDown(LightweightModule):
         prefix="patch_embed",
         *,
         patch_size=1,
-        in_channels=32,
-        emb_channels=4096,
-        hidden_channels=1024,
-        out_channels=4096,
+        in_channels=VAE_LATENT_CHANNELS,
+        emb_channels=HIDDEN_SIZE,
+        hidden_channels=PATCH_EMBED_HIDDEN_CHANNELS,
+        out_channels=HIDDEN_SIZE,
         eps=1e-5,
         dtype=ttnn.bfloat16,
     ):
@@ -452,10 +458,10 @@ class HunyuanTtUNetUp(LightweightModule):
         prefix="final_layer",
         *,
         patch_size=1,
-        in_channels=4096,
-        emb_channels=4096,
-        hidden_channels=1024,
-        out_channels=32,
+        in_channels=HIDDEN_SIZE,
+        emb_channels=HIDDEN_SIZE,
+        hidden_channels=PATCH_EMBED_HIDDEN_CHANNELS,
+        out_channels=VAE_LATENT_CHANNELS,
         out_norm=True,
         eps=1e-5,
         dtype=ttnn.bfloat16,

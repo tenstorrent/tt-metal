@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.experimental.hunyuan_image_3_0.ref.vae.decoder import load_mid
+from models.experimental.hunyuan_image_3_0.ref.vae.decoder import LATENT_H, LATENT_T, LATENT_W, MID_CHANNELS, load_mid
 from models.experimental.hunyuan_image_3_0.tt.vae.decoder import ResnetBlockTTNN
 from models.experimental.hunyuan_image_3_0.tt.vae.decoder_weights import load_resnet_block
 from models.experimental.hunyuan_image_3_0.tt.vae.spatial import enable_vae_spatial, gather_hw
@@ -26,11 +26,11 @@ def device_params(request):
 def test_resnet_conv_pair_replicated_vs_pytorch(mesh_device):
     mesh_device.enable_program_cache()
     ref = load_mid().block_1
-    x = torch.randn(1, 1024, 1, 64, 64) * 0.1
+    x = torch.randn(1, MID_CHANNELS, LATENT_T, LATENT_H, LATENT_W) * 0.1
     with torch.no_grad():
         pt_out = ref(x)
 
-    tt = ResnetBlockTTNN(1024, 1024, mesh_device, t=1, h=64, w=64)
+    tt = ResnetBlockTTNN(MID_CHANNELS, MID_CHANNELS, mesh_device, t=LATENT_T, h=LATENT_H, w=LATENT_W)
     load_resnet_block(tt, ref)
     x_tt = ttnn.from_torch(
         x.permute(0, 2, 3, 4, 1).contiguous(),
@@ -54,11 +54,11 @@ def test_resnet_conv_pair_sharded_vs_pytorch(mesh_device):
     mesh_device.enable_program_cache()
     ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
     ref = load_mid().block_1
-    x = torch.randn(1, 1024, 1, 64, 64) * 0.1
+    x = torch.randn(1, MID_CHANNELS, LATENT_T, LATENT_H, LATENT_W) * 0.1
     with torch.no_grad():
         pt_out = ref(x)
 
-    tt = ResnetBlockTTNN(1024, 1024, mesh_device, t=1, h=64, w=64)
+    tt = ResnetBlockTTNN(MID_CHANNELS, MID_CHANNELS, mesh_device, t=LATENT_T, h=LATENT_H, w=LATENT_W)
     load_resnet_block(tt, ref)
     enable_vae_spatial(tt, ccl, h_mesh_axis=0, w_mesh_axis=1)
 

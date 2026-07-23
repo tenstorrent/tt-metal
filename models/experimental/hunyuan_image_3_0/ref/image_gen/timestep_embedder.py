@@ -98,8 +98,10 @@ class TimestepEmbedder(nn.Module):
 # Quick numeric smoke-test
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    from models.experimental.hunyuan_image_3_0.ref.model_config import HIDDEN_SIZE
+
     torch.manual_seed(42)
-    H = 4096
+    H = HIDDEN_SIZE
     emb = TimestepEmbedder(H).eval()
     t = torch.rand(4)  # 4 fractional timesteps in [0, 1)
     with torch.no_grad():

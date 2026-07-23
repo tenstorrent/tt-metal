@@ -1,20 +1,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Device-logits AR sampling for Hunyuan (``HY_DEVICE_SAMPLING=1``).
+# Device-logits AR sampling for Hunyuan (``HY_DEVICE_SAMPLING``, default **on**).
 #
-# Default (host shortlist under ``HY_DEVICE_SAMPLING=1``):
-#   device logits → D2H full V → host ``torch.topk`` (Instruct ``top_k``, e.g. 1024)
-#   → host shortlist multinomial → host token ids. Logs as ``[device_sampling]``.
+# Default under device sampling (Instruct ``top_k`` e.g. 1024, or any k ≠ 32):
+#   device logits → D2H full V → host ``torch.topk`` → host shortlist multinomial
+#   → host token ids. Logs as ``[device_sampling]``.
 #
-# Opt-in pure ttnn path (``HY_TTNN_SAMPLING_OP=1``):
+# On-device top-k + sample when the user **explicitly** sets ``HY_TOP_K=32``
+# (alias ``HY_TOPK=32``), or ``HY_TTNN_SAMPLING_OP=1``:
 #   device logits → local ``ttnn.topk`` → (vocab-parallel) all_gather + offsets
 #   → pad W≥64 → ``ttnn.sampling`` → device token ids.
 #   ``ttnn.sampling`` hard-caps k to (0, 32]; BH hangs on W=32 (pad to ≥64).
-#   This path currently tends to empty/quad-only Instruct cot.
 #
 # Full-vocab ``ttnn.sampling`` (W≈262144) OOMs with the resident backbone.
 # Repetition penalty / stage-force / ratio processors still force host generate.
+# Disable device-logits path with ``HY_DEVICE_SAMPLING=0`` (alias ``HY_SAMPLE_DEVICE=0``).
 
 from __future__ import annotations
 
@@ -28,17 +29,40 @@ import ttnn
 _TTNN_SAMPLING_MAX_K = 32
 
 
+def resolve_hy_top_k() -> int | None:
+    """Return explicit ``HY_TOP_K`` / ``HY_TOPK`` override, or None if unset."""
+    for key in ("HY_TOP_K", "HY_TOPK"):
+        raw = os.environ.get(key)
+        if raw is not None and str(raw).strip() != "":
+            return int(raw)
+    return None
+
+
 def device_sampling_enabled() -> bool:
-    """``HY_DEVICE_SAMPLING=1`` enables the device-logits sampling path."""
-    return os.environ.get("HY_DEVICE_SAMPLING", "0") == "1"
+    """Device-logits AR path — **on by default**.
+
+    ``HY_DEVICE_SAMPLING=0`` (or alias ``HY_SAMPLE_DEVICE=0``) disables it.
+    """
+    for key in ("HY_DEVICE_SAMPLING", "HY_SAMPLE_DEVICE"):
+        if key in os.environ:
+            return os.environ.get(key, "1") != "0"
+    return True
 
 
 def ttnn_sampling_op_enabled() -> bool:
-    """``HY_TTNN_SAMPLING_OP=1`` uses pure ``ttnn.topk`` + ``ttnn.sampling``.
+    """Use pure ``ttnn.topk`` + ``ttnn.sampling`` (device top-k).
 
-    Default is off: D2H + host shortlist (yesterday-afternoon ``[device_sampling]``).
+    Enabled when:
+      * ``HY_TTNN_SAMPLING_OP=1``, or
+      * user explicitly sets ``HY_TOP_K=32`` / ``HY_TOPK=32``.
+
+    Any other explicit top-k (e.g. 1024) or the Instruct default keeps the host
+    torch shortlist path under device logits.
     """
-    return os.environ.get("HY_TTNN_SAMPLING_OP", "0") == "1"
+    if os.environ.get("HY_TTNN_SAMPLING_OP", "0") == "1":
+        return True
+    k = resolve_hy_top_k()
+    return k is not None and int(k) == _TTNN_SAMPLING_MAX_K
 
 
 def sampling_padded_vocab(vocab_size: int) -> int:
@@ -264,7 +288,7 @@ def _sample_host_shortlist(
     p_val = min(max(p_val, 0.0), 1.0)
     print(
         f"[device_sampling] host shortlist sample k={k_val} temp={temp} p={p_val} "
-        f"(set HY_TTNN_SAMPLING_OP=1 for ttnn.sampling)",
+        f"(set HY_TOP_K=32 for ttnn.topk+sampling)",
         flush=True,
     )
 
@@ -318,8 +342,9 @@ def sample_logits_ttnn(
 ) -> ttnn.Tensor | torch.Tensor:
     """Sample next-token ids from device logits.
 
-    Default: D2H + host topk/shortlist (yesterday ``[device_sampling]`` path).
-    With ``HY_TTNN_SAMPLING_OP=1``: pure ``ttnn.topk`` + ``ttnn.sampling``.
+    Default: D2H + host topk/shortlist.
+    With ``HY_TOP_K=32`` / ``HY_TOPK=32`` or ``HY_TTNN_SAMPLING_OP=1``: pure
+    ``ttnn.topk`` + ``ttnn.sampling``.
 
     When the ttnn op path is active and ``return_device_ids=True``, returns embed-ready
     ``[B, 1]`` uint32 on device. Host shortlist always returns host ``[B]`` long ids.
