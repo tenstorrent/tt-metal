@@ -96,6 +96,38 @@ CB_SUM_SCALED = 9
 CB_OUT_SCALED = 10
 
 
+def _resolve_exp_mode(math_approx_mode, fp32_dest_acc_en):
+    """Refinement 3d / 3d-a / 5a — select the SFPU exp datapath (compute CT arg 14).
+
+    Returns one of:
+      0 = exact  (both exp sites exact)          — the fp32-DEST-acc precision paths.
+      1 = fast   (both exp sites fast)           — 3d's all-fast lever (max speed).
+      2 = hybrid (corr-exp exact, P-exp fast)    — 3d-a/5a precision-recovery lever.
+
+    Resolution (single source of truth for the exp precision decision):
+      * `TTNN_SDPA_EXP_MODE`, when set, overrides everything — a live measurement knob.
+      * `math_approx_mode=True` → all-fast (1): the user's explicit opt-in to maximum
+        approximate SFPU math (3d's kept lever — PCC 0.9967, ~1.44× on the flagged shape).
+      * `fp32_dest_acc_en=False` → hybrid (2): the Refinement 3d-a/5a win. These are the
+        bf16/bf8b lossy-16-bit-DEST paths (golden PCC gates ≤ 0.99). Fast P-exp is the
+        dominant SFPU-floor cost (3d: 21%+ of the wall); keeping the COMPOUNDING corr-exp
+        exact recovers PCC to 0.99965 on the worst-case flagged shape (1,10,9472,128) —
+        clearing the 0.997 perf-1 anchor — while still landing ~1.38× (10.25→7.42 ms).
+        Smaller shapes compound less, so they clear by an even wider margin.
+      * else (fp32_dest_acc_en=True) → exact (0): the precision paths (bf16@True 0.995,
+        fp32@True 0.999) keep the exact exp their tolerance and the user's precision
+        request demand. Byte-identical to prior phases on those cells.
+    """
+    override = os.environ.get("TTNN_SDPA_EXP_MODE")
+    if override is not None:
+        return int(override)
+    if math_approx_mode:
+        return 1
+    if not fp32_dest_acc_en:
+        return 2
+    return 0
+
+
 def _divisors_leq(n, cap):
     """All divisors d of n with 1 <= d <= cap, ascending (keeps every chunk full —
     no partial-tail chunk in Phase-1)."""
@@ -495,15 +527,20 @@ def create_program_descriptor(
         pv_sb_h,
         pv_sb_w,
         int(os.environ.get("TTNN_SDPA_ABLATE", "0")),  # /perf-measure ablation gate (0=normal)
-        # Refinement 3d — SFPU-floor lever (perf): route the compute config's
-        # math_approx_mode into the SFPU exp datapath. The phase-4 exp over the whole
-        # score block is the single dominant SFPU cost (ablation: 21%+ of the wall; fast
-        # exp measured 1.44× — 10.25→7.12 ms — on the flagged shape). Fast exp trades a
-        # little accuracy (flagged PCC 0.9997→0.9967), so it fires ONLY when the user
-        # opts into approximate SFPU math via `math_approx_mode=True`. Default False →
-        # exact exp → byte-identical to prior phases (zero regression on the exact path,
-        # including the flagged perf test which requests math_approx_mode=False).
-        1 if bool(getattr(compute_kernel_config, "math_approx_mode", False)) else 0,
+        # Refinement 3d / 3d-a / 5a — SFPU-floor exp lever (perf). The phase-4 P-exp over
+        # the whole score block is the single dominant SFPU cost (3d ablation: 21%+ of the
+        # wall; all-fast exp measured 1.44× — 10.25→7.12 ms — on the flagged shape). CT
+        # arg 14 selects the exp datapath for the two exp sites independently:
+        #   0 = exact  (both exp sites exact)   — byte-identical default, zero regression.
+        #   1 = fast   (both exp sites fast)    — 3d's all-fast lever (PCC 0.9967).
+        #   2 = hybrid (corr-exp exact, P-exp fast) — 3d-a/5a precision-recovery lever:
+        #       keep the accuracy-critical (compounding) corr-exp exact, take the fast
+        #       path on the bulk P-exp, to recover PCC toward the 0.997 anchor at speed.
+        # Base value: math_approx_mode=True → all-fast (1), else exact (0) — preserves 3d
+        # semantics and the byte-identical exact default. `TTNN_SDPA_EXP_MODE`, when set,
+        # overrides it (a live measurement knob; lets the hybrid be measured at
+        # math_approx_mode=False without changing the default numerics).
+        _resolve_exp_mode(bool(getattr(compute_kernel_config, "math_approx_mode", False)), fp32_dest_acc_en),
         # Refinement 4 — causal: Q_NUM_CHUNKS lets compute recover each Q-block's
         # global query-chunk index (qc = (q_start + qb) % q_num_chunks) to truncate
         # the KV loop + gate the mask add identically to the reader.

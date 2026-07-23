@@ -470,3 +470,52 @@
   R3/3b/3c/3d.
 - Tests added: None (reused test_scaled_dot_product_attention_perf.py + the golden suite + unit
   dir as the regression net; both new levers are env-driven, no new test file).
+
+## Refinement 5a — Compute/exp-bound residual on the perf-flagged profile (R5's real lever = 3d-a)
+- Date: 2026-07-23
+- What was done: Executed Refinement 3d-a's lever (single source of truth, per the 5a
+  heading) — the HYBRID exp precision-recovery — closing the SFPU-floor win at the
+  contract-anchor config. 3d had shown all-fast exp wins 1.44× (10.25→7.11 ms) but lands
+  PCC 0.9967, missing the 0.997 anchor by 0.0003. The kernel has TWO exp sites: the tiny
+  corr-exp (`sq` tiles) rescales the ENTIRE accumulated running (l,O) each time the running
+  max updates (error compounds multiplicatively across the ~74-block KV loop), and the bulk
+  P-exp (`sq×sk` tiles, the 21% SFPU-floor cost). Keeping corr-exp EXACT while routing the
+  bulk P-exp FAST recovers the compounding-error term for negligible cost.
+  * **Reused**: 3d's `kv_step` exp template + compute CT arg 14 + the `TTNN_SDPA_ABLATE`
+    ablation gate. **Added**: split the single `ExpMode` template into two independent modes
+    `(CorrExpMode, PExpMode)`; a 3-value `exp_mode` CT arg (0=exact both / 1=fast both /
+    2=hybrid corr-exact+P-fast) dispatched via `if constexpr` (dead-code-eliminates the two
+    unused instantiations); a `_resolve_exp_mode(math_approx_mode, fp32_dest_acc_en)` resolver
+    (single source for the exp-precision decision) + `TTNN_SDPA_EXP_MODE` measurement override.
+    Compute kernel + program descriptor only; no new file.
+  * **Default policy**: `fp32_dest_acc_en=False` → hybrid (2) — the bf16/bf8b lossy-16-bit-DEST
+    paths (golden PCC gates ≤ 0.99; the perf-1 anchor is a PCC≥0.997 gate, not an exactness
+    guarantee). `fp32_dest_acc_en=True` → exact (0) — the precision paths (bf16@True 0.995,
+    fp32@True 0.999) stay byte-identical. `math_approx_mode=True` → all-fast (1) — 3d's kept
+    max-speed opt-in, untouched. `default_compute_kernel_config()` uses `fp32_dest_acc_en=True`,
+    so unconfigured users are byte-identical to prior phases; hybrid fires precisely on the
+    explicit lossy-DEST config the perf goal targets.
+- Accuracy achieved: flagged shape `(1,10,9472,128)` bf16 @ fp32_dest_acc_en=False at
+  math_approx_mode=False — PCC: exact 0.99971 / all-fast 0.99674 / **hybrid 0.99965** (clears the
+  0.997 anchor with 0.00265 margin). rtol/atol: golden per-dtype tolerances all cleared.
+- Golden test progress: **1511 passed / 398 xfailed / 0 failed** (115s, no hang) — byte-identical
+  count to R4/R5; zero regression, zero xpass drift. Unit dir 127 passed / 8 skipped (incl. the
+  bf16@False / bf8b@False precision-matrix cells now on hybrid + the flagged perf test's
+  exact-case gate 0.997 + approx-case 0.996).
+- Perf result: **math_approx_mode=False (default, fp32_dest_acc_en=False) → 10.25 → 7.42 ms =
+  1.38×** DEVICE KERNEL DURATION, 110 cores (util ~0.15 → ~0.21). math_approx_mode=True (all-fast)
+  → 7.11 ms / 0.9967 (unchanged). Measured via `run_safe_pytest.sh --profile` per exp_mode.
+- Decision: **[x] full**. The Done-when's first branch is met — device-ns improves materially
+  below 10.24 ms on the flagged shape AT math_approx_mode=False WITH PCC ≥ 0.997, golden suite
+  green, no regression on the config-spanning guard set. Refinement 3d-a is the same lever and
+  lands with this. The all-fast lever (1.44×, math_approx_mode=True) and 3d's ablation gate are
+  kept. 3b's (8,8) regime, R3's gated mcast, R5's parked knobs (TTNN_SDPA_KV_BUF/BATCH_KV) all
+  untouched. Residual to the 0.35 util goal is now the 5.3 ms pure dataflow/CB/NoC floor (R5's
+  4th-confirmed compute-bound floor), which is off the exp-precision surface this refinement owns.
+- Issues encountered: None. The hybrid came up correct on the first run; the only "surprise" was
+  how cleanly the corr-exp/P-exp SITE split (rather than a value-band split) recovered the PCC —
+  confirming the corr-exp is precisely the compounding-error term, exactly as hypothesized.
+- Tests added: None (reused test_scaled_dot_product_attention_perf.py — the exact case now
+  exercises the hybrid default at PCC 0.997; updated its header comment to document the new
+  default — plus the golden suite + unit dir as the regression net; the exp_mode override is
+  env-driven, no new test file).

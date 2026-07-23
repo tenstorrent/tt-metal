@@ -70,21 +70,30 @@ struct MMParams {
 
 // One online-softmax KV-step, updating the running (m,l,O) CBs in place.
 //
-// ExpMode (compile-time): the SFPU exp datapath. Approx::Exact is the numerically
-// exact exp_tile (byte-identical default). Approx::Fast selects the hardware's fast
-// approximate exp_tile — a large SFPU-floor reduction (Refinement 3d measured 1.44×
-// on the flagged shape: 10.25 → 7.12 ms, since the phase-4 exp over the whole score
-// block is the single dominant SFPU cost — 21%+ of the wall). Fast exp trades a small
-// amount of accuracy (flagged shape PCC 0.9997→0.9967), so it is gated on the compute
-// config's `math_approx_mode` (the user's explicit opt-in to approximate SFPU math);
-// the exact default is unchanged.
+// CorrExpMode / PExpMode (compile-time): the SFPU exp datapath for the two distinct
+// exp sites, selected INDEPENDENTLY (Refinement 3d-a / 5a — hybrid precision recovery).
+//   * PExpMode drives the phase-4 P = exp((S - m)·scale) over the WHOLE sq×sk score
+//     block — the single dominant SFPU cost (Refinement 3d ablation: 21%+ of the wall).
+//   * CorrExpMode drives the phase-3 corr = exp((m_prev - m_cur)·scale) over just sq
+//     tiles — tiny, but it rescales the ENTIRE accumulated running (l,O) every time the
+//     running max updates, so its error compounds multiplicatively across the ~74-block
+//     KV loop.
+// Approx::Exact is the numerically exact exp_tile; Approx::Fast selects the hardware's
+// fast approximate exp_tile. Refinement 3d measured all-Fast at 1.44× (10.25→7.12 ms)
+// on the flagged shape but PCC 0.9997→0.9967 (misses the 0.997 anchor by 0.0003).
+// Refinement 3d-a/5a's hybrid — CorrExpMode=Exact + PExpMode=Fast — keeps the
+// accuracy-critical (compounding) corr-exp exact while taking the fast path on the bulk
+// P-exp, to recover PCC at (most of) the speed. The 3-value exp_mode CT arg (14) selects:
+//   0 = exact  (Corr=Exact, P=Exact)  — byte-identical default, zero regression.
+//   1 = fast   (Corr=Fast,  P=Fast)   — Refinement 3d's all-fast lever.
+//   2 = hybrid (Corr=Exact, P=Fast)   — Refinement 3d-a/5a precision-recovery lever.
 // apply_mask (runtime): add the mask block sitting in cb_mask_in to the QKᵀ scores
 // before the row-max. For mask_mode=custom it is always true (streamed additive
 // mask). For mask_mode=causal it is true ONLY on the diagonal-straddling KV-blocks
 // (the reader generates + pushes cb_mask_in exactly for those); fully-past blocks
 // carry no mask and skip the add — the reader pushes nothing for them, so the CB
 // balance holds. For mask_mode=none it is always false.
-template <ckl::Approx ExpMode>
+template <ckl::Approx CorrExpMode, ckl::Approx PExpMode>
 void kv_step(bool first, bool apply_mask, const MMParams& p) {
     const uint32_t sq = p.sq, sk = p.sk, dht = p.dht;
 
@@ -153,7 +162,7 @@ void kv_step(bool first, bool apply_mask, const MMParams& p) {
                 ckl::BinaryFpuOp::Sub,
                 ckl::BroadcastDim::None>{},
             ckl::MulUnary<>{p.scale_bits},
-            ckl::Exp<ExpMode>{},
+            ckl::Exp<CorrExpMode>{},
             ckl::PackTile<ckl::output(cb_exp_max_diff)>{});
     }
 
@@ -170,7 +179,7 @@ void kv_step(bool first, bool apply_mask, const MMParams& p) {
                 ckl::BinaryFpuOp::Sub,
                 ckl::BroadcastDim::Col>{},
             ckl::MulUnary<>{p.scale_bits},
-            ckl::Exp<ExpMode>{},
+            ckl::Exp<PExpMode>{},
             ckl::PackTile<ckl::output(cb_qk_scores)>{});
     }
 
@@ -258,9 +267,15 @@ void kernel_main() {
     const uint32_t pv_sb_h = get_compile_time_arg_val(11);
     const uint32_t pv_sb_w = get_compile_time_arg_val(12);
     const uint32_t ablate = get_compile_time_arg_val(13);
-    // Refinement 3d — SFPU-floor lever: fast approximate exp_tile. Gated on the
-    // compute config's math_approx_mode (CT arg 14); default 0 = exact = byte-identical.
-    constexpr uint32_t exp_approx = get_compile_time_arg_val(14);
+    // Refinement 3d / 3d-a / 5a — SFPU-floor exp lever. CT arg 14 selects the exp
+    // datapath for the two exp sites (corr-exp, P-exp) independently:
+    //   0 = exact  (Corr=Exact, P=Exact)  — byte-identical default, zero regression.
+    //   1 = fast   (Corr=Fast,  P=Fast)   — 3d's all-fast lever (math_approx_mode=True).
+    //   2 = hybrid (Corr=Exact, P=Fast)   — 3d-a/5a precision-recovery lever: keep the
+    //       compounding corr-exp exact, take the fast path on the bulk P-exp.
+    // Compile-time constant → the two unused kv_step instantiations are dead-code-
+    // eliminated (only the selected branch is compiled; no binary bloat).
+    constexpr uint32_t exp_mode = get_compile_time_arg_val(14);
     // Refinement 4 — causal masking: Q_NUM_CHUNKS lets compute recover the global
     // query-chunk index per Q-block (qc = (q_start + qb) % q_num_chunks) so it can
     // truncate the KV loop + gate the mask add identically to the reader.
@@ -300,12 +315,14 @@ void kernel_main() {
         for (uint32_t k = 0; k < kv_end; ++k) {
             const bool apply_mask =
                 (mask_regime == 1u) || (mask_regime == 2u && sdpa_causal::needs_mask(qc, k, sq, sk));
-            // exp_approx is a compile-time constant → the unused kv_step instantiation
-            // is dead-code-eliminated (no binary bloat).
-            if constexpr (exp_approx != 0) {
-                kv_step<ckl::Approx::Fast>(k == 0, apply_mask, p);
+            // exp_mode is a compile-time constant → the two unused kv_step
+            // instantiations are dead-code-eliminated (no binary bloat).
+            if constexpr (exp_mode == 1u) {
+                kv_step<ckl::Approx::Fast, ckl::Approx::Fast>(k == 0, apply_mask, p);
+            } else if constexpr (exp_mode == 2u) {
+                kv_step<ckl::Approx::Exact, ckl::Approx::Fast>(k == 0, apply_mask, p);
             } else {
-                kv_step<ckl::Approx::Exact>(k == 0, apply_mask, p);
+                kv_step<ckl::Approx::Exact, ckl::Approx::Exact>(k == 0, apply_mask, p);
             }
         }
 

@@ -383,9 +383,23 @@ reduces change the reduction datapath, so re-check PCC on every dtype in the gua
 (toward the 0.35 math-util floor) via SFPU-floor reduction, golden suite green, PCC 0.997 holds, no
 regression on the config-spanning guard set.
 
-### [ ] Refinement 3d-a — PCC-recovery so fast-exp clears the 0.997 contract on the flagged shape
+### [x] Refinement 3d-a — PCC-recovery so fast-exp clears the 0.997 contract on the flagged shape
 
 **Type**: perf
+
+**Outcome (2026-07-23)**: Landed via the **hybrid exp** lever (this refinement and Refinement 5a
+are the same work — 5a is 3d-a viewed from R5's block-surface-exhaustion finding — executed once,
+single source of truth; see Refinement 5a's Outcome for the full measurement table). The
+PCC-recovery is the **hybrid** partition of the two exp sites: keep the accuracy-critical,
+**compounding** corr-exp EXACT, route the bulk (21%-SFPU-floor) P-exp FAST. On the flagged shape
+`(1,10,9472,128)` bf16 @ `fp32_dest_acc_en=False` at `math_approx_mode=False`, hybrid measures
+**7.42 ms = 1.38×** (vs 10.25 ms exact) at PCC **0.99965 ≥ 0.997** — closing the last 0.0003 the
+all-fast path (0.9967) missed. Made the default for `fp32_dest_acc_en=False`; exact retained for
+the `fp32_dest_acc_en=True` precision paths; golden **1511 passed / 398 xfailed / 0 failed** (no
+hang), unit dir **127 passed / 8 skipped**, zero regression. This is the "hybrid near-range-exact /
+deep-negative-fast exp" branch of the filed levers, realized as an exact/fast **site** split (which
+site, not which value band) — the corr-exp is precisely the site whose error compounds. Done-when's
+first branch met (win at `math_approx_mode=False`, PCC ≥ 0.997, golden green).
 
 **Goal**: Refinement 3d landed the real SFPU-floor lever — fast approximate `exp_tile` (gated on
 `math_approx_mode`), measured **1.44× (10.25 → 7.11 ms)** on the flagged shape `(1,10,9472,128)` bf16 @
@@ -514,9 +528,39 @@ residual headroom before filing effort here.
 suite green, its soft PCC gate holds, and no regression across the config-spanning
 guard set (one representative per distinct kernel path × layout × placement).
 
-### [ ] Refinement 5a — Compute/exp-bound residual on the perf-flagged profile (R5's real lever = 3d-a)
+### [x] Refinement 5a — Compute/exp-bound residual on the perf-flagged profile (R5's real lever = 3d-a)
 
 **Type**: perf
+
+**Outcome (2026-07-23)**: Executed Refinement 3d-a's lever (single source of truth, per this
+heading) — the **hybrid exp** precision-recovery path — and it **closes the win at the
+contract-anchor config**. 3d proved the flagged shape is exp-bound and that all-fast exp wins
+1.44× (10.25→7.11 ms) but lands PCC 0.9967, missing the 0.997 anchor by 0.0003. The recovery:
+the kernel has **two** exp sites — the tiny **corr-exp** (`sq` tiles) that rescales the ENTIRE
+accumulated running (l,O) every time the running max updates (so its error compounds
+multiplicatively across the ~74-block KV loop) and the bulk **P-exp** (`sq×sk` tiles, the 21%
+SFPU-floor cost). Keeping **corr-exp EXACT while routing the bulk P-exp FAST** recovers the
+compounding-error term at negligible cost. Measured on the flagged shape `(1,10,9472,128)` bf16
+@ `fp32_dest_acc_en=False`, 110 cores (PCC at `math_approx_mode=False`):
+- exp_mode=0 exact (both):  10.25 ms, PCC **0.99971**
+- exp_mode=1 fast  (both):   7.12 ms, PCC **0.99674**  (3d's all-fast — misses 0.997)
+- exp_mode=2 **hybrid** (corr exact, P fast): **7.42 ms = 1.38×**, PCC **0.99965** ✅ clears 0.997
+
+Made **hybrid the default when `fp32_dest_acc_en=False`** (the bf16/bf8b lossy-16-bit-DEST paths,
+golden gates ≤ 0.99 — where fast exp is characterized and the perf-1 anchor is a PCC gate, not an
+exactness guarantee), kept **exact when `fp32_dest_acc_en=True`** (precision paths: bf16@True 0.995,
+fp32@True 0.999 — byte-identical), kept 3d's `math_approx_mode=True → all-fast` lever untouched, and
+kept the `TTNN_SDPA_EXP_MODE` measurement override. **Reused**: 3d's `kv_step` exp template + CT arg
+14 + `TTNN_SDPA_ABLATE` gate; **Added**: split the single `ExpMode` template into independent
+`(CorrExpMode, PExpMode)`, a 3-value `exp_mode` CT arg (0/1/2), and the `_resolve_exp_mode(...)`
+resolver. Compute kernel + program descriptor only; no new file. `default_compute_kernel_config()`
+uses `fp32_dest_acc_en=True`, so unconfigured users stay byte-identical to prior phases — hybrid
+fires precisely on the explicit lossy-DEST config the perf goal targets. Golden suite **1511 passed
+/ 398 xfailed / 0 failed** (115s, no hang — byte-identical count to R4/R5, zero xpass drift); unit
+dir **127 passed / 8 skipped** (incl. the bf16@False / bf8b@False precision-matrix cells now on
+hybrid, and the flagged perf test's exact-case gate 0.997). Done-when's first branch met.
+**Refinement 3d-a is the same lever and lands with this** (see its Outcome). 3b's (8,8) regime, R3's
+gated mcast, 3d's approx-exp + ablation gate, R5's parked knobs all untouched.
 
 **Goal**: Refinement 5 proved on device — via four independent flat measurements (read volume,
 buffer depth 2/3/4, reader-barrier batching) plus the `TTNN_SDPA_ABLATE=3` floor (5.31 ms) sitting

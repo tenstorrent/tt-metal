@@ -37,14 +37,17 @@ def _reference(Q, K, V, scale):
     )
 
 
-# Refinement 3d — SFPU-floor lever (fast approximate exp).
-# math_approx_mode=False: exact exp, the perf-1 contract anchor config (PCC >= 0.997,
-#   byte-identical to prior phases, baseline ~10.25 ms).
-# math_approx_mode=True: fast approximate exp_tile — the measured SFPU-floor lever.
-#   The phase-4 exp over the whole score block is the single dominant SFPU cost
-#   (ablation: matmuls 19% / reduces 8% / exp-chain 21% / dataflow floor 52%); fast
-#   exp measured ~1.44x on device (10.25 -> 7.12 ms). It trades a little accuracy, so
-#   the gate is relaxed to PCC >= 0.996 (approximate math is an explicit user opt-in).
+# Refinement 3d / 3d-a / 5a — SFPU-floor exp lever. The phase-4 P-exp over the whole
+# score block is the single dominant SFPU cost (3d ablation: matmuls 19% / reduces 8% /
+# exp-chain 21% / dataflow floor 52%).
+# math_approx_mode=False: on this fp32_dest_acc_en=False config the op now defaults to
+#   the Refinement 3d-a/5a HYBRID exp (corr-exp EXACT + bulk P-exp FAST). Keeping the
+#   COMPOUNDING corr-exp exact recovers PCC to 0.99965 (>= the 0.997 perf-1 anchor) while
+#   landing ~1.38x on device (10.25 -> 7.42 ms). This realizes the SFPU-floor win at the
+#   contract-anchor config (the gate stays PCC >= 0.997). fp32_dest_acc_en=True keeps
+#   exact exp (byte-identical, precision paths).
+# math_approx_mode=True: 3d's all-fast exp_tile (both exp sites fast) — the max-speed
+#   opt-in, ~1.44x (10.25 -> 7.12 ms) at PCC 0.9967, gate relaxed to PCC >= 0.996.
 @pytest.mark.parametrize(
     "math_approx_mode, pcc_gate",
     [(False, 0.997), (True, 0.996)],
