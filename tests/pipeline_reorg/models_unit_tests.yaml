@@ -31,7 +31,7 @@
       timeout: 30
       tier: 1
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -71,7 +71,7 @@
   model: llama3.2-11b-vision
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 10
       tier: 3
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
@@ -149,7 +149,7 @@
   model: qwen2.5-32b
   skus:
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 18
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -188,7 +188,7 @@
   model: qwen3.6-27b
   skus:
     bh_quietbox_2:
-      timeout: 60
+      timeout: 40
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
@@ -351,7 +351,7 @@
       timeout: 30
       tier: 2
     bh_quietbox_2:
-      timeout: 30
+      timeout: 22
       tier: 1
     # bh_galaxy: temporarily disabled — sliding-1x32 path hits an unrecoverable
     # ethernet / fabric hang on Blackhole Galaxy that surfaces during
@@ -385,7 +385,7 @@
       timeout: 25
       tier: 2
     bh_quietbox_2:
-      timeout: 30
+      timeout: 22
       tier: 1
     # bh_galaxy: temporarily disabled — same Blackhole Galaxy ethernet / fabric
     # hang as Gemma-4-26B-A4B above (surfaces during sliding-1x32 attention
@@ -413,7 +413,7 @@
   model: gemma-4-12b
   skus:
     bh_quietbox_2:
-      timeout: 30
+      timeout: 22
       tier: 1
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
@@ -449,7 +449,7 @@
   model: mixtral-8x7b
   skus:
     wh_llmbox_perf:
-      timeout: 60
+      timeout: 40
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -499,7 +499,7 @@
   model: qwen3-32b-galaxy
   skus:
     bh_galaxy:
-      timeout: 40
+      timeout: 30
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -516,14 +516,14 @@
   skus:
     # Wormhole
     wh_llmbox:
-      timeout: 30
+      timeout: 15
       tier: 2
     # Blackhole
     bh_p150:
       timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 10
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -541,7 +541,7 @@
   skus:
     # Wormhole
     wh_llmbox:
-      timeout: 50
+      timeout: 32
       tier: 1
     wh_galaxy:
       timeout: 40
@@ -555,7 +555,7 @@
       # of ~64 tests on p03t05, vs 11.4 min for the full 64 on p02t07 — host
       # variance, not a hang; firmware pre-compiled, all sub-tests pass). Bump to
       # 22; suite is long (test_rope seq sweep to 131k) and may want sharding.
-      timeout: 44
+      timeout: 32
       tier: 1
     bh_galaxy:
       timeout: 10
@@ -703,10 +703,10 @@
   model: dit-common
   skus:
     wh_n150:
-      timeout: 120
+      timeout: 80
       tier: 1
     bh_quietbox_2:
-      timeout: 150
+      timeout: 135
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -752,7 +752,7 @@
   model: flux.1-schnell
   skus:
     bh_quietbox_2:
-      timeout: 40
+      timeout: 30
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -767,7 +767,7 @@
   model: flux.1-dev
   skus:
     bh_quietbox_2:
-      timeout: 40
+      timeout: 30
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
