@@ -355,3 +355,20 @@ Aggregate slice time falls 36.944 -> 30.514 us/device/layer.
 The 67.594 GFLOP executed path reaches 98.90 TFLOP/s or 8.13% of eight-chip
 peak. Conservative factorized-work throughput is 86.62 TFLOP/s or 7.12%.
 Recurrence and CCL mappings remain unchanged.
+
+
+## Rejected Conv1d-fused SiLU
+
+The existing Conv1d packer activation hook is not numerically interchangeable
+with the standalone SiLU on this path. Enabling
+`Conv1dConfig.activation=UnaryWithParam(SILU)` and removing the following
+`ttnn.silu` reduced the focused TP=8 output PCC from 0.999952 to 0.884267
+(required 0.98). Restoring the standalone operation restored output,
+recurrent-state, and convolution-state PCC to
+0.999952/0.999903/0.999997. No performance trace was taken because the fused
+variant failed correctness.
+
+The measured approximately 12.9 us standalone SiLU therefore remains part of
+the convolution boundary. Removing it requires a numerically matched KDA-local
+kernel or an independently validated math mode, not the generic Conv1d
+activation switch.

@@ -700,3 +700,11 @@
 - Report: `/tmp/kda_tp_layer_t640_direct_aux_slices_r10/reports/2026_07_23_12_25_10/ops_perf_results_2026_07_23_12_25_10.csv`; control: `/tmp/kda_tp_layer_t640_precomposed_gate_r10/reports/2026_07_23_12_13_23/ops_perf_results_2026_07_23_12_13_23.csv`.
 - Ten replays reduced median slowest-device span 690.719 -> 683.463 us (1.05%), active time 657.757 -> 650.942 us/device, programs 35 -> 34/device/layer, and slice time 36.944 -> 30.514 us.
 - Executed-work throughput is 98.90 TFLOP/s or 8.13% of peak; conservative factorized-work throughput is 86.62 TFLOP/s or 7.12%. Distribution is unchanged.
+
+
+### 2026-07-23 12:27:51 UTC — Reject Conv1d-fused SiLU
+
+- Hypothesis: the existing Conv1d packer activation can absorb the standalone approximately 12.9 us SiLU without changing KDA numerics.
+- Focused TP=8 hardware correctness rejected the hypothesis: output PCC fell to 0.884267 versus the required 0.98.
+- Restoring the standalone `ttnn.silu` restored output/recurrent/convolution PCC to 0.999952/0.999903/0.999997; `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py::test_kimi_delta_attention_tensor_parallel -q -s` ended with `SAFE_PYTEST_RESULT: PASS`.
+- No Tracy comparison was run because the fused variant failed correctness. A future fusion must preserve the standalone operation's math rather than use the generic Conv1d activation hook.
