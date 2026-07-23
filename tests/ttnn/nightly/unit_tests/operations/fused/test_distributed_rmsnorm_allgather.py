@@ -112,6 +112,9 @@ def _run_distributed_rmsnorm_single_device(
         # LLaMA 70B Galaxy decode shape: hidden=8192, cluster_axis=1 with 4 devices.
         # The 2D-grid path activates when shape[-2] == 128.
         (128, 8192, 4),
+        # Regression: cores_y > tiles_per_core_y (Wt=32 -> cores_y=8, tiles_per_core_y=4) exercises
+        # the c_15 merge-gather CB OOB; fails unless c_15 is sized by cores_y.
+        (128, 4096, 4),
     ],
 )
 @pytest.mark.parametrize("use_2d_core_grid", [False, True])

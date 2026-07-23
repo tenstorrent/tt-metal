@@ -78,7 +78,7 @@ on:
 jobs:
   resolve:
     name: Resolve Docker pull refs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       dev-docker-image: ${{ steps.prefix.outputs.dev-docker-image }}
       basic-dev-docker-image: ${{ steps.prefix.outputs.basic-dev-docker-image }}

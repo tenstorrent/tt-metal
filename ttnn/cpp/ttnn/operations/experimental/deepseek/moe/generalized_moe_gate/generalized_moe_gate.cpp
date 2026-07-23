@@ -9,12 +9,12 @@
 
 namespace ttnn::experimental::deepseek::moe {
 
-std::tuple<tt::tt_metal::Tensor, tt::tt_metal::Tensor> generalized_moe_gate(
-    const tt::tt_metal::Tensor& input_tensor,
-    const tt::tt_metal::Tensor& bias_tensor,
-    const tt::tt_metal::Tensor& input_indices_tensor,
-    const tt::tt_metal::Tensor& output_tensor,
-    const tt::tt_metal::Tensor& output_indices_tensor,
+std::tuple<ttnn::Tensor, ttnn::Tensor> generalized_moe_gate(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& bias_tensor,
+    const ttnn::Tensor& input_indices_tensor,
+    const ttnn::Tensor& output_tensor,
+    const ttnn::Tensor& output_indices_tensor,
     float eps,
     float scaling_factor,
     bool enable_sigmoid,

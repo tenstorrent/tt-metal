@@ -4,14 +4,24 @@
 import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat
-from helpers.golden_generators import DataCopyGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, format_dict
-from helpers.param_config import input_output_formats, parametrize
+from helpers.golden_generators import (
+    TILE_DIMENSIONS,
+    DataCopyGolden,
+    get_golden_generator,
+)
+from helpers.llk_params import DestAccumulation, DestSync, format_dict
+from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
+    input_output_formats,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -27,9 +37,8 @@ def test_unary_datacopy_custom(
     formats,
     dest_acc,
 ):
-    input_dimensions = [32, 32]
+    input_dimensions = [128, 256]
     num_faces = 4
-    tile_cnt = 1
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -43,13 +52,22 @@ def test_unary_datacopy_custom(
         src_A, formats.output_format, num_faces, input_dimensions
     )
 
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+    )
+
     configuration = TestConfig(
         "sources/eltwise_unary_datacopy_custom_test.cpp",
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A), NUM_FACES(num_faces)],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_FACES(num_faces),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

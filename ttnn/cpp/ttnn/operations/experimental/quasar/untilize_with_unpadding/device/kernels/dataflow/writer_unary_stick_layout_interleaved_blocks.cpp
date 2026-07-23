@@ -6,7 +6,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
@@ -28,19 +27,16 @@ inline void write_tiles_in_block(
     for (uint32_t tile_row_id = 0; tile_row_id < block_height_ntiles; tile_row_id++) {
         // We reserve back an entire row of tiles in a block and issue a bunch of reads
         cb_out0.wait_front(block_width_ntiles);
-        uint32_t l1_read_addr = cb_out0.get_read_ptr();
         for (uint32_t j = 0; j < TILE_HEIGHT; j++) {
             if (block_row_id >= num_rows_unpadded) {
                 break;
             }
-            CoreLocalMem<uint32_t> src(l1_read_addr);
             noc.async_write(
-                src,
+                cb_out0,
                 s,
                 block_row_size_unpadded,
-                {.offset_bytes = 0},
+                {.offset_bytes = j * block_row_size},
                 {.page_id = block_row_id, .offset_bytes = block_row_offset});
-            l1_read_addr += block_row_size;
             block_row_id++;
         }  // for tile_nrows
         noc.async_write_barrier();

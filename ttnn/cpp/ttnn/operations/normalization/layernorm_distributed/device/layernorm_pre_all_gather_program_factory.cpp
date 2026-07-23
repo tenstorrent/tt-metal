@@ -542,9 +542,15 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
             .data_format = cb_data_format,
             .page_size = single_tile_size}}}});
 
-    // c_intermed1 (CB 15)
+    // c_intermed1 (CB 15) — cross-core merge buffer (cb_x2_merge) for the 2D core grid.
+    // Each of the cores_y worker rows writes one partial-stat tile into this buffer on the merge
+    // core, and the merge core's compute wait_front/add_tiles/pop_front over cores_y tiles. Size it
+    // by the gather count (cores_y), NOT the per-core width (tiles_per_core_y): when
+    // cores_y > tiles_per_core_y (i.e. cores_y^2 > Wt, e.g. grid.y=8 with Wt=32 -> cores_y=8,
+    // tiles_per_core_y=4) the old sizing was too small and workers with y >= tiles_per_core_y wrote
+    // past the allocation, corrupting adjacent L1 (with a matching over-read on the compute side).
     program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = tiles_per_core_y * single_tile_size,
+        .total_size = cores_y * single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_15),

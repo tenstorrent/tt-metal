@@ -104,18 +104,6 @@ class Qwen3Attention(AbstractModuleBase):
         k = self.k_proj(hidden_states)
         v = self.v_proj(hidden_states)
 
-        q_shape = q.shape()
-        k_shape = k.shape()
-        B, S = q_shape[0], q_shape[2]
-
-        # Reshape to (B, 1, S*num_heads, head_dim) for per-head QK-Norm
-        q = ttml.ops.reshape.reshape(q, [B, 1, S * self.num_heads, self.head_dim])
-        k = ttml.ops.reshape.reshape(k, [B, 1, S * self.num_kv_heads, self.head_dim])
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        q = ttml.ops.reshape.reshape(q, q_shape)
-        k = ttml.ops.reshape.reshape(k, k_shape)
-
         kvs = ConcatLastDim.apply(k, v)
 
         query_heads, key_heads, value_heads = ttml.ops.multi_head_utils.grouped_heads_creation(
@@ -124,6 +112,10 @@ class Qwen3Attention(AbstractModuleBase):
             self.num_heads,
             self.num_kv_heads,
         )
+
+        # Per-head QK-Norm, before RoPE (matches HF Qwen3 ordering). V is left unnormed.
+        query_heads = self.q_norm(query_heads)
+        key_heads = self.k_norm(key_heads)
 
         query_heads = ttml.ops.rope.rope(query_heads, self.rope_params, position_offset)
         key_heads = ttml.ops.rope.rope(key_heads, self.rope_params, position_offset)

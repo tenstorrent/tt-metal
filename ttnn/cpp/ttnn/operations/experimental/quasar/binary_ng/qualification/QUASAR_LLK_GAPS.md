@@ -63,8 +63,8 @@ Dtype is called out in the Quasar cell where it differs (bf16 is the model-relev
 ### Arithmetic
 | Op | Route | WH | Quasar | Evidence / to-close |
 |---|---|:--:|---|---|
-| `add` | FPU (bf16) · SFPU (fp32/int) | ✓ | `✓*` bf16 · `✓` int32 · `kernel` fp32 | int32 `ckernel_sfpu_add.h`; fp32 `add_binary_tile` gated + `calculate_sfpu_binary` `static_assert(MUL\|\|DIV)` — tracked in tenstorrent/tt-metal#49883 |
-| `sub` | FPU (bf16) · SFPU (fp32/int) | ✓ | `✓` bf16 · `kernel` int32 · `kernel` fp32 | `sub_int_sfpu.h` + fp32 SFPU sub both WH-only — tracked in tenstorrent/tt-metal#49883 |
+| `add` | FPU (bf16) · SFPU (fp32/int) | ✓ | `✓*` bf16 · `✓` int32 · `✓` fp32 | int32 `ckernel_sfpu_add.h`; fp32 `add_binary_tile` (Quasar branch) + `calculate_sfpu_binary` ADD |
+| `sub` | FPU (bf16) · SFPU (fp32/int) | ✓ | `✓` bf16 · `kernel` int32 · `✓` fp32 | fp32 `sub_binary_tile` (Quasar branch) + `calculate_sfpu_binary` SUB; int32 `sub_int_sfpu.h` WH-only |
 | `mul` | FPU (bf16) · SFPU | ✓ | `✓*` bf16 · `✓` fp32 · `✓` int32 | `mul_binary_tile` (Quasar branch) + `ckernel_sfpu_mul_int32.h` |
 | `div` | SFPU | ✓ | `✓*` bf16/fp32 · `kernel` int32 | `div_binary_tile` ✓; `div_int32_tile` unported |
 | `rsub` | FPU+`NEG` (bf16) · SFPU | ✓ | `kernel` | bf16 blocked by `NEG` (Tier-2 activation); fp32/int SFPU rsub gated |
@@ -97,7 +97,7 @@ Dtype is called out in the Quasar cell where it differs (bf16 is the model-relev
 | Op | Route | WH | Quasar | Evidence / to-close |
 |---|---|:--:|---|---|
 | `power` | SFPU | ✓ | `kernel` | `power_binary_tile` gated |
-| `xlogy` | SFPU | ✓ | `kernel` | Quasar `calculate_sfpu_binary` is MUL/DIV-only |
+| `xlogy` | SFPU | ✓ | `kernel` | no XLOGY branch in Quasar `calculate_sfpu_binary` (needs the `log` helper) |
 | `atan2` | SFPU | ✓ | `kernel` | |
 | `isclose` | SFPU | ✓ | `kernel` | |
 
@@ -237,14 +237,11 @@ are ternary-select / dtype-cast infra, not activations.)
 1. **`gelu` bridge fix** — best effort/value ratio: a **one-line** LLK fix (qualify
    `ckernel::math::_sfpu_load_config32_` in `ckernel_sfpu_gelu.h::gelu_init`). The bridge/ckernel/`SfpuType`
    already exist; it just doesn't compile. Unblocks `gelu` **and** `bias_gelu` (both `broken` today).
-2. **SFPU float `add`/`sub`** (binary) — unblocks fp32 add/sub, every fp32/int derived op, and (with the
-   log/exp2 activations) the `logaddexp`/`ldexp` family. Relax the `MUL||DIV` `static_assert`; mirror mul/div.
-   Tracked in tenstorrent/tt-metal#49883.
-3. **int `lt`/`le`/`ge`** (binary) — `bridge`, trivial (ckernel already handles lt/gt/le/ge).
-4. **`abs`, `leaky_relu`, `relu_max`, `relu_min`** (activations) — `bridge`, cheap (un-gate; ckernels + slots exist).
-5. **`gelu_tanh`** — transformer MLPs using tanh-GELU (`kernel`; plain `gelu` needs the #1 bridge fix first).
-6. **`log` / `exp2` / `log2`** — softmax-adjacent; unblock `logaddexp`/`logaddexp2`/`ldexp` (`kernel`).
-7. Everything else as op/model demand arises.
+2. **int `lt`/`le`/`ge`** (binary) — `bridge`, trivial (ckernel already handles lt/gt/le/ge).
+3. **`abs`, `leaky_relu`, `relu_max`, `relu_min`** (activations) — `bridge`, cheap (un-gate; ckernels + slots exist).
+4. **`gelu_tanh`** — transformer MLPs using tanh-GELU (`kernel`; plain `gelu` needs the #1 bridge fix first).
+5. **`log` / `exp2` / `log2`** — softmax-adjacent; unblock `logaddexp`/`logaddexp2`/`ldexp` (`kernel`).
+6. Everything else as op/model demand arises.
 
 **Already done — no LLK work:** `relu` (ResNet50), `silu` (Llama SwiGLU), `sigmoid`, `tanh`, `square` — all
 sim-certified — plus the arithmetic/`where`/compare-to-zero core. (`gelu` is NOT done — it is `broken`, see #1.)

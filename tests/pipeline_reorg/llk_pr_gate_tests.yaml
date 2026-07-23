@@ -3,6 +3,9 @@
 # Merge-gate gtest coverage lives in llk_merge_gate_tests.yaml.
 # PYTEST_MARKERS is set by llk-smoke-impl.yaml / workflow_call inputs.
 # For max allowed timeout refer to .github/time_budget.yaml (llk -> pr_gate).
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
+# Blackhole uses bh_p150b_civ2_viommu (same logical SKU as merge-gate); previously
+# non-prio PR runs used bh_p150b_civ2.
 
 - name: llk_smoke_wormhole
   team: llk
@@ -16,7 +19,7 @@
       --junitxml=pytest-report-wormhole.xml .
   skus:
     wh_n150_civ2:
-      timeout: 40
+      timeout: 15
   owner_id: U07J3K6KS1K # LLK team
 
 - name: llk_smoke_blackhole
@@ -30,8 +33,6 @@
       --timeout=60 \
       --junitxml=pytest-report-blackhole.xml .
   skus:
-    bh_p150b_civ2:
-      timeout: 40
-    bh_p150b_civ2_viommu_prio:
-      timeout: 40
+    bh_p150b_civ2_viommu:
+      timeout: 15
   owner_id: U07J3K6KS1K # LLK team

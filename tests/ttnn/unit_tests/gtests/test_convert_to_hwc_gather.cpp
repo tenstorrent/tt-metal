@@ -20,8 +20,8 @@ protected:
     void TearDown() override {}
 
     // Helper to create core coordinate vectors
-    std::vector<CoreCoord> make_cores(uint32_t num_cores) {
-        std::vector<CoreCoord> cores;
+    std::vector<tt::tt_metal::CoreCoord> make_cores(uint32_t num_cores) {
+        std::vector<tt::tt_metal::CoreCoord> cores;
         cores.reserve(num_cores);
         for (uint32_t i = 0; i < num_cores; i++) {
             cores.emplace_back(i, 0);  // Simple linear arrangement
@@ -213,8 +213,8 @@ std::vector<std::vector<float>> gather_with_blocked_transfers(
     uint32_t B,
     uint32_t C,
     uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& output_cores,
     const std::vector<std::vector<float>>& input_shards,
     uint32_t block_size) {
     uint32_t num_input_cores = input_cores.size();
@@ -330,8 +330,8 @@ void gather_with_blocked_transfers_generic(
     uint32_t B,
     uint32_t C,
     uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& output_cores,
     uint32_t block_size) {
     // First, precompute transfers (element-based, size-agnostic)
     auto transfers = precompute_gather_transfers(B, C, HW, input_cores, output_cores);

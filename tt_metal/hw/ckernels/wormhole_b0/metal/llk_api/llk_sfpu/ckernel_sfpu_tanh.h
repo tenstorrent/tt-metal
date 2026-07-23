@@ -16,6 +16,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_expm1.h"
 #include "ckernel_sfpu_trigonometry.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -157,6 +158,7 @@ inline void calculate_tanh() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
         sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x1DFF);  // 0.90625*x
         sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x481A);  // 0.09375*x + 0.8125

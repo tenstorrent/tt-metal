@@ -8,6 +8,7 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_A_api.h"

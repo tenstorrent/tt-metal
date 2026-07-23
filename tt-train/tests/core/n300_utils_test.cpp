@@ -261,7 +261,7 @@ TEST_F(N300UtilsTest, MorehClipGradNorm) {
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
     auto do_it = [&tensor]() {
         ttnn::moreh_clip_grad_norm(
-            std::vector<tt::tt_metal::Tensor>{tensor},
+            std::vector<ttnn::Tensor>{tensor},
             1.0F,
             2.0F,
             false,

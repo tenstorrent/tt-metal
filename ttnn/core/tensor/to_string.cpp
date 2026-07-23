@@ -4,6 +4,7 @@
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/to_string.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -12,7 +13,7 @@
 
 namespace ttnn {
 
-std::string to_string(const tt::tt_metal::Tensor& tensor) {
+std::string to_string(const Tensor& tensor) {
     tt::tt_metal::GraphTracker::instance().track_function_start("ttnn::to_string", tensor);
 
     const auto& shape = tensor.logical_shape();
@@ -32,11 +33,11 @@ std::string to_string(const tt::tt_metal::Tensor& tensor) {
 
             if (mesh_device->num_devices() == 1) {
                 auto cpu_tensor = tensor.cpu();
-                return tt::tt_metal::to_string(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
+                return ttnn::tensor_impl::to_string(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
             }
         }
     }
-    auto result = tt::tt_metal::to_string(tensor);
+    auto result = ttnn::tensor_impl::to_string(tensor);
     tt::tt_metal::GraphTracker::instance().track_function_end();
     return result;
 }

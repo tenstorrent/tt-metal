@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -19,6 +21,7 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -87,7 +90,7 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    Semaphore<> fwd_bwd_sem(get_arg_val<uint32_t>(arg_idx++));
     uint32_t opposite_core_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t opposite_core_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
@@ -207,6 +210,10 @@ void kernel_main() {
         tt::tt_fabric::fabric_client_connect_finish(*mux_connection_handle);
     }
 
+    Noc noc_obj;
+    CircularBuffer cb_compute_output(cb_compute_output_id);
+    CircularBuffer cb_reader_output(cb_reader_output_id);
+
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
     auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
     auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
@@ -281,7 +288,7 @@ void kernel_main() {
 
         uint32_t batch_offset = input_batch_num_pages * b;
         for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
-            const uint32_t cb_output_id = is_first_device_in_direction ? cb_reader_output_id : cb_compute_output_id;
+            CircularBuffer& cb_output = is_first_device_in_direction ? cb_reader_output : cb_compute_output;
             chunk_count = 0;
 
             uint32_t intermediate_tile_id_start;
@@ -307,8 +314,8 @@ void kernel_main() {
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                     uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
-                    cb_wait_front(cb_output_id, tile_granularity);
-                    size_t l1_read_addr = get_read_ptr(cb_output_id);
+                    cb_output.wait_front(tile_granularity);
+                    size_t l1_read_addr = cb_output.get_read_ptr();
                     for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                         uint32_t num_pages_to_write = std::min(contig_pages_advanced, num_pages_to_read - j);
 
@@ -351,10 +358,10 @@ void kernel_main() {
                         } else {
                             ASSERT(false);
                         }
-                        noc_async_writes_flushed();
+                        noc_obj.async_writes_flushed();
                         tiles_read += num_pages_to_write;
                     }
-                    cb_pop_front(cb_output_id, tile_granularity);
+                    cb_output.pop_front(tile_granularity);
 
                     chunk_count++;
                     if (chunk_count % chunks_per_sync == 0) {
@@ -396,37 +403,35 @@ void kernel_main() {
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                     uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
-                    cb_wait_front(cb_compute_output_id, tile_granularity);
-                    size_t l1_read_addr = get_read_ptr(cb_compute_output_id);
+                    cb_compute_output.wait_front(tile_granularity);
+                    uint32_t l1_read_addr = cb_compute_output.get_read_ptr();
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t output_tile_id = output_tile_id_start + tiles_read;
-                        uint64_t local_noc_addr = output_addrgen.get_noc_addr(output_tile_id);
-                        noc_async_write(l1_read_addr, local_noc_addr, page_size);
+                        uint64_t noc_write_addr = output_addrgen.get_noc_addr(output_tile_id);
+                        noc_async_write(l1_read_addr, noc_write_addr, page_size);
                         l1_read_addr += page_size;
                         tiles_read++;
                     }
 
                     if (detail::do_forward_sync(is_forward)) {
-                        noc_async_write_barrier();
+                        noc_obj.async_write_barrier();
                     } else {
-                        noc_async_writes_flushed();
+                        noc_obj.async_writes_flushed();
                     }
-                    cb_pop_front(cb_compute_output_id, tile_granularity);
+                    cb_compute_output.pop_front(tile_granularity);
                     if (detail::do_forward_sync(is_forward)) {
                         // Tell local backwards reader that it can proceed
-                        uint64_t fwd_bwd_sem_noc_addr =
-                            safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, fwd_bwd_sem_addr, 0);
-                        noc_semaphore_inc(fwd_bwd_sem_noc_addr, 1);
+                        fwd_bwd_sem.up(noc_obj, opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, 1);
                     }
                 }
                 output_tile_id_start += output_channel_num_pages;
             }
-            noc_async_write_barrier();
+            noc_obj.async_write_barrier();
         }
     }
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
@@ -439,10 +444,10 @@ void kernel_main() {
             uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
             noc_semaphore_inc(dest_addr, 1);
-            noc_async_atomic_barrier();
+            noc_obj.async_atomic_barrier();
         }
     }
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 }

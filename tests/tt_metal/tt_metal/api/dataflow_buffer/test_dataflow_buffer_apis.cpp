@@ -32,6 +32,7 @@
 
 #include "dfb_test_common.hpp"
 #include "device_fixture.hpp"
+#include "llrt/rtoptions.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/driver_atomics.hpp"
 
@@ -46,6 +47,9 @@ TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
     IDevice* device = mesh_device->get_devices()[0];
     if (device->arch() == ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar read_tile_value / get_tile_address on DFB is under debug; run on WH/BH";
+    }
+    if (MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        GTEST_SKIP() << "Skipping DataflowBufferReadTileValue for tt-sim until GH#50135 is resolved";
     }
 
     constexpr uint32_t num_producers = 1;
