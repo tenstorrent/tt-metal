@@ -153,6 +153,12 @@ one binary program/device; softplus remains separate. This is further evidence
 to retain the 80-core prep, 16-core scan, and 8x8 output/row-8 Ring
 reduce-scatter map while pursuing launch and dataflow reductions.
 
+An exact 16-core scan A/B also rejects sharing the six V-independent inputs
+from one V worker to its three siblings. The L1-transfer version increased
+scan time from 97.387 to 145.942 us and whole-layer latency from 0.85484 to
+0.90400 ms. Keep four independent DRAM readers/head; reducing bytes alone does
+not improve this synchronization-sensitive recurrence.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence

@@ -227,3 +227,10 @@ while unary programs remain at 32. Thus the projection absorbs the bias add,
 but softplus remains a device program. Mesh throughput is 69.27 TFLOP/s or
 5.69% of eight-chip peak by device span; host-observed throughput is
 66.36 TFLOP/s or 5.45%.
+
+The KDA scan common-input sharing experiment was negative. One V worker/head
+read the six V-independent FP32 blocks and sent them from L1 to the other three
+workers once per chunk. Against the matched no-sharing control, slowest-device
+scan time regressed 97.387 -> 145.942 us and whole-layer median critical path
+regressed 0.85484 -> 0.90400 ms. The synchronization and fan-out cost exceeds
+the avoided DRAM traffic; retain independent reads.
