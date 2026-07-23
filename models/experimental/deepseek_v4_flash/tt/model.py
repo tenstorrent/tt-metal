@@ -1,3 +1,5 @@
+import math
+import os
 from typing import Optional
 
 import torch
@@ -325,6 +327,66 @@ class DeepSeekV4Model(DeepSeekV4Module):
             this_device = self.first_device
         return DeepSeekV4HashRouter(self.config, weights, this_device)
 
+    # -- compressor pooling schedule -------------------------------------------- #
+    #
+    # A CSA/HCA compressor emits a new compressed entry once every
+    # ``compress_rate`` tokens, and the block-bias exposes entries
+    # ``w < (pos+1)//compress_rate`` -- constant between two window closures. So
+    # the (``max_seq``-sized, hence expensive) pool only has to run on the steps
+    # that close a window; :class:`_StaticLayerCache` holds the result in between.
+    # ``DEEPSEEK_V4_POOL_EVERY_STEP=1`` restores the old pool-every-step behaviour
+    # (and, on the traced path, collapses back to a single captured trace).
+    _POOL_EVERY_STEP = os.environ.get("DEEPSEEK_V4_POOL_EVERY_STEP", "0") not in ("0", "", "false", "False")
+
+    def _compressor_pool_due(self, layer_type: str, pos: int) -> bool:
+        """Does the step at absolute ``pos`` close a window for ``layer_type``?"""
+        if layer_type == "sliding_attention":
+            return False
+        if self._POOL_EVERY_STEP:
+            return True
+        return (pos + 1) % self.config.compress_rates[layer_type] == 0
+
+    def _compress_rates_for(self, layer_types) -> list[int]:
+        """Sorted distinct compress rates among ``layer_types`` (sliding layers have none)."""
+        return sorted({self.config.compress_rates[t] for t in layer_types if t != "sliding_attention"})
+
+    def _build_pool_phases(self, crs: list[int]) -> tuple[list[tuple], dict[int, int]]:
+        """The distinct pooling patterns over a window period, and the pos -> phase map.
+
+        A step's pattern is ``tuple((pos+1) % cr == 0 for cr in crs)``, which repeats
+        with period ``lcm(crs)``. Far fewer than ``2 ** len(crs)`` patterns are
+        reachable, because the rates divide one another: with the default
+        ``{CSA: 4, HCA: 128}`` an HCA closure *always* coincides with a CSA closure
+        (4 | 128), so the reachable set is three phases — pool nothing, pool CSA,
+        pool CSA+HCA — and never "HCA alone". The traced path captures one trace
+        variant per phase, so this directly bounds the trace-memory cost.
+        """
+        if not crs:
+            return [()], {0: 0}
+        if self._POOL_EVERY_STEP:
+            return [tuple(True for _ in crs)], {p: 0 for p in range(math.lcm(*crs))}
+        phases: list[tuple] = []
+        phase_of: dict[int, int] = {}
+        for p in range(math.lcm(*crs)):
+            key = tuple((p + 1) % cr == 0 for cr in crs)
+            if key not in phases:
+                phases.append(key)
+            phase_of[p] = phases.index(key)
+        return phases, phase_of
+
+    def _pool_phase_index(self, pos: int) -> int:
+        """Index into :attr:`_pool_phases` of the trace variant to replay at ``pos``."""
+        return self._pool_phase_of[pos % self._pool_period]
+
+    @staticmethod
+    def _sm_pool_key(sm: dict, pool_flags: dict[int, bool]) -> tuple:
+        """A submesh's slice of a global phase: only the rates its own layers use.
+
+        Submeshes that host no compressor layer (or only one of the rates) collapse
+        several global phases onto the same capture.
+        """
+        return tuple(pool_flags[cr] for cr in sm["pool_crs"])
+
     # -- decode KV-cache state -------------------------------------------------- #
     def reset_caches(self, max_seq: int) -> None:
         """Allocate empty fixed-size paged decode buffers for a fresh sequence.
@@ -460,6 +522,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 input_ids=ids,
                 paged_sliding_pool=paged_pool,
                 page_table=page_row,
+                pool_compressor=self._compressor_pool_due(layer_type, pos),
             )
             last_submesh_id = current_submesh_id
             _profile(this_device)
@@ -572,6 +635,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 int32_pos_tensor(pos % w, this_device),
                 int32_pos_tensor(pos, this_device),
                 input_ids=ids,
+                pool_compressor=self._compressor_pool_due(layer_type, pos),
             )
             last_submesh_id = current_submesh_id
             _profile(this_device)
@@ -641,6 +705,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
             cr: (max_seq, max_seq // cr)
             for cr in {cfg.compress_rates[t] for t in cfg.layer_types[: self.num_layers] if t != "sliding_attention"}
         }
+        self._pool_crs = self._compress_rates_for(cfg.layer_types[: self.num_layers])
+        self._pool_period = math.lcm(*self._pool_crs) if self._pool_crs else 1
+        self._pool_phases, self._pool_phase_of = self._build_pool_phases(self._pool_crs)
 
         rd = cfg.qk_rope_head_dim
         hc, d, w = cfg.hc_mult, cfg.hidden_size, self.sliding_window
@@ -700,8 +767,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 "rope_invfreq": {},
                 "mask_gen": {},
                 "scaches": {li: self._build_static_layer_cache(li, device) for li in layers_k},
-                "tid": None,
-                "output": None,
+                "pool_crs": self._compress_rates_for(types),
+                "traces": {},  # local pool key -> (trace id, persistent output)
+                "tids": {},  # global phase index -> trace id
+                "outputs": {},  # global phase index -> persistent output
             }
             # Per-family inv_freq constants for the rope families this submesh uses.
             for rt in ({"main"} if "sliding_attention" in types else set()) | ({"compress"} if crs else set()):
@@ -810,9 +879,14 @@ class DeepSeekV4Model(DeepSeekV4Module):
             invalid = ttnn.add(invalid, ttnn.ge(b, thr))  # compressor: window >= completed count
         return ttnn.typecast(ttnn.multiply(invalid, _MASK_NEG), ttnn.bfloat16)
 
-    def _decode_submesh_static(self, sm: dict) -> ttnn.Tensor:
+    def _decode_submesh_static(self, sm: dict, pool_flags: dict[int, bool]) -> ttnn.Tensor:
         """Run one submesh's round-robin layers over the per-step input packets /
         in-place caches (shared by the compile run and the trace capture).
+
+        ``pool_flags`` maps each compress rate to whether this trace variant re-pools
+        that compressor. It is fixed at capture time (a trace is a flat op sequence,
+        so it cannot branch on the device-side position), which is why the capture
+        emits one variant per window phase — see :meth:`_capture_traces`.
 
         Under round-robin placement the decode dataflow is a *ring*: consecutive
         global layers live on consecutive submeshes, so a submesh's layers are *not*
@@ -901,6 +975,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 sliding_pos,
                 compress_pos,
                 hash_token=token if layer.mlp.is_hash else None,
+                pool_compressor=(lt != "sliding_attention" and pool_flags[cfg.compress_rates[lt]]),
             )
 
             if is_last:
@@ -949,8 +1024,27 @@ class DeepSeekV4Model(DeepSeekV4Module):
         ttnn.copy_host_to_device_tensor(self._build_packet(token_id, pos), self.submeshes_io[0]["pkt"])
 
     def _capture_traces(self) -> None:
-        """Capture one trace per submesh: a compile run (to JIT the programs, which
-        trace capture itself cannot do), then the recorded capture.
+        """Capture the decode traces: per submesh, one variant per *window phase*.
+
+        A ttnn trace is a flat, fixed sequence of device ops, so it cannot skip the
+        compressor pool on the steps that do not close a window — the position it
+        would have to branch on only exists as a device tensor at replay. But the
+        *choice of trace* is a host-side decision (``decode_traced`` knows ``pos``
+        before it dispatches), so the schedule is baked into the capture instead:
+        one variant per entry of :attr:`_pool_phases`, selected per step by
+        :meth:`_pool_phase_index`. With the default rates that is three variants
+        (pool nothing / CSA / CSA+HCA).
+
+        Variants are deduplicated per submesh via :meth:`_sm_pool_key`: a submesh
+        only distinguishes phases that differ on the compress rates its own layers
+        use, so a sliding-only submesh is captured once and replays that single
+        trace for every phase.
+
+        Ordering matters twice over. *Every* variant's compile run (which JITs the
+        programs — trace capture itself cannot) has to be issued before the *first*
+        capture: once a trace exists on a device, allocating device buffers on it is
+        unsafe ("these buffers may be corrupted once a trace is executed"), and a
+        compile run allocates freely. So the two passes below are not interleaved.
 
         Each submesh is captured independently — capture only fixes program shapes
         / buffer addresses, so the (stale) compile-run inputs are immaterial: any
@@ -968,21 +1062,56 @@ class DeepSeekV4Model(DeepSeekV4Module):
         them. Trace capture only records ops (it does not execute them), so the
         capture loop is free of this hazard.
         """
-        compile_outs = []
-        for sm in self.submeshes_io:
-            logger.info(f"[traced-decode] compiling submesh {sm['index']} ({len(sm['layers'])} layers)")
-            compile_outs.append(self._decode_submesh_static(sm))  # compile run (JITs the programs)
-        for out in compile_outs:
-            out.deallocate(True)
-        for sm in self.submeshes_io:
-            device = sm["device"]
-            logger.info(f"[traced-decode] capturing submesh {sm['index']} ({len(sm['layers'])} layers)")
-            tid = ttnn.begin_trace_capture(device, cq_id=0)
-            with _trace_capture_guard():
-                out = self._decode_submesh_static(sm)
-            ttnn.end_trace_capture(device, tid, cq_id=0)
-            sm["tid"] = tid
-            sm["output"] = out  # persistent; overwritten in place by every execute_trace
+        # Plan first: which submeshes need their own capture for each phase, and
+        # which just alias an earlier phase's trace.
+        plan = []
+        planned_keys: list[set] = [set() for _ in self.submeshes_io]
+        for phase_idx, phase in enumerate(self._pool_phases):
+            flags = dict(zip(self._pool_crs, phase))
+            pending = []
+            for i, sm in enumerate(self.submeshes_io):
+                key = self._sm_pool_key(sm, flags)
+                if key not in planned_keys[i]:
+                    planned_keys[i].add(key)
+                    pending.append(sm)
+            plan.append((phase_idx, flags, pending))
+
+        # Pass 1 — every compile run, while no trace exists yet. The run is issued
+        # for *all* submeshes, not just the pending ones: the slices contain the
+        # cross-submesh socket send/recv, so a submesh sitting the round out would
+        # leave its neighbours' sends unpaired. Re-running an already-planned
+        # submesh is harmless (the cache rows it dirties are the same
+        # device-indexed slots a later replay overwrites, and they stay
+        # block-bias-masked until then).
+        for phase_idx, flags, pending in plan:
+            if not pending:
+                continue
+            compile_outs = []
+            for sm in self.submeshes_io:
+                logger.info(
+                    f"[traced-decode] compiling submesh {sm['index']} "
+                    f"({len(sm['layers'])} layers) phase {phase_idx} pool={flags}"
+                )
+                compile_outs.append(self._decode_submesh_static(sm, flags))  # JITs the programs
+            for out in compile_outs:
+                out.deallocate(True)
+
+        # Pass 2 — record the captures and bind every phase to a trace.
+        for phase_idx, flags, pending in plan:
+            for sm in pending:
+                device = sm["device"]
+                logger.info(
+                    f"[traced-decode] capturing submesh {sm['index']} "
+                    f"({len(sm['layers'])} layers) phase {phase_idx} pool={flags}"
+                )
+                tid = ttnn.begin_trace_capture(device, cq_id=0)
+                with _trace_capture_guard():
+                    out = self._decode_submesh_static(sm, flags)
+                ttnn.end_trace_capture(device, tid, cq_id=0)
+                # ``out`` is persistent; overwritten in place by every execute_trace.
+                sm["traces"][self._sm_pool_key(sm, flags)] = (tid, out)
+            for sm in self.submeshes_io:
+                sm["tids"][phase_idx], sm["outputs"][phase_idx] = sm["traces"][self._sm_pool_key(sm, flags)]
         self._traced_captured = True
 
     def decode_traced(self, token_id: int, pos: int) -> ttnn.Tensor:
@@ -1003,11 +1132,14 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self._set_step_inputs(token_id, pos)
         if not self._traced_captured:
             self._capture_traces()
+        # Pick the variant whose baked-in compressor-pool schedule matches this
+        # position (see :meth:`_capture_traces`).
+        phase = self._pool_phase_index(pos)
         for sm in self.submeshes_io:
-            ttnn.execute_trace(sm["device"], sm["tid"], cq_id=0, blocking=False)
+            ttnn.execute_trace(sm["device"], sm["tids"][phase], cq_id=0, blocking=False)
         # Under round-robin the global-last layer (and thus the head output) does not
         # land on the last submesh in the list, but on ``(num_layers-1) % S``.
-        return self.submeshes_io[self._output_sm_index]["output"]
+        return self.submeshes_io[self._output_sm_index]["outputs"][phase]
 
     def decode_sampled_burst(self, first_token_id: int, start_pos: int, n_steps: int) -> list[int]:
         """Autoregressively decode ``n_steps`` tokens with greedy (top-1) sampling
@@ -1054,9 +1186,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 rest = ttnn.slice(pkt, [0, 0, 0, 1], [1, 1, 1, w])  # everything past the token slot
                 fused = ttnn.concat([ttnn.reshape(tok_i32, ttnn.Shape([1, 1, 1, 1])), rest], dim=-1)
                 ttnn.copy(fused, pkt)
+            phase = self._pool_phase_index(start_pos + i)
             for sm in self.submeshes_io:
-                ttnn.execute_trace(sm["device"], sm["tid"], cq_id=0, blocking=False)
-            logits_rm = ttnn.to_layout(sm_last["output"], ttnn.ROW_MAJOR_LAYOUT)  # [1, 1, vocab]
+                ttnn.execute_trace(sm["device"], sm["tids"][phase], cq_id=0, blocking=False)
+            logits_rm = ttnn.to_layout(sm_last["outputs"][phase], ttnn.ROW_MAJOR_LAYOUT)  # [1, 1, vocab]
             tok = ttnn.argmax(logits_rm, dim=-1, keepdim=True)  # [1, 1, 1]
             sampled.append(
                 ttnn.reshape(tok if tok.dtype == ttnn.uint32 else ttnn.typecast(tok, ttnn.uint32), ttnn.Shape([1, 1]))
