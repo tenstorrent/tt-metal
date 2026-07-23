@@ -17,6 +17,7 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
+    PerfRunType,
     Transpose,
     UnpackerEngine,
     format_dict,
@@ -27,6 +28,7 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -35,8 +37,10 @@ from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     MATH_TRANSPOSE_FACES,
     NUM_FACES,
+    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -46,6 +50,8 @@ from helpers.utils import passed_test
 
 def generate_qsr_transpose_dest_combinations(
     formats_list: List[FormatConfig],
+    *,
+    is_perf=False,
 ):
     """
     Generate transpose dest combinations for Quasar tests.
@@ -99,8 +105,11 @@ def generate_qsr_transpose_dest_combinations(
         for dest_sync in (DestSync.Half, DestSync.Full)
     }
 
-    dest_sync_modes = (DestSync.Half, DestSync.Full)
-    transpose_faces_modes = (Transpose.No, Transpose.Yes)
+    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+    transpose_faces_modes = (
+        (Transpose.No,) if is_perf else (Transpose.No, Transpose.Yes)
+    )
+    perf_dimensions = [32, 32]
 
     combinations = []
     for fmt in formats_list:
@@ -113,6 +122,17 @@ def generate_qsr_transpose_dest_combinations(
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
                 for dest_sync in dest_sync_modes:
                     for math_transpose_faces in transpose_faces_modes:
+                        if is_perf:
+                            combinations.append(
+                                (
+                                    fmt,
+                                    dest_acc,
+                                    dest_sync,
+                                    math_transpose_faces,
+                                    runtime(perf_dimensions),
+                                )
+                            )
+                            continue
                         for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
                             combinations.append(
                                 (
@@ -125,6 +145,14 @@ def generate_qsr_transpose_dest_combinations(
                             )
 
     return combinations
+
+
+def transpose_dest_implied_math_formats(*, is_perf=False):
+    return (
+        [ImpliedMathFormat.Yes]
+        if is_perf
+        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+    )
 
 
 TRANSPOSE_DEST_FORMATS = input_output_formats(
@@ -140,6 +168,10 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ],
 )
+PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
+    TRANSPOSE_DEST_FORMATS,
+    is_perf=True,
+)
 
 
 @pytest.mark.quasar
@@ -147,11 +179,18 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
     formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
         TRANSPOSE_DEST_FORMATS
     ),
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    implied_math_format=lambda: transpose_dest_implied_math_formats(is_perf=False),
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
 )
 def test_transpose_dest_quasar(
     formats_dest_acc_sync_transpose_dims,
     implied_math_format,
+    run_types,
+    loop_factor,
+    *,
+    is_perf=False,
+    perf_report=None,
 ):
     (formats, dest_acc, dest_sync, math_transpose_faces, input_dimensions) = (
         formats_dest_acc_sync_transpose_dims
@@ -233,14 +272,16 @@ def test_transpose_dest_quasar(
         )
 
     unpack_to_dest = (
-        True
-        if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        else False
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
-    configuration = TestConfig(
-        "sources/quasar/transpose_dest_quasar_test.cpp",
-        formats,
-        templates=[
+
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/transpose_dest_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(data_copy_type),
             UNPACKER_ENGINE_SEL(
@@ -249,13 +290,14 @@ def test_transpose_dest_quasar(
             DEST_SYNC(dest_sync),
             MATH_TRANSPOSE_FACES(math_transpose_faces),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -266,10 +308,22 @@ def test_transpose_dest_quasar(
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
         ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
-    )
+        "unpack_to_dest": unpack_to_dest,
+        "dest_acc": dest_acc,
+    }
 
+    if is_perf:
+        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
+        configuration.run(perf_report)
+        return
+
+    configuration = TestConfig(
+        **{
+            **test_config_kwargs,
+            "templates": test_config_kwargs["templates"]
+            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        },
+    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
