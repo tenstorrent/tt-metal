@@ -525,7 +525,13 @@ class TestSparseFramesRing:
             num_frames_padded=nf_padded,
             frame_seqlen=3840,
             b=1,
-            nh=40,  # total heads; runner shards on tp_axis (nh must divide tp_factor: 40/4=10, 40/2=20)
+            # nh=40 is the real production value but slow to iterate on due to host tilize/detilize
+            # of ~944 MB tensors. nh=12 is the smallest value that still exercises the multi-work-
+            # item-per-core code paths (per_core work items ~= (nh/tp) * num_q_chunks / num_cores;
+            # at 720p geometry and BH 4x8's ~99 compute cores, nh=12 gives ~1.1 items/core so
+            # q_per_core > 1 fires on some cores; nh <= 8 gives <1 items/core and misses the path).
+            # Restore to 40 before final validation.
+            nh=12,  # runner shards on tp_axis; nh must divide tp_factor (12/4=3, 12/2=6)
             d=128,
             window=5,
             add_last_frame=True,
