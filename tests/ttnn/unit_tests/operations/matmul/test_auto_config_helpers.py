@@ -80,7 +80,7 @@ def _make_linear_signature(*, a_shape=(256, 1024), b_shape=(1024, 512), bias_sha
     )
 
 
-def _make_distributed_signature(*, lhs_shard_dim=None, rhs_shard_dim=None):
+def _make_distributed_signature(*, lhs_shard_dim=None, rhs_shard_dim=None, rhs_k=64):
     lhs_topology = None
     rhs_topology = None
     if lhs_shard_dim is not None:
@@ -118,7 +118,7 @@ def _make_distributed_signature(*, lhs_shard_dim=None, rhs_shard_dim=None):
             "topology": lhs_topology,
         },
         input_tensor_b={
-            "shape": [1, 1, 64, 128],
+            "shape": [1, 1, rhs_k, 128],
             "dtype": "bfloat16",
             "layout": "Layout.TILE",
             "tile": {"tile_shape": [32, 32], "transpose_of_faces": "False"},
@@ -127,7 +127,7 @@ def _make_distributed_signature(*, lhs_shard_dim=None, rhs_shard_dim=None):
         },
         bias=None,
         m=32,
-        k=64,
+        k=rhs_k,
         n=128,
     )
 
@@ -297,12 +297,25 @@ def test_default_version_falls_back_to_unknown_without_git_or_package_metadata(m
 
 
 def test_infer_distributed_plan_for_all_gather():
-    signature = _make_distributed_signature(lhs_shard_dim=3)
+    # K-consistent gather: per-device activation K=64 gathered across 8 devices = 512,
+    # matching the replicated weight's full K=512.
+    signature = _make_distributed_signature(lhs_shard_dim=3, rhs_k=512)
     plan = auto_matmul._infer_distributed_plan(signature)
     assert plan.kind == "gather_before_matmul"
     assert plan.collective_dim == 3
     assert plan.cluster_axis == 0
     assert plan.distribution_factor == 8
+
+
+def test_infer_distributed_plan_rejects_gather_with_mismatched_k():
+    # Regression for the 1x4 blackhole QKV crash (bounty #38114 / PR #47111): a
+    # replicated activation mis-detected as K-sharded would all-gather K to
+    # per-device_K * factor (64 * 8 = 512) and multiply against the un-gathered
+    # weight (K=64) -> TT_FATAL contraction-dim mismatch.  The plan must bypass to
+    # the base op instead of building that crashing candidate.
+    signature = _make_distributed_signature(lhs_shard_dim=3, rhs_k=64)
+    plan = auto_matmul._infer_distributed_plan(signature)
+    assert plan.kind == "unsupported"
 
 
 def test_infer_distributed_plan_for_reduce_scatter():
@@ -373,6 +386,84 @@ def test_blackhole_reduce_scatter_candidates_skip_unstable_fused_path():
     )
 
     assert candidates == []
+
+
+def _prepared_for_selection():
+    device = SimpleNamespace()
+    return SimpleNamespace(
+        input_tensor_a=SimpleNamespace(device=lambda: device),
+        staged_rhs_from_host=False,
+        staged_bias_from_host=False,
+    )
+
+
+def _isolate_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_VERSION", "test-version")
+    monkeypatch.delenv("TTNN_AUTO_MATMUL_FORCE_RETUNE", raising=False)
+
+
+def _fail_if_run():
+    raise AssertionError("an unvalidated candidate was executed")
+
+
+def test_select_candidate_fails_closed_when_all_candidates_error(monkeypatch, tmp_path):
+    # Regression for PR #47111 / bounty #38114 (Group A gather crash + Group B reduce-scatter
+    # bad-optional-access): when no candidate can be benchmarked, the selector must NOT execute
+    # an unvalidated candidate.  It must fail closed to a base-op fallback (candidate is None) so
+    # dispatch runs the plain base op == main behaviour.
+    _isolate_cache(monkeypatch, tmp_path)
+    signature = _make_distributed_signature(rhs_shard_dim=2)
+    prepared = _prepared_for_selection()
+
+    reduce_scatter = auto_matmul.Candidate(descriptor={"kind": "matmul_then_reduce_scatter"}, run=_fail_if_run)
+    monkeypatch.setattr(auto_matmul, "_build_candidates", lambda *a, **k: [reduce_scatter])
+    monkeypatch.setattr(auto_matmul, "_compute_reference_output", lambda *a, **k: None)
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("bad optional access")
+
+    monkeypatch.setattr(auto_matmul, "_benchmark_candidate", _raise)
+
+    selection = auto_matmul._select_candidate(signature, prepared, {}, base_operation=None, allow_tuning=True)
+
+    assert selection["candidate"] is None
+    assert selection["winner"]["kind"] == auto_matmul.WINNER_KIND_BASE_OP_FALLBACK
+
+
+def test_select_candidate_cache_hit_returns_fallback_without_retuning(monkeypatch, tmp_path):
+    # After a base-op fallback is persisted, subsequent calls must return candidate=None from the
+    # cache without re-running the (crashing) benchmarks on every call.
+    _isolate_cache(monkeypatch, tmp_path)
+    signature = _make_distributed_signature(rhs_shard_dim=2)
+    prepared = _prepared_for_selection()
+
+    monkeypatch.setattr(
+        auto_matmul,
+        "_build_candidates",
+        lambda *a, **k: [auto_matmul.Candidate(descriptor={"kind": "matmul_then_reduce_scatter"}, run=lambda: None)],
+    )
+    monkeypatch.setattr(auto_matmul, "_compute_reference_output", lambda *a, **k: None)
+
+    benchmark_calls = {"count": 0}
+
+    def _raise(*args, **kwargs):
+        benchmark_calls["count"] += 1
+        raise RuntimeError("bad optional access")
+
+    monkeypatch.setattr(auto_matmul, "_benchmark_candidate", _raise)
+
+    first = auto_matmul._select_candidate(signature, prepared, {}, base_operation=None, allow_tuning=True)
+    calls_after_first = benchmark_calls["count"]
+    assert first["candidate"] is None
+    assert calls_after_first >= 1
+
+    second = auto_matmul._select_candidate(signature, prepared, {}, base_operation=None, allow_tuning=True)
+    assert second["cache_hit"] is True
+    assert second["candidate"] is None
+    assert second["winner"]["kind"] == auto_matmul.WINNER_KIND_BASE_OP_FALLBACK
+    # No new benchmark runs: the fallback was served from the persisted cache record.
+    assert benchmark_calls["count"] == calls_after_first
 
 
 def test_select_candidate_chooses_fastest_and_persists_record(monkeypatch, tmp_path):

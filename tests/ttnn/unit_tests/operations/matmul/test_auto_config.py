@@ -40,6 +40,20 @@ def test_install_passthrough_wrapper_preserves_doc_and_golden_function():
     assert wrapped.golden_function is _ok_candidate_entries
 
 
+def test_install_is_noop_when_disabled_via_env(monkeypatch):
+    monkeypatch.setenv("TTNN_AUTO_MATMUL_DISABLE_INSTALL", "1")
+    monkeypatch.setattr(install_ops, "_installed", False)
+    sentinel = object()
+    monkeypatch.setattr(ttnn, "matmul", sentinel, raising=False)
+    monkeypatch.setattr(ttnn, "linear", sentinel, raising=False)
+
+    install_ops.install_public_wrappers()
+
+    # Disabled: the public entrypoints are left as-is (raw C++ ops in production).
+    assert ttnn.matmul is sentinel
+    assert ttnn.linear is sentinel
+
+
 def test_matmul_wrapper_impl_prefers_queue_id_over_cq_id(monkeypatch):
     import ttnn._experimental.auto_config.matmul as auto_matmul_module
 

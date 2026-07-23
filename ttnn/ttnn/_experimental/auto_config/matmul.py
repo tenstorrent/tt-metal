@@ -55,6 +55,11 @@ _MAX_PROGRAM_CONFIG_CANDIDATES = 6
 # logical outputs many matmuls produce.
 _CORRECTNESS_REL_ERR_THRESHOLD = 0.05
 _CACHE_FILE_SUFFIX = ".json"
+# Winner kind persisted when tuning found no candidate that could be benchmarked
+# successfully.  It carries no runnable candidate: dispatch_matmul falls back to the
+# plain base op (== main behaviour) and the cache-hit path returns candidate=None
+# without re-tuning, so the crashing benchmarks are not re-run on every call.
+WINNER_KIND_BASE_OP_FALLBACK = "base_op_fallback"
 _DEFAULT_CCL_CHUNKS_PER_SYNC = 10
 _DEFAULT_CCL_NUM_WORKERS_PER_LINK = 2
 _DEFAULT_CCL_NUM_BUFFERS_PER_CHANNEL = 2
@@ -1017,7 +1022,18 @@ def _infer_distributed_plan(signature: AutoMatmulSignature) -> DistributedCollec
     # K-sharded W — a silent shape/semantic error.  This is the topology
     # ``place_weight`` produces when it shards a host weight on K to match a
     # K-sharded activation.
+    def _dim_size(shape: tuple[int, ...], dim: int) -> int | None:
+        return int(shape[dim]) if -len(shape) <= dim < len(shape) else None
+
+    lhs_k = _dim_size(lhs_shape, lhs_k_dim)
+    rhs_k = _dim_size(rhs_shape, rhs_k_dim)
+
     if lhs_shard_axis is not None and rhs_shard_axis is not None and lhs_shard_axis == rhs_shard_axis:
+        # Both operands hold the same K shard on this device; the local matmul only
+        # works if the per-device contraction dims agree.  If they don't, this is not
+        # a valid row-parallel layout -- bypass so the base op raises its native error.
+        if lhs_k is not None and rhs_k is not None and lhs_k != rhs_k:
+            return DistributedCollectivePlan(kind="unsupported")
         output_rank = len(_extract_output_shape(lhs_shape, rhs_shape, signature.transpose_a, signature.transpose_b))
         return DistributedCollectivePlan(
             kind="matmul_before_reduce_scatter",
@@ -1029,11 +1045,20 @@ def _infer_distributed_plan(signature: AutoMatmulSignature) -> DistributedCollec
         )
 
     if lhs_shard_axis is not None:
+        # Gather-before-matmul all-gathers the K-sharded activation to its full K and
+        # multiplies against a weight carrying the full K.  This is only valid if the
+        # gathered K equals the weight's contraction dim.  A replicated activation
+        # mis-detected as K-sharded (seen on 1x4 blackhole: 4*2880=11520 vs a 2880
+        # weight) fails this check -- bypass to the base op instead of building a
+        # candidate that would crash with a contraction-dim mismatch.
+        distribution_factor = _topology_distribution_factor(lhs_topology, lhs_shard_axis)
+        if lhs_k is not None and rhs_k is not None and lhs_k * distribution_factor != rhs_k:
+            return DistributedCollectivePlan(kind="unsupported")
         return DistributedCollectivePlan(
             kind="gather_before_matmul",
             collective_dim=lhs_k_dim,
             cluster_axis=lhs_shard_axis,
-            distribution_factor=_topology_distribution_factor(lhs_topology, lhs_shard_axis),
+            distribution_factor=distribution_factor,
             lhs_shard_dim=lhs_k_dim,
             rhs_shard_dim=None,
         )
@@ -2296,6 +2321,38 @@ def _selection_summary(selection: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _persist_and_build_selection(
+    cache: "AutoMatmulCache",
+    signature: AutoMatmulSignature,
+    *,
+    winner_descriptor: dict[str, Any],
+    candidate: "Candidate | None",
+    candidate_timings: list[dict[str, Any]],
+    recommendations: list[str],
+) -> dict[str, Any]:
+    """Persist a freshly tuned record and return the matching selection dict.
+
+    ``candidate`` is None for a base-op fallback (no runnable winner); dispatch then
+    runs the plain base op."""
+    record = {
+        "version": cache.version,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "signature": signature.to_dict(),
+        "winner": winner_descriptor,
+        "candidate_timings_us": candidate_timings,
+        "recommendations": recommendations,
+    }
+    cache.save(signature, record)
+    return {
+        "cache_hit": False,
+        "cache_path": str(cache.path_for(signature)),
+        "winner": winner_descriptor,
+        "candidate_timings_us": candidate_timings,
+        "recommendations": recommendations,
+        "candidate": candidate,
+    }
+
+
 def _select_candidate(
     signature: AutoMatmulSignature,
     prepared: PreparedMatmulInputs,
@@ -2307,6 +2364,19 @@ def _select_candidate(
     cache = AutoMatmulCache()
     cached_record = cache.load(signature)
     if cached_record is not None:
+        # A persisted base-op fallback means an earlier tuning run found no candidate
+        # it could benchmark for this signature.  Return candidate=None so dispatch runs
+        # the plain base op, without rebuilding/invalidating (which would re-tune and
+        # re-run the failing benchmarks on every call).
+        if (cached_record.get("winner") or {}).get("kind") == WINNER_KIND_BASE_OP_FALLBACK:
+            return {
+                "cache_hit": True,
+                "cache_path": str(cache.path_for(signature)),
+                "winner": cached_record["winner"],
+                "candidate_timings_us": cached_record.get("candidate_timings_us", []),
+                "recommendations": cached_record.get("recommendations", []),
+                "candidate": None,
+            }
         candidate = _build_candidate_from_descriptor(
             cached_record["winner"],
             base_operation=base_operation,
@@ -2406,36 +2476,39 @@ def _select_candidate(
             winner = candidate
             winner_avg_us = avg_us
 
+    recommendations = _make_recommendations(signature, prepared)
+
     if winner is None:
-        winner = candidates[0]
-        candidate_timings.append(
-            {
-                "descriptor": winner.descriptor,
-                "status": "fallback",
-                "average_us": None,
-                "samples_us": [],
-                "benchmark_mode": "none",
-            }
+        # No candidate could be benchmarked successfully (e.g. every distributed
+        # collective candidate threw for this layout).  Fail closed: never execute a
+        # candidate that was never validated -- persist a base-op fallback so dispatch
+        # runs the plain base op (identical to pre-auto-config / main behaviour) and
+        # follow-up calls skip re-running the failing benchmarks.  TTNN_AUTO_MATMUL_FORCE_RETUNE=1
+        # bypasses cache loads and re-attempts tuning.  Per-candidate failures are in
+        # candidate_timings_us.
+        recommendations = _append_recommendation(
+            recommendations,
+            f"No auto-config candidate could be benchmarked for signature "
+            f"(m={signature.m}, k={signature.k}, n={signature.n}); see candidate_timings_us for the "
+            f"per-candidate errors. Falling back to the base op.",
+        )
+        return _persist_and_build_selection(
+            cache,
+            signature,
+            winner_descriptor={"kind": WINNER_KIND_BASE_OP_FALLBACK},
+            candidate=None,
+            candidate_timings=candidate_timings,
+            recommendations=recommendations,
         )
 
-    recommendations = _make_recommendations(signature, prepared)
-    record = {
-        "version": cache.version,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "signature": signature.to_dict(),
-        "winner": winner.descriptor,
-        "candidate_timings_us": candidate_timings,
-        "recommendations": recommendations,
-    }
-    cache.save(signature, record)
-    return {
-        "cache_hit": False,
-        "cache_path": str(cache.path_for(signature)),
-        "winner": winner.descriptor,
-        "candidate_timings_us": candidate_timings,
-        "recommendations": recommendations,
-        "candidate": winner,
-    }
+    return _persist_and_build_selection(
+        cache,
+        signature,
+        winner_descriptor=winner.descriptor,
+        candidate=winner,
+        candidate_timings=candidate_timings,
+        recommendations=recommendations,
+    )
 
 
 def _execute_selected_candidate(selection: dict[str, Any]) -> Any:
@@ -3063,8 +3136,8 @@ def dispatch_matmul(
         base_operation=base_operation,
         allow_tuning=True,
     )
-    if selection.get("candidate") is None:
-        cache.save_runtime(signature, _selection_summary(selection))
+
+    def _run_base() -> Any:
         return _run_base_operation(
             base_operation=base_operation,
             input_tensor_a=prepared.input_tensor_a,
@@ -3074,25 +3147,38 @@ def dispatch_matmul(
             kwargs=kwargs,
         )
 
+    # candidate is None => no validated tuned candidate (base-op fallback); run the plain
+    # base op instead of executing an unvalidated candidate.
+    if selection.get("candidate") is None:
+        cache.save_runtime(signature, _selection_summary(selection))
+        return _run_base()
+
     try:
         result = _execute_selected_candidate(selection)
         cache.save_runtime(signature, _selection_summary(selection))
         return result
     except Exception:
-        if selection.get("cache_hit"):
-            cache.invalidate(signature)
-            cache.invalidate_runtime(signature)
-            selection = _select_candidate(
-                signature,
-                prepared,
-                kwargs,
-                base_operation=base_operation,
-                allow_tuning=True,
-            )
-            result = _execute_selected_candidate(selection)
+        if not selection.get("cache_hit"):
+            raise
+        # A cached winner failed at real-execution time (a layout the tuned candidate
+        # can't handle, e.g. the small-M reduce-scatter path).  Drop it and re-select
+        # once.  The re-selection may now legitimately yield no runnable candidate
+        # (base-op fallback) -- that MUST fall back to the base op, not be executed.
+        cache.invalidate(signature)
+        cache.invalidate_runtime(signature)
+        selection = _select_candidate(
+            signature,
+            prepared,
+            kwargs,
+            base_operation=base_operation,
+            allow_tuning=True,
+        )
+        if selection.get("candidate") is None:
             cache.save_runtime(signature, _selection_summary(selection))
-            return result
-        raise
+            return _run_base()
+        result = _execute_selected_candidate(selection)
+        cache.save_runtime(signature, _selection_summary(selection))
+        return result
 
 
 def explain_matmul(

@@ -14,9 +14,16 @@ golden functions rather than redefining them.
 """
 
 import inspect
+import os
 
 import ttnn
 from ttnn.decorators import get_golden_function
+
+# Diagnostic escape hatch. When set (to any non-empty value), install_public_wrappers() is a
+# no-op and the public ttnn.matmul / ttnn.linear stay the raw C++ operations (pre-auto-config
+# behavior). Lets CI A/B whether installing these wrappers is responsible for an otherwise
+# unrelated-looking failure, without reverting the feature.
+_DISABLE_INSTALL_ENV = "TTNN_AUTO_MATMUL_DISABLE_INSTALL"
 
 # Kept as a self-contained reStructuredText ``.. note::`` directive so it appends cleanly to the
 # base op docstrings without forming a definition list or colliding with their existing
@@ -162,6 +169,11 @@ def install_public_wrappers():
     """
     global _CPP_MATMUL, _CPP_LINEAR, _installed
     if _installed:
+        return
+
+    if os.environ.get(_DISABLE_INSTALL_ENV):
+        # Leave ttnn.matmul / ttnn.linear as the raw C++ ops (see _DISABLE_INSTALL_ENV above).
+        _installed = True
         return
 
     _CPP_MATMUL = ttnn.matmul
