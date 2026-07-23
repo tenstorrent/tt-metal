@@ -1,0 +1,266 @@
+{
+    "schema_version": 1,
+    "instructions": [
+        {
+            "pattern": "MOP_CFG",
+            "class": "programming",
+            "rationale": "Writes the MOP configuration registers that program a macro-op program."
+        },
+        {
+            "pattern": "MOP",
+            "class": "deferred",
+            "rationale": "Executes an already-programmed macro-op; any embedded state effect activates during deferred execution rather than programming."
+        },
+        {
+            "pattern": "REPLAY",
+            "class": "programming",
+            "rationale": "Records or replays a buffered instruction program."
+        },
+        {
+            "pattern": "DMANOP",
+            "class": "order_only",
+            "rationale": "Ordering-only DMA no-op; carries no persistent architectural state."
+        },
+        {
+            "pattern": "STALLWAIT",
+            "class": "order_only",
+            "rationale": "Pipeline stall/wait; ordering-only, no persistent state."
+        },
+        {
+            "pattern": "SEMWAIT",
+            "class": "order_only",
+            "rationale": "Blocks on a semaphore; ordering-only, changes no persistent state."
+        },
+        {
+            "pattern": "SFPNOP",
+            "architectures": [
+                "quasar"
+            ],
+            "class": "persistent",
+            "rationale": "On Quasar SFPNOP clears source data-valid state (source-clear)."
+        },
+        {
+            "pattern": "SFPNOP",
+            "class": "order_only",
+            "rationale": "SFPU pipeline no-op on Wormhole/Blackhole; ordering-only."
+        },
+        {
+            "pattern": "NOP",
+            "class": "order_only",
+            "rationale": "No-op; ordering/latency padding only, no persistent state."
+        },
+        {
+            "pattern": "SFPCONFIG",
+            "class": "persistent",
+            "rationale": "Programs persistent SFPU configuration registers."
+        },
+        {
+            "pattern":
+                "SFP(?:ABS|ADD|AND|CAST|COMPC|ENCC|EXEXP|EXMAN|GT|IADD|LOAD|LOADI|LOADMACRO|MAD|MOV|MUL|MUL24|NONLINEAR|OR|SETCC|SETSGN|SHFT|SHFT2|STORE|SWAP|TRANSP|XOR|_STOCH_RND)",
+            "class": "transient",
+            "rationale":
+                "Reviewed SFPU data-plane operations on LReg/dest contents; summarized as transient datapath. New SFP opcodes must be classified explicitly."
+        },
+        {
+            "pattern": "MOV.*",
+            "class": "transient",
+            "rationale": "Src/Dst register data move; transient datapath contents."
+        },
+        {
+            "pattern": "MVMUL.*",
+            "class": "transient",
+            "rationale": "Matrix-multiply datapath op writing Dst contents; transient."
+        },
+        {
+            "pattern": "ELW.*",
+            "class": "transient",
+            "rationale": "Element-wise ALU datapath op writing Dst contents; transient."
+        },
+        {
+            "pattern": "GAPOOL|GMPOOL",
+            "class": "transient",
+            "rationale": "Pooling datapath op writing Dst contents; transient."
+        },
+        {
+            "pattern": "TRNSPSRCB|SHIFTXB",
+            "class": "transient",
+            "rationale": "SrcB register data manipulation; transient datapath contents."
+        },
+        {
+            "pattern": "ZEROACC|ZEROSRC",
+            "class": "transient",
+            "rationale": "Clears Dst/Src datapath contents; summarized as transient datapath."
+        },
+        {
+            "pattern": "UNPACR_NOP",
+            "class": "persistent",
+            "rationale": "Unpack NOP whose operands encode data-valid / source-clear state (WH/BH and Quasar)."
+        },
+        {
+            "pattern": "UNPACR.*",
+            "class": "transient",
+            "rationale": "Unpack data movement into Src registers; transient datapath contents."
+        },
+        {
+            "pattern": "PACR.*",
+            "class": "transient",
+            "rationale": "Pack data movement out of Dst to L1; transient datapath contents."
+        },
+        {
+            "pattern": "RMWCIB[0-9]",
+            "class": "persistent",
+            "rationale": "Raw read-modify-write of a config register byte; persistent config state (includes Quasar RMWCIB3)."
+        },
+        {
+            "pattern": "RDCFG",
+            "class": "order_only",
+            "rationale": "Reads configuration state into a datapath register and does not mutate persistent configuration."
+        },
+        {
+            "pattern": "CFGSHIFTMASK|WRCFG|SETC16|REG2FLOP|REG2FLOP_COMMON",
+            "class": "persistent",
+            "rationale": "Direct config-register write or read-modify-write; persistent config state."
+        },
+        {
+            "pattern": "(SET|INC)_(SRC|DST)_TILE_FACE_ROW_IDX",
+            "class": "persistent",
+            "rationale": "Programs persistent Quasar tile/face/row index counters."
+        },
+        {
+            "pattern": "SET(ADC[A-Z0-9]*|RWC)|INC(ADC[A-Z0-9]*|RWC)|ADDRCR(ZW|XY)",
+            "class": "persistent",
+            "rationale": "Programs persistent addressing/RWC counters."
+        },
+        {
+            "pattern": "SETDVALID|CLEARDVALID|GATESRCRST",
+            "class": "persistent",
+            "rationale": "Sets/clears/gates persistent data-valid or source-gate state."
+        },
+        {
+            "pattern": "SEMINIT|SEMPOST|SEMGET",
+            "class": "persistent",
+            "rationale": "Initializes/updates persistent semaphore state."
+        },
+        {
+            "pattern": "ATGETM|ATRELM",
+            "class": "persistent",
+            "rationale": "Acquires/releases a hardware mutex; persistent synchronization state."
+        },
+        {
+            "pattern": "SETDMAREG|ADDDMAREG|MULDMAREG",
+            "class": "persistent",
+            "rationale": "Writes a persistent general-purpose (DMA) register."
+        }
+    ],
+    "mmio": [
+        {
+            "target": "mop_cfg",
+            "class": "programming",
+            "rationale": "MOP configuration MMIO array; programs a macro-op program."
+        },
+        {
+            "target": "cfg",
+            "class": "persistent",
+            "rationale": "Direct backend CONFIG register-file MMIO write; persistent config state."
+        },
+        {
+            "target": "regfile",
+            "class": "persistent",
+            "rationale": "Direct general-purpose register-file MMIO write; persistent GPR state."
+        }
+    ],
+    "helper_calls": [
+        {
+            "name": "mailbox_write",
+            "class": "persistent",
+            "rationale": "Publishes persistent cross-thread mailbox synchronization state."
+        },
+        {
+            "name": "mailbox_read",
+            "class": "persistent",
+            "rationale": "Consumes or observes persistent cross-thread mailbox synchronization state."
+        }
+    ],
+    "software_state": [
+        {
+            "name": "cfg_state_id",
+            "rationale": "Shadow of the active config state id used to select later config context."
+        },
+        {
+            "name": "unp_cfg_context",
+            "rationale": "Shadow of the active unpack config context."
+        },
+        {
+            "name": "dest_offset_id",
+            "rationale": "Shadow of the active destination bank offset id."
+        },
+        {
+            "name": "dest_register_offset",
+            "rationale": "Shadow of the destination register offset."
+        },
+        {
+            "name": "clear_dest_bank_id",
+            "rationale": "Shadow of the destination bank id to clear."
+        },
+        {
+            "name": "pack_sync_tile_dst_ptr",
+            "rationale": "Shadow of the packer sync tile destination pointer."
+        },
+        {
+            "name": "math_sync_tile_dst_index",
+            "rationale": "Shadow of the math sync tile destination index."
+        },
+        {
+            "name": "data_format_config_set",
+            "rationale": "Shadow tracking whether data-format config has been applied."
+        },
+        {
+            "name": "configured_num_tiles",
+            "rationale": "Cached number of configured tiles that alters later LLK behavior."
+        },
+        {
+            "name": "num_tiles_per_sequence",
+            "rationale": "Cached tiles-per-sequence count that alters later LLK behavior."
+        },
+        {
+            "name": "configured_zero_output",
+            "rationale": "Cached zero-output configuration flag that alters later packing."
+        },
+        {
+            "name": "src_zero_flag_state",
+            "rationale": "Persistent source zero-flag state shadow."
+        },
+        {
+            "name": "src_zero_flag_srca_fmt",
+            "rationale": "Cached SrcA format for the source zero-flag shadow."
+        },
+        {
+            "name": "src_zero_flag_srcb_fmt",
+            "rationale": "Cached SrcB format for the source zero-flag shadow."
+        },
+        {
+            "name": "topk_replay_init",
+            "rationale": "Persistent TopK replay initialization cache that controls later replay rebuild behavior."
+        },
+        {
+            "name": "vConstFloatPrgm0",
+            "rationale": "Programs persistent SFPU constant register 0 for subsequent data-plane operations."
+        },
+        {
+            "name": "vConstFloatPrgm1",
+            "rationale": "Programs persistent SFPU constant register 1 for subsequent data-plane operations."
+        },
+        {
+            "name": "vConstFloatPrgm2",
+            "rationale": "Programs persistent SFPU constant register 2 for subsequent data-plane operations."
+        },
+        {
+            "name": "vConstIntPrgm0",
+            "rationale": "Programs persistent SFPU integer constant register 0 for subsequent data-plane operations."
+        },
+        {
+            "name": "vConstIntPrgm1",
+            "rationale": "Programs persistent SFPU integer constant register 1 for subsequent data-plane operations."
+        }
+    ]
+}

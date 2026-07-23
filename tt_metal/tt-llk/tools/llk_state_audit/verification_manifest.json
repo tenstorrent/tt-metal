@@ -1,0 +1,228 @@
+{
+    "schema_version": 1,
+    "tests": [
+        {
+            "path": "tests/python_tests/z_state/reconfig/test_unpack_reconfig.py",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "functions": [
+                "_llk_unpack_hw_configure_",
+                "_llk_unpack_reconfig_data_format_srca_impl_",
+                "_llk_unpack_reconfig_data_format_srcb_impl_"
+            ],
+            "families": [
+                "unpack_configure"
+            ],
+            "domains": [
+                "cfg_register",
+                "gpr"
+            ],
+            "validation_scope": "runtime_reconfigure"
+        },
+        {
+            "path": "tests/python_tests/z_state/reconfig/test_pack_reconfig.py",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "functions": [
+                "_llk_pack_hw_configure_",
+                "_llk_pack_reconfig_data_format_"
+            ],
+            "families": [
+                "pack_configure"
+            ],
+            "domains": [
+                "cfg_register"
+            ],
+            "validation_scope": "runtime_reconfigure"
+        },
+        {
+            "path": "tests/python_tests/test_unpack_tilize_uninit_restore.py",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "functions": [
+                "_llk_unpack_tilize_init_",
+                "_llk_unpack_tilize_uninit_"
+            ],
+            "families": [
+                "unpack_init_or_restore",
+                "mop_or_addrmod"
+            ],
+            "domains": [
+                "cfg_register",
+                "counter",
+                "mop_replay"
+            ],
+            "validation_scope": "restore"
+        },
+        {
+            "path": "tests/python_tests/test_unpack_tilize_uninit_restore_tiny.py",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "functions": [
+                "_llk_unpack_tilize_init_",
+                "_llk_unpack_tilize_uninit_"
+            ],
+            "families": [
+                "unpack_init_or_restore"
+            ],
+            "domains": [
+                "cfg_register",
+                "counter"
+            ],
+            "validation_scope": "restore"
+        },
+        {
+            "path": "tests/python_tests/test_unpack_bcastA_B_uninit_restore.py",
+            "architectures": [
+                "wormhole_b0"
+            ],
+            "functions": [
+                "_llk_unpack_bcastA_B_init_",
+                "_llk_unpack_bcastA_B_uninit_"
+            ],
+            "families": [
+                "unpack_init_or_restore"
+            ],
+            "domains": [
+                "cfg_register",
+                "counter"
+            ],
+            "validation_scope": "restore"
+        },
+        {
+            "path": "tests/python_tests/test_unpack_canonical_baseline.py",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "functions": [
+                "_llk_math_hw_configure_",
+                "_llk_math_reconfig_data_format_",
+                "_llk_pack_init_",
+                "_llk_pack_uninit_",
+                "_llk_math_eltwise_binary_init_"
+            ],
+            "families": [
+                "math_configure",
+                "pack_init_or_restore",
+                "mop_or_addrmod"
+            ],
+            "domains": [
+                "cfg_register",
+                "counter"
+            ],
+            "validation_scope": "canonical_baseline"
+        },
+        {
+            "path": "tests/python_tests/quasar/test_semaphore_sync_quasar.py",
+            "architectures": [
+                "quasar"
+            ],
+            "functions": [
+                "_llk_sync_init_",
+                "_llk_math_dest_section_done_",
+                "_llk_pack_dest_semaphore_section_done_"
+            ],
+            "families": [
+                "sync_clear_done"
+            ],
+            "domains": [
+                "dvalid_semaphore",
+                "software_shadow"
+            ],
+            "validation_scope": "synchronization"
+        },
+        {
+            "path": "tests/python_tests/quasar/test_pack_quasar.py",
+            "architectures": [
+                "quasar"
+            ],
+            "functions": [
+                "_llk_math_srcAB_hw_configure_",
+                "_llk_pack_hw_configure_",
+                "_llk_pack_init_",
+                "_llk_pack_reduce_mask_clear_"
+            ],
+            "families": [
+                "math_configure",
+                "pack_configure",
+                "pack_init_or_restore",
+                "mop_or_addrmod"
+            ],
+            "domains": [
+                "cfg_register",
+                "mop_replay",
+                "software_shadow"
+            ],
+            "validation_scope": "canonical_baseline"
+        },
+        {
+            "path": "tests/python_tests/quasar/test_unpack_unary_operand_quasar.py",
+            "architectures": [
+                "quasar"
+            ],
+            "functions": [
+                "_llk_unpack_hw_configure_",
+                "_llk_unpack_reconfig_data_format_src_",
+                "_llk_unpack_unary_operand_init_"
+            ],
+            "families": [
+                "unpack_configure",
+                "unpack_init_or_restore",
+                "mop_or_addrmod"
+            ],
+            "domains": [
+                "cfg_register",
+                "mop_replay",
+                "destination"
+            ],
+            "validation_scope": "runtime_reconfigure"
+        },
+        {
+            "path": "tests/python_tests/quasar/test_unpack_tilize_quasar.py",
+            "architectures": [
+                "quasar"
+            ],
+            "functions": [
+                "_llk_unpack_tilize_init_",
+                "_llk_unpack_tilize_strided_init_"
+            ],
+            "families": [
+                "unpack_init_or_restore",
+                "mop_or_addrmod"
+            ],
+            "domains": [
+                "cfg_register",
+                "mop_replay"
+            ],
+            "validation_scope": "canonical_baseline"
+        },
+        {
+            "path": "tests/python_tests/quasar/test_pack_untilize_quasar.py",
+            "architectures": [
+                "quasar"
+            ],
+            "functions": [
+                "_llk_pack_untilize_init_",
+                "_llk_pack_untilize_strided_init_"
+            ],
+            "families": [
+                "pack_init_or_restore",
+                "mop_or_addrmod"
+            ],
+            "domains": [
+                "cfg_register",
+                "mop_replay"
+            ],
+            "validation_scope": "canonical_baseline"
+        }
+    ]
+}
