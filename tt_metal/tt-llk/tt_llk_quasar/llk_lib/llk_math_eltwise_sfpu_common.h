@@ -22,6 +22,7 @@ inline void _eltwise_sfpu_configure_addrmod_()
 /**
  * @brief Begin an SFPU elementwise op on the math thread for the given dest tile.
  *
+ * @tparam TILE_SHAPE: Destination tile shape used to calculate the write address.
  * @param tile_index: Tile index into the destination register to operate on.
  * @note Pair with @ref _llk_math_eltwise_sfpu_done_ once the op has run.
  */

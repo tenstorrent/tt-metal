@@ -44,6 +44,7 @@ inline void _sfpu_configure_addrmod_()
 
 /**
  * @brief Sets up starting index of SFPU, Stalls till all FPU operations are done
+ * @tparam TILE_SHAPE: Destination tile shape used to calculate the write address
  * @param tile_index: Use to index to a tile in Destination register
  */
 template <trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>

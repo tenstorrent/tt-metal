@@ -46,7 +46,7 @@ inline __attribute__((always_inline)) void _sfpu_check_(std::uint32_t dst_index,
 // Non-templated functor in `ckernel::sfpu`.
 #define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IDX, VECTOR_MODE, ...) \
     (::ckernel::_sfpu_check_<DST_SYNC, DST_ACCUM>(DST_IDX, VECTOR_MODE),                     \
-     _llk_math_eltwise_unary_sfpu_params_ > (::ckernel::sfpu::FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
+     _llk_math_eltwise_unary_sfpu_params_(::ckernel::sfpu::FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
 
 // Init macros take OP first, then the optional init callback and template args.
 

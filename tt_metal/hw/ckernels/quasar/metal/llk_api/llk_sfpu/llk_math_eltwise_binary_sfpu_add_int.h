@@ -26,7 +26,7 @@ inline void llk_math_eltwise_binary_sfpu_add_int_init() { _llk_math_eltwise_sfpu
  * @param idst0: The index of the tile in DST register buffer to use as first operand
  * @param idst1: The index of the tile in DST register buffer to use as second operand
  * @param odst: The index of the tile in DST register buffer to use as output
- * @param vector_mode: Vector mode (must be VectorMode::RC)
+ * @param vector_mode: Vector mode, values = <R/C/RC/None>
  */
 template <bool APPROXIMATE, int ITERATIONS, DataFormat DATA_FORMAT, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void llk_math_eltwise_binary_sfpu_add_int(

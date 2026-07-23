@@ -104,6 +104,8 @@ void init_unary_sfpu_operation_quasar()
  * whose sfpi compare path resolves the actual width from the HW format config.
  *
  * @tparam OPERATION The comparison-to-zero `SfpuType` (compile-time constant).
+ * @tparam DST_SYNC Destination synchronization mode used for bounds checking.
+ * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode.
  * @tparam ITERATIONS Number of SFPU loop iterations.
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
  * @param sfpu_format SFPU math format selecting the sfpmem mode / result encoding.
@@ -154,6 +156,8 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  * @brief Apply a Quasar unary SFPU op in-place on one Dest tile.
  *
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
+ * @tparam DST_SYNC Destination synchronization mode used for bounds checking.
+ * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode.
  * @tparam ITERATIONS Number of SFPU loop iterations.
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
  * @param sfpu_format SFPU math format; only the comp family reads it (see
@@ -262,6 +266,7 @@ void init_binary_sfpu_operation_quasar()
  * @brief Apply a Quasar binary SFPU op over two Dest operands into a result tile.
  *
  * @tparam OP The binary op (compile-time `ckernel::BinaryOp` constant).
+ * @tparam DST_SYNC Destination synchronization mode used for bounds checking.
  * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode.
  * @tparam ITERATIONS Number of SFPU loop iterations.
  * @param src0_tile,src1_tile,dst_tile Operand / result tile indices.

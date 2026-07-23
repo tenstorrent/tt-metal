@@ -66,7 +66,7 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
     (::ckernel::_sfpu_ternary_check_<DST_SYNC, DST_ACCUM, TILE_SHAPE>(                                    \
          DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE),                                                \
      _llk_math_eltwise_ternary_sfpu_params_<TILE_SHAPE>(                                                  \
-         ::ckernel::sfpu::FN<_SFPU_TERN_EXPAND TEMPLATES>,                                                \
+         ::ckernel::sfpu::FN<_SFPU_TERN_EXPAND TEMPLATES, TILE_SHAPE>,                                    \
          DST_IN0,                                                                                         \
          DST_IN1,                                                                                         \
          DST_IN2,                                                                                         \

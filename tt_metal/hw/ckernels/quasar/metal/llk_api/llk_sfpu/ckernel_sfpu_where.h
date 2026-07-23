@@ -42,19 +42,24 @@ namespace sfpu {
  *         to 8 for the standard 16-row face. The outer per-face loop and
  *         section base setup are owned by
  *         @c _llk_math_eltwise_ternary_sfpu_params_.
+ * @tparam TILE_SHAPE         Destination tile shape used to calculate operand
+ *         offsets.
  *
  * @param dst_index_in0 DEST tile index holding the condition operand.
  * @param dst_index_in1 DEST tile index holding the true-branch operand.
  * @param dst_index_in2 DEST tile index holding the false-branch operand.
  * @param dst_index_out DEST tile index that receives the per-lane result.
  */
-template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_where(
     const std::uint32_t dst_index_in0,
     const std::uint32_t dst_index_in1,
     const std::uint32_t dst_index_in2,
     const std::uint32_t dst_index_out) {
-    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    constexpr std::uint32_t dst_tile_size_sfpi = 1U << (ckernel::to_underlying(TILE_SHAPE) - 1);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
