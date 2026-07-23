@@ -117,9 +117,6 @@ DispatchSKernel::DispatchSKernel(
     uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
     this->logical_core_ = dispatch_core_manager.dispatcher_s_core(device_id, channel, cq_id_);
     this->kernel_type_ = FDKernelType::DISPATCH;
-    if (dispatch_core_manager.get_dispatch_core_type() == CoreType::DISPATCH) {
-        this->quasar_dm_processor_ = detail::dispatch_s_dm_processor();
-    }
     // Log dispatch_s core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
     Inspector::set_dispatch_s_core_info(virtual_core, DISPATCH_S, cq_id, device_id, servicing_device_id);
@@ -131,8 +128,8 @@ void DispatchSKernel::GenerateStaticConfigs() {
     uint32_t dispatch_s_buffer_base = 0xff;
     if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
         uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
-        if (GetCoreType() == CoreType::WORKER) {
-            // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
+        if (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH) {
+            // dispatch_s shares the core with dispatch_d (Tensix WORKER or Quasar DE). Offset CB start idx.
             dispatch_s_buffer_base = dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                                 my_dispatch_constants.dispatch_buffer_pages();
         } else {

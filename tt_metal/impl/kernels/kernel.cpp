@@ -1084,7 +1084,7 @@ bool DramKernel::configure(
 
 uint32_t experimental::quasar::DispatchEngineKernel::get_kernel_processor_type(int index) const {
     TT_ASSERT(index == 0, "index out of bounds");
-    return enchantum::to_underlying(this->dm_processor_);
+    return enchantum::to_underlying(this->dm_processors_[0]);
 }
 
 void experimental::quasar::DispatchEngineKernel::generate_binaries(IDevice* device, JitBuildOptions&) const {
@@ -1095,7 +1095,7 @@ void experimental::quasar::DispatchEngineKernel::generate_binaries(IDevice* devi
     const uint32_t dispatch_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processor_);
+    const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
     jit_build(
         BuildEnvManager::get_instance(extract_context_id(device))
             .get_kernel_build_state(device->build_id(), dispatch_core_type, dm_class_idx, riscv_id),
@@ -1107,7 +1107,7 @@ void experimental::quasar::DispatchEngineKernel::read_binaries(IDevice* device, 
     const uint32_t dispatch_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processor_);
+    const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
     auto load_type = MetalContext::instance()
                          .hal()
                          .get_jit_build_config(dispatch_core_type, dm_class_idx, riscv_id)
@@ -1143,7 +1143,7 @@ bool experimental::quasar::DispatchEngineKernel::configure(
     const uint32_t dispatch_core_type_index =
         hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processor_);
+    const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
     tt::llrt::test_load_write_read_risc_binary(
         binary_mem, device_id, dispatch_core, dispatch_core_type_index, dm_class_idx, riscv_id);
     return true;
@@ -1158,7 +1158,7 @@ std::string_view experimental::quasar::DispatchEngineKernel::get_linker_opt_leve
 }
 
 std::string experimental::quasar::DispatchEngineKernel::config_hash() const {
-    return fmt::format("dispatch_{}", enchantum::to_string(this->dm_processor_));
+    return fmt::format("dispatch_{}", enchantum::to_string(this->dm_processors_[0]));
 }
 
 uint8_t experimental::quasar::DispatchEngineKernel::expected_num_binaries() const { return 1; }

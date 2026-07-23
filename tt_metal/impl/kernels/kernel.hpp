@@ -502,13 +502,13 @@ public:
             config.defines,
             config.named_compile_args),
         config_(config),
-        dm_processor_(dm_processor) {
+        dm_processors_{dm_processor} {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
             "DispatchEngineKernel is only supported on Quasar");
         TT_FATAL(
             config.num_threads_per_cluster == 1,
-            "DispatchEngineKernel requires num_threads_per_cluster=1 for explicit DM pinning");
+            "DispatchEngineKernel requires num_threads_per_cluster=1");
         this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
@@ -529,9 +529,11 @@ public:
 
     std::string_view get_linker_opt_level() const override;
 
+    const std::vector<DataMovementProcessor>& get_dm_processors() const { return this->dm_processors_; }
+
 private:
     const QuasarDataMovementConfig config_;
-    const DataMovementProcessor dm_processor_;
+    const std::vector<DataMovementProcessor> dm_processors_;
 
     uint8_t expected_num_binaries() const override;
 

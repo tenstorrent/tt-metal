@@ -307,7 +307,6 @@ KernelHandle FDKernel::configure_kernel_variant(
             *program_,
             path,
             CoreCoord(logical_core_.x, logical_core_.y),
-            quasar_dm_processor_,
             experimental::quasar::QuasarDataMovementConfig{
                 .num_threads_per_cluster = 1,
                 .compile_args = compile_args,

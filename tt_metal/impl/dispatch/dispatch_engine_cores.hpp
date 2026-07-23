@@ -47,6 +47,15 @@ CoreType resolve_dispatch_core_type(
     bool use_quasar_tensix_dispatch_cores);
 
 // Explicit DM pinning for dispatch-engine cq kernels (SD + FD).
+// Auto-picks the lowest-numbered free DM on the dispatch-engine core (same policy as Quasar Tensix
+// CreateKernel). Prefer this overload for FD and SD.
+KernelHandle CreateDispatchEngineKernel(
+    Program& program,
+    const std::string& file_name,
+    const CoreCoord& core,
+    const experimental::quasar::QuasarDataMovementConfig& config);
+
+// Explicit DM pin (e.g. watcher tests that must target a specific processor).
 KernelHandle CreateDispatchEngineKernel(
     Program& program,
     const std::string& file_name,
@@ -62,6 +71,8 @@ CoreCoord sd_cq_prefetch_core(const tt::tt_metal::IDevice* device);
 CoreCoord sd_cq_dispatch_core(const tt::tt_metal::IDevice* device);
 CoreCoord sd_cq_virtual_core(const tt::tt_metal::IDevice* device, const CoreCoord& logical_core);
 bool sd_cq_kernel_tests_should_skip(const tt::tt_metal::IDevice* device);
+// Legacy role→DM helpers kept for SD test call sites that still name a preferred DM; DE CreateKernel
+// auto-picks free DMs by creation order (prefetch first → DM0, dispatch → DM1, …).
 DataMovementProcessor prefetch_dm_processor();
 DataMovementProcessor dispatch_dm_processor();
 DataMovementProcessor dispatch_s_dm_processor();

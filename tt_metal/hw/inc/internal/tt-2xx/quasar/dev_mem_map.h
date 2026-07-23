@@ -185,6 +185,9 @@
 // Read-write reserved memory boundary for watcher checks
 #define MEM_MAP_END (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
 
+// Kernel config region size after MEM_MAP_END (see create_tensix_mem_map()).
+#define MEM_KERNEL_CONFIG_SIZE (100 * 1024)
+
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"
 

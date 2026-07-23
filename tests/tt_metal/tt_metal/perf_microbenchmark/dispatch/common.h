@@ -996,16 +996,17 @@ inline tt_metal::KernelHandle create_sd_cq_kernel(
     tt_metal::IDevice* device,
     const std::string& kernel_path,
     const CoreCoord& logical_core,
-    tt_metal::DataMovementProcessor dm_processor,
+    [[maybe_unused]] tt_metal::DataMovementProcessor dm_processor,
     const std::map<std::string, std::string>& defines,
     const std::vector<uint32_t>& compile_args = {}) {
     const tt::CoreType core_type = sd_cq_kernel_core_type(device);
     if (core_type == tt::CoreType::DISPATCH) {
+        // Auto-assign free DMs by creation order (prefetch first -> DM0, dispatch -> DM1), matching
+        // the Quasar Tensix interim path. dm_processor is not used here.
         return tt::tt_metal::detail::CreateDispatchEngineKernel(
             program,
             kernel_path,
             logical_core,
-            dm_processor,
             tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
                 .num_threads_per_cluster = 1,
                 .compile_args = compile_args,

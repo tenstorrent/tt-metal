@@ -170,8 +170,11 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                 *refs.l1_bank_offset_map,
                 *refs.dram_bank_to_noc_xy,
                 *refs.l1_bank_to_noc_xy);
-            generate_worker_logical_to_virtual_map(
-                device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
+            // Quasar FW never loads the logical→virtual scratch table (WH/BH brisc/ncrisc only).
+            if (cluster_.arch() != ARCH::QUASAR) {
+                generate_worker_logical_to_virtual_map(
+                    device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
+            }
 
             // Register the build env unconditionally so JIT compilation (CompileProgram) works on mock
             // and emulated devices too. The build env is HAL/arch-derived and does not probe hardware.
@@ -1062,7 +1065,8 @@ void RiscFirmwareInitializer::initialize_firmware(
         "Tensix cores require end_core to be specified for bank to noc table initialization.");
 
     initialize_device_bank_to_noc_tables(device_id, core_type, virtual_core, end_core);
-    if (core_type == HalProgrammableCoreType::TENSIX) {
+    // Quasar FW never loads the logical→virtual scratch table (WH/BH brisc/ncrisc only).
+    if (core_type == HalProgrammableCoreType::TENSIX && cluster_.arch() != ARCH::QUASAR) {
         initialize_worker_logical_to_virtual_tables(device_id, core_type, virtual_core, end_core.value());
     }
 
