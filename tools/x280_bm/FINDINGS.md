@@ -1081,6 +1081,62 @@ tear-free `read_wall_clock`; (2) the real ts-regression cause — `mark_time` ti
 marker carrying its pre-stall time → backwards per-lane jump. Fix: reserve ring room FIRST (take the
 stall), read the clock AFTER. Commits (local): `1e9f01113a1`, `a76d615ea18`, `046d151ef7b`.
 
+## §23 — Multi-node scale-out (2 L2CPU nodes) + global-lane fix + stagger/uniform captures (bh-11, 2026-07-23)
+
+`test_x280_realprof --nodes N` (1–4): each L2CPU cluster owns a contiguous **band** of the compute grid
+(row bands by default; `--colsplit` = column bands) with its own driver + boot cfg + readers/relays/D2H
+sockets, all feeding the ONE shared host MPMC → consumers. `--l2cpus a,b` picks which clusters (e.g.
+`--l2cpus 2,0` = idx2 tile(8,5) left band, idx0 tile(8,3) right band). Per-node read NoC plane alternates
+(node n → NoC `n&1`, `--flipnoc` to XOR) so the two clusters read on different NoC planes.
+
+- **The 0-stall proddelay knee is SERVICING-bound, NOT ring-depth- or read-BW-bound.** Fewer cores per
+  reader lowers the knee (1 node draining only 60 cores via `--cx1 5` → knee ~500 vs ~830 for the full
+  110). But 2 nodes only crept the knee ~830→~750 under the UNIFORM benchmark, because the workload fills
+  all 550 lanes in lockstep → a synchronized burst that momentarily overruns any drain. NoC-plane split
+  decontended the cross-cluster READ contention (cyc/word 8→5, real) but did NOT move the knee — the knee
+  is a reader **round-robin coverage / per-read NoC-latency** limit, not aggregate read BW. Relays sit IDLE
+  at the knee; the STAGE-buffer and adaptive/ADAPT_THRESH are NOT knee levers either (both tried, no help
+  or worse).
+- **Stagger proves the uniform knee is a synchronized-burst artifact.** `--stagger N` = per-core start
+  delay (`i*N` cycles) desyncs the fills. 2-node @proddelay600 (uniform ~4475 stalls): stagger 1k→4317,
+  3k→4155, 10k→2887, **30k→0**. Caveat (user): this only removes the *benchmark's* artificial lockstep — a
+  genuinely synchronized real workload wouldn't get the free reduction; stagger spreads the load, it
+  doesn't raise the fundamental drain rate.
+
+**Global-lane fix (commit `7e1cfc8e194`, local) — negative-duration + giant Tracy zones, multi-node only.**
+Earlier mis-diagnosed as a producer stall/timer_hi ts bug (§22 class) — WRONG. It was HOST-side and
+VISUALIZATION-only: the per-socket flusher demuxes by the FW's `(core,risc)`, but that core index is
+**band-LOCAL** (`0..nc.NL-1`), and it pushed `Rec{lane}` with the local lane into the shared MPMC. With 2
+nodes, node0's core and node1's core both emit e.g. `lane=230` for two DIFFERENT physical cores → the one
+consumer merged them into one Tracy thread → two interleaved (each-monotonic) streams → non-monotonic ts →
+START-after-END → negative + giant zones. The streams drift apart over the run (lag grew 39k → millions of
+ticks), so it only showed under sustained load. **Marker/stall/knee tallies are per-node and were always
+correct → the BW/knee findings above are unaffected.** Fix: `NodeCtx::gcore[]` band-local→global core map
+(row-major, same order as the full-grid vc/noc0: `(ly-cy0)*full_rgx + (lx-cx0)`); flusher keeps the local
+lane for its per-node arrays but pushes a GLOBAL lane (`gcore[core]*NRISC + risc`) in the Rec. A flat
+per-node offset won't do — column bands are strided in global space. No-op for `nodes==1`.
+Debug method that cracked it: `--csv` dumps decoded records; stack-pair per lane to find ts regressions →
+1-node had 0, 2-node had 1603 → localized to the multi-node merge, not the producer.
+
+**Matched capture pair (2-node `--colsplit --l2cpus 2,0 --nread 2 --nmarkers 3000 --proddelay 600`, post-fix):**
+
+| | stagger 30000 | uniform (no stagger) |
+|---|---|---|
+| markers decoded/consumed | 3,300,000 (exact) | 3,309,004 (exact) |
+| **X280-STALL** | **0** | **4,502** |
+| loss / gaps | none | none |
+| GPU contexts | 111 (1 RT + 110 core) | 111 |
+| nesting depth | all 111 @ depth 0 | 61 @ depth 0, 50 @ depth 1 |
+
+Both render cleanly (no negative/giant zones, no deep staircase). Stagger → all depth 0 (0 stalls, no
+`X280-STALL` nesting). Uniform → 50 cores show a single `X280-STALL` nested one level (depth 1) inside the
+zone it interrupted — correct and shallow. Captures: `tracy_captures/rp_2node_{stagger,nostagger}_globallane.tracy`.
+
+Repro (negative-zone check, decode layer, no Tracy):
+`TT_METAL_DEVICE_PROFILER=1 TT_METAL_NO_RT_PROFILER=1 ./build_Release/programming_examples/test_x280_realprof --reset --nodes 2 --colsplit --l2cpus 2,0 --nread 2 --nmarkers 3000 --proddelay 300 --csv`
+then stack-pair per lane in `tracy_captures/realprof.csv` (expect 0 negatives, 550 distinct lanes).
+Capture: `./build_Release/bin/tracy-capture -o OUT.tracy -f &` then the same run with `--tracy TRACY_NO_EXIT=1` instead of `--csv`.
+
 ## Gotchas (saved time → don't relearn)
 
 - **`tt-smi -r` does NOT clear LIM SRAM** → a re-run of the same FW sees the prior
