@@ -26,6 +26,7 @@ _top_k_top_p_filter = top_k_top_p_filter
 import ttnn
 
 from models.experimental.hunyuan_image_3_0.tt.device_sampling import (  # noqa: E402
+    StageForceController,
     append_token_ids_tt,
     can_use_device_sampling,
     device_sampling_enabled,
@@ -33,6 +34,7 @@ from models.experimental.hunyuan_image_3_0.tt.device_sampling import (  # noqa: 
     sample_logits_ttnn,
     token_hits_stop_tt,
     upload_stop_ids_tt,
+    upload_token_ids_tt,
 )
 
 __all__ = [
@@ -548,12 +550,14 @@ def generate_text(
         seed = int(generator.initial_seed()) % 1_000_000 + 1
 
     use_ttnn_op = ttnn_sampling_op_enabled()
+    stage_force = StageForceController(stage_transitions, B) if stage_transitions else None
     if use_ttnn_op:
         print(
             f"[generate] on-device sampling + device bookkeeping "
             f"(ttnn.topk≤32 + ttnn.sampling → concat/stop on device → embed) "
             f"temp={config.temperature} top_p={config.top_p} top_k={config.top_k} "
-            f"V={vocab_size} vocab_parallel={vocab_parallel}",
+            f"V={vocab_size} vocab_parallel={vocab_parallel} "
+            f"stage_force={bool(stage_force)}",
             flush=True,
         )
     else:
@@ -561,31 +565,44 @@ def generate_text(
             f"[generate] device-logits sampling (D2H + host torch topk/shortlist; "
             f"set HY_TOP_K=32 for ttnn.topk+sampling) "
             f"temp={config.temperature} top_p={config.top_p} top_k={config.top_k} "
-            f"V={vocab_size} vocab_parallel={vocab_parallel}",
+            f"V={vocab_size} vocab_parallel={vocab_parallel} "
+            f"stage_force={bool(stage_force)}",
             flush=True,
         )
 
-    # ---- Default: yesterday host-id AR loop over device logits ----
+    def _next_ids_host(logits_tt, ids_so_far, step_i: int):
+        """Sample or stage-force the next token ids on host ``[B]``; frees ``logits_tt``."""
+        forced = stage_force.forced_ids(ids_so_far[:, -1]) if stage_force is not None else [None] * B
+        if all(f is not None for f in forced):
+            ttnn.deallocate(logits_tt)
+            return torch.tensor(forced, dtype=torch.long)
+        step_seed = None if seed is None else (seed + step_i) % 1_000_000 + 1
+        next_ids = sample_logits_ttnn(
+            logits_tt,
+            device,
+            vocab_size=vocab_size,
+            batch_size=B,
+            temperature=config.temperature,
+            top_p=config.top_p,
+            top_k=config.top_k,
+            seed=step_seed,
+            vocab_parallel=vocab_parallel,
+            deallocate_input=True,
+            return_device_ids=False,
+        )
+        for i, f in enumerate(forced):
+            if f is not None:
+                next_ids[i] = int(f)
+        return next_ids
+
+    # ---- Default: host-id AR loop over device logits ----
     if not use_ttnn_op:
         ids = prefix_ids
         new_tokens: list[list[int]] = [[] for _ in range(B)]
         finished = [False] * B
         logits_tt = forward_logits_fn(ids)
         for step_i in range(config.max_new_tokens):
-            step_seed = None if seed is None else (seed + step_i) % 1_000_000 + 1
-            next_ids = sample_logits_ttnn(
-                logits_tt,
-                device,
-                vocab_size=vocab_size,
-                batch_size=B,
-                temperature=config.temperature,
-                top_p=config.top_p,
-                top_k=config.top_k,
-                seed=step_seed,
-                vocab_parallel=vocab_parallel,
-                deallocate_input=True,
-                return_device_ids=False,
-            )
+            next_ids = _next_ids_host(logits_tt, ids, step_i)
             ids = torch.cat([ids, next_ids.view(B, 1)], dim=1)
             for i in range(B):
                 tid = int(next_ids[i].item())
@@ -601,25 +618,55 @@ def generate_text(
     stop_ids_tt = upload_stop_ids_tt(device, list(stop_set), B) if stop_set else None
     generated_tt = None
     finished = [False] * B
+    ids_host = prefix_ids.clone()
 
     logits_tt = forward_logits_fn(prefix_ids)
     token_tt = None
     for step_i in range(config.max_new_tokens):
-        step_seed = None if seed is None else (seed + step_i) % 1_000_000 + 1
-        token_tt = sample_logits_ttnn(
-            logits_tt,
-            device,
-            vocab_size=vocab_size,
-            batch_size=B,
-            temperature=config.temperature,
-            top_p=config.top_p,
-            top_k=config.top_k,
-            seed=step_seed,
-            vocab_parallel=vocab_parallel,
-            deallocate_input=True,
-            return_device_ids=True,
-        )
+        forced = stage_force.forced_ids(ids_host[:, -1]) if stage_force is not None else [None] * B
+        if all(f is not None for f in forced):
+            ttnn.deallocate(logits_tt)
+            next_ids = torch.tensor(forced, dtype=torch.long)
+            token_tt = upload_token_ids_tt(device, next_ids)
+        else:
+            step_seed = None if seed is None else (seed + step_i) % 1_000_000 + 1
+            token_tt = sample_logits_ttnn(
+                logits_tt,
+                device,
+                vocab_size=vocab_size,
+                batch_size=B,
+                temperature=config.temperature,
+                top_p=config.top_p,
+                top_k=config.top_k,
+                seed=step_seed,
+                vocab_parallel=vocab_parallel,
+                deallocate_input=True,
+                return_device_ids=True,
+            )
+            if any(f is not None for f in forced):
+                # Mixed batch: override forced rows on host then re-upload.
+                host_ids = ttnn.to_torch(token_tt).view(B).long()
+                if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
+                    host_ids = ttnn.to_torch(token_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[:B]
+                    host_ids = host_ids.view(B).long()
+                for i, f in enumerate(forced):
+                    if f is not None:
+                        host_ids[i] = int(f)
+                ttnn.deallocate(token_tt)
+                token_tt = upload_token_ids_tt(device, host_ids)
+                next_ids = host_ids
+            else:
+                next_ids = None  # filled below from device for ids_host only when needed
+
         generated_tt = append_token_ids_tt(generated_tt, token_tt)
+
+        if next_ids is None:
+            if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
+                next_ids = ttnn.to_torch(token_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[:B]
+            else:
+                next_ids = ttnn.to_torch(token_tt)
+            next_ids = next_ids.view(B).long()
+        ids_host = torch.cat([ids_host, next_ids.view(B, 1)], dim=1)
 
         if stop_ids_tt is not None:
             hits = token_hits_stop_tt(token_tt, stop_ids_tt, device, B)

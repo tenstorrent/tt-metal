@@ -74,8 +74,27 @@ def test_can_use_device_sampling_allows_instruct_topk(monkeypatch):
     assert can_use_device_sampling(SamplingConfig(do_sample=True, top_k=32, repetition_penalty=1.0))
     assert can_use_device_sampling(SamplingConfig(do_sample=True, top_k=1024, repetition_penalty=1.0))
     assert can_use_device_sampling(SamplingConfig(do_sample=True, top_k=0, repetition_penalty=1.0))
+    # think→recaption stage-force must NOT disable device sampling
+    assert can_use_device_sampling(
+        SamplingConfig(do_sample=True, top_k=32, repetition_penalty=1.0),
+        stage_transitions=[(1, [2])],
+    )
     monkeypatch.setenv("HY_DEVICE_SAMPLING", "0")
     assert can_use_device_sampling(SamplingConfig(do_sample=True, top_k=32, repetition_penalty=1.0)) is False
+
+
+def test_stage_force_controller_emits_append_ids():
+    from models.experimental.hunyuan_image_3_0.tt.device_sampling import StageForceController
+
+    ctl = StageForceController([(10, [20, 21])], batch_size=1)
+    # free sample while last != stop
+    assert ctl.forced_ids(torch.tensor([7])) == [None]
+    # hit stop → force first append
+    assert ctl.forced_ids(torch.tensor([10])) == [20]
+    # after emitting 20, last==20 pops and forces 21
+    assert ctl.forced_ids(torch.tensor([20])) == [21]
+    # after emitting 21, free again
+    assert ctl.forced_ids(torch.tensor([21])) == [None]
 
 
 @pytest.fixture(scope="function")
