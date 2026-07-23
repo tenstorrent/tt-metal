@@ -2418,10 +2418,11 @@ void sdpa_ring_v2(
     };
 
     // Sparse-frames skip: this (q_frame, k_frame) pair is disallowed by the packed bitmap.
-    // Drain K/V from CBs (reader pushes K/V for every k_chunk in an active ring iter; compute
-    // must consume) and skip. `q_frame_for_chunk` is set per Q chunk before the k_chunk loop
-    // (uniform within a chunk because Sq_chunk_t == frame_seqlen_tiles). k_frame comes from the
-    // K chunk's absolute global tile position in the padded sequence.
+    // The reader ALSO skips these chunks (reader mirrors this predicate using the same broadcast
+    // frame_allow bitmap), so nothing was pushed to cb_kt_in / cb_v_in for a disallowed chunk —
+    // no drain needed here, just return true. Reader-side skip is required for head/batch/gqa
+    // chain multicast to stay in lockstep across cores at high work-items-per-core; without it,
+    // sparse's variable per-chunk compute latency broke chain sync at nh=40.
     //
     //   bit_idx = q_frame * num_frames_padded_compile + k_frame
     //   allowed = (frame_allow_words[bit_idx / 32] >> (bit_idx % 32)) & 1
@@ -2437,14 +2438,7 @@ void sdpa_ring_v2(
             const uint32_t word = frame_allow_words[bit_idx >> 5];
             const uint32_t bit = (word >> (bit_idx & 31u)) & 1u;
             if (bit == 0u) {
-                CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
-                sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-                if constexpr (!kt_inplace_v) {
-                    CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
-                    sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-                }
-                KV_chunks_processed_in_iter++;
-                return true;
+                return true;  // reader also skipped — nothing pushed, nothing to drain
             }
         }
         return false;
@@ -2531,21 +2525,10 @@ void sdpa_ring_v2(
         // inline here and `continue`ing bypasses the entire acc_state state machine for this
         // Q chunk in this iter — real Q chunks resume normally in their next processing iter,
         // and zero-total-work Q chunks push placeholder outputs on the last host-mask iter.
+        // Note: reader is sparse-aware and does NOT push K/V for disallowed chunks, so there is
+        // nothing to drain here — no wait_front/pop_front loop. OOB is also handled by the reader.
         if constexpr (sparse_frames_enabled) {
             if (per_q_valid_kv == 0) {
-                for (uint32_t k = 0; k < num_kv_chunks; ++k) {
-                    const bool is_joint_ = (k >= num_local_k_chunks);
-                    if (try_skip_oob_kv(k, is_joint_)) {
-                        continue;
-                    }
-                    CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
-                    sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-                    if constexpr (!kt_inplace_v) {
-                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
-                        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-                    }
-                    KV_chunks_processed_in_iter++;
-                }
                 // Per-iter handshake with writer (multi-Q only; matches writer's cb_signal wait
                 // in ring_joint_writer.cpp:775-778).
                 if (q_per_core > 1) {

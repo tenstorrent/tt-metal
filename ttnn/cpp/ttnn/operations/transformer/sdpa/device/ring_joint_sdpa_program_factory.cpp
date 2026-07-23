@@ -1505,6 +1505,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     compute_compile_time_args.push_back(static_cast<uint32_t>(sparse_frames_enabled));
     compute_compile_time_args.push_back(sparse_frame_seqlen_tiles);
     compute_compile_time_args.push_back(sparse_num_frames_padded);
+    // Reader gets the same three: with them, the reader mirrors the compute-side sparse-frames
+    // skip inside its per-k_chunk loop (skipping reserve/chain/push for disallowed chunks) so
+    // that head_chain/batch_chain multicast stays in lockstep between sender and receiver even
+    // when compute takes different-latency paths per Q chunk under sparse. Slots are at the end
+    // of reader compile args (after the 3 CB slots that were just appended above).
+    reader_compile_time_args.push_back(static_cast<uint32_t>(sparse_frames_enabled));
+    reader_compile_time_args.push_back(sparse_frame_seqlen_tiles);
+    reader_compile_time_args.push_back(sparse_num_frames_padded);
 
     auto* const q_buf = input_tensor_q.buffer();
     auto* const k_buf = input_tensor_k.buffer();
@@ -2358,6 +2366,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<uint32_t> reader_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
         reader_args.append(reader_signaler_args);
+
+        // Sparse-frames extension: append the 32 uint32 packed frame_allow words. Reader reads
+        // them right after the fused-op signaler runtime args, gated at compile time on
+        // `sparse_frames_enabled` (so zeros are harmless when disabled). Same bit layout the
+        // compute kernel already uses — sender and receiver make identical skip decisions.
+        constexpr uint32_t kReaderSparseFramesPackedWords = 32;
+        for (uint32_t w = 0; w < kReaderSparseFramesPackedWords; ++w) {
+            const uint32_t word =
+                (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
+            reader_args.push_back(word);
+        }
 
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 

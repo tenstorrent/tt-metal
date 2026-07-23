@@ -263,6 +263,15 @@ void kernel_main() {
         true, /* wait_for_op_signal */
         argidx);
 
+    // Sparse-frames packed frame_allow bitmap. Host always pushes 32 uint32 words (zeros when
+    // the feature is disabled), so the read is unconditional here. Later use is gated on the
+    // sparse_frames_enabled compile-time flag. Same bit layout the compute kernel uses; must
+    // match exactly so sender and receiver make identical skip decisions in the chain.
+    uint32_t frame_allow_words[32];
+    for (uint32_t w = 0; w < 32; ++w) {
+        frame_allow_words[w] = get_arg_val<uint32_t>(argidx++);
+    }
+
     // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs().
     // ChainLink takes semaphore IDs directly (the new Semaphore<> wrapper resolves them to L1 addrs).
     constexpr uint32_t chain_sender_semaphore_arg_offset = ring_joint::kChainSenderSemaphoreCompileArgOffset;
@@ -326,6 +335,15 @@ void kernel_main() {
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
+
+    // Sparse-frames extension args (mirror compute-side plumbing; see ring_joint_sdpa_program_
+    // factory.cpp where these are appended right after the reader CB compile args). Reader must
+    // skip disallowed k_chunks identically to compute so head/batch/gqa chain multicast rounds
+    // fire only for chunks that will actually be processed — otherwise sparse's variable-rate
+    // compute path breaks chain lockstep at high work-items-per-core.
+    constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 3);
+    constexpr uint32_t sparse_frame_seqlen_tiles = get_compile_time_arg_val(cb_arg_offset + 4);
+    constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 5);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -589,6 +607,44 @@ void kernel_main() {
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
             const bool need_q_read = (q_per_core > 1) || !q_pushed;
 
+            // Push Q BEFORE the k_chunk loop so the sparse-frames per-k_chunk skip below never
+            // strands the Q push. (Historically Q was pushed at k_chunk==0 inside the loop, "after
+            // K forward" to avoid NOC ordering conflicts between K writes and Q read barriers —
+            // but hoisting BEFORE the loop is equally safe: no K writes are in flight yet.) If
+            // ALL k_chunks were sparse-disallowed and Q push stayed inside the loop, compute
+            // would pop an empty Q CB and hang.
+            if (need_q_read) {
+                const auto read_q = [&](const auto& q_gen) {
+                    if constexpr (use_q_subblock_push) {
+                        for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                            const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
+                            const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+                            Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                            read_block(
+                                q_gen,
+                                q_sub_slice,
+                                q_end_seq_tile,
+                                cb_q_in,
+                                q_tile_bytes,
+                                false /*transpose*/,
+                                q_barrier_threshold);
+                        }
+                    } else {
+                        read_block(
+                            q_gen,
+                            q_slice,
+                            q_end_seq_tile,
+                            cb_q_in,
+                            q_tile_bytes,
+                            false /*transpose*/,
+                            q_barrier_threshold);
+                    }
+                };
+                read_q_from_source<has_joint_q, joint_tensor_args_offset>(
+                    is_joint_q, joint_q_addr, q_generator, joint_input_tile_logical, read_q);
+                q_pushed = true;
+            }
+
             for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
                 /**
                  * Iterate over all KV chunks for this Q chunk.
@@ -607,6 +663,27 @@ void kernel_main() {
                 if (kv_chunk_is_beyond_logical_n) {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
                     continue;
+                }
+
+                // Sparse-frames skip: mirrors compute's try_skip_sparse_frames decision. Reader
+                // skips reserve+chain+push for disallowed (q_frame, k_frame) pairs. Because all
+                // chain participants (sender + receivers) read the same broadcast frame_allow
+                // bitmap and use the same math, they make identical skip decisions and the head/
+                // batch/gqa chain rounds stay in lockstep — even when compute takes different-
+                // latency paths per Q chunk under sparse (which was the root cause of the nh=40
+                // head-chain deadlock). Joint K/V chunks always attend (no frame semantics).
+                if constexpr (sparse_frames_enabled == 1) {
+                    if (!kv_chunk_is_joint) {
+                        const uint32_t q_frame_local = (q_chunk * Sq_chunk_t) / sparse_frame_seqlen_tiles;
+                        const uint32_t q_frames_per_shard = q_local_padded_Nt / sparse_frame_seqlen_tiles;
+                        const uint32_t q_frame = q_frame_local + ring_index * q_frames_per_shard;
+                        const uint32_t k_global_start_tile = kv_local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                        const uint32_t k_frame = k_global_start_tile / sparse_frame_seqlen_tiles;
+                        const uint32_t bit_idx = q_frame * sparse_num_frames_padded + k_frame;
+                        if (((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) == 0u) {
+                            continue;
+                        }
+                    }
                 }
 
                 // Default to local/gathered KV; override below for joint KV when applicable.
@@ -704,41 +781,9 @@ void kernel_main() {
                 cb_k.push_back(k_chunk_tiles);
                 KV_chunks_processed_in_iter++;
 
-                // Download Q on the first K iteration — after K is downloaded and forwarded.
-                // Push Q one subblock at a time so compute can start QK matmul incrementally.
-                // Placed after K forward so no outstanding NOC writes remain
-                // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
-                if (k_chunk == 0 && need_q_read) {
-                    const auto read_q = [&](const auto& q_gen) {
-                        if constexpr (use_q_subblock_push) {
-                            for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                                const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
-                                const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
-                                Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
-                                read_block(
-                                    q_gen,
-                                    q_sub_slice,
-                                    q_end_seq_tile,
-                                    cb_q_in,
-                                    q_tile_bytes,
-                                    false /*transpose*/,
-                                    q_barrier_threshold);
-                            }
-                        } else {
-                            read_block(
-                                q_gen,
-                                q_slice,
-                                q_end_seq_tile,
-                                cb_q_in,
-                                q_tile_bytes,
-                                false /*transpose*/,
-                                q_barrier_threshold);
-                        }
-                    };
-                    read_q_from_source<has_joint_q, joint_tensor_args_offset>(
-                        is_joint_q, joint_q_addr, q_generator, joint_input_tile_logical, read_q);
-                    q_pushed = true;
-                }
+                // (Q push was hoisted above the k_chunk loop — see the "Push Q BEFORE the
+                // k_chunk loop" block. Doing it inside here would strand Q when all k_chunks
+                // for this q_iter are sparse-disallowed.)
 
                 // In-place latent-V (kt_inplace_v) materializes nothing: compute reads V straight
                 // from the K^T already pushed above, so neither branch below runs for that case.
