@@ -60,6 +60,14 @@ def latest_run(repo: str, workflow: str, branch: str) -> dict | None:
     return runs[0] if runs else None
 
 
+def _latest_artifact_id(listing: list[str]) -> str | None:
+    """Newest artifact id from ``created_at\\tid`` lines — RFC3339-Z sorts
+    lexically, ties break on the higher id. None for an empty listing."""
+    if not listing:
+        return None
+    return max(listing, key=lambda ln: (ln.split("\t")[0], int(ln.split("\t")[1]))).split("\t")[1]
+
+
 def fetch_run_summary(repo: str, run_id: int) -> dict | None:
     """Download the latest attempt's ``ai_run_summary_<run_id>`` JSON.
 
@@ -83,9 +91,9 @@ def fetch_run_summary(repo: str, run_id: int) -> dict | None:
         text=True,
         check=True,
     ).stdout.splitlines()
-    if not listing:
+    art_id = _latest_artifact_id(listing)
+    if art_id is None:
         return None
-    _, art_id = max(listing, key=lambda ln: (ln.split("\t")[0], int(ln.split("\t")[1]))).split("\t")
     with tempfile.TemporaryDirectory() as d:
         zip_path = os.path.join(d, "artifact.zip")
         with open(zip_path, "wb") as fh:
@@ -205,13 +213,17 @@ def _section(r: dict) -> list[str]:
     hdr = _link(r) + (f" (attempt {attempt})" if attempt and attempt > 1 else "")
     out = [f"### {hdr}"]
     c = r.get("counts") or {}
-    total = c.get("broken", 0) + c.get("infra", 0) + c.get("passing", 0)
-    if total:
+    broken, infra, passing = c.get("broken", 0), c.get("infra", 0), c.get("passing", 0)
+    if broken or infra or (r.get("outcome") == "GREEN" and passing):
         out.append(_health_bar(c))
-        out.append(f"🔴 {c.get('broken', 0)} · 🟣 {c.get('infra', 0)} · 🟢 {c.get('passing', 0)}{when}")
+        out.append(f"🔴 {broken} · 🟣 {infra} · 🟢 {passing}{when}")
     elif r.get("outcome") == "GREEN":
         # Green via the run-conclusion fallback (no per-job counts available).
         out.append(f"🟢 green{when}")
+    elif passing:
+        # Broken run whose summarized legs all passed — the failure is outside
+        # them, so neither a 100% nor a 0% bar is meaningful. State it plainly.
+        out.append(f"🔴 run failed; {passing} summarized leg(s) passed, none failed{when}")
     else:
         out.append(_health_bar(c))  # 0% — uniform with scored sections
         out.append(f"🔴 no per-job summary{when}")
@@ -297,7 +309,9 @@ def check_workflow(repo: str, branch: str, workflow: str) -> dict:
         # One flaky gh call must not discard the other workflows' results.
         err = ((exc.stderr or "").strip().splitlines() or ["gh command failed"])[-1]
         return {**base, "outcome": "ERROR", "note": err[:200]}
-    except (json.JSONDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, OSError, zipfile.BadZipFile) as exc:
+        # A corrupt/truncated artifact marks only this workflow ERROR, never
+        # aborts the others' reports.
         return {**base, "outcome": "ERROR", "note": str(exc)[:200]}
 
 
@@ -356,6 +370,19 @@ class TestSummarizeRun(unittest.TestCase):
         # A run that didn't finish isn't broken — don't render it as a false red.
         self.assertEqual(summarize_run({}, "cancelled").outcome, "UNKNOWN")
         self.assertEqual(summarize_run({}, "skipped").outcome, "UNKNOWN")
+
+
+class TestLatestArtifactId(unittest.TestCase):
+    def test_newest_created_at_wins(self):
+        lines = ["2026-07-23T01:00:00Z\t100", "2026-07-23T02:00:00Z\t50"]
+        self.assertEqual(_latest_artifact_id(lines), "50")
+
+    def test_tie_breaks_on_higher_id(self):
+        lines = ["2026-07-23T01:00:00Z\t100", "2026-07-23T01:00:00Z\t200"]
+        self.assertEqual(_latest_artifact_id(lines), "200")
+
+    def test_empty_listing_is_none(self):
+        self.assertIsNone(_latest_artifact_id([]))
 
 
 class TestRender(unittest.TestCase):
@@ -420,6 +447,26 @@ class TestRender(unittest.TestCase):
         self.assertIn("no per-job summary", md)
         self.assertIn("0%", md)  # health bar present and at zero, uniform with scored sections
         self.assertNotIn("Failed jobs", md)
+
+    def test_broken_run_with_only_passing_legs_is_not_100_percent(self):
+        # Run concluded failure but every summarized leg passed (failure outside
+        # them): must not render as a healthy 100% bar.
+        md = render_markdown(
+            "m",
+            [
+                {
+                    "workflow": "WF-P",
+                    "outcome": "REAL_FAIL",
+                    "latest_url": "u",
+                    "real_jobs": [],
+                    "infra_jobs": [],
+                    "counts": {"broken": 0, "infra": 0, "passing": 5},
+                }
+            ],
+        )
+        self.assertIn("run failed", md)
+        self.assertIn("5 summarized leg(s) passed", md)
+        self.assertNotIn("100%", md)
 
     def test_infra_only(self):
         md = render_markdown(
