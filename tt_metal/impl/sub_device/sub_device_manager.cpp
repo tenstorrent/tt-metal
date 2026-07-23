@@ -159,20 +159,6 @@ DeviceAddr SubDeviceManager::get_max_trace_high_water_mark() const {
     return max_high_water_mark;
 }
 
-std::optional<DeviceAddr> SubDeviceManager::get_min_trace_buffer_address() const {
-    std::optional<DeviceAddr> min_trace_buffer_address;
-    for (const auto& trace_entry : trace_buffer_pool_) {
-        const auto& trace_buffer = trace_entry.second;
-        if (trace_buffer->mesh_buffer == nullptr) {
-            continue;
-        }
-        const DeviceAddr trace_buffer_address = trace_buffer->mesh_buffer->address();
-        min_trace_buffer_address =
-            std::min(min_trace_buffer_address.value_or(trace_buffer_address), trace_buffer_address);
-    }
-    return min_trace_buffer_address;
-}
-
 bool SubDeviceManager::has_allocations() const {
     for (const auto& allocator : sub_device_allocators_) {
         if (allocator && allocator->get_num_allocated_buffers() > 0) {
