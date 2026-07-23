@@ -48,9 +48,17 @@ so the auto-generated PNG shows one point rather than the two 12-point curves.
 The per-run data is still fully captured in
 `generated/profiler/.logs/profile_log_device.csv`: each `RISCV1` `ZONE_START`/
 `ZONE_END` pair is immediately followed, in order, by that run's
-`Transaction size in bytes` and `Write path` stamps. The correct per-run tuples
-can be reconstructed by walking the CSV in order. A proper fix (an order-based
-aggregation fallback when `run_host_id`s collide, or incrementing `run_host_id`
-under slow dispatch) is deferred until this runs on hardware / a fast-dispatch
-grid, where `run_host_id` increments normally and the shared pipeline plots the
-two curves directly.
+`Transaction size in bytes` and `Write path` stamps.
+
+Stopgap — reconstruct the correct plot from the CSV order:
+```bash
+python tests/tt_metal/tt_metal/data_movement/quasar_cache_perf/plot_cache_write_from_csv.py
+```
+This walks the CSV in order (independent of `run_host_id`), recovers each run's
+(size, path, duration) tuple, and writes a two-panel PNG (full range + a zoom on
+the small-size crossover region) to `data/quasar/Quasar Cache Write Sizes.png`.
+
+A proper fix (an order-based aggregation fallback when `run_host_id`s collide, or
+incrementing `run_host_id` under slow dispatch) is deferred until this runs on
+hardware / a fast-dispatch grid, where `run_host_id` increments normally and the
+shared `--plot` pipeline plots the two curves directly.
