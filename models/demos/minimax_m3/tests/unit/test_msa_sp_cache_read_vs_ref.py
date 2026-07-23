@@ -101,7 +101,6 @@ def test_msa_sp_cache_read(mesh_device, device_params, chunk_local, n_prior, res
         shard(iq, True),
         shard_bc(ik, False),
         s_local=chunk_local,
-        n_chunks=n_chunks,
         chunk_local=chunk_local,
         **common,
     )
@@ -209,7 +208,6 @@ def test_msa_sp_cache_read_ndshard_pcc(mesh_device, device_params, chunk_local, 
             shard(iq, True),
             ik_in,
             s_local=chunk_local,
-            n_chunks=n_chunks,
             chunk_local=chunk_local,
             **common,
         )

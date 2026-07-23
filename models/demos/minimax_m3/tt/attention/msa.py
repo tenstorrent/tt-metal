@@ -226,7 +226,6 @@ def msa_sp_attention(
     ccl_manager,
     cached_len,
     s_local,
-    n_chunks,
     chunk_local,
     scale,
     block_size,
@@ -244,8 +243,9 @@ def msa_sp_attention(
         k_acc, v_acc        ACCUMULATED context's BLOCK-CYCLIC SP shards (as the cache stores them):
                             [1, n_kv_local, n_chunks*chunk_local, hd].
         index_k_acc         accumulated index_k block-cyclic shard [1, 1, n_chunks*chunk_local, hd].
-        cached_len          valid prefix length BEFORE the current chunk (= (n_chunks-1)*chunk_local*sp).
-        n_chunks            total chunks now in the cache (incl. current); chunk_local = tokens/chip/chunk.
+        cached_len          valid prefix length BEFORE the current chunk.
+        chunk_local         tokens/chip/chunk; the accumulated context spans n_chunks*chunk_local rows,
+                            where n_chunks is derived from the gathered K/V tensor shape (dim 2).
 
     AllGather K/V/index_k across SP -> full block-cyclic context -> indexer + sparse_sdpa_msa, which
     read the block-cyclic ("slab") layout IN-KERNEL (block_cyclic_* args) so the indexer's block-pool +
