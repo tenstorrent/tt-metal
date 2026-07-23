@@ -198,18 +198,13 @@ def _patch_model_args(
 
 
 class ChunkedPrefillPageTableGuardMixin:
-    """Guard the shared ``Generator.prefill_forward_single_user_text`` against an
-    over-wide page table, without modifying ``models/tt_transformers``.
+    """Gemma4 prefill guards + eager multi-chunk path (no ``tt_transformers`` edits).
 
-    vLLM's block manager can hand over a page table with more block columns than
-    the prompt needs. The shared method then computes a negative pad width
-    (``num_blocks_in_seq(...) - page_table.shape[1] < 0``) and crashes on
-    ``torch.cat``. Trim the page table to exactly the blocks this prompt needs so
-    the base method's pad becomes a no-op. Mirrors the per-model guard in
-    ``models/demos/llama3_70b_galaxy/tt/generator.py`` (kept in the gemma4 model
-    so the shared generator stays untouched). Mixed into both the demo
-    (:class:`Gemma4Generator`) and vLLM (``Gemma4ForCausalLM``) generators, whose
-    class hierarchies both reach the shared method but do not share a gemma4 base.
+    - Trim over-wide page tables so pad width stays non-negative (vLLM hybrid).
+    - Own the eager single-/multi-chunk loop (``_prefill_forward_single_user_text_eager``)
+      for bounded last-token length, ring-aligned last-chunk expand, and
+      intermediate ``get_last_token=-1``.
+    - Mixed into demo (:class:`Gemma4Generator`) and vLLM (``Gemma4ForCausalLM``).
     """
 
     def _effective_paged_block_size(self, kv_cache):
@@ -622,7 +617,10 @@ class ChunkedPrefillPageTableGuardMixin:
             and not self._uses_bounded_sliding_kv(model_id)
         )
         if not use_traced_chunks:
-            return super().prefill_forward_single_user_text(
+            # Eager path stays in gemma4 (do not patch models/tt_transformers):
+            # true last-token for bounded fill, ring-aligned last-chunk expand,
+            # and intermediate get_last_token=-1.
+            return self._prefill_forward_single_user_text_eager(
                 tokens,
                 page_table=page_table,
                 kv_cache=kv_cache,
@@ -693,6 +691,138 @@ class ChunkedPrefillPageTableGuardMixin:
                 return self.model[model_id].process_logits_after_prefill_trace(tt_out, last_token_idx_for_trace)
             del tt_out
         raise RuntimeError("Traced multi-chunk prefill produced no last-chunk logits")
+
+    def _prefill_forward_single_user_text_eager(
+        self,
+        tokens,
+        page_table=None,
+        user_id=0,
+        last_token_idx=None,
+        kv_cache=None,
+        model_id=-1,
+        num_cached_tokens: int = 0,
+        batch_size=1,
+        **kwargs,
+    ):
+        """Gemma4-local eager prefill (single- or multi-chunk).
+
+        Localized from ``Generator.prefill_forward_single_user_text`` so bounded
+        ring fill / last-chunk expansion does not require shared-generator hooks.
+        """
+        seq_len = tokens.shape[-1]
+        use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
+        use_prefix_caching = num_cached_tokens > 0
+        if use_chunked_prefill or use_prefix_caching:
+            assert page_table is not None, "page_table must be provided for chunked prefill"
+            assert kv_cache is not None, "kv_cache must be provided for chunked prefill"
+            assert last_token_idx is not None and last_token_idx < seq_len + num_cached_tokens, (
+                f"last_token_idx must be provided and less than seq_len + num_cached_tokens: "
+                f"last_token_idx={last_token_idx}, seq_len={seq_len}, num_cached_tokens={num_cached_tokens}"
+            )
+
+            if use_chunked_prefill:
+                chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args[model_id].max_prefill_chunk_size)
+            else:
+                chunk_size = seq_len
+
+            last_token_idx_in_seq = last_token_idx - num_cached_tokens
+            last_token_idx_in_chunk = last_token_idx_in_seq % chunk_size
+            last_chunk_start = (last_token_idx_in_seq // chunk_size) * chunk_size
+            chunk_source_page_table, block_size = self._chunk_prefill_page_table(
+                page_table, user_id=user_id, model_id=model_id, kv_cache=kv_cache
+            )
+            last_chunk_start, last_token_idx_in_chunk = self._adjust_last_prefill_chunk(
+                last_chunk_start=last_chunk_start,
+                last_token_idx_in_chunk=last_token_idx_in_chunk,
+                last_token_idx_in_seq=last_token_idx_in_seq,
+                chunk_size=chunk_size,
+                block_size=block_size,
+                model_id=model_id,
+            )
+            page_table_user = chunk_source_page_table[user_id : user_id + 1, :]
+            needed_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size)
+            if page_table_user.shape[1] > needed_blocks:
+                page_table_user = page_table_user[:, :needed_blocks]
+            num_padding_blocks = needed_blocks - page_table_user.shape[1]
+            page_table_user_padded = torch.cat(
+                [page_table_user, torch.zeros(1, num_padding_blocks, dtype=torch.int32)], dim=-1
+            )
+            CHUNK_USER_ID = 0
+
+            # Inject an expanded last start when adjust moves it off the chunk grid.
+            last_abs = num_cached_tokens + last_chunk_start
+            chunk_starts = list(range(num_cached_tokens, num_cached_tokens + seq_len, chunk_size))
+            chunk_starts = [s for s in chunk_starts if s < last_abs]
+            chunk_starts.append(last_abs)
+
+            for chunk_start in chunk_starts:
+                chunk_end = chunk_start + chunk_size
+                chunk_start_relative = chunk_start - num_cached_tokens
+                chunk_end_relative = min(chunk_end - num_cached_tokens, seq_len)
+                is_last_chunk = chunk_start == last_abs
+
+                chunk_tokens = tokens[:, chunk_start_relative:chunk_end_relative]
+                if chunk_tokens.shape[-1] < chunk_size:
+                    chunk_tokens = torch.nn.functional.pad(chunk_tokens, (0, chunk_size - chunk_tokens.shape[-1]))
+
+                chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
+                chunk_inputs = self.model[model_id].prepare_inputs_prefill(
+                    chunk_tokens,
+                    start_pos=chunk_start,
+                    page_table=page_table_user_padded,
+                    chunk_page_table=chunk_page_table,
+                    batch_size=batch_size,
+                    user_id=CHUNK_USER_ID,
+                    **kwargs,
+                )
+                (
+                    chunk_prefill_input,
+                    chunk_rot_mats_global_prefill,
+                    chunk_rot_mats_local_prefill,
+                    page_table_tt,
+                    chunk_page_table_tt,
+                    _chunk_start_idx_tt,
+                ) = chunk_inputs
+                tt_logits = self.model[model_id].ttnn_prefill_forward(
+                    chunk_prefill_input,
+                    rot_mats_global=chunk_rot_mats_global_prefill,
+                    rot_mats_local=chunk_rot_mats_local_prefill,
+                    user_id=CHUNK_USER_ID,
+                    page_table=page_table_tt,
+                    chunk_page_table=chunk_page_table_tt,
+                    chunk_start_idx=chunk_start,
+                    get_last_token=self._chunk_prefill_get_last_token(
+                        is_last_chunk=is_last_chunk,
+                        last_token_idx_in_chunk=last_token_idx_in_chunk if is_last_chunk else (chunk_size - 1),
+                        chunk_size=chunk_size,
+                    ),
+                    kv_cache=kv_cache,
+                    batch_size=batch_size,
+                    **kwargs,
+                )
+                if is_last_chunk:
+                    return tt_logits
+                del tt_logits
+            raise RuntimeError("Gemma4 eager multi-chunk prefill produced no last-chunk logits")
+
+        inputs = self.model[model_id].prepare_inputs_prefill(
+            tokens,
+            page_table=page_table,
+            batch_size=batch_size,
+            user_id=user_id,
+            **kwargs,
+        )
+        prefill_input, rot_mats_global_prefill, rot_mats_local_prefill, page_table_tt, *_ = inputs
+        return self.model[model_id].ttnn_prefill_forward(
+            prefill_input,
+            rot_mats_global=rot_mats_global_prefill,
+            rot_mats_local=rot_mats_local_prefill,
+            user_id=user_id,
+            page_table=page_table_tt,
+            get_last_token=(-1 if batch_size > 1 else self._prefill_get_last_token(last_token_idx)),
+            kv_cache=kv_cache,
+            batch_size=batch_size,
+        )
 
 
 class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
