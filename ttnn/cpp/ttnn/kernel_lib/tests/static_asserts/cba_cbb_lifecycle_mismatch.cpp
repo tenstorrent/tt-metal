@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Negative compile test: Block index mode with a Streaming lifecycle is illegal — a Block walker
-// reads an absolute CB-front index, but Streaming pops per tile so the front shifts and the index
-// reads the wrong tile. is_legal_kind_lifecycle rejects (Block, Streaming).
-// MUST fail to compile with "CopyTile: (IndexMode, Policy) is illegal for Block".
+// Negative compile test: BinaryFpu reading the SAME CB for both operands must use the same input
+// lifecycle because the chain dedups the B-side wait/pop against A. Bulk and HeldBulk are each
+// legal with Scalar, so only the same-CB-lifecycle guard fires.
+// MUST fail to compile with "same InputLifecycle".
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -20,6 +20,10 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(n),
-        CopyTile<input(cb_in, InputLifecycle::Streaming, OperandKind::Block), Dst::D0>{},
+        BinaryFpu<
+            input(cb_in, InputLifecycle::Bulk),
+            input(cb_in, InputLifecycle::HeldBulk),
+            BinaryFpuOp::Add,
+            BroadcastDim::None>{},
         PackTile<output(cb_out)>{});
 }
