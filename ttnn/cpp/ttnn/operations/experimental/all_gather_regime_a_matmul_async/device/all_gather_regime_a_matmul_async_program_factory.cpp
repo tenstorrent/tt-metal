@@ -21,6 +21,7 @@
 #include "all_gather_regime_a_matmul_async_program_factory.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <set>
 #include <string>
 #include <vector>
@@ -189,9 +190,12 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     };
 
     // ---- writer (COPIED gated in0 ring/reduce writer) compile args ----
-    // Base layout identical to regime_a; AGMM_FULL_GATHER_BARRIER appends the gather_ready sem id at the end.
+    // Base layout identical to regime_a; the AGMM gate appends (gather_ready_addr, Kt_local, D) at the end.
+    // Default = AGMM_STREAM (per-shard progressive gate → matmul overlaps the gather). TT_AGMM_FULL_GATHER=1
+    // selects the same-binary full-gather-before-matmul diagnostic (reader waits gather_ready==D). Not public.
+    const bool full_gather_diag = std::getenv("TT_AGMM_FULL_GATHER") != nullptr;
     std::map<std::string, std::string> wdefs;
-    wdefs["AGMM_FULL_GATHER_BARRIER"] = "1";
+    wdefs[full_gather_diag ? "AGMM_FULL_GATHER_BARRIER" : "AGMM_STREAM"] = "1";
     std::vector<uint32_t> wct = {
         geo.M_block_capacity,   // 0
         kb,                     // 1
@@ -255,16 +259,18 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     const CoreCoord inj_logical = take_free_core();
     const CoreRangeSet inj_crs(CoreRange(inj_logical, inj_logical));
 
-    // Coordination uses two GlobalSemaphores (multi_device_global_semaphore[0]=gather_progress, [1]=gather_ready)
-    // rather than program-local CreateSemaphores: GlobalSemaphores can be reset host-side between launches, so
-    // the barrier is correct on program-cache replay (a program-local semaphore would keep its accumulated value
-    // across launches and defeat the barrier). Both live on the CCL sub-device CRS (all cores), so their address
-    // is valid on every compute core AND the injector core.
+    // Coordination uses D+1 GlobalSemaphores (multi_device_global_semaphore[0]=gather_ready, [1+e]=shard_landed
+    // for device e) rather than program-local CreateSemaphores: GlobalSemaphores can be reset host-side between
+    // launches, so the streaming barrier is correct on program-cache replay (a program-local semaphore keeps its
+    // accumulated value across launches and defeats the barrier). All live on the CCL sub-device CRS (all cores),
+    // so their address is valid on every compute core AND the injector core.
     TT_FATAL(
-        op.multi_device_global_semaphore.size() >= 2,
-        "all_gather_regime_a_matmul_async needs >=2 global semaphores (gather_progress, gather_ready), got {}",
-        op.multi_device_global_semaphore.size());
-    const uint32_t gather_ready_addr = op.multi_device_global_semaphore.at(1).address();
+        op.multi_device_global_semaphore.size() >= D + 1,
+        "all_gather_regime_a_matmul_async needs >= D+1 global semaphores (gather_ready + D shard_landed), got {} "
+        "for D={}",
+        op.multi_device_global_semaphore.size(),
+        D);
+    const uint32_t gather_ready_addr = op.multi_device_global_semaphore.at(0).address();
 
     // Injector L1 scratch: payload tile CB (c_0) + packet-header CB (c_1).
     const uint32_t aligned_hdr = align_up((uint32_t)tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
@@ -362,8 +368,9 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             cp.valid_k,              // 14
             cp.valid_m,              // 15
             cp.valid_n,              // 16
-            gather_ready_addr,       // 17 (AGMM_FULL_GATHER_BARRIER) gather_ready GlobalSemaphore L1 address
-            D - 1u};                 // 18 (AGMM_FULL_GATHER_BARRIER) expected remote-shard count
+            gather_ready_addr,       // 17 gather_ready GlobalSemaphore L1 address
+            geo.Kt / D,              // 18 Kt_local (K tiles per device shard; shard of global tile = kg/Kt_local)
+            D};                      // 19 device count (streaming: gate kg on gather_ready>kg/Kt_local; full: ==D)
         SetRuntimeArgs(program, wh, cores[i], wa);
 
         std::vector<uint32_t> ca = {0u, geo.M_block_capacity, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u};
@@ -375,9 +382,8 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     const uint32_t Kt_global = geo.Kt;
     const uint32_t Kt_local = Kt_global / D;
     const uint32_t k_tile_global_base = device_index * Kt_local;
-    // gather_progress GlobalSemaphore (remote shards landed here). address() is uniform across the mesh.
-    const uint32_t progress_addr = op.d > 1 ? op.multi_device_global_semaphore.at(0).address() : 0u;
-    // neighbour's injector core == our injector core (symmetric programs, uniform harvesting on the galaxy).
+    // injector core (symmetric across devices): where shard_landed + gather_ready live and where remote
+    // shard_landed atomic-incs are targeted.
     const CoreCoord inj_virtual = mesh_device->worker_core_from_logical_core(inj_logical);
 
     std::vector<uint32_t> inj_rt = {
@@ -389,13 +395,17 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         k_tile_global_base,             // a5 global K-tile base of this shard
         kTileBytesBf16,                 // a6 tile bytes
         num_dests,                      // a7 number of remote devices to reach (hops 1..num_dests)
-        progress_addr,                  // a8 gather_progress GlobalSemaphore L1 address (on neighbour)
-        (uint32_t)inj_virtual.x,        // a9 neighbour injector core x (== ours; where its gather_progress lives)
-        (uint32_t)inj_virtual.y,        // a10 neighbour injector core y
-        gather_ready_addr,              // a11 gather_ready GlobalSemaphore L1 address (local fan-out target)
-        D - 1u,                         // a12 expected remote-shard count before fan-out
+        D,                              // a8 device count
+        device_index,                  // a9 this device's shard index
+        (uint32_t)inj_virtual.x,        // a10 injector core x
+        (uint32_t)inj_virtual.y,        // a11 injector core y
+        gather_ready_addr,              // a12 gather_ready GlobalSemaphore L1 address (monotonic fan-out target)
         geo.num_cores};                 // a13 number of compute cores to fan out to
-    // followed by each compute core's (x,y) for the local gather_ready fan-out.
+    // a14..a14+D-1: shard_landed[0..D-1] GlobalSemaphore L1 addresses.
+    for (uint32_t s = 0; s < D; ++s) {
+        inj_rt.push_back(op.multi_device_global_semaphore.at(1u + s).address());
+    }
+    // followed by each compute core's (x,y) for the gather_ready fan-out.
     for (uint32_t i = 0; i < geo.num_cores; ++i) {
         auto p = phys(i);
         inj_rt.push_back(p.x);

@@ -3,36 +3,39 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fused all-gather + regime_a_matmul — Phase A in0 INJECTOR (fabric worker core, fabric mux v2).
-// (REGIME_A_AGMM_EXECUTION_PLAN.md Task 3, milestone #17; design: REGIME_A_AGMM_TASK3_BLUEPRINT.md §B.2.)
+// (REGIME_A_AGMM_EXECUTION_PLAN.md Task 3; design: REGIME_A_AGMM_TASK3_BLUEPRINT.md.)
 //
-// D=2 full-gather-barrier producer. For every tile of this device's in0 K-shard:
-//   1. read it from the shard DRAM buffer into L1,
-//   2. write it into the LOCAL slice of this device's DRAM gather buffer (at the shard's global-K offset),
-//   3. fabric-unicast it into the forward neighbour's gather buffer at the SAME global offset (the gather
-//      buffer is a mesh tensor => identical address on the neighbour, so this device's TensorAccessor noc
-//      address is valid there).
-// Then, after the payload has flushed on the fabric channel, atomic-inc the neighbour's gather_progress
-// GlobalSemaphore (payload-before-readiness on the same channel). Finally wait until this device's own
-// gather_progress reaches D-1 (all remote shards landed here) and fan out the local gather_ready semaphore to
-// every regime_a compute core, releasing their in0 reads.
+// Streaming producer. For every tile of this device's in0 K-shard: read it from DRAM, write it into the LOCAL
+// slice of this device's DRAM gather buffer (at the shard's global-K offset), and fabric-unicast it into every
+// other device's gather buffer at the SAME global offset (the gather buffer is a mesh tensor => identical NoC
+// address on all devices, reached via forward hops 1..num_dests on the ring).
+//
+// Readiness is PER-SHARD and progressive. Each device e increments its own shard-landed GlobalSemaphore
+// `shard_landed[e]` on every device (locally after its own write; over fabric on the others, ordered AFTER the
+// payload on the same mux channel). This device's injector then walks s = 0..D-1 in GLOBAL-K order, waits for
+// shard s to have landed locally, and fans out one increment of the monotonic `gather_ready` GlobalSemaphore to
+// every regime_a compute core. gather_ready therefore reaches value k once shards 0..k-1 are all present, so a
+// compute core can start reading in0 global K-tile kg as soon as gather_ready > kg/Kt_local — the matmul begins
+// before the full gather completes. (The full-gather-barrier diagnostic is just the reader waiting for D.)
 //
 // Runtime-arg contract (must match all_gather_regime_a_matmul_async_program_factory.cpp create_at()):
-//   a0  in0_shard_addr            (DRAM base of this device's in0 shard [M, K_local])
-//   a1  gather_local_addr         (DRAM base of this device's gather buffer [M, K_global])
-//   a2  Mt                        (M tiles)
-//   a3  Kt_local                  (K tiles owned locally)
-//   a4  Kt_global                 (K tiles of the gather buffer = row stride)
-//   a5  k_tile_global_base        (global K-tile offset of this device's shard)
-//   a6  tile_bytes                (bf16 tile = 2048)
-//   a7  num_dests                 (# remote devices = D-1; reach each via forward hops 1..num_dests)
-//   a8  progress_sem_addr         (gather_progress GlobalSemaphore L1 address; local read + remote target)
-//   a9  nbr_inj_x                 (neighbour injector core x — where its gather_progress lives)
-//   a10 nbr_inj_y                 (neighbour injector core y)
-//   a11 ready_addr                (gather_ready GlobalSemaphore L1 address, fanned out to compute cores)
-//   a12 expected_remote           (remote shards to await before fan-out = D-1)
+//   a0  in0_shard_addr        DRAM base of this device's in0 shard [M, K_local]
+//   a1  gather_local_addr     DRAM base of this device's gather buffer [M, K_global]
+//   a2  Mt                    M tiles
+//   a3  Kt_local              K tiles owned locally
+//   a4  Kt_global             K tiles of the gather buffer = row stride
+//   a5  k_tile_global_base    global K-tile offset of this device's shard (= device_index * Kt_local)
+//   a6  tile_bytes            bf16 tile = 2048
+//   a7  num_dests             # remote devices = D-1; reach each via forward hops 1..num_dests
+//   a8  D                     device count along the gather axis
+//   a9  device_index          this device's shard index (0..D-1)
+//   a10 inj_x                 injector core x (symmetric across devices; where shard_landed/gather_ready live)
+//   a11 inj_y                 injector core y
+//   a12 gather_ready_addr     gather_ready GlobalSemaphore L1 address (monotonic prefix, fanned to compute)
 //   a13 num_compute_cores
-//   a14.. per compute core: (x, y)  [num_compute_cores pairs]
-//   ...   then FabricMuxV2Sender::build_from_args() args (appended by the factory).
+//   a14 .. a14+D-1            shard_landed[0..D-1] GlobalSemaphore L1 addresses
+//   then num_compute_cores * (x, y)
+//   then FabricMuxV2Sender::build_from_args() args (appended by the factory).
 //
 // CT args: TensorAccessorArgs(in0 shard) then TensorAccessorArgs(gather buffer). L1 scratch: CB c_0 = payload
 // tile, CB c_1 = fabric packet header.
@@ -51,13 +54,19 @@ void kernel_main() {
     const uint32_t Kt_global = get_arg_val<uint32_t>(a++);
     const uint32_t k_tile_global_base = get_arg_val<uint32_t>(a++);
     const uint32_t tile_bytes = get_arg_val<uint32_t>(a++);
-    const uint32_t num_dests = get_arg_val<uint32_t>(a++);  // reach devices 1..num_dests hops forward (ring)
-    const uint32_t progress_sem_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t nbr_inj_x = get_arg_val<uint32_t>(a++);
-    const uint32_t nbr_inj_y = get_arg_val<uint32_t>(a++);
-    const uint32_t ready_addr = get_arg_val<uint32_t>(a++);  // gather_ready GlobalSemaphore L1 address
-    const uint32_t expected_remote = get_arg_val<uint32_t>(a++);
+    const uint32_t num_dests = get_arg_val<uint32_t>(a++);
+    const uint32_t D = get_arg_val<uint32_t>(a++);
+    const uint32_t device_index = get_arg_val<uint32_t>(a++);
+    const uint32_t inj_x = get_arg_val<uint32_t>(a++);
+    const uint32_t inj_y = get_arg_val<uint32_t>(a++);
+    const uint32_t ready_addr = get_arg_val<uint32_t>(a++);
     const uint32_t num_compute_cores = get_arg_val<uint32_t>(a++);
+
+    constexpr uint32_t kMaxD = 8u;
+    uint32_t shard_landed_addr[kMaxD];
+    for (uint32_t s = 0; s < D; ++s) {
+        shard_landed_addr[s] = get_arg_val<uint32_t>(a++);
+    }
 
     constexpr uint32_t kMaxComputeCores = 128u;
     uint32_t cc_x[kMaxComputeCores];
@@ -81,7 +90,7 @@ void kernel_main() {
     auto sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(a);
     sender.open();
 
-    // Stream each local shard tile: DRAM shard -> L1 -> local gather slice + fabric unicast to neighbour gather.
+    // Stream each local shard tile: DRAM shard -> L1 -> local gather slice + fabric unicast to every remote.
     for (uint32_t m = 0; m < Mt; ++m) {
         for (uint32_t kl = 0; kl < Kt_local; ++kl) {
             const uint32_t k_global = k_tile_global_base + kl;
@@ -92,7 +101,6 @@ void kernel_main() {
             noc_async_read_barrier();
             noc_async_write_page(global_tile_id, gather_acc, payload_l1);  // local gather write
 
-            // Same global-K offset on every device's gather buffer (mesh tensor => identical NoC address).
             const uint64_t dst = get_noc_addr(global_tile_id, gather_acc);
             for (uint32_t h = 1; h <= num_dests; ++h) {
                 tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
@@ -102,34 +110,37 @@ void kernel_main() {
                     tile_bytes,
                     tt::tt_fabric::NocUnicastCommandHeader{dst},
                     (uint8_t)h);
-                // pkt_hdr AND payload_l1 are the (shared) source of this non-blocking send; drain the copy to
-                // the mux slot before the next iteration rewrites pkt_hdr's num_hops / the next tile's payload.
+                // pkt_hdr AND payload_l1 are the (shared) source of this non-blocking send; drain the copy to the
+                // mux slot before the next iteration rewrites pkt_hdr's num_hops / the next tile's payload.
                 noc_async_writes_flushed();
             }
         }
     }
-    noc_async_writes_flushed();  // local gather writes departed L1
+    noc_async_write_barrier();  // this device's whole local shard has landed in the gather buffer
 
-    // Signal readiness to each remote AFTER the payload flushed (same channel => ordered delivery).
-    const uint64_t nbr_progress = get_noc_addr(nbr_inj_x, nbr_inj_y, progress_sem_addr);
+    // Mark THIS device's shard present everywhere: locally now, and on each remote AFTER its payload flushed
+    // (same channel => ordered). Every device e increments shard_landed[e]; nobody else does.
+    noc_semaphore_inc(get_noc_addr(inj_x, inj_y, shard_landed_addr[device_index]), 1);
     for (uint32_t h = 1; h <= num_dests; ++h) {
+        const uint64_t remote_landed = get_noc_addr(inj_x, inj_y, shard_landed_addr[device_index]);
         tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
             &sender,
             pkt_hdr,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{nbr_progress, /*val=*/1u, /*flush=*/true},
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_landed, /*val=*/1u, /*flush=*/true},
             (uint8_t)h);
         noc_async_writes_flushed();  // pkt_hdr reused for the next inc
     }
-
     noc_async_write_barrier();
     sender.close();
 
-    // Wait until every remote shard has landed in THIS device's gather buffer, then release the compute readers.
-    volatile tt_l1_ptr uint32_t* progress_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(progress_sem_addr);
-    noc_semaphore_wait_min(progress_ptr, expected_remote);
-
-    for (uint32_t i = 0; i < num_compute_cores; ++i) {
-        noc_semaphore_inc(get_noc_addr(cc_x[i], cc_y[i], ready_addr), 1);
+    // Progressive fan-out: as shard s (in GLOBAL-K order) lands locally, bump gather_ready on every compute
+    // core. gather_ready reaches k once shards 0..k-1 are all present, matching the reader's in-order K reads.
+    for (uint32_t s = 0; s < D; ++s) {
+        volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(shard_landed_addr[s]);
+        noc_semaphore_wait_min(landed, 1);
+        for (uint32_t i = 0; i < num_compute_cores; ++i) {
+            noc_semaphore_inc(get_noc_addr(cc_x[i], cc_y[i], ready_addr), 1);
+        }
+        noc_async_atomic_barrier();
     }
-    noc_async_atomic_barrier();
 }

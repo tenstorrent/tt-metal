@@ -120,10 +120,10 @@ def _run_full_gather(D, mesh_shape, fabric_config, topology):
         ccl_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
         md.load_sub_device_manager(md.create_sub_device_manager([ttnn.SubDevice([ccl_crs])], 0))
         md.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
-        # [0] gather_progress (fabric atomic-inc target), [1] gather_ready (injector -> compute fan-out).
-        # GlobalSemaphores (not program-local sems) so they can be reset between launches -> the barrier stays
-        # correct on program-cache replay.
-        sems = [ttnn.create_global_semaphore(md, ccl_crs, 0) for _ in range(2)]
+        # D+1 GlobalSemaphores: [0] gather_ready (monotonic prefix; injector -> compute fan-out), [1+e]
+        # shard_landed[e] (device e marks its shard present everywhere). GlobalSemaphores (not program-local
+        # sems) so they can be reset between launches -> the streaming barrier stays correct on cache replay.
+        sems = [ttnn.create_global_semaphore(md, ccl_crs, 0) for _ in range(D + 1)]
 
         a = ttnn.from_torch(
             t0,

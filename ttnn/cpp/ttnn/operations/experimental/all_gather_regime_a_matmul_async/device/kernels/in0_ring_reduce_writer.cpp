@@ -76,12 +76,17 @@ void kernel_main() {
     const uint32_t valid_m = get_arg_val<uint32_t>(15);  // valid M tiles (rest zero / not written)
     const uint32_t valid_n = get_arg_val<uint32_t>(16);  // valid N tiles (rest zero / not written)
 
-#if defined(AGMM_FULL_GATHER_BARRIER)
-    // Fused full-gather barrier: RT arg 17 = gather_ready GlobalSemaphore L1 address (injector fans it out once
-    // every remote in0 K-shard has landed in this device's gather buffer); RT arg 18 = expected count (unused).
+#if defined(AGMM_STREAM) || defined(AGMM_FULL_GATHER_BARRIER)
+    // Fused gather gate. RT arg 17 = gather_ready GlobalSemaphore L1 address (the injector advances it to k once
+    // in0 shards 0..k-1 have landed in this device's gather buffer, in global-K order). arg 18 = Kt_local (K
+    // tiles per device shard), arg 19 = D. STREAM gates each in0 read on its own shard; the diagnostic waits for
+    // all D shards up front (== all_gather then matmul, no overlap).
     const uint32_t agmm_ready_addr = get_arg_val<uint32_t>(17);
-    (void)get_arg_val<uint32_t>(18);
+    const uint32_t agmm_Kt_local = get_arg_val<uint32_t>(18);
+    const uint32_t agmm_D = get_arg_val<uint32_t>(19);
     volatile tt_l1_ptr uint32_t* agmm_ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(agmm_ready_addr);
+    (void)agmm_Kt_local;
+    (void)agmm_D;
 #endif
 
     const auto in0 = TensorAccessor(in0_args, in0_addr, tile_bytes);
@@ -226,8 +231,8 @@ void kernel_main() {
 #endif
 
 #if defined(AGMM_FULL_GATHER_BARRIER)
-    // Block until the fabric injector signals the whole gather buffer is populated (all D shards present).
-    noc_semaphore_wait_min(agmm_ready_ptr, 1);
+    // Diagnostic: block until ALL D in0 shards are present before any matmul (no overlap; == AG then MM).
+    noc_semaphore_wait_min(agmm_ready_ptr, agmm_D);
 #endif
 
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
@@ -244,6 +249,12 @@ void kernel_main() {
                     for (uint32_t k = 0; k < K_block; ++k) {
                         const uint32_t l = sb * K_block + k;  // capacity-local K index within the slice
                         if (m < valid_m && l < valid_k) {
+#if defined(AGMM_STREAM)
+                            // Progressive gate: this DRAM read hits global K-tile (k_start+l), owned by shard
+                            // (k_start+l)/Kt_local. Wait until the injector has advanced gather_ready past it
+                            // (shards land in global order), so the matmul overlaps the still-arriving shards.
+                            noc_semaphore_wait_min(agmm_ready_ptr, (k_start + l) / agmm_Kt_local + 1u);
+#endif
                             noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
                         } else {
                             zero_tile(p);  // pad M row or K tail -> local zero (no DRAM read)
