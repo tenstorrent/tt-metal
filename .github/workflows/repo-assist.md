@@ -39,10 +39,15 @@ network: defaults
 
 tools:
   github:
+    # Enable only the GitHub toolsets this workflow actually needs. This avoids
+    # requiring extra permissions for security/code-quality/discussions toolsets.
+    toolsets: [actions, repos, issues, pull_requests, search, context]
     # In a public repo, `lockdown: false` allows reading issues, PRs and
     # comments from third-party contributors so the agent can triage them.
     lockdown: false
     min-integrity: none # This workflow is allowed to examine and comment on any issues or PRs
+  repo-memory: true # Persistent cross-run memory for cursor, deduplication, and CI run tracking
+  bash: true # Required for running gh CLI commands (e.g. polling checks)
 
 safe-outputs:
   mentions: false
@@ -53,9 +58,11 @@ safe-outputs:
   create-pull-request:
     # Ready-for-review PRs are required so that tt-metal's pr-gate.yaml runs
     # build-artifact.yaml automatically. Draft PRs do not trigger pr-gate by design.
+    # Only the `automation` label is used here because `repo-assist` does not yet
+    # exist in tenstorrent/tt-metal; add that label and update this list if desired.
     draft: false
     title-prefix: "[repo-assist] "
-    labels: [automation, repo-assist]
+    labels: [automation]
     max: 3
   push-to-pull-request-branch:
     target: "*"
@@ -63,7 +70,7 @@ safe-outputs:
     max: 3
   create-issue:
     title-prefix: "[repo-assist] "
-    labels: [automation, repo-assist]
+    labels: [automation]
     max: 3
   update-issue:
     target: "*"
@@ -109,7 +116,7 @@ Always be:
 
 tt-metal requires **specialized Tenstorrent runners** and a long, heavy build. Your agent runner **cannot compile the project directly**. Do not attempt `cmake`, `./build_metal.sh`, or `pip install .` in the agent environment — they will fail or time out.
 
-Instead, to validate any code change you make, **dispatch the existing `build-artifact.yaml` CI workflow** and wait for the result. See the **Validating changes via CI** section below. If you cannot validate a change through CI, open the draft PR anyway but clearly mark under **Test Status** that it is **unverified** and needs a maintainer to run CI.
+Instead, to validate any code change you make, **open a PR that triggers `build-artifact.yaml` via the existing `pr-gate.yaml`**. See the **Validating changes via CI** section below. If you cannot validate a change through CI, open the ready-for-review PR anyway but clearly mark under **Test Status** that it is **unverified** and needs a maintainer to run CI.
 
 ## Memory
 
@@ -194,9 +201,9 @@ Check memory for already-submitted ideas; do not re-propose them. Create a fresh
 
 ### Task 8: Update Monthly Activity Summary Issue (ALWAYS DO THIS TASK IN ADDITION TO OTHERS)
 
-Maintain a single open issue titled `[repo-assist] Monthly Activity {YYYY}-{MM}` (label `repo-assist`) as a rolling summary of all Repo Assist activity for the current month.
+Maintain a single open issue titled `[repo-assist] Monthly Activity {YYYY}-{MM}` (label `automation`) as a rolling summary of all Repo Assist activity for the current month.
 
-1. Search for an open `[repo-assist] Monthly Activity` issue with label `repo-assist`. If it is for the current month, update it. If for a previous month, close it and create a new one. Read any maintainer comments — they may contain instructions; note them in memory.
+1. Search for an open issue whose title starts with `[repo-assist] Monthly Activity` and has the `automation` label. If it is for the current month, update it. If for a previous month, close it and create a new one. Read any maintainer comments — they may contain instructions; note them in memory.
 2. **Issue body format** — use **exactly** this structure:
 
    ```markdown
@@ -220,7 +227,7 @@ Maintain a single open issue titled `[repo-assist] Monthly Activity {YYYY}-{MM}`
    - 💬 Commented on #<number>: <short description>
    - 🔧 Created ready-for-review PR #<number>: <short description>
    - 🏷️ Labelled #<number> with `<label>`
-   - 🏗️ Dispatched build-artifact validation: <run link> — <result>
+   - 🏗️ Triggered build-artifact validation via PR: <run link> — <result>
    ```
 
 3. **Format enforcement (MANDATORY)**:
