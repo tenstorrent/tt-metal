@@ -411,8 +411,8 @@ def validate_encoder_sdpa_inputs(
         raise ValueError(f"expected V shape {config.kv_shape}, got {_shape_tuple(v)}")
     if q.layout != ttnn.TILE_LAYOUT or k.layout != ttnn.TILE_LAYOUT or v.layout != ttnn.TILE_LAYOUT:
         raise ValueError("encoder SDPA requires TILE_LAYOUT Q/K/V")
-    if q.dtype != ttnn.bfloat8_b:
-        raise ValueError(f"expected BF8 Q, got {q.dtype}")
+    if q.dtype not in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        raise ValueError(f"expected BF8 or BF4 Q, got {q.dtype}")
     if k.dtype != ttnn.bfloat4_b:
         raise ValueError(f"expected BF4 K, got {k.dtype}")
     if v.dtype not in (ttnn.bfloat8_b, ttnn.bfloat4_b):

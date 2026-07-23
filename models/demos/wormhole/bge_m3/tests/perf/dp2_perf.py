@@ -67,6 +67,7 @@ def test_embedding_perf_b12_s8192_dp2(mesh_device):
         use_experimental_encoder_sdpa=True,
         encoder_sdpa_q256_vbf4=True,
         use_qkv_scatter_matmul=True,
+        mlp_wi_output_dtype=ttnn.bfloat4_b,
     )
     assert model._data_parallel, "DP mode not active"
     logger.info(f"DP2 model built in {time.perf_counter() - t0:.1f}s")

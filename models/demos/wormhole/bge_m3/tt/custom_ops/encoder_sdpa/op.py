@@ -416,9 +416,11 @@ def build_encoder_sdpa_descriptor(
     """
     plan = validate_encoder_sdpa_inputs(q, k, v, config)
     device = q.device()
+    # Keep the established BF8 output contract even when Q arrives packed as
+    # BF4; only the redundant input typecast is being removed.
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(config.output_shape),
-        q.dtype,
+        ttnn.bfloat8_b,
         ttnn.TILE_LAYOUT,
         device,
         output_mem_config,
@@ -437,9 +439,7 @@ def build_encoder_sdpa_descriptor(
         # CB depths derive from the plan so q_chunk/k_chunk can be swept.
         # Defaults (q128/k2048): Q=16, K=V=256, QK=256 — identical to the
         # parity-verified sizes. K/V are double-buffered (x2), Q holds 2 chunks.
-        _cb_descriptor(
-            CB_Q, plan.config.q_buffer_depth * plan.q_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat8_b, core_grid
-        ),
+        _cb_descriptor(CB_Q, plan.config.q_buffer_depth * plan.q_chunk_tiles * plan.head_dim_tiles, q.dtype, core_grid),
         # K/V: either two separate CBs (default) or ONE shared aliased allocation
         # (F4). The aliased path is appended after this list to keep the common
         # ordering intact; see below.

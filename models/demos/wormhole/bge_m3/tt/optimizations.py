@@ -191,11 +191,15 @@ class Optimizations:
             output_prg_config=(
                 None
                 if out_minimal is not None
-                else _tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
-                if tuned_b1
-                else _b16_tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
-                if tuned_b16
-                else _attention_output_program_config(max_seq_len, max_batch, hidden_size, mesh_device)
+                else (
+                    _tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
+                    if tuned_b1
+                    else (
+                        _b16_tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
+                        if tuned_b16
+                        else _attention_output_program_config(max_seq_len, max_batch, hidden_size, mesh_device)
+                    )
+                )
             ),
         )
 
@@ -310,7 +314,9 @@ def _matmul_core_grid(mesh_device, sequence_length=None, batch_size=None):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _make_compute_kernel(mesh_device, fidelity, max_seq_len=None, max_batch_size=None, fp32_dest_acc_en=None):
+def _make_compute_kernel(
+    mesh_device, fidelity, max_seq_len=None, max_batch_size=None, fp32_dest_acc_en=None, math_approx_mode=False
+):
     packer_l1_acc = True
     # B1/S512: fp32_dest_acc_en=False lifts the matmul subblock cap (h*w <= 8
     # instead of 4) and speeds up LN reduction passes (~1.68 µs/call).
@@ -321,7 +327,7 @@ def _make_compute_kernel(mesh_device, fidelity, max_seq_len=None, max_batch_size
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=fidelity,
-        math_approx_mode=False,
+        math_approx_mode=math_approx_mode,
         fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=packer_l1_acc,
     )
@@ -429,7 +435,12 @@ def layernorm_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_siz
     if max_seq_len == 8192:
         if data_parallel:
             return _make_compute_kernel(
-                mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch_size, fp32_dest_acc_en=False
+                mesh_device,
+                ttnn.MathFidelity.LoFi,
+                max_seq_len,
+                max_batch_size,
+                fp32_dest_acc_en=False,
+                math_approx_mode=True,
             )
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch_size)
     return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi4, max_seq_len, max_batch_size)

@@ -186,7 +186,9 @@ class BgeM3Attention(LightweightModule):
                 self.wqkv,
                 bias_tensor=self.bqkv,
                 memory_config=self.config.create_heads_memcfg,
-                dtype=self.config.qkv_dtype,
+                # Evaluation candidate: emit Q directly as BF4 to halve the
+                # QKV-scatter write. It is cast back to score_dtype before SDPA.
+                dtype=ttnn.bfloat4_b,
             )
         else:
             # Stage 1: fused QKV projection
@@ -245,8 +247,16 @@ class BgeM3Attention(LightweightModule):
                 )
             ttnn.deallocate(qkv_fused)
 
-        # Stage 3: optional cast to score dtype
-        if self.config.score_dtype is not None and q.dtype != self.config.score_dtype:
+        # Preserve direct BF4 Q on the exact DP q256 path. Casting it to BF8
+        # cannot restore precision and costs one full-tensor program per layer.
+        preserve_bf4_q = (
+            self.config.data_parallel
+            and self.config.encoder_sdpa_q256_vbf4
+            and attention_mask is None
+            and seq_len == 8192
+            and q.dtype == ttnn.bfloat4_b
+        )
+        if self.config.score_dtype is not None and q.dtype != self.config.score_dtype and not preserve_bf4_q:
             q_cast = ttnn.typecast(q, dtype=self.config.score_dtype)
             ttnn.deallocate(q)
             q = q_cast
@@ -352,7 +362,7 @@ class BgeM3Attention(LightweightModule):
             and tuple(k.shape)[1:] == (16, 8192, 64)
             and tuple(v.shape)[1:] == (16, 8192, 64)
             and tuple(q.shape)[0] == tuple(k.shape)[0] == tuple(v.shape)[0]
-            and q.dtype == ttnn.bfloat8_b
+            and q.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b)
             and k.dtype == ttnn.bfloat4_b
             and v.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b)
         )

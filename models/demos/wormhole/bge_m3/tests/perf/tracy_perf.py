@@ -285,6 +285,7 @@ def test_bge_m3_tracy_perf_b12_s8192_dp2(mesh_device):
         use_experimental_encoder_sdpa=True,
         encoder_sdpa_q256_vbf4=True,
         use_qkv_scatter_matmul=True,
+        mlp_wi_output_dtype=ttnn.bfloat4_b,
     )
     assert model._data_parallel, "DP mode not active"
     host_inputs = prepare_inputs(model_args.tokenizer, 12, SEQ_LEN_8192, model_args.pad_token_id)
