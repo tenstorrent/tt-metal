@@ -10,25 +10,21 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t batch_ids_addr = get_arg_val<uint32_t>(0);
-    uint32_t batch_id_size = get_arg_val<uint32_t>(1);
-    uint32_t input_addr_a = get_arg_val<uint32_t>(2);
-    uint32_t input_addr_b = get_arg_val<uint32_t>(3);
-    uint32_t batch_size_in_pages = get_arg_val<uint32_t>(4);
-    uint32_t my_batch_id = get_arg_val<uint32_t>(5);
+    uint32_t batch_id_size = get_arg(args::batch_id_size);
+    uint32_t batch_size_in_pages = get_arg(args::batch_size_in_pages);
+    uint32_t my_batch_id = get_arg(args::my_batch_id);
 
-    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t batch_dfb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t page_size = get_arg(args::page_size);
 
-    // Mode encoding (compile-time arg 3):
+    // Mode encoding (the `mode` compile-time arg):
     //   0 = generic fallback  (TensorAccessor page-by-page from input_a)
-    //   1 = native fast path  (HEIGHT_SHARDED L1 one-batch-per-core, CB aliased to output)
-    //   2 = shard-local       (WIDTH/BLOCK_SHARDED, all-batches-per-core, CB aliased, INTERLEAVED input_b)
-    //   3 = shard-local       (same as 2 but input_b is same-sharded; direct L1 reads for input_b too)
-    constexpr uint32_t mode = get_compile_time_arg_val(3);
+    //   1 = native fast path  (HEIGHT_SHARDED SRAM one-batch-per-core, DFB borrowed from output)
+    //   2 = shard-local       (WIDTH/BLOCK_SHARDED, all-batches-per-core, DFB borrowed, INTERLEAVED input_b)
+    //   3 = shard-local       (same as 2 but input_b is same-sharded; direct SRAM reads for input_b too)
+    constexpr uint32_t mode = get_arg(args::mode);
     constexpr bool IS_NATIVE = (mode == 1);
     constexpr bool IS_SHARD_LOCAL = (mode >= 2);
     constexpr bool IS_B_SAME_SHARDED = (mode == 3);
@@ -37,20 +33,13 @@ void kernel_main() {
     // address arithmetic produces aligned base addresses on every core.
     constexpr uint32_t shard_page_stride = (page_size + 31u) & ~31u;
 
-    constexpr auto src0_args = TensorAccessorArgs<4>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
-    constexpr auto batch_ids_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
-
-    const auto s0 = TensorAccessor(src0_args, input_addr_a);
-    const auto s1 = TensorAccessor(src1_args, input_addr_b);
-
-    // page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
-    const auto batchAddr = TensorAccessor(batch_ids_args, batch_ids_addr, batch_id_size << 2);
+    const auto s0 = TensorAccessor(tensor::input_a);
+    const auto s1 = TensorAccessor(tensor::input_b);
+    const auto batchAddr = TensorAccessor(tensor::batch_ids);
 
     Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
-    DataflowBuffer batch_dfb(batch_dfb_id);
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer batch_dfb(dfb::batch);
 
     volatile tt_l1_ptr int* addr_ptr = nullptr;
 
@@ -64,14 +53,19 @@ void kernel_main() {
     }
 
     if constexpr (IS_SHARD_LOCAL) {
-        const uint32_t batch_offset_a = get_arg_val<uint32_t>(6);
-        const uint32_t total_local_batches = get_arg_val<uint32_t>(7);
-        const uint32_t b_full_ppb = get_arg_val<uint32_t>(8);
-        const uint32_t shard_tile_w = get_arg_val<uint32_t>(9);
-        const uint32_t full_tile_w = get_arg_val<uint32_t>(10);
-        const uint32_t col_page_offset = get_arg_val<uint32_t>(11);
-        const uint32_t col_byte_offset = get_arg_val<uint32_t>(12);
+        const uint32_t batch_offset_a = get_arg(args::batch_offset_a);
+        const uint32_t total_local_batches = get_arg(args::total_local_batches);
+        const uint32_t b_full_ppb = get_arg(args::b_full_ppb);
+        const uint32_t shard_tile_w = get_arg(args::shard_tile_w);
+        const uint32_t full_tile_w = get_arg(args::full_tile_w);
+        const uint32_t col_page_offset = get_arg(args::col_page_offset);
+        const uint32_t col_byte_offset = get_arg(args::col_byte_offset);
         const uint32_t shard_ppb = batch_size_in_pages;
+
+        // Raw SRAM base addresses for this core's shard (Case 2 bindings): direct-address
+        // arithmetic into input_a (both shard-local modes) and input_b (same-sharded mode only).
+        const uint32_t input_addr_a = s0.get_bank_base_address();
+        [[maybe_unused]] const uint32_t input_addr_b = s1.get_bank_base_address();
 
         if (shard_ppb == 0 || total_local_batches == 0) {
             return;
@@ -165,7 +159,7 @@ void kernel_main() {
             }
 
             // Passthrough copies the full batch slab in one bulk NoC read (input_a is
-            // HEIGHT_SHARDED L1; pages are contiguous within the shard). The replace branch
+            // HEIGHT_SHARDED SRAM; pages are contiguous within the shard). The replace branch
             // falls back to per-page reads since input_b may be interleaved.
             const uint32_t start_id = my_batch_id * batch_size_in_pages;
             if (replace_batch) {
@@ -185,18 +179,18 @@ void kernel_main() {
                 dfb_in0.push_back(batch_size_in_pages);
             }
         } else {
-            // Generic fallback path. Runtime args:
-            //   arg[5] = slice_start    — first slice index for this core
-            //   arg[6] = outer_count    — dims before the target dim (1 for dim=0)
-            //   arg[7] = outer_stride_a — page stride per outer step in input_a
-            //   arg[8] = outer_stride_b — page stride per outer step in input_b
-            //   arg[9] = num_slices     — slices assigned to this core (work-splitting)
-            //   arg[4] = inner_count    — pages per (outer, slice) pair
+            // Generic fallback path. Runtime args (named):
+            //   slice_start (via my_batch_id) — first slice index for this core
+            //   outer_count    — dims before the target dim (1 for dim=0)
+            //   outer_stride_a — page stride per outer step in input_a
+            //   outer_stride_b — page stride per outer step in input_b
+            //   num_slices     — slices assigned to this core (work-splitting)
+            //   inner_count (via batch_size_in_pages) — pages per (outer, slice) pair
             const uint32_t slice_start = my_batch_id;
-            const uint32_t num_slices = get_arg_val<uint32_t>(9);
-            const uint32_t outer_count = get_arg_val<uint32_t>(6);
-            const uint32_t outer_stride_a = get_arg_val<uint32_t>(7);
-            const uint32_t outer_stride_b = get_arg_val<uint32_t>(8);
+            const uint32_t num_slices = get_arg(args::num_slices);
+            const uint32_t outer_count = get_arg(args::outer_count);
+            const uint32_t outer_stride_a = get_arg(args::outer_stride_a);
+            const uint32_t outer_stride_b = get_arg(args::outer_stride_b);
             const uint32_t inner_count = batch_size_in_pages;
 
             if (num_slices == 0) {

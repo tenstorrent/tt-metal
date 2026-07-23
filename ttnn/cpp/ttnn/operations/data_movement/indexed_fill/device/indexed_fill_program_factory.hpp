@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {
 
 struct IndexedFillProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const IndexedFillParams& operation_attributes, const IndexedFillInputs& tensor_args, Tensor& output);
 };
 

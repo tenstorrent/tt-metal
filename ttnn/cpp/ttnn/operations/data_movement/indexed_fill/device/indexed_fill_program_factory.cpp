@@ -7,25 +7,38 @@
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_utils.hpp"
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
 namespace {
 
-// Kernel mode encoding passed as compile-time arg 3 (see indexed_fill_reader.cpp header).
+// Kernel mode encoding passed as the `mode` compile-time arg (see indexed_fill_reader.cpp header).
 constexpr uint32_t MODE_GENERIC = 0;
 constexpr uint32_t MODE_NATIVE = 1;
 constexpr uint32_t MODE_SHARD_LOCAL_INTERLEAVED_B = 2;
 constexpr uint32_t MODE_SHARD_LOCAL_SHARDED_B = 3;
+
+// Metal 2.0 spec resource names. Prefixed to stay distinct under unity builds
+// (Pattern: Unity-build hygiene for anonymous-namespace symbols).
+const KernelSpecName IF_READER{"if_reader"};
+const KernelSpecName IF_WRITER{"if_writer"};
+const DFBSpecName IF_DATA_DFB{"if_data"};
+const DFBSpecName IF_BATCH_DFB{"if_batch"};
+const TensorParamName IF_BATCH_IDS{"if_batch_ids"};
+const TensorParamName IF_INPUT_A{"if_input_a"};
+const TensorParamName IF_INPUT_B{"if_input_b"};
+const TensorParamName IF_OUTPUT{"if_output"};
 
 // Geometry shared by every path; mirrors the page/stride layout the kernels expect.
 struct IndexedFillGeometry {
@@ -120,7 +133,7 @@ ShardColOffsets compute_shard_col_offsets(
 
 }  // namespace
 
-ProgramDescriptor IndexedFillProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_program_artifacts(
     const IndexedFillParams& operation_attributes, const IndexedFillInputs& tensor_args, Tensor& output) {
     const auto& batch_ids = tensor_args.batch_id;
     const auto& input_a = tensor_args.input_tensor_a;
@@ -139,13 +152,10 @@ ProgramDescriptor IndexedFillProgramFactory::create_descriptor(
     auto cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
     const uint32_t num_cores_total = static_cast<uint32_t>(cores.size());
 
-    constexpr uint32_t cb_index = 0;
-    constexpr uint32_t batch_cb_index = 1;
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_a.dtype());
+    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_a.dtype());
 
     const bool is_tile = input_a.layout() == Layout::TILE;
 
-    Buffer* batch_ids_buffer = batch_ids.buffer();
     Buffer* input_a_buffer = input_a.buffer();
     Buffer* input_b_buffer = input_b.buffer();
     Buffer* output_buffer = output.buffer();
@@ -154,7 +164,7 @@ ProgramDescriptor IndexedFillProgramFactory::create_descriptor(
     // Path selection
     // -----------------------------------------------------------------------------------
     // Native HEIGHT_SHARDED and shard-local WIDTH/BLOCK_SHARDED paths are designed around
-    // dim=0 (one shard per batch).  For dim != 0 the shard grid does not align with the
+    // dim=0 (one shard per batch). For dim != 0 the shard grid does not align with the
     // target dimension, so always use the generic 2D-stride path instead.
     const bool is_native = (dim == 0) && ttnn::operations::data_movement::indexed_fill::is_native_indexed_fill_sharding(
                                              input_a.tensor_spec(),
@@ -201,7 +211,7 @@ ProgramDescriptor IndexedFillProgramFactory::create_descriptor(
 
     uint32_t page_size = 0;
     if (is_tile) {
-        page_size = tt::tile_size(cb_data_format);
+        page_size = tt::tile_size(dfb_data_format);
     } else {
         page_size = input_a.padded_shape()[-1] * input_a.element_size();
     }
@@ -211,14 +221,14 @@ ProgramDescriptor IndexedFillProgramFactory::create_descriptor(
     if (is_shard_local) {
         const auto& shard_spec = *input_a.memory_config().shard_spec();
         const uint32_t shard_width = shard_spec.shape[1];
-        shard_page_size = is_tile ? tt::tile_size(cb_data_format) : shard_width * input_a.element_size();
+        shard_page_size = is_tile ? tt::tile_size(dfb_data_format) : shard_width * input_a.element_size();
     }
 
-    // Generic interleaved path: the CB stages whole interleaved pages copied verbatim from
-    // input to output. A NOC DRAM access always moves a full alignment-sized chunk, so the CB
+    // Generic interleaved path: the DFB stages whole interleaved pages copied verbatim from
+    // input to output. A NOC DRAM access always moves a full alignment-sized chunk, so the DFB
     // slot AND the per-page transfer must be sized to the buffer's *aligned* page size, not a
     // hardcoded 32B multiple. Wormhole DRAM alignment is 32B (== round_up_to_mul32), so the old
-    // sizing happened to be correct there; Blackhole DRAM alignment is 64B, so a 32B CB slot is
+    // sizing happened to be correct there; Blackhole DRAM alignment is 64B, so a 32B DFB slot is
     // overrun by the 64B NOC read and adjacent staged pages are clobbered (wrong output, PCC ~0.5).
     // This bites when the last-dim row is smaller than the DRAM alignment, e.g. the permute
     // fallback for dim==rank-1 ROW_MAJOR, which feeds the dim=0 primitive a tiny (4-elem = 8B) row.
@@ -236,103 +246,151 @@ ProgramDescriptor IndexedFillProgramFactory::create_descriptor(
                                               : is_native     ? rounded_page_size
                                                               : generic_aligned_page_size;
     const uint32_t batch_size_in_pages = is_shard_local ? shard_ppb : inner_count;
-
-    ProgramDescriptor desc;
-
-    // -----------------------------------------------------------------------------------
-    // Data CB (cb_index == 0).
-    //
-    // Native / shard-local path: globally allocate to the output buffer so reader writes
-    // land directly in the output's per-core L1 shard, and the writer becomes a tiny
-    // wait/pop stub.  Setting CBDescriptor::buffer makes the framework re-point the CB at
-    // the (possibly moved) output buffer on every cache hit (UpdateDynamicCircularBufferAddress).
-    //
-    // Fallback path: local CB with the original double-buffered (2-page) capacity.
-    // -----------------------------------------------------------------------------------
-    if (is_native) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = kernel_rounded_page_size * batch_size_in_pages,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_index),
-                .data_format = cb_data_format,
-                .page_size = kernel_rounded_page_size,
-            }}},
-            .buffer = output.buffer(),
-        });
-    } else if (is_shard_local) {
-        const uint32_t total_pages_in_shard = total_batches_per_core * shard_ppb;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = kernel_rounded_page_size * total_pages_in_shard,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_index),
-                .data_format = cb_data_format,
-                .page_size = kernel_rounded_page_size,
-            }}},
-            .buffer = output.buffer(),
-        });
-    } else {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 2 * kernel_rounded_page_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_index),
-                .data_format = cb_data_format,
-                .page_size = kernel_rounded_page_size,
-            }}},
-        });
-    }
-
+    const uint32_t total_pages_in_shard = total_batches_per_core * shard_ppb;
     const uint32_t batch_page_size = round_up_to_mul32(b * sizeof(uint32_t));
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * batch_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(batch_cb_index),
-            .data_format = cb_data_format,
-            .page_size = batch_page_size,
-        }}},
+
+    // -----------------------------------------------------------------------------------
+    // Program spec
+    // -----------------------------------------------------------------------------------
+    ProgramSpec spec;
+    spec.name = "indexed_fill";
+
+    // Typed tensor bindings replace the four Buffer* address RTAs. All four are declared in
+    // every path; each has at least one user (reader/writer accessor, or the data DFB's
+    // borrowed_from for the output in the native / shard-local paths).
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = IF_BATCH_IDS, .spec = batch_ids.tensor_spec()},
+        TensorParameter{.unique_id = IF_INPUT_A, .spec = input_a.tensor_spec()},
+        TensorParameter{.unique_id = IF_INPUT_B, .spec = input_b.tensor_spec()},
+        TensorParameter{.unique_id = IF_OUTPUT, .spec = output.tensor_spec()},
+    };
+
+    // -----------------------------------------------------------------------------------
+    // Data DFB (reader PRODUCER, writer CONSUMER).
+    //
+    // Native / shard-local path: borrowed onto the output buffer so reader writes land
+    // directly in the output's per-core SRAM shard, and the writer becomes a tiny wait/pop
+    // stub. The borrowed_from binding re-points the DFB at the (possibly moved) output
+    // buffer on every cache hit, resolving the backing address from the output TensorArgument.
+    //
+    // Fallback path: local DFB with the original double-buffered (2-page) capacity.
+    // -----------------------------------------------------------------------------------
+    const uint32_t data_dfb_num_entries = is_native ? batch_size_in_pages : is_shard_local ? total_pages_in_shard : 2u;
+    DataflowBufferSpec data_dfb{
+        .unique_id = IF_DATA_DFB,
+        .entry_size = kernel_rounded_page_size,
+        .num_entries = data_dfb_num_entries,
+        .data_format_metadata = dfb_data_format,
+    };
+    if (is_native || is_shard_local) {
+        data_dfb.borrowed_from = IF_OUTPUT;
+    }
+    spec.dataflow_buffers.push_back(data_dfb);
+
+    // Batch DFB: staging buffer for the `b` uint32 batch ids. Touched only by the reader,
+    // which fills it (reserve_back / push_back) and reads the staged indices straight back
+    // through a raw SRAM pointer (get_write_ptr) rather than a FIFO consume. It is therefore a
+    // single-ended buffer, so bind the reader as both PRODUCER and CONSUMER (self-loop). The
+    // data format is inert here (the buffer is filled/read by raw byte access at a byte page
+    // size), so the value set for it is cosmetic.
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = IF_BATCH_DFB,
+        .entry_size = batch_page_size,
+        .num_entries = 2,
+        .data_format_metadata = dfb_data_format,
     });
 
-    // ---- Reader: single unified kernel; path selected via `mode` compile-time arg.
-    std::vector<uint32_t> reader_compile_time_args = {cb_index, batch_cb_index, kernel_page_size, kernel_mode};
-    TensorAccessorArgs(*input_a_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*input_b_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*batch_ids_buffer).append_to(reader_compile_time_args);
+    const auto arch = input_a.device()->arch();
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/indexed_fill/device/kernels/dataflow/indexed_fill_reader.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
+    // ---- Reader: single unified kernel; path selected via the `mode` compile-time arg.
+    // The one source serves all four modes through `if constexpr (mode)`. Because the named
+    // `args::` tokens are emitted per-kernel from the schema, and name lookup still runs on the
+    // discarded `if constexpr` branches, every runtime-arg name any branch reads must be declared
+    // here for every path (the union below); the host sets 0 for the names a given path omits.
+    KernelSpec reader{
+        .unique_id = IF_READER,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/indexed_fill/device/kernels/dataflow/indexed_fill_reader.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = IF_DATA_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = IF_BATCH_DFB,
+                    .accessor_name = "batch",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = IF_BATCH_DFB,
+                    .accessor_name = "batch",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = IF_BATCH_IDS, .accessor_name = "batch_ids"},
+                TensorBinding{.tensor_parameter_name = IF_INPUT_A, .accessor_name = "input_a"},
+                TensorBinding{.tensor_parameter_name = IF_INPUT_B, .accessor_name = "input_b"},
+            },
+        .compile_time_args = {{"page_size", kernel_page_size}, {"mode", kernel_mode}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {// Read in every path:
+                  "batch_id_size",
+                  "batch_size_in_pages",
+                  "my_batch_id",
+                  // Generic path only:
+                  "outer_count",
+                  "outer_stride_a",
+                  "outer_stride_b",
+                  "num_slices",
+                  // Shard-local path only:
+                  "batch_offset_a",
+                  "total_local_batches",
+                  "b_full_ppb",
+                  "shard_tile_w",
+                  "full_tile_w",
+                  "col_page_offset",
+                  "col_byte_offset"}},
+        .hw_config = ttnn::create_reader_datamovement_config(arch),
+    };
 
-    // ---- Writer
-    KernelDescriptor writer_desc;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.config = WriterConfigDescriptor{};
+    // ---- Writer: path-dependent source and bindings.
+    KernelSpec writer{
+        .unique_id = IF_WRITER,
+        .hw_config = ttnn::create_writer_datamovement_config(arch),
+    };
     if (is_native || is_shard_local) {
-        // CB is aliased to the output buffer: writer just synchronises on the CB.
-        writer_desc.kernel_source =
+        // Data DFB is borrowed onto the output buffer: the writer just synchronises on the DFB.
+        writer.source =
             "ttnn/cpp/ttnn/operations/data_movement/indexed_fill/device/kernels/dataflow/indexed_fill_writer.cpp";
-        writer_desc.compile_time_args = {cb_index};
+        writer.dfb_bindings = {DFBBinding{
+            .dfb_spec_name = IF_DATA_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER}};
+        writer.runtime_arg_schema = {.runtime_arg_names = {"batch_size_in_pages"}};
     } else {
         // Generic path: scatter-write via the strided writer kernel.
-        std::vector<uint32_t> writer_compile_time_args = {cb_index};
-        TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
-        writer_desc.kernel_source =
+        writer.source =
             "ttnn/cpp/ttnn/operations/data_movement/indexed_fill/device/kernels/dataflow/"
             "indexed_fill_writer_strided.cpp";
-        writer_desc.compile_time_args = std::move(writer_compile_time_args);
+        writer.dfb_bindings = {DFBBinding{
+            .dfb_spec_name = IF_DATA_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER}};
+        writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = IF_OUTPUT, .accessor_name = "output"}};
+        writer.runtime_arg_schema = {
+            .runtime_arg_names = {
+                "page_size", "outer_count", "inner_count", "outer_stride", "slice_start", "num_slices"}};
     }
 
-    // ---- Per-core runtime arguments.
+    spec.kernels.push_back(reader);
+    spec.kernels.push_back(writer);
+    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {IF_READER, IF_WRITER}, .target_nodes = all_cores}};
+
+    // -----------------------------------------------------------------------------------
+    // Per-core runtime arguments.
     // Work-splitting for the generic path: distribute S_dim slices across num_cores_total cores
     // using ceiling-division. Cores [0, extra) receive slices_per_core + 1 slices; others receive
     // slices_per_core. When S_dim < num_cores_total, cores with index >= S_dim are idle.
+    // -----------------------------------------------------------------------------------
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run{.kernel = IF_READER};
+    KernelRunArgs writer_run{.kernel = IF_WRITER};
+
     const uint32_t slices_per_core = (num_cores_total > 0) ? S_dim / num_cores_total : 0;
     const uint32_t extra_slices = (num_cores_total > 0) ? S_dim % num_cores_total : 0;
 
@@ -358,44 +416,52 @@ ProgramDescriptor IndexedFillProgramFactory::create_descriptor(
             const uint32_t local_b = active ? b : 0;
             const uint32_t local_batch_size = active ? batch_size_in_pages : 0;
 
-            reader_desc.emplace_runtime_args(
+            AddRuntimeArgsForNode(
+                reader_run.runtime_arg_values,
                 core,
-                {batch_ids_buffer,
-                 local_b,
-                 input_a_buffer,
-                 input_b_buffer,
-                 local_batch_size,
-                 i,
-                 0u,    // batch_offset_a (unused in native mode)
-                 0u});  // total_local_batches (unused in native mode)
-            writer_desc.emplace_runtime_args(core, {local_batch_size});
+                {{"batch_id_size", local_b},
+                 {"batch_size_in_pages", local_batch_size},
+                 {"my_batch_id", i},
+                 {"outer_count", 0u},
+                 {"outer_stride_a", 0u},
+                 {"outer_stride_b", 0u},
+                 {"num_slices", 0u},
+                 {"batch_offset_a", 0u},  // unused in native mode
+                 {"total_local_batches", 0u},
+                 {"b_full_ppb", 0u},
+                 {"shard_tile_w", 0u},
+                 {"full_tile_w", 0u},
+                 {"col_page_offset", 0u},
+                 {"col_byte_offset", 0u}});
+            AddRuntimeArgsForNode(writer_run.runtime_arg_values, core, {{"batch_size_in_pages", local_batch_size}});
 
         } else if (is_shard_local) {
             // Shard row/col for BLOCK_SHARDED: indices within the shard grid bounding box.
             const uint32_t shard_row = (shard_n_x > 0) ? (i / shard_n_x) : 0;
             const uint32_t cx = (shard_n_x > 0) ? (i % shard_n_x) : 0;
             const uint32_t batch_offset_a = shard_row * total_batches_per_core;
-            const uint32_t total_pages_in_shard = total_batches_per_core * shard_ppb;
 
-            // Args 8-12: column-offset state for the INTERLEAVED_B read path (precomputed above).
+            // Column-offset state for the INTERLEAVED_B read path (precomputed above).
             const auto& col = col_offsets[cx];
 
-            reader_desc.emplace_runtime_args(
+            AddRuntimeArgsForNode(
+                reader_run.runtime_arg_values,
                 core,
-                {batch_ids_buffer,
-                 b,
-                 input_a_buffer,
-                 input_b_buffer,
-                 shard_ppb,  // batch_size_in_pages == shard_ppb for this path
-                 0u,         // my_batch_id (unused in shard_local mode)
-                 batch_offset_a,
-                 total_batches_per_core,
-                 col.b_full_ppb,
-                 col.shard_tile_w,
-                 col.full_tile_w,
-                 col.col_page_offset,
-                 col.col_byte_offset});
-            writer_desc.emplace_runtime_args(core, {total_pages_in_shard});
+                {{"batch_id_size", b},
+                 {"batch_size_in_pages", shard_ppb},  // batch_size_in_pages == shard_ppb for this path
+                 {"my_batch_id", 0u},                 // unused in shard_local mode
+                 {"outer_count", 0u},
+                 {"outer_stride_a", 0u},
+                 {"outer_stride_b", 0u},
+                 {"num_slices", 0u},
+                 {"batch_offset_a", batch_offset_a},
+                 {"total_local_batches", total_batches_per_core},
+                 {"b_full_ppb", col.b_full_ppb},
+                 {"shard_tile_w", col.shard_tile_w},
+                 {"full_tile_w", col.full_tile_w},
+                 {"col_page_offset", col.col_page_offset},
+                 {"col_byte_offset", col.col_byte_offset}});
+            AddRuntimeArgsForNode(writer_run.runtime_arg_values, core, {{"batch_size_in_pages", total_pages_in_shard}});
 
         } else {
             // Generic 2D-stride path: each core handles a contiguous range of slices.
@@ -413,34 +479,45 @@ ProgramDescriptor IndexedFillProgramFactory::create_descriptor(
                 num_slices = 0;
             }
 
-            reader_desc.emplace_runtime_args(
+            AddRuntimeArgsForNode(
+                reader_run.runtime_arg_values,
                 core,
-                {batch_ids_buffer,
-                 b,  // arg[1] = b (kernel exits early when num_slices == 0)
-                 input_a_buffer,
-                 input_b_buffer,
-                 inner_count,     // arg[4] = inner_count
-                 slice_start,     // arg[5] = slice_start (first slice for this core)
-                 outer_count,     // arg[6] = outer_count
-                 outer_stride_a,  // arg[7]
-                 outer_stride_b,  // arg[8]
-                 num_slices});    // arg[9] = num_slices
-            writer_desc.emplace_runtime_args(
+                {{"batch_id_size", b},  // kernel exits early when num_slices == 0
+                 {"batch_size_in_pages", inner_count},
+                 {"my_batch_id", slice_start},  // reader reads slice_start via my_batch_id
+                 {"outer_count", outer_count},
+                 {"outer_stride_a", outer_stride_a},
+                 {"outer_stride_b", outer_stride_b},
+                 {"num_slices", num_slices},
+                 {"batch_offset_a", 0u},
+                 {"total_local_batches", 0u},
+                 {"b_full_ppb", 0u},
+                 {"shard_tile_w", 0u},
+                 {"full_tile_w", 0u},
+                 {"col_page_offset", 0u},
+                 {"col_byte_offset", 0u}});
+            AddRuntimeArgsForNode(
+                writer_run.runtime_arg_values,
                 core,
-                {output_buffer,
-                 kernel_page_size,
-                 outer_count,     // arg[2]
-                 inner_count,     // arg[3]
-                 outer_stride_a,  // arg[4] = outer stride in output
-                 slice_start,     // arg[5] = slice_start (first slice for this core)
-                 num_slices});    // arg[6]
+                {{"page_size", kernel_page_size},
+                 {"outer_count", outer_count},
+                 {"inner_count", inner_count},
+                 {"outer_stride", outer_stride_a},  // outer stride in output
+                 {"slice_start", slice_start},
+                 {"num_slices", num_slices}});
         }
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    run_args.kernel_run_args.push_back(std::move(reader_run));
+    run_args.kernel_run_args.push_back(std::move(writer_run));
 
-    return desc;
+    // Tensor arguments: reference the same MeshTensors the parameters were declared from.
+    run_args.tensor_args.emplace(IF_BATCH_IDS, TensorArgument{batch_ids.mesh_tensor()});
+    run_args.tensor_args.emplace(IF_INPUT_A, TensorArgument{input_a.mesh_tensor()});
+    run_args.tensor_args.emplace(IF_INPUT_B, TensorArgument{input_b.mesh_tensor()});
+    run_args.tensor_args.emplace(IF_OUTPUT, TensorArgument{output.mesh_tensor()});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim
