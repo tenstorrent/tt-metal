@@ -12,14 +12,14 @@
 namespace tt {
 
 struct core_descriptor_t {
-    CoreCoord compute_grid_size;
+    tt::tt_metal::CoreCoord compute_grid_size;
     std::vector<tt_metal::RelativeCoreCoord> relative_compute_cores;
     std::vector<tt_metal::RelativeCoreCoord> relative_dispatch_cores;
     std::vector<tt_metal::RelativeCoreCoord> relative_fabric_mux_cores;
 
-    std::vector<CoreCoord> logical_compute_cores;
-    std::vector<CoreCoord> logical_dispatch_cores;
-    std::vector<CoreCoord> logical_fabric_mux_cores;
+    std::vector<tt::tt_metal::CoreCoord> logical_compute_cores;
+    std::vector<tt::tt_metal::CoreCoord> logical_dispatch_cores;
+    std::vector<tt::tt_metal::CoreCoord> logical_fabric_mux_cores;
 };
 
 }  // namespace tt
