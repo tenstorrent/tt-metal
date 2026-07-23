@@ -33,6 +33,7 @@ _REPORT_DIR = os.path.join(os.environ.get("TT_METAL_HOME", os.getcwd()), "genera
 
 _RUNNER_MODULE = "models.demos.common.prefill.runners.prefill_runner"
 _PRODUCER_MODULE = "models.demos.common.prefill.runners.prefill_producer"
+_GEN_TRACE_MODULE = "models.demos.deepseek_v3_d_p.tt.runners.generate_prompt_trace"
 
 _READY_TIMEOUT_S = int(os.environ.get("PREFILL_CI_RUNNER_READY_TIMEOUT_S", "1200"))  # 20 min for load + JIT
 _PRODUCER_TIMEOUT_S = int(os.environ.get("PREFILL_CI_PRODUCER_TIMEOUT_S", "900"))
@@ -80,6 +81,19 @@ SCENARIOS = {
         },
     },
 }
+
+# Opt-in prompt-driven scenario: instead of a recorded golden trace, generate the reference KV from a
+# user prompt on the host (device-less pre-step) and validate device KV against it. Enabled by pointing
+# PREFILL_PROMPT_FILE at a prompt JSON. One chunk deep (host torch reference is O(seq^2), so full-depth
+# is infeasible here) — this is the correctness gate for arbitrary prompts, not a depth/breadth stress.
+_PROMPT_FILE = os.environ.get("PREFILL_PROMPT_FILE")
+if _PROMPT_FILE:
+    SCENARIOS["prompt_single_user"] = {
+        "users": 1,
+        "max_seq_len": CHUNK_SIZE,
+        "producer": {"PREFILL_PRODUCER_CHUNKS": "1", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
+        "prompt_file": _PROMPT_FILE,
+    }
 
 
 def _transport_env(num_users: int, max_seq_len: int, **extra) -> dict:
@@ -130,13 +144,13 @@ def _emit_log_group(title: str, path: str, n: int = _LOG_TAIL_LINES) -> None:
 
 
 @contextlib.contextmanager
-def _running_runner(tag: str, num_users: int, max_seq_len: int):
+def _running_runner(tag: str, num_users: int, max_seq_len: int, **extra):
     """Spin up ONE runner (mock-migration, request mode) for a scenario and tear it down. Yields once
     it has published the H2D descriptor + KV table + device map (i.e. it is serving)."""
     os.makedirs(_REPORT_DIR, exist_ok=True)
     log_path = os.path.join(_REPORT_DIR, f"ci_runner_{tag}.log")
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
-    env = _transport_env(num_users, max_seq_len, PREFILL_MOCK_MIGRATION="1")
+    env = _transport_env(num_users, max_seq_len, PREFILL_MOCK_MIGRATION="1", **extra)
     with open(log_path, "w") as log:
         proc = subprocess.Popen([sys.executable, "-m", _RUNNER_MODULE], env=env, stdout=log, stderr=subprocess.STDOUT)
     try:
@@ -162,14 +176,51 @@ def _running_runner(tag: str, num_users: int, max_seq_len: int):
         _cleanup_ipc()
 
 
+def _generate_prompt_trace(out_dir: str, isl: int, prompt_file: str) -> None:
+    """Host-only pre-step: build a reference-KV trace dir from a prompt (no device). Raises with the
+    generator's output on failure so a bad reference is not silently mistaken for a device PCC failure."""
+    os.makedirs(_REPORT_DIR, exist_ok=True)
+    log_path = os.path.join(_REPORT_DIR, "ci_gen_trace.log")
+    with open(log_path, "w") as log:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                _GEN_TRACE_MODULE,
+                "--prompt-file",
+                prompt_file,
+                "--isl",
+                str(isl),
+                "--num-layers",
+                str(NUM_LAYERS),
+                "--out",
+                out_dir,
+            ],
+            env=dict(os.environ),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            timeout=_PRODUCER_TIMEOUT_S,
+        )
+    _emit_log_group("reference trace generation", log_path)
+    if result.returncode != 0:
+        raise RuntimeError(f"reference trace generation failed (rc={result.returncode}):\n{_tail(log_path)}")
+
+
 @pytest.mark.parametrize("scenario", list(SCENARIOS))
-def test_producer_runner_pcc(scenario):
+def test_producer_runner_pcc(scenario, tmp_path):
     """Spin up a fresh runner for the scenario, drive it with the producer, and require the per-slot
     KV PCC gate to pass (the producer exits non-zero if any resident slot is below threshold)."""
     sc = SCENARIOS[scenario]
     prod_log = os.path.join(_REPORT_DIR, f"ci_producer_{scenario}.log")
-    with _running_runner(scenario, sc["users"], sc["max_seq_len"]) as runner_log:
-        env = _transport_env(sc["users"], sc["max_seq_len"], PREFILL_PRODUCER_CHECK_PCC="1", **sc["producer"])
+    trace_env = {}
+    if "prompt_file" in sc:
+        trace_dir = str(tmp_path / "prompt_trace")
+        _generate_prompt_trace(trace_dir, sc["max_seq_len"], sc["prompt_file"])
+        trace_env["PREFILL_TRACE_DIR"] = trace_dir
+    with _running_runner(scenario, sc["users"], sc["max_seq_len"], **trace_env) as runner_log:
+        env = _transport_env(
+            sc["users"], sc["max_seq_len"], PREFILL_PRODUCER_CHECK_PCC="1", **trace_env, **sc["producer"]
+        )
         try:
             with open(prod_log, "w") as f:
                 result = subprocess.run(
