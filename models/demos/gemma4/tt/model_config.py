@@ -25,6 +25,44 @@ from transformers import AutoConfig, AutoModelForCausalLM
 import ttnn
 
 
+def _weight_cache_dir_populated(path: Path) -> bool:
+    """True if ``path`` already holds cached tensorbins (non-empty tree)."""
+    try:
+        return path.is_dir() and any(path.iterdir())
+    except OSError:
+        return False
+
+
+def _resolve_mesh_qualified_weight_cache(model_cache_path: Path, dtype_str: str, shape) -> Path:
+    """Mesh-qualified cache dir, with warm legacy fallback for CI.
+
+    Multi-device layouts must not share a single ``tensor_cache_{dtype}`` across
+    different mesh geometries (``as_tensor`` reloads tensorbins as-is). Prefer
+    ``tensor_cache_{dtype}_mesh{RxC}``.
+
+    When that directory is empty but the legacy (unqualified) cache is already
+    populated — typical on CI MLPerf after this path change — reuse legacy so
+    e2e does not cold-rebuild a full 31B under a 10–25 min SKU step timeout.
+    Force the mesh path (and a rebuild) with ``GEMMA4_WEIGHT_CACHE_MESH_ONLY=1``.
+    """
+    legacy = model_cache_path / f"tensor_cache_{dtype_str}"
+    mesh = model_cache_path / (f"tensor_cache_{dtype_str}_mesh" + "x".join(str(d) for d in shape))
+    mesh.mkdir(parents=True, exist_ok=True)
+    mesh_only = os.environ.get("GEMMA4_WEIGHT_CACHE_MESH_ONLY", "0").lower() in ("1", "true", "yes")
+    if mesh_only or _weight_cache_dir_populated(mesh):
+        return mesh
+    if _weight_cache_dir_populated(legacy):
+        logger.warning(
+            "Gemma4 weight cache: mesh-qualified dir {} is empty; reusing legacy {}. "
+            "Set GEMMA4_WEIGHT_CACHE_MESH_ONLY=1 to rebuild into the mesh path "
+            "(required if legacy was built for a different MeshShape).",
+            mesh,
+            legacy,
+        )
+        return legacy
+    return mesh
+
+
 @dataclass
 class Gemma4ModelArgs:
     """Gemma4 model arguments parsed from HuggingFace config.
@@ -240,15 +278,15 @@ class Gemma4ModelArgs:
         Multi-device layouts are qualified by mesh geometry. ``ttnn.as_tensor``
         reloads tensorbins as-is and ignores ``mesh_mapper``, so a TP=4 cache
         built on ``MeshShape([2,4])`` must not be reused on ``[1,4]`` (QB2).
+        See ``_resolve_mesh_qualified_weight_cache`` for CI legacy fallback.
         """
         if self.model_cache_path is None:
             raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
-        suffix = f"tensor_cache_{dtype_str}"
         shape = mesh_shape if mesh_shape is not None else getattr(self, "cluster_shape", None)
         if shape is not None and shape[0] * shape[1] > 1:
-            suffix += "_mesh" + "x".join(str(d) for d in shape)
-        cache_path = self.model_cache_path / suffix
+            return _resolve_mesh_qualified_weight_cache(self.model_cache_path, dtype_str, shape)
+        cache_path = self.model_cache_path / f"tensor_cache_{dtype_str}"
         cache_path.mkdir(parents=True, exist_ok=True)
         return cache_path
 
@@ -310,10 +348,25 @@ class Gemma4AssistantArgs:
         if self.model_cache_path is None:
             raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
-        suffix = f"assistant_tensor_cache_{dtype_str}"
         shape = mesh_shape if mesh_shape is not None else getattr(self, "cluster_shape", None)
+        # Assistant caches use a distinct prefix; mirror target mesh qualification.
         if shape is not None and shape[0] * shape[1] > 1:
-            suffix += "_mesh" + "x".join(str(d) for d in shape)
-        cache_path = self.model_cache_path / suffix
+            legacy = self.model_cache_path / f"assistant_tensor_cache_{dtype_str}"
+            mesh = self.model_cache_path / (
+                f"assistant_tensor_cache_{dtype_str}_mesh" + "x".join(str(d) for d in shape)
+            )
+            mesh.mkdir(parents=True, exist_ok=True)
+            mesh_only = os.environ.get("GEMMA4_WEIGHT_CACHE_MESH_ONLY", "0").lower() in ("1", "true", "yes")
+            if mesh_only or _weight_cache_dir_populated(mesh):
+                return mesh
+            if _weight_cache_dir_populated(legacy):
+                logger.warning(
+                    "Gemma4 assistant weight cache: reusing legacy {} (mesh path {} empty).",
+                    legacy,
+                    mesh,
+                )
+                return legacy
+            return mesh
+        cache_path = self.model_cache_path / f"assistant_tensor_cache_{dtype_str}"
         cache_path.mkdir(parents=True, exist_ok=True)
         return cache_path
