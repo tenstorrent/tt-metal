@@ -2394,6 +2394,10 @@ bool topology_sat_search_n(
         topology_sat_add_shape_clause_or_unsat(solver, enc, forbid_clause);
     }
 
+    // Drive the solve heartbeat's "progress to first solution" / enumeration counters (see TopologySatSolver).
+    solver.set_solution_progress(0, static_cast<std::int64_t>(max_solutions));
+    solver.set_progress_phase("enumerate");
+
     // Minimal-host occupancy objective (same strategy as the single solve): PRIME the solver with the warm descent
     // + full-packing lock and make the achieved cap PERMANENT (unit clause), so every enumerated solution occupies
     // the minimal host count -- not just the first. The primed model is the first solution; the loop below finds
@@ -2417,6 +2421,7 @@ bool topology_sat_search_n(
         std::vector<int> first_mapping;
         size_t best_k = 0;
         bool hard_cap_met = false;
+        solver.set_progress_phase("descent");  // minimal-host warm descent -- the long pre-first-solution phase
         const bool primed = topology_sat_solve_minimize_groups(
             solver,
             enc,
@@ -2431,6 +2436,9 @@ bool topology_sat_search_n(
             /*make_cap_permanent=*/true);
         if (primed && !first_mapping.empty()) {
             all_mappings_out.push_back(first_mapping);
+            solver.set_progress_phase("enumerate");
+            solver.set_solution_progress(
+                static_cast<std::int64_t>(all_mappings_out.size()), static_cast<std::int64_t>(max_solutions));
             if (!quiet_mode) {
                 log_info(
                     tt::LogFabric,
@@ -2478,6 +2486,8 @@ bool topology_sat_search_n(
             break;
         }
         all_mappings_out.push_back(std::move(current_mapping));
+        solver.set_solution_progress(
+            static_cast<std::int64_t>(all_mappings_out.size()), static_cast<std::int64_t>(max_solutions));
 
         // Progress: emit in non-quiet mode, and ALSO whenever profiling is on (so a long quiet enumeration -- e.g.
         // map_multi_mesh_to_physical_n runs quiet -- still gives a live per-solution count under TT_TOPO_SAT_PROFILE).

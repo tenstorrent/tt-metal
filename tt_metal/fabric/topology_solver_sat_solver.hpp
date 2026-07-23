@@ -5,7 +5,9 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -50,6 +52,12 @@ struct TopologySatSolver {
     // The limit is cleared afterwards so subsequent solve() calls are unbounded.
     int solve_limited(int max_conflicts);
     int val(int lit) const;
+
+    // Progress annotations surfaced in the 15s solve heartbeat (see topology_solver_sat_solver.cpp). Optional and
+    // side-effect-free w.r.t. the search; callers driving a multi-solution enumeration set these so the heartbeat can
+    // report "seeking 1st solution" vs "N/target solutions" and a coarse stage tag. Persist across solve() calls.
+    void set_progress_phase(std::string_view phase);
+    void set_solution_progress(std::int64_t found, std::int64_t target);
 
     /**
      * Must be called immediately after construction, before any add() / encoding.

@@ -3,20 +3,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a command across every solution produced by ``generate_rank_bindings --all-solutions``.
+"""Async, interleaved generate-and-sweep across every topology solution.
 
-This is a thin orchestrator on top of ``tt-run``: it accepts the **same arguments as
-``tt-run``** (so a working ``tt-run`` invocation ports over directly) plus a few sweep-specific
-extras, then:
+It's ``tt-run``, but across every valid placement of one MGD + host set:
 
-  1. (new mode) runs ``generate_rank_bindings --all-solutions`` to enumerate every valid
-     placement into ``<solutions-output-dir>/`` -- OR consumes an existing solutions directory
-     via ``--solutions-dir``;
-  2. for **each** solution, launches the trailing ``<program>`` via ``tt-run`` legacy mode bound
-     to that solution's ``rank_bindings.yaml`` (+ ``rankfile`` / ``phase2_mock_mapping.yaml``);
-  3. records per-solution pass/fail into ``sweep_report.yaml`` and returns non-zero if any failed.
+  1. launches ``generate_rank_bindings --all-solutions`` ONCE in the background (it streams each
+     solution to disk + rewrites ``solutions_index.yaml`` as it finds them);
+  2. the moment a solution is ready, runs your workload on it via ``tt-run`` -- ONE workload at a
+     time, while generation races ahead producing the next ones;
+  3. writes a self-contained folder per solution (rank bindings + ``run.sh`` reproducer +
+     ``workload.log`` + ``result.yaml``) and an aggregate ``sweep/sweep_report.yaml``.
 
-See tools/scaleout/README_sweep_rank_binding_solutions.md for the design.
+Exactly one producer (generation) + one consumer (workload). See
+tools/scaleout/README_sweep_rank_binding_solutions.md for the full design.
 """
 
 import os
@@ -25,8 +24,9 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import click
 import yaml
@@ -37,10 +37,14 @@ from ttnn.distributed.ttrun import (
     find_generate_rank_bindings_executable,
     get_generate_rank_bindings_output_paths,
     load_mock_rank_to_descriptors,
-    run_generate_rank_bindings,
 )
 
 PREFIX = "[tt-sweep]"
+POLL_INTERVAL_S = 1.0  # how often the consumer re-reads the index / polls the running workload
+HEARTBEAT_INTERVAL_S = 15.0  # periodic status while waiting on the producer or a long-running workload
+
+
+# ─────────────────────────────── reused helpers (from v1) ────────────────────────────────
 
 
 def _repo_root() -> Path:
@@ -48,12 +52,10 @@ def _repo_root() -> Path:
 
 
 def _find_tt_run() -> str:
-    """Locate the tt-run entrypoint (installed console script, or run the module directly)."""
+    """Locate the tt-run entrypoint (installed console script, or venv-adjacent script)."""
     exe = shutil.which("tt-run")
     if exe:
         return exe
-    # Fall back to `python -m ttnn.distributed.ttrun` semantics is not available (no __main__),
-    # so use the venv-adjacent script if present.
     candidate = Path(sys.executable).parent / "tt-run"
     if candidate.exists():
         return str(candidate)
@@ -61,12 +63,7 @@ def _find_tt_run() -> str:
 
 
 def _inject_solution_flags(cmd: List[str], extra: List[str]) -> List[str]:
-    """Insert generate_rank_bindings sweep flags after every ``--output-dir <value>``.
-
-    ``build_generate_rank_bindings_mpi_cmd`` emits ``--mesh-graph-descriptor``/``--output-dir`` once
-    (real cluster) or once per MPMD rank segment (mock). Inserting after each ``--output-dir`` value
-    puts the flags in the right place for both layouts.
-    """
+    """Insert generate_rank_bindings sweep flags after every ``--output-dir <value>`` (real + mock layouts)."""
     out: List[str] = []
     i = 0
     while i < len(cmd):
@@ -80,75 +77,6 @@ def _inject_solution_flags(cmd: List[str], extra: List[str]) -> List[str]:
     return out
 
 
-def _generate_solutions(
-    *,
-    mesh_graph_descriptor: Path,
-    hosts: Optional[List[str]],
-    mock_cluster_rank_binding: Optional[Path],
-    output_dir: Path,
-    max_solutions: int,
-    distinct_host_sets: bool,
-    allow_shape_permutations: bool,
-    mpi_args: Optional[List[str]],
-    dry_run: bool,
-) -> Path:
-    """Phase 1: run generate_rank_bindings --all-solutions. Returns the solutions dir."""
-    executable = find_generate_rank_bindings_executable()
-    repo_root = _repo_root()
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    mock_rank_to_desc: Optional[Dict[int, Path]] = None
-    if mock_cluster_rank_binding is not None:
-        mock_rank_to_desc = load_mock_rank_to_descriptors(mock_cluster_rank_binding.resolve())
-
-    cmd = build_generate_rank_bindings_mpi_cmd(
-        executable=executable,
-        mgd_path=mesh_graph_descriptor,
-        hosts=hosts,
-        output_dir=output_dir,
-        mock_rank_to_desc=mock_rank_to_desc,
-        mpi_args=mpi_args,
-    )
-
-    extra = ["--all-solutions"]
-    if max_solutions:
-        extra += ["--max-solutions", str(max_solutions)]
-    if distinct_host_sets:
-        extra += ["--distinct-host-sets"]
-    if allow_shape_permutations:
-        # hidden: turn OFF generate_rank_bindings' always-on solver unique_shapes dedup
-        extra += ["--allow-shape-permutations"]
-    cmd = _inject_solution_flags(cmd, extra)
-
-    click.echo(f"{PREFIX} Phase 1 (generate solutions):\n  {' '.join(shlex.quote(c) for c in cmd)}")
-    if dry_run:
-        click.echo(f"{PREFIX} --dry-run: skipping Phase 1 execution.")
-        return output_dir
-
-    rc = run_generate_rank_bindings(cmd, cwd=repo_root)
-    if rc != 0:
-        raise click.ClickException(f"generate_rank_bindings failed (exit {rc}).")
-    return output_dir
-
-
-def _load_index(solutions_dir: Path) -> dict:
-    index_path = solutions_dir / "solutions_index.yaml"
-    if not index_path.is_file():
-        raise click.ClickException(f"No solutions_index.yaml under {solutions_dir}. Run with --all-solutions first.")
-    with open(index_path) as f:
-        return yaml.safe_load(f)
-
-
-def _select_solutions(index: dict, select: Optional[str], limit: Optional[int]) -> List[dict]:
-    solutions = list(index.get("solutions", []))
-    if select:
-        wanted = {s.strip() for s in select.split(",") if s.strip()}
-        solutions = [s for s in solutions if s.get("id") in wanted]
-    if limit is not None:
-        solutions = solutions[:limit]
-    return solutions
-
-
 def _build_tt_run_cmd(
     *,
     tt_run: str,
@@ -159,7 +87,7 @@ def _build_tt_run_cmd(
     mpi_args: Optional[List[str]],
     passthrough: List[str],
 ) -> List[str]:
-    """Build the per-solution ``tt-run`` legacy invocation for one solution."""
+    """Build the per-solution ``tt-run`` legacy invocation, with ABSOLUTE paths to this solution's artifacts."""
     sol_dir = solutions_dir / sol["dir"]
     rank_bindings, rankfile = get_generate_rank_bindings_output_paths(sol_dir)
 
@@ -182,23 +110,425 @@ def _build_tt_run_cmd(
     return cmd
 
 
+# ─────────────────────────────── v2: producer (generation) ───────────────────────────────
+
+
+def _build_generate_cmd(
+    *,
+    mesh_graph_descriptor: Path,
+    hosts: Optional[List[str]],
+    mock_cluster_rank_binding: Optional[Path],
+    output_dir: Path,
+    max_solutions: int,
+    distinct_host_sets: bool,
+    allow_shape_permutations: bool,
+    mpi_args: Optional[List[str]],
+) -> List[str]:
+    """Build the background ``generate_rank_bindings --all-solutions`` command (producer)."""
+    executable = find_generate_rank_bindings_executable()
+    mock_rank_to_desc: Optional[Dict[int, Path]] = None
+    if mock_cluster_rank_binding is not None:
+        mock_rank_to_desc = load_mock_rank_to_descriptors(mock_cluster_rank_binding.resolve())
+
+    cmd = build_generate_rank_bindings_mpi_cmd(
+        executable=executable,
+        mgd_path=mesh_graph_descriptor,
+        hosts=hosts,
+        output_dir=output_dir,
+        mock_rank_to_desc=mock_rank_to_desc,
+        mpi_args=mpi_args,
+    )
+    extra = ["--all-solutions"]
+    if max_solutions:
+        extra += ["--max-solutions", str(max_solutions)]
+    if distinct_host_sets:
+        extra += ["--distinct-host-sets"]
+    if allow_shape_permutations:
+        extra += ["--allow-shape-permutations"]  # hidden: turn OFF the always-on solver unique_shapes dedup
+    return _inject_solution_flags(cmd, extra)
+
+
+def _start_producer(cmd: List[str], cwd: Path, log_path: Path) -> subprocess.Popen:
+    """Launch generation in the background; its stdout+stderr stream to generate.log."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = open(log_path, "w")
+    return subprocess.Popen(cmd, cwd=cwd, stdout=log_fh, stderr=subprocess.STDOUT)
+
+
+# ─────────────────────────────── v2: index (the handoff) ─────────────────────────────────
+
+
+def _read_index(index_path: Path) -> Optional[dict]:
+    """Read solutions_index.yaml DEFENSIVELY: the producer rewrites it in place, so a mid-rewrite read may
+    fail to parse -- return None then and let the caller retry on the next tick."""
+    if not index_path.is_file():
+        return None
+    try:
+        with open(index_path) as f:
+            data = yaml.safe_load(f)
+        return data if isinstance(data, dict) else None
+    except (yaml.YAMLError, OSError):
+        return None
+
+
+# ─────────────────────────────── v2: run.sh + workload ───────────────────────────────────
+
+
+def _env_snapshot() -> Dict[str, str]:
+    """Curated env allowlist to bake into each run.sh so a later re-run matches the sweep's environment."""
+    keep_exact = {"TT_METAL_HOME", "ARCH_NAME", "LD_LIBRARY_PATH", "PYTHONPATH", "PATH"}
+    snap: Dict[str, str] = {}
+    for k, v in os.environ.items():
+        if k in keep_exact or k.startswith("TT_"):
+            snap[k] = v
+    return snap
+
+
+def _write_run_sh(sol_dir: Path, tt_run_cmd: List[str], env: Dict[str, str], solution_id: str) -> Path:
+    """Write the self-contained reproducer AND the actual launcher for one solution."""
+    run_sh = sol_dir / "run.sh"
+    lines = [
+        "#!/usr/bin/env bash",
+        f"# Reproduce the sweep run for solution {solution_id} exactly. Generated by sweep_rank_binding_solutions.py.",
+        "set -euo pipefail",
+        "",
+        "# --- Environment captured at sweep time ---",
+    ]
+    for k in sorted(env):
+        lines.append(f"export {k}={shlex.quote(env[k])}")
+    if "TT_METAL_HOME" in env:
+        lines += ["", 'cd "$TT_METAL_HOME"']
+    lines += [
+        "",
+        "# --- Exact tt-run launch (absolute paths to THIS solution's artifacts) ---",
+        "exec " + " ".join(shlex.quote(c) for c in tt_run_cmd),
+        "",
+    ]
+    run_sh.write_text("\n".join(lines))
+    run_sh.chmod(0o755)
+    return run_sh
+
+
+def _as_host_list(value) -> List[str]:
+    """Normalize a solution's ``host_set`` to a list of host strings.
+
+    The generate_rank_bindings solutions index serializes ``host_set`` as a single comma-joined scalar, so PyYAML hands
+    it back as a ``str``. Iterating/joining that directly would split it character-by-character; coerce to a real list
+    here (accepting an already-list form too, for forward-compat)."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [h for h in (p.strip() for p in value.split(",")) if h]
+    return [str(h) for h in value]
+
+
+def _workload_banner(sol: dict, sol_dir: Path, run_sh: Path, tt_run_cmd: List[str]) -> str:
+    hosts = sol.get("host_set") or []
+    sid = sol.get("id", sol["dir"])
+    return "\n".join(
+        [
+            f"# ===== tt-sweep solution {sid} =====",
+            f"# hosts ({sol.get('num_hosts', len(hosts))}): {' '.join(hosts)}",
+            f"# rank_bindings: {(sol_dir / 'rank_bindings.yaml').resolve()}",
+            f"# rankfile:      {(sol_dir / 'rankfile').resolve()}",
+            f"# reproduce:     bash {run_sh.resolve()}",
+            f"# command:       {' '.join(shlex.quote(c) for c in tt_run_cmd)}",
+            f"# started:       {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "# " + "=" * 46,
+            "",
+        ]
+    )
+
+
+# ─────────────────────────────── v2: report ──────────────────────────────────────────────
+
+
+def _write_report(report_path: Path, meta: dict, results: List[dict], truncated: bool) -> None:
+    """Rewrite the aggregate sweep_report.yaml (index order) after every completed workload."""
+    passed = sum(r["status"] == "pass" for r in results)
+    failed = sum(r["status"] == "fail" for r in results)
+    timed_out = sum(r["status"] == "timeout" for r in results)
+    report = {
+        **meta,
+        "summary": {
+            "total": len(results),
+            "passed": passed,
+            "failed": failed,
+            "timed_out": timed_out,
+            "truncated": truncated,
+        },
+        "results": results,
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(report_path, "w") as f:
+        yaml.safe_dump(report, f, sort_keys=False, default_flow_style=False, width=float("inf"))
+
+
+# ─────────────────────────────── v2: interleaved orchestrator ────────────────────────────
+
+
+def _sweep_interleaved(
+    *,
+    producer: subprocess.Popen,
+    solutions_dir: Path,
+    tt_run: str,
+    program: List[str],
+    mock: bool,
+    parsed_mpi_args: Optional[List[str]],
+    passthrough: List[str],
+    limit: Optional[int],
+    stop_on_failure: bool,
+    per_solution_timeout: Optional[int],
+    interleave: bool,
+    dry_run: bool,
+    report_meta: dict,
+    report_path: Path,
+) -> List[dict]:
+    """The single control loop: one producer + one consumer, coordinated through solutions_index.yaml."""
+    index_path = solutions_dir / "solutions_index.yaml"
+    env = _env_snapshot()
+
+    order: List[str] = []  # solution ids in index order (report order)
+    sols: Dict[str, dict] = {}  # id -> index entry
+    queue: List[str] = []  # ids waiting to launch (index order)
+    dispatched = set()  # ids launched (or dry-run written)
+    results: Dict[str, dict] = {}  # id -> result dict
+    running: Optional[dict] = None  # currently-running workload
+    stop = False
+    t0 = time.time()
+    last_heartbeat = t0
+
+    def rel() -> str:
+        return f"+{int(time.time() - t0):03d}s"
+
+    def producer_alive() -> bool:
+        return producer.poll() is None
+
+    def echo(stream: str, msg: str) -> None:
+        click.echo(f"{PREFIX}[{stream} {rel()}] {msg}")
+
+    def flush_report(trunc: bool) -> None:
+        _write_report(report_path, report_meta, [results[i] for i in order if i in results], trunc)
+
+    def ingest_index() -> None:
+        idx = _read_index(index_path)
+        if not idx:
+            return
+        for sol in idx.get("solutions", []):
+            sid = sol.get("id") or sol.get("dir")
+            if not sid or sid in sols:
+                continue
+            if limit is not None and len(order) >= limit:
+                break
+            sol["host_set"] = _as_host_list(sol.get("host_set"))  # index stores it comma-joined; make it a real list
+            sols[sid] = sol
+            order.append(sid)
+            queue.append(sid)
+            hs = sol.get("host_set") or []
+            preview = ",".join(hs[:6]) + (f" …(+{len(hs) - 6})" if len(hs) > 6 else "")
+            echo(
+                "gen",
+                f"found #{len(order)}  {sid}  hosts={sol.get('num_hosts', len(hs))}"
+                + (f"   [{preview}]" if hs else "")
+                + f"   (found {len(order)}, tested {len(results)}, queued {len(queue)})",
+            )
+
+    def launch_next() -> None:
+        nonlocal running
+        sid = queue.pop(0)
+        sol = sols[sid]
+        sol_dir = solutions_dir / sol["dir"]
+        cmd = _build_tt_run_cmd(
+            tt_run=tt_run,
+            solutions_dir=solutions_dir,
+            sol=sol,
+            program=program,
+            mock=mock,
+            mpi_args=parsed_mpi_args,
+            passthrough=passthrough,
+        )
+        run_sh = _write_run_sh(sol_dir, cmd, env, sid)
+        log_path = sol_dir / "workload.log"
+        dispatched.add(sid)
+
+        if dry_run:
+            echo("run", f"DRY-RUN #{order.index(sid) + 1}  {sid}  → wrote {run_sh}")
+            _record(sid, sol, "dry-run", None, 0.0, run_sh, log_path, cmd, None, None)
+            return
+
+        log_fh = open(log_path, "w")
+        log_fh.write(_workload_banner(sol, sol_dir, run_sh, cmd))
+        log_fh.flush()
+        proc = subprocess.Popen(["bash", str(run_sh)], cwd=_repo_root(), stdout=log_fh, stderr=subprocess.STDOUT)
+        running = {
+            "id": sid,
+            "sol": sol,
+            "proc": proc,
+            "log_fh": log_fh,
+            "log_path": log_path,
+            "run_sh": run_sh,
+            "cmd": cmd,
+            "start": time.time(),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+        echo(
+            "run",
+            f"▶ START #{order.index(sid) + 1}  {sid}  ({sol.get('num_hosts', '?')} hosts)"
+            f"  dir={sol['dir']}  started={running['started_at']}",
+        )
+        echo("run", f"           log {log_path}")
+
+    def _record(sid, sol, status, rc, dur, run_sh, log_path, cmd, started_at, finished_at) -> None:
+        hs = sol.get("host_set") or []
+        results[sid] = {
+            "solution_id": sid,
+            "status": status,  # pass | fail | timeout | dry-run
+            "returncode": rc,
+            "duration_seconds": round(dur, 1),
+            "num_hosts": sol.get("num_hosts", len(hs)),
+            "host_set": hs,
+            "run_script": str(run_sh.resolve()),
+            "log_path": str(log_path.resolve()),
+            "rank_binding_path": str((solutions_dir / sol["dir"] / "rank_bindings.yaml").resolve()),
+            "started_at": started_at,
+            "finished_at": finished_at,
+        }
+        flush_report(trunc=(limit is not None and len(order) >= limit))
+
+    def poll_running() -> None:
+        nonlocal running, stop
+        if running is None:
+            return
+        proc = running["proc"]
+        rc = proc.poll()
+        timed_out = (
+            per_solution_timeout is not None and time.time() - running["start"] > per_solution_timeout and rc is None
+        )
+        if timed_out:
+            proc.kill()
+            proc.wait()
+            rc, status = None, "timeout"
+        elif rc is None:
+            return  # still running
+        else:
+            status = "pass" if rc == 0 else "fail"
+        dur = time.time() - running["start"]
+        running["log_fh"].close()
+        sid = running["id"]
+        _record(
+            sid,
+            running["sol"],
+            status,
+            rc,
+            dur,
+            running["run_sh"],
+            running["log_path"],
+            running["cmd"],
+            running["started_at"],
+            datetime.now(timezone.utc).isoformat(),
+        )
+        mark = {"pass": "✔ END PASS", "fail": "✘ END FAIL", "timeout": "⏱ END TIMEOUT"}[status]
+        line = (
+            f"{mark}  #{order.index(sid) + 1}  {sid}   rc={rc}   {dur:.1f}s"
+            f"   finished={datetime.now(timezone.utc).isoformat()}"
+        )
+        if status != "pass":
+            line += f"   → {running['log_path']} ; reproduce: bash {running['run_sh']}"
+        echo("run", line)
+        running = None
+        if status != "pass" and stop_on_failure:
+            echo("run", f"--stop-on-failure: halting after {sid}; terminating producer.")
+            stop = True
+
+    def maybe_heartbeat() -> None:
+        nonlocal last_heartbeat
+        now = time.time()
+        if now - last_heartbeat < HEARTBEAT_INTERVAL_S:
+            return
+        last_heartbeat = now
+        if running is not None:
+            elapsed = now - running["start"]
+            echo(
+                "run",
+                f"… still running #{order.index(running['id']) + 1}  {running['id']}"
+                f"   {elapsed:.0f}s elapsed   log={running['log_path']}",
+            )
+            return
+        if producer_alive():
+            if order:
+                echo(
+                    "gen",
+                    f"waiting for next solution   (found {len(order)}, tested {len(results)},"
+                    f" queued {len(queue)}, producer running)",
+                )
+            else:
+                echo(
+                    "gen",
+                    "waiting for first solution from producer" f"   (see {solutions_dir / 'sweep' / 'generate.log'})",
+                )
+        elif not order:
+            echo("gen", "producer exited before any solution appeared in solutions_index.yaml")
+
+    # ── main loop ───────────────────────────────────────────────────────────────────────
+    while True:
+        ingest_index()
+        if stop:
+            break
+        # launch when idle; in --no-interleave, hold until the producer has fully finished
+        if running is None and queue and (interleave or not producer_alive()):
+            launch_next()
+        poll_running()
+        maybe_heartbeat()
+        # terminate: producer done AND nothing running AND nothing queued (index re-read above caught stragglers)
+        if not producer_alive() and running is None and not queue:
+            break
+        time.sleep(POLL_INTERVAL_S)
+
+    # stop-on-failure (or reaching --limit) ⇒ kill the still-running producer
+    if producer_alive():
+        producer.terminate()
+        try:
+            producer.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            producer.kill()
+    if running is not None:  # stop_on_failure left a workload mid-flight
+        running["proc"].wait()
+        running["log_fh"].close()
+
+    flush_report(trunc=(limit is not None and len(order) >= limit))
+    return [results[i] for i in order if i in results]
+
+
+# ─────────────────────────────── CLI ─────────────────────────────────────────────────────
+
+
 @click.command(
     context_settings=dict(ignore_unknown_options=True, allow_extra_args=True),
-    help="Run <program> across every generate_rank_bindings --all-solutions solution. "
+    help="Run <program> across every generate_rank_bindings --all-solutions solution (async, interleaved). "
     "Accepts the same arguments as tt-run, plus sweep extras.",
 )
-# ---- tt-run compatible options (same names/semantics) ----
-# NOTE: the sweep is new-mode only. tt-run's legacy --rank-binding (a single explicit binding) is
-# intentionally NOT exposed -- a sweep needs an MGD + hosts (or a mock mapping) to enumerate solutions.
-@click.option("--mesh-graph-descriptor", type=click.Path(path_type=Path), default=None,
-              help="(tt-run) MGD to solve; enables generate-then-sweep. Requires --hosts or --mock-cluster-rank-binding.")
-@click.option("--hosts", type=str, default=None,
-              help="(tt-run) Comma-separated hostnames (real cluster).")
-@click.option("--mock-cluster-rank-binding", type=click.Path(path_type=Path), default=None,
-              help="(tt-run) Mock rank->descriptor mapping YAML (mock cluster).")
+# ---- tt-run compatible options (forwarded to each per-solution launch) ----
+@click.option(
+    "--mesh-graph-descriptor",
+    "-m",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="(tt-run) MGD to solve. Required. Requires --hosts or --mock-cluster-rank-binding.",
+)
+@click.option("--hosts", type=str, default=None, help="(tt-run) Comma-separated hostnames (real cluster).")
+@click.option(
+    "--mock-cluster-rank-binding",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="(tt-run) Mock rank->descriptor mapping YAML (mock cluster).",
+)
 @click.option("--mpi-args", default=None, help="(tt-run) Extra MPI args (quoted); forwarded to each launch.")
-@click.option("--rankfile-syntax", type=click.Choice(["auto", "rankfile", "map-by", "mca"]), default="auto",
-              help="(tt-run) Rankfile syntax; forwarded to each launch.")
+@click.option(
+    "--rankfile-syntax",
+    type=click.Choice(["auto", "rankfile", "map-by", "mca"]),
+    default="auto",
+    help="(tt-run) Rankfile syntax; forwarded.",
+)
 @click.option("--tcp-interface", type=str, default=None, help="(tt-run) MPI TCP interface; forwarded.")
 @click.option("--bare", is_flag=True, help="(tt-run) Disable tt-run defaults; forwarded.")
 @click.option("--tracy", "tracy_args", type=str, default=None, help="(tt-run) Tracy profiling args; forwarded.")
@@ -206,29 +536,43 @@ def _build_tt_run_cmd(
 @click.option("--skip-executable-check", is_flag=True, help="(tt-run) forwarded.")
 @click.option("--skip-mgd-check", is_flag=True, help="(tt-run) forwarded.")
 @click.option("-v", "--verbose", is_flag=True, help="(tt-run) Verbose; forwarded.")
-@click.option("--dry-run", is_flag=True, help="Print per-solution tt-run commands without executing.")
-# ---- sweep-specific extras ----
-@click.option("--solutions-dir", type=click.Path(path_type=Path), default=None,
-              help="EXTRA: sweep an existing solutions dir (with solutions_index.yaml). Skips Phase 1.")
-@click.option("--solutions-output-dir", type=click.Path(path_type=Path), default=None,
-              help="EXTRA: where Phase 1 writes solutions (default generated/ttrun/sweep).")
-@click.option("--max-solutions", type=int, default=0,
-              help="EXTRA: cap solutions generated in Phase 1 (0 = all). Forwarded to generate_rank_bindings.")
-@click.option("--distinct-host-sets", is_flag=True,
-              help="EXTRA: keep only one solution per unique set of HOSTS (real host-set dedup). "
-                   "Forwarded to generate_rank_bindings.")
-@click.option("--allow-shape-permutations", is_flag=True, hidden=True,
-              help="(advanced/hidden) Disable generate_rank_bindings' always-on solver unique_shapes dedup.")
-@click.option("--select", type=str, default=None, help="EXTRA: only sweep these solution ids (comma-separated).")
-@click.option("--limit", type=int, default=None, help="EXTRA: sweep at most the first N solutions (index order).")
-@click.option("--per-solution-timeout", type=int, default=None, help="EXTRA: kill a launch after N seconds (=> timeout).")
-@click.option("--stop-on-failure/--continue-on-failure", default=False,
-              help="EXTRA: stop the sweep on the first failing solution (default: continue).")
-@click.option("--sweep-report", type=click.Path(path_type=Path), default=None,
-              help="EXTRA: path for sweep_report.yaml (default <solutions-dir>/sweep_report.yaml).")
-@click.option("--log-dir", type=click.Path(path_type=Path), default=None,
-              help="EXTRA: directory for per-solution logs (default <solutions-dir>/sweep_logs). "
-                   "Each solution's stdout+stderr is saved to <log-dir>/<solution_id>.log.")
+# ---- sweep extras ----
+@click.option(
+    "--solutions-output-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Where solutions + sweep artifacts are written (default generated/ttrun/sweep).",
+)
+@click.option(
+    "--max-solutions",
+    type=int,
+    default=0,
+    help="Cap solutions generated (0 = all). Forwarded to generate_rank_bindings.",
+)
+@click.option(
+    "--distinct-host-sets",
+    is_flag=True,
+    help="Keep only one solution per unique host set. Forwarded to generate_rank_bindings.",
+)
+@click.option(
+    "--allow-shape-permutations",
+    is_flag=True,
+    hidden=True,
+    help="(hidden) Disable generate_rank_bindings' always-on solver unique_shapes dedup.",
+)
+@click.option("--limit", type=int, default=None, help="Sweep at most the first N solutions (index order).")
+@click.option("--per-solution-timeout", type=int, default=None, help="Kill a launch after N seconds (=> timeout).")
+@click.option(
+    "--stop-on-failure/--continue-on-failure",
+    default=False,
+    help="Stop the sweep (and generation) on the first failing solution (default: continue).",
+)
+@click.option(
+    "--interleave/--no-interleave",
+    default=True,
+    help="Overlap generation with testing (default). --no-interleave waits for all generation first.",
+)
+@click.option("--dry-run", is_flag=True, help="Generate + write each run.sh, but launch no workloads.")
 @click.pass_context
 def main(
     ctx,
@@ -244,63 +588,37 @@ def main(
     skip_executable_check,
     skip_mgd_check,
     verbose,
-    dry_run,
-    solutions_dir,
     solutions_output_dir,
     max_solutions,
     distinct_host_sets,
     allow_shape_permutations,
-    select,
     limit,
     per_solution_timeout,
     stop_on_failure,
-    sweep_report,
-    log_dir,
+    interleave,
+    dry_run,
 ):
     program = list(ctx.args)
     if not program:
         raise click.ClickException("No <program> to run. Pass it after the options, e.g. `... -- ./my_app`.")
+    if mesh_graph_descriptor is None:
+        raise click.ClickException("Provide --mesh-graph-descriptor / -m (the sweep always generates).")
 
     parsed_hosts = [h for h in hosts.split(",") if h] if hosts else None
     parsed_mpi_args = shlex.split(mpi_args) if mpi_args else None
     mock = mock_cluster_rank_binding is not None
+    if not mock and not parsed_hosts:
+        raise click.ClickException("Provide --hosts (real cluster) or --mock-cluster-rank-binding (mock).")
 
-    # 1. Obtain the solutions directory.
-    if solutions_dir is not None:
-        sol_dir = Path(solutions_dir).resolve()
-    else:
-        if mesh_graph_descriptor is None:
-            raise click.ClickException("Provide --solutions-dir, or --mesh-graph-descriptor to generate solutions.")
-        if not mock and not parsed_hosts:
-            raise click.ClickException("New mode needs --hosts (real cluster) or --mock-cluster-rank-binding (mock).")
-        out = Path(solutions_output_dir).resolve() if solutions_output_dir else (_repo_root() / "generated/ttrun/sweep")
-        sol_dir = _generate_solutions(
-            mesh_graph_descriptor=Path(mesh_graph_descriptor),
-            hosts=parsed_hosts,
-            mock_cluster_rank_binding=Path(mock_cluster_rank_binding) if mock else None,
-            output_dir=out,
-            max_solutions=max_solutions,
-            distinct_host_sets=distinct_host_sets,
-            allow_shape_permutations=allow_shape_permutations,
-            mpi_args=parsed_mpi_args,
-            dry_run=dry_run,
-        )
-        if dry_run:
-            click.echo(f"{PREFIX} --dry-run: no solutions generated; nothing to sweep.")
-            return
-
-    index = _load_index(sol_dir)
-    solutions = _select_solutions(index, select, limit)
-    if not solutions:
-        raise click.ClickException(f"No solutions to sweep in {sol_dir} (after --select/--limit).")
-
-    # Auto-detect mock mode when sweeping an existing solutions dir (per-solution phase2_mock_mapping.yaml).
-    if not mock and (sol_dir / solutions[0]["dir"] / "phase2_mock_mapping.yaml").is_file():
-        mock = True
-
+    out = Path(solutions_output_dir).resolve() if solutions_output_dir else (_repo_root() / "generated/ttrun/sweep")
+    out.mkdir(parents=True, exist_ok=True)
+    sweep_dir = out / "sweep"
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+    generate_log = sweep_dir / "generate.log"
+    report_path = sweep_dir / "sweep_report.yaml"
     tt_run = _find_tt_run()
 
-    # Args forwarded verbatim to every per-solution tt-run launch.
+    # tt-run passthrough args forwarded verbatim to every per-solution launch.
     passthrough: List[str] = []
     if rankfile_syntax and rankfile_syntax != "auto":
         passthrough += ["--rankfile-syntax", rankfile_syntax]
@@ -319,92 +637,77 @@ def main(
     if verbose:
         passthrough += ["-v"]
 
-    logs_root = Path(log_dir).resolve() if log_dir else (sol_dir / "sweep_logs")
-    if not dry_run:
-        logs_root.mkdir(parents=True, exist_ok=True)
+    gen_cmd = _build_generate_cmd(
+        mesh_graph_descriptor=Path(mesh_graph_descriptor),
+        hosts=parsed_hosts,
+        mock_cluster_rank_binding=Path(mock_cluster_rank_binding) if mock else None,
+        output_dir=out,
+        max_solutions=max_solutions,
+        distinct_host_sets=distinct_host_sets,
+        allow_shape_permutations=allow_shape_permutations,
+        mpi_args=parsed_mpi_args,
+    )
 
-    click.echo(f"{PREFIX} Sweeping {len(solutions)} solution(s) in {sol_dir}")
-    click.echo(f"{PREFIX} Per-solution logs -> {logs_root}")
-    results = []
-    for i, sol in enumerate(solutions):
-        cmd = _build_tt_run_cmd(
-            tt_run=tt_run, solutions_dir=sol_dir, sol=sol, program=program,
-            mock=mock, mpi_args=parsed_mpi_args, passthrough=passthrough,
-        )
-        label = sol.get("id", sol["dir"])
-        cmd_str = " ".join(shlex.quote(c) for c in cmd)  # exact, copy-paste-reproducible tt-run command
-        click.echo(f"\n{PREFIX} [{i + 1}/{len(solutions)}] solution {label} "
-                   f"({sol.get('num_hosts', '?')} hosts)\n  {cmd_str}")
+    # Sweep header.
+    click.echo(f"{PREFIX} ┌ sweep start {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    click.echo(f"{PREFIX} │ MGD          : {mesh_graph_descriptor}")
+    click.echo(f"{PREFIX} │ cluster      : " + ("mock" if mock else f"real, hosts={','.join(parsed_hosts or [])}"))
+    click.echo(
+        f"{PREFIX} │ enumerate    : --all-solutions"
+        + (f" --max-solutions {max_solutions}" if max_solutions else "")
+        + (" --distinct-host-sets" if distinct_host_sets else "")
+    )
+    click.echo(f"{PREFIX} │ workload     : {' '.join(shlex.quote(p) for p in program)}")
+    click.echo(f"{PREFIX} │ output dir   : {out}")
+    click.echo(
+        f"{PREFIX} │ concurrency  : 1 producer, 1 consumer (one workload at a time"
+        + ("" if interleave else "; --no-interleave: generate all first")
+        + ")"
+    )
 
-        if dry_run:
-            results.append({"solution_id": label, "status": "dry-run", "returncode": None,
-                            "duration_seconds": 0.0, "tt_run_command": cmd_str})
-            continue
+    producer = _start_producer(gen_cmd, cwd=_repo_root(), log_path=generate_log)
+    click.echo(f"{PREFIX} └ producer pid {producer.pid}  →  log {generate_log}")
 
-        log_path = logs_root / f"{label}.log"
-        t0 = time.time()
-        status = "pass"
-        rc: Optional[int] = None
-        try:
-            with open(log_path, "w") as log:
-                proc = subprocess.run(cmd, cwd=_repo_root(), stdout=log,
-                                      stderr=subprocess.STDOUT, timeout=per_solution_timeout)
-            rc = proc.returncode
-            status = "pass" if rc == 0 else "fail"
-        except subprocess.TimeoutExpired:
-            status = "timeout"
-        dur = round(time.time() - t0, 1)
+    report_meta = {
+        "mesh_graph_desc_path": str(mesh_graph_descriptor),
+        "workload_command": " ".join(shlex.quote(p) for p in program),
+        "solutions_dir": str(out),
+    }
+    results = _sweep_interleaved(
+        producer=producer,
+        solutions_dir=out,
+        tt_run=tt_run,
+        program=program,
+        mock=mock,
+        parsed_mpi_args=parsed_mpi_args,
+        passthrough=passthrough,
+        limit=limit,
+        stop_on_failure=stop_on_failure,
+        per_solution_timeout=per_solution_timeout,
+        interleave=interleave,
+        dry_run=dry_run,
+        report_meta=report_meta,
+        report_path=report_path,
+    )
 
-        click.echo(f"{PREFIX}   -> {status} (rc={rc}, {dur}s)\n     log={log_path}")
-        results.append({
-            "solution_id": label,               # content hash = the solution subdirectory name
-            "status": status,                   # pass | fail | timeout | dry-run
-            "returncode": rc,                   # process exit code (null if it timed out)
-            "duration_seconds": dur,            # wall-clock for this solution's launch
-            "num_hosts": sol.get("num_hosts"),  # distinct physical hosts this solution occupies
-            "host_set": sol.get("host_set"),    # the hosts (per-host cluster descriptor / hostname)
-            "tt_run_command": cmd_str,          # exact tt-run command run for this solution (copy-paste to re-run)
-            "rank_binding_path": str((sol_dir / sol["dir"] / "rank_bindings.yaml").resolve()),
-            "log_path": str(log_path),          # full stdout+stderr of this solution's launch
-        })
-        if status != "pass" and stop_on_failure:
-            click.echo(f"{PREFIX} --stop-on-failure: halting after {label}.")
-            break
-
-    # 3. Report.
+    gen_rc = producer.poll()
     passed = sum(r["status"] == "pass" for r in results)
     failed = sum(r["status"] == "fail" for r in results)
     timed_out = sum(r["status"] == "timeout" for r in results)
-    report = {
-        "mesh_graph_desc_path": index.get("mesh_graph_desc_path"),
-        "solutions_dir": str(sol_dir),
-        # The workload run once per solution, as a single-line command string.
-        "workload_command": " ".join(shlex.quote(p) for p in program),
-        # Enumeration metadata copied from solutions_index.yaml:
-        #   mode           = all | distinct-host-sets
-        #   max_solutions  = requested cap (0 = all up to the solver safety cap)
-        #   found          = number of distinct solutions generated
-        #   truncated      = true if the cap bounded the result (more solutions may exist)
-        "enumeration": index.get("enumeration"),
-        # Tally across the solutions actually swept this run.
-        "summary": {
-            "total": len(results),        # solutions attempted
-            "passed": passed,             # workload exit code 0
-            "failed": failed,             # workload non-zero exit
-            "timed_out": timed_out,       # killed by --per-solution-timeout
-        },
-        "results": results,
-    }
-    report_path = Path(sweep_report).resolve() if sweep_report else (sol_dir / "sweep_report.yaml")
-    if not dry_run:
-        with open(report_path, "w") as f:
-            # width=inf keeps long values (tt_run_command, paths) on a single line instead of YAML-wrapping them.
-            yaml.safe_dump(report, f, sort_keys=False, default_flow_style=False, width=float("inf"))
-        click.echo(f"\n{PREFIX} Report: {report_path}")
+    click.echo(f"\n{PREFIX} ┌ SUMMARY  {passed}/{len(results)} passed · {failed} failed · {timed_out} timed out")
+    for r in results:
+        if r["status"] not in ("pass", "dry-run"):
+            click.echo(
+                f"{PREFIX} │ {r['status'].upper():7s} {r['solution_id']}  rc={r['returncode']}  "
+                f"log={r['log_path']}  repro=bash {r['run_script']}"
+            )
+    click.echo(f"{PREFIX} └ report   {report_path}")
+    if gen_rc not in (0, None) and not stop_on_failure:
+        click.echo(f"{PREFIX} WARNING: producer (generation) exited rc={gen_rc}; see {generate_log}")
 
-    click.echo(f"{PREFIX} SUMMARY: {passed}/{len(results)} passed"
-               + (f", {failed} failed" if failed else "")
-               + (f", {timed_out} timed out" if timed_out else ""))
+    if not results:
+        click.echo(f"{PREFIX} No solutions were produced.")
+        sys.exit(1)
     if not dry_run and (failed or timed_out):
         sys.exit(1)
 

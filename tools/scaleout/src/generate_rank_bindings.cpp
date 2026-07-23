@@ -725,9 +725,10 @@ int main(int argc, char** argv) {
                     fsync_path(index_path);
                     log_info(
                         tt::LogFabric,
-                        "Wrote solution {} ({} hosts) [{} written so far]",
+                        "Wrote solution {} ({} hosts) to directory: {} [{} written so far]",
                         solution_id,
                         hosts.size(),
+                        solution_dir.string(),
                         index_entries.size());
                 }
                 log_info(

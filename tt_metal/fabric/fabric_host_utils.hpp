@@ -38,6 +38,9 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ubb_galaxy);
 
+// Compact large-number formatting for log lines (e.g. 1.2M, 340.0k). Negative input renders as "n/a".
+std::string humanize(int64_t n);
+
 // Helper to validate that requested FabricType doesn't require more connectivity than available FabricType provides
 // Returns true if requested_type requires more connections than available_type provides
 // mesh_shape: [rows, cols] - used to detect edge cases where 2-row/2-col torus is equivalent to mesh

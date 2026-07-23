@@ -17,7 +17,9 @@
 #include <vector>
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cstring>
+#include <fmt/format.h>
 #include <stdexcept>
 #include "fabric_context.hpp"
 #include <queue>
@@ -530,6 +532,22 @@ void serialize_intermesh_port_assignment_to_file(
     out_file.close();
 
     log_debug(tt::LogFabric, "Serialized inter-mesh port assignment to file: {}", output_file_path.string());
+}
+
+std::string humanize(int64_t n) {
+    if (n < 0) {
+        return "n/a";
+    }
+    if (n >= 1'000'000'000) {
+        return fmt::format("{:.1f}B", static_cast<double>(n) / 1e9);
+    }
+    if (n >= 1'000'000) {
+        return fmt::format("{:.1f}M", static_cast<double>(n) / 1e6);
+    }
+    if (n >= 1'000) {
+        return fmt::format("{:.1f}k", static_cast<double>(n) / 1e3);
+    }
+    return fmt::format("{}", n);
 }
 
 }  // namespace tt::tt_fabric
