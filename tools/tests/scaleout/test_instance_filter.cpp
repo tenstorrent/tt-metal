@@ -143,6 +143,23 @@ TEST(InstanceFilterTest, RelativeIncludeSelectsNameUnderEveryParent) {
     EXPECT_EQ(cross_host_pairs(gen).size(), 1u);
 }
 
+TEST(InstanceFilterTest, RelativeNameSpansMultipleParentsMatchesAll) {
+    // "node1" occurs under every superpod, so a relative include matches ALL of them - the selection is
+    // inclusive, not one prioritized match. This is the ambiguous/colliding-name case (matches span
+    // multiple distinct parents) that drives the match-logging + ambiguity warning; behavior is unchanged.
+    auto gen = make_gen();
+    gen.apply_instance_filter({{"node1"}}, {});
+    auto paths = instance_paths(gen);
+    ASSERT_EQ(paths.size(), 4u);
+    EXPECT_THAT(paths, Each(ElementsAre("n300_lb_cluster", _, "node1")));  // every selected host is a node1 leaf
+    // ...sitting under 4 DISTINCT parents (superpod0..3) - i.e. the multi-parent (ambiguous) match.
+    std::set<std::string> parents;
+    for (const auto& p : paths) {
+        parents.insert(p[1]);
+    }
+    EXPECT_EQ(parents.size(), 4u);
+}
+
 TEST(InstanceFilterTest, RootLevelNameDoesNotMatchDeeperInstances) {
     // "superpod1" is a suffix only of the top-level instance, never of a deeper node path.
     auto gen = make_gen();

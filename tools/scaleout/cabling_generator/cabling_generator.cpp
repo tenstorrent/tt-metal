@@ -16,6 +16,7 @@
 #include <functional>
 #include <unordered_set>
 #include <fmt/base.h>
+#include <fmt/ranges.h>
 #include <google/protobuf/text_format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/caseless_comparison.hpp>
@@ -2550,6 +2551,9 @@ void CablingGenerator::apply_instance_filter(
     std::set<HostId> kept_host_ids;
     std::vector<bool> include_used(includes.size(), false);
     std::vector<bool> exclude_used(excludes.size(), false);
+    // Full instance paths each filter matched (for logging + multi-parent ambiguity detection).
+    std::vector<std::vector<std::vector<std::string>>> include_matches(includes.size());
+    std::vector<std::vector<std::vector<std::string>>> exclude_matches(excludes.size());
 
     // A suffix-matched filter applies to its instance's whole subtree (carried via
     // included/excluded_by_ancestor). Keep a leaf iff base-selected (or no include) and not excluded.
@@ -2565,12 +2569,14 @@ void CablingGenerator::apply_instance_filter(
             for (size_t i = 0; i < includes.size(); ++i) {
                 if (path_is_suffix(includes[i], prefix)) {
                     include_used[i] = true;
+                    include_matches[i].push_back(prefix);
                     included_here = true;
                 }
             }
             for (size_t i = 0; i < excludes.size(); ++i) {
                 if (path_is_suffix(excludes[i], prefix)) {
                     exclude_used[i] = true;
+                    exclude_matches[i].push_back(prefix);
                     excluded_here = true;
                 }
             }
@@ -2611,6 +2617,44 @@ void CablingGenerator::apply_instance_filter(
     if (kept_host_ids.empty()) {
         throw std::runtime_error("Instance filter selected no nodes");
     }
+
+    // Report what each filter matched. Matching is suffix-based and fully inclusive: a filter selects the
+    // whole subtree of EVERY instance whose path ends with it. When a (possibly colliding) name matches
+    // instances under more than one parent, warn - the selection is broader than a unique name would give.
+    auto report_filter = [](const char* kind,
+                            const std::vector<std::vector<std::string>>& filters,
+                            const std::vector<std::vector<std::vector<std::string>>>& matches) {
+        for (size_t i = 0; i < filters.size(); ++i) {
+            std::vector<std::string> joined_paths;
+            std::set<std::string> parents;
+            for (const auto& path : matches[i]) {
+                joined_paths.push_back(join_instance_path(path));
+                std::vector<std::string> parent(
+                    path.begin(), path.end() - static_cast<std::ptrdiff_t>(filters[i].size()));
+                parents.insert(join_instance_path(parent));
+            }
+            log_info(
+                tt::LogDistributed,
+                "Instance filter {} '{}' matched {} instance(s): {}",
+                kind,
+                join_instance_path(filters[i]),
+                joined_paths.size(),
+                fmt::join(joined_paths, ", "));
+            if (parents.size() > 1) {
+                log_warning(
+                    tt::LogDistributed,
+                    "Instance filter {} '{}' is ambiguous: matched instances under {} different parents; every "
+                    "match's subtree is selected. Use a longer path to disambiguate. Matches: {}",
+                    kind,
+                    join_instance_path(filters[i]),
+                    parents.size(),
+                    fmt::join(joined_paths, ", "));
+            }
+        }
+    };
+    report_filter("include", includes, include_matches);
+    report_filter("exclude", excludes, exclude_matches);
+    log_info(tt::LogDistributed, "Instance filter selected {} node(s)", kept_host_ids.size());
 
     // Prune structure: keep nodes whose host_id survived, and subgraphs with any surviving node.
     auto prune = [&](auto& self, ResolvedGraphInstance& graph) -> bool {
