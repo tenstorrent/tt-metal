@@ -19,6 +19,11 @@ namespace compute_kernel_lib {
 /// precise path, `Fast` selects the lower-precision fast approximation.
 enum class Approx : bool { Exact = false, Fast = true };
 
+/// Input sanitation for exponential implementations with a removable lower clamp. `ClampToNegative`
+/// is the safe LLK default. `None` removes the clamp; callers must guarantee an appropriate input
+/// domain or apply packer ReLU because inputs below approximately -88 can produce negative outputs.
+enum class ExpInputClamping : bool { None = false, ClampToNegative = true };
+
 /// Legacy code-path toggle. Currently used only by `Rsqrt`, whose `rsqrt_tile<...>` takes a
 /// leading `legacy` template bool selecting the older implementation. `Off` = modern path.
 enum class Legacy : bool { Off = false, On = true };

@@ -19,15 +19,19 @@
 namespace compute_kernel_lib {
 
 // ---- Exp ----
-// The second `fast` template parameter is part of the struct signature but is NOT
-// routed into the LLK template args. The LLK `exp_tile_init` second arg is
-// `uint32_t scale` (default 0x3F800000 = 1.0f) and `exp_tile` second arg is
-// `bool scale_en` (default false). Only `approx` is forwarded to the LLK; the
-// scale and scale_en arguments stay at their LLK defaults.
-template <Approx approx, Approx fast, Dst Slot>
-struct Exp : UnaryOp<Exp<approx, fast, Slot>, Slot> {
-    static ALWI void init() { exp_tile_init<approx == Approx::Fast>(); }
-    static ALWI void exec_impl(uint32_t slot_offset) { exp_tile<approx == Approx::Fast>(to_u32(Slot) + slot_offset); }
+// The second `fast` template parameter is retained for source compatibility but is not routed into
+// the LLK template args. `input_clamping` selects the LLK's safe clamped approximation or its faster
+// unclamped variant; callers selecting `None` must repair extreme-negative results with packer ReLU.
+template <Approx approx, Approx fast, Dst Slot, ExpInputClamping input_clamping>
+struct Exp : UnaryOp<Exp<approx, fast, Slot, input_clamping>, Slot> {
+    static constexpr auto llk_input_clamping = input_clamping == ExpInputClamping::ClampToNegative
+                                                   ? ckernel::InputClamping::ClampToNegative
+                                                   : ckernel::InputClamping::None;
+
+    static ALWI void init() { exp_tile_init<approx == Approx::Fast, 0x3F800000, llk_input_clamping>(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        exp_tile<approx == Approx::Fast, false, llk_input_clamping>(to_u32(Slot) + slot_offset);
+    }
 };
 
 // ---- Log ----

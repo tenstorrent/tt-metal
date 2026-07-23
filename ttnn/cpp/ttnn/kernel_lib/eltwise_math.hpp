@@ -18,7 +18,11 @@
 namespace compute_kernel_lib {
 
 // ---- Exp ----
-template <Approx approx = Approx::Exact, Approx fast = Approx::Fast, Dst Slot = Dst::D0>
+template <
+    Approx approx = Approx::Exact,
+    Approx fast = Approx::Fast,
+    Dst Slot = Dst::D0,
+    ExpInputClamping input_clamping = ExpInputClamping::ClampToNegative>
 struct Exp;
 
 // ---- Log ----

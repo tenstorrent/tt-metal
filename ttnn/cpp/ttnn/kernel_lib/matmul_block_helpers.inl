@@ -33,12 +33,7 @@ namespace compute_kernel_lib {
  * M-row-group) and is responsible for the matching cb_push_back.
  */
 ALWI void pack_subblock_row_strided(
-    uint32_t dst_start_idx,
-    uint32_t pack_target_id,
-    uint32_t col_base,
-    uint32_t row_stride,
-    uint32_t h,
-    uint32_t w) {
+    uint32_t dst_start_idx, uint32_t pack_target_id, uint32_t col_base, uint32_t row_stride, uint32_t h, uint32_t w) {
     for (uint32_t r = 0; r < h; r++) {
         const uint32_t row_base = r * row_stride + col_base;
         for (uint32_t c = 0; c < w; c++) {
@@ -58,11 +53,7 @@ ALWI void pack_subblock_row_strided(
  * pops it when done. col_base / row_stride match the spill.
  */
 ALWI void copy_subblock_row_strided(
-    uint32_t src_cb_id,
-    uint32_t col_base,
-    uint32_t row_stride,
-    uint32_t h,
-    uint32_t w) {
+    uint32_t src_cb_id, uint32_t col_base, uint32_t row_stride, uint32_t h, uint32_t w) {
     for (uint32_t r = 0; r < h; r++) {
         copy_block_matmul_partials(src_cb_id, r * row_stride + col_base, r * w, w);
     }
@@ -86,6 +77,7 @@ template <
     bool caller_owns_pack_target,
     typename Activation,
     matmul_config::DataFormatReconfig reconfig,
+    bool accumulate_first_k_block,
     typename Buf>
 ALWI void matmul_block(
     Buf& in0_buf,
@@ -101,13 +93,13 @@ ALWI void matmul_block(
     KBlockInnerDimFn k_block_inner_dim,
     In0SourceFn in0_source_fn,
     In1BaseOffsetFn in1_base_offset_fn) {
-
     // OutWithUntilize needs SubblockMajor: pack_untilize_dest packs from DST offset 0 for a
     // fixed block_ct_dim and can't compose with the per-tile absolute-offset row-major pack.
     // Row-major untilize goes through Interm + reblock_and_untilize instead.
     static_assert(
         last_block_target != LastBlockTarget::OutWithUntilize || tile_order == OutputCBLayout::SubblockMajor,
-        "OutWithUntilize requires tile_order == SubblockMajor; route row-major untilize via Interm + reblock_and_untilize");
+        "OutWithUntilize requires tile_order == SubblockMajor; route row-major untilize via Interm + "
+        "reblock_and_untilize");
     // block_ct_dim is a compile-time arg, so the caller must supply it for OutWithUntilize.
     static_assert(
         last_block_target != LastBlockTarget::OutWithUntilize || untilize_block_ct_dim > 0,
@@ -137,6 +129,9 @@ ALWI void matmul_block(
         caller_owns_pack_target_supported(
             caller_owns_pack_target, tile_order == OutputCBLayout::TileRowMajor, packer_l1_acc, pack_last_to_interm),
         "caller_owns_pack_target requires TileRowMajor + packer_l1_acc + last_block_target == Interm");
+    static_assert(
+        !accumulate_first_k_block || caller_owns_pack_target,
+        "accumulate_first_k_block requires a preinitialized caller-owned pack target");
 
     // Cache integer IDs for legacy LLK calls. buf_id() resolves to
     // get_cb_id() on CircularBuffer or get_id() on DataflowBuffer.
@@ -335,7 +330,13 @@ ALWI void matmul_block(
                             interm_buf.pop_front(out_num_tiles);
                         }
                         mm_block_init_short_with_dt(
-                            in0_cb_id, in1_cb_id, interm_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_k);
+                            in0_cb_id,
+                            in1_cb_id,
+                            interm_cb_id,
+                            transpose,
+                            shape.out_subblock_w,
+                            shape.out_subblock_h,
+                            shape.in0_block_k);
                     }
 
                     // Compute the output sub-block. SKIP_COMPUTE (microbench) omits only the LLK call.
@@ -398,7 +399,7 @@ ALWI void matmul_block(
                         if constexpr (packer_l1_acc) {
                             if constexpr (pack_last_to_interm) {
                                 // Interm target: L1 accumulates across all blocks in the same region.
-                                PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
+                                PACK((llk_pack_reconfig_l1_acc(block == 0 && !accumulate_first_k_block ? 0 : 1)));
                             } else {
                                 // Out target: the last block's partial was reloaded into DST, so the
                                 // pack must NOT re-accumulate.
@@ -416,8 +417,7 @@ ALWI void matmul_block(
                             // so the M-row-group base must be folded into the absolute offset here
                             // (in0_subblock * row_group_tiles); otherwise every row group packs onto
                             // row 0 (latent when in0_num_subblocks == 1, garbles when > 1).
-                            const uint32_t row_base =
-                                caller_owns_pack_target ? in0_subblock * row_group_tiles : 0;
+                            const uint32_t row_base = caller_owns_pack_target ? in0_subblock * row_group_tiles : 0;
                             const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
                                 0, pack_target_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
@@ -451,14 +451,13 @@ ALWI void matmul_block(
                             PACK((pack_reconfig_data_format(interm_cb_id)));
                         }
                         if constexpr (packer_l1_acc) {
-                            PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
+                            PACK((llk_pack_reconfig_l1_acc(block == 0 && !accumulate_first_k_block ? 0 : 1)));
                         }
 
                         if constexpr (spill_row_grouped) {
                             // caller_owns_pack_target: fold the M-row-group base into the offset,
                             // same as the last-block pack above.
-                            const uint32_t row_base =
-                                caller_owns_pack_target ? in0_subblock * row_group_tiles : 0;
+                            const uint32_t row_base = caller_owns_pack_target ? in0_subblock * row_group_tiles : 0;
                             const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
                                 0, interm_cb_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
@@ -545,6 +544,12 @@ ALWI void matmul_block(
             // CB rd_ptrs (or other bookkeeping) only once the consumer has read the block.
             post_k_block(block, shape.num_k_blocks, last_out);
         }
+    }
+
+    // L1 accumulation is latched packer-global state. Restore ordinary pack mode before
+    // returning so an unrelated downstream eltwise/reduce pack cannot inherit it.
+    if constexpr (packer_l1_acc) {
+        PACK((llk_pack_reconfig_l1_acc(0)));
     }
 }
 

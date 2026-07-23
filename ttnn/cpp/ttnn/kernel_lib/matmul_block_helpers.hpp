@@ -27,6 +27,8 @@ namespace compute_kernel_lib {
  * caller_owns_pack_target opts out of that bookkeeping — the helper skips its own
  * reserve/push/drain; the caller does one reserve before + one push after, packing
  * K-blocks into a fixed caller-owned region. Pairs with TileRowMajor + packer_l1_acc + Interm.
+ * accumulate_first_k_block additionally accumulates block zero into a target the caller
+ * preinitialized, enabling a fused bias/state update without another CB round trip.
  */
 
 /**
@@ -295,6 +297,9 @@ struct NoIn1BaseOffset {
  *                      aliases, or ActivationOp<type,p0,p1,p2> for host-driven kinds. The
  *                      helper does not issue ActivationInitHelper::init() — boot-time, caller's.
  *   reconfig           which data-format reconfigs to issue — see DataFormatReconfig.
+ *   accumulate_first_k_block  begin packer L1 accumulation on K-block zero. The caller must
+ *                              preinitialize the caller-owned pack target before invoking the
+ *                              helper. Requires caller_owns_pack_target; false by default.
  *
  * ── Runtime parameters ───────────────────────────────────────────────────────
  *
@@ -350,6 +355,7 @@ template <
     bool caller_owns_pack_target = false,
     typename Activation = NoneActivation,
     matmul_config::DataFormatReconfig reconfig = matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT,
+    bool accumulate_first_k_block = false,
     typename Buf = ::CircularBuffer>
 ALWI void matmul_block(
     Buf& in0_buf,
