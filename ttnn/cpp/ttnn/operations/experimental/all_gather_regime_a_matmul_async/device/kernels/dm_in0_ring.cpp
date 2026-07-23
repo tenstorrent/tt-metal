@@ -163,6 +163,10 @@ void kernel_main() {
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{get_noc_addr(inj_x, inj_y, recv_sem_addr), 1u, true},
             (uint8_t)fwd_hops);
         noc_async_writes_flushed();
+        // overlap marker: our OWN shard's last block (round 0, last block) has now been forwarded to the neighbour.
+        if (r == 0u && b + 1u == blocks_per_shard) {
+            DeviceZoneScopedN("AGMM_LOCAL_TX_DONE");
+        }
 
         // ---- STEP 3: drain the neighbour's chunk from our recv-slot ----
         noc_semaphore_wait_min(recv_ptr, i + 1u);  // the -1 neighbour wrote chunk i into our recv-slot
@@ -186,5 +190,9 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+    // overlap marker: every shard's every block is now stored locally -> the all-gather is complete on this device.
+    {
+        DeviceZoneScopedN("AGMM_GATHER_DONE");
+    }
     sender.close();
 }

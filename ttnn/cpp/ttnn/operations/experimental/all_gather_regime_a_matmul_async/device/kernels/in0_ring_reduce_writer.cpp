@@ -91,6 +91,16 @@ void kernel_main() {
     for (uint32_t s = 0; s < agmm_D; ++s) {
         agmm_blk_ready[s] = get_arg_val<uint32_t>(20u + s);
     }
+    // arg 20+D = this device's shard index; used only to tag the overlap profiler markers (local vs remote).
+    const uint32_t agmm_device_index = get_arg_val<uint32_t>(20u + agmm_D);
+#endif
+#if defined(AGMM_STREAM)
+    // Overlap-proof markers (streaming ring only): the FIRST step-0 in0 block whose gate passes for a LOCAL shard
+    // (this device's own K-region) vs a REMOTE shard. Compared against the relay's AGMM_LOCAL_TX_DONE /
+    // AGMM_GATHER_DONE to prove first-local-matmul precedes local-shard-tx-done and first-remote-matmul precedes
+    // full-gather-done. Each core touches one shard at step 0, so a core emits at most one of the two.
+    bool agmm_marked_local = false;
+    bool agmm_marked_remote = false;
 #endif
 
     const auto in0 = TensorAccessor(in0_args, in0_addr, tile_bytes);
@@ -266,6 +276,16 @@ void kernel_main() {
                             const uint32_t agmm_bws = (agmm_kg - agmm_sh * agmm_Kt_local) / agmm_kb;
                             noc_semaphore_wait_min(
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(agmm_blk_ready[agmm_sh]), agmm_bws + 1u);
+                            // overlap markers: first LOCAL / first REMOTE step-0 block whose gate has just passed
+                            if (agmm_sh == agmm_device_index) {
+                                if (!agmm_marked_local) {
+                                    agmm_marked_local = true;
+                                    DeviceZoneScopedN("AGMM_FIRST_LOCAL_MM");
+                                }
+                            } else if (!agmm_marked_remote) {
+                                agmm_marked_remote = true;
+                                DeviceZoneScopedN("AGMM_FIRST_REMOTE_MM");
+                            }
 #endif
                             noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
                         } else {

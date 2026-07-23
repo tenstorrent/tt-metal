@@ -582,6 +582,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         for (uint32_t s = 0; s < D; ++s) {
             wa.push_back(blk_ready_addr(s));  // 20..20+D-1 blk_ready[s] GlobalSemaphore addresses
         }
+        wa.push_back(device_index);  // 20+D this device's shard index (tags the local/remote overlap markers)
         SetRuntimeArgs(program, wh, cores[i], wa);
 
         std::vector<uint32_t> ca = {0u, geo.M_block_capacity, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u};
