@@ -150,16 +150,14 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
         cb(CB_SCALER_SUM, 1),
         cb(CB_OUT, o_tiles * 2),
         cb(CB_QK_SCORES, qk_tiles),
-        cb(CB_MAX_A, sq_chunk_t),
-        cb(CB_MAX_B, sq_chunk_t),
+        cb(CB_MAX_A, sq_chunk_t),  # running max (cb_m)
+        cb(CB_MAX_B, sq_chunk_t),  # m_cur scratch (cb_max_cur)
         cb(CB_MAX_NEW, sq_chunk_t),
-        cb(CB_SUM_A, sq_chunk_t),
-        cb(CB_SUM_B, sq_chunk_t),
+        cb(CB_SUM_A, sq_chunk_t),  # running sum (cb_l)
         cb(CB_SUM_NEW, sq_chunk_t),
         cb(CB_SUM_SCALED, sq_chunk_t),
         cb(CB_EXP_MAX_DIFF, sq_chunk_t),
-        cb(CB_OUT_A, o_tiles),
-        cb(CB_OUT_B, o_tiles),
+        cb(CB_OUT_A, o_tiles),  # running output accumulator (cb_o)
         cb(CB_OUT_NEW, o_tiles),
         cb(CB_OUT_SCALED, o_tiles),
     ]
@@ -201,7 +199,7 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     for core, q_start, q_count in assignment:
         reader_rt[core.x][core.y] = [q_addr, k_addr, v_addr, m_addr, q_start, q_count]
         writer_rt[core.x][core.y] = [o_addr, q_start, q_count]
-        compute_rt[core.x][core.y] = [q_count]
+        compute_rt[core.x][core.y] = [q_count, k_num_chunks]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_reader.cpp"),
@@ -212,11 +210,14 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     )
 
     # ---- Compute kernel ----
+    # k_num_chunks is a RUNTIME arg (not CT): a constexpr loop bound would let
+    # the compiler fully unroll the large kv_step body per KV-block, blowing the
+    # kernel-config buffer for long sequences. Keeping it runtime keeps the loop
+    # rolled (one kv_step instantiation per parity).
     compute_ct = [
         sq_chunk_t,
         sk_chunk_t,
         dht,
-        k_num_chunks,
         1 if has_mask else 0,
         _f32_bits(scale),
         qk_in0_sb,
