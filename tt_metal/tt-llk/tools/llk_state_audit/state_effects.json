@@ -1,0 +1,1197 @@
+{
+    "schema_version": 1,
+    "effects": [
+        {
+            "pattern": "\\bcfg_reg_rmw_tensix\\b",
+            "domain": "cfg_register",
+            "operation": "rmw",
+            "retention": "Retained until the configuration resource is reconfigured.",
+            "extractor": {
+                "kind": "template_call",
+                "resource": "template:0",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\bcfg_rmw\\b",
+            "domain": "cfg_register",
+            "operation": "rmw",
+            "retention": "Retained until the configuration resource is reconfigured.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0",
+                "value": "arg:1"
+            }
+        },
+        {
+            "pattern": "\\bcfg\\s*\\[",
+            "domain": "cfg_register",
+            "operation": "write",
+            "retention": "Retained until the configuration resource is reconfigured.",
+            "extractor": {
+                "kind": "assign_index",
+                "resource": "index",
+                "value": "rhs"
+            }
+        },
+        {
+            "pattern": "\\bmop_cfg\\s*\\[",
+            "domain": "mop_replay",
+            "operation": "program",
+            "retention": "Retained until the MOP configuration slot is reprogrammed.",
+            "activation": "programming",
+            "resource_template": "mop_cfg[{resource}]",
+            "extractor": {
+                "kind": "assign_index",
+                "resource": "index",
+                "value": "rhs"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?WRCFG\\b",
+            "domain": "cfg_register",
+            "operation": "write",
+            "retention": "Retained until the configuration resource is reconfigured.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:2",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SETC16\\b",
+            "domain": "cfg_register",
+            "operation": "write",
+            "retention": "Retained until the configuration resource is reconfigured.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0",
+                "value": "arg:1"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?REG2FLOP\\b",
+            "domain": "cfg_register",
+            "operation": "write",
+            "retention": "Retained until the configuration resource is reconfigured.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:4",
+                "value": "arg:5"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?(?:SET|INC)ADC[A-Za-z0-9_]*\\b",
+            "domain": "counter",
+            "operation": "adc",
+            "retention": "Retained until the counter is next updated or reset.",
+            "extractor": {
+                "kind": "adc_call",
+                "resource": "arg:0",
+                "value": "args:1,2,3,4,5"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SETRWC\\b",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "domain": "counter",
+            "operation": "rwc",
+            "retention": "Retained until the counter is next updated or reset.",
+            "skip_resources": [
+                "0"
+            ],
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:5",
+                "value": "args:1,2,3,4"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SETRWC\\b",
+            "architectures": [
+                "quasar"
+            ],
+            "domain": "counter",
+            "operation": "rwc",
+            "retention": "Retained until the counter is next updated or reset.",
+            "skip_resources": [
+                "0"
+            ],
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:3",
+                "value": "args:1,2"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?INCRWC\\b",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole",
+                "quasar"
+            ],
+            "domain": "counter",
+            "operation": "increment",
+            "retention": "Retained until the counter is next updated or reset.",
+            "skip_values": [
+                "0"
+            ],
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:RWC_CR",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?INCRWC\\b",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "domain": "counter",
+            "operation": "increment",
+            "retention": "Retained until the counter is next updated or reset.",
+            "skip_values": [
+                "0"
+            ],
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:RWC_D",
+                "value": "arg:1"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?INCRWC\\b",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole",
+                "quasar"
+            ],
+            "domain": "counter",
+            "operation": "increment",
+            "retention": "Retained until the counter is next updated or reset.",
+            "skip_values": [
+                "0"
+            ],
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:RWC_B",
+                "value": "arg:2"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?INCRWC\\b",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "domain": "counter",
+            "operation": "increment",
+            "retention": "Retained until the counter is next updated or reset.",
+            "skip_values": [
+                "0"
+            ],
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:RWC_A",
+                "value": "arg:3"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?INCRWC\\b",
+            "architectures": [
+                "quasar"
+            ],
+            "domain": "counter",
+            "operation": "increment",
+            "retention": "Retained until the counter is next updated or reset.",
+            "skip_values": [
+                "0"
+            ],
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:RWC_A",
+                "value": "arg:1"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?INCRWC\\b",
+            "architectures": [
+                "quasar"
+            ],
+            "domain": "counter",
+            "operation": "increment",
+            "retention": "Retained until the counter is next updated or reset.",
+            "skip_values": [
+                "0"
+            ],
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:RWC_D",
+                "value": "arg:3"
+            }
+        },
+        {
+            "pattern": "\\b(?:math::)?reset_counters\\b",
+            "domain": "counter",
+            "operation": "reset",
+            "retention": "Retained until the counter is next updated or reset.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0",
+                "value": "literal:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:set|inc)_(?:src|dst)_(?:tile|face|row)_index\\b",
+            "domain": "counter",
+            "operation": "index",
+            "retention": "Retained until the counter is next updated or reset.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:quasar_index",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SETADDRMOD\\b",
+            "domain": "addr_mod",
+            "operation": "program",
+            "retention": "Retained until address-modifier state is reprogrammed.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0",
+                "value": "arg:1"
+            }
+        },
+        {
+            "pattern": "\\baddr_mod_t::set\\b",
+            "domain": "addr_mod",
+            "operation": "program",
+            "retention": "Retained until address-modifier state is reprogrammed.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:addr_mod",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\.set\\s*\\(\\s*(?P<resource>ADDR_MOD_[A-Za-z0-9_]+)\\s*\\)",
+            "domain": "addr_mod",
+            "operation": "program",
+            "retention": "Retained until address-modifier state is reprogrammed.",
+            "extractor": {
+                "kind": "regex_group",
+                "resource_group": "resource"
+            }
+        },
+        {
+            "pattern": "\\.program[A-Za-z0-9_]*\\s*\\(",
+            "domain": "mop_replay",
+            "operation": "program",
+            "retention": "Retained until MOP/replay state is reprogrammed.",
+            "extractor": {
+                "kind": "token",
+                "resource": "literal:mop"
+            }
+        },
+        {
+            "pattern": "\\blltt::(?:record|replay)\\b",
+            "domain": "mop_replay",
+            "operation": "record_replay",
+            "retention": "Retained until MOP/replay state is reprogrammed.",
+            "extractor": {
+                "kind": "template_call",
+                "resource": "literal:lltt",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\bmailbox_write\\b",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "domain": "mailbox",
+            "operation": "write",
+            "retention": "Mailbox synchronization state persists until consumed by the destination thread.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0",
+                "value": "arg:1"
+            }
+        },
+        {
+            "pattern": "\\bmailbox_read\\b",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "domain": "mailbox",
+            "operation": "consume",
+            "retention": "Consumes or observes the persistent mailbox synchronization state produced by the source thread.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SEMINIT\\b",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "domain": "dvalid_semaphore",
+            "operation": "init",
+            "retention": "Retained until semaphore/data-valid state is balanced or reset.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:2",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SEMINIT\\b",
+            "architectures": [
+                "quasar"
+            ],
+            "domain": "dvalid_semaphore",
+            "operation": "init",
+            "retention": "Retained until semaphore/data-valid state is balanced or reset.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:3",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SEMGET\\b|\\b(?:t6_)?semaphore_get\\b",
+            "domain": "dvalid_semaphore",
+            "operation": "get",
+            "retention": "Retained until semaphore/data-valid state is balanced or reset.",
+            "extractor": {
+                "kind": "semaphore_call",
+                "resource": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SEMPOST\\b|\\b(?:t6_)?semaphore_post\\b",
+            "domain": "dvalid_semaphore",
+            "operation": "post",
+            "retention": "Retained until semaphore/data-valid state is balanced or reset.",
+            "extractor": {
+                "kind": "semaphore_call",
+                "resource": "arg:0",
+                "value": "arg:1"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SETDVALID\\b",
+            "domain": "dvalid_semaphore",
+            "operation": "set",
+            "retention": "Retained until semaphore/data-valid state is balanced or reset.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:dvalid",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?CLEARDVALID\\b",
+            "domain": "dvalid_semaphore",
+            "operation": "clear",
+            "retention": "Retained until semaphore/data-valid state is balanced or reset.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:dvalid",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:switch|reset)_(?:cfg|config)_context\\b",
+            "domain": "config_context",
+            "operation": "switch",
+            "retention": "Retained until the configuration context is switched or reset.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:context",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\bset_dst_write_addr\\b",
+            "domain": "destination",
+            "operation": "select",
+            "retention": "Retained until destination state is reset or reselected.",
+            "extractor": {
+                "kind": "template_call",
+                "resource": "literal:destination_write_address",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:set_dst(?!_write_addr)\\w*|dst_[A-Za-z0-9_]*select[A-Za-z0-9_]*|select_dst\\w*|set_dest_(?:addr|offset|bank))\\b",
+            "domain": "destination",
+            "operation": "select",
+            "retention": "Retained until destination state is reset or reselected.",
+            "extractor": {
+                "kind": "template_call",
+                "resource": "literal:destination",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:flip_packer_dest_offset_id|update_dest_offset_id)\\b",
+            "domain": "destination",
+            "operation": "update",
+            "retention": "Retained until destination state is reset or reselected.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:dest_offset"
+            }
+        },
+        {
+            "pattern": "\\b(?:reset_dest_offset_id|_reset_dest_register_offset_)\\b",
+            "domain": "destination",
+            "operation": "reset",
+            "retention": "Retained until destination state is reset or reselected.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:dest_offset"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SFPCONFIG\\b",
+            "domain": "sfpu_config",
+            "operation": "configure",
+            "retention": "Retained until SFPU configuration state is reprogrammed.",
+            "extractor": {
+                "kind": "sfpu_config_call",
+                "resource": "arg:1",
+                "value": "args:0,2"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SFPLOADI\\b",
+            "domain": "sfpu_lreg",
+            "operation": "write",
+            "retention": "Retained in the SFPU local register until overwritten.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0",
+                "value": "arg:2"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SFPLOAD\\b",
+            "domain": "sfpu_lreg",
+            "operation": "load",
+            "retention": "Retained in the SFPU local register until overwritten.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0",
+                "value": "args:2,3"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?(?:SFPXOR|SFPMOV|SFPSHFT|SFPIADD|SFPAND)\\b",
+            "domain": "sfpu_lreg",
+            "operation": "write",
+            "retention": "Retained in the SFPU local register until overwritten.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:2",
+                "value": "args:0,1"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SFPSTORE\\b",
+            "domain": "dest_data",
+            "operation": "write",
+            "retention": "Destination data remains until overwritten, packed, or cleared.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:DEST_DATA",
+                "value": "args:0,2,3"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?ZEROACC\\b",
+            "domain": "dest_data",
+            "operation": "clear",
+            "retention": "Destination data remains cleared until overwritten.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:DEST_DATA",
+                "value": "args:0,1,2,3,4"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?SFPNOP\\b",
+            "architectures": [
+                "quasar"
+            ],
+            "domain": "dvalid_semaphore",
+            "operation": "clear",
+            "retention": "Retained until source/destination valid state is set again.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:SRCS_DVALID",
+                "value": "args:0,1,2"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?UNPACR_NOP\\b",
+            "architectures": [
+                "wormhole_b0"
+            ],
+            "domain": "dvalid_semaphore",
+            "operation": "set",
+            "retention": "Retained until unpack source valid state is cleared or consumed.",
+            "value_pattern": "UNP_(?:ZEROSRC_)?SET_DVALID",
+            "resource_template": "UNPACK_DVALID[{resource}]",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0",
+                "value": "arg:1"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?UNPACR_NOP\\b",
+            "architectures": [
+                "wormhole_b0"
+            ],
+            "domain": "src_data",
+            "operation": "clear",
+            "persistence": "persistent",
+            "retention": "Source-clear state remains effective until source data is written again.",
+            "value_pattern": "UNP_(?:ZERO|NEGINF|ZERO.*SET_DVALID).*SRC|UNP_ZEROSRC",
+            "resource_template": "SRC_DATA[{resource}]",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0",
+                "value": "arg:1"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?UNPACR_NOP\\b",
+            "architectures": [
+                "blackhole"
+            ],
+            "domain": "dvalid_semaphore",
+            "operation": "set",
+            "retention": "Retained until unpack source valid state is cleared or consumed.",
+            "value_pattern": "SET_DVALID",
+            "resource_template": "UNPACK_DVALID[{resource}]",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0",
+                "value": "arg:3"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?UNPACR_NOP\\b",
+            "architectures": [
+                "blackhole"
+            ],
+            "domain": "src_data",
+            "operation": "clear",
+            "persistence": "persistent",
+            "retention": "Source-clear state remains effective until source data is written again.",
+            "value_pattern": "UNP_CLRSRC|UNP_ZEROSRC",
+            "resource_template": "SRC_DATA[{resource}]",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0",
+                "value": "arg:8"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?UNPACR_NOP\\b",
+            "architectures": [
+                "quasar"
+            ],
+            "domain": "dvalid_semaphore",
+            "operation": "set",
+            "retention": "Retained until unpack source valid state is cleared or consumed.",
+            "skip_values": [
+                "0"
+            ],
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:UNPACK_DVALID",
+                "value": "arg:1"
+            }
+        },
+        {
+            "pattern": "\\bregfile\\s*\\[",
+            "domain": "gpr",
+            "operation": "write",
+            "retention": "Retained until overwritten or cleared.",
+            "extractor": {
+                "kind": "assign_index",
+                "resource": "index",
+                "value": "rhs"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?(?:SETGPR|SETDMAREG|DMAREG|GPR_SNAPSHOT)\\b|\\bset_gpr\\b",
+            "domain": "gpr",
+            "operation": "write",
+            "retention": "Retained until overwritten or cleared.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:3",
+                "value": "arg:1"
+            }
+        },
+        {
+            "pattern": "\\breg_write\\b",
+            "domain": "debug_register",
+            "operation": "write",
+            "retention": "Retained until overwritten or cleared.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0",
+                "value": "arg:1"
+            }
+        },
+        {
+            "pattern":
+                "\\b(?P<resource>cfg_state_id|unp_cfg_context|dest_offset_id|dest_register_offset|clear_dest_bank_id|pack_sync_tile_dst_ptr|math_sync_tile_dst_index|data_format_config_set|configured_num_tiles|num_tiles_per_sequence|configured_zero_output|src_zero_flag_state|src_zero_flag_srca_fmt|src_zero_flag_srcb_fmt|topk_replay_init|shadow[A-Za-z0-9_]*)\\s*=(?!=)",
+            "domain": "software_shadow",
+            "operation": "assign",
+            "retention": "Retained until overwritten or cleared.",
+            "extractor": {
+                "kind": "regex_group",
+                "resource_group": "resource"
+            }
+        },
+        {
+            "pattern": "\\bsfpi::(?P<resource>vConst(?:Float|Int)Prgm[0-9]+)\\s*=\\s*(?P<value>[^;]+)",
+            "domain": "sfpu_config",
+            "operation": "configure",
+            "retention": "Retained in the SFPU programmable constant register until overwritten.",
+            "extractor": {
+                "kind": "regex_group",
+                "resource_group": "resource",
+                "value_group": "value"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?(?:SET|INC)_SRC_TILE_FACE_ROW_IDX\\b",
+            "architectures": [
+                "quasar"
+            ],
+            "domain": "counter",
+            "operation": "index",
+            "retention": "Retained until the counter is next updated or reset.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:SRC_TILE_FACE_ROW_IDX",
+                "value": "arg:2"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?(?:SET|INC)_DST_TILE_FACE_ROW_IDX\\b",
+            "architectures": [
+                "quasar"
+            ],
+            "domain": "counter",
+            "operation": "index",
+            "retention": "Retained until the counter is next updated or reset.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:DST_TILE_FACE_ROW_IDX",
+                "value": "arg:2"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?(?:ADD|SUB|MUL)DMAREG\\b",
+            "domain": "gpr",
+            "operation": "write",
+            "retention": "Retained until overwritten or cleared.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:1",
+                "value": "args:2,3"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?CFGSHIFTMASK\\b",
+            "architectures": [
+                "blackhole"
+            ],
+            "domain": "cfg_register",
+            "operation": "rmw",
+            "retention": "Retained until the configuration resource is reconfigured.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:5"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?CFGSHIFTMASK\\b",
+            "architectures": [
+                "quasar"
+            ],
+            "domain": "cfg_register",
+            "operation": "rmw",
+            "retention": "Retained until the configuration resource is reconfigured.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?ADDRCR(?:ZW|XY)\\b",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "domain": "counter",
+            "operation": "addr_cr",
+            "retention": "Retained until the counter is next updated or reset.",
+            "extractor": {
+                "kind": "adc_call",
+                "resource": "arg:0",
+                "value": "args:1,2,3,4,5"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?GATESRCRST\\b",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "domain": "dvalid_semaphore",
+            "operation": "gate_reset",
+            "retention": "Retained until the source gate control is next set or reset.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:src_gate",
+                "value": "args:0,1"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?ZEROSRC\\b",
+            "domain": "src_data",
+            "operation": "clear",
+            "retention": "Source data remains cleared until overwritten by the next unpack.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:SRC_DATA",
+                "value": "args:0,1,2,3,4,5,6"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?RMWCIB[0-9]\\b",
+            "architectures": [
+                "wormhole_b0",
+                "blackhole"
+            ],
+            "skip_functions": [
+                "cfg_reg_rmw_tensix"
+            ],
+            "domain": "cfg_register",
+            "operation": "rmw",
+            "retention": "Retained until the configuration resource is reconfigured.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:2",
+                "value": "arg:1"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?RMWCIB[0-9]\\b",
+            "architectures": [
+                "quasar"
+            ],
+            "domain": "cfg_register",
+            "operation": "rmw",
+            "retention": "Retained until the configuration resource is reconfigured.",
+            "extractor": {
+                "kind": "call",
+                "resource": "arg:0",
+                "value": "arg:2"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?ATGETM\\b",
+            "domain": "mutex",
+            "operation": "acquire",
+            "retention": "Mutex ownership is held until the matching release.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:mutex",
+                "value": "arg:0"
+            }
+        },
+        {
+            "pattern": "\\b(?:TTI_|TT_OP_|TT_)?ATRELM\\b",
+            "domain": "mutex",
+            "operation": "release",
+            "retention": "Releases previously held mutex ownership.",
+            "extractor": {
+                "kind": "call",
+                "resource": "literal:mutex",
+                "value": "arg:0"
+            }
+        }
+    ],
+    "restore_contracts": [
+        {
+            "architecture": "wormhole_b0",
+            "function": "_llk_unpack_AB_init_",
+            "kind": "no_op_transient",
+            "owner": null,
+            "pair": "_llk_unpack_AB_uninit_",
+            "owner_source": null,
+            "pair_source": {
+                "path": "tt_llk_wormhole_b0/llk_lib/llk_unpack_AB.h",
+                "line": 205,
+                "token": "_llk_unpack_AB_uninit_",
+                "body_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "rationale": "The documented uninit is a no-op because datum-count state is transient and each init reprograms it.",
+            "source": {
+                "path": "tt_llk_wormhole_b0/llk_lib/llk_unpack_AB.h",
+                "line": 150,
+                "token": "_llk_unpack_AB_init_",
+                "body_fingerprint": "37beb5ba11bb2d2f0137e2a83c960cb930485eb605de550796a1dc2d75d4fcd8"
+            }
+        },
+        {
+            "architecture": "blackhole",
+            "function": "_llk_unpack_AB_init_",
+            "kind": "no_op_transient",
+            "owner": null,
+            "pair": "_llk_unpack_AB_uninit_",
+            "owner_source": null,
+            "pair_source": {
+                "path": "tt_llk_blackhole/llk_lib/llk_unpack_AB.h",
+                "line": 216,
+                "token": "_llk_unpack_AB_uninit_",
+                "body_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "rationale": "The documented uninit is a no-op because datum-count state is transient and each init reprograms it.",
+            "source": {
+                "path": "tt_llk_blackhole/llk_lib/llk_unpack_AB.h",
+                "line": 161,
+                "token": "_llk_unpack_AB_init_",
+                "body_fingerprint": "37beb5ba11bb2d2f0137e2a83c960cb930485eb605de550796a1dc2d75d4fcd8"
+            }
+        },
+        {
+            "architecture": "wormhole_b0",
+            "function": "_llk_unpack_tilize_init_",
+            "kind": "canonical_reset",
+            "owner": "_llk_unpack_tilize_uninit_",
+            "pair": "_llk_unpack_tilize_uninit_",
+            "owner_source": {
+                "path": "tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h",
+                "line": 549,
+                "token": "_llk_unpack_tilize_uninit_",
+                "body_fingerprint": "395888ceea18cfad45c38331639231a71a344e2774912de576e5062ddbef4b39"
+            },
+            "pair_source": {
+                "path": "tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h",
+                "line": 549,
+                "token": "_llk_unpack_tilize_uninit_",
+                "body_fingerprint": "395888ceea18cfad45c38331639231a71a344e2774912de576e5062ddbef4b39"
+            },
+            "rationale": "Uninit restores tile descriptor dimensions and clears tilize mode to the canonical unpack baseline.",
+            "source": {
+                "path": "tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h",
+                "line": 72,
+                "token": "_llk_unpack_tilize_init_",
+                "body_fingerprint": "904b0882370aad2ad7aac1ba89d8903de6312d8b5134f046b60f4b5ec321b4c5"
+            },
+            "effect_selector": {
+                "domain": "cfg_register"
+            }
+        },
+        {
+            "architecture": "blackhole",
+            "function": "_llk_unpack_tilize_init_",
+            "kind": "canonical_reset",
+            "owner": "_llk_unpack_tilize_uninit_",
+            "pair": "_llk_unpack_tilize_uninit_",
+            "owner_source": {
+                "path": "tt_llk_blackhole/llk_lib/llk_unpack_tilize.h",
+                "line": 303,
+                "token": "_llk_unpack_tilize_uninit_",
+                "body_fingerprint": "2c1e127c5e80414d6f114cc548db5132261bcffaf12a25b8a6a2ea38586696b1"
+            },
+            "pair_source": {
+                "path": "tt_llk_blackhole/llk_lib/llk_unpack_tilize.h",
+                "line": 303,
+                "token": "_llk_unpack_tilize_uninit_",
+                "body_fingerprint": "2c1e127c5e80414d6f114cc548db5132261bcffaf12a25b8a6a2ea38586696b1"
+            },
+            "rationale": "Uninit restores tile descriptor dimensions and clears tilize mode to the canonical unpack baseline.",
+            "source": {
+                "path": "tt_llk_blackhole/llk_lib/llk_unpack_tilize.h",
+                "line": 84,
+                "token": "_llk_unpack_tilize_init_",
+                "body_fingerprint": "ace140340d0eedd4bd3afec5ec7160561d941c1a955db639722bb4a22a64b507"
+            },
+            "effect_selector": {
+                "domain": "cfg_register"
+            }
+        },
+        {
+            "architecture": "wormhole_b0",
+            "function": "_llk_pack_untilize_init_",
+            "kind": "no_op_transient",
+            "owner": null,
+            "pair": "_llk_pack_untilize_uninit_",
+            "owner_source": null,
+            "pair_source": {
+                "path": "tt_llk_wormhole_b0/llk_lib/llk_pack_untilize.h",
+                "line": 220,
+                "token": "_llk_pack_untilize_uninit_",
+                "body_fingerprint": "ce4b3e07ced83d5644b3c54867b32354535de1a70691110264d3d7c31a856116"
+            },
+            "rationale": "The documented uninit is a no-op because packer x-counter state is transient and each operation init reprograms it.",
+            "source": {
+                "path": "tt_llk_wormhole_b0/llk_lib/llk_pack_untilize.h",
+                "line": 179,
+                "token": "_llk_pack_untilize_init_",
+                "body_fingerprint": "f037a02c9517c4b2ae10049a1de478a68f9f82860e079254f49bb8265529b49f"
+            }
+        },
+        {
+            "architecture": "blackhole",
+            "function": "_llk_pack_untilize_init_",
+            "kind": "canonical_reset",
+            "owner": "_llk_pack_untilize_uninit_",
+            "pair": "_llk_pack_untilize_uninit_",
+            "owner_source": {
+                "path": "tt_llk_blackhole/llk_lib/llk_pack_untilize.h",
+                "line": 332,
+                "token": "_llk_pack_untilize_uninit_",
+                "body_fingerprint": "ce3ddd4495be3886d2f1a8a2a4487b8cfdfa84f7e81195871a6a6338d75fdb9f"
+            },
+            "pair_source": {
+                "path": "tt_llk_blackhole/llk_lib/llk_pack_untilize.h",
+                "line": 332,
+                "token": "_llk_pack_untilize_uninit_",
+                "body_fingerprint": "ce3ddd4495be3886d2f1a8a2a4487b8cfdfa84f7e81195871a6a6338d75fdb9f"
+            },
+            "rationale": "Uninit recomputes the canonical single-face packer Z stride; it does not restore the init's other state effects.",
+            "source": {
+                "path": "tt_llk_blackhole/llk_lib/llk_pack_untilize.h",
+                "line": 194,
+                "token": "_llk_pack_untilize_init_",
+                "body_fingerprint": "5b64529f4dbf54802cb6ed67edc3dd90950059735be0f03856478e5c2be64524"
+            },
+            "effect_selector": {
+                "domain": "cfg_register",
+                "resource": "PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW"
+            }
+        },
+        {
+            "architecture": "wormhole_b0",
+            "function": "_llk_pack_init_",
+            "kind": "no_op_transient",
+            "owner": null,
+            "pair": "_llk_pack_uninit_",
+            "owner_source": null,
+            "pair_source": {
+                "path": "tt_llk_wormhole_b0/llk_lib/llk_pack.h",
+                "line": 436,
+                "token": "_llk_pack_uninit_",
+                "body_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "rationale": "Pack teardown is documented as a no-op; operation initialization owns transient setup.",
+            "source": {
+                "path": "tt_llk_wormhole_b0/llk_lib/llk_pack.h",
+                "line": 394,
+                "token": "_llk_pack_init_",
+                "body_fingerprint": "0834aa89788c30b1aac6137a1e4d89efb1d5daf9b45afa8e3fecf16554d99d57"
+            }
+        },
+        {
+            "architecture": "blackhole",
+            "function": "_llk_pack_init_",
+            "kind": "no_op_transient",
+            "owner": null,
+            "pair": "_llk_pack_uninit_",
+            "owner_source": null,
+            "pair_source": {
+                "path": "tt_llk_blackhole/llk_lib/llk_pack.h",
+                "line": 561,
+                "token": "_llk_pack_uninit_",
+                "body_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "rationale": "Pack init leaves the fixed PAC X counter at its default, so teardown is documented as a no-op.",
+            "source": {
+                "path": "tt_llk_blackhole/llk_lib/llk_pack.h",
+                "line": 517,
+                "token": "_llk_pack_init_",
+                "body_fingerprint": "4ab8e714bc97ec7335e78f5f17eba2165bbe467cb7934da26d03f736cf750e54"
+            }
+        },
+        {
+            "architecture": "wormhole_b0",
+            "function": "_llk_pack_reduce_mask_config_",
+            "kind": "canonical_reset",
+            "owner": "_llk_pack_reduce_mask_clear_",
+            "pair": "_llk_pack_reduce_mask_clear_",
+            "owner_source": {
+                "path": "tt_llk_wormhole_b0/llk_lib/llk_pack_common.h",
+                "line": 338,
+                "token": "_llk_pack_reduce_mask_clear_",
+                "body_fingerprint": "fe217c6ef7b3cdddbaa11fc99eda9a945ca416716b179b67a346d60cc779a526"
+            },
+            "pair_source": {
+                "path": "tt_llk_wormhole_b0/llk_lib/llk_pack_common.h",
+                "line": 338,
+                "token": "_llk_pack_reduce_mask_clear_",
+                "body_fingerprint": "fe217c6ef7b3cdddbaa11fc99eda9a945ca416716b179b67a346d60cc779a526"
+            },
+            "rationale": "Clear restores default pass-through packer edge masks and pack-read counters after reduce mask configuration.",
+            "source": {
+                "path": "tt_llk_wormhole_b0/llk_lib/llk_pack_common.h",
+                "line": 240,
+                "token": "_llk_pack_reduce_mask_config_",
+                "body_fingerprint": "565286c83a44891e86c24b38d14ee7346d6ed426f743fade9f201f56e1b95089"
+            },
+            "effect_selector": {
+                "domain": [
+                    "cfg_register",
+                    "counter"
+                ]
+            }
+        },
+        {
+            "architecture": "blackhole",
+            "function": "_llk_pack_reduce_mask_config_",
+            "kind": "canonical_reset",
+            "owner": "_llk_pack_reduce_mask_clear_",
+            "pair": "_llk_pack_reduce_mask_clear_",
+            "owner_source": {
+                "path": "tt_llk_blackhole/llk_lib/llk_pack_common.h",
+                "line": 275,
+                "token": "_llk_pack_reduce_mask_clear_",
+                "body_fingerprint": "6b851cc09749e75612e90ce165440f86b8d379002822eacb0f38f6162afce42d"
+            },
+            "pair_source": {
+                "path": "tt_llk_blackhole/llk_lib/llk_pack_common.h",
+                "line": 275,
+                "token": "_llk_pack_reduce_mask_clear_",
+                "body_fingerprint": "6b851cc09749e75612e90ce165440f86b8d379002822eacb0f38f6162afce42d"
+            },
+            "rationale": "Clear restores default pass-through packer edge masks and pack-read counters after reduce mask configuration.",
+            "source": {
+                "path": "tt_llk_blackhole/llk_lib/llk_pack_common.h",
+                "line": 184,
+                "token": "_llk_pack_reduce_mask_config_",
+                "body_fingerprint": "8fa3036324cea8b79973f1a9f2c4a37808b6cf0a690708993a8a4d1cc7b62a6b"
+            },
+            "effect_selector": {
+                "domain": [
+                    "cfg_register",
+                    "counter"
+                ]
+            }
+        },
+        {
+            "architecture": "quasar",
+            "function": "_llk_pack_reduce_mask_config_",
+            "kind": "canonical_reset",
+            "owner": "_llk_pack_reduce_mask_clear_",
+            "pair": "_llk_pack_reduce_mask_clear_",
+            "owner_source": {
+                "path": "tt_llk_quasar/llk_lib/llk_pack_common.h",
+                "line": 183,
+                "token": "_llk_pack_reduce_mask_clear_",
+                "body_fingerprint": "db10e26c12bdb205679ebd5f31ece8c56458845b7f6bfbf0d05fd7c09e7682bf"
+            },
+            "pair_source": {
+                "path": "tt_llk_quasar/llk_lib/llk_pack_common.h",
+                "line": 183,
+                "token": "_llk_pack_reduce_mask_clear_",
+                "body_fingerprint": "db10e26c12bdb205679ebd5f31ece8c56458845b7f6bfbf0d05fd7c09e7682bf"
+            },
+            "rationale": "The source explicitly directs callers to clear to restore default pass-through masks.",
+            "source": {
+                "path": "tt_llk_quasar/llk_lib/llk_pack_common.h",
+                "line": 124,
+                "token": "_llk_pack_reduce_mask_config_",
+                "body_fingerprint": "ab05ec0526d46ceb794834671c7625dec7424b4c1fd13201b0801e34bd437aca"
+            },
+            "effect_selector": {
+                "domain": [
+                    "cfg_register",
+                    "counter"
+                ]
+            }
+        },
+        {
+            "architecture": "quasar",
+            "function": "_llk_pack_reduce_mask_clear_",
+            "kind": "canonical_reset",
+            "owner": "_llk_pack_reduce_mask_clear_",
+            "pair": "_llk_pack_reduce_mask_config_",
+            "owner_source": {
+                "path": "tt_llk_quasar/llk_lib/llk_pack_common.h",
+                "line": 183,
+                "token": "_llk_pack_reduce_mask_clear_",
+                "body_fingerprint": "db10e26c12bdb205679ebd5f31ece8c56458845b7f6bfbf0d05fd7c09e7682bf"
+            },
+            "pair_source": {
+                "path": "tt_llk_quasar/llk_lib/llk_pack_common.h",
+                "line": 124,
+                "token": "_llk_pack_reduce_mask_config_",
+                "body_fingerprint": "ab05ec0526d46ceb794834671c7625dec7424b4c1fd13201b0801e34bd437aca"
+            },
+            "rationale": "This function restores default Packer 0 edge masks after reduce.",
+            "source": {
+                "path": "tt_llk_quasar/llk_lib/llk_pack_common.h",
+                "line": 183,
+                "token": "_llk_pack_reduce_mask_clear_",
+                "body_fingerprint": "db10e26c12bdb205679ebd5f31ece8c56458845b7f6bfbf0d05fd7c09e7682bf"
+            },
+            "effect_selector": {
+                "domain": [
+                    "cfg_register",
+                    "counter"
+                ]
+            }
+        },
+        {
+            "architecture": "quasar",
+            "function": "_llk_pack_dest_dvalid_section_done_",
+            "kind": "canonical_reset",
+            "owner": "_llk_pack_dest_dvalid_section_done_",
+            "pair": null,
+            "owner_source": {
+                "path": "tt_llk_quasar/llk_lib/llk_pack_common.h",
+                "line": 88,
+                "token": "_llk_pack_dest_dvalid_section_done_",
+                "body_fingerprint": "12ead970126c8a61634ffe8b40df860c8a1dfbc68139f10fe91ef385b1194e19"
+            },
+            "pair_source": null,
+            "rationale": "Section completion clears destination data-valid and destination-bank state.",
+            "source": {
+                "path": "tt_llk_quasar/llk_lib/llk_pack_common.h",
+                "line": 88,
+                "token": "_llk_pack_dest_dvalid_section_done_",
+                "body_fingerprint": "12ead970126c8a61634ffe8b40df860c8a1dfbc68139f10fe91ef385b1194e19"
+            },
+            "effect_selector": {
+                "domain": [
+                    "dvalid_semaphore",
+                    "software_shadow",
+                    "dest_data",
+                    "destination"
+                ]
+            }
+        }
+    ]
+}
