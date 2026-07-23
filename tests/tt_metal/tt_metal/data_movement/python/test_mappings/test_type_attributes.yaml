@@ -60,6 +60,7 @@ quasar_cache_write:
     "Write path": "write_path"
   value_mappings:
     "Write path":
-      0: "Uncached (1B)"
-      1: "Uncached (8B)"
-      2: "Cached+Flush (8B)"
+      0: "Uncached (1B stores)"
+      1: "Uncached (8B stores)"
+      2: "Cached + flush (fence per line)"
+      3: "Cached + flush (single fence)"

@@ -1,38 +1,44 @@
 # Quasar Cache-Write Performance Test (test id 912)
 
-Measures single-DM-core write performance to Tensix L1 on Quasar, swept over
-total data size (1B .. 2KB, powers of two), for three write modes:
+Measures single-DM-core write performance to Tensix L1 on Quasar, swept over total
+data size (8B .. 2KB, multiples of 8), for four write modes (stamped as `Write path`):
 
-- **Uncached (1B)** — `base + MEM_L1_UNCACHED_BASE` (+4MB alias), byte-at-a-time
-  stores; straight to TL1, no flush.
-- **Uncached (8B)** — same uncached port, but 64-bit stores (the natural DM-core
-  store width) with a byte tail for sub-8B sizes.
-- **Cached+Flush (8B)** — 64-bit stores to the cacheable window (`0..4MB`), then
-  `flush_l2_cache_range(base, N)` (flushes `ceil(N/64)` 64B lines).
+- **0 — Uncached (1B stores)** — `base + MEM_L1_UNCACHED_BASE` (+4MB alias), written
+  one byte at a time; straight to TL1, no flush.
+- **1 — Uncached (8B stores)** — same uncached port, 64-bit stores (the natural
+  DM-core store width).
+- **2 — Cached + flush (fence per line)** — 64-bit stores to the cacheable window,
+  then `flush_l2_cache_range(base, N)`, the library range flush, which fences twice
+  per 64B line. This is the exact method used by the earlier standalone measurement.
+- **3 — Cached + flush (single fence)** — identical cacheable 64-bit stores, then the
+  touched 64B lines are flushed with bare flush-register writes (no per-line fence)
+  and a single completion fence after all iterations. This is the efficient flush.
 
-Comparing Uncached (1B) vs Uncached (8B) isolates the effect of store width on the
-uncached port; comparing Uncached (8B) vs Cached+Flush (8B) isolates the cache +
-flush effect at a fixed store width.
+What the comparisons isolate: **0 vs 1** = store width on the uncached port; **1 vs 2**
+= uncached vs cache+flush as originally measured; **2 vs 3** = the flush fencing cost.
 
 ## When to use which (write-only to L1)
 
-- **Fire-and-forget writes, any size → uncached port with 8-byte stores.** Fastest
-  at every size in the sweep; cache+flush is never faster for write-only traffic.
-- **< 8 bytes → uncached** (store width is irrelevant below 8B). Cache+flush pays a
-  ~160-cycle `flush_l2_cache_range` floor, 3–10x worse at these sizes.
-- **Cache + flush → only with reuse.** Worth its flush cost when the data is
-  subsequently read back by the core, or when many scattered sub-64B updates
-  coalesce in cache before one flush — cases this write-only test does not measure.
+- **Fire-and-forget writes, any size → uncached port with 8-byte stores.** Fastest at
+  every size in the sweep.
+- **Cache + flush → use the single-fence flush, not `flush_l2_cache_range`.** The
+  library per-line fencing is much slower for multi-line ranges (e.g. ~4400 vs ~3900
+  cyc at 2KB). Even optimized, cache+flush does not beat uncached-8B for write-only,
+  no-reuse traffic — it pays off only when the data is subsequently read back, or when
+  many scattered sub-64B updates coalesce in cache before one flush (not measured here).
 
-To measure steady-state (not one-shot) cost, the kernel repeats the timed
-`write(+flush)` region `num_iterations` times (default 100) inside a single
-`DeviceZoneScopedN`, and the host divides the zone duration by the iteration
-count. This amortizes fixed per-run overhead (zone entry/exit, prologue, cold
-pipeline), matching the April two-phase measurement method. It stamps `Test id`,
-`Number of transactions` (= iteration count), `Transaction size in bytes` (=N),
-and `Write path` (the mode: 0=Uncached 1B, 1=Uncached 8B, 2=Cached+Flush 8B).
-Results are plotted as amortized per-write duration (cycles) and bandwidth
-(bytes/cycle) vs data size.
+## Measurement method
+
+To measure steady-state (not one-shot) cost, each mode repeats its write(+flush)
+region `num_iterations` times (default 100) inside a single `DeviceZoneScopedN`, and
+the host divides the zone duration by the iteration count to get the amortized
+per-write cost. Fencing discipline: the uncached modes (0/1) fence every iteration
+(matching the standalone `DirectSram` baseline); mode 2 uses the library per-line
+flush; mode 3 issues a single fence after all iterations. Sizes are multiples of 8 so
+the 8-byte modes do exactly `N/8` stores with no sub-8B tail. The kernel stamps
+`Test id`, `Number of transactions` (= iteration count), `Transaction size in bytes`,
+and `Write path` (mode). Results are plotted as amortized per-write duration (cycles)
+and bandwidth (bytes/cycle) vs data size.
 
 ## Requirements
 
@@ -62,10 +68,11 @@ data size, one line per path.
 
 The `emu-quasar-1x3` target has no fast-dispatch cores, so tests must run in
 slow-dispatch mode (`TT_METAL_SLOW_DISPATCH_MODE=1`). Under slow dispatch the
-profiler does not increment `run host ID` — every one of the 24 sweep runs is
-stamped `run_host_id = 0`. Because `stats_collector.aggregate_performance`
-groups runs by `run_host_id`, all runs collapse into a single aggregated point,
-so the auto-generated PNG shows one point rather than the two 12-point curves.
+profiler does not increment `run host ID` — every one of the 40 sweep runs
+(4 modes x 10 sizes) is stamped `run_host_id = 0`. Because
+`stats_collector.aggregate_performance` groups runs by `run_host_id`, all runs
+collapse into a single aggregated point, so the auto-generated PNG shows one point
+rather than the four per-mode curves.
 
 The per-run data is still fully captured in
 `generated/profiler/.logs/profile_log_device.csv`: each `RISCV1` `ZONE_START`/

@@ -46,7 +46,12 @@ import matplotlib.ticker as mticker
 
 TEST_ID = 912
 # Write modes stamped as "Write path" by the kernel.
-MODE_LABELS = {0: "Uncached (1B)", 1: "Uncached (8B)", 2: "Cached+Flush (8B)"}
+MODE_LABELS = {
+    0: "Uncached (1B stores)",
+    1: "Uncached (8B stores)",
+    2: "Cached + flush (fence per line)",
+    3: "Cached + flush (single fence)",
+}
 
 # CSV column indices (0-based), per the tracy device-log header:
 # PCIe, core_x, core_y, RISC type, timer_id, time, data, run host ID, trace id,
@@ -157,7 +162,7 @@ def main():
     )
     fig.suptitle(
         f"Quasar Cache Write Sizes (test {TEST_ID}) - amortized over {runs[0].get('iters', '?')} iters "
-        f"- uncached 1B vs uncached 8B vs cached+flush",
+        f"- uncached (1B/8B stores) vs cached+flush (fence per line / single fence)",
         fontweight="bold",
     )
 

@@ -88,7 +88,9 @@ bool run_cache_write(
 class QuasarCacheWrite : public QuasarMeshDeviceSingleCardFixture {};
 
 namespace unit_tests::dm::quasar_cache_perf {
-static const std::vector<std::uint32_t> kSizesBytes = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048};
+// Sizes are multiples of 8 (kernel does 8-byte stores, no sub-8B tail). 24 = 3x uint64
+// stores, the direct comparison point against the April descriptor-write baseline.
+static const std::vector<std::uint32_t> kSizesBytes = {8, 16, 24, 32, 64, 128, 256, 512, 1024, 2048};
 }  // namespace unit_tests::dm::quasar_cache_perf
 
 TEST_F(QuasarCacheWrite, SizeSweep) {
@@ -96,8 +98,8 @@ TEST_F(QuasarCacheWrite, SizeSweep) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     bool pass = true;
-    // mode: 0=uncached 1B stores, 1=uncached 8B stores, 2=cached+flush 8B stores
-    for (std::uint32_t mode : {0u, 1u, 2u}) {
+    // mode: 0=uncached 1B, 1=uncached 8B, 2=cached+range flush (April), 3=cached+fast flush
+    for (std::uint32_t mode : {0u, 1u, 2u, 3u}) {
         for (std::uint32_t size_bytes : unit_tests::dm::quasar_cache_perf::kSizesBytes) {
             pass &= unit_tests::dm::quasar_cache_perf::run_cache_write(devices_[0], size_bytes, mode);
         }
