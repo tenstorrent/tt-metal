@@ -6,7 +6,6 @@ import torch
 # import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_common import HostEmbedding
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
-from models.demos.llama3_70b_galaxy.reference.llama import Transformer
 
 from loguru import logger
 
@@ -22,7 +21,7 @@ def test_llama_torch_inference(ensure_gc):
     prompts = ["1 2 3 4 "] * model_args.max_batch_size
     encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in prompts]
 
-    reference_model = Transformer(model_args)
+    reference_model = model_args.reference_transformer()
     reference_model.load_state_dict(state_dict)
 
     # Embedding on host

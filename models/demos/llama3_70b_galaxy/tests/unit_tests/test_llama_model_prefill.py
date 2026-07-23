@@ -14,7 +14,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
-from models.demos.llama3_70b_galaxy.reference.llama import Transformer
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -122,7 +121,7 @@ def test_llama_model_inference(
     encoded_prompt = model_args.encode_prompt(prompt, instruct=instruct)[:seq_len]
 
     if run_ref_pt:
-        reference_model = Transformer(model_args)
+        reference_model = model_args.reference_transformer()
         reference_model.load_state_dict(reference_state_dict)
     # Embedding on host
     embd = HostEmbedding(model_args)
@@ -227,11 +226,11 @@ def test_llama_model_inference(
             if cache_pcc:
                 for i in range(model_args.n_layers):
                     pytorch_layer_present = [
-                        reference_model.layers[i]
-                        .attention.cache_k.clone()
+                        reference_model.cache_k[i]
+                        .clone()
                         .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-                        reference_model.layers[i]
-                        .attention.cache_v.clone()
+                        reference_model.cache_v[i]
+                        .clone()
                         .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
                     ]
 

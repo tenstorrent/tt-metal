@@ -5,6 +5,7 @@
 import math
 import os
 import json
+import inspect
 import ttnn
 from pathlib import Path
 from loguru import logger
@@ -23,7 +24,7 @@ from models.tt_transformers.tt.common import (
     nearest_multiple,
 )
 from typing import Tuple
-from models.common.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32, hf_cache_to_legacy
 from pathlib import Path
 from enum import Enum, auto
 from dataclasses import dataclass
@@ -31,7 +32,9 @@ from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     load_meta_state_dict,
     load_hf_state_dict,
     convert_hf_to_meta,
+    convert_meta_to_hf,
     standardize_hf_keys,
+    reverse_permute,
 )
 
 # Performance tuning:
@@ -473,6 +476,15 @@ class TtModelArgs:
         self.tile_size = 32
         self.is_70b = False
         self.from_hf_url = False  # updated below if true
+        # HuggingFace-backed reference model infrastructure (mirrors models/tt_transformers).
+        # Galaxy Llama/Qwen use Meta-format state dicts, so keep the Meta<->HF permute path (use_hf_rope=False).
+        self.hf_config = None  # Populated in _set_hf_params for HF checkpoints
+        self.use_hf_rope = False
+        self.trust_remote_code_hf = False
+        self.cache_hf_flag = False  # Whether to cache the HF reference model to avoid multiple loads
+        self.cached_hf_model = None
+        self.fuse_qkv = False
+        self.fuse_mlp = False
         self.max_prefill_chunk_size = max_seq_len
         self.use_prefetcher = False
         self.max_top_k = 32
@@ -2205,15 +2217,17 @@ class TtModelArgs:
         self.orig_context_len = 8192
 
     def _set_hf_params(self, checkpoint_dir):
-        if self.from_hf_url:
-            from transformers import AutoConfig
+        from transformers import AutoConfig
 
-            config = AutoConfig.from_pretrained(self.model_name).to_dict()
+        if self.from_hf_url:
+            self.hf_config = AutoConfig.from_pretrained(self.model_name, trust_remote_code=self.trust_remote_code_hf)
+            config = self.hf_config.to_dict()
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
+            self.hf_config = AutoConfig.from_pretrained(checkpoint_dir, trust_remote_code=self.trust_remote_code_hf)
         self._set_params_from_dict(config, is_hf=True)
         self.is_70b = self.dim == 8192 and self.n_layers == 80
         if self.is_70b:
@@ -2275,10 +2289,116 @@ class TtModelArgs:
     def get_model_config(self):
         return self.model_config
 
+    def get_hf_model_cls(self):
+        # Galaxy Llama / Qwen are text-only causal LMs.
+        from transformers import AutoModelForCausalLM
+
+        return AutoModelForCausalLM
+
+    def reference_transformer(self, wrap=True, load_checkpoint=False):
+        """Return the HuggingFace reference transformer, mirroring models/tt_transformers.
+
+        When wrap=True, returns an HfModelWrapper exposing a Meta-style forward/load_state_dict.
+        When wrap=False, returns the raw HF model (used by the submodule reference_* helpers).
+        """
+        import copy
+
+        model_cls = self.get_hf_model_cls()
+
+        if self.dummy_weights and not load_checkpoint:
+            assert self.hf_config is not None, "hf_config must be set to build a dummy HF reference model"
+            config = copy.deepcopy(self.hf_config)
+            if hasattr(config, "text_config"):
+                config.text_config.num_layers = self.n_layers
+                config.text_config.num_hidden_layers = self.n_layers
+            else:
+                config.num_layers = self.n_layers
+                config.num_hidden_layers = self.n_layers
+            try:
+                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            except TypeError:
+                model = model_cls.from_config(config)
+        else:
+            # Load real HF weights. Mirrors the from_pretrained call in load_state_dict so the
+            # CI checkpoint-resolution behavior stays consistent.
+            if self.cache_hf_flag and self.cached_hf_model is not None:
+                model = self.cached_hf_model
+            else:
+                model = model_cls.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto",
+                    trust_remote_code=self.trust_remote_code_hf,
+                )
+                if self.cache_hf_flag:
+                    self.cached_hf_model = model
+
+        # Keep only the requested number of layers.
+        model.model.layers = model.model.layers[: self.n_layers]
+        if wrap:
+            return HfModelWrapper(model, self.head_dim, config=self.hf_config, use_hf_rope=self.use_hf_rope)
+        return model
+
+    def reference_rms_norm(self):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0].input_layernorm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_mlp(self):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0].mlp
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_embedding(self, reference_model=None):
+        if reference_model is None:
+            model = self.reference_transformer(wrap=False)
+            layer = model.model.embed_tokens
+        else:
+            layer = reference_model.model.model.embed_tokens
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_decoder(self, load_checkpoint=False):
+        model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
+        layer = model.model.layers[0]
+        rotary_emb_local = getattr(model.model, "rotary_emb_local", None)
+        wrapper = HfDecoderWrapper(
+            layer,
+            self.head_dim,
+            model.model.rotary_emb,
+            rotary_emb_local,
+            self.use_hf_rope,
+        )
+        return wrapper
+
+    def reference_attention(self, load_checkpoint=False):
+        model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
+        layer = model.model.layers[0].self_attn
+        use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
+        wrapper = HfAttentionWrapper(
+            layer,
+            self.head_dim,
+            model.model.rotary_emb if use_position_embeddings else None,
+            use_hf_rope=self.use_hf_rope,
+        )
+        return wrapper
+
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         """Generate or load state_dict for n_layers of the model"""
-        if self.dummy_weights:
+        if self.dummy_weights and self.checkpoint_type == CheckpointType.HuggingFace:
+            # Build the HF reference model from config (random init) and convert its keys to Meta
+            # format, matching the real HF weight-loading path below.
+            reference_model = self.reference_transformer(wrap=False)
+            state_dict = reference_model.state_dict()
+            state_dict = standardize_hf_keys(state_dict)
+            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+        elif self.dummy_weights:
+            # Meta-format dummy weights (multiple_of / ffn_dim_multiplier available in the config)
             from models.demos.llama3_70b_galaxy.reference.llama import Transformer
 
             reference_model = Transformer(self)
@@ -2840,3 +2960,196 @@ def set_tg_attention_config(model_config, dim):
     )
 
     return model_config
+
+
+# ---------------------------------------------------------------------------
+# HuggingFace reference-model wrappers (mirrors models/tt_transformers).
+# These adapt HF submodules to the Meta-style forward/load_state_dict API used
+# by the galaxy tests. Galaxy Llama/Qwen use Meta-format state dicts, so the
+# Meta<->HF permute path is used (convert_meta_to_hf).
+# ---------------------------------------------------------------------------
+def _meta_cache_to_meta_k(hf_past_key_value, use_hf_rope):
+    """Extract the (single-layer) K cache from an HF cache and convert to Meta layout."""
+    [(k, v)] = [(kk, vv) for (kk, vv) in hf_cache_to_legacy(hf_past_key_value) if kk is not None]
+    hf_k = k.permute(0, 2, 1, 3)  # (batch_size, seq, n_kv_heads, head_dim)
+    if use_hf_rope:
+        return hf_k
+    batch_size, seq_len, n_heads, head_dim = hf_k.shape
+    meta_k = torch.zeros_like(hf_k)
+    for b in range(batch_size):
+        for s in range(seq_len):
+            flat = hf_k[b, s].flatten()
+            transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+            meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+    return meta_k
+
+
+class HfAttentionWrapper:
+    def __init__(self, attention, head_dim, rotary_emb, use_hf_rope=False):
+        from transformers import DynamicCache
+
+        super().__init__()
+        self.attention = attention
+        self.past_key_value = DynamicCache()
+        self.head_dim = head_dim
+        self.rotary_emb = rotary_emb
+        self.use_hf_rope = use_hf_rope
+
+    def forward(self, x, start_pos, freqs_cis_i, mask=None):
+        position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+
+        if mask is not None:
+            while len(mask.shape) < 4:
+                mask = mask.unsqueeze(0)
+
+        # transformers 5.x renamed the attention cache kwarg past_key_value -> past_key_values.
+        cache_kw = (
+            "past_key_values"
+            if "past_key_values" in inspect.signature(self.attention.forward).parameters
+            else "past_key_value"
+        )
+        if self.rotary_emb is not None:
+            position_embeddings = self.rotary_emb(x, position_ids)
+            output, *_ = self.attention(
+                x,
+                position_embeddings=position_embeddings,
+                use_cache=True,
+                attention_mask=mask,
+                **{cache_kw: self.past_key_value},
+            )
+        else:
+            output, _, self.past_key_value = self.attention(
+                x,
+                use_cache=True,
+                position_ids=position_ids,
+                attention_mask=mask,
+                **{cache_kw: self.past_key_value},
+            )
+        return output
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def load_state_dict(self, state_dict):
+        return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+
+    @property
+    def cache_k(self):
+        return _meta_cache_to_meta_k(self.past_key_value, self.use_hf_rope)
+
+    @property
+    def cache_v(self):
+        [(k, v)] = [(kk, vv) for (kk, vv) in hf_cache_to_legacy(self.past_key_value) if kk is not None]
+        return v.permute(0, 2, 1, 3)  # (batch_size, seq, n_kv_heads, head_dim)
+
+
+class HfDecoderWrapper:
+    def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local=None, use_hf_rope=False):
+        from transformers import DynamicCache
+
+        self.decoder = decoder
+        self.head_dim = head_dim
+        self.rotary_emb = rotary_emb
+        self.rotary_emb_local = rotary_emb_local
+        self.past_key_values = DynamicCache()
+        self.use_hf_rope = use_hf_rope
+
+    def forward(self, x, start_pos, freqs_cis_i, mask=None):
+        position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+        position_embeddings = self.rotary_emb(x, position_ids) if self.rotary_emb is not None else None
+
+        if mask is not None:
+            while len(mask.shape) < 4:
+                mask = mask.unsqueeze(0)
+
+        # transformers 5.x renamed the decoder-layer cache kwarg past_key_value -> past_key_values.
+        cache_kw = (
+            "past_key_values"
+            if "past_key_values" in inspect.signature(self.decoder.forward).parameters
+            else "past_key_value"
+        )
+        result = self.decoder.forward(
+            x,
+            position_embeddings=position_embeddings,
+            use_cache=True,
+            position_ids=position_ids,
+            attention_mask=mask,
+            **{cache_kw: self.past_key_values},
+        )
+        # transformers 5.x decoder layers return the hidden-states tensor directly instead of a tuple.
+        output = result[0] if isinstance(result, tuple) else result
+        return output
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def load_state_dict(self, state_dict):
+        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+
+    @property
+    def cache_k(self):
+        return _meta_cache_to_meta_k(self.past_key_values, self.use_hf_rope)
+
+    @property
+    def cache_v(self):
+        [(k, v)] = [(kk, vv) for (kk, vv) in hf_cache_to_legacy(self.past_key_values) if kk is not None]
+        return v.permute(0, 2, 1, 3)  # (batch_size, seq, n_kv_heads, head_dim)
+
+
+class HfModelWrapper:
+    def __init__(self, model, head_dim, config=None, use_hf_rope=False):
+        from transformers import DynamicCache
+
+        self.model = model
+        self.head_dim = head_dim
+        self.config = config
+        self.past_key_values = DynamicCache()
+        self.use_hf_rope = use_hf_rope
+
+    def forward(self, inputs_embeds, start_pos, mode="decode"):
+        position_ids = torch.tensor(
+            [list(range(start_pos, start_pos + inputs_embeds.shape[1]))] * inputs_embeds.shape[0]
+        )
+        logits, new_cache, hidden_states = self.model.forward(
+            inputs_embeds=inputs_embeds,
+            position_ids=position_ids,
+            use_cache=True,
+            past_key_values=self.past_key_values,
+            return_dict=False,
+            output_hidden_states=True,
+        )
+        self.past_key_values = new_cache
+        return logits if mode == "decode" else hidden_states[-2]  # last hidden state is final norm
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def load_state_dict(self, state_dict):
+        return self.model.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+
+    def eval(self):
+        self.model.eval()
+
+    @property
+    def cache_k(self):
+        kvs = hf_cache_to_legacy(self.past_key_values)
+        meta_ks = []
+        for k, v in kvs:
+            hf_k = k.permute(0, 2, 1, 3)  # (batch_size, seq, n_kv_heads, head_dim)
+            if self.use_hf_rope:
+                meta_ks.append(hf_k)
+                continue
+            batch_size, seq_len, n_heads, head_dim = hf_k.shape
+            meta_k = torch.zeros_like(hf_k)
+            for b in range(batch_size):
+                for s in range(seq_len):
+                    flat = hf_k[b, s].flatten()
+                    transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+                    meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+            meta_ks.append(meta_k)
+        return meta_ks
+
+    @property
+    def cache_v(self):
+        kvs = hf_cache_to_legacy(self.past_key_values)
+        return [v.permute(0, 2, 1, 3) for k, v in kvs]  # (batch_size, seq, n_kv_heads, head_dim)
