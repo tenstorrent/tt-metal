@@ -84,7 +84,7 @@ HostTensor enqueue_read_tensor(distributed::MeshCommandQueue& cq, const MeshTens
         },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+    cq.enqueue_read(*mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
     return HostTensor::from_buffer(
         std::move(distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
@@ -156,7 +156,7 @@ void enqueue_read_tensor(
         });
     }
 
-    cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+    cq.enqueue_read(*mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
     host_tensor.update_tensor_topology(device_tensor.tensor_topology());
 }
 
@@ -221,12 +221,12 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
             }
         }
         if (any_pinned) {
-            cq.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
+            cq.enqueue_write_shards(*mesh_buffer, transfers, /*blocking=*/true);
         } else {
-            cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+            cq.enqueue_write(*mesh_buffer, distributed_host_buffer, /*blocking=*/false);
         }
     } else {
-        cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+        cq.enqueue_write(*mesh_buffer, distributed_host_buffer, /*blocking=*/false);
     }
 
     device_tensor = MeshTensor::from_buffer(
@@ -256,7 +256,7 @@ void enqueue_read_tensor(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(dst)
             .region(region)};
-    queue.enqueue_read_shards(shard_data_transfers, device_tensor.impl().raw_mesh_buffer(), blocking);
+    queue.enqueue_read_shards(shard_data_transfers, device_tensor.impl().mesh_buffer(), blocking);
 }
 
 void enqueue_write_tensor(
@@ -269,7 +269,7 @@ void enqueue_write_tensor(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(const_cast<std::byte*>(src))
             .region(region)};
-    queue.enqueue_write_shards(device_tensor.impl().raw_mesh_buffer(), shard_data_transfers, false);
+    queue.enqueue_write_shards(device_tensor.impl().mesh_buffer(), shard_data_transfers, false);
 }
 
 // ======================================================================================
@@ -334,7 +334,7 @@ void enqueue_read_tensor(
     }
 
     std::unordered_set<distributed::MeshCoordinate> shard_set(coords.begin(), coords.end());
-    cq.enqueue_read(device_tensor.impl().raw_mesh_buffer(), dst_distributed_host_buffer, shard_set, blocking);
+    cq.enqueue_read(device_tensor.impl().mesh_buffer(), dst_distributed_host_buffer, shard_set, blocking);
 
     host_tensor = HostTensor::from_buffer(
         std::move(dst_distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
@@ -416,12 +416,12 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
                 experimental::ShardDataTransferSetPinnedMemory(xfer, pinned_memory);
                 transfers.push_back(std::move(xfer));
             }
-            command_queue.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
+            command_queue.enqueue_write_shards(*mesh_buffer, transfers, /*blocking=*/true);
         } else {
-            command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
+            command_queue.enqueue_write_mesh_buffer(*mesh_buffer, data_to_write.data(), /*blocking=*/false);
         }
     } else {
-        command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
+        command_queue.enqueue_write_mesh_buffer(*mesh_buffer, data_to_write.data(), /*blocking=*/false);
     }
 
     const auto& mesh_device_shape = mesh_buffer->device()->shape();
@@ -514,12 +514,12 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
             }
         }
         if (any_pinned) {
-            cq.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
+            cq.enqueue_write_shards(*mesh_buffer, transfers, /*blocking=*/true);
         } else {
-            cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+            cq.enqueue_write(*mesh_buffer, distributed_host_buffer, /*blocking=*/false);
         }
     } else {
-        cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+        cq.enqueue_write(*mesh_buffer, distributed_host_buffer, /*blocking=*/false);
     }
 
     // DistributedHostBuffer may not cover the entire MeshDevice, must preserve coords here.
