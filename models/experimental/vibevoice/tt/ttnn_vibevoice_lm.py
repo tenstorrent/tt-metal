@@ -760,14 +760,21 @@ class TTVibeVoiceLM:
             gate_pc, down_pc = None, _FFN_DOWN_DECODE_PROGCFG_B1
         else:  # prefill (S>1) → auto
             gate_pc, down_pc = None, None
-        gate = ttnn.linear(
-            x, layer_w.w1, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        up = ttnn.linear(
-            x, layer_w.w3, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        gate = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        hidden = ttnn.mul(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # L1-island for the cfg-batch-2 deploy chain (S==1, B==2): keep gate/up matmul outputs and
+        # the silu output in L1 so silu/mul read from L1 instead of DRAM.  gate/up use an EXPLICIT
+        # progcfg here, so output placement does not re-pick the config => byte-identical (maxabsdiff==0,
+        # ffn_chain_l1_probe.py; 1.15x on the chain).  B==1 uses auto gate_pc (which could re-pick its
+        # config on an L1 output) so it stays DRAM.
+        gateup_mc = ttnn.L1_MEMORY_CONFIG if (S == 1 and B == 2) else ttnn.DRAM_MEMORY_CONFIG
+        gate = ttnn.linear(x, layer_w.w1, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=gateup_mc)
+        up = ttnn.linear(x, layer_w.w3, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=gateup_mc)
+        gate = ttnn.silu(gate, memory_config=gateup_mc)
+        # Place the SwiGLU product (down_proj's in0) in L1 for decode: down_proj is the biggest
+        # LM matmul (K=8960, 24c, ~45% DRAM BW) and reads in0 faster from L1 (B=2 deploy 151->134us,
+        # 1.13x).  Memory placement only, same in0_block_w K-reduction => byte-identical (maxabsdiff==0,
+        # ffn_down_l1_input_probe.py) — Tier-0 long-form-safe.  Prefill (S>1) keeps DRAM.
+        hidden_mc = ttnn.L1_MEMORY_CONFIG if S == 1 else ttnn.DRAM_MEMORY_CONFIG
+        hidden = ttnn.mul(gate, up, memory_config=hidden_mc)
         out = ttnn.linear(
             hidden,
             layer_w.w2,
