@@ -305,7 +305,7 @@ def test_round_trip_random(device, dtype, shape):
     assert_quality(y, x_in, pcc_threshold=0.999, rtol=0.1, atol=0.2, label=f"roundtrip {dtype} shape={shape}")
 
 
-MASKED_CASES = [
+TOKEN_COUNT_AWARE_CASES = [
     ("dense", [130, 74, 200, 96, 41]),
     ("zeros_middle", [130, 0, 0, 74, 200]),
     ("zeros_leading", [0, 0, 130, 74, 200]),
@@ -344,8 +344,8 @@ def _pack_scale_metadata(input_scale):
 
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("scales_from_metadata", [False, True])
-@pytest.mark.parametrize("label, counts", MASKED_CASES, ids=[c[0] for c in MASKED_CASES])
-def test_masked_cast_back(device, label, counts, scales_from_metadata, output_dtype):
+@pytest.mark.parametrize("label, counts", TOKEN_COUNT_AWARE_CASES, ids=[c[0] for c in TOKEN_COUNT_AWARE_CASES])
+def test_token_count_aware_cast_back(device, label, counts, scales_from_metadata, output_dtype):
     torch.manual_seed(0)
     H = 1024
 
@@ -426,5 +426,5 @@ def test_masked_cast_back(device, label, counts, scales_from_metadata, output_dt
         pcc_threshold=0.999,
         rtol=1e-2,
         atol=1e-3,
-        label=f"masked cast back {label} metadata={scales_from_metadata} out={output_dtype}",
+        label=f"token-count-aware cast back {label} metadata={scales_from_metadata} out={output_dtype}",
     )

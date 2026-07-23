@@ -98,7 +98,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const uint32_t out_tile_bytes = tile_h * tile_w * out_elem_bytes;  // cb_out page = one output tile
     const uint32_t scale_aligned_page_bytes = input_scale.buffer()->aligned_page_size();
 
-    // Masked-only metadata tensors (unset on the plain path).
+    // Token-count-aware-only metadata tensors (unset on the plain path).
     const Tensor* expert_region_offsets = token_count_aware ? &tensor_args.expert_region_offsets.value() : nullptr;
     const Tensor* expert_token_counts = token_count_aware ? &tensor_args.expert_token_counts.value() : nullptr;
     const Tensor* global_expert_idx_table = token_count_aware ? &tensor_args.global_expert_idx_table.value() : nullptr;
