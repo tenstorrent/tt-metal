@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -105,6 +106,13 @@ def make_contiguous_page_table(
 # Mirror of TTTv1 generator.py constants.
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
+
+# A/B escape hatch: set TTT_BATCHED_EXTRACT_HOST_GATHER=1 to force the legacy host-gather last-token
+# extraction (reads the whole folded [1,1,B*S,dim] hidden to host, gathers on host, re-uploads).
+# Default (unset) uses the on-device selection-matmul gather, which keeps the hidden on device and
+# reads back only the [1,1,32,vocab] logits — closing the batch-32 prefill-TTFT gap vs TTTv1. Kept
+# only for before/after measurement; the on-device path is bit-identical (see _gather_last_tokens_*).
+_BATCHED_EXTRACT_HOST_GATHER = bool(os.environ.get("TTT_BATCHED_EXTRACT_HOST_GATHER"))
 
 
 def select_batched_prefill_padded_batch(model_args, batch_size, prefill_seq_lens, num_cached_per_user):
@@ -1086,30 +1094,22 @@ class EagerLLMExecutor:
         ``[i*S : i*S+S]``) into a single [1,1,32,dim] tensor — column-sharded across the mesh the same
         way the prefill residual is (dim=-1), so the model's distributed norm all-gathers correctly —
         then runs ``post_process_prefill_output`` once (slice [0:32] is a no-op on the 32-row tile).
-        Mirrors TTTv1 ``extract_last_tokens_batched_prefill`` (host gather + ShardTensorToMesh). This is
-        a pure host gather + re-upload (deterministic; source branch measured pcc 1.0 vs sequential).
+
+        The gather is done ON DEVICE by default (``_gather_last_tokens_on_device``): a one-hot selection
+        matmul keeps the folded hidden on device and reads back only the small [1,1,32,vocab] logits,
+        instead of copying the whole [1,1,B*S,dim] hidden to host (~25 MB at B=32,S=128) to gather 32
+        rows. This is the batched analogue of ``fast_prefill_last_token`` and closes the residual
+        TTTv2-vs-TTTv1 batch-32 prefill-TTFT gap. Set ``TTT_BATCHED_EXTRACT_HOST_GATHER=1`` to force the
+        legacy host gather (mirrors TTTv1 ``extract_last_tokens_batched_prefill``) for A/B measurement;
+        both paths are bit-identical (deterministic gather of the same rows).
         """
-        # hidden: folded [1, 1, padded_batch*prefill_seq_len, dim_per_device]. Read per-device shards
-        # and concat along the (sharded) hidden dim to reconstruct full dim on host.
-        ttnn.synchronize_device(self.mesh_device)
-        shards = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(hidden)]
-        host_full = torch.cat(shards, dim=-1) if len(shards) > 1 else shards[0]  # [1,1,B*S,full_dim]
-        full_dim = host_full.shape[-1]
-        host_full = host_full.reshape(padded_batch, prefill_seq_len, full_dim)
-
-        # Pack last-token rows into a tile-height (32) block; row local_i = user group_idxs[local_i].
         TILE = 32
-        combined = torch.zeros(1, 1, TILE, full_dim, dtype=host_full.dtype)
-        for local_i, _ in enumerate(group_idxs):
-            combined[0, 0, local_i, :] = host_full[local_i, last_token_idxs[local_i], :]
-
-        gathered = ttnn.from_torch(
-            combined,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-        )
+        if _BATCHED_EXTRACT_HOST_GATHER:
+            gathered = self._gather_last_tokens_host(hidden, padded_batch, prefill_seq_len, group_idxs, last_token_idxs)
+        else:
+            gathered = self._gather_last_tokens_on_device(
+                hidden, padded_batch, prefill_seq_len, group_idxs, last_token_idxs
+            )
         # last_token_idx = TILE-1 → post_process slices [0:TILE] (whole tile) then runs norm+lm_head once.
         logits = self.model.post_process_prefill_output(gathered, TILE - 1)
         logits = ttnn.untilize(logits, use_multicore=True)
@@ -1118,6 +1118,72 @@ class EagerLLMExecutor:
         return [
             {"idx": idx, "last_token_idx": local_i, "logits": logits_host} for local_i, idx in enumerate(group_idxs)
         ]
+
+    def _gather_last_tokens_on_device(self, hidden, padded_batch, prefill_seq_len, group_idxs, last_token_idxs):
+        """Gather each user's last-token row from the folded hidden ON DEVICE (no host round-trip).
+
+        ``hidden`` is folded ``[1, 1, padded_batch*S, dim]``, column-sharded on ``dim`` (dim=-1). User
+        ``local_i``'s last token sits at fold row ``local_i*S + last_token_idxs[local_i]``. A one-hot
+        selection matmul ``sel[1,1,32,B*S] @ hidden[1,1,B*S,dim] -> [1,1,32,dim]`` performs the gather:
+        each device computes ``sel @ (its dim-shard of hidden)``, producing the dim-shard of the 32
+        gathered rows — no collective, output stays column-sharded (dim=-1) TILE_LAYOUT, exactly what
+        the distributed norm expects. ``sel`` has a single 1.0 per output row, so with HiFi4 + fp32
+        accumulation the result is bit-identical to reading ``hidden[row]`` (``1.0*x + 0*... = x``; the
+        bf16 value round-trips through fp32 unchanged). Only ``sel`` (tiny) is uploaded and only the
+        final logits are read back — the ~B*S*dim host read (25 MB at B=32,S=128) is eliminated.
+        Generalizes TTTv1's on-device slice (``all_same`` only) to arbitrary per-user last-token rows.
+        """
+        TILE = 32
+        fold_len = padded_batch * prefill_seq_len
+        sel = torch.zeros(1, 1, TILE, fold_len, dtype=torch.bfloat16)
+        for local_i, _ in enumerate(group_idxs):
+            sel[0, 0, local_i, local_i * prefill_seq_len + last_token_idxs[local_i]] = 1.0
+        sel_tt = ttnn.from_torch(
+            sel,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        gathered = ttnn.matmul(
+            sel_tt,
+            hidden,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            ),
+        )
+        ttnn.deallocate(sel_tt)
+        return gathered
+
+    def _gather_last_tokens_host(self, hidden, padded_batch, prefill_seq_len, group_idxs, last_token_idxs):
+        """Legacy host gather (A/B baseline; TTTv1 ``extract_last_tokens_batched_prefill`` parity).
+
+        Reads the whole folded ``[1,1,B*S,dim]`` hidden to host, gathers each user's last-token row, and
+        re-uploads a ``[1,1,32,dim]`` column-sharded tile. Deterministic; bit-identical to the on-device
+        path. Only used when ``TTT_BATCHED_EXTRACT_HOST_GATHER=1``.
+        """
+        ttnn.synchronize_device(self.mesh_device)
+        shards = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(hidden)]
+        host_full = torch.cat(shards, dim=-1) if len(shards) > 1 else shards[0]  # [1,1,B*S,full_dim]
+        full_dim = host_full.shape[-1]
+        host_full = host_full.reshape(padded_batch, prefill_seq_len, full_dim)
+        TILE = 32
+        combined = torch.zeros(1, 1, TILE, full_dim, dtype=host_full.dtype)
+        for local_i, _ in enumerate(group_idxs):
+            combined[0, 0, local_i, :] = host_full[local_i, last_token_idxs[local_i], :]
+        return ttnn.from_torch(
+            combined,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+        )
 
     def _prefill_forward_batched_group(self, tokens, page_table, prompt_lens, positions, padded_batch, prefill_seq_len):
         """Eager batched prefill for ONE uniform-length bucket group: process ``positions`` (row
