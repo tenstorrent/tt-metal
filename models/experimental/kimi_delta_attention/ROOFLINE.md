@@ -249,3 +249,18 @@ BinaryNg count remains 160, while its aggregate kernel time falls
 1.294 -> 1.151 ms. Mesh throughput is 69.82 TFLOP/s, or 5.74% of the
 eight-chip HiFi4 peak. This is a pointwise dataflow win; recurrence and
 collective ownership remain unchanged.
+
+## FP32 decay-product result
+
+Profile:
+`/tmp/kda_tp_layer_t640_fp32_decay_r10/reports/2026_07_23_11_55_48/ops_perf_results_2026_07_23_11_55_48.csv`.
+Producing the scaled decay gate directly in FP32 removes the remaining
+chunk-input typecast and reduces programs from 42 to 41/device/layer. Against
+the mixed-gate control, median device span falls 0.84802 -> 0.84038 ms
+(0.90%), sustaining 70.45 TFLOP/s or 5.79% of eight-chip HiFi4 peak.
+
+The mechanism is not a pure kernel-time reduction: the FP32 BinaryNg path is
+slower, and summed per-op kernel maxima rise 0.79339 -> 0.80205 ms/device.
+The serialized start-to-end device span nevertheless improves because one
+program boundary is removed. Prep and fused-collective medians remain 84.05
+and 146.31 us, so the retained work distribution is unaffected.

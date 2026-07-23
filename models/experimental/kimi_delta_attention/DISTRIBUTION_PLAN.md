@@ -166,6 +166,12 @@ latency from 0.85484 to 0.84802 ms. This does not justify any core or tensor
 redistribution; retain the 80-core prep, 16-core independent-reader scan, and
 8x8 output/Ring reduce-scatter map.
 
+The decay-scale product likewise produces the prep-required FP32 tensor
+directly. Removing that conversion reduces traced layer latency from 0.84802
+to 0.84038 ms while prep and fused-collective medians remain 84.05 and
+146.31 us. Retain the current map; this is launch-chain reduction rather than
+evidence for redistributing recurrence or CCL workers.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence
