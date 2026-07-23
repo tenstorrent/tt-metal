@@ -21,7 +21,7 @@ void bind_gated_delta_prefill_query(nb::module_& mod) {
         Gated DeltaNet: prefill the recurrent state over a K/V sequence, then query.
 
         Runs the gated delta-rule recurrence over the ``seq_len`` K/V tokens starting from
-        ``state``, using a per-head constant decay ``decay`` (g, log-space) and write-strength
+        ``state``, using a per-head per-token decay ``decay`` (g, log-space) and write-strength
         ``gate`` (beta), then applies the single query ``q`` to the final state to emit the
         first decode output token.
 
@@ -33,8 +33,8 @@ void bind_gated_delta_prefill_query(nb::module_& mod) {
             q (ttnn.Tensor):     [1, 1,  Nk, d]  ROW_MAJOR bf16 — single query token
             k (ttnn.Tensor):     [1, Nk, S,  d]  TILE bf16
             v (ttnn.Tensor):     [1, Nv, S,  d]  TILE bf16
-            gate (ttnn.Tensor):  [1, Nv, 1,  1]  TILE fp32 — beta (write strength), scalar per V-head
-            decay (ttnn.Tensor): [1, Nv, 1,  1]  TILE fp32 — g (log-space decay), scalar per V-head
+            gate (ttnn.Tensor):  [1, Nv, S,  1]  TILE fp32 — beta (write strength), per V-head per token
+            decay (ttnn.Tensor): [1, Nv, S,  1]  TILE fp32 — g (log-space decay), per V-head per token
             state (ttnn.Tensor): [1, Nv, d,  d]  TILE fp32 — recurrent state
 
         Keyword Args:

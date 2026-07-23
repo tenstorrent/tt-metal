@@ -16,7 +16,7 @@ namespace ttnn::experimental {
 // Gated DeltaNet: prefill the recurrent state over a K/V sequence, then query.
 //
 // Runs the gated delta-rule recurrence over the `seq_len` K/V tokens starting from
-// `state`, using a per-head constant decay `g` and write-strength `beta`, then applies
+// `state`, using a per-head per-token decay `g` and write-strength `beta`, then applies
 // the single query `q` to the final state to emit the first decode output token.
 //
 // EXPERIMENTAL / SCAFFOLDING: the current kernels wire the data path end-to-end but do
@@ -27,8 +27,8 @@ namespace ttnn::experimental {
 //   q     : [1, 1,  Nk, d]  ROW_MAJOR bf16 — single query token
 //   k     : [1, Nk, S,  d]  TILE bf16
 //   v     : [1, Nv, S,  d]  TILE bf16
-//   gate  : [1, Nv, 1,  1]  TILE fp32 — beta (write strength), scalar per V-head
-//   decay : [1, Nv, 1,  1]  TILE fp32 — g (log-space decay), scalar per V-head
+//   gate  : [1, Nv, S,  1]  TILE fp32 — beta (write strength), per V-head per token
+//   decay : [1, Nv, S,  1]  TILE fp32 — g (log-space decay), per V-head per token
 //   state : [1, Nv, d,  d]  TILE fp32 — recurrent state
 //
 // Returns:

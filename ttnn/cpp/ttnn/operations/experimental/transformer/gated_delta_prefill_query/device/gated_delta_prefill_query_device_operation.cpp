@@ -64,8 +64,8 @@ void GatedDeltaPrefillQueryDeviceOperation::validate_on_program_cache_miss(
     check_shape(in.q, {1, 1, Nk, d}, "q");
     check_shape(in.k, {1, Nk, S, d}, "k");
     check_shape(in.v, {1, Nv, S, d}, "v");
-    check_shape(in.gate, {1, Nv, 1, 1}, "gate");
-    check_shape(in.decay, {1, Nv, 1, 1}, "decay");
+    check_shape(in.gate, {1, Nv, S, 1}, "gate");
+    check_shape(in.decay, {1, Nv, S, 1}, "decay");
     check_shape(in.state, {1, Nv, d, d}, "state");
 }
 

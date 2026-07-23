@@ -14,7 +14,7 @@ namespace ttnn::experimental::prim {
 //
 // Semantics (target — NOT yet implemented by the placeholder kernels):
 //   Starting from `state` (per V-head d_k x d_v recurrent matrix), run the gated
-//   delta-rule recurrence over the `seq_len` K/V tokens using a per-head constant
+//   delta-rule recurrence over the `seq_len` K/V tokens using a per-head per-token
 //   decay `g` (log-space) and write-strength `beta`, then apply the single query
 //   `q` to the final state to emit the first decode output token.
 struct GatedDeltaPrefillQueryParams {
@@ -30,8 +30,8 @@ struct GatedDeltaPrefillQueryParams {
 //   q     : [1, 1,  Nk, d ]  ROW_MAJOR, bf16  — single query token
 //   k     : [1, Nk, S,  d ]  TILE,      bf16
 //   v     : [1, Nv, S,  d ]  TILE,      bf16
-//   gate  : [1, Nv, 1,  1 ]  TILE,      fp32  — beta (write strength), scalar per head
-//   decay : [1, Nv, 1,  1 ]  TILE,      fp32  — g (log-space decay), scalar per head
+//   gate  : [1, Nv, S,  1 ]  TILE,      fp32  — beta (write strength), per head per token
+//   decay : [1, Nv, S,  1 ]  TILE,      fp32  — g (log-space decay), per head per token
 //   state : [1, Nv, d,  d ]  TILE,      fp32  — recurrent state, d_k x d_v per head
 struct GatedDeltaPrefillQueryInputs {
     Tensor q;
