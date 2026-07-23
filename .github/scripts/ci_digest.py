@@ -63,11 +63,11 @@ def latest_run(repo: str, workflow: str, branch: str) -> dict | None:
 def fetch_run_summary(repo: str, run_id: int) -> dict | None:
     """Download the latest attempt's ``ai_run_summary_<run_id>`` JSON.
 
-    Each re-run uploads another artifact under this same name and they coexist on
-    the run, so pick the newest by created_at instead of relying on the undefined
-    choice ``gh run download -n`` makes among duplicates. Returns None when no
-    such artifact exists — the workflow doesn't run ai_summary/run, or the run
-    predates JSON output — so the caller can fall back to the run's conclusion.
+    Re-runs upload multiple artifacts under this one name; pick the newest by
+    created_at, since a name-only download has no defined order among duplicates.
+    Returns None when no such artifact exists — the workflow doesn't run
+    ai_summary/run, or the run predates JSON output — so the caller can fall back
+    to the run's conclusion.
     """
     name = f"ai_run_summary_{run_id}"
     listing = subprocess.run(
@@ -99,15 +99,20 @@ def fetch_run_summary(repo: str, run_id: int) -> dict | None:
             return json.load(fh)
 
 
+# Conclusions where the run genuinely broke, as opposed to merely not finishing
+# (cancelled/skipped/neutral/…), which we can't score either way.
+_BROKEN_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}
+
+
 @dataclass(frozen=True)
 class RunReport:
     """One watched run's result: the failure rows plus the run's own conclusion.
 
     ``outcome`` is derived, never stored, so it cannot drift from the rows it
-    summarizes. The conclusion is authoritative over an all-clear summary: a run
-    GitHub marks non-success is never GREEN even when the summary lists no
-    failures — an empty summary is what a pre-leg failure (matrix generation
-    died, checkout failed) looks like, and must not read as healthy.
+    summarizes. With no rows to show, the conclusion decides: a broken one
+    (matrix generation died before any leg, checkout failed) is REAL_FAIL — an
+    empty summary must never read as GREEN — while a merely-unfinished one
+    (cancelled, skipped) is UNKNOWN rather than a false red.
 
     failed/infra rows are passed through verbatim — they already carry job_name,
     job_url, status, category, error_message, root_cause.
@@ -124,9 +129,9 @@ class RunReport:
             return "REAL_FAIL"
         if self.infra:
             return "INFRA"
-        if self.conclusion != "success":
-            return "REAL_FAIL"
-        return "GREEN"
+        if self.conclusion == "success":
+            return "GREEN"
+        return "REAL_FAIL" if self.conclusion in _BROKEN_CONCLUSIONS else "UNKNOWN"
 
 
 def summarize_run(data: dict, conclusion: str) -> RunReport:
@@ -270,12 +275,14 @@ def check_workflow(repo: str, branch: str, workflow: str) -> dict:
         conclusion = run.get("conclusion") or ""
         data = fetch_run_summary(repo, run["databaseId"])
         if data is None:
-            # No machine-readable summary. The conclusion is all we have: a green
-            # run is healthy; a non-green one we can't detail (workflow doesn't run
-            # ai_summary/run, or the run predates JSON output).
-            if conclusion == "success":
-                return {**base, **meta, "outcome": "GREEN"}
-            return {**base, **meta, "outcome": "UNKNOWN", "note": "no ai_run_summary artifact"}
+            # No machine-readable summary (uninstrumented workflow, or the run
+            # predates JSON output); classify from the conclusion alone, the same
+            # rule a present-but-empty summary gets.
+            outcome = RunReport(conclusion, [], [], 0).outcome
+            result = {**base, **meta, "outcome": outcome}
+            if outcome == "UNKNOWN":
+                result["note"] = "no ai_run_summary artifact"
+            return result
         report = summarize_run(data, conclusion)
         return {
             **base,
@@ -344,6 +351,11 @@ class TestSummarizeRun(unittest.TestCase):
 
     def test_empty_summary_and_success_is_green(self):
         self.assertEqual(summarize_run({}, "success").outcome, "GREEN")
+
+    def test_cancelled_or_skipped_with_no_rows_is_unknown(self):
+        # A run that didn't finish isn't broken — don't render it as a false red.
+        self.assertEqual(summarize_run({}, "cancelled").outcome, "UNKNOWN")
+        self.assertEqual(summarize_run({}, "skipped").outcome, "UNKNOWN")
 
 
 class TestRender(unittest.TestCase):
