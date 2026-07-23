@@ -747,25 +747,48 @@ class DeepseekV3Attention(nn.Module):
             ).flatten(-2)
             past_key_value.update(key_latent, torch.empty((*key_latent.shape[:-1], 0)), self.layer_idx, cache_kwargs)
 
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * self.softmax_scale
+        # The full score matrix is [num_heads, q_len, kv_seq_len] — the sole O(seq^2) host-memory term,
+        # which OOMs long prefill prompts. When the returned weights are not needed (the prefill KV
+        # reference), compute attention in head+query-sequence tiles so peak memory is bounded by
+        # HEAD_CHUNK * SEQ_CHUNK * kv_seq_len rather than num_heads * q_len * kv_seq_len. Gated on
+        # q_len > SEQ_CHUNK so shorter prompts keep the exact original path. Numerically equal up to
+        # float accumulation order; the KVPE cache is already written above, so it is unaffected either way.
+        SEQ_CHUNK = 4096
+        HEAD_CHUNK = 16
+        if not output_attentions and q_len > SEQ_CHUNK:
+            assert attention_mask is not None
+            attn_output = query_states.new_empty(bsz, self.num_heads, q_len, self.v_head_dim)
+            for h in range(0, self.num_heads, HEAD_CHUNK):
+                he = min(h + HEAD_CHUNK, self.num_heads)
+                k_h = key_states[:, h:he]
+                v_h = value_states[:, h:he]
+                for s in range(0, q_len, SEQ_CHUNK):
+                    e = min(s + SEQ_CHUNK, q_len)
+                    scores = torch.matmul(query_states[:, h:he, s:e], k_h.transpose(2, 3)) * self.softmax_scale
+                    scores = scores + attention_mask[:, :, s:e, :]
+                    scores = nn.functional.softmax(scores, dim=-1, dtype=torch.float32).to(query_states.dtype)
+                    attn_output[:, h:he, s:e] = torch.matmul(scores, v_h)
+            attn_weights = None
+        else:
+            attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * self.softmax_scale
 
-        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
-            raise ValueError(
-                f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights.size()}"
-            )
-        assert attention_mask is not None
-        if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+            if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
                 raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+                    f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
+                    f" {attn_weights.size()}"
                 )
-            attn_weights = attn_weights + attention_mask
+            assert attention_mask is not None
+            if attention_mask is not None:
+                if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+                    raise ValueError(
+                        f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+                    )
+                attn_weights = attn_weights + attention_mask
 
-        # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
-        attn_output = torch.matmul(attn_weights, value_states)
+            # upcast attention to fp32
+            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+            attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
+            attn_output = torch.matmul(attn_weights, value_states)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.v_head_dim):
             raise ValueError(

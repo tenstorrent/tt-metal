@@ -84,17 +84,21 @@ SCENARIOS = {
 
 # Opt-in prompt-driven scenario: instead of a recorded golden trace, generate the reference KV from a
 # user prompt on the host (device-less pre-step) and validate device KV against it. Enabled by pointing
-# PREFILL_PROMPT_FILE at a prompt JSON. One chunk deep (host torch reference is O(seq^2), so full-depth
-# is infeasible here) — this is the correctness gate for arbitrary prompts, not a depth/breadth stress.
+# PREFILL_PROMPT_FILE at a prompt JSON. The host reference forward uses chunked-SDPA MLA, so its memory
+# stays bounded and PREFILL_PROMPT_CHUNKS chunks (default 1) can be validated — the correctness gate for
+# arbitrary prompts. Runtime is still O(seq^2) in the sequence length, so deeper runs take longer.
 _PROMPT_FILE = os.environ.get("PREFILL_PROMPT_FILE")
 if _PROMPT_FILE:
+    _PROMPT_CHUNKS = int(os.environ.get("PREFILL_PROMPT_CHUNKS", "1"))
     SCENARIOS["prompt_single_user"] = {
         "users": 1,
-        # A 2-chunk cache though only one chunk is prefilled: the chunked-attention SDPA gate
-        # requires Q.seq < cache-width, so max_seq_len must exceed chunk_size even for a single chunk.
-        "max_seq_len": 2 * CHUNK_SIZE,
-        "producer": {"PREFILL_PRODUCER_CHUNKS": "1", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
+        # Cache width must exceed the deepest single push (Q.seq == CHUNK_SIZE): the chunked-attention
+        # SDPA gate requires Q.seq < cache-width, so a 1-chunk prompt still needs a 2-chunk cache. For
+        # N>=2 the accumulated fill N*CHUNK_SIZE already exceeds one chunk, so N*CHUNK_SIZE suffices.
+        "max_seq_len": max(2, _PROMPT_CHUNKS) * CHUNK_SIZE,
+        "producer": {"PREFILL_PRODUCER_CHUNKS": str(_PROMPT_CHUNKS), "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
         "prompt_file": _PROMPT_FILE,
+        "isl": _PROMPT_CHUNKS * CHUNK_SIZE,
     }
 
 
@@ -220,9 +224,10 @@ def test_producer_runner_pcc(scenario, tmp_path):
     trace_env = {}
     if "prompt_file" in sc:
         trace_dir = str(tmp_path / "prompt_trace")
-        # The prompt is one chunk deep; max_seq_len only sizes the device cache. Generate the reference
-        # at CHUNK_SIZE so the host O(seq^2) forward stays cheap and its length matches what's pushed.
-        _generate_prompt_trace(trace_dir, CHUNK_SIZE, sc["prompt_file"])
+        # Generate the host reference at exactly the pushed depth (isl == chunks * CHUNK_SIZE). The
+        # reference forward is chunked-SDPA so RAM stays bounded at any depth; runtime is still O(seq^2),
+        # which the per-test timeout accounts for.
+        _generate_prompt_trace(trace_dir, sc["isl"], sc["prompt_file"])
         trace_env["PREFILL_TRACE_DIR"] = trace_dir
     with _running_runner(scenario, sc["users"], sc["max_seq_len"], **trace_env) as runner_log:
         env = _transport_env(
