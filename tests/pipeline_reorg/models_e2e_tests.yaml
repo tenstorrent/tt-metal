@@ -491,6 +491,8 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
+    # SKU step timeout must cover demo (--timeout 1500) + unit suite; was 10/25
+    # and killed jobs mid text_demo when mesh-qualified caches forced a cold 31B rebuild.
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -500,10 +502,13 @@
   model_family: Gemma
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      # Was 10m — below pytest --timeout 1500; killed mid text_demo on cold cache.
+      timeout: 40
       tier: 2
     bh_quietbox_2:
-      timeout: 25
+      # Cap at 30 to stay within models e2e_tier1 bh_quietbox_2 budget (195m).
+      # Legacy weight-cache fallback avoids cold 31B rebuild under this budget.
+      timeout: 30
       tier: 1
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
     # hang as 26B-A4B above. Re-enable once root-caused.
