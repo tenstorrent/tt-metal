@@ -86,6 +86,26 @@ Implementation order:
    Reserve cores permanently only if overlap improves end-to-end layer time;
    the current evidence does not justify a fixed reservation.
 
+The fused path now exists. At the target shape it uses an 8x8 matmul grid and
+two reduce-scatter worker rows, reaches 29.3% of the effective two-link
+roofline on the slowest device, and shows 140.160-176.089 us device-median
+spread. Retain whole-head TP and the 80-core/16-core recurrence maps: measured
+prep and scan are 84.502 us and 96.336 us and agree with their isolated
+crossovers. The next distribution sweep is therefore local to the fused
+output program:
+
+1. Hold tensor ownership, Ring topology, two links, and FP32 output fixed.
+2. Sweep reduce-scatter core offsets/worker rows and record the slowest chip,
+   not the mesh mean.
+3. Accept a mapping only if it reduces the full-layer device critical path;
+   a faster isolated collective that increases dispatch or layout time is not
+   a win.
+
+The 5.606 ms steady device span versus 1.20-1.27 ms summed active kernels also
+changes the layer-level priority. After the CCL placement sweep, capture the
+layer in a device trace and fuse/remove host-visible layout and pointwise
+boundaries. Adding recurrence cores cannot address the measured idle gap.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence

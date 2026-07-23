@@ -5,6 +5,7 @@
 Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
+
 import math
 
 import torch
@@ -454,7 +455,7 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
         out_subblock_w=1,
         per_core_M=max(1, math.ceil(M / TILE_SIZE / grid[1])),
         per_core_N=per_core_N,
-        out_block_w=max(1, per_core_N // 2),
+        out_block_w=_find_largest_divisor(per_core_N, max(1, per_core_N // 2)),
         transpose_mcast=False,
         fused_activation=None,
         fuse_batch=False,
