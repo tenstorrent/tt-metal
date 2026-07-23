@@ -67,8 +67,20 @@ enum class SrcOrder : uint8_t {
  * | Function   | ocb       | The identifier of the output circular buffer (CB)               | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
+// Per-thread MOP timeout-count CSR. Raising it lets a compute MOP wait longer before tripping
+// ERROR_TRISC1 0x19 when it legitimately stalls on a slow producer (e.g. a wide tilize datacopy waiting
+// on the padding reader + its L2 flush). Set ONCE per kernel at hw-startup (not per mop-reprogram).
+#ifndef CSR_TIMEOUT_COUNT
+#define CSR_TIMEOUT_COUNT 0xBD0
+#endif
+
 template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+#ifdef ARCH_QUASAR
+    // Bump the MOP timeout once at the top of every compute kernel (runs on all compute threads; 0x40000
+    // is enough headroom for the slow-producer stalls without the excess of 1M cycles).
+    asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x40000));
+#endif
     // Map the operands onto the physical source registers. For SrcOrder::Reverse (matmul) in0 (icb0)
     // lands in SrcB and in1 (icb1) lands in SrcA, so the per-source state below is programmed with the
     // operands swapped. src_order is a template parameter, so reverse (and the selection below) is
