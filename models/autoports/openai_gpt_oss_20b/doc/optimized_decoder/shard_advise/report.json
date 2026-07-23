@@ -12,7 +12,7 @@
   "ops": [
     {
       "index": 0,
-      "op": "ttnn.zeros",
+      "op": "ttnn.full",
       "layout": "dram/interleaved/1x1",
       "program_config": ""
     },
@@ -24,7 +24,7 @@
     },
     {
       "index": 2,
-      "op": "ttnn.full",
+      "op": "ttnn.zeros",
       "layout": "dram/interleaved/1x1",
       "program_config": ""
     },
@@ -144,110 +144,110 @@
     },
     {
       "index": 22,
-      "op": "ttnn.reshape",
+      "op": "ttnn.typecast",
       "layout": "l1/block_sharded/1x10 cores=(0,0)-(9,0)",
       "program_config": ""
     },
     {
       "index": 23,
-      "op": "ttnn.repeat",
-      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
-      "program_config": ""
-    },
-    {
-      "index": 24,
-      "op": "ttnn.linear",
-      "layout": "dram/interleaved/1x1",
-      "program_config": ""
-    },
-    {
-      "index": 25,
-      "op": "ttnn.slice_static",
-      "layout": "l1/interleaved/10x11",
-      "program_config": ""
-    },
-    {
-      "index": 26,
-      "op": "ttnn.slice_static",
-      "layout": "l1/interleaved/10x11",
-      "program_config": ""
-    },
-    {
-      "index": 27,
-      "op": "ttnn.clamp_scalar",
-      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
-      "program_config": ""
-    },
-    {
-      "index": 28,
-      "op": "ttnn.add",
-      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
-      "program_config": ""
-    },
-    {
-      "index": 29,
-      "op": "ttnn.clamp_scalar",
-      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
-      "program_config": ""
-    },
-    {
-      "index": 30,
-      "op": "ttnn.multiply",
-      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
-      "program_config": ""
-    },
-    {
-      "index": 31,
-      "op": "ttnn.multiply",
-      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
-      "program_config": ""
-    },
-    {
-      "index": 32,
-      "op": "ttnn.multiply",
-      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
-      "program_config": ""
-    },
-    {
-      "index": 33,
-      "op": "ttnn.linear",
-      "layout": "dram/interleaved/1x1",
-      "program_config": ""
-    },
-    {
-      "index": 34,
-      "op": "ttnn.typecast",
-      "layout": "l1/block_sharded/1x10 cores=(0,0)-(9,0)",
-      "program_config": ""
-    },
-    {
-      "index": 35,
       "op": "ttnn.linear",
       "layout": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
       "program_config": "matmul_multi_core_reuse_multi_cast_1d @1x1"
     },
     {
-      "index": 36,
+      "index": 24,
       "op": "ttnn.typecast",
       "layout": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
       "program_config": ""
     },
     {
-      "index": 37,
+      "index": 25,
       "op": "ttnn.topk",
       "layout": "l1/interleaved/10x11",
       "program_config": ""
     },
     {
-      "index": 38,
+      "index": 26,
       "op": "ttnn.softmax",
       "layout": "l1/block_sharded/1x1 cores=(0,0)-(0,0)",
       "program_config": ""
     },
     {
-      "index": 39,
+      "index": 27,
       "op": "ttnn.scatter",
       "layout": "l1/block_sharded/1x1 cores=(0,0)-(0,0)",
+      "program_config": ""
+    },
+    {
+      "index": 28,
+      "op": "ttnn.reshape",
+      "layout": "l1/block_sharded/1x10 cores=(0,0)-(9,0)",
+      "program_config": ""
+    },
+    {
+      "index": 29,
+      "op": "ttnn.repeat",
+      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
+      "program_config": ""
+    },
+    {
+      "index": 30,
+      "op": "ttnn.linear",
+      "layout": "dram/interleaved/1x1",
+      "program_config": ""
+    },
+    {
+      "index": 31,
+      "op": "ttnn.slice_static",
+      "layout": "l1/interleaved/10x11",
+      "program_config": ""
+    },
+    {
+      "index": 32,
+      "op": "ttnn.slice_static",
+      "layout": "l1/interleaved/10x11",
+      "program_config": ""
+    },
+    {
+      "index": 33,
+      "op": "ttnn.clamp_scalar",
+      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
+      "program_config": ""
+    },
+    {
+      "index": 34,
+      "op": "ttnn.clamp_scalar",
+      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
+      "program_config": ""
+    },
+    {
+      "index": 35,
+      "op": "ttnn.multiply",
+      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
+      "program_config": ""
+    },
+    {
+      "index": 36,
+      "op": "ttnn.multiply",
+      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
+      "program_config": ""
+    },
+    {
+      "index": 37,
+      "op": "ttnn.add",
+      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
+      "program_config": ""
+    },
+    {
+      "index": 38,
+      "op": "ttnn.multiply",
+      "layout": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
+      "program_config": ""
+    },
+    {
+      "index": 39,
+      "op": "ttnn.linear",
+      "layout": "dram/interleaved/1x1",
       "program_config": ""
     },
     {
@@ -380,38 +380,6 @@
     },
     {
       "kind": "to_memory_config",
-      "producer": "repeat",
-      "consumer": "linear",
-      "from": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
-      "to": "l1/interleaved/10x11",
-      "output_revert": false
-    },
-    {
-      "kind": "to_memory_config",
-      "producer": "full",
-      "consumer": "add",
-      "from": "dram/interleaved/1x1",
-      "to": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
-      "output_revert": false
-    },
-    {
-      "kind": "to_memory_config",
-      "producer": "full",
-      "consumer": "multiply",
-      "from": "dram/interleaved/1x1",
-      "to": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
-      "output_revert": false
-    },
-    {
-      "kind": "to_memory_config",
-      "producer": "multiply",
-      "consumer": "linear",
-      "from": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
-      "to": "l1/interleaved/10x11",
-      "output_revert": false
-    },
-    {
-      "kind": "to_memory_config",
       "producer": "typecast",
       "consumer": "linear",
       "from": "l1/block_sharded/1x10 cores=(0,0)-(9,0)",
@@ -431,6 +399,38 @@
       "producer": "softmax",
       "consumer": "scatter",
       "from": "l1/block_sharded/1x1 cores=(0,0)-(0,0)",
+      "to": "l1/interleaved/10x11",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "repeat",
+      "consumer": "linear",
+      "from": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
+      "to": "l1/interleaved/10x11",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "full",
+      "consumer": "multiply",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "full",
+      "consumer": "add",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "multiply",
+      "consumer": "linear",
+      "from": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
       "to": "l1/interleaved/10x11",
       "output_revert": false
     },

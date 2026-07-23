@@ -11,12 +11,12 @@
 #ttnn_layout7 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<2x1x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
 #ttnn_layout8 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<128x90x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
 #ttnn_layout9 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 32 + d1, d2), <1x1>, memref<1x90x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
-#ttnn_layout10 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 2880 + d1, d2), <1x1>, memref<2880x180x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
-#ttnn_layout11 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 32 + d1, d2), <1x1>, memref<32x180x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
-#ttnn_layout12 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 2880 + d1, d2), <1x1>, memref<2880x90x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
-#ttnn_layout13 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 32 + d1, d2), <1x1>, memref<32x90x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
-#ttnn_layout14 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<90x1x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
-#ttnn_layout15 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<1x1x!ttcore.tile<32x32, f32>, #dram>, <interleaved>>
+#ttnn_layout10 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<90x1x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
+#ttnn_layout11 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<1x1x!ttcore.tile<32x32, f32>, #dram>, <interleaved>>
+#ttnn_layout12 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 2880 + d1, d2), <1x1>, memref<2880x180x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
+#ttnn_layout13 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 32 + d1, d2), <1x1>, memref<32x180x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
+#ttnn_layout14 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 2880 + d1, d2), <1x1>, memref<2880x90x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
+#ttnn_layout15 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 32 + d1, d2), <1x1>, memref<32x90x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
 #ttnn_layout16 = #ttnn.ttnn_layout<(d0, d1, d2, d3) -> (d0 * 32 + d1 * 32 + d2, d3), <1x1>, memref<1x90x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
 #ttnn_layout17 = #ttnn.ttnn_layout<(d0, d1, d2, d3) -> (d0 * 32 + d1 * 32 + d2, d3), <1x1>, memref<1x2x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
 #ttnn_layout18 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<1x1x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
@@ -35,16 +35,16 @@
 #ttnn_layout31 = #ttnn.ttnn_layout<(d0, d1, d2, d3) -> (d0 * 64 + d1 * 64 + d2, d3), <1x1>, memref<2x2x!ttcore.tile<32x32, bf16>, #dram>, <interleaved>>
 #ttnn_layout32 = #ttnn.ttnn_layout<(d0, d1, d2, d3) -> (d0 * 32 + d1 * 32 + d2, d3), <1x90>, memref<1x1x!ttcore.tile<32x32, bf16>, #l1>, <width_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (10,7)>, #ttnn.core_range<(0,8), (1,8)>]>>
 #ttnn_layout33 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x10>, memref<1x9x!ttcore.tile<32x32, bf16>, #l1>, <block_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (9,0)>]>>
-#ttnn_layout34 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 32 + d1, d2), <1x10>, memref<1x9x!ttcore.tile<32x32, bf16>, #l1>, <block_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (9,0)>]>>
-#ttnn_layout35 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 32 + d1, d2), <1x90>, memref<32x1x!ttcore.tile<32x32, bf16>, #l1>, <width_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (10,7)>, #ttnn.core_range<(0,8), (1,8)>]>>
-#ttnn_layout36 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 32 + d1, d2), <10x11>, memref<1x27x!ttcore.tile<32x32, bf16>, #l1>, <interleaved>>
-#ttnn_layout37 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x10>, memref<1x9x!ttcore.tile<32x32, f32>, #l1>, <block_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (9,0)>]>>
-#ttnn_layout38 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<1x90x!ttcore.tile<32x32, f32>, #l1>, <height_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (0,0)>]>>
-#ttnn_layout39 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<1x1x!ttcore.tile<32x32, f32>, #l1>, <height_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (0,0)>]>>
-#ttnn_layout40 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<1x1x!ttcore.tile<32x32, bf16>, #l1>, <height_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (0,0)>]>>
-#ttnn_layout41 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <10x11>, memref<1x1x!ttcore.tile<32x32, bf16>, #l1>, <interleaved>>
-#ttnn_layout42 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <10x11>, memref<1x1x!ttcore.tile<32x32, u16>, #l1>, <interleaved>>
-#ttnn_layout43 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<1x1x!ttcore.tile<32x32, bf16>, #l1>, <block_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (0,0)>]>>
+#ttnn_layout34 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x10>, memref<1x9x!ttcore.tile<32x32, f32>, #l1>, <block_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (9,0)>]>>
+#ttnn_layout35 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<1x90x!ttcore.tile<32x32, f32>, #l1>, <height_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (0,0)>]>>
+#ttnn_layout36 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<1x1x!ttcore.tile<32x32, f32>, #l1>, <height_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (0,0)>]>>
+#ttnn_layout37 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<1x1x!ttcore.tile<32x32, bf16>, #l1>, <height_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (0,0)>]>>
+#ttnn_layout38 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <10x11>, memref<1x1x!ttcore.tile<32x32, bf16>, #l1>, <interleaved>>
+#ttnn_layout39 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <10x11>, memref<1x1x!ttcore.tile<32x32, u16>, #l1>, <interleaved>>
+#ttnn_layout40 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x1>, memref<1x1x!ttcore.tile<32x32, bf16>, #l1>, <block_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (0,0)>]>>
+#ttnn_layout41 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 32 + d1, d2), <1x10>, memref<1x9x!ttcore.tile<32x32, bf16>, #l1>, <block_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (9,0)>]>>
+#ttnn_layout42 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 32 + d1, d2), <1x90>, memref<32x1x!ttcore.tile<32x32, bf16>, #l1>, <width_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (10,7)>, #ttnn.core_range<(0,8), (1,8)>]>>
+#ttnn_layout43 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 32 + d1, d2), <10x11>, memref<1x27x!ttcore.tile<32x32, bf16>, #l1>, <interleaved>>
 #ttnn_layout44 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 32 + d1, d2), <10x11>, memref<1x1x!ttcore.tile<32x32, bf16>, #l1>, <interleaved>>
 #ttnn_layout45 = #ttnn.ttnn_layout<(d0, d1, d2) -> (d0 * 32 + d1, d2), <32x1>, memref<1x1x!ttcore.tile<32x32, bf16>, #l1>, <height_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (10,1)>, #ttnn.core_range<(0,2), (9,2)>]>>
 #ttnn_layout46 = #ttnn.ttnn_layout<(d0, d1) -> (d0, d1), <1x90>, memref<1x1x!ttcore.tile<32x32, bf16>, #l1>, <width_sharded>, core_ranges = <[#ttnn.core_range<(0,0), (10,7)>, #ttnn.core_range<(0,8), (1,8)>]>>
@@ -52,11 +52,11 @@ module {
   ttcore.device_module {
     builtin.module attributes {ttcore.system_desc = #system_desc} {
       ttcore.device @default_device = <workerGrid = #ttcore.grid<10x11, virt_to_physical_map = (d0, d1) -> (0, d0, d1), physical_to_virt_map = (d0, d1, d2) -> (d1, d2)>, dramGrid = #ttcore.grid<1x8>, l1Map = (d0, d1, d2)[s0] -> (0, d0, d1, d2 + s0), dramMap = (d0, d1, d2)[s0, s1, s2, s3, s4, s5, s6] -> (0, 0, (((d0 * s1) * (s2 * (s3 * s6)) + d1 * (s2 * (s3 * s6)) + d2) floordiv s4) mod 8, ((((d0 * s1) * (s2 * (s3 * s6)) + d1 * (s2 * (s3 * s6)) + d2) floordiv s4) floordiv 8) * s4 + ((d0 * s1) * (s2 * (s3 * s6)) + d1 * (s2 * (s3 * s6)) + d2) mod s4 + s5), meshShape = , chipIds = [0]>
-      func.func @decode(%arg0: tensor<1x1x1x2880xbf16, #ttnn_layout> {ttcore.argument_type = #ttcore.argument_type<input>}, %arg1: tensor<1x8x128x64x!ttcore.tile<32x32, bfp_bf8>, #ttnn_layout1> {ttcore.argument_type = #ttcore.argument_type<input>}, %arg2: tensor<1x8x128x64x!ttcore.tile<32x32, bfp_bf8>, #ttnn_layout1> {ttcore.argument_type = #ttcore.argument_type<input>}, %arg3: tensor<1x1x90x32xbf16, #ttnn_layout2> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg4: tensor<2880x5120xbf16, #ttnn_layout3> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg5: tensor<1x1x5120xbf16, #ttnn_layout4> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg6: tensor<1x1x128x64xbf16, #ttnn_layout5> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg7: tensor<1x1x128x64xbf16, #ttnn_layout5> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg8: tensor<128xsi32, #ttnn_layout6> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg9: tensor<64x32xbf16, #ttnn_layout7> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg10: tensor<4096x2880xbf16, #ttnn_layout8> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg11: tensor<1x1x2880xbf16, #ttnn_layout9> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg12: tensor<1x1x90x32xbf16, #ttnn_layout2> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg13: tensor<32x2880x5760xbf16, #ttnn_layout10> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg14: tensor<32x1x5760xbf16, #ttnn_layout11> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg15: tensor<32x2880x2880xbf16, #ttnn_layout12> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg16: tensor<32x1x2880xbf16, #ttnn_layout13> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg17: tensor<2880x32xbf16, #ttnn_layout14> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg18: tensor<1x32xf32, #ttnn_layout15> {ttcore.argument_type = #ttcore.argument_type<parameter>}) -> (tensor<1x1x1x2880xbf16, #ttnn_layout16>, tensor<1x1x8x64xbf16, #ttnn_layout17>, tensor<1x1x1x64xbf16, #ttnn_layout17>, tensor<1x1x1x64xbf16, #ttnn_layout17>, tensor<1x1x8x64xbf16, #ttnn_layout17>) attributes {tt.function_type = "forward_device"} {
+      func.func @decode(%arg0: tensor<1x1x1x2880xbf16, #ttnn_layout> {ttcore.argument_type = #ttcore.argument_type<input>}, %arg1: tensor<1x8x128x64x!ttcore.tile<32x32, bfp_bf8>, #ttnn_layout1> {ttcore.argument_type = #ttcore.argument_type<input>}, %arg2: tensor<1x8x128x64x!ttcore.tile<32x32, bfp_bf8>, #ttnn_layout1> {ttcore.argument_type = #ttcore.argument_type<input>}, %arg3: tensor<1x1x90x32xbf16, #ttnn_layout2> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg4: tensor<2880x5120xbf16, #ttnn_layout3> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg5: tensor<1x1x5120xbf16, #ttnn_layout4> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg6: tensor<1x1x128x64xbf16, #ttnn_layout5> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg7: tensor<1x1x128x64xbf16, #ttnn_layout5> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg8: tensor<128xsi32, #ttnn_layout6> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg9: tensor<64x32xbf16, #ttnn_layout7> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg10: tensor<4096x2880xbf16, #ttnn_layout8> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg11: tensor<1x1x2880xbf16, #ttnn_layout9> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg12: tensor<1x1x90x32xbf16, #ttnn_layout2> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg13: tensor<2880x32xbf16, #ttnn_layout10> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg14: tensor<1x32xf32, #ttnn_layout11> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg15: tensor<32x2880x5760xbf16, #ttnn_layout12> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg16: tensor<32x1x5760xbf16, #ttnn_layout13> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg17: tensor<32x2880x2880xbf16, #ttnn_layout14> {ttcore.argument_type = #ttcore.argument_type<parameter>}, %arg18: tensor<32x1x2880xbf16, #ttnn_layout15> {ttcore.argument_type = #ttcore.argument_type<parameter>}) -> (tensor<1x1x1x2880xbf16, #ttnn_layout16>, tensor<1x1x8x64xbf16, #ttnn_layout17>, tensor<1x1x1x64xbf16, #ttnn_layout17>, tensor<1x1x1x64xbf16, #ttnn_layout17>, tensor<1x1x8x64xbf16, #ttnn_layout17>) attributes {tt.function_type = "forward_device"} {
         %0 = "ttnn.get_device"() <{mesh_offset = #ttnn<mesh_offset 0x0>, mesh_shape = #ttnn<mesh_shape 1x1>}> : () -> !ttnn.device
-        %1 = "ttnn.zeros"(%0) <{shape = #ttnn.shape<1x32>}> : (!ttnn.device) -> tensor<1x32xbf16, #ttnn_layout18>
-        %2 = "ttnn.full"(%0) <{fill_value = 1.703125 : f32, shape = #ttnn.shape<32x1x2880>}> : (!ttnn.device) -> tensor<32x1x2880xbf16, #ttnn_layout13>
-        %3 = "ttnn.full"(%0) <{fill_value = 1.000000e+00 : f32, shape = #ttnn.shape<32x1x2880>}> : (!ttnn.device) -> tensor<32x1x2880xbf16, #ttnn_layout13>
+        %1 = "ttnn.full"(%0) <{fill_value = 1.000000e+00 : f32, shape = #ttnn.shape<32x1x2880>}> : (!ttnn.device) -> tensor<32x1x2880xbf16, #ttnn_layout15>
+        %2 = "ttnn.full"(%0) <{fill_value = 1.703125 : f32, shape = #ttnn.shape<32x1x2880>}> : (!ttnn.device) -> tensor<32x1x2880xbf16, #ttnn_layout15>
+        %3 = "ttnn.zeros"(%0) <{shape = #ttnn.shape<1x32>}> : (!ttnn.device) -> tensor<1x32xbf16, #ttnn_layout18>
         %4 = "ttnn.reshape"(%arg3) <{shape = [2880 : i32]}> : (tensor<1x1x90x32xbf16, #ttnn_layout2>) -> tensor<2880xbf16, #ttnn_layout19>
         %5 = "ttnn.to_layout"(%arg0) : (tensor<1x1x1x2880xbf16, #ttnn_layout>) -> tensor<1x1x1x2880xbf16, #ttnn_layout16>
         %6 = "ttnn.to_memory_config"(%5) : (tensor<1x1x1x2880xbf16, #ttnn_layout16>) -> tensor<1x1x1x2880xbf16, #ttnn_layout20>
@@ -88,39 +88,39 @@ module {
         %31 = "ttnn.to_memory_config"(%29) : (tensor<2880xbf16, #ttnn_layout19>) -> tensor<2880xbf16, #ttnn_layout21>
         %32 = "ttnn.rms_norm"(%30, %31) <{epsilon = 9.99999974E-6 : f32, operandSegmentSizes = array<i32: 1, 1, 0>}> : (tensor<1x1x1x2880xbf16, #ttnn_layout20>, tensor<2880xbf16, #ttnn_layout21>) -> tensor<1x1x1x2880xbf16, #ttnn_layout20>
         %33 = "ttnn.reshape"(%32) <{shape = [1 : i32, 2880 : i32]}> : (tensor<1x1x1x2880xbf16, #ttnn_layout20>) -> tensor<1x2880xbf16, #ttnn_layout33>
-        %34 = "ttnn.reshape"(%32) <{shape = [1 : i32, 1 : i32, 2880 : i32]}> : (tensor<1x1x1x2880xbf16, #ttnn_layout20>) -> tensor<1x1x2880xbf16, #ttnn_layout34>
-        %35 = "ttnn.repeat"(%34) <{repeat_dims = #ttnn.shape<32x1x1>}> : (tensor<1x1x2880xbf16, #ttnn_layout34>) -> tensor<32x1x2880xbf16, #ttnn_layout35>
-        %36 = "ttnn.to_memory_config"(%35) : (tensor<32x1x2880xbf16, #ttnn_layout35>) -> tensor<32x1x2880xbf16, #ttnn_layout36>
-        %37 = "ttnn.linear"(%36, %arg13, %arg14) <{transpose_a = false, transpose_b = false}> : (tensor<32x1x2880xbf16, #ttnn_layout36>, tensor<32x2880x5760xbf16, #ttnn_layout10>, tensor<32x1x5760xbf16, #ttnn_layout11>) -> tensor<32x1x5760xbf16, #ttnn_layout11>
-        %38 = "ttnn.slice_static"(%37) <{begins = [0 : i32, 0 : i32, 1 : i32], ends = [32 : i32, 1 : i32, 5760 : i32], step = [1 : i32, 1 : i32, 2 : i32]}> : (tensor<32x1x5760xbf16, #ttnn_layout11>) -> tensor<32x1x2880xbf16, #ttnn_layout36>
-        %39 = "ttnn.slice_static"(%37) <{begins = [0 : i32, 0 : i32, 0 : i32], ends = [32 : i32, 1 : i32, 5760 : i32], step = [1 : i32, 1 : i32, 2 : i32]}> : (tensor<32x1x5760xbf16, #ttnn_layout11>) -> tensor<32x1x2880xbf16, #ttnn_layout36>
-        %40 = "ttnn.clamp_scalar"(%38) <{max = 7.000000e+00 : f32, min = -7.000000e+00 : f32}> : (tensor<32x1x2880xbf16, #ttnn_layout36>) -> tensor<32x1x2880xbf16, #ttnn_layout35>
-        %41 = "ttnn.to_memory_config"(%3) : (tensor<32x1x2880xbf16, #ttnn_layout13>) -> tensor<32x1x2880xbf16, #ttnn_layout35>
-        %42 = "ttnn.add"(%40, %41) : (tensor<32x1x2880xbf16, #ttnn_layout35>, tensor<32x1x2880xbf16, #ttnn_layout35>) -> tensor<32x1x2880xbf16, #ttnn_layout35>
-        %43 = "ttnn.clamp_scalar"(%39) <{max = 7.000000e+00 : f32, min = -3.40282347E+38 : f32}> : (tensor<32x1x2880xbf16, #ttnn_layout36>) -> tensor<32x1x2880xbf16, #ttnn_layout35>
-        %44 = "ttnn.to_memory_config"(%2) : (tensor<32x1x2880xbf16, #ttnn_layout13>) -> tensor<32x1x2880xbf16, #ttnn_layout35>
-        %45 = "ttnn.multiply"(%43, %44) : (tensor<32x1x2880xbf16, #ttnn_layout35>, tensor<32x1x2880xbf16, #ttnn_layout35>) -> tensor<32x1x2880xbf16, #ttnn_layout35>
-        %46 = "ttnn.multiply"(%43, %45) : (tensor<32x1x2880xbf16, #ttnn_layout35>, tensor<32x1x2880xbf16, #ttnn_layout35>) -> tensor<32x1x2880xbf16, #ttnn_layout35>
-        %47 = "ttnn.multiply"(%42, %46) : (tensor<32x1x2880xbf16, #ttnn_layout35>, tensor<32x1x2880xbf16, #ttnn_layout35>) -> tensor<32x1x2880xbf16, #ttnn_layout35>
-        %48 = "ttnn.to_memory_config"(%47) : (tensor<32x1x2880xbf16, #ttnn_layout35>) -> tensor<32x1x2880xbf16, #ttnn_layout36>
-        %49 = "ttnn.linear"(%48, %arg15, %arg16) <{transpose_a = false, transpose_b = false}> : (tensor<32x1x2880xbf16, #ttnn_layout36>, tensor<32x2880x2880xbf16, #ttnn_layout12>, tensor<32x1x2880xbf16, #ttnn_layout13>) -> tensor<32x1x2880xbf16, #ttnn_layout13>
-        %50 = "ttnn.typecast"(%33) : (tensor<1x2880xbf16, #ttnn_layout33>) -> tensor<1x2880xf32, #ttnn_layout37>
-        %51 = "ttnn.to_memory_config"(%50) : (tensor<1x2880xf32, #ttnn_layout37>) -> tensor<1x2880xf32, #ttnn_layout38>
-        %52 = "ttnn.linear"(%51, %arg17, %arg18) <{matmul_program_config = #ttnn.matmul_multi_core_reuse_multi_cast_1d_program_config<compute_with_storage_grid_size = #ttnn.core_coord<1, 1>, in0_block_w = 90, out_subblock_h = 1, out_subblock_w = 1, out_block_h = 1, out_block_w = 1, per_core_m = 1, per_core_n = 1, fuse_batch = true, mcast_in0 = false, gather_in0 = false, hop_cores = #ttnn.core_range_set<>, num_global_cb_receivers = 0, untilize_out = false>, transpose_a = false, transpose_b = false}> : (tensor<1x2880xf32, #ttnn_layout38>, tensor<2880x32xbf16, #ttnn_layout14>, tensor<1x32xf32, #ttnn_layout15>) -> tensor<1x32xf32, #ttnn_layout39>
-        %53 = "ttnn.typecast"(%52) : (tensor<1x32xf32, #ttnn_layout39>) -> tensor<1x32xbf16, #ttnn_layout40>
-        %54 = "ttnn.to_memory_config"(%53) : (tensor<1x32xbf16, #ttnn_layout40>) -> tensor<1x32xbf16, #ttnn_layout41>
-        %values, %indices = "ttnn.topk"(%54) <{dim = 1 : i32, k = 4 : i32, largest = true, sorted = true}> : (tensor<1x32xbf16, #ttnn_layout41>) -> (tensor<1x4xbf16, #ttnn_layout41>, tensor<1x4xui16, #ttnn_layout42>)
-        %55 = "ttnn.softmax"(%values) <{dimension = 1 : si32, numericStable = false}> : (tensor<1x4xbf16, #ttnn_layout41>) -> tensor<1x4xbf16, #ttnn_layout43>
-        %56 = "ttnn.to_memory_config"(%55) : (tensor<1x4xbf16, #ttnn_layout43>) -> tensor<1x4xbf16, #ttnn_layout41>
-        %57 = "ttnn.scatter"(%1, %indices, %56) <{dim = 1 : i32, scatter_reduce_type = #ttcore.reduce_type<sum>}> : (tensor<1x32xbf16, #ttnn_layout18>, tensor<1x4xui16, #ttnn_layout42>, tensor<1x4xbf16, #ttnn_layout41>) -> tensor<1x32xbf16, #ttnn_layout43>
-        %58 = "ttnn.reshape"(%57) <{shape = [32 : i32, 1 : i32, 1 : i32]}> : (tensor<1x32xbf16, #ttnn_layout43>) -> tensor<32x1x1xbf16, #ttnn_layout44>
-        %59 = "ttnn.to_memory_config"(%49) : (tensor<32x1x2880xbf16, #ttnn_layout13>) -> tensor<32x1x2880xbf16, #ttnn_layout35>
+        %34 = "ttnn.typecast"(%33) : (tensor<1x2880xbf16, #ttnn_layout33>) -> tensor<1x2880xf32, #ttnn_layout34>
+        %35 = "ttnn.to_memory_config"(%34) : (tensor<1x2880xf32, #ttnn_layout34>) -> tensor<1x2880xf32, #ttnn_layout35>
+        %36 = "ttnn.linear"(%35, %arg13, %arg14) <{matmul_program_config = #ttnn.matmul_multi_core_reuse_multi_cast_1d_program_config<compute_with_storage_grid_size = #ttnn.core_coord<1, 1>, in0_block_w = 90, out_subblock_h = 1, out_subblock_w = 1, out_block_h = 1, out_block_w = 1, per_core_m = 1, per_core_n = 1, fuse_batch = true, mcast_in0 = false, gather_in0 = false, hop_cores = #ttnn.core_range_set<>, num_global_cb_receivers = 0, untilize_out = false>, transpose_a = false, transpose_b = false}> : (tensor<1x2880xf32, #ttnn_layout35>, tensor<2880x32xbf16, #ttnn_layout10>, tensor<1x32xf32, #ttnn_layout11>) -> tensor<1x32xf32, #ttnn_layout36>
+        %37 = "ttnn.typecast"(%36) : (tensor<1x32xf32, #ttnn_layout36>) -> tensor<1x32xbf16, #ttnn_layout37>
+        %38 = "ttnn.to_memory_config"(%37) : (tensor<1x32xbf16, #ttnn_layout37>) -> tensor<1x32xbf16, #ttnn_layout38>
+        %values, %indices = "ttnn.topk"(%38) <{dim = 1 : i32, k = 4 : i32, largest = true, sorted = true}> : (tensor<1x32xbf16, #ttnn_layout38>) -> (tensor<1x4xbf16, #ttnn_layout38>, tensor<1x4xui16, #ttnn_layout39>)
+        %39 = "ttnn.softmax"(%values) <{dimension = 1 : si32, numericStable = false}> : (tensor<1x4xbf16, #ttnn_layout38>) -> tensor<1x4xbf16, #ttnn_layout40>
+        %40 = "ttnn.to_memory_config"(%39) : (tensor<1x4xbf16, #ttnn_layout40>) -> tensor<1x4xbf16, #ttnn_layout38>
+        %41 = "ttnn.scatter"(%3, %indices, %40) <{dim = 1 : i32, scatter_reduce_type = #ttcore.reduce_type<sum>}> : (tensor<1x32xbf16, #ttnn_layout18>, tensor<1x4xui16, #ttnn_layout39>, tensor<1x4xbf16, #ttnn_layout38>) -> tensor<1x32xbf16, #ttnn_layout40>
+        %42 = "ttnn.reshape"(%32) <{shape = [1 : i32, 1 : i32, 2880 : i32]}> : (tensor<1x1x1x2880xbf16, #ttnn_layout20>) -> tensor<1x1x2880xbf16, #ttnn_layout41>
+        %43 = "ttnn.repeat"(%42) <{repeat_dims = #ttnn.shape<32x1x1>}> : (tensor<1x1x2880xbf16, #ttnn_layout41>) -> tensor<32x1x2880xbf16, #ttnn_layout42>
+        %44 = "ttnn.to_memory_config"(%43) : (tensor<32x1x2880xbf16, #ttnn_layout42>) -> tensor<32x1x2880xbf16, #ttnn_layout43>
+        %45 = "ttnn.linear"(%44, %arg15, %arg16) <{transpose_a = false, transpose_b = false}> : (tensor<32x1x2880xbf16, #ttnn_layout43>, tensor<32x2880x5760xbf16, #ttnn_layout12>, tensor<32x1x5760xbf16, #ttnn_layout13>) -> tensor<32x1x5760xbf16, #ttnn_layout13>
+        %46 = "ttnn.slice_static"(%45) <{begins = [0 : i32, 0 : i32, 1 : i32], ends = [32 : i32, 1 : i32, 5760 : i32], step = [1 : i32, 1 : i32, 2 : i32]}> : (tensor<32x1x5760xbf16, #ttnn_layout13>) -> tensor<32x1x2880xbf16, #ttnn_layout43>
+        %47 = "ttnn.slice_static"(%45) <{begins = [0 : i32, 0 : i32, 0 : i32], ends = [32 : i32, 1 : i32, 5760 : i32], step = [1 : i32, 1 : i32, 2 : i32]}> : (tensor<32x1x5760xbf16, #ttnn_layout13>) -> tensor<32x1x2880xbf16, #ttnn_layout43>
+        %48 = "ttnn.clamp_scalar"(%47) <{max = 7.000000e+00 : f32, min = -3.40282347E+38 : f32}> : (tensor<32x1x2880xbf16, #ttnn_layout43>) -> tensor<32x1x2880xbf16, #ttnn_layout42>
+        %49 = "ttnn.clamp_scalar"(%46) <{max = 7.000000e+00 : f32, min = -7.000000e+00 : f32}> : (tensor<32x1x2880xbf16, #ttnn_layout43>) -> tensor<32x1x2880xbf16, #ttnn_layout42>
+        %50 = "ttnn.to_memory_config"(%2) : (tensor<32x1x2880xbf16, #ttnn_layout15>) -> tensor<32x1x2880xbf16, #ttnn_layout42>
+        %51 = "ttnn.multiply"(%48, %50) : (tensor<32x1x2880xbf16, #ttnn_layout42>, tensor<32x1x2880xbf16, #ttnn_layout42>) -> tensor<32x1x2880xbf16, #ttnn_layout42>
+        %52 = "ttnn.multiply"(%48, %51) : (tensor<32x1x2880xbf16, #ttnn_layout42>, tensor<32x1x2880xbf16, #ttnn_layout42>) -> tensor<32x1x2880xbf16, #ttnn_layout42>
+        %53 = "ttnn.to_memory_config"(%1) : (tensor<32x1x2880xbf16, #ttnn_layout15>) -> tensor<32x1x2880xbf16, #ttnn_layout42>
+        %54 = "ttnn.add"(%49, %53) : (tensor<32x1x2880xbf16, #ttnn_layout42>, tensor<32x1x2880xbf16, #ttnn_layout42>) -> tensor<32x1x2880xbf16, #ttnn_layout42>
+        %55 = "ttnn.multiply"(%54, %52) : (tensor<32x1x2880xbf16, #ttnn_layout42>, tensor<32x1x2880xbf16, #ttnn_layout42>) -> tensor<32x1x2880xbf16, #ttnn_layout42>
+        %56 = "ttnn.to_memory_config"(%55) : (tensor<32x1x2880xbf16, #ttnn_layout42>) -> tensor<32x1x2880xbf16, #ttnn_layout43>
+        %57 = "ttnn.linear"(%56, %arg17, %arg18) <{transpose_a = false, transpose_b = false}> : (tensor<32x1x2880xbf16, #ttnn_layout43>, tensor<32x2880x2880xbf16, #ttnn_layout14>, tensor<32x1x2880xbf16, #ttnn_layout15>) -> tensor<32x1x2880xbf16, #ttnn_layout15>
+        %58 = "ttnn.reshape"(%41) <{shape = [32 : i32, 1 : i32, 1 : i32]}> : (tensor<1x32xbf16, #ttnn_layout40>) -> tensor<32x1x1xbf16, #ttnn_layout44>
+        %59 = "ttnn.to_memory_config"(%57) : (tensor<32x1x2880xbf16, #ttnn_layout15>) -> tensor<32x1x2880xbf16, #ttnn_layout42>
         %60 = "ttnn.to_memory_config"(%58) : (tensor<32x1x1xbf16, #ttnn_layout44>) -> tensor<32x1x1xbf16, #ttnn_layout45>
-        %61 = "ttnn.multiply"(%59, %60) : (tensor<32x1x2880xbf16, #ttnn_layout35>, tensor<32x1x1xbf16, #ttnn_layout45>) -> tensor<32x1x2880xbf16, #ttnn_layout35>
-        %62 = "ttnn.to_memory_config"(%61) : (tensor<32x1x2880xbf16, #ttnn_layout35>) -> tensor<32x1x2880xbf16, #ttnn_layout36>
-        %63 = "ttnn.sum"(%62) <{dim_arg = [0 : i32], keep_dim = false}> : (tensor<32x1x2880xbf16, #ttnn_layout36>) -> tensor<1x2880xbf16, #ttnn_layout46>
-        %64 = "ttnn.to_memory_config"(%63) : (tensor<1x2880xbf16, #ttnn_layout46>) -> tensor<1x2880xbf16, #ttnn_layout41>
-        %65 = "ttnn.reshape"(%64) <{shape = [1 : i32, 1 : i32, 1 : i32, 2880 : i32]}> : (tensor<1x2880xbf16, #ttnn_layout41>) -> tensor<1x1x1x2880xbf16, #ttnn_layout28>
+        %61 = "ttnn.multiply"(%59, %60) : (tensor<32x1x2880xbf16, #ttnn_layout42>, tensor<32x1x1xbf16, #ttnn_layout45>) -> tensor<32x1x2880xbf16, #ttnn_layout42>
+        %62 = "ttnn.to_memory_config"(%61) : (tensor<32x1x2880xbf16, #ttnn_layout42>) -> tensor<32x1x2880xbf16, #ttnn_layout43>
+        %63 = "ttnn.sum"(%62) <{dim_arg = [0 : i32], keep_dim = false}> : (tensor<32x1x2880xbf16, #ttnn_layout43>) -> tensor<1x2880xbf16, #ttnn_layout46>
+        %64 = "ttnn.to_memory_config"(%63) : (tensor<1x2880xbf16, #ttnn_layout46>) -> tensor<1x2880xbf16, #ttnn_layout38>
+        %65 = "ttnn.reshape"(%64) <{shape = [1 : i32, 1 : i32, 1 : i32, 2880 : i32]}> : (tensor<1x2880xbf16, #ttnn_layout38>) -> tensor<1x1x1x2880xbf16, #ttnn_layout28>
         %66 = "ttnn.add"(%28, %65) : (tensor<1x1x1x2880xbf16, #ttnn_layout32>, tensor<1x1x1x2880xbf16, #ttnn_layout28>) -> tensor<1x1x1x2880xbf16, #ttnn_layout32>
         %67 = "ttnn.to_memory_config"(%66) : (tensor<1x1x1x2880xbf16, #ttnn_layout32>) -> tensor<1x1x1x2880xbf16, #ttnn_layout16>
         return %67, %14, %15, %16, %20 : tensor<1x1x1x2880xbf16, #ttnn_layout16>, tensor<1x1x8x64xbf16, #ttnn_layout17>, tensor<1x1x1x64xbf16, #ttnn_layout17>, tensor<1x1x1x64xbf16, #ttnn_layout17>, tensor<1x1x8x64xbf16, #ttnn_layout17>

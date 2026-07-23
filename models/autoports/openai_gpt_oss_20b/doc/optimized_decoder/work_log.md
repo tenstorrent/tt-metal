@@ -1,6 +1,6 @@
 # GPT-OSS 20B optimized decoder work log
 
-Date: 2026-07-22 UTC
+Date: 2026-07-22 through 2026-07-23 UTC
 
 ## Scope, provenance, and device discipline
 
@@ -11,7 +11,10 @@ work are out of scope.
 
 The initial stage-owned commit is `d3b34a9bf87` (`Optimize GPT-OSS 20B
 decoder`). The independent review of that commit returned more-work-needed;
-the remediation and rereview are recorded below. Nothing was pushed.
+the first remediation commit is `82892545af1` (`Address GPT-OSS optimized
+decoder review`). A second independent review found the remaining S=128
+contract and performance-accounting gaps; its remediation and rereview are
+recorded below. Nothing was pushed.
 
 `tt-smi -s` showed four healthy local Blackhole P300c devices, DRAM status
 true, and no uncorrectable GDDR errors. Hardware commands were serialized.
@@ -37,10 +40,12 @@ is also consumed by the later skip connection.
 
 ## Sparse expert rewrite and topology candidates
 
-The selected batch-one graph loads BFP8_B routed expert weights, releases the
-inherited dense tensors, and executes device-side routing, sparse gate/up/down,
-clipped SwiGLU, routing-score multiplication, reduction, and residual. Public
-prefill lengths remain arbitrary; padding and slicing are internal.
+The selected batch-one decode graph loads BFP8_B routed expert weights,
+releases inherited dense tensors, and executes device-side routing, sparse
+gate/up/down, clipped SwiGLU, routing-score multiplication, reduction, and
+residual. Full-attention layers retain only split BF16 gate/up/down tensors for
+the real S=128 precision path. Public prefill lengths remain non-aligned;
+padding and slicing are internal.
 
 An early residual-add output-buffer dtype mismatch was repaired by allocating
 the BF16 result rather than reusing a BFP8 expert output. It was not treated as
@@ -55,8 +60,8 @@ Real checkpoint weights were used for correctness decisions.
 | BFP4_B/LoFi 9x10 | real S=17 prefill PCC 0.969613 / 0.972778 for layers 12/13 | reject |
 | BFP4_B/LoFi 5x6 | same material failure family after geometry retry | reject |
 | BF16/LoFi 9x10 | correct; 5.76075 ms prefill / 1.06843 ms decode | reject: slower |
-| BFP8_B/LoFi 9x10, block 45, subblock 1 | correct; final 4.04530 / 0.83421 ms | keep |
-| BFP8_B/HiFi2 with final layouts | identical final layer-kind PCC; 0.834096 ms adjacent decode trial | reject: no accuracy gain and no speed win over LoFi |
+| BFP8_B/LoFi 9x10, block 45, subblock 1 | correct; final 3.95312 / 0.834353 ms | keep |
+| BFP8_B/HiFi2 with final layouts | identical layer-kind PCC; equal 20/200 control 3.87603 / 0.834611 ms | reject: decode mean 0.03% slower; effectively tied, no accuracy gain |
 
 Precision-locked BFP8 geometry trials:
 
@@ -130,8 +135,8 @@ partial capture.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `shard_advise/report.json` | 12,432 | `942251261b4846fe977abaf19d78c1ee6d4d78bc20d61add455ae5b60d490f53` |
-| `shard_advise/final_ir.mlir` | 27,874 | `7d42d2aa40e92b8eb086465b4531a339ee7a045cd300841d3bfd57fc9d3fe97e` |
+| `shard_advise/report.json` | 12,431 | `4042377b86bac479cbcc31c8fc7c006dd4fa361cb5cc9194b9eefad4663f7656` |
+| `shard_advise/final_ir.mlir` | 27,874 | `581e8050b7b69cbe43e946c486ed404d74707a132c04b92b380e075b79c09ad2` |
 
 ### Recommendation disposition
 
@@ -165,13 +170,17 @@ partial capture.
 At S=128, explicit 8x4 and 10x4 QKV/O programs produced real layer-12/13
 output PCC around 0.97469/0.97190. Automatic projection selection produced
 0.98922/0.98700 and was materially better, so `prefill_matmul_config="auto"`
-is selected. Dense+auto controls reached 0.99205/0.98983, confirming that the
-remaining long-prefill delta is dominated by the shared sparse prefill
-precision rather than projection layout. Internal chunk-by-32 retry produced
-the same PCC and was removed. Synthetic S=128 remains above the stage's 0.99
-test bar; S=128 real output is reported as a known precision boundary, not
-silently described as qualified. The public API has no divisibility
-restriction.
+is selected. The first dense+auto controls reached 0.99205/0.98983, identifying
+both sparse-prefill precision and full-attention accumulation as material.
+
+The final layer-aware policy keeps composite SDPA plus decoder-local
+BF16/HiFi2 sparse prefill for sliding layers (layer 12 PCC 0.990790). For the
+full layer, FP32 manual S=128 attention plus a decoder-local BF16 split dense
+expert graph reaches 0.990509. Explicit SDPA chunk sizes 32/64, BF16 expert
+weights under the shared sparse prefill, and manual attention alone remained
+below 0.99. The dense graph is owned by `OptimizedDecoder`; neither selected
+S=128 path calls a fused or functional forward. The API retains non-aligned
+S=3/17/33 support.
 
 ## Semantic corrections from independent review
 
@@ -188,11 +197,26 @@ boundary. Remediation:
 - add a real-weight, 256-entry-cache test that prefills 128 and decodes at
   position 128 for both layer kinds.
 
-Boundary results are 0.996112 output PCC for layer 12 and 0.994792 for layer
-13, with K/V PCC above 0.99982. An AutoFix isolation pass verified that RoPE
-tables are bitwise identical at the boundary and that the full-attention SDPA
-window semantics are correct; the lower real S=128 prefill output PCC is the
-shared sparse prefill precision boundary described above.
+An AutoFix isolation pass verified that RoPE tables are bitwise identical at
+the boundary and that full-attention window semantics are correct.
+
+The second independent review rejected the then-claimed 131072-token support
+because only S=17 prefill was real-weight qualified and also required explicit
+roofline/device/end-to-end accounting. Remediation:
+
+- layer-aware S=128 precision paths raise both real layer kinds above 0.99;
+- the optimized class now owns the dense advisor/control and full-layer
+  prefill graph instead of calling `FusedDecoder._moe_forward`;
+- `current_supported_context` is 128, while the HF provenance field remains
+  131072; the reduction records a hard 72,477,573,120-byte minimum-live-tensor
+  requirement against 34,178,731,008 allocator bytes at the target extent;
+- performance reports now use `--active-experts 4`, retain advice, print
+  same-run host wall time, and reconcile a byte roofline with device work,
+  dispatch gaps, profiled host wall, and uninstrumented repeated wall time.
+
+Final S=128 boundary results are 0.990790/0.990509 prefill output PCC and
+0.996168/0.994839 decode output PCC for layers 12/13, with K/V PCC above
+0.99982.
 
 ## Final correctness
 
@@ -200,29 +224,30 @@ Real S=17 checkpoint coverage under the selected default:
 
 | Layer / kind | Prefill output | Prefill K / V | Decode output | Decode K / V |
 | --- | ---: | ---: | ---: | ---: |
-| 12 / sliding | 0.99024635 | 0.99991794 / 0.99992703 | 0.99563603 | 0.99981871 / 0.99980306 |
-| 13 / full | 0.99308115 | 0.99990794 / 0.99992701 | 0.99410810 | 0.99982619 / 0.99981078 |
+| 12 / sliding | 0.99195677 | 0.99991794 / 0.99992703 | 0.99563603 | 0.99981871 / 0.99980306 |
+| 13 / full | 0.99436448 | 0.99990794 / 0.99992701 | 0.99410810 | 0.99982619 / 0.99981078 |
 
 Additional coverage:
 
 - non-aligned S=3/17/33 and bitwise deterministic S=17 output/cache rerun;
-- synthetic S=128 output and cache PCC above 0.99;
+- synthetic and real S=128 output/cache PCC above 0.99 for both layer kinds;
 - real sliding/full decode at position 128 using a 256-entry BFP8 cache;
-- batch-two compatibility prefill/decode;
+- batch-two compatibility through an optimized-owned dense prefill/decode
+  graph;
 - repeated paged decode positions 3-18 with untouched cache tails;
 - ten trace replays with bitwise-identical output and complete K/V cache.
 
 ## Final performance and profiler evidence
 
-The final same-process real-weight gate uses ten warmed S=17 prefill runs and
-100 traced decode replays:
+The final same-process real-weight gate uses 20 warmed S=17 prefill runs and
+200 traced decode replays:
 
-| Path | Prefill mean / min | Decode mean / min |
+| Path | Prefill mean / median / min | Decode mean / median / min |
 | --- | ---: | ---: |
-| fused | 7.193785 / 7.098952 ms | 6.050208 / 6.033769 ms |
-| **selected optimized** | **4.045302 / 3.934355 ms** | **0.834213 / 0.826016 ms** |
+| fused | 7.119405 / 7.102114 / 7.094515 ms | 6.051824 / 6.050705 / 6.038011 ms |
+| **selected optimized** | **3.953124 / 4.010050 / 3.740721 ms** | **0.834353 / 0.834215 / 0.827959 ms** |
 
-The selected path reduces mean prefill by 43.8% and mean traced decode by
+The selected path reduces mean prefill by 44.5% and mean traced decode by
 86.2%. It also beats the best previous correct selected-path reproduction
 (0.846833 ms) and the historical optimized artifact (0.928144 ms).
 
@@ -230,18 +255,52 @@ Fresh Tracy was collected with real layer-12 weights and five bounded windows:
 
 | Window | Ops | Device | Gaps | Total |
 | --- | ---: | ---: | ---: | ---: |
-| fused S=17 prefill | 52 | 7,026.773 us | 236.111 us | 7,262.884 us |
-| optimized S=17 prefill | 63 | 3,671.552 us | 612.177 us | 4,283.729 us |
-| fused traced decode | 56 | 5,857.295 us | 49.365 us | 5,906.660 us |
-| optimized traced decode | 75 | 768.311 us | 77.188 us | 845.499 us |
-| optimized S=128 prefill | 57 | 12,866.761 us | 375.417 us | 13,242.178 us |
+| fused S=17 prefill | 52 | 7,028.379 us | 260.515 us | 7,288.894 us |
+| optimized S=17 prefill | 60 | 3,513.175 us | 627.634 us | 4,140.809 us |
+| fused traced decode | 56 | 5,855.744 us | 49.913 us | 5,905.657 us |
+| optimized traced decode | 75 | 776.196 us | 77.466 us | 853.662 us |
+| optimized S=128 prefill | 54 | 12,327.276 us | 530.800 us | 12,858.076 us |
 
-Optimized decode sparse rows are 115.665/110.876/109.761 us (336.302 us
-total). QKV/O are 72.363/58.256 us, and SDPA is about 10 us. Reports visibly
-show BFP8 cache writes, BFP8/LoFi sparse matmuls, and the selected sharded
+Optimized decode sparse rows are 116.101/117.231/110.231 us (343.563 us
+total) at 55.3-58.8% modeled DRAM bandwidth with active-experts=4. QKV/O are
+72.566/58.333 us at 79.4/79.0%, and SDPA is 9.919 us. The report's wider
+subblock advice is blocked on the selected 90-core sparse geometry because
+per-core-N=1; the legal 30-core/subblock-3 retry was 0.961806 ms. Reports show
+BFP8 cache writes, BFP8/LoFi sparse matmuls, and the selected sharded
 norm/residual chain. Required routing layout changes are device operations;
 there is no `torch`, `from_torch`, `to_torch`, implicit functional forward,
 host golden fallback, or collective in the measured runtime methods.
+
+### Decode performance accounting
+
+The Blackhole entry used by `tt-perf-report` is 512 GB/s. A BFP8 tile stores
+1024 elements in 1088 bytes. The measured token must read:
+
+| Component | Stored bytes |
+| --- | ---: |
+| BF16 packed QKV weights | 29,491,200 |
+| BF16 output-projection weights | 23,592,960 |
+| BF16 router weights | 184,320 |
+| 4/32 active BFP8 gate/up/down weights | 105,753,600 |
+| expert/attention biases and two norm vectors | 580,608 |
+| 32-token physical BFP8 K/V tile | 34,816 |
+| **Compulsory total** | **159,637,504** |
+
+The theoretical floor is therefore 159,637,504 / 512e9 = 0.311792 ms/token.
+Fresh same-run accounting is:
+
+| Quantity | Time | Reconciliation |
+| --- | ---: | --- |
+| theoretical DRAM floor | 0.311792 ms | compulsory stored bytes only |
+| device kernels | 0.776196 ms | 2.49x roofline; many small/routed ops |
+| op-to-op gaps | 0.077466 ms | traced dispatch/runtime gaps |
+| profiler total | 0.853662 ms | kernels + gaps |
+| same-replay host wall | 0.872583 ms | 0.018921 ms trace-call/signpost overhead |
+| uninstrumented 200-replay mean | 0.834353 ms | 2.3% below profiler total |
+
+Kernels plus gaps account for 97.8% of the same profiled host wall. The 4.6%
+profiled-wall increase over the uninstrumented benchmark is profiler overhead
+and process/run variance, not an untraced model path.
 
 Human-readable tables and CSVs are under `tracy/final/` for fused prefill,
 fused decode, optimized prefill/decode, and optimized S=128 prefill. Raw Tracy
@@ -253,8 +312,8 @@ artifacts are intentionally not stage-owned.
 pytest -q models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py -s
 
 RUN_OPTIMIZED_DECODER_PERF=1 \
-OPTIMIZED_DECODER_PREFILL_REPEATS=10 \
-OPTIMIZED_DECODER_TRACE_REPLAYS=100 \
+OPTIMIZED_DECODER_PREFILL_REPEATS=20 \
+OPTIMIZED_DECODER_TRACE_REPLAYS=200 \
 pytest -q models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_optimized_beats_fused_warmed_prefill_and_traced_decode -s
 
 TT_VISIBLE_DEVICES=0 \
@@ -272,22 +331,40 @@ models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py \
 -k 'real_weight_layer_kind or repeated_paged_decode_stress or traced_decode_output_and_full_cache_integrity' -s
 ```
 
-Final gate results after all runtime changes:
+Final gate results after the first remediation (superseded by the 2026-07-23
+rereview runs below):
 
 - full suite: 10 passed, 2 intentional opt-in skips in 71.22 s;
 - watcher/fallback suite: 6 passed, 6 deselected in 77.87 s;
 - watcher scan: no device, NoC, kernel, or uninitialized-memory assertion;
-- context runner: target=131072, supported=131072, full HF context;
+- context runner: target=131072, supported=131072; this was rejected by the
+  second independent review and corrected to a hard-evidenced supported 128;
 - optimized-decoder runner: fresh advisor JSON parses and authoritative IR
   contains the rewritten dense block matmuls;
 - post-run `tt-smi -s`: all four devices report DRAM healthy and live
   heartbeats.
 
-The exact outputs are retained in
+Those earlier exact outputs are retained in
 `logs/run_20260722_review_final_correctness.log`, its JUnit XML,
-`logs/run_20260722_review_watcher.log`, and its JUnit XML. The final real-weight
-performance result is in `logs/run_20260722_review_final_perf.log`; the fresh
-advisor command and result are in `logs/run_20260722_review_shard_advise.log`.
+`logs/run_20260722_review_watcher.log`, and its JUnit XML. The final 2026-07-23
+evidence replaces their headline numbers and is named `rereview_*`.
+
+Final 2026-07-23 rereview gates:
+
+- full suite: 10 passed, 2 intentional opt-in skips in 74.37 s;
+- watcher/fallback suite: 6 passed, 6 deselected in 74.88 s, with no device,
+  NoC, kernel, or uninitialized-memory assertion in either pytest output or
+  `generated/watcher/watcher.log`;
+- optimized-decoder runner: fresh `report.json` parses and `final_ir.mlir`
+  contains the rewritten dense block matmuls;
+- context runner: target=131072, supported=128, accepted as DRAM-limited from
+  the capacity evidence in `doc/context_contract.json`;
+- post-run `tt-smi -s`: all four devices report healthy DRAM, zero corrected
+  or uncorrected GDDR errors, live heartbeats, and normal temperatures.
+
+The exact final correctness and watcher outputs are retained in
+`logs/run_20260723_rereview_final_correctness.log`, its JUnit XML,
+`logs/run_20260723_rereview_watcher.log`, and its JUnit XML.
 
 ## Optimize checklist
 
@@ -308,23 +385,21 @@ advisor command and result are in `logs/run_20260722_review_shard_advise.log`.
 - [x] Large-prefill program configs evaluated; PCC-losing 2D configs rejected.
 - [x] Non-aligned, repeated, batch, layer-kind, long-boundary, trace, profiler,
   and watcher coverage present.
-- [x] Before/after warmed prefill and 100-replay traced decode are comparable
+- [x] Before/after warmed prefill and 200-replay traced decode are comparable
   and final selected code beats the strongest correct baseline.
 - [x] No host fallback, unnecessary host tensor conversion, or collective in
   the measured single-device graph.
 
 ## Limitations
 
-- Real S=128 sparse prefill output is below the 0.99 qualification bar even
-  though synthetic S=128 and its cache pass. Decode through position 128 is
-  real-weight qualified for both layer kinds. This is documented in the
-  context contract and is not used to claim longer real prefill qualification.
+- The supported context is 128, not the HF-advertised 131072. At the target
+  extent, the full-attention BF16 accuracy path's repeated input+gate+up live
+  tensors alone require 72.48 GB versus 34.18 GB allocator capacity. The HF
+  field is preserved as provenance, and the hard limit plus formula is in the
+  context contract.
 - The shared sparse expert implementation supports batch one. Batch two uses
-  the exact fused dense compatibility branch and is not a measured optimized
-  latency path.
-- The default test cache extent remains 128, while callers may request a larger
-  cache. Removing the quadratic dense mask and dynamically extending RoPE
-  preserves the HF-advertised 131072-token logical contract. A 256-entry cache
-  is hardware-validated through decode position 128; longer-context accuracy
-  and performance remain unmeasured in this decoder-layer stage and are not
-  confused with a public context cap.
+  the optimized class's decoder-local dense compatibility graph and is not a
+  measured optimized latency path.
+- Full-attention S=128 uses manual FP32 attention because the SDPA composite
+  candidate missed the real-weight bar. Sliding layers and all measured decode
+  continue to use TTNN SDPA composites.

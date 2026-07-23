@@ -6,6 +6,7 @@ from __future__ import annotations
 import gc
 import inspect
 import os
+import statistics
 import time
 
 import pytest
@@ -83,6 +84,25 @@ def _optimization_config(variant: str | None = None) -> OptimizationConfig:
         "prefill_auto": base.with_changes(prefill_matmul_config="auto"),
         "prefill_2d_8x4": base.with_changes(prefill_matmul_config="2d_8x4"),
         "prefill_2d_10x4": base.with_changes(prefill_matmul_config="2d_10x4"),
+        "prefill_sdpa_32": base.with_changes(
+            prefill_sdpa_chunk_size=32,
+            use_manual_prefill_attention=False,
+            use_dense_long_prefill=False,
+        ),
+        "prefill_sdpa_64": base.with_changes(
+            prefill_sdpa_chunk_size=64,
+            use_manual_prefill_attention=False,
+            use_dense_long_prefill=False,
+        ),
+        "manual_prefill_attention": base.with_changes(use_manual_prefill_attention=True),
+        "manual_prefill_attention_bf16_experts": base.with_changes(
+            use_manual_prefill_attention=True,
+            expert_weight_dtype="bfloat16",
+        ),
+        "manual_dense_long_prefill": base.with_changes(
+            use_manual_prefill_attention=True,
+            use_dense_long_prefill=True,
+        ),
         "dense": base.with_changes(use_sparse_experts=False),
         "dense_prefill_auto": base.with_changes(use_sparse_experts=False, prefill_matmul_config="auto"),
         "advisor_dense_moe": base.with_changes(
@@ -91,6 +111,17 @@ def _optimization_config(variant: str | None = None) -> OptimizationConfig:
         ),
         "sparse_bf16": base.with_changes(expert_weight_dtype="bfloat16"),
         "sparse_hifi2": base.with_changes(expert_math_fidelity="hifi2"),
+        "sparse_prefill_shared": base.with_changes(
+            use_precise_sparse_prefill=False,
+            use_manual_prefill_attention=False,
+            use_dense_long_prefill=False,
+        ),
+        "sparse_prefill_bfp8_lofi": base.with_changes(
+            prefill_expert_output_dtype="bfloat8_b",
+            prefill_expert_math_fidelity="lofi",
+            use_manual_prefill_attention=False,
+            use_dense_long_prefill=False,
+        ),
         "sparse_packed_gate_up": base.with_changes(use_packed_sparse_gate_up=True),
         "expert_input_l1": base.with_changes(expert_input_l1=True),
         "expert_input_dram": base.with_changes(expert_input_l1=False),
@@ -165,6 +196,9 @@ def test_optimized_runtime_is_distinct_and_has_no_host_fallback():
         OptimizedDecoder._route,
         OptimizedDecoder._apply_fused_swiglu,
         OptimizedDecoder._sparse_decode_experts,
+        OptimizedDecoder._sparse_prefill_chunk,
+        OptimizedDecoder._sparse_prefill_experts,
+        OptimizedDecoder._dense_reference_experts,
         OptimizedDecoder._optimized_moe_forward,
         OptimizedDecoder._prefill_attention,
         OptimizedDecoder._decode_attention,
@@ -211,7 +245,36 @@ def test_real_weight_layer_kind_boundary_beyond_emitted_cache(mesh_device, layer
         key_cache, value_cache = decoder.create_kv_cache()
         generator = torch.Generator().manual_seed(16100 + layer_idx)
         hidden = torch.randn((1, 1, prefill_len, config.hidden_size), generator=generator, dtype=torch.bfloat16)
-        decoder.prefill_forward(functional_test._tt_tensor(hidden, mesh_device), key_cache, value_cache)
+        reference_prefill, reference_key, reference_value, _ = functional_test._reference_layer(
+            reference_layer,
+            hidden,
+            config,
+        )
+        actual_prefill = decoder.prefill_forward(
+            functional_test._tt_tensor(hidden, mesh_device),
+            key_cache,
+            value_cache,
+        )
+        functional_test._assert_pcc(
+            reference_prefill,
+            functional_test._to_host(actual_prefill),
+            0.99,
+            f"layer{layer_idx} prefill S={prefill_len}",
+        )
+        reference_cache_len = reference_key.shape[-2]
+        cache_start = prefill_len - reference_cache_len
+        functional_test._assert_pcc(
+            reference_key,
+            functional_test._to_host(key_cache)[:, :, cache_start:prefill_len, :],
+            0.99,
+            f"layer{layer_idx} prefill boundary key",
+        )
+        functional_test._assert_pcc(
+            reference_value,
+            functional_test._to_host(value_cache)[:, :, cache_start:prefill_len, :],
+            0.99,
+            f"layer{layer_idx} prefill boundary value",
+        )
 
         assert decoder.max_cache_len == 256
         assert decoder.attention_window == expected_window
@@ -432,8 +495,17 @@ def test_real_weight_layer_kind_prefill_and_decode(mesh_device, layer_idx, seed)
         )
         if decoder.optimization_config.use_sparse_experts:
             assert decoder.experts is not None
-            assert decoder.gate_up_weight is None
-            assert decoder.down_weight is None
+            retains_dense_long_prefill = (
+                decoder.optimization_config.use_dense_long_prefill and decoder.attention_window is None
+            )
+            if retains_dense_long_prefill:
+                assert decoder.gate_up_weight is None
+                assert decoder.gate_weight is not None
+                assert decoder.up_weight is not None
+                assert decoder.down_weight is not None
+            else:
+                assert decoder.gate_up_weight is None
+                assert decoder.down_weight is None
         del decoder, reference_layer, state
         gc.collect()
 
@@ -601,10 +673,16 @@ def _measure_decoder(decoder_cls, state, config, mesh_device, *, optimization_co
     trace_output.deallocate(True)
     result = {
         "prefill_seq_len": seq_len,
-        "prefill_mean_ms": sum(prefill_ms) / len(prefill_ms),
+        "prefill_mean_ms": statistics.mean(prefill_ms),
+        "prefill_median_ms": statistics.median(prefill_ms),
+        "prefill_stdev_ms": statistics.pstdev(prefill_ms),
         "prefill_min_ms": min(prefill_ms),
-        "decode_traced_mean_ms": sum(decode_ms) / len(decode_ms),
+        "prefill_max_ms": max(prefill_ms),
+        "decode_traced_mean_ms": statistics.mean(decode_ms),
+        "decode_traced_median_ms": statistics.median(decode_ms),
+        "decode_traced_stdev_ms": statistics.pstdev(decode_ms),
         "decode_traced_min_ms": min(decode_ms),
+        "decode_traced_max_ms": max(decode_ms),
     }
     del decoder
     gc.collect()
@@ -640,8 +718,10 @@ def test_profile_optimized_warmed_windows(mesh_device, device_params):
         ttnn.synchronize_device(mesh_device)
         output.deallocate(True)
         signpost(header=f"{prefix}_PREFILL")
+        prefill_start = time.perf_counter()
         output = decoder.prefill_forward(prefill_input, key_cache, value_cache)
         ttnn.synchronize_device(mesh_device)
+        profiled_prefill_ms = (time.perf_counter() - prefill_start) * 1000
         signpost(header=f"{prefix}_PREFILL_END")
         output.deallocate(True)
 
@@ -663,8 +743,14 @@ def test_profile_optimized_warmed_windows(mesh_device, device_params):
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
         signpost(header=f"{prefix}_DECODE")
+        decode_start = time.perf_counter()
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        profiled_decode_ms = (time.perf_counter() - decode_start) * 1000
         signpost(header=f"{prefix}_DECODE_END")
+        print(
+            f"{prefix.lower()}_profiled_wall_ms="
+            f"{{'prefill': {profiled_prefill_ms}, 'traced_decode': {profiled_decode_ms}}}"
+        )
         assert tuple(trace_output.shape) == (1, 1, 1, config.hidden_size)
         ttnn.release_trace(mesh_device, trace_id)
         trace_output.deallocate(True)

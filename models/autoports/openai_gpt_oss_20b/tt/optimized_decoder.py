@@ -97,6 +97,11 @@ class OptimizationConfig:
     use_sparse_experts: bool = True
     expert_weight_dtype: str = "bfloat8_b"
     expert_math_fidelity: str = "lofi"
+    prefill_expert_math_fidelity: str = "hifi2"
+    prefill_expert_output_dtype: str = "bfloat16"
+    use_precise_sparse_prefill: bool = True
+    use_manual_prefill_attention: bool = True
+    use_dense_long_prefill: bool = True
     expert_gate_up_cores: tuple[int, int] = (9, 10)
     expert_down_cores: tuple[int, int] = (9, 10)
     expert_gate_up_in0_block_w: int = 45
@@ -107,6 +112,7 @@ class OptimizationConfig:
     use_packed_sparse_gate_up: bool = False
     kv_cache_dtype: str = "bfloat8_b"
     prefill_matmul_config: str = "auto"
+    prefill_sdpa_chunk_size: int | None = None
     explicit_sdpa_program_config: bool = True
     sdpa_grid: tuple[int, int] = (8, 8)
     sdpa_k_chunk_size: int = ttnn.TILE_SIZE
@@ -402,8 +408,12 @@ class OptimizedDecoder(FusedDecoder):
         # Optimized SDPA consumes no dense eager mask. Releasing it also lets
         # this stage support cache extents beyond the captured 128-token graph
         # without allocating an O(sequence^2) host/device mask.
-        decoder.attention_mask.deallocate(True)
-        decoder.attention_mask = None
+        retain_manual_mask = (
+            decoder.optimization_config.use_manual_prefill_attention and decoder.attention_window is None
+        )
+        if not retain_manual_mask:
+            decoder.attention_mask.deallocate(True)
+            decoder.attention_mask = None
         if max_cache_len > EMITTED_CACHE_LENGTH:
             rotary = GptOssRotaryEmbedding(hf_config)
             positions = torch.arange(max_cache_len, dtype=torch.long).unsqueeze(0)
@@ -539,20 +549,37 @@ class OptimizedDecoder(FusedDecoder):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        prefill_fidelity = self.optimization_config.prefill_expert_math_fidelity
+        self.prefill_expert_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity={
+                "lofi": ttnn.MathFidelity.LoFi,
+                "hifi2": ttnn.MathFidelity.HiFi2,
+            }[prefill_fidelity],
+            math_approx_mode=prefill_fidelity == "lofi",
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
 
         # The sparse module owns separate gate/up/down tensors.  Releasing the
         # inherited dense copies both restores capacity and guarantees that the
         # selected runtime cannot silently execute the dense expert path.
-        for name in (
-            "gate_weight",
-            "up_weight",
-            "gate_bias",
-            "up_bias",
-            "gate_up_weight",
-            "gate_up_bias",
-            "down_weight",
-            "down_bias",
-        ):
+        retain_dense_long_prefill = self.optimization_config.use_dense_long_prefill and self.attention_window is None
+        released_dense_names = (
+            (
+                "gate_weight",
+                "up_weight",
+                "gate_bias",
+                "up_bias",
+                "gate_up_weight",
+                "gate_up_bias",
+                "down_weight",
+                "down_bias",
+            )
+            if not retain_dense_long_prefill
+            else ("gate_up_weight", "gate_up_bias")
+        )
+        for name in released_dense_names:
             tensor = getattr(self, name)
             tensor.deallocate(True)
             setattr(self, name, None)
@@ -568,10 +595,12 @@ class OptimizedDecoder(FusedDecoder):
             activations=[ttnn.UnaryOpType.SIGMOID],
         )
         gated = ttnn.multiply(gate, sigmoid, output_tensor=gate)
-        sigmoid.deallocate(True)
+        if hasattr(sigmoid, "deallocate"):
+            sigmoid.deallocate(True)
         up = ttnn.add(up, 1.0, output_tensor=up)
         result = ttnn.multiply(up, gated, output_tensor=up)
-        gated.deallocate(True)
+        if hasattr(gated, "deallocate"):
+            gated.deallocate(True)
         return result
 
     def _sparse_decode_experts(self, hidden_states, routing_weights):
@@ -692,11 +721,232 @@ class OptimizedDecoder(FusedDecoder):
             (1, self.batch, ttnn.TILE_SIZE, self.hidden_size),
         )
 
+    def _sparse_prefill_chunk(self, hidden_states, routing_weights):
+        """Run one tile-aligned sparse-prefill chunk at the selected precision.
+
+        The shared expert prefill hardcodes BFP8 outputs and leaves sparse
+        matmul fidelity implicit.  That is fast, but loses the decoder's 0.99
+        real-weight bar at S=128.  This local TP1/EP1 graph preserves the same
+        routing and expert algebra while making BF16/HiFi2 explicit.
+        """
+
+        experts = self.experts
+        weights = experts.weights
+        program_config = experts.program_config
+        _, batch_size, seq_len, _ = hidden_states.shape
+        if batch_size != 1 or seq_len % ttnn.TILE_SIZE != 0:
+            raise ValueError("precise sparse prefill requires batch one and an internally tile-aligned sequence")
+
+        activation_dtype = {
+            "bfloat8_b": ttnn.bfloat8_b,
+            "bfloat16": ttnn.bfloat16,
+        }[self.optimization_config.prefill_expert_output_dtype]
+        group_size = seq_len // ttnn.TILE_SIZE
+        hidden_groups = ttnn.reshape(hidden_states, (1, group_size, ttnn.TILE_SIZE, self.hidden_size))
+        sparsity = ttnn.repeat(experts.prefill_sparsity, (1, 1, group_size, 1))
+        gate_up_nnz = self.num_experts * group_size
+        output_tile = ttnn.Tile([ttnn.TILE_SIZE, ttnn.TILE_SIZE])
+
+        def project(input_tensor, weight, config, *, input_a_sparse=False, projection_sparsity=sparsity, nnz=None):
+            return ttnn.sparse_matmul(
+                input_tensor,
+                weight,
+                sparsity=projection_sparsity,
+                nnz=nnz,
+                is_input_a_sparse=input_a_sparse,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                output_tile=output_tile,
+                program_config=config,
+                compute_kernel_config=self.prefill_expert_compute_kernel_config,
+                dtype=activation_dtype,
+            )
+
+        gate_up_config = program_config.get_prefill_gate_up_config(
+            hidden_groups.shape[2],
+            weights.gate_proj.shape[3],
+            k=hidden_groups.shape[-1],
+        )
+        gate = project(hidden_groups, weights.gate_proj, gate_up_config, nnz=gate_up_nnz)
+        gate = ttnn.transpose(gate, 1, 3)
+        gate = ttnn.reshape(gate, (batch_size, self.num_experts, seq_len, weights.intermediate_size_per_device))
+        gate_bias = ttnn.transpose(weights.gate_proj_bias, 1, 0)
+        gate = ttnn.add(gate, gate_bias, output_tensor=gate)
+
+        up = project(hidden_groups, weights.up_proj, gate_up_config, nnz=gate_up_nnz)
+        hidden_groups.deallocate(True)
+        up = ttnn.transpose(up, 1, 3)
+        up = ttnn.reshape(up, (batch_size, self.num_experts, seq_len, weights.intermediate_size_per_device))
+        up_bias = ttnn.transpose(weights.up_proj_bias, 1, 0)
+        up = ttnn.add(up, up_bias, output_tensor=up)
+        down_input = self._apply_fused_swiglu(gate, up)
+        down_input = ttnn.reshape(
+            down_input,
+            (1, self.num_experts, seq_len, weights.intermediate_size_per_device),
+        )
+
+        routing_weights = ttnn.permute(routing_weights, (1, 0))
+        routing_weights = ttnn.reshape(routing_weights, (batch_size, self.num_experts, seq_len, 1))
+        split_size = program_config.get_down_split_size(seq_len)
+        if seq_len > split_size:
+            down_inputs = ttnn.split(down_input, split_size, dim=2)
+            down_input.deallocate(True)
+            routing_splits = ttnn.split(routing_weights, split_size, dim=2)
+            routing_weights.deallocate(True)
+        else:
+            down_inputs = [down_input]
+            routing_splits = [routing_weights]
+
+        reduced_chunks = []
+        for down_split, routing_split in zip(down_inputs, routing_splits):
+            split_len = down_split.shape[2]
+            down = project(
+                down_split,
+                weights.down_proj,
+                program_config.get_prefill_down_config(
+                    down_split.shape[2],
+                    weights.down_proj.shape[-1],
+                    k=down_split.shape[-1],
+                ),
+                input_a_sparse=True,
+                projection_sparsity=experts.prefill_sparsity,
+                nnz=self.num_experts,
+            )
+            down_split.deallocate(True)
+            next_states = ttnn.reshape(down, (batch_size, self.num_experts, split_len, self.hidden_size))
+            down_bias = ttnn.transpose(weights.down_proj_bias, 1, 0)
+            next_states = ttnn.add(next_states, down_bias, output_tensor=next_states)
+            next_states = ttnn.multiply(next_states, routing_split, output_tensor=next_states)
+            routing_split.deallocate(True)
+            reduced = ttnn.unsqueeze_to_4D(ttnn.experimental.fast_reduce_nc(next_states, dims=[1]))
+            down.deallocate(True)
+            reduced_chunks.append(reduced)
+
+        output = reduced_chunks[0]
+        for next_chunk in reduced_chunks[1:]:
+            concatenated = ttnn.concat([output, next_chunk], dim=2)
+            output.deallocate(True)
+            next_chunk.deallocate(True)
+            output = concatenated
+        return ttnn.reshape(
+            output,
+            (1, batch_size, seq_len, self.hidden_size),
+            (1, batch_size, max(ttnn.TILE_SIZE, seq_len), self.hidden_size),
+        )
+
+    def _sparse_prefill_experts(self, hidden_states, routing_weights):
+        """Process arbitrarily long padded prefill through bounded chunks."""
+
+        chunk_size = self.experts.program_config.sequence_chunk_size
+        if hidden_states.shape[2] <= chunk_size:
+            return self._sparse_prefill_chunk(hidden_states, routing_weights)
+        hidden_chunks = ttnn.split(hidden_states, chunk_size, dim=2)
+        routing_chunks = ttnn.split(routing_weights, chunk_size, dim=0)
+        hidden_states.deallocate(True)
+        routing_weights.deallocate(True)
+        output = None
+        for hidden_chunk, routing_chunk in zip(hidden_chunks, routing_chunks):
+            next_chunk = self._sparse_prefill_chunk(hidden_chunk, routing_chunk)
+            if output is None:
+                output = next_chunk
+            else:
+                concatenated = ttnn.concat([output, next_chunk], dim=2)
+                output.deallocate(True)
+                next_chunk.deallocate(True)
+                output = concatenated
+        return output
+
+    def _dense_reference_experts(self, hidden_states, seq_len: int):
+        """Run the decoder-local BF16 all-expert reference graph.
+
+        The advisor's dense attention+MLP control and the selected
+        full-attention S=128 accuracy path are both optimized-owned.  Decode
+        uses one packed gate/up projection; prefill uses two narrower
+        projections to avoid the packed output's strided extraction.
+        """
+
+        tokens = self.batch * seq_len
+        token_states = ttnn.reshape(hidden_states, [tokens, self.hidden_size])
+        routing_weights = self._route(hidden_states, seq_len)
+        expert_input = ttnn.reshape(token_states, [1, tokens, self.hidden_size])
+        expert_input = ttnn.repeat(
+            expert_input,
+            ttnn.Shape([self.num_experts, 1, 1]),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if seq_len == 1:
+            gate_up = ttnn.linear(
+                expert_input,
+                self.gate_up_weight,
+                bias=self.gate_up_bias,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            up = ttnn.slice(
+                gate_up,
+                [0, 0, 1],
+                [self.num_experts, tokens, 2 * self.intermediate_size],
+                [1, 1, 2],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            gate = ttnn.slice(
+                gate_up,
+                [0, 0, 0],
+                [self.num_experts, tokens, 2 * self.intermediate_size],
+                [1, 1, 2],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            gate = ttnn.linear(
+                expert_input,
+                self.gate_weight,
+                bias=self.gate_bias,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            up = ttnn.linear(
+                expert_input,
+                self.up_weight,
+                bias=self.up_bias,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+        if hasattr(expert_input, "deallocate"):
+            expert_input.deallocate(True)
+        activated = self._apply_fused_swiglu(gate, up)
+        expert_output = ttnn.linear(
+            activated,
+            self.down_weight,
+            bias=self.down_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        if hasattr(activated, "deallocate"):
+            activated.deallocate(True)
+        routing_weights = ttnn.permute(routing_weights, (1, 0), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        routing_weights = ttnn.reshape(routing_weights, [self.num_experts, tokens, 1])
+        expert_output = ttnn.multiply(
+            expert_output,
+            routing_weights,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tensor=expert_output,
+        )
+        if hasattr(routing_weights, "deallocate"):
+            routing_weights.deallocate(True)
+        reduced = ttnn.sum(expert_output, [0], False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.reshape(reduced, [1, self.batch, seq_len, self.hidden_size])
+
     def _route(self, hidden_states, seq_len: int):
         tokens = self.batch * seq_len
         advisor_layouts = self.optimization_config.use_shard_advisor_router_layouts and seq_len == 1
         advisor_dense = self.optimization_config.use_shard_advisor_dense_moe_layouts and seq_len == 1
-        advisor_l1_norm = advisor_dense or (self.optimization_config.expert_input_l1 and seq_len == 1)
+        advisor_l1_norm = advisor_dense or (
+            self.experts is not None and self.optimization_config.expert_input_l1 and seq_len == 1
+        )
         token_states = ttnn.reshape(hidden_states, [tokens, self.hidden_size])
         router_input = ttnn.typecast(
             token_states,
@@ -772,11 +1022,25 @@ class OptimizedDecoder(FusedDecoder):
         )
 
         # The shared sparse expert module currently serves batch one. Preserve
-        # the inherited batch contract with the exact fused dense graph for
-        # larger batches; the primary measured batch-one path can only use the
-        # sparse module because its dense weights were released above.
+        # larger-batch compatibility with this class's dense graph; the
+        # primary measured batch-one decode path can only use the sparse
+        # module because its dense weights were released above.
         if self.experts is None:
-            expert_output = FusedDecoder._moe_forward(self, normalized, seq_len)
+            expert_output = self._dense_reference_experts(normalized, seq_len)
+            return ttnn.add(
+                residual,
+                expert_output,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                output_tensor=expert_output,
+            )
+
+        if (
+            self.optimization_config.use_dense_long_prefill
+            and self.attention_window is None
+            and seq_len >= EMITTED_CACHE_LENGTH
+        ):
+            expert_output = self._dense_reference_experts(normalized, seq_len)
             return ttnn.add(
                 residual,
                 expert_output,
@@ -807,11 +1071,14 @@ class OptimizedDecoder(FusedDecoder):
                     [(0, padded_len - seq_len), (0, 0)],
                     value=0.0,
                 )
-            expert_output = self.experts(
-                expert_input,
-                topk_expert_weights=routing_weights,
-                is_decode=False,
-            )
+            if self.optimization_config.use_precise_sparse_prefill:
+                expert_output = self._sparse_prefill_experts(expert_input, routing_weights)
+            else:
+                expert_output = self.experts(
+                    expert_input,
+                    topk_expert_weights=routing_weights,
+                    is_decode=False,
+                )
             if padded_len != seq_len:
                 expert_output = ttnn.slice(
                     expert_output,
@@ -1018,18 +1285,77 @@ class OptimizedDecoder(FusedDecoder):
                 )
                 ttnn.fill_cache(key_cache, user_key, user_id)
                 ttnn.fill_cache(value_cache, user_value, user_id)
-        attention = ttnn.transformer.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            attn_mask=None,
-            is_causal=True,
-            scale=self.scale,
-            sliding_window_size=self.attention_window,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-            attention_sink=self.prefill_sdpa_sink,
+        use_manual_accuracy_path = (
+            self.optimization_config.use_manual_prefill_attention
+            and self.attention_window is None
+            and seq_len == EMITTED_CACHE_LENGTH
         )
+        if use_manual_accuracy_path:
+            if self.attention_mask is None:
+                raise ValueError("manual prefill attention requires the retained S=128 causal mask")
+            repeated_key = ttnn.repeat_interleave(key, self.num_heads // self.num_kv_heads, 1)
+            transposed_key = ttnn.permute(repeated_key, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            scores = ttnn.matmul(query, transposed_key, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            scores = ttnn.multiply(scores, self.scale, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            mask = ttnn.slice(
+                self.attention_mask,
+                [0, 0, 0, 0],
+                [1, 1, seq_len, seq_len],
+                [1, 1, 1, 1],
+            )
+            mask = ttnn.typecast(mask, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            scores = ttnn.add(scores, mask, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            sinks = ttnn.slice(
+                self.attention_sinks,
+                [0, 0, 0, 0],
+                [self.batch, self.num_heads, seq_len, 1],
+                [1, 1, 1, 1],
+            )
+            sinks = ttnn.typecast(sinks, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            probabilities = ttnn.softmax(
+                ttnn.concat([scores, sinks], 3, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                3,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                numeric_stable=True,
+            )
+            probabilities = ttnn.slice(
+                probabilities,
+                [0, 0, 0, 0],
+                [self.batch, self.num_heads, seq_len, seq_len],
+                [1, 1, 1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            repeated_value = ttnn.repeat_interleave(value, self.num_heads // self.num_kv_heads, 1)
+            attention = ttnn.matmul(
+                probabilities,
+                repeated_value,
+                dtype=ttnn.float32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            attention = ttnn.typecast(attention, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            attention = ttnn.transformer.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                attn_mask=None,
+                is_causal=True,
+                scale=self.scale,
+                sliding_window_size=self.attention_window,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=(
+                    ttnn.SDPAProgramConfig(
+                        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                        q_chunk_size=self.optimization_config.prefill_sdpa_chunk_size,
+                        k_chunk_size=self.optimization_config.prefill_sdpa_chunk_size,
+                        exp_approx_mode=False,
+                    )
+                    if self.optimization_config.prefill_sdpa_chunk_size is not None
+                    else None
+                ),
+                attention_sink=self.prefill_sdpa_sink,
+            )
         attention = ttnn.transformer.concatenate_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attention = ttnn.reshape(attention, [1, self.batch, seq_len, self.num_heads * self.head_dim])
         attention = ttnn.linear(

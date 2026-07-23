@@ -1,9 +1,9 @@
 === Final-IR layout & reshard summary (authoritative) ===
 
 -- Op layouts (from final TTNN IR) --
-[0] ttnn.zeros  ->  dram/interleaved/1x1
+[0] ttnn.full  ->  dram/interleaved/1x1
 [1] ttnn.full  ->  dram/interleaved/1x1
-[2] ttnn.full  ->  dram/interleaved/1x1
+[2] ttnn.zeros  ->  dram/interleaved/1x1
 [3] ttnn.reshape  ->  dram/interleaved/1x1
 [4] ttnn.rms_norm  ->  l1/block_sharded/1x10 cores=(0,0)-(9,0)
 [5] ttnn.linear  ->  l1/width_sharded/1x80 cores=(0,0)-(10,6)   [matmul_multi_core_reuse_multi_cast_1d @11x8]
@@ -23,24 +23,24 @@
 [19] ttnn.reshape  ->  dram/interleaved/1x1
 [20] ttnn.rms_norm  ->  l1/block_sharded/1x10 cores=(0,0)-(9,0)
 [21] ttnn.reshape  ->  l1/block_sharded/1x10 cores=(0,0)-(9,0)
-[22] ttnn.reshape  ->  l1/block_sharded/1x10 cores=(0,0)-(9,0)
-[23] ttnn.repeat  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
-[24] ttnn.linear  ->  dram/interleaved/1x1
-[25] ttnn.slice_static  ->  l1/interleaved/10x11
-[26] ttnn.slice_static  ->  l1/interleaved/10x11
-[27] ttnn.clamp_scalar  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
-[28] ttnn.add  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
-[29] ttnn.clamp_scalar  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
-[30] ttnn.multiply  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
-[31] ttnn.multiply  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
-[32] ttnn.multiply  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
-[33] ttnn.linear  ->  dram/interleaved/1x1
-[34] ttnn.typecast  ->  l1/block_sharded/1x10 cores=(0,0)-(9,0)
-[35] ttnn.linear  ->  l1/height_sharded/1x1 cores=(0,0)-(0,0)   [matmul_multi_core_reuse_multi_cast_1d @1x1]
-[36] ttnn.typecast  ->  l1/height_sharded/1x1 cores=(0,0)-(0,0)
-[37] ttnn.topk  ->  l1/interleaved/10x11
-[38] ttnn.softmax  ->  l1/block_sharded/1x1 cores=(0,0)-(0,0)
-[39] ttnn.scatter  ->  l1/block_sharded/1x1 cores=(0,0)-(0,0)
+[22] ttnn.typecast  ->  l1/block_sharded/1x10 cores=(0,0)-(9,0)
+[23] ttnn.linear  ->  l1/height_sharded/1x1 cores=(0,0)-(0,0)   [matmul_multi_core_reuse_multi_cast_1d @1x1]
+[24] ttnn.typecast  ->  l1/height_sharded/1x1 cores=(0,0)-(0,0)
+[25] ttnn.topk  ->  l1/interleaved/10x11
+[26] ttnn.softmax  ->  l1/block_sharded/1x1 cores=(0,0)-(0,0)
+[27] ttnn.scatter  ->  l1/block_sharded/1x1 cores=(0,0)-(0,0)
+[28] ttnn.reshape  ->  l1/block_sharded/1x10 cores=(0,0)-(9,0)
+[29] ttnn.repeat  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
+[30] ttnn.linear  ->  dram/interleaved/1x1
+[31] ttnn.slice_static  ->  l1/interleaved/10x11
+[32] ttnn.slice_static  ->  l1/interleaved/10x11
+[33] ttnn.clamp_scalar  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
+[34] ttnn.clamp_scalar  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
+[35] ttnn.multiply  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
+[36] ttnn.multiply  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
+[37] ttnn.add  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
+[38] ttnn.multiply  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
+[39] ttnn.linear  ->  dram/interleaved/1x1
 [40] ttnn.reshape  ->  l1/interleaved/10x11
 [41] ttnn.multiply  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
 [42] ttnn.sum  ->  l1/width_sharded/1x90 cores=(0,0)-(10,7)
@@ -60,13 +60,13 @@
     to_layout -> add: dram/interleaved/1x1 -> l1/width_sharded/1x90 cores=(0,0)-(10,7)  [to_memory_config]
     add -> rms_norm: l1/width_sharded/1x90 cores=(0,0)-(10,7) -> l1/block_sharded/1x10 cores=(0,0)-(9,0)  [to_memory_config]
     reshape -> rms_norm: dram/interleaved/1x1 -> l1/width_sharded/1x90 cores=(0,0)-(10,7)  [to_memory_config]
-    repeat -> linear: l1/width_sharded/1x90 cores=(0,0)-(10,7) -> l1/interleaved/10x11  [to_memory_config]
-    full -> add: dram/interleaved/1x1 -> l1/width_sharded/1x90 cores=(0,0)-(10,7)  [to_memory_config]
-    full -> multiply: dram/interleaved/1x1 -> l1/width_sharded/1x90 cores=(0,0)-(10,7)  [to_memory_config]
-    multiply -> linear: l1/width_sharded/1x90 cores=(0,0)-(10,7) -> l1/interleaved/10x11  [to_memory_config]
     typecast -> linear: l1/block_sharded/1x10 cores=(0,0)-(9,0) -> l1/height_sharded/1x1 cores=(0,0)-(0,0)  [to_memory_config]
     typecast -> topk: l1/height_sharded/1x1 cores=(0,0)-(0,0) -> l1/interleaved/10x11  [to_memory_config]
     softmax -> scatter: l1/block_sharded/1x1 cores=(0,0)-(0,0) -> l1/interleaved/10x11  [to_memory_config]
+    repeat -> linear: l1/width_sharded/1x90 cores=(0,0)-(10,7) -> l1/interleaved/10x11  [to_memory_config]
+    full -> multiply: dram/interleaved/1x1 -> l1/width_sharded/1x90 cores=(0,0)-(10,7)  [to_memory_config]
+    full -> add: dram/interleaved/1x1 -> l1/width_sharded/1x90 cores=(0,0)-(10,7)  [to_memory_config]
+    multiply -> linear: l1/width_sharded/1x90 cores=(0,0)-(10,7) -> l1/interleaved/10x11  [to_memory_config]
     linear -> multiply: dram/interleaved/1x1 -> l1/width_sharded/1x90 cores=(0,0)-(10,7)  [to_memory_config]
     reshape -> multiply: l1/interleaved/10x11 -> l1/height_sharded/32x1 cores=(0,0)-(10,1)  [to_memory_config]
     multiply -> sum: l1/width_sharded/1x90 cores=(0,0)-(10,7) -> l1/interleaved/10x11  [to_memory_config]
@@ -200,127 +200,7 @@ ops: 39  beam_width: 8
     * rank6: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
     * rank7: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
     => FINAL: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10
-[14] ttnn.reshape  @ loc(unknown)
-    * rank0: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
-    * rank1: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
-    * rank2: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
-    * rank3: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
-    * rank4: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
-    * rank5: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
-    * rank6: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
-    * rank7: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
-    => FINAL: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10
-[15] ttnn.repeat  @ loc(unknown)
-    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
-[16] ttnn.linear  @ loc(unknown)
-    * rank0: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank1: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank2: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank3: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank4: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank5: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank6: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank7: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    => FINAL: dram/#ttnn.tensor_memory_layout<interleaved>/1x1
-[17] ttnn.slice_static  @ loc(unknown)
-    * rank0: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank1: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank2: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank3: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank4: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank5: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank6: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank7: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    => FINAL: l1/#ttnn.tensor_memory_layout<interleaved>/10x11
-[18] ttnn.slice_static  @ loc(unknown)
-    * rank0: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank1: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank2: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank3: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank4: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank5: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank6: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    * rank7: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
-    => FINAL: l1/#ttnn.tensor_memory_layout<interleaved>/10x11
-[19] ttnn.clamp_scalar  @ loc(unknown)
-    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
-[20] ttnn.add  @ loc(unknown)
-    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
-[21] ttnn.clamp_scalar  @ loc(unknown)
-    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
-[22] ttnn.multiply  @ loc(unknown)
-    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
-[23] ttnn.multiply  @ loc(unknown)
-    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
-[24] ttnn.multiply  @ loc(unknown)
-    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
-    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
-[25] ttnn.linear  @ loc(unknown)
-    * rank0: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank1: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank2: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank3: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank4: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank5: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank6: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    * rank7: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
-    => FINAL: dram/#ttnn.tensor_memory_layout<interleaved>/1x1
-[26] ttnn.typecast  @ loc(unknown)
+[14] ttnn.typecast  @ loc(unknown)
     * rank0: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=36.0 KB]
     * rank1: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=36.0 KB]
     * rank2: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=36.0 KB]
@@ -330,7 +210,7 @@ ops: 39  beam_width: 8
     * rank6: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=36.0 KB]
     * rank7: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=36.0 KB]
     => FINAL: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10
-[27] ttnn.linear  @ loc(unknown)
+[15] ttnn.linear  @ loc(unknown)
     * rank0: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1  [L1 cores=1 l1=4.0 KB]
     * rank1: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1  [L1 cores=1 l1=4.0 KB]
     * rank2: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1  [L1 cores=1 l1=4.0 KB]
@@ -340,7 +220,7 @@ ops: 39  beam_width: 8
     * rank6: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1  [L1 cores=1 l1=4.0 KB]
     * rank7: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1  [L1 cores=1 l1=4.0 KB]
     => FINAL: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1
-[28] ttnn.typecast  @ loc(unknown)
+[16] ttnn.typecast  @ loc(unknown)
     * rank0: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
     * rank1: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
     * rank2: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
@@ -350,7 +230,7 @@ ops: 39  beam_width: 8
     * rank6: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
     * rank7: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
     => FINAL: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1
-[29] ttnn.topk  @ loc(unknown)
+[17] ttnn.topk  @ loc(unknown)
     * rank0: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=4.0 KB]
     * rank1: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=4.0 KB]
     * rank2: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=4.0 KB]
@@ -360,7 +240,7 @@ ops: 39  beam_width: 8
     * rank6: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=4.0 KB]
     * rank7: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=4.0 KB]
     => FINAL: l1/#ttnn.tensor_memory_layout<interleaved>/10x11
-[30] ttnn.softmax  @ loc(unknown)
+[18] ttnn.softmax  @ loc(unknown)
     * rank0: l1/#ttnn.tensor_memory_layout<block_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
       rank1: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
       rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
@@ -370,7 +250,7 @@ ops: 39  beam_width: 8
     * rank6: l1/#ttnn.tensor_memory_layout<block_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
       rank7: l1/#ttnn.tensor_memory_layout<height_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
     => FINAL: l1/#ttnn.tensor_memory_layout<block_sharded>/1x1
-[31] ttnn.scatter  @ loc(unknown)
+[19] ttnn.scatter  @ loc(unknown)
     * rank0: l1/#ttnn.tensor_memory_layout<block_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
     * rank1: l1/#ttnn.tensor_memory_layout<block_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
     * rank2: l1/#ttnn.tensor_memory_layout<block_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
@@ -380,6 +260,126 @@ ops: 39  beam_width: 8
     * rank6: l1/#ttnn.tensor_memory_layout<block_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
     * rank7: l1/#ttnn.tensor_memory_layout<block_sharded>/1x1  [L1 cores=1 l1=2.0 KB]
     => FINAL: l1/#ttnn.tensor_memory_layout<block_sharded>/1x1
+[20] ttnn.reshape  @ loc(unknown)
+    * rank0: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
+    * rank1: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
+    * rank2: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
+    * rank3: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
+    * rank4: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
+    * rank5: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
+    * rank6: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
+    * rank7: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10  [L1 cores=10 l1=18.0 KB]
+    => FINAL: l1/#ttnn.tensor_memory_layout<block_sharded>/1x10
+[21] ttnn.repeat  @ loc(unknown)
+    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
+[22] ttnn.linear  @ loc(unknown)
+    * rank0: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank1: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank2: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank3: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank4: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank5: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank6: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank7: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    => FINAL: dram/#ttnn.tensor_memory_layout<interleaved>/1x1
+[23] ttnn.slice_static  @ loc(unknown)
+    * rank0: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank1: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank2: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank3: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank4: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank5: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank6: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank7: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    => FINAL: l1/#ttnn.tensor_memory_layout<interleaved>/10x11
+[24] ttnn.slice_static  @ loc(unknown)
+    * rank0: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank1: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank2: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank3: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank4: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank5: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank6: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    * rank7: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=54.0 KB]
+    => FINAL: l1/#ttnn.tensor_memory_layout<interleaved>/10x11
+[25] ttnn.clamp_scalar  @ loc(unknown)
+    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
+[26] ttnn.clamp_scalar  @ loc(unknown)
+    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
+[27] ttnn.multiply  @ loc(unknown)
+    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
+[28] ttnn.multiply  @ loc(unknown)
+    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
+[29] ttnn.add  @ loc(unknown)
+    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
+[30] ttnn.multiply  @ loc(unknown)
+    * rank0: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank1: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank2: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank3: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank4: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank5: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank6: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    * rank7: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90  [L1 cores=90 l1=64.0 KB]
+    => FINAL: l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
+[31] ttnn.linear  @ loc(unknown)
+    * rank0: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank1: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank2: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank3: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank4: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank5: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank6: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    * rank7: dram/#ttnn.tensor_memory_layout<interleaved>/1x1  [DRAM cores=1 l1=0 B]
+    => FINAL: dram/#ttnn.tensor_memory_layout<interleaved>/1x1
 [32] ttnn.permute  @ loc(unknown)
     * rank0: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=2.0 KB]
     * rank1: l1/#ttnn.tensor_memory_layout<interleaved>/10x11  [L1 cores=110 l1=2.0 KB]
@@ -449,12 +449,12 @@ ops: 39  beam_width: 8
     op1 ttnn.linear -> op2 ttnn.reshape (operand 0): reshard into l1/#ttnn.tensor_memory_layout<interleaved>/10x11
     op5 ttnn.reshape -> op7 ttnn.scaled_dot_product_attention_decode (operand 0): reshard into dram/#ttnn.tensor_memory_layout<interleaved>/1x1
     op11 ttnn.add -> op12 ttnn.rms_norm (operand 0): reshard into l1/#ttnn.tensor_memory_layout<block_sharded>/1x10
-    op15 ttnn.repeat -> op16 ttnn.linear (operand 0): reshard into l1/#ttnn.tensor_memory_layout<interleaved>/10x11
-    op24 ttnn.multiply -> op25 ttnn.linear (operand 0): reshard into l1/#ttnn.tensor_memory_layout<interleaved>/10x11
-    op26 ttnn.typecast -> op27 ttnn.linear (operand 0): reshard into l1/#ttnn.tensor_memory_layout<height_sharded>/1x1
-    op28 ttnn.typecast -> op29 ttnn.topk (operand 0): reshard into l1/#ttnn.tensor_memory_layout<interleaved>/10x11
-    op30 ttnn.softmax -> op31 ttnn.scatter (operand 2): reshard into l1/#ttnn.tensor_memory_layout<interleaved>/10x11
-    op25 ttnn.linear -> op34 ttnn.multiply (operand 0): reshard into l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
+    op14 ttnn.typecast -> op15 ttnn.linear (operand 0): reshard into l1/#ttnn.tensor_memory_layout<height_sharded>/1x1
+    op16 ttnn.typecast -> op17 ttnn.topk (operand 0): reshard into l1/#ttnn.tensor_memory_layout<interleaved>/10x11
+    op18 ttnn.softmax -> op19 ttnn.scatter (operand 2): reshard into l1/#ttnn.tensor_memory_layout<interleaved>/10x11
+    op21 ttnn.repeat -> op22 ttnn.linear (operand 0): reshard into l1/#ttnn.tensor_memory_layout<interleaved>/10x11
+    op30 ttnn.multiply -> op31 ttnn.linear (operand 0): reshard into l1/#ttnn.tensor_memory_layout<interleaved>/10x11
+    op31 ttnn.linear -> op34 ttnn.multiply (operand 0): reshard into l1/#ttnn.tensor_memory_layout<width_sharded>/1x90
     op33 ttnn.reshape -> op34 ttnn.multiply (operand 1): reshard into l1/#ttnn.tensor_memory_layout<height_sharded>/32x1
     op34 ttnn.multiply -> op35 ttnn.sum (operand 0): reshard into l1/#ttnn.tensor_memory_layout<interleaved>/10x11
     op35 ttnn.sum -> op36 ttnn.reshape (operand 0): reshard into l1/#ttnn.tensor_memory_layout<interleaved>/10x11
