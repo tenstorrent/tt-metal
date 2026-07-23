@@ -28,6 +28,8 @@ no accuracy gain. Pass ``activations_dtype=ttnn.bfloat16`` for a faster, lower-
 accuracy mode.
 """
 
+import math
+
 import torch
 import ttnn
 
@@ -77,6 +79,50 @@ def _interleaved(x: ttnn.Tensor, shape, *, row_major: bool) -> ttnn.Tensor:
     if row_major:
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     return ttnn.reshape(x, shape)
+
+
+# Per-core resident-activation ceiling for the sharded conv chain. Kept below the smallest
+# observed circular-buffer clash point (k=3 clashes ~64KB/core; k7/k11 have bigger CBs but
+# were verified to fit at 48KB), so the chain's L1-resident tensors always leave room for the
+# convs' circular buffers. The profiled decode lengths (latent_len<=32) sit at 32-48KB/core and
+# stay sharded; longer sequences (the demo) exceed this and fall back to the interleaved path.
+_SHARD_L1_BUDGET_BYTES = 48 * 1024
+
+
+def _shard_height(device, nhw: int) -> int:
+    grid = device.compute_with_storage_grid_size()
+    ncores = int(grid.x) * int(grid.y)
+    return math.ceil(math.ceil(nhw / ncores) / 32) * 32
+
+
+def sharded_chain_fits_l1(device, length: int, channels: int, dtype_bytes: int = 4) -> bool:
+    """Whether a HEIGHT_SHARDED activation of ``length x channels`` is small enough per core
+    to keep the resblock chain resident in L1 without clashing the convs' circular buffers.
+    Length-dependent, so it is checked at forward time (the same block shards at short decode
+    lengths and falls back at long ones)."""
+    return _shard_height(device, length) * channels * dtype_bytes <= _SHARD_L1_BUDGET_BYTES
+
+
+def height_shard_l1(device, x: ttnn.Tensor, channels: int) -> ttnn.Tensor:
+    """Bring a ``[N, L, C]`` (or ``[N, 1, L, C]``) TILE tensor to an L1 HEIGHT_SHARDED
+    layout spread over the full compute grid, tile-aligned per core.
+
+    This is the entry point for a sharded conv chain: once the activation is L1-sharded,
+    ``ttnn.conv1d`` takes its L1 path (input already sharded -> no InterleavedToSharded;
+    ``memory_config=None`` -> output stays sharded, no ShardedToInterleaved), so a chain of
+    same-shape convs + eltwise stays in L1 and pays the reshard only once (here) and the
+    gather only once (``_interleaved`` at chain exit).  Same-shape convs share this exact
+    spec, so no per-conv re-derivation happens (verified PCC ~1.0)."""
+    mem = ttnn.create_sharded_memory_config(
+        shape=(_shard_height(device, x.shape[-2]), channels),
+        core_grid=ttnn.CoreGrid(
+            y=int(device.compute_with_storage_grid_size().y), x=int(device.compute_with_storage_grid_size().x)
+        ),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return ttnn.to_memory_config(x, mem)
 
 
 def _subpixel_weight(weight: torch.Tensor, bias: torch.Tensor | None, stride: int):
@@ -135,6 +181,7 @@ class TtConv1d(LightweightModule):
         math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4,
         fp32_dest_acc_en: bool = True,
         packer_l1_acc: bool = True,
+        act_double_buffer: bool | None = None,
     ):
         super().__init__()
         assert weight.dim() == 3, f"expected Conv1d weight [out, in/groups, k], got {tuple(weight.shape)}"
@@ -165,9 +212,12 @@ class TtConv1d(LightweightModule):
                 bias.reshape(1, 1, 1, -1).float(), ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
             )
 
-        # No forced shard_layout: HEIGHT_SHARDED fails the DRAM slicer on the wide
-        # (1024-channel) layers with short spatial extent. Auto-sharding picks a
-        # valid layout per shape and gives PCC ~0.9999.
+        # No forced shard_layout: HEIGHT_SHARDED fails the DRAM slicer on the wide (1024-channel)
+        # layers with short spatial extent; auto-sharding picks a valid layout per shape (PCC
+        # ~0.9999). The sharded-chain mode (forward's ``keep_sharded``) needs no shard_layout
+        # either — the conv takes its L1 path purely from being handed an already-L1-sharded
+        # input. ``act_double_buffer`` (opt-in) is dropped only on the sharding-capable resblock
+        # convs to fit their circular buffers alongside the resident sharded activations in L1.
         # ``activation`` (e.g. leaky_relu) is fused onto the conv output (post-bias),
         # so ``conv(x, activation=leaky_relu) == leaky_relu(conv(x))`` — used to fold
         # HiFi-GAN's between-conv activations into the producing conv.
@@ -175,6 +225,7 @@ class TtConv1d(LightweightModule):
             weights_dtype=weights_dtype,
             deallocate_activation=False,
             activation=activation,
+            **({"enable_act_double_buffer": act_double_buffer} if act_double_buffer is not None else {}),
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -183,7 +234,7 @@ class TtConv1d(LightweightModule):
             packer_l1_acc=packer_l1_acc,
         )
 
-    def forward(self, x: ttnn.Tensor, cond_bias: ttnn.Tensor | None = None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, cond_bias: ttnn.Tensor | None = None, keep_sharded: bool = False) -> ttnn.Tensor:
         batch_size, input_length, _ = x.shape
         # ``cond_bias`` ([1,1,1,C], fp32) is a per-channel conditioning constant. Two equivalent
         # ways to apply it (identical math — a per-output-channel bias add):
@@ -223,6 +274,12 @@ class TtConv1d(LightweightModule):
         self.tt_weight = weight
         if not fold:  # bias is the (prepared) base bias — cache it; when folding it is the combined bias
             self.tt_bias = bias
+        if keep_sharded:
+            # Sharded-chain mode (input was L1-sharded): the L1 path already returns a
+            # HEIGHT_SHARDED TILE output; reshape is a metadata op that preserves the sharding
+            # (verified). No gather here — the chain owner gathers once at the end. cond_bias is
+            # never used on these (resblock) convs, so the trace-safe add path below is unreachable.
+            return ttnn.reshape(out, [batch_size, out_length, self.out_channels])
         # Keep TILE: the conv already emits TILE/interleaved-DRAM, and the whole
         # vocoder conv chain (+ its eltwise ops) consumes TILE, so we skip the
         # per-conv untilize->ROW_MAJOR round-trip.
