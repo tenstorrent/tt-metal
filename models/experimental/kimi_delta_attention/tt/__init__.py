@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Kimi Delta Attention public API."""
+"""Private TTNN implementation for Kimi Delta Attention."""
 
-from models.experimental.kimi_delta_attention.config import KDAConfig
 from models.experimental.kimi_delta_attention.tt.layer import KimiDeltaAttention
 
-__all__ = ["KDAConfig", "KimiDeltaAttention"]
+__all__ = ["KimiDeltaAttention"]
