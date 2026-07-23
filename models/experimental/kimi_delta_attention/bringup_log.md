@@ -571,3 +571,13 @@
 - The fused FP32 reduce-scatter has 5.160960 MB critical-path traffic and a 51.610 us two-link lower bound. Its 176.089 us slowest-device median is 29.3% effective fabric utilization, below the 40% aspiration and the 129.0 us target. Device imbalance, not recurrence mapping, is the next distribution sweep.
 - Per-iteration device spans were 6.858, 5.496, and 5.605 ms; the signposted host interval averaged 6.401 ms. Only 1.20-1.27 ms/device was active kernel duration, proving that host dispatch gaps and unfused layout/pointwise boundaries dominate end-to-end latency.
 - Combined hardware regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 9/9 in 9.71 s. TP output/recurrent/convolution PCC remained `0.999949`/`0.999914`/`0.999997`.
+
+
+### 2026-07-23 10:41:10 UTC — Reject fused core-placement changes
+
+- Hypothesis: the 36 us device-median spread in fused output came from matmul tile imbalance or CCL worker placement. Held Ring topology, two links, FP32 output, and tensor ownership fixed.
+- Three-sample sweeps rejected 9x8/offset `(0,8)` at 191.184 us and 8x6/offset `(0,6)` at 192.304 us slowest-chip median. An 8x7/offset `(0,7)` run initially appeared better at 172.227 us versus the original three-sample 176.089 us, so it was retested with ten samples.
+- Matched ten-sample reports: original 8x8 `/tmp/kda_tp_layer_t640_grid8x8_r10/reports/2026_07_23_10_41_10/ops_perf_results_2026_07_23_10_41_10.csv`; 8x7 `/tmp/kda_tp_layer_t640_grid8x7_r10/reports/2026_07_23_10_39_29/ops_perf_results_2026_07_23_10_39_29.csv`.
+- The larger sample rejected 8x7: slowest-chip median was 172.950 us versus 166.069 us for 8x8. Effective CCL utilization is therefore 31.1%, still below the 40% aspiration. The original 8x8/offset `(0,8)` mapping remains selected.
+- Horizontal offset `(1,7)` aborted and produced no timing. A subsequent `PERF_SEQ=64 PERF_REPS=1 scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` passed 1/1 and reset all eight devices.
+- Original 8x8 ten-sample layer result: last-nine median device span 5.749 ms, host signpost average 6.116 ms, and 1.20-1.23 ms/device summed active kernels. The evidence keeps layout/pointwise fusion and device trace capture ahead of further core redistribution.

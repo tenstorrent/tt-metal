@@ -87,21 +87,26 @@ Implementation order:
    the current evidence does not justify a fixed reservation.
 
 The fused path now exists. At the target shape it uses an 8x8 matmul grid and
-two reduce-scatter worker rows, reaches 29.3% of the effective two-link
-roofline on the slowest device, and shows 140.160-176.089 us device-median
+two reduce-scatter worker rows, reaches 31.1% of the effective two-link
+roofline on the slowest device, and shows 140.349-166.069 us device-median
 spread. Retain whole-head TP and the 80-core/16-core recurrence maps: measured
-prep and scan are 84.502 us and 96.336 us and agree with their isolated
-crossovers. The next distribution sweep is therefore local to the fused
-output program:
+prep and scan are 84.295 us and 96.497 us and agree with their isolated
+crossovers.
 
-1. Hold tensor ownership, Ring topology, two links, and FP32 output fixed.
-2. Sweep reduce-scatter core offsets/worker rows and record the slowest chip,
-   not the mesh mean.
-3. Accept a mapping only if it reduces the full-layer device critical path;
-   a faster isolated collective that increases dispatch or layout time is not
-   a win.
+The controlled fused-layout sweep held Ring topology, two links, FP32 output,
+and tensor ownership fixed:
 
-The 5.606 ms steady device span versus 1.20-1.27 ms summed active kernels also
+| Matmul grid / RS offset | Slowest-chip median | Result |
+|---|---:|---|
+| 8x8 / `(0,8)` | 166.069 us | retain |
+| 8x7 / `(0,7)` | 172.950 us | 4.1% slower |
+| 9x8 / `(0,8)` | 191.184 us | 15.1% slower |
+| 8x6 / `(0,6)` | 192.304 us | 15.8% slower |
+
+Horizontal offset `(1,7)` is illegal for this CCL worker geometry and aborted
+before yielding a timing. The safe wrapper recovered and reset all devices.
+
+The 5.749 ms steady device span versus 1.20-1.23 ms summed active kernels also
 changes the layer-level priority. After the CCL placement sweep, capture the
 layer in a device trace and fuse/remove host-visible layout and pointwise
 boundaries. Adding recurrence cores cannot address the measured idle gap.

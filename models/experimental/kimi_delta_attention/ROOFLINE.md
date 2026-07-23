@@ -97,32 +97,32 @@ The topology/critical-path convention mirrors
 ## Measured TP=8 fused layer
 
 Profile:
-`/tmp/kda_tp_layer_t640_fused_profile/reports/2026_07_23_10_24_46/ops_perf_results_2026_07_23_10_24_46.csv`.
-The full target-shape TP=8 layer passed for three warm measured iterations.
-The steady-state device critical path was 5.606 ms (the slower of the final
-two iterations); the signposted host interval averaged 6.401 ms. Device
-kernels sum to only 1.20-1.27 ms/device, so host dispatch gaps and unfused
+`/tmp/kda_tp_layer_t640_grid8x8_r10/reports/2026_07_23_10_41_10/ops_perf_results_2026_07_23_10_41_10.csv`.
+The full target-shape TP=8 layer passed for ten warm measured iterations.
+Excluding the first sample, the median device critical path was 5.749 ms; the
+signposted host interval averaged 6.116 ms. Device kernels sum to only
+1.20-1.23 ms/device, so host dispatch gaps and unfused
 layout/pointwise operations, rather than recurrence or CCL alone, dominate the
 layer wall time.
 
 TP executes 59.205 GFLOP across the mesh. This includes the 53.920 GFLOP
 single-device algorithm plus 5.285 GFLOP from replicating the two 128-wide
-low-rank auxiliary outputs on every device. At 5.606 ms, the mesh sustains
-10.56 TFLOP/s, or 0.87% of the eight-chip HiFi4 ceiling. This whole-layer
+low-rank auxiliary outputs on every device. At 5.749 ms, the mesh sustains
+10.30 TFLOP/s, or 0.85% of the eight-chip HiFi4 ceiling. This whole-layer
 number includes idle gaps and is intentionally not renormalized to active
 cores.
 
 | Program | Slowest-chip warm time | Observation |
 |---|---:|---|
-| KDA prep, 80 cores/device | 84.502 us | 3.8x faster than single-chip H=32 prep |
-| KDA scan, 16 cores/device | 96.336 us | Matches the predicted H=4 split mapping |
-| Fused output matmul + reduce-scatter | 176.089 us | Slowest device median; device medians span 140.160-176.089 us |
+| KDA prep, 80 cores/device | 84.295 us | 3.8x faster than single-chip H=32 prep |
+| KDA scan, 16 cores/device | 96.497 us | Matches the predicted H=4 split mapping |
+| Fused output matmul + reduce-scatter | 166.069 us | Slowest device median; device medians span 140.349-166.069 us |
 
 The fused program reduces an FP32 `[1,1,640,2304]` partial. Its 5.898240 MB
 payload has `payload * (P-1)/P = 5.160960 MB` on the reduce-scatter critical
 path. At two links, the 100 GB/s lower bound is again 51.610 us. The measured
-slowest-device median gives 29.3% effective fabric-roofline utilization. This
-is a conservative combined-program metric because its 176.089 us also includes
+slowest-device median gives 31.1% effective fabric-roofline utilization. This
+is a conservative combined-program metric because its 166.069 us also includes
 the local output matmul; it nevertheless misses the 40% goal, which requires
-at most 129.0 us. The 36 us spread between devices identifies ring/core
-placement imbalance as the next CCL experiment.
+at most 129.0 us. Controlled grid/worker-placement sweeps did not improve the
+8x8 matmul plus row-8 reduce-scatter baseline.
