@@ -43,11 +43,13 @@ SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA
     // and the rect are both constant), so compute it ONCE here rather than per send().
     in_rect_ = my_x[NOC_ID] >= dest_.xlo() && my_x[NOC_ID] <= dest_.xhi() && my_y[NOC_ID] >= dest_.ylo() &&
                my_y[NOC_ID] <= dest_.yhi();
-    // Fan-out, derived from the rect area (num_dests == area ± source) — precomputed so send()
-    // branch-selects between two constants with no arithmetic:
-    //   * EXCLUDE-source count: area minus self if this sender is in its own box;
-    //   * INCLUDE-source (loopback) count: +1 for the sender's own self-copy.
-    num_dests_excl_ = dest_.area() - (in_rect_ ? 1u : 0u);
+    // EXCLUDE-source multicast fan-out. On Blackhole the worker grid is non-contiguous, so a dense
+    // line's bounding box straddles non-worker columns and dest_.area() overcounts the real tensix
+    // destinations — the non-posted signal would then wait for acks from cores that do not exist and
+    // hang. So prefer the host-supplied active-core count (num_active on the wire); fall back to the
+    // rect geometry only for by-hand callers that pass ACK_EQUALS_FANOUT (exact on a gap-free grid).
+    num_dests_excl_ = (consumer_ack_count == ACK_EQUALS_FANOUT) ? (dest_.area() - (in_rect_ ? 1u : 0u))
+                                                                : consumer_ack_count;
     num_dests_incl_ = num_dests_excl_ + 1u;
     // Degenerate self-only box (a 1x1 rect that IS the sender): no receivers, send() does a local
     // copy. (`area==1 && in_rect` => excl==0.)
