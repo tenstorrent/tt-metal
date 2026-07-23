@@ -2177,23 +2177,28 @@ def _load_perf_target_inputs() -> dict | None:
 def _perf_target_status(rep: dict, dev: float) -> dict | None:
     """Opt-in DRAM-bandwidth band status for the target-driven stop (PERF_MCP_TARGET_BAND=1).
 
-    Full-model uses the config-derived active_bytes ceiling when perf_target_inputs.json is
-    present, else the roofline aggregate floor; per-module always scores that module's OWN floor,
-    so the target is recomputed per module and never shared. Scored on trace+1cq, not the noisy
-    device_ms. Fail-open: returns None on any issue so the deterministic ladder stop is untouched."""
+    The measured metric MUST match the target's unit or the band is meaningless: the config
+    active_bytes ceiling (compute_target) is per-token tok/s, scored against the per-token trace
+    (_reliable_forward_ms); the roofline aggregate floor (target_from_floor_ms) is a per-profile
+    sum of op floors, scored against the per-profile device_ms (dev). Mixing them (per-token vs
+    per-profile) made every module read ABOVE_BAND. Full-model prefers the config ceiling when
+    perf_target_inputs.json is present, else the floor; per-module always uses that module's OWN
+    floor (recomputed per module, never shared). Fail-open: returns None so the ladder stop is
+    untouched on any issue."""
     if os.environ.get("PERF_MCP_TARGET_BAND") != "1":
         return None
     try:
-        measured_ms = _reliable_forward_ms(dev)
         module_level = os.environ.get("TT_PERF_MODULE_LEVEL") == "1"
-        target = None
+        target, measured_ms = None, None
         if not module_level:
             mf = _load_perf_target_inputs()
             if mf:
                 tp = int(os.environ.get("TT_PERF_MESH_COLS", "1") or "1")
                 target = perf_target.compute_target(mf, _ENV, tp_degree=tp)
+                measured_ms = _reliable_forward_ms(dev)
         if target is None:
             target = perf_target.target_from_floor_ms(rep.get("modeled_floor_ms"))
+            measured_ms = dev
         s = perf_target.score(target, measured_ms)
         s["scope"] = "module" if module_level else "model"
         return s
