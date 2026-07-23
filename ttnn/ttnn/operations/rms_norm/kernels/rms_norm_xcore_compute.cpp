@@ -318,25 +318,27 @@ void kernel_main() {
     auto do_pass1 = [&](uint32_t base_t, uint32_t C_this) {
         for (uint32_t cc = 0; cc < C_this; ++cc) {
             const uint32_t t = base_t + cc;
-            for (uint32_t w = 0; w < vwt; ++w) {
-                const uint32_t xin_off = t * PER_W_T + w;
-                ckl::eltwise_chain(
-                    one_tile,
-                    ckl::BinaryFpu<
-                        cb_x_in,
-                        cb_x_in,
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::None,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::BinaryDataFormatReconfig::Input,
-                        ckl::Dst::D0,
-                        ckl::OperandKind::Block,
-                        ckl::OperandKind::Block,
-                        ckl::TileOffset::Set,
-                        ckl::TileOffset::Set>{xin_off, xin_off},
-                    ckl::PackTile<cb_xsq, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
-            }
+            // Refinement 6f lever 3: square the whole vwt-tile block in ONE chain (Block-walk
+            // from the tile-row's resident base t*PER_W_T) instead of vwt one-tile chains, so the
+            // per-call eltwise-chain init/reconfig is amortized over the block — the R3 resident
+            // square pattern (rms_norm_compute.cpp block_shape). Byte-identical: same x*x per tile,
+            // same vwt tiles streamed into cb_xsq for the block reduce below.
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(vwt),
+                ckl::BinaryFpu<
+                    cb_x_in,
+                    cb_x_in,
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::Dst::D0,
+                    ckl::OperandKind::Block,
+                    ckl::OperandKind::Block,
+                    ckl::TileOffset::Set,
+                    ckl::TileOffset::Set>{t * PER_W_T, t * PER_W_T},
+                ckl::PackTile<cb_xsq, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
             const ckl::ReducePartialScaler ps =
                 (HAS_PARTIAL_W && is_partial_holder) ? partial_scaler_sel : ckl::ReducePartialScaler::none();
             ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_stat_local>(
