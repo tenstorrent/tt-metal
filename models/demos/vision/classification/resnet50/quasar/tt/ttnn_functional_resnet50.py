@@ -86,6 +86,116 @@ def fit_width_sharded_cores(width_elems, desired_cores, device):
     return num_cores, ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
 
 
+# --- Bring-up host-bypass for convs -------------------------------------------------------------
+# The sliced 3x3 convs on the Quasar emulator hit a MATH_PACK program-boundary deadlock in the
+# multi-core matmul (LLK-team WIP, ~/conv_stem_sliced.md). To keep exercising the rest of the model,
+# any conv can be computed on HOST from its real device input + weights and re-uploaded, so every
+# downstream op still runs on device AND stays numerically correct. Flip an entry to True to run that
+# conv on the device once the LLK fence lands. (The stem conv1 has its own `on_device` toggle in run().)
+# Only the bottleneck conv2 (3x3) slices/deadlocks; conv1/conv3/downsample are 1x1 (mm_conv) and run on
+# device. conv1 and conv2 are wired through _conv2d_or_host below (they share the 3-tuple return); to bypass
+# the 1x1s too, wrap their calls the same way (conv3 uses return_output_dim=False -> a 2-tuple return).
+_CONV_ON_DEVICE = {"conv1": True, "conv2": False}
+
+
+def _host_conv2d(
+    input_tensor,
+    weight_tensor,
+    bias_tensor,
+    device,
+    conv_config,
+    *,
+    in_channels,
+    out_channels,
+    batch_size,
+    input_height,
+    input_width,
+    kernel_size,
+    stride,
+    padding,
+    dilation=(1, 1),
+    groups=1,
+):
+    """Compute a conv on HOST from the real device tensors; return (out, [oh, ow], [w, b]) exactly like
+    ttnn.experimental.quasar.conv2d(..., return_output_dim=True, return_weights_and_bias=True) so it is a
+    drop-in bypass. Output is uploaded height-sharded ROW_MAJOR (downstream convs reshard/tilize it; the
+    quasar RELU activation is folded in when the conv_config sets one)."""
+    inp = (
+        ttnn.to_torch(input_tensor)
+        .float()
+        .reshape(batch_size, input_height, input_width, in_channels)
+        .permute(0, 3, 1, 2)  # NHWC -> NCHW
+    )
+    w = ttnn.to_torch(weight_tensor).float().reshape(out_channels, in_channels // groups, *kernel_size)
+    b = ttnn.to_torch(bias_tensor).float().reshape(-1)[:out_channels] if bias_tensor is not None else None
+    g = torch.nn.functional.conv2d(
+        inp, w, bias=b, stride=tuple(stride), padding=tuple(padding), dilation=tuple(dilation), groups=groups
+    )
+    if getattr(conv_config, "activation", None) is not None:
+        g = torch.relu(g)  # model convs use RELU; extend here if other activations are ever configured
+    if getattr(conv_config, "deallocate_activation", False):
+        ttnn.deallocate(input_tensor)  # mirror the on-device conv's input dealloc so L1 doesn't leak
+    oh, ow = int(g.shape[2]), int(g.shape[3])
+    flat = g.permute(0, 2, 3, 1).reshape(1, 1, batch_size * oh * ow, out_channels).contiguous()
+    nhw = batch_size * oh * ow
+    grid = device.compute_with_storage_grid_size()
+    maxc = grid.x * grid.y
+    nc = max(c for c in range(1, maxc + 1) if nhw % c == 0)
+    mem = ttnn.create_sharded_memory_config(
+        shape=(1, 1, nhw // nc, out_channels),
+        core_grid=ttnn.num_cores_to_corerangeset(nc, grid, True),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    out = ttnn.from_torch(
+        flat.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=mem,
+    )
+    return out, [oh, ow], [weight_tensor, bias_tensor]
+
+
+def _conv2d_or_host(
+    on_device, name, *, input_tensor, weight_tensor, bias_tensor, compute_config, dtype, **conv2d_kwargs
+):
+    """Drop-in for the model's ttnn.experimental.quasar.conv2d(...) calls (return_output_dim=True,
+    return_weights_and_bias=True). Runs on device when `on_device` else computes on host. `conv2d_kwargs`
+    is the per-conv conv_kwargs dict (in_channels/out_channels/batch_size/input_height/input_width/
+    kernel_size/stride/padding/dilation/groups/device/conv_config)."""
+    if on_device:
+        return ttnn.experimental.quasar.conv2d(
+            input_tensor=input_tensor,
+            weight_tensor=weight_tensor,
+            bias_tensor=bias_tensor,
+            compute_config=compute_config,
+            dtype=dtype,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+            **conv2d_kwargs,
+        )
+    logger.warning(f"[QSR] conv '{name}' HOST bypass (on_device=False)")
+    return _host_conv2d(
+        input_tensor,
+        weight_tensor,
+        bias_tensor,
+        conv2d_kwargs["device"],
+        conv2d_kwargs["conv_config"],
+        in_channels=conv2d_kwargs["in_channels"],
+        out_channels=conv2d_kwargs["out_channels"],
+        batch_size=conv2d_kwargs["batch_size"],
+        input_height=conv2d_kwargs["input_height"],
+        input_width=conv2d_kwargs["input_width"],
+        kernel_size=conv2d_kwargs["kernel_size"],
+        stride=conv2d_kwargs["stride"],
+        padding=conv2d_kwargs["padding"],
+        dilation=conv2d_kwargs.get("dilation", (1, 1)),
+        groups=conv2d_kwargs.get("groups", 1),
+    )
+
+
 # uint16 DFB ring-extent limit for a bf16 tile (2048B = 128 x 16B units; entry*cap < 65536 -> <512 tiles).
 _DFB_RING_LIMIT_TILES = 511
 
@@ -354,19 +464,19 @@ class resnet50Bottleneck:
             out,
             [input_height, input_width],
             [self.conv1_weight_tensor, self.conv1_bias_tensor],
-        ) = ttnn.experimental.quasar.conv2d(
+        ) = _conv2d_or_host(
+            _CONV_ON_DEVICE["conv1"],
+            f"{layer_module}.conv1",
             input_tensor=x,
             weight_tensor=self.conv1_weight_tensor,
             bias_tensor=self.conv1_bias_tensor,
-            **conv_kwargs_1,
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 packer_l1_acc=packer_l1_acc,
             ),
-            return_output_dim=True,
-            return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            **conv_kwargs_1,
         )
         out = _log_op(f"{layer_module}.conv1", out)
 
@@ -434,19 +544,19 @@ class resnet50Bottleneck:
             out,
             [input_height, input_width],
             [self.conv2_weight_tensor, self.conv2_bias_tensor],
-        ) = ttnn.experimental.quasar.conv2d(
+        ) = _conv2d_or_host(
+            _CONV_ON_DEVICE["conv2"],
+            f"{layer_module}.conv2",
             input_tensor=out,
             weight_tensor=self.conv2_weight_tensor,
             bias_tensor=self.conv2_bias_tensor,
-            **conv_kwargs_2,
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 packer_l1_acc=packer_l1_acc,
             ),
-            return_output_dim=True,
-            return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            **conv_kwargs_2,
         )
         out = _log_op(f"{layer_module}.conv2", out)
 
