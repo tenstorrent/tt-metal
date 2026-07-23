@@ -20,7 +20,7 @@ import os
 import sys
 from collections import defaultdict
 
-ROOT = "/data/cglagovich/tt-metal/.claude/worktrees/resilient-marinating-piglet"
+ROOT = os.environ.get("TT_METAL_HOME", os.getcwd())
 CSV = f"{ROOT}/generated/profiler/.logs/profile_log_device.csv"
 FREQ = 1.35e9
 

@@ -11,18 +11,24 @@ Op: `ttnn.experimental.all_gather_regime_a_matmul_async`. Branch: `cglagovich/re
   - MeshWorkload / `create_at`-per-coordinate device op; D inferred from the K-shard ratio.
   - Per-device DRAM gather buffer (output slot 1, mesh tensor → uniform address).
   - Fabric **mux v2** injector: reads local in0 shard, writes local gather slice, unicasts to all D-1 other
-    devices (ring forward hops 1..D-1), per-shard readiness via `shard_landed[e]` GlobalSemaphores.
-  - **Streaming (default):** monotonic `gather_ready` advanced in global-K order; the copied regime_a in0
-    reader (`AGMM_STREAM`) gates each in0 read on `gather_ready > kg/Kt_local` → matmul overlaps the gather.
-  - **Full-gather diagnostic:** same binary, `TT_AGMM_FULL_GATHER=1` → reader waits `gather_ready==D` (no
-    overlap A/B).
-  - Cache-safe: all coordination via D+1 GlobalSemaphores reset per launch (fresh+cached both correct).
+    devices (ring forward hops 1..D-1; naive all-to-all Phase-A reference, no receiver forwarding).
+  - **Streaming (default), LOCAL-FIRST per-shard:** 2*D GlobalSemaphores (D `shard_ready` + D `shard_landed`).
+    The injector fans out its OWN shard's readiness first, then each remote shard as it lands (arrival order).
+    The copied regime_a in0 reader (`AGMM_STREAM`) gates each read on `shard_ready[kg/Kt_local]`, so device d's
+    local Pk band computes without waiting for remote shard 0. `TT_AGMM_FULL_GATHER=1` (hashed attribute) is the
+    same-binary no-overlap diagnostic (reader waits all D shards).
+  - Production placement restored: IN1_NEAR M-slave placement + PARETO in0-ring ordering via the multi-device
+    hop-distance overload, so the fused compute engine matches single-chip placement.
+  - Cache-safe: program hash covers mem-configs/dtype/compute-config/transport/diagnostic; the override
+    relocates all GlobalSemaphore addresses on replay (verified with a fresh-sems 2nd iteration).
+  - Validated: bf16/INTERLEAVED bf16 output, D in [2,8], ring for D>2, num_links==workers==1, >= 2*D sems;
+    persistent_output_buffer/barrier_semaphore/compute-config-override rejected or documented.
   - regime_a single-chip kernels UNTOUCHED (copied the in0 reader; reused in1_reader/compute by path).
-  - **Tests (19 passed):** offline plan (D=1/2/4/8); D=1 == regime_a; D=2 (linear) / D=4,D=8 (ring)
-    full-gather streaming, fresh+cached; D=4 config coverage (auto-picker, Ns=2, Sm=2). PCC ≥ 0.999.
-  - "More chunks than slots" is inherent: every in0 tile is a packet through a 2-slot mux channel.
-- **Task 4 — PARTIAL** (`REGIME_A_AGMM_TASK4_REPORT.md`): host-wall A/B (overhead-bound, can't resolve
-  overlap); per-RISC profiler + watcher **blocked in this container** (see below). Harnesses committed.
+  - **Tests (19 passed):** offline plan (D=1/2/4/8); D=1 == regime_a; D=2 (linear) / D=4,D=8 (ring) streaming,
+    fresh program + cached replay with a FRESH sem set; D=4 config coverage (auto-picker, Ns=2, Sm=2). PCC ≥ 0.999.
+- **Task 4 — DONE** (`REGIME_A_AGMM_TASK4_REPORT.md`): per-RISC device profiler + watcher both usable via the
+  documented workarounds; overlap A/B + DRAM-staging characterization measured. (Re-measured after the F3/F5
+  fixes — see the report.)
 
 ## Known scope limits / deferred
 

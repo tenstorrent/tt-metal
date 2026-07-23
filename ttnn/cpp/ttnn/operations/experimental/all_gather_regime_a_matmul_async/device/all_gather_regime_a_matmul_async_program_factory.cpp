@@ -127,6 +127,14 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     ra::ExecutionPlan& P = *planres.plan;  // mutable: production IN1_NEAR placement + PARETO ring reorder below
     const ra::Geometry& geo = P.geo;
     const ra::CbSizes& cb = P.cb;
+    // The injector kernel holds the compute-core coordinate list in a fixed [128] array; enforce that bound.
+    TT_FATAL(
+        geo.num_cores <= 128u,
+        "all_gather_regime_a_matmul_async: regime_a needs {} compute cores > 128 (injector fan-out array limit)",
+        geo.num_cores);
+    // NOTE (Phase A, naive reference): each device sends its full shard to all D-1 peers directly through one
+    // forward mux (hops 1..D-1); receivers do NOT forward. This is an intentionally simple all-to-all reference,
+    // not the read-once neighbor-forward ring chain (that is later-task work). Correctness-first.
 
     // Resolve the SAME config make_and_build_plan used (auto-select when config=None), so Pk/Ns/Sm/kb match.
     const uint32_t Mt_r = (static_cast<uint32_t>(gather.logical_shape()[-2]) + 31u) / 32u;

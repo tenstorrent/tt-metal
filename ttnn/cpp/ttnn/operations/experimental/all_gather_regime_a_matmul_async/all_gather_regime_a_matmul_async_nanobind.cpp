@@ -31,11 +31,20 @@ void bind_all_gather_regime_a_matmul_async(nb::module_& mod) {
 
         Fused all-gather(in0, dim=-1) @ in1 using regime_a_matmul as the compute engine. in0 owns a
         contiguous K-shard [.., M, K_local]; in1 is the full [.., K_global, N] regime_a DRAM width-shard.
-        D (= K_global / K_local) devices are gathered. bf16 only, no transpose/batching, tile-aligned K
-        sharding, no epilogues (v1).
+        D (= K_global / K_local) devices are gathered. Each device produces the full [.., M, N] result.
 
-        Task-2 scope: D=1 is behaviorally identical to regime_a_matmul; D>1 validates the host plan and
-        reports that the fabric-streaming path is implemented in Task 3.
+        D=1 is behaviorally identical to regime_a_matmul. D>1 (Phase A, DRAM-staged streaming): the in0 shards
+        are gathered over fabric (mux v2) into a per-device DRAM buffer with per-shard progressive readiness so
+        the matmul overlaps the still-arriving shards (local shard first). Set TT_AGMM_FULL_GATHER=1 for the
+        same-binary no-overlap diagnostic.
+
+        v1 constraints (validated): BFLOAT16 in0/in1 and BFLOAT16 INTERLEAVED output; TILE layout; in1 in the
+        regime_a 8-bank DRAM width-shard; tile-aligned K divisible by D; D in [2, 8]; ring topology for D>2
+        (linear supported for D=2); num_links == num_workers_per_link == 1. No epilogues (bias/activation/
+        addcmul/chunks), no persistent_output_buffer, no barrier_semaphore yet. The compute kernel is always
+        HiFi2 + fp32 dest-acc (a caller compute_kernel_config override is not honored). Requires >= 2*D global
+        semaphores (D shard_ready + D shard_landed). Assumes uniform harvesting across the D devices (identical
+        logical->virtual worker mapping) for the injector's cross-device semaphore targeting.
         )doc",
         &ttnn::experimental::all_gather_regime_a_matmul_async,
         nb::arg("input_tensor"),
