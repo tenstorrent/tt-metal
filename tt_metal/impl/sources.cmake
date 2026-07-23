@@ -149,6 +149,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/distributed_tensor_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/byte_based_data_transfer_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_pad_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_live_ranges.cpp
 )

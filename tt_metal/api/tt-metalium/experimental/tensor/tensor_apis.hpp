@@ -52,19 +52,6 @@ HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile);
 HostTensor to_row_major_layout(const HostTensor& tensor);
 
 // ======================================================================================
-//                                  .pad() and .unpad()
-// ======================================================================================
-
-HostTensor pad(
-    const HostTensor& tensor, const Shape& output_padded_shape, const Shape& input_tensor_start, float pad_value);
-
-HostTensor unpad(const HostTensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
-
-HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value);
-
-HostTensor unpad_from_tile(const HostTensor& input_tensor, const Shape& output_tensor_shape);
-
-// ======================================================================================
 //                                  .to_dtype()
 // ======================================================================================
 
