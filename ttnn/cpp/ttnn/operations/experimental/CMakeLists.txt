@@ -28,6 +28,7 @@ add_subdirectory(ccl/moe_gpt)
 add_subdirectory(matmul)
 add_subdirectory(quasar)
 add_subdirectory(reduction)
+add_subdirectory(matmul_decode)
 
 # metalium-developers-sdpa
 add_subdirectory(indexer_score)
@@ -53,7 +54,9 @@ add_subdirectory(slice_write)
 add_subdirectory(bcast_to)
 add_subdirectory(copy)
 add_subdirectory(deepseek/mla/matmul_wo)
+add_subdirectory(deepseek/hyperconnection)
 add_subdirectory(deepseek/moe/deepseek_moe_gate)
+add_subdirectory(deepseek/moe/fused_experts)
 add_subdirectory(deepseek/moe/generalized_moe_gate)
 add_subdirectory(deepseek/moe/moe_gate_mm)
 add_subdirectory(deepseek_moe_post_combine_tilize)
@@ -82,6 +85,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::MoEGPT
         TTNN::Ops::Experimental::Matmul
+        TTNN::Ops::Experimental::MatmulDecode
         TTNN::Ops::Experimental::Quasar
         TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::IndexerScore
@@ -94,7 +98,9 @@ target_link_libraries(
         TTNN::Ops::Experimental::BcastTo
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
+        TTNN::Ops::Experimental::DeepSeek::HyperConnection
         TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate
+        TTNN::Ops::Experimental::DeepSeek::MoE::FusedExperts
         TTNN::Ops::Experimental::DeepSeek::MoE::GeneralizedMoeGate
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
@@ -129,6 +135,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::CCL>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MoEGPT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Matmul>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::MatmulDecode>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Quasar>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reduction>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>
@@ -141,7 +148,9 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::BcastTo>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Copy>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::HyperConnection>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::FusedExperts>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::GeneralizedMoeGate>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize>

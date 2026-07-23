@@ -156,6 +156,10 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     send_recv_async/recv_async/recv_async_nanobind.cpp
     send_recv_async/recv_async_h2d/recv_async_h2d_nanobind.cpp
     send_recv_async/send_async_d2h/send_async_d2h_nanobind.cpp
+    send_recv_async/send_direct_async/send_direct_async_nanobind.cpp
+    send_recv_async/recv_direct_async/recv_direct_async_nanobind.cpp
+    send_recv_async/buffered_send/buffered_send_nanobind.cpp
+    send_recv_async/buffered_recv/buffered_recv_nanobind.cpp
     neighbor_pad_async/neighbor_pad_async_nanobind.cpp
     slice_reshard_async/slice_reshard_async_nanobind.cpp
     deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp
