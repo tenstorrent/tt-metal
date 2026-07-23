@@ -19,8 +19,6 @@
 
 namespace tt::tt_metal {
 
-class IDevice;
-
 class TensorLayoutImpl {
 public:
     TensorLayoutImpl(
@@ -51,7 +49,6 @@ public:
     size_t compute_packed_buffer_size_bytes(const tt::tt_metal::Shape& shape) const;
     size_t compute_page_size_bytes(const tt::tt_metal::Shape& shape) const;
 
-    size_t compute_consumed_memory_bytes_per_bank(const tt::tt_metal::Shape& shape, const IDevice& device) const;
     size_t compute_consumed_memory_bytes_per_bank(
         const tt::tt_metal::Shape& shape, size_t page_alignment, size_t num_banks) const;
 

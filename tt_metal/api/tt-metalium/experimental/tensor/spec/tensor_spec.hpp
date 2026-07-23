@@ -91,7 +91,6 @@ public:
     size_t compute_packed_buffer_size_bytes() const;
     size_t compute_page_size_bytes() const;
 
-    size_t compute_consumed_memory_bytes_per_bank(const IDevice& device) const;
     size_t compute_consumed_memory_bytes_per_bank(size_t page_alignment, size_t num_banks) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("logical_shape", "tensor_layout");

@@ -5,8 +5,6 @@
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
@@ -307,18 +305,6 @@ size_t TensorLayoutImpl::compute_consumed_memory_bytes_per_bank(
 
     const size_t aligned_page_size = round_up(compute_page_size_bytes(page_shape), page_alignment);
     return num_pages_per_bank * aligned_page_size;
-}
-
-size_t TensorLayoutImpl::compute_consumed_memory_bytes_per_bank(
-    const tt::tt_metal::Shape& shape, const IDevice& device) const {
-    const size_t page_alignment = device.allocator()->get_alignment(memory_config_.buffer_type());
-    size_t num_banks = 0;
-    if (memory_config_.is_l1()) {
-        num_banks = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y;
-    } else {
-        num_banks = device.num_dram_channels();
-    }
-    return compute_consumed_memory_bytes_per_bank(shape, page_alignment, num_banks);
 }
 
 Shape2D TensorLayoutImpl::get_logical_shard_shape() const {

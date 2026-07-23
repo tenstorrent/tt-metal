@@ -22,8 +22,6 @@ namespace tt::tt_metal {
 // Returns true if the configuration is valid, false otherwise.
 bool can_shard_align(const MemoryConfig& memory_config, const Layout& layout, const Tile& tile = Tile{});
 
-class IDevice;
-
 // Implementation details for TensorLayout. Reachable from within tt_metal via impl(); not part of the public API.
 class TensorLayoutImpl;
 
