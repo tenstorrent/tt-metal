@@ -6,7 +6,7 @@
 # {split_group} is substituted with each row's split_group by prepare_test_matrix.py,
 # so every group below shares one identical cmd that calls a shared runner in
 # tt_metal/tt-llk/tests/: run_llk_perf_wormhole.sh (plain pytest-split) and
-# run_llk_perf_blackhole.sh (slice-level bin-pack + per-slice tt-smi reset).
+# run_llk_perf_blackhole.sh (also plain pytest-split; the bin-pack + per-slice reset from #46478 were reverted after #45727 fixed the root cause).
 
 - name: llk_perf_wormhole group 1/5
   split_group: 1
