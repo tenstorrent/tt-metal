@@ -120,6 +120,17 @@
 // calculate_mask_binary) used by the dispatch below.
 #include "sfpu_test_helpers.h"
 
+namespace ckernel::sfpu
+{
+
+template <bool APPROXIMATION_MODE, bool IS_FP32_DEST_ACC_EN, int ITERATIONS, bool CLAMP_NEGATIVE, std::uint32_t EXP_BASE_SCALE_FACTOR>
+inline __attribute__((always_inline)) void calculate_exponential_const_scale()
+{
+    calculate_exponential<APPROXIMATION_MODE, IS_FP32_DEST_ACC_EN, true /* SCALE_EN */, ITERATIONS, CLAMP_NEGATIVE>(EXP_BASE_SCALE_FACTOR);
+}
+
+} // namespace ckernel::sfpu
+
 namespace test_utils
 {
 using namespace ckernel;
@@ -814,18 +825,15 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     // golden is exp(0.5*x); 0.5 is exact in bf16 so no scale-rounding error is added.
     //
     // The bf16-accurate path (_sfpu_exp_21f_bf16_tti_) lowers the scale via TTI_SFPMULI,
-    // whose immediate operand must be a compile-time constant. Forwarding the scale as a
-    // runtime arg through the generic SFPU_UNARY_CALL wrapper drops constness at -O3 and
-    // trips the "impossible asm constraint" error, so bake the literal into a direct call.
+    // whose immediate operand must be a compile-time constant. Pass the scale through the
+    // test-only adapter's template arguments so SFPU_UNARY_CALL preserves that constness.
     else if constexpr (OPERATION == SfpuType::exp_with_base)
     {
-        ::ckernel::_sfpu_check_<DST_SYNC_MODE, DST_ACCUM_MODE>(dst_index, vector_mode);
-        _llk_math_eltwise_unary_sfpu_params_(
-            []()
-            {
-                ::ckernel::sfpu::calculate_exponential<APPROX_MODE, is_fp32_dest_acc_en, true /* scale_en */, ITERATIONS, CLAMP_NEGATIVE>(
-                    0x3F00u /* bf16(0.5) exp base scale */);
-            },
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_exponential_const_scale,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, CLAMP_NEGATIVE, 0x3F00u /* bf16(0.5) exp base scale */),
             dst_index,
             vector_mode);
     }

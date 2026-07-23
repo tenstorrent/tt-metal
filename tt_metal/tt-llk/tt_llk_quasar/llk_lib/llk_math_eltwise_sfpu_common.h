@@ -25,9 +25,10 @@ inline void _eltwise_sfpu_configure_addrmod_()
  * @param tile_index: Tile index into the destination register to operate on.
  * @note Pair with @ref _llk_math_eltwise_sfpu_done_ once the op has run.
  */
+template <ckernel::trisc::DstTileShape TILE_SHAPE = ckernel::trisc::DstTileShape::Tile32x32>
 inline void _llk_math_eltwise_sfpu_start_(const std::uint32_t tile_index)
 {
-    _llk_math_sfpu_start_(tile_index);
+    _llk_math_sfpu_start_<TILE_SHAPE>(tile_index);
 }
 
 /**

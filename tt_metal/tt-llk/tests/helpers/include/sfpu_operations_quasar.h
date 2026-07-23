@@ -8,7 +8,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
-#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 
 // To add a new Quasar unary SFPU operation:
 // 1. Include its `ckernel_sfpu_<op>.h` below.
@@ -109,7 +109,7 @@ void init_unary_sfpu_operation_quasar()
  * @param sfpu_format SFPU math format selecting the sfpmem mode / result encoding.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
-template <SfpuType OPERATION, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
+template <SfpuType OPERATION, DstSync DST_SYNC, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
 void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format)
 {
     static_assert(is_zero_comp_op(OPERATION), "call_zero_comp_operation_quasar: OPERATION must be a comparison-to-zero SfpuType");
@@ -117,24 +117,24 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
     switch (sfpu_format)
     {
         case DataFormat::Int32:
-            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Int32, OPERATION, ITERATIONS>, dst_index);
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_zero_comp, (false, DataFormat::Int32, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
             break;
         case DataFormat::Int16:
-            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Int16, OPERATION, ITERATIONS>, dst_index);
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_zero_comp, (false, DataFormat::Int16, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
             break;
         case DataFormat::Int8:
         {
             constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::Int8;
-            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, sfpu_fmt, OPERATION, ITERATIONS>, dst_index);
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_zero_comp, (false, sfpu_fmt, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
             break;
         }
         case DataFormat::UInt16:
-            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::UInt16, OPERATION, ITERATIONS>, dst_index);
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_zero_comp, (false, DataFormat::UInt16, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
             break;
         case DataFormat::UInt8:
         {
             constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::UInt8;
-            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, sfpu_fmt, OPERATION, ITERATIONS>, dst_index);
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_zero_comp, (false, sfpu_fmt, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
             break;
         }
         case DataFormat::Float16:
@@ -142,7 +142,7 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
         case DataFormat::Float32:
             // Float widths share the width-agnostic Float32 path: its sfpmem::DEFAULT access mode
             // resolves the actual width from ALU_FORMAT_SPEC_REG / ACC_CTRL.
-            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Float32, OPERATION, ITERATIONS>, dst_index);
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_zero_comp, (false, DataFormat::Float32, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
             break;
         default:
             LLK_ASSERT(false, "Unsupported Quasar comp-to-zero SFPU format");
@@ -160,60 +160,60 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  *        @ref call_zero_comp_operation_quasar), float-only ops ignore it.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
-template <SfpuType OPERATION, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
+template <SfpuType OPERATION, DstSync DST_SYNC, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
 void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format = DataFormat::Float32)
 {
     if constexpr (OPERATION == SfpuType::abs)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_abs_<ITERATIONS>, dst_index);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_abs_, (ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_exp_<true /* APPROX */, ITERATIONS>, dst_index);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_exp_, (true /* APPROX */, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
-        _llk_math_eltwise_unary_sfpu_params_(calculate_gelu<true /* APPROX */, ITERATIONS>, dst_index);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_gelu, (true /* APPROX */, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::relu)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_relu_<ITERATIONS>, dst_index);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_relu_, (ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_reciprocal_<true /* APPROX */, ITERATIONS>, dst_index);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_reciprocal_, (true /* APPROX */, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_sqrt_<true /* APPROX */, ITERATIONS>, dst_index);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_sqrt_, (true /* APPROX */, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::tanh)
     {
-        _llk_math_eltwise_unary_sfpu_params_(calculate_tanh<ITERATIONS>, dst_index);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tanh, (ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::sigmoid)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_sigmoid_<ITERATIONS>, dst_index);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_sigmoid_, (ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::silu)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_silu_<ITERATIONS>, dst_index);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_silu_, (ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_rsqrt_<ITERATIONS>, dst_index);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_rsqrt_, (ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        _llk_math_eltwise_unary_sfpu_params_(calculate_square<ITERATIONS>, dst_index);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_square, (ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::negative)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_negative_<false, ITERATIONS>, dst_index);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_negative_, (false, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
-        call_zero_comp_operation_quasar<OPERATION, is_fp32_dest_acc_en, ITERATIONS>(dst_index, sfpu_format);
+        call_zero_comp_operation_quasar<OPERATION, DST_SYNC, is_fp32_dest_acc_en, ITERATIONS>(dst_index, sfpu_format);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
@@ -221,7 +221,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
         // bakes in as the compile-time constants TYPECAST_IN_FORMAT / TYPECAST_OUT_FORMAT (set
         // by the TYPECAST_FORMATS variant). The functor picks the conversion sequence from the
         // pair at compile time.
-        _llk_math_eltwise_unary_sfpu_params_(calculate_typecast<TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS>, dst_index);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_typecast, (TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS), dst_index, VectorMode::RC);
     }
     else
     {
@@ -269,7 +269,7 @@ void init_binary_sfpu_operation_quasar()
  * @param math_format Dest math format (Int32 vs float path for MUL and max/min).
  * @note Must be preceded by @ref init_binary_sfpu_operation_quasar for the same op.
  */
-template <ckernel::BinaryOp OP, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
+template <ckernel::BinaryOp OP, DstSync DST_SYNC, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
 void call_binary_sfpu_operation_quasar(
     [[maybe_unused]] std::uint32_t base_dst_index, int src0_tile, int src1_tile, int dst_tile, [[maybe_unused]] DataFormat math_format)
 {
@@ -336,8 +336,11 @@ void call_binary_sfpu_operation_quasar(
         // All integer formats route through the Int32 path; float / MX use Float32.
         if (math_format == DataFormat::Int32)
         {
-            _llk_math_eltwise_unary_sfpu_params_(
-                ckernel::sfpu::calculate_binary_max_min<DataFormat::Int32, IS_MAX, ITERATIONS>,
+            SFPU_UNARY_CALL(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                calculate_binary_max_min,
+                (DataFormat::Int32, IS_MAX, ITERATIONS),
                 base_dst_index,
                 VectorMode::RC,
                 static_cast<std::uint32_t>(src0_tile),
@@ -346,8 +349,11 @@ void call_binary_sfpu_operation_quasar(
         }
         else
         {
-            _llk_math_eltwise_unary_sfpu_params_(
-                ckernel::sfpu::calculate_binary_max_min<DataFormat::Float32, IS_MAX, ITERATIONS>,
+            SFPU_UNARY_CALL(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                calculate_binary_max_min,
+                (DataFormat::Float32, IS_MAX, ITERATIONS),
                 base_dst_index,
                 VectorMode::RC,
                 static_cast<std::uint32_t>(src0_tile),

@@ -170,7 +170,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // so it is offset by params.DST_INDEX.
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, is_fp32_dest_acc_en>(params.DST_INDEX + i, sfpu_format);
+        test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, dest_sync, is_fp32_dest_acc_en>(params.DST_INDEX + i, sfpu_format);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
