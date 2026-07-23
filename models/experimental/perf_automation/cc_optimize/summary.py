@@ -291,8 +291,8 @@ def render_summary(
             lever = _disp_level(a.get("kernel_kind") or "?")
             ms = a.get("measured_ms")
             ms_s = f"{ms:.2f}" if isinstance(ms, (int, float)) else "—"
-            if baseline_ms and isinstance(ms, (int, float)):
-                gain_s = f"{baseline_ms - ms:+.2f} ms"
+            if hdr_base and isinstance(ms, (int, float)):
+                gain_s = f"{hdr_base - ms:+.2f} ms"
             else:
                 gain_s = "—"
             res = "✓ win" if a.get("beat_baseline") else ("· wedged" if a.get("wedged") else "· no gain")
@@ -314,7 +314,7 @@ def render_summary(
             lever = _disp_level(a.get("kernel_kind") or "?")
             res = "win" if a.get("beat_baseline") else ("wedged" if a.get("wedged") else "no gain")
             ms = a.get("measured_ms")
-            gain = f"  {baseline_ms - ms:+.2f} ms" if (baseline_ms and isinstance(ms, (int, float))) else ""
+            gain = f"  {hdr_base - ms:+.2f} ms" if (hdr_base and isinstance(ms, (int, float))) else ""
             lines.append("")
             lines.append(f"[#{i}] {sig} · {lever} · {res}{gain}")
             for dl in d.splitlines():
