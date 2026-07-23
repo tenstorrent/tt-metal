@@ -143,6 +143,10 @@ weight shard is `[Q_local|K_local|V_local|f_a|g_a|beta_local]`. Fusing these
 columns reduces traced latency to 0.874 ms without a collective or ownership
 change.
 
+A controlled 1x3 fused-output subblock test also retains 1x1: slowest-chip
+matmul + reduce-scatter regressed from 146.778 us to 147.706 us. The remaining
+CCL gap is not solved by widening the local matmul subblock.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence
