@@ -38,7 +38,7 @@ void bind_experimental_per_token_cast_back_operation(nb::module_& mod) {
                 * :attr:`output_dtype`: BFLOAT16 (default) or FLOAT32.
                 * :attr:`memory_config`: optional DRAM interleaved output memory config
                   (default: same as input_e4m3).
-                * :attr:`token_count_aware`: enable the masked MoE-dispatch prefix path (default False).
+                * :attr:`token_count_aware`: enable the token-count-aware MoE-dispatch prefix path (default False).
                 * :attr:`expert_region_offsets`: UINT32 ROW_MAJOR DRAM interleaved, (1, num_routed_experts).
                   Required when token_count_aware=True.
                 * :attr:`expert_token_counts`: UINT32 ROW_MAJOR DRAM interleaved, (1, num_routed_experts).
