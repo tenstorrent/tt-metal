@@ -14,6 +14,7 @@
 //   1     Bulk                   reserve n upfront + push n at end     nothing
 //   2     ReserveAllPushPerTile  reserve n upfront, push 1 / iter      nothing
 //   3     CallerManaged          pack only (no reserve / no push)      reserve n before, push n after
+//   4     ReserveNonePushEnd      push n at end                         reserve n before
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -46,12 +47,18 @@ void kernel_main() {
             EltwiseShape::tiles(n),
             in,
             PackTile<output(cb_out, OutputLifecycle::ReserveAllPushPerTile, DataFormatReconfig::Disabled)>{});
-    } else {  // life == 3: CallerManaged — chain packs only, caller brackets reserve+push
+    } else if constexpr (life == 3) {
         cb_out_obj.reserve_back(n);
         eltwise_chain(
             EltwiseShape::tiles(n),
             in,
             PackTile<output(cb_out, OutputLifecycle::CallerManaged, DataFormatReconfig::Disabled)>{});
         cb_out_obj.push_back(n);
+    } else {
+        cb_out_obj.reserve_back(n);
+        eltwise_chain(
+            EltwiseShape::tiles(n),
+            in,
+            PackTile<output(cb_out, OutputLifecycle::ReserveNonePushEnd, DataFormatReconfig::Disabled)>{});
     }
 }

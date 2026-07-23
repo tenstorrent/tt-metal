@@ -45,10 +45,11 @@ void kernel_main() {
             cb, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto bulk_output = [](uint32_t cb) {
-        return ckl::output(cb, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled);
+        return ckl::output(cb, ckl::OutputLifecycle::ReserveNonePushEnd, ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto rotated_input = bulk_block_input(rotated_in_interm_cb);
-    constexpr auto in_input = bulk_block_input(in_cb);
+    constexpr auto in_input =
+        ckl::input(in_cb, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
     constexpr auto sin_input = held_block_input(sin_cb);
     constexpr auto cos_input = held_block_input(cos_cb);
     constexpr auto sin_interm_input = bulk_block_input(sin_interm_cb);
@@ -68,7 +69,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, trans_mat_cb, out_cb);
     matmul_init(in_cb, trans_mat_cb);
-    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
+    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);
 
     // Get the trans_mat
     trans_mat_cb_obj.reserve_back(onetile);
@@ -105,7 +106,6 @@ void kernel_main() {
         }
         REL();
         rotated_in_interm_cb_obj.push_back(Wt);
-        rotated_in_interm_cb_obj.wait_front(Wt);
 
         mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
         ckl::eltwise_chain<ckl::SetupOwner::Caller>(

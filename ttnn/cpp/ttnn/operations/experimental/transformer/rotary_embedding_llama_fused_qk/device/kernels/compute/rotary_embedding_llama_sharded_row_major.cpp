@@ -13,6 +13,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 ALWI void ACQ() {
     tile_regs_acquire();
     tile_regs_wait();
@@ -23,11 +25,6 @@ ALWI void REL() {
 }
 
 void kernel_main() {
-    // TODO: Add back early return? Currently, running out of code size in TRISC2 by 4B
-    // const bool has_work = get_arg_val<uint32_t>(0);
-    // if (!has_work) {
-    //     return;
-    // }
     const bool is_q = get_arg_val<uint32_t>(0);
 
     // First 6 args for q and k heads
@@ -66,7 +63,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, trans_mat_cb, out_cb);
     matmul_init(in_cb, trans_mat_cb);
-    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
+    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
         rotated_in_interm_cb_obj.reserve_back(Wt);
@@ -90,18 +87,12 @@ void kernel_main() {
 
         REL();
         rotated_in_interm_cb_obj.push_back(Wt);
-        rotated_in_interm_cb_obj.wait_front(Wt);
 
-        compute_kernel_lib::mul<
-            compute_kernel_lib::input(rotated_in_interm_cb, compute_kernel_lib::InputLifecycle::CallerManaged),
-            compute_kernel_lib::input(sin_cb, compute_kernel_lib::InputLifecycle::CallerManaged),
-            compute_kernel_lib::output(
-                sin_interm_cb,
-                compute_kernel_lib::OutputLifecycle::CallerManaged,
-                compute_kernel_lib::DataFormatReconfig::Disabled),
-            compute_kernel_lib::BroadcastDim::None>(compute_kernel_lib::EltwiseShape::single());
-        sin_interm_cb_obj.push_back(Wt);
-        rotated_in_interm_cb_obj.pop_front(Wt);
+        ckl::mul<
+            ckl::input(rotated_in_interm_cb, ckl::InputLifecycle::Bulk),
+            ckl::input(sin_cb, ckl::InputLifecycle::CallerManaged),
+            ckl::output(sin_interm_cb, ckl::OutputLifecycle::ReserveNonePushEnd),
+            ckl::BroadcastDim::None>(ckl::EltwiseShape::single());
 
         mul_tiles_init(in_cb, cos_cb);
         ACQ();

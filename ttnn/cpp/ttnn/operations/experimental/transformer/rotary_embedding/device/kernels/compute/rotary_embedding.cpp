@@ -24,14 +24,13 @@ template <uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb>
 ALWI void mul_tiles_chain(uint32_t in1_idx) {
     using namespace compute_kernel_lib;
     if constexpr (kDecodeMode) {
-        cb_wait_front(in1_cb, in1_idx + 1);
         eltwise_chain(
             EltwiseShape::single(),
             BinaryFpu<
                 input(in0_cb, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
                 input(
                     in1_cb,
-                    InputLifecycle::CallerManaged,
+                    InputLifecycle::HeldBulk,
                     OperandKind::Scalar,
                     DataFormatReconfig::Disabled,
                     compute_kernel_lib::TileOffset::Set),

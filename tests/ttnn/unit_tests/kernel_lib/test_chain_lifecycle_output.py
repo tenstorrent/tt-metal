@@ -9,8 +9,8 @@ The output lifecycle decides whether the chain or the CALLER emits cb_reserve_ba
 A miscount hangs the writer (BRISC) or overwrites an unpushed tile. out_lifecycle.cpp does an
 identity copy with a selectable OutputLifecycle and supplies the caller-side edge where needed.
 
-Covers the 4 well-defined cells (Streaming, Bulk, ReserveAllPushPerTile, CallerManaged);
-ReserveNonePushEnd / Chunked are skipped (ambiguous n>1 reserve-without-push semantics).
+Covers the 5 well-defined cells (Streaming, Bulk, ReserveAllPushPerTile, CallerManaged,
+ReserveNonePushEnd); Chunked is covered by the blocking suite.
 """
 
 import torch
@@ -27,6 +27,7 @@ OUT_LIFECYCLES = {
     1: "Bulk",
     2: "ReserveAllPushPerTile",
     3: "CallerManaged",
+    4: "ReserveNonePushEnd",
 }
 
 

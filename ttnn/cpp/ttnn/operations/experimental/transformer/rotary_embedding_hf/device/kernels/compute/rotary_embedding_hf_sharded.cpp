@@ -7,7 +7,8 @@
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
-#include "ttnn/kernel/compute/moreh_common.hpp"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
@@ -38,10 +39,11 @@ void kernel_main() {
             cb, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto bulk_output = [](uint32_t cb) {
-        return ckl::output(cb, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled);
+        return ckl::output(cb, ckl::OutputLifecycle::ReserveNonePushEnd, ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto rotated_input = bulk_block_input(rotated_in_interm_cb);
-    constexpr auto in_input = bulk_block_input(in_cb);
+    constexpr auto in_input =
+        ckl::input(in_cb, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
     constexpr auto sin_input = held_block_input(sin_cb);
     constexpr auto cos_input = held_block_input(cos_cb);
     constexpr auto sin_interm_input = bulk_block_input(sin_interm_cb);
@@ -50,58 +52,58 @@ void kernel_main() {
     constexpr auto cos_output = bulk_output(cos_interm_cb);
     constexpr auto rotary_output = bulk_output(out_cb);
 
+    CircularBuffer in_cb_obj(in_cb);
+    CircularBuffer cos_cb_obj(cos_cb);
+    CircularBuffer sin_cb_obj(sin_cb);
+    CircularBuffer scalar_cb_obj(scalar_cb);
+    CircularBuffer rotated_in_interm_cb_obj(rotated_in_interm_cb);
+    CircularBuffer cos_interm_cb_obj(cos_interm_cb);
+    CircularBuffer sin_interm_cb_obj(sin_interm_cb);
+    CircularBuffer out_cb_obj(out_cb);
+
     compute_kernel_hw_startup(in_cb, sin_cb, sin_interm_cb);
 
     // Wait for the reader kernel (reader_rotary_embedding_hf_sharded.cpp) to
     // write -1.0 into the scalar CB and push it.
-    cb_wait_front(scalar_cb, onetile);
+    scalar_cb_obj.wait_front(onetile);
 
     for (uint32_t batch_idx = 0; batch_idx < batch_per_core; ++batch_idx) {
         // For decode mode, cos/sin are [1, batch, 1, head_dim] and this core's shard
         // may contain multiple batch rows. Push one row at a time and advance the CB.
-        cb_reserve_back(sin_cb, Wt);
-        cb_reserve_back(cos_cb, Wt);
-        cb_push_back(sin_cb, Wt);
-        cb_push_back(cos_cb, Wt);
+        sin_cb_obj.reserve_back(Wt);
+        cos_cb_obj.reserve_back(Wt);
+        sin_cb_obj.push_back(Wt);
+        cos_cb_obj.push_back(Wt);
 
         for (uint32_t ht = 0; ht < heads_per_batch_t; ++ht) {
-            cb_reserve_back(rotated_in_interm_cb, Wt);
-            cb_reserve_back(sin_interm_cb, Wt);
-            cb_reserve_back(cos_interm_cb, Wt);
-            cb_reserve_back(out_cb, Wt);
+            rotated_in_interm_cb_obj.reserve_back(Wt);
+            sin_interm_cb_obj.reserve_back(Wt);
+            cos_interm_cb_obj.reserve_back(Wt);
+            out_cb_obj.reserve_back(Wt);
 
             // Get the input
-            cb_reserve_back(in_cb, Wt);
-            cb_push_back(in_cb, Wt);
-            cb_wait_front(in_cb, Wt);
+            in_cb_obj.reserve_back(Wt);
+            in_cb_obj.push_back(Wt);
+            in_cb_obj.wait_front(Wt);
 
-            // Process second half: multiply by -1 and store in rotated buffer
-            mul_tiles_bcast_scalar_init_short(in_cb, scalar_cb);
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < half_Wt; ++j) {
-                mul_tiles_bcast_scalar(in_cb, scalar_cb, j + half_Wt, 0, j);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < half_Wt; ++j) {
-                pack_tile(j, rotated_in_interm_cb, j);
-            }
-            tile_regs_release();
-
-            // Copy first half to second half of rotated buffer
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < half_Wt; ++j) {
-                copy_tile_init_with_dt(in_cb);
-                copy_tile(in_cb, j, j + half_Wt);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < half_Wt; ++j) {
-                pack_tile(j + half_Wt, rotated_in_interm_cb, j + half_Wt);
-            }
-            tile_regs_release();
-
-            cb_push_back(rotated_in_interm_cb, Wt);
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(half_Wt, /*block_size=*/half_Wt),
+                ckl::BinaryFpu<
+                    ckl::input(
+                        in_cb, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block, ckl::TileOffset::Set),
+                    ckl::input(scalar_cb, ckl::InputLifecycle::CallerManaged),
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::BroadcastDim::Scalar>{half_Wt, 0u},
+                ckl::CopyTile<
+                    ckl::input(in_cb, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
+                    ckl::Dst::D1>{},
+                ckl::PackTile<
+                    ckl::output(rotated_in_interm_cb, ckl::OutputLifecycle::CallerManaged, ckl::TileOffset::Set),
+                    ckl::Dst::D0>{0u},
+                ckl::PackTile<
+                    ckl::output(rotated_in_interm_cb, ckl::OutputLifecycle::CallerManaged, ckl::TileOffset::Set),
+                    ckl::Dst::D1>{half_Wt});
+            rotated_in_interm_cb_obj.push_back(Wt);
 
             mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
             ckl::eltwise_chain<ckl::SetupOwner::Caller>(
@@ -118,10 +120,10 @@ void kernel_main() {
                 ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
         }
 
-        cb_pop_front(sin_cb, Wt);
-        cb_pop_front(cos_cb, Wt);
+        sin_cb_obj.pop_front(Wt);
+        cos_cb_obj.pop_front(Wt);
     }
 
     // Done with the scalar, so remove from CB
-    cb_pop_front(scalar_cb, onetile);
+    scalar_cb_obj.pop_front(onetile);
 }

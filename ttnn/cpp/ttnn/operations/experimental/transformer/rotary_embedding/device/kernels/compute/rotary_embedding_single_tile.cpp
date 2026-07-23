@@ -59,7 +59,6 @@ void kernel_main() {
     constexpr uint32_t out_cb = get_compile_time_arg_val(7);
     constexpr uint32_t num_rows = get_compile_time_arg_val(8);
 
-    // Device 2.0 CB objects for the (non-eltwise) matmul block — kept identical to main (#47571/#47389).
     CircularBuffer cb_in(in_cb);
     CircularBuffer cb_trans_mat(trans_mat_cb);
     CircularBuffer cb_rotated_in_interm(rotated_in_interm_cb);
@@ -92,7 +91,6 @@ void kernel_main() {
 
     cb_trans_mat.wait_front(onetile);
     binary_op_init_common(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb);
-
     for (uint32_t i = 0; i < num_rows; ++i) {
         // rotated = in @ trans_mat  (HF rotate_half on a single 32x32 tile)
         cb_in.wait_front(onetile);
@@ -116,9 +114,11 @@ void kernel_main() {
         mul<input(rotated_in_interm_cb), input(updated_sin_cb, trig_lifecycle), output(sin_interm_cb), trig_bcast>(
             EltwiseShape::tiles(onetile));
 
-        // cos_interim = in * cos  (chain waits+pops in_cb; cos held/streamed per mode)
-        mul<input(in_cb), input(updated_cos_cb, trig_lifecycle), output(cos_interm_cb), trig_bcast>(
-            EltwiseShape::tiles(onetile));
+        // cos_interim = in * cos
+        mul<input(in_cb, InputLifecycle::NoWaitPop),
+            input(updated_cos_cb, trig_lifecycle),
+            output(cos_interm_cb),
+            trig_bcast>(EltwiseShape::tiles(onetile));
 
         // out = cos_interim + sin_interim
         add<input(cos_interm_cb), input(sin_interm_cb), output(out_cb)>(EltwiseShape::tiles(onetile));

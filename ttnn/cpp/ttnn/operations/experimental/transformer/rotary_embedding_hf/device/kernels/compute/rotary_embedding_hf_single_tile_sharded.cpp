@@ -10,6 +10,9 @@
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
@@ -24,6 +27,9 @@ void kernel_main() {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(7);
     constexpr uint32_t heads_per_batch_t = get_compile_time_arg_val(8);
     constexpr uint32_t batch_per_core = get_compile_time_arg_val(9);
+    constexpr auto pre_reserved_output = [](uint32_t cb) {
+        return ckl::output(cb, ckl::OutputLifecycle::ReserveNonePushEnd);
+    };
 
     CircularBuffer in_cb(in_cb_id);
     CircularBuffer cos_cb(cos_cb_id);
@@ -66,47 +72,18 @@ void kernel_main() {
             tile_regs_release();
             rotated_in_interm_cb.push_back(onetile);
 
-            rotated_in_interm_cb.wait_front(onetile);
-            sin_cb.wait_front(onetile);
-            reconfig_data_format(rotated_in_interm_cb_id, sin_cb_id);
-            pack_reconfig_data_format(sin_interm_cb_id);
-            tile_regs_acquire();
-            mul_bcast_rows_init_short(rotated_in_interm_cb_id, sin_cb_id);
-            mul_tiles_bcast_rows(rotated_in_interm_cb_id, sin_cb_id, 0, 0, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, sin_interm_cb_id);
-            tile_regs_release();
-            sin_interm_cb.push_back(onetile);
-            rotated_in_interm_cb.pop_front(onetile);
-
-            cos_cb.wait_front(onetile);
-            reconfig_data_format(in_cb_id, cos_cb_id);
-            pack_reconfig_data_format(cos_interm_cb_id);
-            tile_regs_acquire();
-            mul_bcast_rows_init_short(in_cb_id, cos_cb_id);
-            mul_tiles_bcast_rows(in_cb_id, cos_cb_id, 0, 0, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, cos_interm_cb_id);
-            tile_regs_release();
-            cos_interm_cb.push_back(onetile);
-            in_cb.pop_front(onetile);
-
-            cos_interm_cb.wait_front(onetile);
-            sin_interm_cb.wait_front(onetile);
-            reconfig_data_format(cos_interm_cb_id, sin_interm_cb_id);
-            pack_reconfig_data_format(out_cb_id);
-            add_tiles_init(cos_interm_cb_id, sin_interm_cb_id);
-            tile_regs_acquire();
-            add_tiles(cos_interm_cb_id, sin_interm_cb_id, 0, 0, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, out_cb_id);
-            tile_regs_release();
-            out_cb.push_back(onetile);
-            cos_interm_cb.pop_front(onetile);
-            sin_interm_cb.pop_front(onetile);
+            ckl::mul<
+                ckl::input(rotated_in_interm_cb_id),
+                ckl::input(sin_cb_id, ckl::InputLifecycle::HeldBulk),
+                pre_reserved_output(sin_interm_cb_id),
+                ckl::BroadcastDim::Row>(ckl::EltwiseShape::single());
+            ckl::mul<
+                ckl::input(in_cb_id, ckl::InputLifecycle::DeferredPop),
+                ckl::input(cos_cb_id, ckl::InputLifecycle::HeldBulk),
+                pre_reserved_output(cos_interm_cb_id),
+                ckl::BroadcastDim::Row>(ckl::EltwiseShape::single());
+            ckl::add<ckl::input(cos_interm_cb_id), ckl::input(sin_interm_cb_id), pre_reserved_output(out_cb_id)>(
+                ckl::EltwiseShape::single());
         }
 
         sin_cb.pop_front(onetile);

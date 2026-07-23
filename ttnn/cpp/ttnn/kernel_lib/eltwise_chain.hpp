@@ -299,6 +299,7 @@ constexpr InputSpec input(
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
     TileOffset offset = TileOffset::Unset) noexcept;
 constexpr InputSpec input(uint32_t cb_id, InputLifecycle lifecycle, DataFormatReconfig reconfig) noexcept;
+constexpr InputSpec input(uint32_t cb_id, InputLifecycle lifecycle, OperandKind index, TileOffset offset) noexcept;
 
 /// Bind one output buffer id to its configuration.
 /// Defaults: Streaming lifecycle, reconfig enabled, no accumulation, no pack ReLU,
@@ -311,6 +312,7 @@ constexpr OutputSpec output(
     L1Accumulation l1_accumulation = L1Accumulation::Disabled,
     DestAccumulation dest_accumulation = DestAccumulation::Disabled,
     TileOffset offset = TileOffset::Unset) noexcept;
+constexpr OutputSpec output(uint32_t cb_id, OutputLifecycle lifecycle, TileOffset offset) noexcept;
 
 // =============================================================================
 // 2. DEST slot enum — capped at compile-time DEST capacity

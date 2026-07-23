@@ -245,6 +245,10 @@ constexpr InputSpec input(uint32_t cb_id, InputLifecycle lifecycle, DataFormatRe
     return input(cb_id, lifecycle, OperandKind::Scalar, reconfig);
 }
 
+constexpr InputSpec input(uint32_t cb_id, InputLifecycle lifecycle, OperandKind index, TileOffset offset) noexcept {
+    return input(cb_id, lifecycle, index, DataFormatReconfig::Enabled, offset);
+}
+
 constexpr OutputSpec output(
     uint32_t cb_id,
     OutputLifecycle lifecycle,
@@ -254,6 +258,17 @@ constexpr OutputSpec output(
     DestAccumulation dest_accumulation,
     TileOffset offset) noexcept {
     return {cb_id, lifecycle, reconfig, relu, l1_accumulation, dest_accumulation, offset};
+}
+
+constexpr OutputSpec output(uint32_t cb_id, OutputLifecycle lifecycle, TileOffset offset) noexcept {
+    return output(
+        cb_id,
+        lifecycle,
+        DataFormatReconfig::Enabled,
+        PackRelu::Disabled,
+        L1Accumulation::Disabled,
+        DestAccumulation::Disabled,
+        offset);
 }
 
 namespace detail {
@@ -927,8 +942,10 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     using Base = OutputStream;
     using Base::tile_base;
     // Walk vs pinned output addressing is derived from the lifecycle: upfront-reserve
-    // policies write distinct tiles in one reserved window; front-advancing policies stay pinned.
-    static constexpr bool walk = Policy.reserve_policy == ReservePolicy::Upfront;
+    // policies and caller-pre-reserved windows write distinct tiles; front-advancing policies stay pinned.
+    static constexpr bool walk = Policy.reserve_policy == ReservePolicy::Upfront ||
+                                 Policy == OutputLifecycle::ReserveNonePushEnd ||
+                                 Policy == OutputLifecycle::CallerManaged;
 
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(is_legal_output_lifecycle(Policy), "PackTile: output lifecycle is not a named OutputLifecycle");
@@ -992,8 +1009,9 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     }
 
     // Pack exec — walk the reserved output window (base + i_flat) for the upfront-reserve outputs
-    // (Bulk / ReserveAllPushPerTile / ReserveAllPushPerChunk), or stay pinned at base for the
-    // front-advancing policies (Streaming / Chunked) whose CB front already advanced. TileOffset adds base.
+    // (Bulk / ReserveAllPushPerTile / ReserveAllPushPerChunk) and ReserveNonePushEnd's caller-pre-reserved
+    // window, or stay pinned at base for the front-advancing policies (Streaming / Chunked) whose CB front
+    // already advanced. TileOffset adds base.
     //
     // OOO gating: the LLK's sequential pack path (out_of_order_output=false) derives its write
     // address from an internal running `fifo_wr_tile_ptr` and IGNORES `out_idx` entirely. That is
