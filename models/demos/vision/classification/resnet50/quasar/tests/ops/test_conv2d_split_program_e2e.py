@@ -261,6 +261,32 @@ def _run(
                 f"[32:64]={_pcc(dev[:, 32:64], gold_mn[:, 32:64]):.3f}"
             )
 
+    # DIAG (sliced-output scramble localizer): compare device vs torch_golden (BOTH relu+bias), per output-H
+    # row, to distinguish a row/slice PERMUTATION (rows individually correct but misplaced) from per-row garbage.
+    with torch.no_grad():
+        gk = torch_golden[0].permute(1, 2, 0).reshape(out_h * out_w, out_channels).float()  # [oh*ow, C]
+        dk = tt_out[0].permute(1, 2, 0).reshape(out_h * out_w, out_channels).float()
+
+        def _p2(a, b):
+            a = a.reshape(-1)
+            b = b.reshape(-1)
+            if float(a.std()) == 0 or float(b.std()) == 0:
+                return 0.0
+            return float(torch.corrcoef(torch.stack([a, b]))[0, 1])
+
+        row_pccs = [_p2(dk[i * out_w : (i + 1) * out_w], gk[i * out_w : (i + 1) * out_w]) for i in range(out_h)]
+        good = sum(1 for p in row_pccs if p > 0.9)
+        print(
+            f"  DIAG scramble: {good}/{out_h} output-H rows in-place PCC>0.9; row_pcc[:10]={[round(p, 2) for p in row_pccs[:10]]}"
+        )
+        # where does device H-row 0 actually land in golden? (permutation detector)
+        j0 = max(range(out_h), key=lambda j: _p2(dk[0:out_w], gk[j * out_w : (j + 1) * out_w]))
+        j1 = max(range(out_h), key=lambda j: _p2(dk[out_w : 2 * out_w], gk[j * out_w : (j + 1) * out_w]))
+        print(
+            f"  DIAG device H-row0 best matches golden H-row {j0} (pcc={_p2(dk[0:out_w], gk[j0*out_w:(j0+1)*out_w]):.2f}); "
+            f"H-row1 -> golden H-row {j1}"
+        )
+
     assert_with_pcc(torch_golden, tt_out.float(), pcc=PCC)
 
 
