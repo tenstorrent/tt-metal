@@ -33,10 +33,11 @@ inline void _llk_math_eltwise_ternary_sfpu_init_()
  * supplied tile indices, advances the face pointer between calls, then signals
  * SFPU done.
  *
+ * @tparam TILE_SHAPE     Dest tile shape used when setting the tile-zero destination base.
  * @tparam F              Callable type matching the ternary SFPU kernel signature.
  * @tparam ARGS           Any extra arguments forwarded verbatim to @p sfpu_func.
  *
- * @param sfpu_func       Ternary SFPU kernel (e.g. @c _calculate_where_<false>).
+ * @param sfpu_func       Ternary SFPU kernel (e.g. @c calculate_where<false>).
  * @param dst_index_in0   DEST tile index for the first input operand (e.g. condition).
  * @param dst_index_in1   DEST tile index for the second input operand (e.g. true_val).
  * @param dst_index_in2   DEST tile index for the third input operand (e.g. false_val).
@@ -44,7 +45,7 @@ inline void _llk_math_eltwise_ternary_sfpu_init_()
  * @param vector_mode     Faces to process: R (0-1), C (0,2), RC (all 4, default), or scalar (once).
  * @param args            Extra arguments forwarded to @p sfpu_func after the tile indices.
  */
-template <typename Callable, typename... Args>
+template <ckernel::trisc::DstTileShape TILE_SHAPE = ckernel::trisc::DstTileShape::Tile32x32, typename Callable, typename... Args>
 inline void _llk_math_eltwise_ternary_sfpu_params_(
     Callable&& sfpu_func,
     std::uint32_t dst_index_in0,
@@ -54,7 +55,7 @@ inline void _llk_math_eltwise_ternary_sfpu_params_(
     VectorMode vector_mode = VectorMode::RC,
     Args&&... args)
 {
-    _llk_math_eltwise_sfpu_start_(0);
+    _llk_math_eltwise_sfpu_start_<TILE_SHAPE>(0);
     _llk_math_eltwise_sfpu_apply_vector_mode_(
         std::forward<Callable>(sfpu_func), vector_mode, dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<Args>(args)...);
     _llk_math_eltwise_sfpu_done_();

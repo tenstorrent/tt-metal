@@ -21,7 +21,12 @@ namespace sfpu
 // inversion:
 //   lt(A,B) = LT(A,B)           gt(A,B) = LT(B,A)
 //   ge(A,B) = NOT LT(A,B)       le(A,B) = NOT LT(B,A)
-template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, bool SIGN_MAGNITUDE_FORMAT = false>
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS,
+    SfpuType RELATIONAL_OP,
+    bool SIGN_MAGNITUDE_FORMAT     = false,
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
     static_assert(
@@ -36,8 +41,10 @@ inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const
         TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
     }
 
-    const std::uint32_t idx_x = swap_operands ? dst_index_in1 : dst_index_in0;
-    const std::uint32_t idx_y = swap_operands ? dst_index_in0 : dst_index_in1;
+    constexpr std::uint32_t tile_stride = 1U << ckernel::to_underlying(TILE_SHAPE);
+    const std::uint32_t idx_x           = (swap_operands ? dst_index_in1 : dst_index_in0) * tile_stride;
+    const std::uint32_t idx_y           = (swap_operands ? dst_index_in0 : dst_index_in1) * tile_stride;
+    const std::uint32_t out_offset      = dst_index_out * tile_stride;
 
     for (int d = 0; d < ITERATIONS; d++)
     {
@@ -85,7 +92,7 @@ inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const
             }
         }
 
-        TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, dst_index_out + (d << 1));
+        TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, out_offset + (d << 1));
     }
 }
 

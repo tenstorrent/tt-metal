@@ -107,8 +107,7 @@ class BinarySfpu(Sfpu):
         return (
             f"    test_utils::call_binary_sfpu_operation_quasar<"
             f"{op}, {dest_sync}, {en_32bit_dest}, {self.iterations}"
-            f">({self.dst_index_in0} /* base_dst_index */, "
-            f"{src1} /* src0_tile */, {src2} /* src1_tile */, {dst} /* dst_tile */, "
+            f">({src1} /* src0_tile */, {src2} /* src1_tile */, {dst} /* dst_tile */, "
             f"{config.sentinel.math_format});\n"
         )
 

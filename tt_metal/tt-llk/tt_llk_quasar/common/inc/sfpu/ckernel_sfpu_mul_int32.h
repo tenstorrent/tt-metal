@@ -18,14 +18,19 @@ namespace sfpu
 // Int32 multiply ported from the BH DISABLE_SFPLOADMACRO path.
 // Uses SFPMUL24 (24-bit partial products) + shifts to produce a full 32-bit
 // result.
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void _mul_int32_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t tile_stride = 1U << ckernel::to_underlying(TILE_SHAPE);
+    const std::uint32_t in0_offset      = dst_index_in0 * tile_stride;
+    const std::uint32_t in1_offset      = dst_index_in1 * tile_stride;
+    const std::uint32_t out_offset      = dst_index_out * tile_stride;
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, dst_index_in0 + (d << 1));
-        TT_SFPLOAD(p_sfpu::LREG2, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, dst_index_in1 + (d << 1));
+        TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, in0_offset + (d << 1));
+        TT_SFPLOAD(p_sfpu::LREG2, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, in1_offset + (d << 1));
 
         // Dest layout depends on how operands reached dest:
         //   UNP_DEST / Int32 L1 with 2's-comp tiles → 2's-comp Int32
@@ -54,7 +59,7 @@ inline void _mul_int32_(const std::uint32_t dst_index_in0, const std::uint32_t d
             TTI_SFPCAST(p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM);
         }
 
-        TT_SFPSTORE(p_sfpu::LREG4, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, dst_index_out + (d << 1));
+        TT_SFPSTORE(p_sfpu::LREG4, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, out_offset + (d << 1));
     }
 }
 
