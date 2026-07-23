@@ -198,6 +198,30 @@ protected:
         EXPECT_EQ(result.size(), 1u);
         return result.empty() ? 0u : result[0];
     }
+
+    // Build (but do not run) a minimal ProgramSpec whose semaphore carries the given scope
+    // intent on the given target, so ValidateProgramSpec's ResolveSemaphoreScope runs.
+    // Throws (TT_FATAL) on a contradiction. No JIT/emu-kernel execution.
+    void make_program_with_forced_scope(SemaphoreScope scope, const experimental::Nodes& sem_target) {
+        experimental::SemaphoreSpec sem{
+            .unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = sem_target};
+        sem.scope = scope;
+        const experimental::KernelSpecName K{"k"};
+        experimental::KernelSpec ks{
+            .unique_id = K,
+            .source = kernel_path,
+            .num_threads = 1,
+            .semaphore_bindings =
+                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times"}},
+            .hw_config = experimental::DataMovementGen2Config{},
+        };
+        experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
+        experimental::ProgramSpec spec{
+            .name = "sem_scope_validate", .kernels = {ks}, .semaphores = {sem}, .work_units = {wu}};
+        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+        (void)program;
+    }
 };
 
 // EXTERNAL scope: local up() is a self-targeted NoC atomic increment; value() reads
@@ -305,6 +329,24 @@ TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
     const uint32_t observed = run_concurrent("SEM_SCOPE_DM_LOCAL_CACHED", "MODE_PRODUCER_CONSUMER");
     log_info(LogTest, "DM_LOCAL_CACHED producer/consumer value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() lost a concurrent producer increment.";
+}
+
+// ---- Phase-2 S2a: host-side scope resolution + contradiction FATALs ----
+
+// Explicit single-node scopes are accepted (ResolveSemaphoreScope validates, no throw).
+TEST_F(SemScopeFixture, TestForcedScopeSingleNodeAccepted) {
+    EXPECT_NO_THROW(make_program_with_forced_scope(SemaphoreScope::EXTERNAL, core));
+    EXPECT_NO_THROW(make_program_with_forced_scope(SemaphoreScope::DM_LOCAL_CACHED, core));
+}
+
+// A forced DM_LOCAL_CACHED semaphore that spans >1 node is a contradiction -> host FATAL.
+TEST_F(SemScopeFixture, TestForcedDmLocalCachedMultiNodeFatal) {
+    const auto grid = mesh_device_->compute_with_storage_grid_size();
+    if (grid.x < 2) {
+        GTEST_SKIP() << "needs >= 2 worker nodes to form a multi-node semaphore range";
+    }
+    const experimental::NodeRange two_nodes{experimental::NodeCoord{0, 0}, experimental::NodeCoord{1, 0}};
+    EXPECT_ANY_THROW(make_program_with_forced_scope(SemaphoreScope::DM_LOCAL_CACHED, two_nodes));
 }
 
 }  // namespace tt::tt_metal

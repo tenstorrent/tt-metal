@@ -192,6 +192,33 @@ bool nodes_intersect(const Nodes& a, const Nodes& b) {
     return a_set.intersects(b_set);
 }
 
+// Resolve a SemaphoreSpec's host-side scope INTENT (SemaphoreScope) to the device SemScope
+// baked into the kernel, with contradiction FATALs (Phase-2 auto-path baking).
+//   AUTO            -> LOCAL_NONATOMIC for now (inert; the auto classifier that picks
+//                      EXTERNAL from reach arrives with the decidability ABI, S4).
+//   EXTERNAL        -> EXTERNAL.
+//   DM_LOCAL_CACHED -> DM_LOCAL_CACHED, but only if the semaphore lives on exactly one node
+//                      (a cached-alias AMO must never race a NoC atomic).
+//   LOCAL_NONATOMIC -> LOCAL_NONATOMIC (explicit legacy escape hatch).
+SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem) {
+    switch (sem.scope) {
+        case SemaphoreScope::EXTERNAL: return SemScope::EXTERNAL;
+        case SemaphoreScope::DM_LOCAL_CACHED: {
+            const uint32_t num_nodes = to_node_range_set(sem.target_nodes).num_cores();
+            TT_FATAL(
+                num_nodes == 1,
+                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but spans {} nodes; a DM-local cached "
+                "semaphore must live on exactly one node (it must never be reachable via the NoC).",
+                sem.unique_id,
+                num_nodes);
+            return SemScope::DM_LOCAL_CACHED;
+        }
+        case SemaphoreScope::LOCAL_NONATOMIC: return SemScope::LOCAL_NONATOMIC;
+        case SemaphoreScope::AUTO:
+        default: return SemScope::LOCAL_NONATOMIC;
+    }
+}
+
 // Helper: return a DFB's alias-with list.
 const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
     return dfb.advanced_options.alias_with;
@@ -1745,6 +1772,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 sem.unique_id,
                 init_value);
         }
+        // Resolve + validate the physical-path scope (FATALs on a contradiction, e.g. a
+        // forced DM_LOCAL_CACHED semaphore that spans multiple nodes). Phase-2 S2b will
+        // thread the resolved SemScope into the kernel's baked accessor.
+        (void)ResolveSemaphoreScope(sem);
     }
 
     //////////////////////////////
