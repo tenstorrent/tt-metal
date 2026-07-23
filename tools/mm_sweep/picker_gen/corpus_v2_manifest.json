@@ -1,0 +1,3141 @@
+{
+  "n_shapes": 141,
+  "total_candidates": 13398,
+  "budget": 96,
+  "audit": 8,
+  "split_counts": {
+    "train": 83,
+    "val": 29,
+    "holdout": 29
+  },
+  "shapes": [
+    {
+      "M": 32,
+      "K": 256,
+      "N": 6144,
+      "Mt": 1,
+      "Kt": 8,
+      "Nt": 192,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        1,
+        1,
+        1,
+        8
+      ],
+      "n_candidates": 62,
+      "n_structured": 54,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 1024,
+      "N": 1024,
+      "Mt": 1,
+      "Kt": 32,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        1,
+        2
+      ],
+      "n_candidates": 48,
+      "n_structured": 40,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 1280,
+      "N": 1792,
+      "Mt": 1,
+      "Kt": 40,
+      "Nt": 56,
+      "tags": [
+        "boundary"
+      ],
+      "split": "val",
+      "prod_pick": [
+        2,
+        5,
+        1,
+        1,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 129,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 2048,
+      "N": 512,
+      "Mt": 1,
+      "Kt": 64,
+      "Nt": 16,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 56,
+      "n_structured": 48,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 2048,
+      "N": 1024,
+      "Mt": 1,
+      "Kt": 64,
+      "Nt": 32,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        4,
+        2,
+        1,
+        4,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 89,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 2048,
+      "N": 1536,
+      "Mt": 1,
+      "Kt": 64,
+      "Nt": 48,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        2,
+        1,
+        4,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 179,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 2048,
+      "N": 2048,
+      "Mt": 1,
+      "Kt": 64,
+      "Nt": 64,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        2,
+        2,
+        1,
+        4,
+        4
+      ],
+      "n_candidates": 96,
+      "n_structured": 209,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 2048,
+      "N": 6144,
+      "Mt": 1,
+      "Kt": 64,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 594,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 2304,
+      "N": 6144,
+      "Mt": 1,
+      "Kt": 72,
+      "Nt": 192,
+      "tags": [
+        "boundary",
+        "fluxltx"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        3,
+        1,
+        1,
+        6
+      ],
+      "n_candidates": 96,
+      "n_structured": 903,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 3072,
+      "N": 6144,
+      "Mt": 1,
+      "Kt": 96,
+      "Nt": 192,
+      "tags": [
+        "boundary"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        6,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 988,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 4096,
+      "N": 1024,
+      "Mt": 1,
+      "Kt": 128,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        8,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 166,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 4096,
+      "N": 4096,
+      "Mt": 1,
+      "Kt": 128,
+      "Nt": 128,
+      "tags": [
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        8,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 738,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 4608,
+      "N": 3072,
+      "Mt": 1,
+      "Kt": 144,
+      "Nt": 96,
+      "tags": [
+        "boundary"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        9,
+        1,
+        1,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 811,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 6080,
+      "N": 4640,
+      "Mt": 1,
+      "Kt": 190,
+      "Nt": 145,
+      "tags": [
+        "boundary"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1280,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 6100,
+      "N": 4608,
+      "Mt": 1,
+      "Kt": 190,
+      "Nt": 144,
+      "tags": [
+        "boundary"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1298,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 768,
+      "Mt": 1,
+      "Kt": 192,
+      "Nt": 24,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        6,
+        1,
+        2,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 241,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 1536,
+      "Mt": 1,
+      "Kt": 192,
+      "Nt": 48,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        6,
+        1,
+        4,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 454,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 2304,
+      "Mt": 1,
+      "Kt": 192,
+      "Nt": 72,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        3,
+        1,
+        4,
+        5
+      ],
+      "n_candidates": 96,
+      "n_structured": 664,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 3072,
+      "Mt": 1,
+      "Kt": 192,
+      "Nt": 96,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        3,
+        1,
+        4,
+        6
+      ],
+      "n_candidates": 96,
+      "n_structured": 844,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 6144,
+      "Mt": 1,
+      "Kt": 192,
+      "Nt": 192,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        6,
+        1,
+        4,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 1385,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 6144,
+      "N": 9216,
+      "Mt": 1,
+      "Kt": 192,
+      "Nt": 288,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        3,
+        1,
+        4,
+        6
+      ],
+      "n_candidates": 96,
+      "n_structured": 1905,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 7168,
+      "N": 1280,
+      "Mt": 1,
+      "Kt": 224,
+      "Nt": 40,
+      "tags": [
+        "boundary"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        10,
+        1,
+        1,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 407,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 7680,
+      "N": 4608,
+      "Mt": 1,
+      "Kt": 240,
+      "Nt": 144,
+      "tags": [
+        "boundary"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        10,
+        1,
+        1,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 1494,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 8192,
+      "N": 1536,
+      "Mt": 1,
+      "Kt": 256,
+      "Nt": 48,
+      "tags": [
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        11,
+        1,
+        1,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 528,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 15360,
+      "N": 768,
+      "Mt": 1,
+      "Kt": 480,
+      "Nt": 24,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        6,
+        1,
+        2,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 406,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 15360,
+      "N": 1536,
+      "Mt": 1,
+      "Kt": 480,
+      "Nt": 48,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        6,
+        1,
+        2,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 747,
+      "n_audit": 8
+    },
+    {
+      "M": 32,
+      "K": 15360,
+      "N": 6144,
+      "Mt": 1,
+      "Kt": 480,
+      "Nt": 192,
+      "tags": [
+        "tail"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        6,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 2106,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 1024,
+      "N": 1024,
+      "Mt": 2,
+      "Kt": 32,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        1,
+        2
+      ],
+      "n_candidates": 82,
+      "n_structured": 74,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 2048,
+      "N": 512,
+      "Mt": 2,
+      "Kt": 64,
+      "Nt": 16,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 94,
+      "n_structured": 86,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 2048,
+      "N": 1024,
+      "Mt": 2,
+      "Kt": 64,
+      "Nt": 32,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 156,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 2048,
+      "N": 2048,
+      "Mt": 2,
+      "Kt": 64,
+      "Nt": 64,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        2,
+        1,
+        2,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 359,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 2048,
+      "N": 6144,
+      "Mt": 2,
+      "Kt": 64,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 971,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 4096,
+      "N": 1024,
+      "Mt": 2,
+      "Kt": 128,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        8,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 283,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 4096,
+      "N": 4096,
+      "Mt": 2,
+      "Kt": 128,
+      "Nt": 128,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 1197,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 4608,
+      "N": 6144,
+      "Mt": 2,
+      "Kt": 144,
+      "Nt": 192,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        3,
+        1,
+        2,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 2120,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 5152,
+      "N": 2080,
+      "Mt": 2,
+      "Kt": 161,
+      "Nt": 65,
+      "tags": [
+        "tail"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        11,
+        1,
+        2,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 460,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 6144,
+      "N": 512,
+      "Mt": 2,
+      "Kt": 192,
+      "Nt": 16,
+      "tags": [
+        "tail"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 220,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 6144,
+      "N": 768,
+      "Mt": 2,
+      "Kt": 192,
+      "Nt": 24,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 397,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 6144,
+      "N": 1536,
+      "Mt": 2,
+      "Kt": 192,
+      "Nt": 48,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        3,
+        1,
+        8,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 734,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 6144,
+      "N": 2304,
+      "Mt": 2,
+      "Kt": 192,
+      "Nt": 72,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 1063,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 6144,
+      "N": 4608,
+      "Mt": 2,
+      "Kt": 192,
+      "Nt": 144,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        6,
+        1,
+        4,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 1858,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 6144,
+      "N": 6144,
+      "Mt": 2,
+      "Kt": 192,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 2108,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 6144,
+      "N": 9216,
+      "Mt": 2,
+      "Kt": 192,
+      "Nt": 288,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        6,
+        1,
+        4,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 2799,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 8192,
+      "N": 1536,
+      "Mt": 2,
+      "Kt": 256,
+      "Nt": 48,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        11,
+        1,
+        1,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 839,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 15360,
+      "N": 768,
+      "Mt": 2,
+      "Kt": 480,
+      "Nt": 24,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        10,
+        1,
+        2,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 582,
+      "n_audit": 8
+    },
+    {
+      "M": 64,
+      "K": 15360,
+      "N": 1536,
+      "Mt": 2,
+      "Kt": 480,
+      "Nt": 48,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        6,
+        1,
+        2,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 1030,
+      "n_audit": 8
+    },
+    {
+      "M": 96,
+      "K": 1024,
+      "N": 1024,
+      "Mt": 3,
+      "Kt": 32,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 105,
+      "n_audit": 8
+    },
+    {
+      "M": 96,
+      "K": 2048,
+      "N": 512,
+      "Mt": 3,
+      "Kt": 64,
+      "Nt": 16,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        4,
+        3,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 118,
+      "n_audit": 8
+    },
+    {
+      "M": 96,
+      "K": 2048,
+      "N": 1024,
+      "Mt": 3,
+      "Kt": 64,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        8,
+        1,
+        1,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 213,
+      "n_audit": 8
+    },
+    {
+      "M": 96,
+      "K": 2048,
+      "N": 2048,
+      "Mt": 3,
+      "Kt": 64,
+      "Nt": 64,
+      "tags": [
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 475,
+      "n_audit": 8
+    },
+    {
+      "M": 96,
+      "K": 2048,
+      "N": 6144,
+      "Mt": 3,
+      "Kt": 64,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 1264,
+      "n_audit": 8
+    },
+    {
+      "M": 96,
+      "K": 4096,
+      "N": 1024,
+      "Mt": 3,
+      "Kt": 128,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        8,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 377,
+      "n_audit": 8
+    },
+    {
+      "M": 96,
+      "K": 4096,
+      "N": 4096,
+      "Mt": 3,
+      "Kt": 128,
+      "Nt": 128,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 1536,
+      "n_audit": 8
+    },
+    {
+      "M": 96,
+      "K": 6144,
+      "N": 768,
+      "Mt": 3,
+      "Kt": 192,
+      "Nt": 24,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 506,
+      "n_audit": 8
+    },
+    {
+      "M": 96,
+      "K": 6144,
+      "N": 2304,
+      "Mt": 3,
+      "Kt": 192,
+      "Nt": 72,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 1300,
+      "n_audit": 8
+    },
+    {
+      "M": 96,
+      "K": 6144,
+      "N": 6144,
+      "Mt": 3,
+      "Kt": 192,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 2482,
+      "n_audit": 8
+    },
+    {
+      "M": 96,
+      "K": 8192,
+      "N": 1536,
+      "Mt": 3,
+      "Kt": 256,
+      "Nt": 48,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 947,
+      "n_audit": 8
+    },
+    {
+      "M": 96,
+      "K": 15360,
+      "N": 768,
+      "Mt": 3,
+      "Kt": 480,
+      "Nt": 24,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 621,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 1024,
+      "N": 1024,
+      "Mt": 4,
+      "Kt": 32,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 126,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 1280,
+      "N": 1792,
+      "Mt": 4,
+      "Kt": 40,
+      "Nt": 56,
+      "tags": [
+        "boundary"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        5,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 391,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 2048,
+      "N": 512,
+      "Mt": 4,
+      "Kt": 64,
+      "Nt": 16,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        4,
+        2,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 143,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 2048,
+      "N": 1024,
+      "Mt": 4,
+      "Kt": 64,
+      "Nt": 32,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        4,
+        2,
+        2,
+        4
+      ],
+      "n_candidates": 96,
+      "n_structured": 253,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 2048,
+      "N": 2048,
+      "Mt": 4,
+      "Kt": 64,
+      "Nt": 64,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 560,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 2048,
+      "N": 6144,
+      "Mt": 4,
+      "Kt": 64,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 1435,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 2304,
+      "N": 6144,
+      "Mt": 4,
+      "Kt": 72,
+      "Nt": 192,
+      "tags": [
+        "boundary",
+        "fluxltx"
+      ],
+      "split": "val",
+      "prod_pick": [
+        2,
+        3,
+        1,
+        1,
+        6
+      ],
+      "n_candidates": 96,
+      "n_structured": 2156,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 3072,
+      "N": 6144,
+      "Mt": 4,
+      "Kt": 96,
+      "Nt": 192,
+      "tags": [
+        "boundary"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        2,
+        6,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 2251,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 4096,
+      "N": 1024,
+      "Mt": 4,
+      "Kt": 128,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        8,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 441,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 4096,
+      "N": 4096,
+      "Mt": 4,
+      "Kt": 128,
+      "Nt": 128,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 1690,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 4608,
+      "N": 3072,
+      "Mt": 4,
+      "Kt": 144,
+      "Nt": 96,
+      "tags": [
+        "boundary"
+      ],
+      "split": "train",
+      "prod_pick": [
+        4,
+        3,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1823,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 6080,
+      "N": 4640,
+      "Mt": 4,
+      "Kt": 190,
+      "Nt": 145,
+      "tags": [
+        "boundary",
+        "tail"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 2350,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 6100,
+      "N": 4608,
+      "Mt": 4,
+      "Kt": 190,
+      "Nt": 144,
+      "tags": [
+        "boundary"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 2347,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 6144,
+      "N": 768,
+      "Mt": 4,
+      "Kt": 192,
+      "Nt": 24,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 548,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 6144,
+      "N": 2304,
+      "Mt": 4,
+      "Kt": 192,
+      "Nt": 72,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1348,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 6144,
+      "N": 4608,
+      "Mt": 4,
+      "Kt": 192,
+      "Nt": 144,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 2192,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 6144,
+      "N": 6144,
+      "Mt": 4,
+      "Kt": 192,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 2415,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 7168,
+      "N": 1280,
+      "Mt": 4,
+      "Kt": 224,
+      "Nt": 40,
+      "tags": [
+        "boundary"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        10,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 930,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 7680,
+      "N": 4608,
+      "Mt": 4,
+      "Kt": 240,
+      "Nt": 144,
+      "tags": [
+        "boundary"
+      ],
+      "split": "val",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 2560,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 8192,
+      "N": 1536,
+      "Mt": 4,
+      "Kt": 256,
+      "Nt": 48,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1082,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 15360,
+      "N": 768,
+      "Mt": 4,
+      "Kt": 480,
+      "Nt": 24,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        6,
+        1,
+        2,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 650,
+      "n_audit": 8
+    },
+    {
+      "M": 128,
+      "K": 15360,
+      "N": 1536,
+      "Mt": 4,
+      "Kt": 480,
+      "Nt": 48,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        1,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 1036,
+      "n_audit": 8
+    },
+    {
+      "M": 160,
+      "K": 1024,
+      "N": 1024,
+      "Mt": 5,
+      "Kt": 32,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 147,
+      "n_audit": 8
+    },
+    {
+      "M": 160,
+      "K": 2048,
+      "N": 512,
+      "Mt": 5,
+      "Kt": 64,
+      "Nt": 16,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        4,
+        3,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 164,
+      "n_audit": 8
+    },
+    {
+      "M": 160,
+      "K": 2048,
+      "N": 1024,
+      "Mt": 5,
+      "Kt": 64,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 287,
+      "n_audit": 8
+    },
+    {
+      "M": 160,
+      "K": 2048,
+      "N": 2048,
+      "Mt": 5,
+      "Kt": 64,
+      "Nt": 64,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 622,
+      "n_audit": 8
+    },
+    {
+      "M": 160,
+      "K": 2048,
+      "N": 6144,
+      "Mt": 5,
+      "Kt": 64,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1574,
+      "n_audit": 8
+    },
+    {
+      "M": 160,
+      "K": 4096,
+      "N": 1024,
+      "Mt": 5,
+      "Kt": 128,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        8,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 469,
+      "n_audit": 8
+    },
+    {
+      "M": 160,
+      "K": 4096,
+      "N": 4096,
+      "Mt": 5,
+      "Kt": 128,
+      "Nt": 128,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1706,
+      "n_audit": 8
+    },
+    {
+      "M": 160,
+      "K": 6144,
+      "N": 768,
+      "Mt": 5,
+      "Kt": 192,
+      "Nt": 24,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 599,
+      "n_audit": 8
+    },
+    {
+      "M": 160,
+      "K": 6144,
+      "N": 2304,
+      "Mt": 5,
+      "Kt": 192,
+      "Nt": 72,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1419,
+      "n_audit": 8
+    },
+    {
+      "M": 160,
+      "K": 6144,
+      "N": 6144,
+      "Mt": 5,
+      "Kt": 192,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 2414,
+      "n_audit": 8
+    },
+    {
+      "M": 160,
+      "K": 8192,
+      "N": 1536,
+      "Mt": 5,
+      "Kt": 256,
+      "Nt": 48,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1010,
+      "n_audit": 8
+    },
+    {
+      "M": 160,
+      "K": 15360,
+      "N": 768,
+      "Mt": 5,
+      "Kt": 480,
+      "Nt": 24,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 562,
+      "n_audit": 8
+    },
+    {
+      "M": 192,
+      "K": 1024,
+      "N": 1024,
+      "Mt": 6,
+      "Kt": 32,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 168,
+      "n_audit": 8
+    },
+    {
+      "M": 192,
+      "K": 2048,
+      "N": 512,
+      "Mt": 6,
+      "Kt": 64,
+      "Nt": 16,
+      "tags": [
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        4,
+        3,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 185,
+      "n_audit": 8
+    },
+    {
+      "M": 192,
+      "K": 2048,
+      "N": 1024,
+      "Mt": 6,
+      "Kt": 64,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 321,
+      "n_audit": 8
+    },
+    {
+      "M": 192,
+      "K": 2048,
+      "N": 2048,
+      "Mt": 6,
+      "Kt": 64,
+      "Nt": 64,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 685,
+      "n_audit": 8
+    },
+    {
+      "M": 192,
+      "K": 2048,
+      "N": 6144,
+      "Mt": 6,
+      "Kt": 64,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1701,
+      "n_audit": 8
+    },
+    {
+      "M": 192,
+      "K": 4096,
+      "N": 1024,
+      "Mt": 6,
+      "Kt": 128,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        8,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 506,
+      "n_audit": 8
+    },
+    {
+      "M": 192,
+      "K": 4096,
+      "N": 4096,
+      "Mt": 6,
+      "Kt": 128,
+      "Nt": 128,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1780,
+      "n_audit": 8
+    },
+    {
+      "M": 192,
+      "K": 6144,
+      "N": 768,
+      "Mt": 6,
+      "Kt": 192,
+      "Nt": 24,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 651,
+      "n_audit": 8
+    },
+    {
+      "M": 192,
+      "K": 6144,
+      "N": 2304,
+      "Mt": 6,
+      "Kt": 192,
+      "Nt": 72,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1499,
+      "n_audit": 8
+    },
+    {
+      "M": 192,
+      "K": 6144,
+      "N": 6144,
+      "Mt": 6,
+      "Kt": 192,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 2485,
+      "n_audit": 8
+    },
+    {
+      "M": 192,
+      "K": 8192,
+      "N": 1536,
+      "Mt": 6,
+      "Kt": 256,
+      "Nt": 48,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1073,
+      "n_audit": 8
+    },
+    {
+      "M": 192,
+      "K": 15360,
+      "N": 768,
+      "Mt": 6,
+      "Kt": 480,
+      "Nt": 24,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 555,
+      "n_audit": 8
+    },
+    {
+      "M": 224,
+      "K": 1024,
+      "N": 1024,
+      "Mt": 7,
+      "Kt": 32,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 177,
+      "n_audit": 8
+    },
+    {
+      "M": 224,
+      "K": 2048,
+      "N": 512,
+      "Mt": 7,
+      "Kt": 64,
+      "Nt": 16,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        4,
+        3,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 195,
+      "n_audit": 8
+    },
+    {
+      "M": 224,
+      "K": 2048,
+      "N": 1024,
+      "Mt": 7,
+      "Kt": 64,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 336,
+      "n_audit": 8
+    },
+    {
+      "M": 224,
+      "K": 2048,
+      "N": 2048,
+      "Mt": 7,
+      "Kt": 64,
+      "Nt": 64,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 711,
+      "n_audit": 8
+    },
+    {
+      "M": 224,
+      "K": 2048,
+      "N": 6144,
+      "Mt": 7,
+      "Kt": 64,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1702,
+      "n_audit": 8
+    },
+    {
+      "M": 224,
+      "K": 4096,
+      "N": 1024,
+      "Mt": 7,
+      "Kt": 128,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        8,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 526,
+      "n_audit": 8
+    },
+    {
+      "M": 224,
+      "K": 4096,
+      "N": 4096,
+      "Mt": 7,
+      "Kt": 128,
+      "Nt": 128,
+      "tags": [
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1743,
+      "n_audit": 8
+    },
+    {
+      "M": 224,
+      "K": 6144,
+      "N": 768,
+      "Mt": 7,
+      "Kt": 192,
+      "Nt": 24,
+      "tags": [
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 599,
+      "n_audit": 8
+    },
+    {
+      "M": 224,
+      "K": 6144,
+      "N": 2304,
+      "Mt": 7,
+      "Kt": 192,
+      "Nt": 72,
+      "tags": [
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1298,
+      "n_audit": 8
+    },
+    {
+      "M": 224,
+      "K": 6144,
+      "N": 6144,
+      "Mt": 7,
+      "Kt": 192,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 2041,
+      "n_audit": 8
+    },
+    {
+      "M": 224,
+      "K": 8192,
+      "N": 1536,
+      "Mt": 7,
+      "Kt": 256,
+      "Nt": 48,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 933,
+      "n_audit": 8
+    },
+    {
+      "M": 224,
+      "K": 15360,
+      "N": 768,
+      "Mt": 7,
+      "Kt": 480,
+      "Nt": 24,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 410,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 1024,
+      "N": 1024,
+      "Mt": 8,
+      "Kt": 32,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        4,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 186,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 1280,
+      "N": 1792,
+      "Mt": 8,
+      "Kt": 40,
+      "Nt": 56,
+      "tags": [
+        "boundary"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        5,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 540,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 2048,
+      "N": 512,
+      "Mt": 8,
+      "Kt": 64,
+      "Nt": 16,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        4,
+        3,
+        2,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 205,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 2048,
+      "N": 1024,
+      "Mt": 8,
+      "Kt": 64,
+      "Nt": 32,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        4,
+        2,
+        2,
+        4
+      ],
+      "n_candidates": 96,
+      "n_structured": 349,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 2048,
+      "N": 1536,
+      "Mt": 8,
+      "Kt": 64,
+      "Nt": 48,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        4,
+        3,
+        2,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 642,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 2048,
+      "N": 2048,
+      "Mt": 8,
+      "Kt": 64,
+      "Nt": 64,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        4,
+        3,
+        2,
+        4
+      ],
+      "n_candidates": 96,
+      "n_structured": 733,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 2048,
+      "N": 6144,
+      "Mt": 8,
+      "Kt": 64,
+      "Nt": 192,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1708,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 2304,
+      "N": 6144,
+      "Mt": 8,
+      "Kt": 72,
+      "Nt": 192,
+      "tags": [
+        "boundary",
+        "fluxltx"
+      ],
+      "split": "val",
+      "prod_pick": [
+        4,
+        3,
+        1,
+        1,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 2371,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 3072,
+      "N": 6144,
+      "Mt": 8,
+      "Kt": 96,
+      "Nt": 192,
+      "tags": [
+        "boundary"
+      ],
+      "split": "train",
+      "prod_pick": [
+        2,
+        6,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 2286,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 4096,
+      "N": 1024,
+      "Mt": 8,
+      "Kt": 128,
+      "Nt": 32,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        8,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 547,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 4096,
+      "N": 4096,
+      "Mt": 8,
+      "Kt": 128,
+      "Nt": 128,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1773,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 4608,
+      "N": 3072,
+      "Mt": 8,
+      "Kt": 144,
+      "Nt": 96,
+      "tags": [
+        "boundary"
+      ],
+      "split": "train",
+      "prod_pick": [
+        4,
+        3,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1859,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 6080,
+      "N": 4640,
+      "Mt": 8,
+      "Kt": 190,
+      "Nt": 145,
+      "tags": [
+        "boundary"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 2079,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 6100,
+      "N": 4608,
+      "Mt": 8,
+      "Kt": 190,
+      "Nt": 144,
+      "tags": [
+        "boundary"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 2094,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 6144,
+      "N": 768,
+      "Mt": 8,
+      "Kt": 192,
+      "Nt": 24,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 616,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 6144,
+      "N": 1536,
+      "Mt": 8,
+      "Kt": 192,
+      "Nt": 48,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        6,
+        2,
+        4,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 1002,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 6144,
+      "N": 2304,
+      "Mt": 8,
+      "Kt": 192,
+      "Nt": 72,
+      "tags": [
+        "matched"
+      ],
+      "split": "val",
+      "prod_pick": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1306,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 6144,
+      "N": 4608,
+      "Mt": 8,
+      "Kt": 192,
+      "Nt": 144,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        6,
+        2,
+        4,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 1938,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 6144,
+      "N": 6144,
+      "Mt": 8,
+      "Kt": 192,
+      "Nt": 192,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        6,
+        2,
+        4,
+        2
+      ],
+      "n_candidates": 96,
+      "n_structured": 2026,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 7168,
+      "N": 1280,
+      "Mt": 8,
+      "Kt": 224,
+      "Nt": 40,
+      "tags": [
+        "boundary"
+      ],
+      "split": "train",
+      "prod_pick": [
+        1,
+        10,
+        1,
+        1,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 908,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 7680,
+      "N": 4608,
+      "Mt": 8,
+      "Kt": 240,
+      "Nt": 144,
+      "tags": [
+        "boundary"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 1921,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 8192,
+      "N": 1536,
+      "Mt": 8,
+      "Kt": 256,
+      "Nt": 48,
+      "tags": [
+        "matched"
+      ],
+      "split": "train",
+      "prod_pick": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 943,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 15360,
+      "N": 768,
+      "Mt": 8,
+      "Kt": 480,
+      "Nt": 24,
+      "tags": [
+        "fluxltx",
+        "matched"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        6,
+        2,
+        2,
+        3
+      ],
+      "n_candidates": 96,
+      "n_structured": 387,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 15360,
+      "N": 1536,
+      "Mt": 8,
+      "Kt": 480,
+      "Nt": 48,
+      "tags": [
+        "fluxltx"
+      ],
+      "split": "holdout",
+      "prod_pick": [
+        1,
+        6,
+        2,
+        2,
+        6
+      ],
+      "n_candidates": 96,
+      "n_structured": 552,
+      "n_audit": 8
+    },
+    {
+      "M": 256,
+      "K": 15360,
+      "N": 6144,
+      "Mt": 8,
+      "Kt": 480,
+      "Nt": 192,
+      "tags": [
+        "tail"
+      ],
+      "split": "val",
+      "prod_pick": [
+        2,
+        6,
+        1,
+        2,
+        1
+      ],
+      "n_candidates": 96,
+      "n_structured": 800,
+      "n_audit": 8
+    }
+  ]
+}
