@@ -30,6 +30,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // square
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -38,14 +39,25 @@ namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
+struct FusedActivation : ckl::UnaryOp<FusedActivation, ckl::Dst::D0> {
+    static ALWI void init() {
+#ifdef SFPU_OP_INIT_ACTIVATION
+        SFPU_OP_INIT_ACTIVATION
+#endif
+    }
+
+    static ALWI void exec_impl([[maybe_unused]] uint32_t i) {
+#ifdef SFPU_OP_INIT_ACTIVATION
+        SFPU_OP_FUNC_ACTIVATION
+#endif
+    }
+};
+
+#ifdef SFPU_OP_INIT_ACTIVATION
+constexpr bool fused_activation_enabled = true;
+#else
+constexpr bool fused_activation_enabled = false;
+#endif
 
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -53,6 +65,8 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(1);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
+    constexpr bool activate_after_normalize = fused_activation_enabled && !do_gamma && !do_beta;
+    constexpr bool activate_after_gamma = fused_activation_enabled && !do_beta;
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(5) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(6) == 1;
@@ -82,13 +96,10 @@ void kernel_main() {
     CircularBuffer cb_in_obj(cb_in);
     CircularBuffer cb_inb_obj(cb_inb);
     CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_gamma_obj(cb_gamma);
-    CircularBuffer cb_beta_obj(cb_beta);
     CircularBuffer cb_ex_obj(cb_ex);
     CircularBuffer cb_ex2_obj(cb_ex2);
     CircularBuffer cb_xmm2_obj(cb_xmm2);
     CircularBuffer cb_ex2pe_obj(cb_ex2pe);
-    CircularBuffer cb_fusion_obj(cb_fusion);
 
     constexpr auto cb_in_rm =
         get_named_compile_time_arg_val("cb_in_rm");  // input row-major (if row-major input, otherwise unused)
@@ -122,16 +133,11 @@ void kernel_main() {
     cb_eps_obj.wait_front(1);  // comes from the reader
 
     constexpr int cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
-    CircularBuffer cb_im_or_out_obj(cb_im_or_out);
 
     // Intermediate buffers need to be reserved/pushed/popped
     // in full blocks
     const auto total_buffer_size = generic::blocks(Wt, block_size).total_with_remainder();
-    // Padded row width (== total_buffer_size, compile-time). Used as the single-call
-    // EltwiseShape::tiles() count so the chain's internal blocking processes full
-    // block_size chunks (matching the padded full_block_size-per-block convention every
-    // producer/consumer here uses), instead of an external generic::blocks loop that
-    // re-emits the chain's boot init per block and defeats hoisting.
+    // Intermediate producers and consumers operate on full blocks, including the padded tail.
     constexpr uint32_t Wt_padded = ((Wt + block_size - 1) / block_size) * block_size;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -147,32 +153,9 @@ void kernel_main() {
         binary_op_init_common(cb_x, cb_scaler, cb_ex);
 #endif
 #endif
-/*
- * X + Y
- */
+        // X + Y
 #ifdef FUSE_PRE_ADD
-        // X + Y per-block bulk add. Original: explicit reconfig_data_format(cb_in, cb_inb) +
-        // pack_reconfig_data_format(cb_x) + add_tiles_init ONCE outside the loop. Each loop
-        // iter does: wait_front(block.full_block_size()) on cb_in/cb_inb, reserve_back+push
-        // on cb_x, inner add_tiles + pack_tile loop, then pop_front on cb_in/cb_inb.
-        //
-        // Reconfig audit: chain re-emits its element-level reconfig per-call. With
-        // both input specs and the output spec set reconfig to Enabled, so the chain emits
-        // reconfig per outer block iter (extra MOPs vs original's once-outside). The fold
-        // elision skips reconfig when prev format matches, so the per-iter cost is amortized
-        // after the first block. (Alternative: disable reconfig in all three specs and keep the
-        // explicit reconfigs above — same effect, but the chain owns the lifecycle).
-        // Net: same correctness; slightly different MOP placement.
-        //
-        // Per-block bulk: A/B InputLifecycle::Bulk + OperandKind::Block (chain walks 0..full_block_size-1
-        // per call). cb_x: OutputLifecycle::Bulk + Block. BlockSize template = block_size so DEST lanes
-        // process all tiles in one DEST window — matches the original's `for (auto i : block.local())`
-        // inside one ACQ/REL.
-        // Single hoisted chain over the padded row. cb_in/cb_inb (in0_t/in1_t = 2*block_size)
-        // are STREAMED by the reader and consumed here, so Chunked (per-chunk wait+pop,
-        // == the old per-block Bulk-in-external-loop) — a single Bulk would wait the whole
-        // row upfront and deadlock the streaming reader. cb_x output is also streamed
-        // (im6_t = 2*block_size) -> Chunked. tiles(Wt_padded) keeps every internal block full.
+        // The reader streams block-sized chunks, so waiting for the whole row would deadlock.
         ckl::add<
             ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
             ckl::input(cb_inb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
@@ -183,7 +166,6 @@ void kernel_main() {
 #else
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_x);
 #endif
-        // by the end of this loop we should end up with Wt tiles in cb_x
 #else
 #ifdef RMSNORM
         reconfig_data_format(cb_in, cb_in);
@@ -193,38 +175,12 @@ void kernel_main() {
 
 #ifndef RMSNORM
         // E[x]
-        // row_wise_mean takes CircularBuffer& (main's Device-2.0 signature); wrap the ids.
         CircularBuffer cb_x_obj(cb_x), cb_scaler_obj(cb_scaler), cb_ex_obj(cb_ex);
         numeric::
             row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithoutPopPolicy>(
                 cb_x_obj, cb_scaler_obj, cb_ex_obj, W, Wt, block_size, tile_width);
 
-        // x - E[x]  per-block, scalar bcast on cb_ex (col bcast — cb_ex is 1 tile per row).
-        // Original: explicit reconfig_data_format(cb_x, cb_ex) + sub_bcast_cols_init_short
-        // ONCE outside the loop; cb_xmm_obj.reserve_back(total_buffer_size) ONCE upfront;
-        // per-iter ACQ/inner-loop/push(full_block_size)/pop_front(cb_x, full_block_size)/REL;
-        // cb_ex popped once after the outer loop.
-        //
-        // Reconfig audit:
-        //   - reconfig_data_format(cb_x, cb_ex) + sub_bcast_cols_init_short both reconfig
-        //     srca/srcb -> reconfig Enabled on both input specs (chain re-emits per call;
-        //     fold elides after first iter).
-        //   - No pack reconfig in original -> reconfig Disabled on the output spec.
-        //
-        // Behavioral diff:
-        //   - Original: 1 upfront cb_xmm.reserve_back(total) + N per-block push.
-        //   - Chain:   N per-block cb_xmm.reserve_back(full_block_size) + N per-block push.
-        //     Chain BlockIter pack requires Upfront* / NoReserve* policy (chain.inl:361);
-        //     OutputLifecycle::ReserveNonePushEnd / OutputLifecycle::Streaming are static_assert'd out.
-        //     OutputLifecycle::Bulk per call emits both. The upfront reserve(total) is dropped — per-block reserves
-        //     cover the same capacity progressively. All reserves are capacity-checks;
-        //     since the producer/consumer balance is unchanged, behavior is identical.
-        // Single hoisted chain. cb_x is consumed per-block (Chunked == the old per-block
-        // Bulk-in-external-loop; cb_x was read no-pop by the E[x] reduce just above, so it's
-        // fully present and x-E[x] is its popping consumer). cb_ex (the mean, 1 tile, col-bcast)
-        // is held -> CallerManaged, popped right after. cb_xmm output Chunked (per-chunk push;
-        // the squaring below waits it whole via HeldBulk once this stage completes).
-        // tiles(Wt_padded) keeps every internal block full.
+        // x - E[x]; the mean stays resident for the whole row.
         ckl::sub<
             ckl::input(cb_x, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
             ckl::input(cb_ex, ckl::InputLifecycle::CallerManaged),
@@ -237,51 +193,22 @@ void kernel_main() {
 #endif
 #endif
 
-        /* (x - E[x])^2 = xmm*xmm — single hoisted same-CB squaring over the full
-         * padded row, blocked internally by block_size. Replaces the external
-         * generic::blocks loop + per-call TileOffset::Set, which re-emitted the boot
-         * init every block and defeated hoisting.
-         *
-         * Shape = Wt_padded = ceil(Wt/block_size)*block_size (== total_buffer_size).
-         * This MUST be the padded count, not Wt: cb_xmm2 is sized total_buffer_size and
-         * the downstream Var reduce (FullBlockWithPopPolicy -> sync_full_block) waits/pops
-         * cb_xmm2 in full_block_size (padded) chunks. tiles(Wt) would make the chain's
-         * last internal block partial (= remainder), under-producing cb_xmm2 and hanging
-         * the reduce's wait_front. tiles(Wt_padded) makes every internal block full, so
-         * the producer/consumer padded-block convention matches (the junk padding tiles
-         * are read/squared/pushed but the reduce sums only its block.local() actual tiles).
-         *
-         * cb_xmm: HeldBulk — waited once upfront, NEVER popped here. It is held because
-         *   the scale stage below re-reads cb_xmm and only pops it at line ~429
-         *   (cb_xmm_obj.pop_front(total_buffer_size)). A popping input (Chunked/Streaming)
-         *   would drain cb_xmm mid-squaring and hang the scale stage. CbA==CbB so the
-         *   chain dedups the B-side wait. No TileOffset: BlockIter index is already absolute.
-         * cb_xmm2: OutputLifecycle::Bulk (reserve total_buffer_size upfront + push at end),
-         *   matching the original.
-         * Reconfig: mul_tiles_init(cb_xmm, cb_xmm) -> reconfig Enabled on the input spec
-         *   (fold elides after first block, CbA==CbB); no pack_reconfig -> None.
-         */
+        // Preserve cb_xmm for the normalization pass; the variance path consumes only its square.
         ckl::square<
-            ckl::input(cb_xmm, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
-            ckl::output(cb_xmm2, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
+            ckl::input(cb_xmm, ckl::InputLifecycle::HeldCumulative, ckl::OperandKind::Block),
+            ckl::output(cb_xmm2, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>(
             ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 #endif
 
         // Var[x]
-        // row_wise_mean takes CircularBuffer& (main's Device-2.0 signature); wrap the ids.
         CircularBuffer cb_xmm2_obj(cb_xmm2), cb_scaler_obj2(cb_scaler), cb_ex2_obj(cb_ex2);
         numeric::
             row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
                 cb_xmm2_obj, cb_scaler_obj2, cb_ex2_obj, W, Wt, block_size, tile_width);
 
-        // Var[x] + eps  ->  1/sqrt(Var[x] + eps)
-        // PARTIAL migration: BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
-        // Original: explicit reconfig_data_format(cb_ex2, cb_eps) + add_tiles_init reconfigs
-        // srca/srcb; pack_reconfig_data_format(cb_ex2pe) explicitly reconfigs pack.
-        // cb_ex2: InputLifecycle::Streaming (chain owns wait/pop). cb_eps: InputLifecycle::CallerManaged (waited once
-        // outside the loop, never popped). cb_ex2pe: OutputLifecycle::Streaming (chain owns reserve/push).
+        // 1/sqrt(Var[x] + eps)
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
@@ -293,100 +220,54 @@ void kernel_main() {
             ckl::PackTile<ckl::output(cb_ex2pe)>{});
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
-        cb_ex2pe_obj.wait_front(1);
         for (auto block : generic::blocks(Wt, block_size)) {
-            reconfig_data_format(cb_xmm, cb_ex2pe);
-            if constexpr (do_gamma == 0 && do_beta == 0) {
-                pack_reconfig_data_format(cb_out);
-            } else {
-                pack_reconfig_data_format(cb_fusion);
-            }
-            cb_im_or_out_obj.reserve_back(block.full_block_size());
-#if defined RMSNORM and not defined FUSE_PRE_ADD
-            reconfig_data_format_srca(cb_fusion, cb_xmm);
-#endif
-            ACQ();
-            mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
-            for (auto i : block.local()) {
-                mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, block.to_global(i), 0, i);  // tile *= 1/(sum(exp(x)))
-#ifdef SFPU_OP_INIT_ACTIVATION
-                // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
-                // activation will be applied after the gamma/beta multiplication/addition.
-                // Otherwise, we can apply the activation here.
-                if constexpr (!(do_gamma == 1 || do_beta == 1)) {
-                    SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_FUNC_ACTIVATION
-                }
-#endif
-                pack_tile(i, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
-            }
-            cb_im_or_out_obj.push_back(
-                block.full_block_size());  // if no gamma/beta are provided, this will be passed on to the writer
-            REL();
-
-            if constexpr (!(do_gamma == 0 && do_beta == 0)) {
-#if defined RMSNORM and not defined FUSE_PRE_ADD
-                reconfig_data_format_srca(cb_xmm, cb_fusion);
-#endif
-            }
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                ckl::BinaryFpu<
+                    ckl::input(
+                        cb_xmm,
+                        ckl::InputLifecycle::HeldBulk,
+                        ckl::OperandKind::Block,
+                        ckl::DataFormatReconfig::Enabled,
+                        ckl::TileOffset::Set),
+                    ckl::input(cb_ex2pe, ckl::InputLifecycle::HeldBulk),
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::BroadcastDim::Col>{block.start(), 0u},
+                ckl::OptionalChainElement<activate_after_normalize, FusedActivation>{},
+                ckl::PackTile<ckl::output(cb_im_or_out, ckl::OutputLifecycle::Chunked)>{});
 
             if constexpr (do_gamma) {
-                if constexpr (do_beta == 0) {
-                    pack_reconfig_data_format(cb_out);
-                }
-                reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
-                ACQ();
-                uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
-                CircularBuffer cb_outg_obj(cb_outg);
-                mul_bcast_rows_init_short(cb_fusion, cb_gamma);
-                cb_outg_obj.reserve_back(block.full_block_size());
-                cb_gamma_obj.wait_front(
-                    block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
-                cb_fusion_obj.wait_front(block.full_block_size());
-                for (auto i : block.local()) {
-                    mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
-#ifdef SFPU_OP_INIT_ACTIVATION
-                    // Activation must be applied last. If do_beta != 0 then
-                    // activation will be applied after the beta addition.
-                    // Otherwise, we can apply the activation here.
-                    if constexpr (!(do_beta == 1)) {
-                        SFPU_OP_INIT_ACTIVATION
-                        SFPU_OP_FUNC_ACTIVATION
-                    }
-#endif
-                    pack_tile(i, cb_outg);  // pack either to intermediate (cb_fusion or out0)
-                }
-                cb_fusion_obj.pop_front(block.full_block_size());
-                // we don't pop gamma
-                cb_outg_obj.push_back(block.full_block_size());
-                // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
-                REL();
+                constexpr uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                    ckl::BinaryFpu<
+                        ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::input(
+                            cb_gamma,
+                            ckl::InputLifecycle::HeldBulk,
+                            ckl::OperandKind::Block,
+                            ckl::DataFormatReconfig::Enabled,
+                            ckl::TileOffset::Set),
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::Row>{0u, block.start()},
+                    ckl::OptionalChainElement<activate_after_gamma, FusedActivation>{},
+                    ckl::PackTile<ckl::output(cb_outg, ckl::OutputLifecycle::Chunked)>{});
             }
             if constexpr (do_beta) {
-                pack_reconfig_data_format(cb_out);
-                if constexpr (do_gamma) {
-                    reconfig_data_format_srcb(cb_gamma, cb_beta);
-                } else {
-                    reconfig_data_format_srcb(cb_ex2pe, cb_beta);
-                }
-                ACQ();
-                add_bcast_rows_init_short(cb_fusion, cb_beta);
-                cb_out_obj.reserve_back(block.full_block_size());
-                cb_beta_obj.wait_front(
-                    block.start() + block.full_block_size());  // TODO: optimization - only wait on first ht
-                cb_fusion_obj.wait_front(block.full_block_size());
-                for (auto i : block.local()) {
-                    add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
-#ifdef SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_FUNC_ACTIVATION
-#endif
-                    pack_tile(i, cb_out);  // pack either to intermediate (cb_fusion or out0)
-                }
-                cb_fusion_obj.pop_front(block.full_block_size());
-                // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
-                cb_out_obj.push_back(block.full_block_size());
-                REL();
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                    ckl::BinaryFpu<
+                        ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::input(
+                            cb_beta,
+                            ckl::InputLifecycle::HeldBulk,
+                            ckl::OperandKind::Block,
+                            ckl::DataFormatReconfig::Enabled,
+                            ckl::TileOffset::Set),
+                        ckl::BinaryFpuOp::Add,
+                        ckl::BroadcastDim::Row>{0u, block.start()},
+                    ckl::OptionalChainElement<fused_activation_enabled, FusedActivation>{},
+                    ckl::PackTile<ckl::output(cb_out, ckl::OutputLifecycle::Chunked)>{});
             }
         }
         cb_ex2pe_obj.pop_front(1);

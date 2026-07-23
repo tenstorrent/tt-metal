@@ -27,11 +27,11 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
         cb_wait_front(in1_cb, in1_idx + 1);
         eltwise_chain(
             EltwiseShape::single(),
-            BinaryFpu<  // in0: chain owns wait(1)/pop(1)
+            BinaryFpu<
                 input(in0_cb, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
                 input(
                     in1_cb,
-                    InputLifecycle::CallerManaged,  // in1: held across the walk (TileOffset, no pop)
+                    InputLifecycle::CallerManaged,
                     OperandKind::Scalar,
                     DataFormatReconfig::Disabled,
                     compute_kernel_lib::TileOffset::Set),

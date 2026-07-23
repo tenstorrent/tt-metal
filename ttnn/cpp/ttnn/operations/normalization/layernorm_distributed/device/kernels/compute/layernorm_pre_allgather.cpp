@@ -43,20 +43,20 @@ void kernel_main() {
         compute_kernel_hw_startup(cb_inp, cb_reduce, cb_x2);
     }
 
-    constexpr auto squaring_shape = ckl::EltwiseShape::of(Wt / blk, blk);
+    constexpr auto squaring_shape = ckl::EltwiseShape::tiles(Wt, blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (FUSE_PRE_ADD) {
             ckl::add<
-                ckl::input(cb_in0, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(cb_res, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::output(cb_inp, ckl::OutputLifecycle::Bulk),
+                ckl::input(cb_in0, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                ckl::input(cb_res, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                ckl::output(cb_inp, ckl::OutputLifecycle::Chunked),
                 ckl::BroadcastDim::None>(squaring_shape);
         }
 
         ckl::square<
             ckl::input(cb_inp, ckl::InputLifecycle::HeldCumulative, ckl::OperandKind::Block),
-            ckl::output(cb_x2, ckl::OutputLifecycle::Bulk)>(squaring_shape);
+            ckl::output(cb_x2, ckl::OutputLifecycle::Chunked)>(squaring_shape);
 
         ckl::reduce<
             PoolType::AVG,

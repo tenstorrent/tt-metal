@@ -34,12 +34,34 @@ namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 namespace generic = kutil::generic;
 
+struct FusedActivation : ckl::UnaryOp<FusedActivation, ckl::Dst::D0> {
+    static ALWI void init() {
+#ifdef SFPU_OP_INIT_ACTIVATION
+        SFPU_OP_INIT_ACTIVATION
+#endif
+    }
+
+    static ALWI void exec_impl([[maybe_unused]] uint32_t i) {
+#ifdef SFPU_OP_INIT_ACTIVATION
+        SFPU_OP_FUNC_ACTIVATION
+#endif
+    }
+};
+
+#ifdef SFPU_OP_INIT_ACTIVATION
+constexpr bool fused_activation_enabled = true;
+#else
+constexpr bool fused_activation_enabled = false;
+#endif
+
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t block_size = get_compile_time_arg_val(1);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
+    constexpr bool activate_after_normalize = fused_activation_enabled && !do_gamma && !do_beta;
+    constexpr bool activate_after_gamma = fused_activation_enabled && !do_beta;
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(5) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(6) == 1;
@@ -61,7 +83,8 @@ void kernel_main() {
     constexpr auto cb_ex2 = get_named_compile_time_arg_val("cb_ex2");
     constexpr auto cb_xmm2 = get_named_compile_time_arg_val("cb_xmm2");
     constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");
-    uint32_t cb_fusion = get_named_compile_time_arg_val("cb_fusion");  // stream gamma/beta
+    constexpr auto cb_fusion = get_named_compile_time_arg_val("cb_fusion");  // stream gamma/beta
+    constexpr auto cb_im_or_out = (do_gamma || do_beta) ? cb_fusion : cb_out;
     constexpr auto scaler0 = 0;
     constexpr auto cb_accumulate = get_named_compile_time_arg_val("cb_accumulate");
 
@@ -95,9 +118,6 @@ void kernel_main() {
     CircularBuffer cb_in_rm_obj(cb_in_rm);
     CircularBuffer cb_inb_obj(cb_inb);
     CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_gamma_obj(cb_gamma);
-    CircularBuffer cb_beta_obj(cb_beta);
-    CircularBuffer cb_xmm_obj(cb_xmm);
     CircularBuffer cb_ex_obj(cb_ex);
     CircularBuffer cb_ex2_obj(cb_ex2);
     CircularBuffer cb_xmm2_obj(cb_xmm2);
@@ -161,23 +181,23 @@ void kernel_main() {
                 ckl::OptionalChainElement<
                     is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
                     ckl::CopyTile<
-                        ckl::input(cb_in, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                        ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::Dst::D0>>{},
                 ckl::OptionalChainElement<
                     !is_rmsnorm,  // LayerNorm: x - E[x] (reads cb_ex; stripped under RMSNORM)
                     ckl::BinaryFpu<
-                        ckl::input(cb_in, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                        ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::input(cb_ex, ckl::InputLifecycle::CallerManaged),
                         ckl::BinaryFpuOp::Sub,
                         ckl::BroadcastDim::Col>>{},
                 ckl::OptionalChainElement<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<
-                        ckl::input(cb_inb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                        ckl::input(cb_inb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::BinaryFpuOp::Add,
                         ckl::DestReuseType::DEST_TO_SRCB>>{},
                 ckl::Square<ckl::Dst::D0>{},
-                ckl::PackTile<ckl::output(cb_xmm2, ckl::OutputLifecycle::Bulk)>{});
+                ckl::PackTile<ckl::output(cb_xmm2, ckl::OutputLifecycle::Chunked)>{});
 
             tile_regs_acquire();
             if (!block.is_first()) {
@@ -190,8 +210,6 @@ void kernel_main() {
             cb_xmm2_obj.wait_front(block.full_block_size());
 
             // Accumulate (x-E[x])^2
-            // main #47311 dropped the FLOAT32_REDUCTION template arg (fp32 now via FP32_DEST_ACC_EN)
-            // and uses the scaler-first reconfig convention documented in reduce.h.
             reconfig_data_format(cb_scaler, cb_xmm2);
             reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_xmm2, cb_scaler, cb_accumulate);
             for (auto i : block.local()) {
@@ -272,120 +290,55 @@ void kernel_main() {
                 ckl::OptionalChainElement<
                     is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
                     ckl::CopyTile<
-                        ckl::input(cb_in, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                        ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::Dst::D0>>{},
                 ckl::OptionalChainElement<
                     !is_rmsnorm,  // LayerNorm: x - E[x] (reads cb_ex; stripped under RMSNORM)
                     ckl::BinaryFpu<
-                        ckl::input(cb_in, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                        ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::input(cb_ex, ckl::InputLifecycle::CallerManaged),
                         ckl::BinaryFpuOp::Sub,
                         ckl::BroadcastDim::Col>>{},
                 ckl::OptionalChainElement<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<
-                        ckl::input(cb_inb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                        ckl::input(cb_inb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::BinaryFpuOp::Add,
                         ckl::DestReuseType::DEST_TO_SRCB>>{},
-                ckl::PackTile<ckl::output(cb_xmm, ckl::OutputLifecycle::Bulk)>{});
+                ckl::PackTile<ckl::output(cb_xmm, ckl::OutputLifecycle::Chunked)>{});
 
-            cb_xmm_obj.wait_front(block.full_block_size());
-            reconfig_data_format(cb_xmm, cb_ex2pe);
-            tile_regs_acquire();
-
-            mul_tiles_init(cb_xmm, cb_ex2pe);
-            for (auto i : block.local()) {
-                mul_tiles(cb_xmm, cb_ex2pe, i, 0, i);
-#ifdef SFPU_OP_INIT_ACTIVATION
-                // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
-                // activation will be applied after the gamma/beta multiplication/addition.
-                // Otherwise, we can apply the activation here.
-                if constexpr (!(do_gamma == 1 || do_beta == 1)) {
-                    SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_FUNC_ACTIVATION
-                }
-#endif
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-
-            if constexpr (!(do_gamma == 1 or do_beta == 1)) {
-                cb_fusion = cb_out;
-            }
-            CircularBuffer(cb_fusion).reserve_back(block.full_block_size());
-            pack_reconfig_data_format(cb_fusion);
-            for (auto i : block.local()) {
-                pack_tile(i, cb_fusion);
-            }
-            tile_regs_release();
-            CircularBuffer(cb_fusion).push_back(block.full_block_size());
-            cb_xmm_obj.pop_front(block.full_block_size());
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                ckl::BinaryFpu<
+                    ckl::input(cb_xmm, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                    ckl::input(cb_ex2pe, ckl::InputLifecycle::HeldBulk),
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::BroadcastDim::None>{},
+                ckl::OptionalChainElement<activate_after_normalize, FusedActivation>{},
+                ckl::PackTile<ckl::output(cb_im_or_out, ckl::OutputLifecycle::Chunked)>{});
 
             if constexpr (do_gamma == 1) {
-                tile_regs_acquire();
-                tile_regs_wait();
-                reconfig_data_format(cb_fusion, cb_gamma);
-                if constexpr (!do_beta) {
-                    pack_reconfig_data_format(cb_out);
-                }
-                cb_gamma_obj.wait_front(block.full_block_size());
-                CircularBuffer(cb_fusion).wait_front(block.full_block_size());
-                mul_bcast_rows_init_short(cb_fusion, cb_gamma);
-                for (auto i : block.local()) {
-                    mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, i, i);
-#ifdef SFPU_OP_INIT_ACTIVATION
-                    // Activation must be applied last. If do_beta != 0 then
-                    // activation will be applied after the beta addition.
-                    // Otherwise, we can apply the activation here.
-                    if constexpr (!(do_beta == 1)) {
-                        SFPU_OP_INIT_ACTIVATION
-                        SFPU_OP_FUNC_ACTIVATION
-                    }
-#endif
-                }
-                tile_regs_commit();
-                cb_gamma_obj.pop_front(block.full_block_size());
-                CircularBuffer(cb_fusion).pop_front(block.full_block_size());
-                if constexpr (!do_beta) {
-                    cb_out_obj.reserve_back(block.full_block_size());
-                    for (auto i : block.local()) {
-                        pack_tile(i, cb_out);
-                    }
-                    cb_out_obj.push_back(block.full_block_size());
-                } else {
-                    CircularBuffer(cb_fusion).reserve_back(block.full_block_size());
-                    for (auto i : block.local()) {
-                        pack_tile(i, cb_fusion);
-                    }
-                    CircularBuffer(cb_fusion).push_back(block.full_block_size());
-                }
-
-                tile_regs_release();
+                constexpr auto cb_gamma_out = do_beta ? cb_fusion : cb_out;
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                    ckl::BinaryFpu<
+                        ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::input(cb_gamma, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::Row>{},
+                    ckl::OptionalChainElement<activate_after_gamma, FusedActivation>{},
+                    ckl::PackTile<ckl::output(cb_gamma_out, ckl::OutputLifecycle::Chunked)>{});
             }
             if constexpr (do_beta == 1) {
-                tile_regs_acquire();
-                tile_regs_wait();
-                reconfig_data_format(cb_fusion, cb_beta);
-                pack_reconfig_data_format(cb_out);
-                cb_beta_obj.wait_front(block.full_block_size());
-                CircularBuffer(cb_fusion).wait_front(block.full_block_size());
-                add_bcast_rows_init_short(cb_fusion, cb_beta);
-                for (auto i : block.local()) {
-                    add_tiles_bcast_rows(cb_fusion, cb_beta, i, i, i);
-#ifdef SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_FUNC_ACTIVATION
-#endif
-                }
-                tile_regs_commit();
-                cb_beta_obj.pop_front(block.full_block_size());
-                CircularBuffer(cb_fusion).pop_front(block.full_block_size());
-                cb_out_obj.reserve_back(block.full_block_size());
-                for (auto i : block.local()) {
-                    pack_tile(i, cb_out);
-                }
-                tile_regs_release();
-                cb_out_obj.push_back(block.full_block_size());
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                    ckl::BinaryFpu<
+                        ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::input(cb_beta, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::BinaryFpuOp::Add,
+                        ckl::BroadcastDim::Row>{},
+                    ckl::OptionalChainElement<fused_activation_enabled, FusedActivation>{},
+                    ckl::PackTile<ckl::output(cb_out, ckl::OutputLifecycle::Chunked)>{});
             }
 
 #ifdef UNTILIZE_OUT

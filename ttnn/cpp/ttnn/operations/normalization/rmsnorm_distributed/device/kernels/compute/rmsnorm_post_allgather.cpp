@@ -70,12 +70,7 @@ void kernel_main() {
         ckl::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_stats, cb_reduce, cb_var>(
             ckl::ReduceInputBlockShape::row(stats_tiles_cols));
 
-        /*
-         * 1/sqrt(var + eps)
-         * BinaryFpu(Add, cb_var, cb_eps) + Rsqrt + PackTile(cb_recip_sqrt_var).
-         * cb_var: InputLifecycle::Streaming (per-tile wait/pop). cb_eps: InputLifecycle::CallerManaged (pre-waited
-         * before NCHt loop, popped once after). cb_recip_sqrt_var: OutputLifecycle::Streaming.
-         */
+        // 1/sqrt(var + eps)
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
@@ -86,22 +81,7 @@ void kernel_main() {
             ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(cb_recip_sqrt_var)>{});
 
-        /*
-         * norm x
-         * RMSNorm: X * 1/sqrt(E[X**2] + eps)
-         *
-         * Three eltwise stages via eltwise_chain. Each stage is a single chain
-         * call over the full Wt with BlockSize=blk; the chain owns all of:
-         *   - A-side wait_upfront / pop_at_end on the streaming input CB,
-         *   - B-side index walk (Scalar for cb_recip_sqrt_var, Block for
-         *     cb_gamma / cb_beta which already span all Wt tiles upfront),
-         *   - pack-side reserve_upfront / push_at_end on the output CB,
-         *   - entry-time srca/srcb + pack reconfig.
-         * The chain now owns the B-side CB edges too: cb_recip_sqrt_var is Bulk
-         * (wait+pop per call); cb_gamma / cb_beta are HeldBulk (chain waits Wt per
-         * row, no pop) — they stay resident across rows, released by the trailing
-         * cb_pop_front after the NCHt loop.
-         */
+        // X * 1/sqrt(E[X**2] + eps), followed by optional gamma and beta.
         constexpr uint32_t normed_output_cb = do_gamma ? cb_x_normed : cb_out;
 
         ckl::mul<
@@ -111,9 +91,6 @@ void kernel_main() {
             ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/blk));
 
         if constexpr (do_gamma) {
-            /*
-             * x_normed * gamma   (cb_gamma walks Block — index = 0..Wt-1)
-             */
             ckl::mul<
                 ckl::input(cb_x_normed, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
                 ckl::input(cb_gamma, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
@@ -121,9 +98,6 @@ void kernel_main() {
                 ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/blk));
 
             if constexpr (do_beta) {
-                /*
-                 * (x_normed * gamma) + beta   (cb_beta walks Block — 0..Wt-1)
-                 */
                 ckl::add<
                     ckl::input(cb_times_gamma_out, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
                     ckl::input(cb_beta, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),

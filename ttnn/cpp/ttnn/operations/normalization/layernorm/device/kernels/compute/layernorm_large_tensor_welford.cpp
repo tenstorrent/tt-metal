@@ -93,12 +93,11 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     }
 
     for (auto block : generic::blocks(Wt, blk)) {
-        // Fused pre-add (migrated to eltwise_chain; Bulk/Bulk mirrors main's wait_front+add+pop
-        // on both operands, produces the intermediate CB that works around the transpose_dest bug).
+        // Keep pre-add in a separate CB to avoid the transpose_dest aliasing issue.
         ckl::add<
-            ckl::input(cb_in, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-            ckl::input(cb_inb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-            ckl::output(cb_interm_pre_add, ckl::OutputLifecycle::Bulk),
+            ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+            ckl::input(cb_inb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+            ckl::output(cb_interm_pre_add, ckl::OutputLifecycle::Chunked),
             ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
 
         // Now run Welfords in these blk number of tiles
@@ -181,8 +180,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         cb_ex2_welford_obj.wait_front(1);
     }
     tile_regs_acquire();
-    // Final reload before welford_finalize_to_row: same fp32-via-Dst rationale as the
-    // per-block reload above.
+    // Reload through the FP32 alias before finalizing.
     copy_tile_init(cb_ex_welford);
     copy_tile(cb_ex_welford, 0, mean_dst);
     copy_tile_to_dst_init_short_with_dt(cb_ex_welford, cb_ex2_welford);
@@ -340,7 +338,8 @@ void kernel_main() {
     constexpr auto cb_out = get_named_compile_time_arg_val("cb_out");  // output
     constexpr auto cb_gamma = get_named_compile_time_arg_val("cb_gamma");
     constexpr auto cb_beta = get_named_compile_time_arg_val("cb_beta");
-    uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");                        // x - E[x]
+    constexpr auto cb_xmm_id = get_named_compile_time_arg_val("cb_xmm");  // x - E[x]
+    uint32_t cb_xmm = cb_xmm_id;
     constexpr auto cb_ex = get_named_compile_time_arg_val("cb_ex");                    // E[x]
     constexpr auto cb_ex2 = get_named_compile_time_arg_val("cb_ex2");                  // Var[x] = E[(x-E[x])^2]
     constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");              // Var[x]+ε
@@ -351,9 +350,6 @@ void kernel_main() {
     CircularBuffer cb_eps_obj(cb_eps);
     CircularBuffer cb_in_obj(cb_in);
     CircularBuffer cb_inb_obj(cb_inb);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_gamma_obj(cb_gamma);
-    CircularBuffer cb_beta_obj(cb_beta);
     CircularBuffer cb_ex_obj(cb_ex);
     CircularBuffer cb_ex2_obj(cb_ex2);
     CircularBuffer cb_ex2pe_obj(cb_ex2pe);
@@ -600,65 +596,25 @@ void kernel_main() {
             tile_regs_release();
 
             if constexpr (do_gamma == 1) {
-                // Multiply by gamma
-                reconfig_data_format(cb_xmm, cb_gamma);
-                tile_regs_acquire();
-                cb_gamma_obj.wait_front(block.full_block_size());
-                CircularBuffer(cb_xmm).wait_front(block.full_block_size());
-                mul_bcast_rows_init_short(cb_xmm, cb_gamma);
-                for (auto i : block.local()) {
-                    mul_tiles_bcast_rows(cb_xmm, cb_gamma, i, i, i);
-                }
-                tile_regs_commit();
-                cb_gamma_obj.pop_front(block.full_block_size());
-                CircularBuffer(cb_xmm).pop_front(block.full_block_size());
-
-                if constexpr (!do_beta) {
-                    pack_reconfig_data_format(cb_out);
-                }
-                tile_regs_wait();
-                if constexpr (!do_beta) {
-                    cb_out_obj.reserve_back(block.full_block_size());
-                    for (auto i : block.local()) {
-                        pack_tile(i, cb_out);
-                    }
-                    cb_out_obj.push_back(block.full_block_size());
-                } else {
-                    CircularBuffer(cb_xmm).reserve_back(block.full_block_size());
-                    for (auto i : block.local()) {
-                        pack_tile(i, cb_xmm);
-                    }
-                    CircularBuffer(cb_xmm).push_back(block.full_block_size());
-                }
-                tile_regs_release();
+                constexpr auto cb_gamma_out = do_beta ? cb_fusion : cb_out;
+                ckl::mul<
+                    ckl::input(cb_xmm_id, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                    ckl::input(cb_gamma, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                    ckl::output(cb_gamma_out, ckl::OutputLifecycle::Chunked),
+                    ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
             }
 
             if constexpr (do_beta == 1) {
-                // Add beta
-                tile_regs_acquire();
-                reconfig_data_format(cb_xmm, cb_beta);
-                add_bcast_rows_init_short(cb_xmm, cb_beta);
-                CircularBuffer(cb_xmm).wait_front(block.full_block_size());
-                cb_beta_obj.wait_front(block.full_block_size());
-                for (auto i : block.local()) {
-                    add_tiles_bcast_rows(cb_xmm, cb_beta, i, i, i);
-                }
-                tile_regs_commit();
-                cb_beta_obj.pop_front(block.full_block_size());
-                CircularBuffer(cb_xmm).pop_front(block.full_block_size());
-
-                pack_reconfig_data_format(cb_out);
-                cb_out_obj.reserve_back(block.full_block_size());
-                tile_regs_wait();
-                for (auto i : block.local()) {
-                    pack_tile(i, cb_out);
-                }
-                tile_regs_release();
-                cb_out_obj.push_back(block.full_block_size());
+                constexpr auto cb_beta_input = do_gamma ? cb_fusion : cb_xmm_id;
+                ckl::add<
+                    ckl::input(cb_beta_input, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                    ckl::input(cb_beta, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                    ckl::output(cb_out, ckl::OutputLifecycle::Chunked),
+                    ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
             }
         }
 
-        cb_xmm = get_named_compile_time_arg_val("cb_xmm");  // x minus mean
+        cb_xmm = cb_xmm_id;
         cb_ex2pe_obj.pop_front(onetile);
         cb_ex_obj.pop_front(onetile);
     }  // NCHt loop

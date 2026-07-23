@@ -20,8 +20,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
-#include "chain_llk.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 namespace ckl = compute_kernel_lib;
@@ -39,70 +39,51 @@ constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;
 
 // Layernorm-specific CBs
 constexpr uint32_t cb_x_minus_mean = tt::CBIndex::c_11;  // x - E(x)
-
 constexpr uint32_t cb_norm_x_input = cb_x_minus_mean;
 constexpr uint32_t stats_tile_stride = 2;
-
-struct x_minus_mean_node {
-    static constexpr LLK_Node node{
-        .llk_init = sub_bcast_cols_init_short,
-        .llk = FN_compute(sub_tiles_bcast_cols),
-        .CB_A = cb_inp,
-        .CB_B = cb_stats_reduced_id,
-        .CB_OUT = cb_x_minus_mean,
-        .fixed_CB_B_index = 0,
-        .fixed_dest_reg = 0xFFFF,
-        .debug_mode = 1,
-    };
-};
 constexpr uint32_t do_gamma = get_compile_time_arg_val(4);
 constexpr uint32_t do_beta = get_compile_time_arg_val(5);
 constexpr uint32_t normed_output_cb =
     do_gamma || do_beta ? cb_x_normed : cb_out;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
-struct normed_output_node {
-    static constexpr LLK_Node node{
-        .llk_init = mul_bcast_cols_init_short,
-        .llk = FN_compute(mul_tiles_bcast_cols),
-        .CB_A = cb_norm_x_input,
-        .CB_B = cb_recip_sqrt_var_id,
-        .CB_OUT = normed_output_cb,
-        .fixed_CB_B_index = 0,
-        .fixed_dest_reg = 0xFFFF,
-        .debug_mode = 1,
-    };
-};
 constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
-
 constexpr uint32_t Wt = get_compile_time_arg_val(0);
 constexpr uint32_t cb_length = get_compile_time_arg_val(7);
-constexpr uint32_t pop_gamma_beta = Wt == cb_length ? 0xDDDD : 0xFFFF;
 constexpr uint32_t cb_times_gamma_out = do_beta ? tt::CBIndex::c_13 : cb_out;
-struct gamma_optional_node {
-    static constexpr LLK_Node node{
-        .llk_init = mul_bcast_rows_init_short,
-        .llk = FN_compute(mul_tiles_bcast_rows),
-        .CB_A = cb_x_normed,
-        .CB_B = cb_gamma,
-        .CB_OUT = cb_times_gamma_out,
-        .fixed_CB_B_index = pop_gamma_beta,
-        .fixed_dest_reg = 0xFFFF,
-        .debug_mode = 1,
-    };
-};
-constexpr uint32_t cb_in_beta = do_gamma ? cb_times_gamma_out : normed_output_cb;
 constexpr uint32_t cb_beta = tt::CBIndex::c_3;
-struct beta_optional_node {
-    static constexpr LLK_Node node{
-        .llk_init = add_bcast_rows_init_short,
-        .llk = FN_compute(add_tiles_bcast_rows),
-        .CB_A = cb_in_beta,
-        .CB_B = cb_beta,
-        .CB_OUT = cb_out,
-        .fixed_CB_B_index = pop_gamma_beta,
-        .fixed_dest_reg = 0xFFFF,
-        .debug_mode = 1,
-    };
-};
+
+ALWI void normalize_chunk(const uint32_t num_tiles) {
+    const auto shape = ckl::EltwiseShape::tiles(num_tiles, ckl::DEST_AUTO_LIMIT);
+    constexpr auto gamma_beta_lifecycle =
+        Wt == cb_length ? ckl::InputLifecycle::HeldCumulative : ckl::InputLifecycle::Chunked;
+
+    ckl::sub<
+        ckl::input(cb_inp, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+        ckl::input(cb_stats_reduced_id, ckl::InputLifecycle::HeldBulk),
+        ckl::output(cb_x_minus_mean, ckl::OutputLifecycle::Chunked),
+        ckl::BroadcastDim::Col>(shape);
+
+    ckl::mul<
+        ckl::input(cb_norm_x_input, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+        ckl::input(cb_recip_sqrt_var_id, ckl::InputLifecycle::HeldBulk),
+        ckl::output(normed_output_cb, ckl::OutputLifecycle::Chunked),
+        ckl::BroadcastDim::Col>(shape);
+
+    if constexpr (do_gamma) {
+        ckl::mul<
+            ckl::input(cb_x_normed, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+            ckl::input(cb_gamma, gamma_beta_lifecycle, ckl::OperandKind::Block),
+            ckl::output(cb_times_gamma_out, ckl::OutputLifecycle::Chunked),
+            ckl::BroadcastDim::Row>(shape);
+    }
+    if constexpr (do_beta) {
+        constexpr uint32_t cb_beta_input = do_gamma ? cb_times_gamma_out : normed_output_cb;
+        ckl::add<
+            ckl::input(cb_beta_input, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+            ckl::input(cb_beta, gamma_beta_lifecycle, ckl::OperandKind::Block),
+            ckl::output(cb_out, ckl::OutputLifecycle::Chunked),
+            ckl::BroadcastDim::Row>(shape);
+    }
+}
 
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -134,10 +115,8 @@ void kernel_main() {
             norm::kernel_util::compute::RSqrtPolicy{false, 0});
         cb_stats_reduced.push_back(2);
         cb_stats_reduced.wait_front(2);
-        /*
-         * 1/sqrt(var + eps)
-         */
 
+        // 1/sqrt(var + eps)
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
@@ -153,19 +132,13 @@ void kernel_main() {
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(cb_recip_sqrt_var_id)>{});
 
-        if constexpr (do_gamma && do_beta) {
-            /*
-             * x_normed * gamma
-             */
-            chain_llk<Wt, cb_length, true>(
-                x_minus_mean_node{}, normed_output_node{}, gamma_optional_node{}, beta_optional_node{});
-
-        } else if (do_gamma) {
-            chain_llk<Wt, cb_length, true>(x_minus_mean_node{}, normed_output_node{}, gamma_optional_node{});
-        } else if (do_beta) {
-            chain_llk<Wt, cb_length, true>(x_minus_mean_node{}, normed_output_node{}, beta_optional_node{});
-        } else {
-            chain_llk<Wt, cb_length, true>(x_minus_mean_node{}, normed_output_node{});
+        constexpr uint32_t chunk_iterations = Wt / cb_length;
+        constexpr uint32_t leftover_tiles = Wt % cb_length;
+        for (uint32_t chunk = 0; chunk < chunk_iterations; ++chunk) {
+            normalize_chunk(cb_length);
+        }
+        if constexpr (leftover_tiles > 0) {
+            normalize_chunk(leftover_tiles);
         }
 
         // free up CBs

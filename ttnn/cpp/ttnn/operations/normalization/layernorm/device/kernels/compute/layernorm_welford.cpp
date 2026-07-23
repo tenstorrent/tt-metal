@@ -121,9 +121,9 @@ void kernel_main() {
                     cb_x_welford_obj.reserve_back(block.full_block_size());
                 }
                 ckl::add<
-                    ckl::input(cb_in, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::input(cb_inb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::output(cb_x, ckl::OutputLifecycle::Bulk),
+                    ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                    ckl::input(cb_inb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                    ckl::output(cb_x, ckl::OutputLifecycle::Chunked),
                     ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk));
                 if constexpr (welford_fp32_alias) {
                     cb_x_welford_obj.push_back(block.full_block_size());
@@ -262,13 +262,11 @@ void kernel_main() {
         cb_ex2_obj.push_back(onetile);
 
         cb_ex_obj.wait_front(onetile);
-        for (auto block : generic::blocks(Wt, blk)) {
-            ckl::sub<
-                ckl::input(cb_x, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(cb_ex, ckl::InputLifecycle::CallerManaged),
-                ckl::output(cb_xmm, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
-                ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk));
-        }
+        ckl::sub<
+            ckl::input(cb_x, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+            ckl::input(cb_ex, ckl::InputLifecycle::CallerManaged),
+            ckl::output(cb_xmm, ckl::OutputLifecycle::ReserveAllPushPerChunk, ckl::DataFormatReconfig::Disabled),
+            ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(total_buffer_size, /*block_size=*/blk));
         cb_ex_obj.pop_front(1);
         cb_xmm_obj.wait_front(total_buffer_size);
 
@@ -301,14 +299,14 @@ void kernel_main() {
                     ckl::input(cb_ex2pe, ckl::InputLifecycle::CallerManaged),
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::Col>{block.start(), 0u},
-                ckl::PackTile<ckl::output(cb_im_or_out, ckl::OutputLifecycle::Bulk)>{});
+                ckl::PackTile<ckl::output(cb_im_or_out, ckl::OutputLifecycle::Chunked)>{});
 
             if constexpr (do_gamma) {
                 constexpr uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
                     ckl::BinaryFpu<
-                        ckl::input(cb_fusion, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                        ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::input(
                             cb_gamma,
                             ckl::InputLifecycle::HeldBulk,
@@ -317,13 +315,13 @@ void kernel_main() {
                             ckl::TileOffset::Set),
                         ckl::BinaryFpuOp::Mul,
                         ckl::BroadcastDim::Row>{0u, block.start()},
-                    ckl::PackTile<ckl::output(cb_outg, ckl::OutputLifecycle::Bulk)>{});
+                    ckl::PackTile<ckl::output(cb_outg, ckl::OutputLifecycle::Chunked)>{});
             }
             if constexpr (do_beta) {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
                     ckl::BinaryFpu<
-                        ckl::input(cb_fusion, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                        ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::input(
                             cb_beta,
                             ckl::InputLifecycle::HeldBulk,
@@ -332,7 +330,7 @@ void kernel_main() {
                             ckl::TileOffset::Set),
                         ckl::BinaryFpuOp::Add,
                         ckl::BroadcastDim::Row>{0u, block.start()},
-                    ckl::PackTile<ckl::output(cb_out, ckl::OutputLifecycle::Bulk)>{});
+                    ckl::PackTile<ckl::output(cb_out, ckl::OutputLifecycle::Chunked)>{});
             }
         }
         cb_ex2pe_obj.pop_front(onetile);

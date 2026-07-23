@@ -81,21 +81,7 @@ void kernel_main() {
         ckl::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, stats_cb, reduce_scalar_cb, reduce_result_cb>(
             ckl::ReduceInputBlockShape::row(stats_tiles_cols));
 
-        /*
-         * 1/sqrt(mean_squared + eps)
-         * PARTIAL migration: BinaryFpu(Add) + Rsqrt + PackTile, all on the same CB
-         * (reduce_result_cb read for input, packed back as output).
-         *
-         * Reconfig audit: explicit reconfig_data_format + add_tiles_init -> Input.
-         * Explicit pack_reconfig_data_format -> Output.
-         * use_legacy_rsqrt forwarded via Legacy::On/Off.
-         *
-         * Lifecycle: reduce_result_cb InputLifecycle::Streaming (chain owns wait+pop); epsilon_cb
-         * InputLifecycle::CallerManaged (waited once at MAIN entry); reduce_result_cb output
-         * OutputLifecycle::Streaming (chain owns reserve+push). Same-CB in/out is fine — original
-         * popped the input tile then re-reserved+packed; chain emits the same
-         * sequence.
-         */
+        // 1/sqrt(mean_squared + eps)
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
