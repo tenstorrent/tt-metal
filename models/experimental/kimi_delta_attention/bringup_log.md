@@ -749,3 +749,38 @@
 - Report: `/tmp/kda_tp_layer_t640_fused_beta_sigmoid_cast_r10/reports/2026_07_23_13_06_00/ops_perf_results_2026_07_23_13_06_00.csv`; control: `/tmp/kda_tp_layer_t640_fused_softplus_mul_r10/reports/2026_07_23_12_57_57/ops_perf_results_2026_07_23_12_57_57.csv`.
 - Ten replays regressed median slowest-device span `658.960 -> 690.497 us` (4.79%) despite programs falling `30 -> 29` and active time remaining flat at `633.656 -> 633.211 us/device`. The approximately 31 us gap is serialized scheduling overhead not represented by summed kernel duration.
 - Restored unary sigmoid plus FP32 typecast. The beta head split still requires transpose because all heads occupy columns of the same source tile; removing it requires in-kernel column selection, not a flat-reader address change.
+
+
+### 2026-07-23 13:20:54 UTC — Measure TP=8 at 5120 tokens
+
+- “5k” is measured as `T=5120`, preserving the 32-token chunk boundary.
+- The first warm forward failed in native Conv1d before trace capture: static
+  circular buffers requested 2,470,848 B/core against 1,572,864 B available.
+  This proves a sequence-dependent L1 overflow and rules out trace-region,
+  DRAM-capacity, recurrence, and CCL hypotheses.
+- Reused the repository tested long-sequence Conv1d route: keep the known
+  L1-full path through `T=640`, then auto-slice width from DRAM. Eager and trace
+  smoke each passed 1/1 at `T=5120`.
+- Full functional command:
+  `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_kda_recurrent.py models/experimental/kimi_delta_attention/tests/test_reference.py models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 27/27 in 17.90 s.
+- Measurement command:
+  `PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 python_env/bin/python3 -m tracy -p -r -o /tmp/kda_tp_layer_t5120_dram_width_slice_r10 --check-exit-code --op-support-count 10000 -t 5007 -a device_kernel_duration -m "pytest models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s"`
+  -> PASS, 1/1.
+- Report:
+  `/tmp/kda_tp_layer_t5120_dram_width_slice_r10/reports/2026_07_23_13_20_54/ops_perf_results_2026_07_23_13_20_54.csv`.
+  After one warm replay, ten measured replays have a 3692.501 us median
+  slowest-device span, 3665.305 us corresponding active kernels, and 35
+  programs/device/layer.
+- The 540.752 GFLOP executed path sustains 146.45 TFLOP/s, 12.04% of the
+  eight-chip HiFi4 peak. Conservative factorized throughput is 128.27 TFLOP/s,
+  10.54%. The 60% aspiration remains unmet.
+- Prep/scan/fused-output medians are 335.954/677.885/1043.920 us. Prep and
+  gated-RMS each distribute 640 independent items across all 110 cores
+  (90 cores get six, 20 get five); scan keeps four V splits/head on 16 cores
+  and serially processes 160 chunks/core.
+- The FP32 output partial is 47.185920 MB/device and has 41.287680 MB
+  reduce-scatter critical-path traffic. Its 412.877 us lower bound versus
+  1043.920 us measured combined time gives 39.55% effective CCL utilization,
+  11.728 us short of the 40% target. Retain the 8x8 matmul/two-row Ring
+  placement and one worker/link.

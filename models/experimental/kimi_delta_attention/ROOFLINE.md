@@ -437,3 +437,47 @@ but regressed median span 658.960 -> 690.497 us (4.79%). Programs fell
 30 -> 29 and active time was flat at 633.656 -> 633.211 us, proving that an
 approximately 31 us serialized scheduling gap—not kernel work—caused the
 regression. Retain unary sigmoid followed by typecast.
+
+
+## Long-sequence TP=8 result (`T=5120`)
+
+Profile:
+`/tmp/kda_tp_layer_t5120_dram_width_slice_r10/reports/2026_07_23_13_20_54/ops_perf_results_2026_07_23_13_20_54.csv`.
+Here “5k” means 5120 tokens, preserving the 32-token chunk boundary. One warm
+trace replay preceded ten measured replays.
+
+The original forced-L1 convolution route failed before measurement: native
+Conv1d requested 2,470,848 B of circular buffers/core against 1,572,864 B
+available. This is a sequence-dependent L1 overflow, not trace-region or DRAM
+capacity. The repository Conv1d tests establish DRAM width slicing for this
+case. KDA now retains the measured L1-full route through `T=640` and uses
+auto-sized DRAM width slices above it.
+
+| Metric | `T=640` | `T=5120` | Scale |
+|---|---:|---:|---:|
+| Median slowest-device span | 658.960 us | 3692.501 us | 5.60x |
+| Median corresponding active kernels | 633.656 us | 3665.305 us | 5.78x |
+| Programs/device/layer | 30 | 35 | +5 |
+| Prep | 84.152 us | 335.954 us | 3.99x |
+| Scan | 97.314 us | 677.885 us | 6.97x |
+| Fused output matmul + reduce-scatter | 148.782 us | 1043.920 us | 7.02x |
+
+Executed online work scales linearly to 540.752 GFLOP and sustains
+146.45 TFLOP/s, or 12.04% of the eight-chip HiFi4 peak. The conservative
+factorized work is 473.640 GFLOP, 128.27 TFLOP/s, or 10.54%. Both improve over
+the `T=640` result because fixed launch and setup costs are amortized, but the
+60% compute aspiration remains unmet.
+
+The fused program reduces an FP32 `[1,1,5120,2304]` partial: 47.185920
+MB/device and 41.287680 MB on the eight-device reduce-scatter critical path.
+At 100 GB/s the lower bound is 412.877 us. The measured 1043.920 us combined
+matmul-plus-collective time reaches 39.55% effective CCL-roofline utilization.
+The 40% threshold is 1032.192 us, so the retained path misses by 11.728 us
+(1.14%). Because the measured program includes local matmul, this remains a
+conservative combined-program CCL metric.
+
+The long-sequence convolution adds two padded-slice, two slice-write, and an
+extra Conv1d/halo stage. Those slicing-specific stages total about 222 us
+of aggregate kernel time; recurrence and output collective dominate. The
+next long-context optimization should target the scan serial 160-chunk chain
+and the fused output program, not add convolution cores.
