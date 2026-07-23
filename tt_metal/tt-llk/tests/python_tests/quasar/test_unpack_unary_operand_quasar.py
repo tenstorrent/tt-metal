@@ -100,10 +100,7 @@ def generate_unpack_unary_operand_combinations(
                 continue
             # Same packer constraint as the correctness path: non-Fp32 input cannot
             # pack to Fp32 when dest is in 16-bit mode.
-            if (
-                in_fmt != DataFormat.Float32
-                and fmt.output_format == DataFormat.Float32
-            ):
+            if in_fmt != DataFormat.Float32 and fmt.output_format == DataFormat.Float32:
                 continue
             for dest_acc in (DestAccumulation.No,):
                 for dest_sync in dest_sync_modes:
