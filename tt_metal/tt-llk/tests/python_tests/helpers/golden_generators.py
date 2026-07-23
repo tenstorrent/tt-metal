@@ -4607,8 +4607,9 @@ class CausalConv1dSiluGolden:
     Per channel: new_cache = a*x + b*y + c*z + d*w (a 4-tap weighted sum where every tap
     weight is itself a per-channel tensor, not a scalar), then one output is
     SiLU(new_cache) and the other is the 3-wide causal-cache shift [new_cache, x, y].
-    Returned in the same order the kernel packs its four Res tiles: (new_cache, x, y,
-    silu_out).
+    Returns a single tensor holding the kernel's four Res tiles concatenated in pack
+    order (new_cache, x, y, silu_out) -- matching the single-tensor golden convention of
+    WhereGolden/TernarySFPUGolden so the compile-producer's dummy golden stays compatible.
     """
 
     def __call__(self, wa, wb, wc, wd, x, y, z, w, data_format):
@@ -4625,11 +4626,13 @@ class CausalConv1dSiluGolden:
         silu_out = new_cache * torch.sigmoid(new_cache)
 
         torch_format = format_dict[data_format]
-        return (
-            new_cache.to(torch_format).flatten(),
-            x.to(torch_format).flatten(),
-            y.to(torch_format).flatten(),
-            silu_out.to(torch_format).flatten(),
+        return torch.cat(
+            [
+                new_cache.to(torch_format).flatten(),
+                x.to(torch_format).flatten(),
+                y.to(torch_format).flatten(),
+                silu_out.to(torch_format).flatten(),
+            ]
         )
 
 

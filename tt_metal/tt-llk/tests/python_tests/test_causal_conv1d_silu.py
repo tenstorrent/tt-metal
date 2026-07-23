@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import CausalConv1dSiluGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
@@ -57,10 +58,7 @@ def _run_causal_conv1d_silu(formats, dest_acc):
     buffer_B = torch.cat([t.flatten() for t in (x, y, z, w)])
 
     golden_generator = get_golden_generator(CausalConv1dSiluGolden)
-    new_cache_g, x_g, y_g, silu_g = golden_generator(
-        wa, wb, wc, wd, x, y, z, w, formats.output_format
-    )
-    golden = torch.cat([new_cache_g, x_g, y_g, silu_g])
+    golden = golden_generator(wa, wb, wc, wd, x, y, z, w, formats.output_format)
 
     configuration = TestConfig(
         "sources/sfpu_causal_conv1d_silu_test.cpp",
@@ -97,6 +95,11 @@ def _run_causal_conv1d_silu(formats, dest_acc):
     ), "Assert against golden failed"
 
 
+# The C++ source includes ckernel_sfpu_causal_conv1d_silu.h, which only exists under
+# tt_llk_blackhole; TestConfig compiles against the active arch's include roots, so Wormhole and
+# Quasar would fail to compile rather than skip. This op is Blackhole-only for now.
+@skip_for_wormhole
+@skip_for_quasar
 @parametrize(
     formats=input_output_formats(
         [

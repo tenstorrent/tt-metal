@@ -26,10 +26,17 @@ std::uint32_t math_sync_tile_dst_index = 0;
 //   buffer_Res: [new_cache, x, y, silu_out] -- updated 3-wide cache (new_cache,x,y) + SiLU output
 //
 // DST tile indices 0-7 hold the 8 inputs (wa,wb,wc,wd,x,y,z,w). The two computed outputs reuse
-// wa's slot (0) and wb's slot (1) -- both fully consumed into registers by
-// ckernel_sfpu_causal_conv1d_silu.h before its first store -- so the whole op stays inside
-// DstSync::SyncHalf's proven 8-tile budget, matching the exact `dst_index_out == dst_index_in0`
-// reuse `calculate_addcmul()`/`calculate_where()` already rely on in production.
+// wa's slot (0) and wb's slot (1): ckernel_sfpu_causal_conv1d_silu.h stores each row only after
+// that row's inputs have been loaded into registers, so reusing a dead weight slot for an output
+// is safe -- the same `dst_index_out == dst_index_in0` reuse `calculate_addcmul()`/
+// `calculate_where()` already rely on in production.
+//
+// Sync mode: 8 simultaneously-live DST tiles only fit under DstSync::SyncHalf for 16-bit dest
+// (get_dest_max_tiles<SyncHalf, /*accum=*/false, Tile32x32>() == 8). With fp32 dest-accumulation
+// SyncHalf's budget halves to 4 (get_dest_max_tiles<SyncHalf, /*accum=*/true, ...>() == 4), so
+// tiles 4-7 would spill past the half. This test therefore runs under DstSync::SyncFull, whose
+// fp32 budget is exactly 8 (and 16 for bf16), covering both formats safely -- the same choice
+// reduce_sfpu_unary.cpp makes when an op needs more than SyncHalf's slots.
 //
 // NOTE: an earlier revision of this test failed against golden on ttsim (x/y passthrough, which
 // this op never touches, always matched; only the two computed outputs were wrong). The root
@@ -90,7 +97,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-static constexpr ckernel::DstSync DST_SYNC_MODE = ckernel::DstSync::SyncHalf;
+static constexpr ckernel::DstSync DST_SYNC_MODE = ckernel::DstSync::SyncFull;
 
 #include "llk_math_eltwise_unary_sfpu.h"
 
@@ -112,11 +119,17 @@ void run_kernel(RUNTIME_PARAMETERS)
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC_MODE, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             dst_index, MATH_FMT, MATH_FMT);
     }
-    // _llk_math_eltwise_unary_datacopy_uninit_() is a no-op (see llk_math_eltwise_unary_datacopy.h);
-    // the real "start a fresh sfpi dst_reg addressing pass at tile-0 base" reset -- with the
-    // required STALLWAIT for the preceding datacopies to drain -- is _llk_math_eltwise_sfpu_start_,
-    // the same primitive the generic ternary/unary SFPU dispatch (llk_math_eltwise_*_sfpu_params.h)
-    // uses ahead of any sfpi-based compute.
+    // SFPU init, mirroring what the generic unary/ternary SFPU dispatch runs ahead of any
+    // sfpi-based compute (llk_math_eltwise_*_sfpu_params.h -> _llk_math_eltwise_*_sfpu_init_):
+    // program the SFPU config register (SFPCONFIG) and the zero-increment ADDR_MOD_7 that this
+    // op's sfpi::dst_reg[] loads/stores address through. Left at reset defaults these happen to
+    // be zero on a fresh boot, so skipping this "works" once but is fragile on silicon and after
+    // any op that leaves ADDR_MOD_7/SFPCONFIG dirty.
+    _llk_math_eltwise_unary_sfpu_init_once_();
+
+    // _llk_math_eltwise_sfpu_start_ is NOT the SFPU init: it only sets the dst write address for
+    // tile 0 and issues the STALLWAIT that drains the preceding datacopies (see
+    // llk_math_eltwise_sfpu_common.h). It must run after the init above and before the compute.
     _llk_math_eltwise_sfpu_start_(0);
 
     // A 32x32 tile is 4 faces of 16x16; each call below advances only ITERATIONS=8 rows within
@@ -127,7 +140,7 @@ void run_kernel(RUNTIME_PARAMETERS)
 #pragma GCC unroll 4
     for (std::uint32_t face = 0; face < TILE_NUM_FACES; ++face)
     {
-        ckernel::sfpu::_calculate_causal_conv1d_silu_<false /*APPROXIMATION_MODE*/, is_fp32_dest_acc_en, kIterations>(
+        ckernel::sfpu::_calculate_causal_conv1d_silu_<true /*APPROXIMATION_MODE*/, is_fp32_dest_acc_en, kIterations>(
             0 /*wa*/,
             1 /*wb*/,
             2 /*wc*/,
@@ -159,17 +172,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(PACK_FMT, PACK_FMT, 16 * 16 * 4 /* tile_size */);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(PACK_FMT);
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
+    _llk_pack_dest_init_wrapper_<DstSync::SyncFull, is_fp32_dest_acc_en, PackMode::Default>();
 
     _llk_packer_wait_for_math_done_();
     // Res[0]=new_cache (dst 0, == wa's slot), Res[1]=x unchanged (dst 4), Res[2]=y unchanged
     // (dst 5), Res[3]=silu_out (dst 1, == wb's slot) -- matches the issue's outB=[new_cache,x,y],
-    // outA=SiLU(new_cache).
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[0]));
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(4, L1_ADDRESS(params.buffer_Res[1]));
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(5, L1_ADDRESS(params.buffer_Res[2]));
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(1, L1_ADDRESS(params.buffer_Res[3]));
-    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    // outA=SiLU(new_cache). SyncFull to match the math thread (see the sync-mode note up top).
+    _llk_pack_<DstSync::SyncFull, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[0]));
+    _llk_pack_<DstSync::SyncFull, is_fp32_dest_acc_en, ckernel::PackMode::Default>(4, L1_ADDRESS(params.buffer_Res[1]));
+    _llk_pack_<DstSync::SyncFull, is_fp32_dest_acc_en, ckernel::PackMode::Default>(5, L1_ADDRESS(params.buffer_Res[2]));
+    _llk_pack_<DstSync::SyncFull, is_fp32_dest_acc_en, ckernel::PackMode::Default>(1, L1_ADDRESS(params.buffer_Res[3]));
+    _llk_pack_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
 }
 
 #endif
