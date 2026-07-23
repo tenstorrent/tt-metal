@@ -106,7 +106,7 @@ tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-a
 tt_metal/api/tt-metalium/experimental/tensor/ @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass # tensor WIP
 tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/common/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tt_metal/common/broadcast_ring.hpp @yusufbashiTT @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass
+tt_metal/common/broadcast_ring.hpp @yusufbashiTT @mo-tenstorrent @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/core_descriptors/ @abhullar-tt @aliuTT @ubcheema @tenstorrent/codeowner-bypass
 tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass # this should go away
 tt_metal/detail/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass # this should go away
