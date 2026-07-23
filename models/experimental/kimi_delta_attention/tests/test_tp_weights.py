@@ -43,6 +43,7 @@ def test_tp_weight_layout(mesh_device: ttnn.MeshDevice) -> None:
 
     assert weights.tensor_parallel_size == 8
     input_shards = _host_shards(weights.input_projection)
+    input_prefill_shards = _host_shards(weights.input_projection_prefill)
     output_shards = _host_shards(weights.output_projection)
     tap_shards = _host_shards(weights.convolution_taps[0])
 
@@ -65,6 +66,22 @@ def test_tp_weight_layout(mesh_device: ttnn.MeshDevice) -> None:
             ),
             dim=0,
         ).T
+        output_gate_projection = state_dict["g_b_proj.weight"].reshape(
+            config.num_heads, config.head_v_dim, config.head_v_dim
+        )
+        output_gate_direct = torch.matmul(output_gate_projection, state_dict["g_a_proj.weight"]).reshape(
+            config.v_dim, config.hidden_size
+        )
+        value_start = device_index * config.head_v_dim
+        value_end = value_start + config.head_v_dim
+        expected_prefill_auxiliary = torch.cat(
+            (
+                state_dict["f_a_proj.weight"],
+                output_gate_direct[value_start:value_end],
+                state_dict["b_proj.weight"][device_index : device_index + 1],
+            ),
+            dim=0,
+        ).T
         expected_output = state_dict["o_proj.weight"][:, head_start:head_end].T
         expected_tap = torch.cat(
             (
@@ -75,7 +92,11 @@ def test_tp_weight_layout(mesh_device: ttnn.MeshDevice) -> None:
         ).reshape(1, 1, -1)
 
         expected_input = torch.cat((expected_qkv, expected_auxiliary), dim=-1)
+        expected_prefill_input = torch.cat((expected_qkv, expected_prefill_auxiliary), dim=-1)
         torch.testing.assert_close(input_shards[device_index], expected_input.to(torch.bfloat16), rtol=0, atol=0)
+        torch.testing.assert_close(
+            input_prefill_shards[device_index], expected_prefill_input.to(torch.bfloat16), rtol=0, atol=0
+        )
         torch.testing.assert_close(output_shards[device_index], expected_output.to(torch.bfloat16), rtol=0, atol=0)
         torch.testing.assert_close(tap_shards[device_index], expected_tap.to(torch.bfloat16), rtol=0, atol=0)
 

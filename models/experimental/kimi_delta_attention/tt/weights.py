@@ -18,9 +18,9 @@ from models.experimental.kimi_delta_attention.reference import validate_referenc
 @dataclass(frozen=True)
 class KDAWeights:
     input_projection: ttnn.Tensor
+    input_projection_prefill: ttnn.Tensor
     decay_output_projection: ttnn.Tensor
     output_gate_projection: ttnn.Tensor
-    output_gate_projection_batched: ttnn.Tensor
     output_projection: ttnn.Tensor
     decay_scale: ttnn.Tensor
     decay_bias: ttnn.Tensor
@@ -93,6 +93,22 @@ def load_kda_weights(
         state_dict["b_proj.weight"],
     ).T
 
+    output_gate_projection = state_dict["g_b_proj.weight"].reshape(
+        config.num_heads, config.head_v_dim, config.head_v_dim
+    )
+    output_gate_direct = torch.matmul(
+        output_gate_projection,
+        state_dict["g_a_proj.weight"],
+    ).reshape(config.v_dim, config.hidden_size)
+    input_projection_prefill = group_output_shards(
+        state_dict["q_proj.weight"],
+        state_dict["k_proj.weight"],
+        state_dict["v_proj.weight"],
+        state_dict["f_a_proj.weight"].repeat(tensor_parallel_size, 1),
+        output_gate_direct,
+        state_dict["b_proj.weight"],
+    ).T
+
     decay_scale = -state_dict["A_log"].float().exp()
     decay_bias = state_dict["dt_bias"].reshape(1, 1, config.num_heads, config.head_k_dim)
     decay_scale_flat = decay_scale.expand(-1, -1, -1, config.head_k_dim).reshape(1, 1, config.q_dim)
@@ -124,6 +140,7 @@ def load_kda_weights(
 
     return KDAWeights(
         input_projection=device_tensor(input_projection, "input_projection", shard_dim=-1),
+        input_projection_prefill=device_tensor(input_projection_prefill, "input_projection_prefill", shard_dim=-1),
         decay_output_projection=device_tensor(
             state_dict["f_b_proj.weight"].T,
             "decay_output_projection",
@@ -133,13 +150,6 @@ def load_kda_weights(
             state_dict["g_b_proj.weight"].T,
             "output_gate_projection",
             shard_dim=-1,
-        ),
-        output_gate_projection_batched=device_tensor(
-            state_dict["g_b_proj.weight"]
-            .reshape(config.num_heads, config.head_v_dim, config.head_v_dim)
-            .transpose(1, 2),
-            "output_gate_projection_batched",
-            shard_dim=0,
         ),
         output_projection=device_tensor(
             state_dict["o_proj.weight"].T,
