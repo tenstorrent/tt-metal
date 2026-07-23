@@ -37,8 +37,7 @@ SINGLE_CHIP_MESH_PARAMS = [
 
 
 def run_single_routed_expert(
-    mesh_device,
-    device_params,
+    device,
     allocated_tokens: int,
     emb_dim: int,
     hidden_dim: int,
@@ -64,7 +63,7 @@ def run_single_routed_expert(
     signpost(f"SingleRoutedExpert {allocated_tokens=} {active_tokens=} {emb_dim=} {hidden_dim=}")
 
     logger.debug(f"Testing single routed expert: {allocated_tokens=}, {active_tokens=}, {emb_dim=}, {hidden_dim=}")
-    logger.debug(f"Mesh: {mesh_device.shape}, num_devices={mesh_device.get_num_devices()}")
+    logger.debug(f"Mesh: {device.shape}, num_devices={device.get_num_devices()}")
 
     # Create random weights
     torch.manual_seed(42)
@@ -96,9 +95,9 @@ def run_single_routed_expert(
     # each variation drives its real device path.
     tt_input = ttnn.from_torch(
         torch_input,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         layout=ttnn.ROW_MAJOR_LAYOUT if x_row_major else ttnn.TILE_LAYOUT,
-        device=mesh_device,
+        device=device,
         dtype=ttnn.bfloat16 if x_row_major else ttnn.bfloat8_b,
     )
     logger.debug(f"TTNN input shape: {tt_input.shape}")
@@ -111,7 +110,7 @@ def run_single_routed_expert(
         return ttnn.from_torch(
             torch.tensor(values, dtype=torch.int32),
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
+            device=device,
             dtype=ttnn.uint32,
         )
 
@@ -122,7 +121,7 @@ def run_single_routed_expert(
     # Create TtRoutedExpert
     logger.debug("Creating TtRoutedExpert...")
     tt_expert = TtRoutedExpert(
-        mesh_device=mesh_device,
+        mesh_device=device,
         experts_per_chip=experts_per_chip,
         global_expert_idx_table=global_expert_idx_tt,
         emb_dim=emb_dim,
@@ -143,7 +142,7 @@ def run_single_routed_expert(
     # ConcatMeshToTensor(dim=0) with 1 slice is a no-op that returns the tensor.
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+        mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0),
     )
     logger.debug(f"TTNN output (torch) shape: {tt_output_torch.shape}")
     tt_output_active = tt_output_torch[:active_tokens]
@@ -241,13 +240,9 @@ def _isl_params(active_sweep, only_models=None):
 
 
 @pytest.mark.parametrize("allocated_tokens, active_tokens, emb_dim, hidden_dim", _isl_params(_ISL_FUNCTIONAL_SWEEP))
-@pytest.mark.parametrize(
-    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
-)
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 def test_single_routed_expert_functional(
-    mesh_device,
-    device_params,
+    device,
     allocated_tokens: int,
     active_tokens: int,
     emb_dim: int,
@@ -255,8 +250,7 @@ def test_single_routed_expert_functional(
     x_row_major: bool,
 ):
     run_single_routed_expert(
-        mesh_device,
-        device_params,
+        device,
         allocated_tokens,
         emb_dim,
         hidden_dim,
@@ -269,14 +263,10 @@ def test_single_routed_expert_functional(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
-@pytest.mark.parametrize(
-    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
-)
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
 def test_single_routed_expert_isl_sweep(
-    mesh_device,
-    device_params,
+    device,
     allocated_tokens: int,
     active_tokens: int,
     emb_dim: int,
@@ -284,8 +274,7 @@ def test_single_routed_expert_isl_sweep(
     x_row_major: bool,
 ):
     run_single_routed_expert(
-        mesh_device,
-        device_params,
+        device,
         allocated_tokens,
         emb_dim,
         hidden_dim,
