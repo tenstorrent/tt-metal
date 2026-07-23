@@ -211,15 +211,19 @@ class KimiDeltaAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_config,
         )
-        raw_gate = ttnn.reshape(raw_gate, (batch, sequence, config.num_heads, config.head_k_dim))
-        gate = ttnn.add(raw_gate, weights.decay_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        gate = ttnn.softplus(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        gate = ttnn.multiply(weights.decay_scale, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        assert self.recurrent_state is not None
         head_major = mode == "chunk" and sequence % ttnn.TILE_SIZE == 0
         if head_major:
-            gate = ttnn.reshape(gate, (batch, sequence, config.num_heads * config.head_k_dim))
+            decay_bias = weights.decay_bias_flat
+            decay_scale = weights.decay_scale_flat
+        else:
+            raw_gate = ttnn.reshape(raw_gate, (batch, sequence, config.num_heads, config.head_k_dim))
+            decay_bias = weights.decay_bias
+            decay_scale = weights.decay_scale
+        gate = ttnn.add(raw_gate, decay_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gate = ttnn.softplus(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gate = ttnn.multiply(decay_scale, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        assert self.recurrent_state is not None
         recurrence = fused_kda_recurrence if mode == "recurrent" else chunk_kda_recurrence
         output, new_recurrent_state = recurrence(q, k, v, gate, beta, self.recurrent_state)
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
