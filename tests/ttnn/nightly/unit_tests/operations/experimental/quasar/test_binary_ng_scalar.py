@@ -9,26 +9,32 @@ DM write-back D$ is incoherent with the TL1 the compute consumer reads); the rea
 the compute waits on in1 once and reuses tile index 0. This is the make-or-break coherence proof: a
 plain cacheable fill would leave the consumer reading zeros (out ~ a / ~ 0) or corrupt the neighbor DFB.
 
-add/subtract are bf16-FPU (this task). On Quasar the descriptor path is unsupported (throws), so a
-passing PCC here is itself proof the op ran on the v2/DFB tensor-scalar factory.
+add/subtract are bf16-FPU. The metal_v2 / DFB tensor-scalar path is arch-portable -- CB-backed on
+Wormhole/Blackhole, overlay-backed on Quasar -- and the is_scalar gate admits interleaved + sharded
+scalar ops to it with no arch check, so these tests run on all three. On Quasar the descriptor path
+throws (a pass implicitly proves v2 routing); on WH/BH the descriptor path also runs, so
+test_scalar_v2_routing_distinct_cache_entries asserts v2 routing EXPLICITLY via the scalar-in-hash cache
+signature (the metal_v2 compute_program_hash folds the packed scalar; the descriptor path and
+operation_attributes_t::to_hash() exclude it).
 
 Run on the Quasar simulator:
     unset TT_METAL_DISABLE_SFPLOADMACRO
     TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
         TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_scalar.py
+
+Run on real Wormhole / Blackhole (first-silicon validation of the DFB path):
+    pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_scalar.py
 """
 import pytest
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _on_quasar,
     _run_scalar,
     _height_sharded_config,
 )
 
 
-@pytest.mark.skipif(not _on_quasar(), reason="Quasar DFB path only")
 @pytest.mark.parametrize("op_name", ["add", "subtract"])
 @pytest.mark.parametrize("scalar", [3.5, -2.0])
 @pytest.mark.parametrize("shape", [[2, 1, 64, 128], [1, 1, 32, 32]])
@@ -40,7 +46,6 @@ def test_scalar_fpu_bf16_interleaved(device, op_name, scalar, shape):
     _run_scalar(device, op_name, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, shape, scalar)
 
 
-@pytest.mark.skipif(not _on_quasar(), reason="Quasar DFB path only")
 @pytest.mark.parametrize("op_name", ["multiply", "divide"])
 @pytest.mark.parametrize("scalar", [3.5, -2.0])
 @pytest.mark.parametrize("shape", [[2, 1, 64, 128]])
@@ -54,7 +59,6 @@ def test_scalar_sfpu_bf16_interleaved(device, op_name, scalar, shape):
     _run_scalar(device, op_name, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, shape, scalar)
 
 
-@pytest.mark.skipif(not _on_quasar(), reason="Quasar DFB path only")
 @pytest.mark.parametrize("op_name", ["add", "subtract", "multiply", "divide"])
 @pytest.mark.parametrize("scalar", [2.0, -3.5])
 def test_scalar_fp32_interleaved(device, op_name, scalar):
@@ -91,7 +95,6 @@ _SCALAR_LHS_SHAPE = [2, 1, 64, 128]
 _SCALAR_LHS_HEIGHT = _height_sharded_config([1 * 32, 4 * 32], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}))
 
 
-@pytest.mark.skipif(not _on_quasar(), reason="Quasar DFB path only")
 @pytest.mark.parametrize("op_name", ["add", "multiply"])
 def test_scalar_sharded_lhs(device, op_name):
     # Sharded LHS (+ sharded output, via _run_scalar's single mem_config) with a Python scalar RHS: proves
@@ -101,7 +104,6 @@ def test_scalar_sharded_lhs(device, op_name):
     _run_scalar(device, op_name, _SCALAR_LHS_HEIGHT, ttnn.bfloat16, _SCALAR_LHS_SHAPE, 3.5)
 
 
-@pytest.mark.skipif(not _on_quasar(), reason="Quasar DFB path only")
 @pytest.mark.parametrize("op_name", ["add", "multiply"])
 @pytest.mark.parametrize("lhs_act", [ttnn.UnaryOpType.RELU])
 def test_scalar_lhs_activation(device, op_name, lhs_act):
@@ -111,3 +113,37 @@ def test_scalar_lhs_activation(device, op_name, lhs_act):
     # test_binary_ng_no_bcast.py), and _run_scalar already threads lhs_act into both the ttnn call kwarg
     # (input_tensor_a_activations) and the torch golden (_ACT_GOLDEN[lhs_act](a)), mirroring _run/_run_mixed.
     _run_scalar(device, op_name, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, _SCALAR_LHS_SHAPE, 3.5, lhs_act=lhs_act)
+
+
+# --- Explicit metal_v2 / DFB routing proof (replaces the Quasar-only "descriptor throws" implicit proof) --
+def test_scalar_v2_routing_distinct_cache_entries(device):
+    # On WH/BH the descriptor path also runs, so a passing PCC no longer implies the op took the DFB
+    # (metal_v2) factory. Assert routing EXPLICITLY via the metal_v2 tensor-scalar cache signature: the v2
+    # compute_program_hash folds the packed scalar (binary_ng_device_operation.cpp, the `if (metal_v2)`
+    # branch), while operation_attributes_t::to_hash() and the descriptor path deliberately EXCLUDE it.
+    # So, on the SAME shape:
+    #   - repeating the SAME scalar   -> program-cache HIT   (+0 entries)
+    #   - a DISTINCT scalar           -> a distinct program  (+1 entry)
+    # A distinct scalar adding 0 entries would mean the op routed to the DESCRIPTOR path (scalar not
+    # hashed), not the DFB factory. Mirrors test_binary_ng_descriptor_cache_hit.py's cross-shape check
+    # and doubles as a regression guard on the scalar-in-hash fold. Requires the program cache (the
+    # `device` fixture enables it, as in test_binary_ng_resnet_add.py / test_binary_ng_descriptor_cache_hit.py).
+    shape = [1, 1, 32, 32]
+    mem = ttnn.DRAM_MEMORY_CONFIG
+
+    # Warm up the add-for-3.5 program (and any from_torch/to_torch machinery) so the deltas below isolate
+    # the binary program.
+    _run_scalar(device, "add", mem, ttnn.bfloat16, shape, 3.5)
+
+    n0 = device.num_program_cache_entries()
+    _run_scalar(device, "add", mem, ttnn.bfloat16, shape, 3.5)  # same shape + SAME scalar
+    n1 = device.num_program_cache_entries()
+    assert n1 - n0 == 0, f"same shape + same scalar must hit the program cache, got {n1 - n0} new entries"
+
+    _run_scalar(device, "add", mem, ttnn.bfloat16, shape, -2.0)  # same shape, DISTINCT scalar
+    n2 = device.num_program_cache_entries()
+    assert n2 - n1 == 1, (
+        f"a distinct scalar must create a distinct metal_v2 cache entry (the packed scalar is folded into "
+        f"the v2 program hash) -- got {n2 - n1} new; 0 would mean the op routed to the descriptor path, "
+        f"not the DFB/metal_v2 factory"
+    )
