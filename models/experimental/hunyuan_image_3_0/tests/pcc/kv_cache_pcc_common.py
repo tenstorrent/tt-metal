@@ -41,6 +41,7 @@ from models.experimental.hunyuan_image_3_0.ref.attention.mask import (
     to_additive,
 )
 from models.experimental.hunyuan_image_3_0.ref.attention.rms_norm import HunyuanRMSNorm
+from models.experimental.hunyuan_image_3_0.ref.attention.rope_2d import build_batch_2d_rope
 from models.experimental.hunyuan_image_3_0.ref.lm_head import lm_head_logits
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import HunyuanTokenizer, prepare_recaption_inputs
 from models.experimental.hunyuan_image_3_0.ref.weights import INSTRUCT_MODEL_DIR, load_tensors
@@ -48,8 +49,6 @@ from models.experimental.hunyuan_image_3_0.tests.pcc import i2i_helpers as h
 from models.experimental.hunyuan_image_3_0.tt.kv_cache import HunyuanTtKvCache
 from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
 from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
-
-from hunyuan_image_3.modeling_hunyuan_image_3 import build_batch_2d_rope
 
 PROMPT = "a cat on a mat"
 BOT_TASK = "recaption"
