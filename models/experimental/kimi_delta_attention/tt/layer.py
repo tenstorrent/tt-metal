@@ -239,7 +239,14 @@ class KimiDeltaAttention:
             dtype=ttnn.bfloat16,
             conv_config=conv_config,
             compute_config=self.compute_config,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=(
+                ttnn.Conv2dL1FullSliceConfig
+                if sequence <= 640
+                else ttnn.Conv2dSliceConfig(
+                    slice_type=ttnn.Conv2dDRAMSliceWidth,
+                    num_slices=0,
+                )
+            ),
             return_output_dim=False,
             return_weights_and_bias=False,
         )
