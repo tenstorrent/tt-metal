@@ -58,15 +58,15 @@ void bind_experimental_per_token_cast_back_operation(nb::module_& mod) {
         )doc",
         &per_token_cast_back,
         nb::arg("input_e4m3").noconvert(),
-        nb::arg("input_scale").noconvert() = std::nullopt,
+        nb::arg("input_scale") = nb::none(),
         nb::arg("output_dtype") = std::nullopt,
         nb::arg("memory_config") = std::nullopt,
         nb::arg("token_count_aware") = false,
-        nb::arg("expert_region_offsets").noconvert() = std::nullopt,
-        nb::arg("expert_token_counts").noconvert() = std::nullopt,
-        nb::arg("global_expert_idx_table").noconvert() = std::nullopt,
+        nb::arg("expert_region_offsets") = nb::none(),
+        nb::arg("expert_token_counts") = nb::none(),
+        nb::arg("global_expert_idx_table") = nb::none(),
         nb::arg("experts_per_chip") = 0,
-        nb::arg("metadata").noconvert() = std::nullopt);
+        nb::arg("metadata") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_back::detail
