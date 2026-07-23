@@ -198,17 +198,29 @@ AllGatherRegimeAMatmulAsyncDeviceOperation::invoke(
             // Transport mode captured here so it is part of the hashed attributes (distinct program per mode).
             .transport_mode =
                 [] {
+                    // 0 = ring_store_forward (neighbour store-and-forward relay: data 1 hop, credit wraps D-1;
+                    //     each relayed chunk is re-read from gather DRAM to forward it, keeping L1 bounded),
+                    // 1 = source_to_all (source unicasts its whole shard to every peer via hops 1..D-1),
+                    // 2 = full_wait (source_to_all + the in0 reader waits the COMPLETE gather before matmul).
+                    // Default = source_to_all: the interleaved A/B (tools/mm_sweep/agmm_ab.py) shows it is the
+                    // fastest correct transport at D=4/8; ring_store_forward is retained as a hashed mode. (A
+                    // "direct-slot" ring that forwards from the L1 recv slot was evaluated and rejected — it needs
+                    // O(bps) L1 slots for D>2, incompatible with bounded buffering.)
                     const char* t = std::getenv("TT_AGMM_TRANSPORT");
                     if (t == nullptr) {
-                        return 0u;  // default: ring_stream
+                        return 1u;  // default: source_to_all (fastest measured)
                     }
-                    if (std::string(t) == "source_to_all") {
+                    const std::string s(t);
+                    if (s == "ring_store_forward") {
+                        return 0u;
+                    }
+                    if (s == "source_to_all") {
                         return 1u;
                     }
-                    if (std::string(t) == "full_wait") {
+                    if (s == "full_wait") {
                         return 2u;
                     }
-                    return 0u;
+                    return 1u;
                 }(),
             .multi_device_global_semaphore = std::move(multi_device_global_semaphore),
             .barrier_semaphore = std::move(barrier_semaphore)},

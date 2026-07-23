@@ -105,7 +105,8 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
 
     const uint32_t D = op.d;
     TT_FATAL(D >= 2, "all_gather_regime_a_matmul_async fused path requires D>=2 (got D={})", D);
-    // Transport: 0 = ring_stream (production streaming ring), 1 = source_to_all, 2 = full_wait (diagnostics).
+    // Transport: 0 = ring_store_forward (neighbour store-and-forward relay kernel), 1 = source_to_all,
+    // 2 = full_wait.
     const bool ring_stream = (op.transport_mode == 0u);
     const bool full_gather_diag = (op.transport_mode == 2u);
     // ring_stream neighbor store-and-forward relay: general D over D-1 forward rounds (data 1 hop, credit wraps
@@ -583,6 +584,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back(blk_ready_addr(s));  // 20..20+D-1 blk_ready[s] GlobalSemaphore addresses
         }
         wa.push_back(device_index);  // 20+D this device's shard index (tags the local/remote overlap markers)
+        wa.push_back(cp.kk);         // 20+D+1 this core's Pk band index (per-band overlap markers)
         SetRuntimeArgs(program, wh, cores[i], wa);
 
         std::vector<uint32_t> ca = {0u, geo.M_block_capacity, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u};

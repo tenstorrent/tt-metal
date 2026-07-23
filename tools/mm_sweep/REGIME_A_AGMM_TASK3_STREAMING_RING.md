@@ -104,3 +104,35 @@ write per chunk, whereas source_to_all reads each shard once and fires D-1 non-b
 fabric-bandwidth-optimal (each link carries the gather once) but relay-core / DRAM round-trips dominate at these
 D. The gap narrows with D (1.55x@D4 -> 1.29x@D8). Task-4 perf levers: forward-from-L1 (drop the relay re-reads),
 multiple relay cores/links, and confirming the crossover at larger D.
+
+## Corrections (fix round)
+1. **Transport modes** are now `ring_store_forward` (0), `source_to_all` (1), `full_wait` (2), hashed via
+   `TT_AGMM_TRANSPORT`. **Default = `source_to_all`**, chosen on the A/B evidence (fastest correct transport at
+   D=4/8), NOT on the planned-hypothesis ring. `ring_store_forward` and `full_wait` remain as hashed A/B modes.
+2. **Per-band overlap markers** (`AGMM_MM_LOCAL`/`AGMM_MM_REMOTE`, `DeviceTimestampedData` tagged with the Pk band
+   `kk`; relay `AGMM_LOCAL_TX_DONE`/`AGMM_GATHER_DONE` zones). `agmm_markers.py` proves, D=4, all 4 devices x 11
+   runs, all True: `bands_with_local_begin_local_first` (every band that owns local K begins a local block before
+   its first remote block), `first_local_before_local_tx_done`, `first_remote_before_gather_done`. Bands that own
+   no local K for a device correctly emit no local marker and overlap their remote compute with the gather.
+3. **Local-first (point 1)** is thus PROVEN per band, not just via a single earliest-matmul marker. The regime_a
+   8-core ring gives each core exactly one own-shard DRAM read (the only gated read) consumed at ring step 0, and
+   the fabric gathers the local device-shard first (round 0), so each band's local-owning cores begin local
+   immediately. An explicit in-ring block reorder is unnecessary here and cannot help without changing the
+   physical PARETO ring (forbidden): for the pinned config W=1 (one kb-block per ring shard), so the consumption
+   order is fixed by ring position; the markers confirm no local-owning band ever begins remote-before-local.
+4. **Direct-slot forwarding experiment** (forward a received chunk straight from its L1 recv slot while the DRAM
+   store is in flight): implemented and REJECTED. For D>2 a relayed chunk is received a full shard-round (bps
+   blocks) before it would be forwarded, so holding it in L1 needs O(bps) slots — far exceeding the bounded
+   `num_slots` — and a sequential-round variant deadlocks (observed: D=2 hang). At D=2 it degenerates to the
+   reread path (own shard forwarded from the send slot; no relay hop). Per "adopt only if clean", it is NOT
+   adopted; `ring_store_forward` uses the gather-DRAM re-read, which is exactly the trade that keeps L1 bounded.
+5. **A/B with injector span** (`agmm_ab.py`, total + fabric-relay/injector span, per run/median/spread, PCC):
+   - D=4 32x6144x3072: ring total ~209-230us (inj ~164-175us), source_to_all ~134-141us (inj ~56-66us),
+     full_wait ~136-147us (inj ~56-66us). Ring ~1.5x slower; injector ~3x.
+   - D=8 32x6144x3072: ring total ~250-268us (inj ~196-222us), source_to_all ~188-210us (inj ~121-146us),
+     full_wait ~202-224us (inj ~121-146us). Ring ~1.25-1.3x slower.
+   All PCC 0.99999. The injector span confirms the relay-core serial DRAM round-trips (not fabric links) are the
+   ring's bottleneck.
+6. **Gates**: 23/23 tests pass (D=2/4/8 x {ring_store_forward, source_to_all}; Pk=1 & Pk>1; Ns>1; Sm>1;
+   auto-picker; fresh program + cached replay with fresh semaphores; forced wraparound (D-1)*bps >> num_slots=2).
+   Watcher-clean D=4 ring stress (zero watcher trips). No source_to_all regression.

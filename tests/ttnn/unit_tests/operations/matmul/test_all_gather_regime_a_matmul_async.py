@@ -118,13 +118,16 @@ def test_d1_matches_regime_a(device):
 # kernel-config buffer on this build — so we open the full mesh with a BARE fabric config, no watcher, and carve
 # a (1,D) submesh. D>2 uses a ring so the injector's forward hops 1..D-1 reach every other device.
 def _run_full_gather(
-    D, mesh_shape, fabric_config, topology, shape=(32, 6144, 3072), cfg_kwargs=None, transport="ring_stream"
+    D, mesh_shape, fabric_config, topology, shape=(32, 6144, 3072), cfg_kwargs=None, transport="ring_store_forward"
 ):
     import os
 
-    # transport_mode is read from TT_AGMM_TRANSPORT at the op's invoke() (hashed attribute). ring_stream is the
-    # production streaming ring (D=2 so far); source_to_all/full_wait are diagnostics valid for all D.
-    if transport == "ring_stream":
+    # transport_mode is read from TT_AGMM_TRANSPORT at the op's invoke() (hashed attribute):
+    #   ring_store_forward = neighbour store-and-forward relay (data 1 hop, credit wraps D-1; relayed chunks
+    #     re-read from gather DRAM to stay within bounded L1 slots),
+    #   source_to_all = whole-shard unicast to every peer, full_wait = source_to_all + wait-full-gather diagnostic.
+    # transport=None exercises the built-in default (source_to_all).
+    if transport is None:
         os.environ.pop("TT_AGMM_TRANSPORT", None)
     else:
         os.environ["TT_AGMM_TRANSPORT"] = transport
@@ -210,9 +213,12 @@ _PINNED = dict(k_slices=3, n_slices=1, m_slices=1, k_block_tiles=4, n_subblock_t
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="regime_a_matmul is Blackhole-only")
-def test_d2_full_gather_correctness():
-    # D=2 on a line: device 0 -> forward, device 1 -> backward (both one hop).
-    _run_full_gather(2, (8, 4), ttnn.FabricConfig.FABRIC_1D, ttnn.Topology.Linear, cfg_kwargs=_PINNED)
+@pytest.mark.parametrize("transport", ["ring_store_forward", "source_to_all"])
+def test_d2_full_gather_correctness(transport):
+    # D=2 on a line: device 0 -> forward, device 1 -> backward (both one hop). All transports must be correct.
+    _run_full_gather(
+        2, (8, 4), ttnn.FabricConfig.FABRIC_1D, ttnn.Topology.Linear, cfg_kwargs=_PINNED, transport=transport
+    )
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="regime_a_matmul is Blackhole-only")
@@ -220,12 +226,12 @@ def test_d2_full_gather_correctness():
     "D, mesh_shape",
     [(4, (8, 4)), (8, (4, 8))],  # (1,8) submesh needs axis-1 extent 8 -> open the mesh as (4,8)
 )
-def test_dn_full_gather_correctness_ring(D, mesh_shape):
-    # D>2: production streaming ring — neighbor store-and-forward over D-1 forward rounds (data 1 hop, credit
-    # wraps D-1 hops on the ring). Each shard travels one device hop at a time; every device forwards received
-    # chunks onward and publishes them progressively.
+@pytest.mark.parametrize("transport", ["ring_store_forward", "source_to_all"])
+def test_dn_full_gather_correctness_ring(D, mesh_shape, transport):
+    # D>2: store-and-forward ring (each shard travels one device hop at a time; relayed chunks re-read from gather
+    # DRAM to forward) vs the source_to_all whole-shard unicast (forward hops 1..D-1). All correct on every device.
     _run_full_gather(
-        D, mesh_shape, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.Topology.Ring, cfg_kwargs=_PINNED, transport="ring_stream"
+        D, mesh_shape, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.Topology.Ring, cfg_kwargs=_PINNED, transport=transport
     )
 
 
@@ -251,5 +257,5 @@ def test_d4_config_coverage(shape, cfg_kwargs, label):
         ttnn.Topology.Ring,
         shape=shape,
         cfg_kwargs=cfg_kwargs,
-        transport="ring_stream",
+        transport="ring_store_forward",
     )

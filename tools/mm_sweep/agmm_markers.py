@@ -3,16 +3,17 @@
 #
 # Task 3 overlap PROOF for all_gather_regime_a_matmul_async via custom device-profiler markers.
 #
-# The streaming-ring kernels emit four named zones (DeviceZoneScopedN), all on the same per-device cycle
-# timebase:
-#   AGMM_FIRST_LOCAL_MM   (in0 reader) - first step-0 in0 block whose gate passed for a LOCAL shard block
-#   AGMM_FIRST_REMOTE_MM  (in0 reader) - first step-0 in0 block whose gate passed for a REMOTE shard block
-#   AGMM_LOCAL_TX_DONE    (relay)      - this device's OWN shard's last block has been forwarded to the neighbour
-#   AGMM_GATHER_DONE      (relay)      - every shard's every block is now stored locally (all-gather complete)
+# The store-and-forward ring kernels emit markers on one per-device cycle timebase:
+#   AGMM_MM_LOCAL   (in0 reader, DeviceTimestampedData, data=Pk band kk) - first step-0 in0 block whose gate
+#                    passed for a LOCAL shard block, per band
+#   AGMM_MM_REMOTE  (in0 reader, DeviceTimestampedData, data=Pk band kk) - first step-0 REMOTE-shard block, per band
+#   AGMM_LOCAL_TX_DONE (relay, zone) - this device's OWN shard's last block has been forwarded to the neighbour
+#   AGMM_GATHER_DONE   (relay, zone) - every shard's every block is now stored locally (all-gather complete)
 #
-# Overlap is PROVEN, per device, per run, when:
-#   (a) first_local_mm  <  local_tx_done   (compute on local data starts before local-shard transmit finishes)
-#   (b) first_remote_mm <  gather_done      (compute on a remote shard starts before the full gather finishes)
+# Overlap is PROVEN, per device, per run, PER Pk BAND, when:
+#   - every band that owns local K begins a LOCAL block before its own first REMOTE block (local-first schedule),
+#   - first local math  <  local_tx_done   (local compute starts before local-shard transmit finishes),
+#   - first remote math <  gather_done      (remote compute starts before the full gather finishes).
 #
 # Usage:  TT_METAL_DEVICE_PROFILER=1 python tools/mm_sweep/agmm_markers.py <D> <mesh_y> <mesh_x> <M> <K> <N>
 
@@ -27,64 +28,97 @@ ROOT = os.environ.get("TT_METAL_HOME", os.getcwd())
 CSV = f"{ROOT}/generated/profiler/.logs/profile_log_device.csv"
 FREQ = 1.35e9
 
-MARKS = ("AGMM_FIRST_LOCAL_MM", "AGMM_FIRST_REMOTE_MM", "AGMM_LOCAL_TX_DONE", "AGMM_GATHER_DONE")
+RELAY = ("AGMM_LOCAL_TX_DONE", "AGMM_GATHER_DONE")  # DeviceZoneScopedN zones on the relay core
+BANDMK = ("AGMM_MM_LOCAL", "AGMM_MM_REMOTE")  # DeviceTimestampedData(name, band_kk) on the compute readers
 
 
-def parse_marker_starts():
-    """runs[(dev, zone)] -> sorted list of per-run earliest ZONE_START cycles across that device's cores."""
+def _zone_starts():
+    """(dev, zone) -> [earliest ZONE_START cycle per run across that device's cores]."""
     rows = list(csv.reader(open(CSV)))
-    # per (dev, core_x, core_y, zone): ordered ZONE_START cycles (one per program invocation).
     per_core = defaultdict(list)
     for row in rows[2:]:
-        if len(row) < 12:
+        if len(row) < 12 or row[11].strip() != "ZONE_START" or row[10].strip() not in RELAY:
             continue
-        zone = row[10].strip()
-        if zone not in MARKS or row[11].strip() != "ZONE_START":
-            continue
-        per_core[(row[0].strip(), row[1].strip(), row[2].strip(), zone)].append(int(row[5]))
-    # group by (dev, zone); align runs by invocation index and take the earliest core per run.
-    by_devzone = defaultdict(dict)  # (dev,zone) -> {(x,y): [cycles per run]}
-    for (dev, x, y, zone), cyc in per_core.items():
-        by_devzone[(dev, zone)][(x, y)] = cyc
+        per_core[(row[0].strip(), row[10].strip(), row[1].strip(), row[2].strip())].append(int(row[5]))
+    by = defaultdict(dict)
+    for (dev, zone, x, y), cyc in per_core.items():
+        by[(dev, zone)][(x, y)] = cyc
     out = {}
-    for (dev, zone), cores in by_devzone.items():
-        nruns = min(len(v) for v in cores.values())
-        out[(dev, zone)] = [min(v[r] for v in cores.values()) for r in range(nruns)]
+    for (dev, zone), cores in by.items():
+        n = min(len(v) for v in cores.values())
+        out[(dev, zone)] = [min(v[r] for v in cores.values()) for r in range(n)]
+    return out
+
+
+def _band_starts():
+    """(dev, band_kk, kind) -> [earliest TS_DATA cycle per run across that band's cores]; kind in {local,remote}."""
+    rows = list(csv.reader(open(CSV)))
+    per_core = defaultdict(list)  # (dev, kk, kind, x, y) -> [cycles per run]
+    for row in rows[2:]:
+        if len(row) < 12 or row[11].strip() != "TS_DATA" or row[10].strip() not in BANDMK:
+            continue
+        kind = "local" if row[10].strip() == "AGMM_MM_LOCAL" else "remote"
+        per_core[(row[0].strip(), int(row[6]), kind, row[1].strip(), row[2].strip())].append(int(row[5]))
+    by = defaultdict(dict)
+    for (dev, kk, kind, x, y), cyc in per_core.items():
+        by[(dev, kk, kind)][(x, y)] = cyc
+    out = {}
+    for (dev, kk, kind), cores in by.items():
+        n = min(len(v) for v in cores.values())
+        out[(dev, kk, kind)] = [min(v[r] for v in cores.values()) for r in range(n)]
     return out
 
 
 def prove_overlap():
-    starts = parse_marker_starts()
-    devs = sorted({d for (d, _z) in starts})
+    zones = _zone_starts()
+    bands = _band_starts()
+    devs = sorted({d for (d, _z) in zones} | {d for (d, _kk, _k) in bands})
     result = {}
     for dev in devs:
-        got = {m: starts.get((dev, m), []) for m in MARKS}
-        nruns = min((len(v) for v in got.values()), default=0)
-        if nruns == 0 or any(len(got[m]) == 0 for m in MARKS):
-            result[dev] = {"error": "missing markers", "counts": {m: len(got[m]) for m in MARKS}}
+        lt = zones.get((dev, "AGMM_LOCAL_TX_DONE"), [])
+        gd = zones.get((dev, "AGMM_GATHER_DONE"), [])
+        kks = sorted({kk for (d, kk, _k) in bands if d == dev})
+        counts = {"AGMM_LOCAL_TX_DONE": len(lt), "AGMM_GATHER_DONE": len(gd), "bands": kks}
+        if not lt or not gd or not kks:
+            result[dev] = {"error": "missing markers", "counts": counts}
             continue
-        run_ids = list(range(1, nruns)) if nruns > 1 else [0]  # drop warmup run 0 when possible
-        a_ok, b_ok, rows = True, True, []
-        for r in run_ids:
-            fl, fr = got["AGMM_FIRST_LOCAL_MM"][r], got["AGMM_FIRST_REMOTE_MM"][r]
-            lt, gd = got["AGMM_LOCAL_TX_DONE"][r], got["AGMM_GATHER_DONE"][r]
-            a = fl < lt
-            b = fr < gd
-            a_ok, b_ok = a_ok and a, b_ok and b
-            rows.append(
-                {
-                    "run": r,
-                    "first_local_before_local_tx_done": a,
-                    "first_remote_before_gather_done": b,
-                    "local_lead_us": round((lt - fl) / FREQ * 1e6, 3),
-                    "remote_lead_us": round((gd - fr) / FREQ * 1e6, 3),
-                }
-            )
+        # per-band local ordering + device overlap, scored per run (drop warmup run 0 when possible).
+        nruns = min([len(lt), len(gd)] + [len(v) for (d, kk, k), v in bands.items() if d == dev])
+        run_ids = list(range(1, nruns)) if nruns > 1 else [0]
+        per_band = {}
+        dev_a_ok, dev_b_ok = True, True  # a: first-local < local_tx_done ; b: first-remote < gather_done
+        band_local_first_ok = True  # every band with local ownership begins local before its own first remote
+        for kk in kks:
+            loc = bands.get((dev, kk, "local"), [])
+            rem = bands.get((dev, kk, "remote"), [])
+            has_local = len(loc) > 0
+            rows = []
+            for r in run_ids:
+                lv = loc[r] if r < len(loc) else None
+                rv = rem[r] if r < len(rem) else None
+                lb = (lv is not None) and (rv is None or lv <= rv)  # band begins local before remote
+                a = (lv is not None) and lv < lt[r]
+                b = (rv is not None) and rv < gd[r]
+                if has_local:
+                    band_local_first_ok = band_local_first_ok and lb
+                    dev_a_ok = dev_a_ok and a
+                if rv is not None:
+                    dev_b_ok = dev_b_ok and b
+                rows.append(
+                    {
+                        "run": r,
+                        "local_before_remote": lb if has_local else None,
+                        "first_local_before_local_tx_done": a if has_local else None,
+                        "first_remote_before_gather_done": b if rv is not None else None,
+                    }
+                )
+            per_band[kk] = {"has_local_ownership": has_local, "per_run": rows}
         result[dev] = {
             "runs_scored": len(run_ids),
-            "overlap_a_all_runs": a_ok,
-            "overlap_b_all_runs": b_ok,
-            "per_run": rows,
+            "bands_with_local_begin_local_first": band_local_first_ok,
+            "first_local_before_local_tx_done_all": dev_a_ok,
+            "first_remote_before_gather_done_all": dev_b_ok,
+            "per_band": per_band,
         }
     return result
 
@@ -98,6 +132,7 @@ def main():
         int(sys.argv[5]),
         int(sys.argv[6]),
     )
+    os.environ["TT_AGMM_TRANSPORT"] = "ring_store_forward"  # markers only exist in the store-and-forward relay
     try:
         os.remove(CSV)
     except OSError:

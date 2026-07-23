@@ -103,6 +103,38 @@ void kernel_main() {
         noc_async_atomic_barrier();
     };
 
+    // Fabric-forward one contiguous L1 chunk at `src` to the +1 neighbour's recv-slot at `dst_slot`, then
+    // signal recv_sem (ordered after the payload on the same channel).
+    auto forward_chunk = [&](uint32_t src, uint32_t dst_slot) {
+        for (uint32_t off = 0; off < chunk_bytes; off += packet_payload_bytes) {
+            const uint32_t sz = (chunk_bytes - off) < packet_payload_bytes ? (chunk_bytes - off) : packet_payload_bytes;
+            const uint64_t dst = get_noc_addr(inj_x, inj_y, dst_slot + off);
+            tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
+                &sender, pkt_hdr, src + off, sz, tt::tt_fabric::NocUnicastCommandHeader{dst}, (uint8_t)fwd_hops);
+            noc_async_writes_flushed();  // pkt_hdr + src are the send source; drain before they are reused
+        }
+        tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+            &sender,
+            pkt_hdr,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{get_noc_addr(inj_x, inj_y, recv_sem_addr), 1u, true},
+            (uint8_t)fwd_hops);
+        noc_async_writes_flushed();
+    };
+    auto return_credit = [&]() {  // free the -1 neighbour's send-slot (our recv-slot is drained)
+        tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+            &sender,
+            pkt_hdr,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{get_noc_addr(inj_x, inj_y, credit_sem_addr), 1u, true},
+            (uint8_t)credit_hops);
+        noc_async_writes_flushed();
+    };
+
+    // ===== store-and-forward relay: ONE interleaved send+drain per iteration (NOT sequential rounds, which
+    // deadlock past num_slots). The chunk forwarded in round r (shard d-r) is re-read from gather DRAM, where it
+    // was stored in round r-1. (A "direct-slot" variant that forwards the just-received chunk straight from its
+    // L1 recv slot was tried and rejected: relaying a chunk a full shard-round after receipt would need O(bps) L1
+    // slots — far more than the bounded num_slots — so it cannot honour forced wraparound; the DRAM re-read here
+    // is exactly the trade that keeps the relay bounded. See tools/mm_sweep/REGIME_A_AGMM_TASK3_STREAMING_RING.md.)
     const uint32_t total_iters = (D - 1u) * blocks_per_shard;  // D-1 forward rounds, blocks_per_shard chunks each
     for (uint32_t i = 0; i < total_iters; ++i) {
         const uint32_t r = i / blocks_per_shard;      // round 0..D-2
@@ -116,7 +148,6 @@ void kernel_main() {
         // ---- STEP 1: produce the send payload into the L1 send-slot ----
         uint32_t p = send_slot;
         if (r == 0u) {
-            // own shard: read block b from our in0 DRAM shard [M, K_local]
             for (uint32_t m = 0; m < Mt; ++m) {
                 for (uint32_t kt = 0; kt < kb; ++kt) {
                     noc_async_read_page(m * Kt_local + b * kb + kt, in0_acc, p);
@@ -124,7 +155,6 @@ void kernel_main() {
                 }
             }
             noc_async_read_barrier();
-            // store own block to local gather DRAM at shard d's global offset, then publish it (local-first)
             p = send_slot;
             for (uint32_t m = 0; m < Mt; ++m) {
                 for (uint32_t kt = 0; kt < kb; ++kt) {
@@ -135,7 +165,6 @@ void kernel_main() {
             noc_async_write_barrier();
             fanout(send_shard);  // send_shard == device_index in round 0
         } else {
-            // forward-from-DRAM: read shard send_shard block b out of local gather DRAM (stored in round r-1)
             for (uint32_t m = 0; m < Mt; ++m) {
                 for (uint32_t kt = 0; kt < kb; ++kt) {
                     noc_async_read_page(m * Kt_global + send_shard * Kt_local + b * kb + kt, gather_acc, p);
@@ -146,30 +175,16 @@ void kernel_main() {
         }
 
         // ---- STEP 2: forward the contiguous L1 block to the +1 neighbour's recv-slot ----
-        if (i >= num_slots) {  // reuse of the +1 neighbour's recv-slot: it must have freed chunk (i - num_slots)
+        if (i >= num_slots) {
             noc_semaphore_wait_min(credit_ptr, i - num_slots + 1u);
         }
-        for (uint32_t off = 0; off < chunk_bytes; off += packet_payload_bytes) {
-            const uint32_t sz = (chunk_bytes - off) < packet_payload_bytes ? (chunk_bytes - off) : packet_payload_bytes;
-            const uint64_t dst = get_noc_addr(inj_x, inj_y, recv_slot + off);
-            tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
-                &sender, pkt_hdr, send_slot + off, sz, tt::tt_fabric::NocUnicastCommandHeader{dst}, (uint8_t)fwd_hops);
-            noc_async_writes_flushed();  // pkt_hdr + send_slot are the send source; drain before the loop reuses them
-        }
-        // recv_sem AFTER payload flushed (same channel => ordered): tells the +1 neighbour chunk i has landed
-        tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
-            &sender,
-            pkt_hdr,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{get_noc_addr(inj_x, inj_y, recv_sem_addr), 1u, true},
-            (uint8_t)fwd_hops);
-        noc_async_writes_flushed();
-        // overlap marker: our OWN shard's last block (round 0, last block) has now been forwarded to the neighbour.
+        forward_chunk(send_slot, recv_slot);
         if (r == 0u && b + 1u == blocks_per_shard) {
-            DeviceZoneScopedN("AGMM_LOCAL_TX_DONE");
+            DeviceZoneScopedN("AGMM_LOCAL_TX_DONE");  // own shard's last block forwarded
         }
 
         // ---- STEP 3: drain the neighbour's chunk from our recv-slot ----
-        noc_semaphore_wait_min(recv_ptr, i + 1u);  // the -1 neighbour wrote chunk i into our recv-slot
+        noc_semaphore_wait_min(recv_ptr, i + 1u);
         p = recv_slot;
         for (uint32_t m = 0; m < Mt; ++m) {
             for (uint32_t kt = 0; kt < kb; ++kt) {
@@ -179,13 +194,7 @@ void kernel_main() {
         }
         noc_async_write_barrier();  // recv_shard's block stored -> safe to publish + return the credit
         fanout(recv_shard);
-        // return a credit to the -1 neighbour: our recv-slot for chunk i is now free (we forward from DRAM, not L1)
-        tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
-            &sender,
-            pkt_hdr,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{get_noc_addr(inj_x, inj_y, credit_sem_addr), 1u, true},
-            (uint8_t)credit_hops);
-        noc_async_writes_flushed();
+        return_credit();
     }
 
     noc_async_write_barrier();

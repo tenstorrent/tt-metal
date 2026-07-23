@@ -91,14 +91,18 @@ void kernel_main() {
     for (uint32_t s = 0; s < agmm_D; ++s) {
         agmm_blk_ready[s] = get_arg_val<uint32_t>(20u + s);
     }
-    // arg 20+D = this device's shard index; used only to tag the overlap profiler markers (local vs remote).
+    // arg 20+D = this device's shard index, arg 20+D+1 = this core's Pk band index; used only to tag the overlap
+    // profiler markers (local vs remote, per band).
     const uint32_t agmm_device_index = get_arg_val<uint32_t>(20u + agmm_D);
+    const uint32_t agmm_band_kk = get_arg_val<uint32_t>(21u + agmm_D);
 #endif
 #if defined(AGMM_STREAM)
-    // Overlap-proof markers (streaming ring only): the FIRST step-0 in0 block whose gate passes for a LOCAL shard
-    // (this device's own K-region) vs a REMOTE shard. Compared against the relay's AGMM_LOCAL_TX_DONE /
-    // AGMM_GATHER_DONE to prove first-local-matmul precedes local-shard-tx-done and first-remote-matmul precedes
-    // full-gather-done. Each core touches one shard at step 0, so a core emits at most one of the two.
+    // Per-band overlap-proof markers (streaming ring only). Each core in a Pk band consumes its OWN ring shard at
+    // step 0 (the only gated DRAM read); a core whose own shard is LOCAL to this device begins a local block
+    // immediately, one whose shard is REMOTE waits for the fabric. Emitting the first-local / first-remote step-0
+    // consume timestamp TAGGED WITH THE BAND (data = kk) lets the parser prove, PER BAND, that a band owning local
+    // K starts a local block before it stalls on a remote one, and (vs the relay's AGMM_LOCAL_TX_DONE /
+    // AGMM_GATHER_DONE) that first-local precedes local-shard-tx-done and first-remote precedes full-gather-done.
     bool agmm_marked_local = false;
     bool agmm_marked_remote = false;
 #endif
@@ -276,15 +280,16 @@ void kernel_main() {
                             const uint32_t agmm_bws = (agmm_kg - agmm_sh * agmm_Kt_local) / agmm_kb;
                             noc_semaphore_wait_min(
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(agmm_blk_ready[agmm_sh]), agmm_bws + 1u);
-                            // overlap markers: first LOCAL / first REMOTE step-0 block whose gate has just passed
+                            // per-band overlap markers: first LOCAL / first REMOTE step-0 block whose gate has just
+                            // passed on this core, tagged with the Pk band index (data = kk).
                             if (agmm_sh == agmm_device_index) {
                                 if (!agmm_marked_local) {
                                     agmm_marked_local = true;
-                                    DeviceZoneScopedN("AGMM_FIRST_LOCAL_MM");
+                                    DeviceTimestampedData("AGMM_MM_LOCAL", agmm_band_kk);
                                 }
                             } else if (!agmm_marked_remote) {
                                 agmm_marked_remote = true;
-                                DeviceZoneScopedN("AGMM_FIRST_REMOTE_MM");
+                                DeviceTimestampedData("AGMM_MM_REMOTE", agmm_band_kk);
                             }
 #endif
                             noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);

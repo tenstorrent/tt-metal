@@ -4,9 +4,9 @@
 # Task 3 A/B: interleaved multi-relaunch of the three Phase-A transports, reporting per-transport total
 # device-span (median + min-max) so drift is shared across all three arms.
 #
-#   ring_stream    - production DRAM-staged streaming ring (neighbor store-and-forward, per-kb-block overlap)
-#   source_to_all  - diagnostic: source unicasts its whole shard to every peer (old whole-shard path)
-#   full_wait      - diagnostic: source_to_all AND the in0 reader waits for the COMPLETE gather before matmul
+#   ring_store_forward - DRAM-staged store-and-forward ring (neighbor relay, per-kb-block overlap)
+#   source_to_all      - source unicasts its whole shard to every peer (default transport)
+#   full_wait          - diagnostic: source_to_all AND the in0 reader waits for the COMPLETE gather before matmul
 #
 # The three run interleaved within ONE process (transport_mode is a hashed op attribute read from
 # TT_AGMM_TRANSPORT at invoke(), so the program cache holds all three); run index r maps to ARMS[r % 3].
@@ -25,11 +25,13 @@ from collections import defaultdict
 ROOT = os.environ.get("TT_METAL_HOME", os.getcwd())
 CSV = f"{ROOT}/generated/profiler/.logs/profile_log_device.csv"
 FREQ = 1.35e9
-ARMS = ("ring_stream", "source_to_all", "full_wait")
+ARMS = ("ring_store_forward", "source_to_all", "full_wait")
 
 
-def parse_total_spans():
-    """runs[(dev)] -> list of total device-span (us) per invocation, in invocation order."""
+def parse_spans():
+    """dev -> {'total': [us per run], 'injector': [us per run]}, in invocation order.
+    total = max zone-end - min zone-start across the device's cores; injector = span of the fabric relay/injector
+    BRISC-KERNEL (the BRISC core with no TRISC-KERNEL = the relay core)."""
     rows = list(csv.reader(open(CSV)))
     ev = defaultdict(list)  # (dev,x,y,zone) -> [(marker, cycle), ...]
     for row in rows[2:]:
@@ -46,36 +48,61 @@ def parse_total_spans():
                 pairs[k].append((st, c))
                 st = None
     devs = sorted({k[0] for k in pairs})
+    trisc = defaultdict(set)  # dev -> {(x,y) with a TRISC-KERNEL = compute cores}
+    for dev, x, y, zone in pairs:
+        if zone == "TRISC-KERNEL":
+            trisc[dev].add((x, y))
     out = {}
     for dev in devs:
         nz = [len(pairs[k]) for k in pairs if k[0] == dev]
         nruns = min(nz) if nz else 0
-        spans = []
+        total, inj = [], []
         for r in range(nruns):
             ap = [pairs[k][r] for k in pairs if k[0] == dev and len(pairs[k]) > r]
-            spans.append((max(e for _, e in ap) - min(s for s, _ in ap)) / FREQ * 1e6)
-        out[dev] = spans
+            total.append((max(e for _, e in ap) - min(s for s, _ in ap)) / FREQ * 1e6)
+            ip = [
+                pairs[k][r]
+                for k in pairs
+                if k[0] == dev and k[3] == "BRISC-KERNEL" and (k[1], k[2]) not in trisc[dev] and len(pairs[k]) > r
+            ]
+            if ip:  # relay core = BRISC without a TRISC; the latest-ending such core is the fabric relay
+                s0, e0 = max(ip, key=lambda p: p[1])
+                inj.append((e0 - s0) / FREQ * 1e6)
+        out[dev] = {"total": total, "injector": inj}
     return out
 
 
 def summarize(rounds_warmup):
-    spans = parse_total_spans()
+    spans = parse_spans()
     result = {}
     for dev, sp in spans.items():
-        by_arm = defaultdict(list)
-        for r, v in enumerate(sp):
+        by_arm = defaultdict(lambda: {"total": [], "injector": []})
+        for r, v in enumerate(sp["total"]):
             if r // len(ARMS) < rounds_warmup:  # drop the first `rounds_warmup` full interleaved rounds
                 continue
-            by_arm[ARMS[r % len(ARMS)]].append(v)
+            arm = ARMS[r % len(ARMS)]
+            by_arm[arm]["total"].append(v)
+            if r < len(sp["injector"]):
+                by_arm[arm]["injector"].append(sp["injector"][r])
         arm_stat = {}
-        for arm, vs in by_arm.items():
-            if vs:
-                arm_stat[arm] = {
-                    "runs": len(vs),
-                    "median_us": round(statistics.median(vs), 2),
-                    "min_us": round(min(vs), 2),
-                    "max_us": round(max(vs), 2),
+        for arm, d in by_arm.items():
+            if d["total"]:
+                st = {
+                    "runs": len(d["total"]),
+                    "total_median_us": round(statistics.median(d["total"]), 2),
+                    "total_min_us": round(min(d["total"]), 2),
+                    "total_max_us": round(max(d["total"]), 2),
+                    "total_all_us": [round(x, 2) for x in d["total"]],
                 }
+                if d["injector"]:
+                    st.update(
+                        {
+                            "inj_median_us": round(statistics.median(d["injector"]), 2),
+                            "inj_min_us": round(min(d["injector"]), 2),
+                            "inj_max_us": round(max(d["injector"]), 2),
+                        }
+                    )
+                arm_stat[arm] = st
         result[dev] = arm_stat
     return result
 
