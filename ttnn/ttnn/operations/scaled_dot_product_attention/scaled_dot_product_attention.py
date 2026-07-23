@@ -104,6 +104,21 @@ PROPERTIES = {
 # ---------------------------------------------------------------------------
 
 
+def default_compute_kernel_config():
+    """Phase-1 default compute-kernel config (single source of truth).
+
+    HiFi2 + fp32 DEST accumulation + no approx. The golden harness (axes.py)
+    reads this to tag the ``fp32_dest_acc_en`` axis; the entry point resolves a
+    ``None`` ``compute_kernel_config`` through it. Never hardcode the default
+    elsewhere — if it moves, both the op and the tag follow together.
+    """
+    return ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        fp32_dest_acc_en=True,
+        math_approx_mode=False,
+    )
+
+
 def _mask_mode(attn_mask, is_causal):
     if is_causal:
         return "causal"
@@ -111,7 +126,7 @@ def _mask_mode(attn_mask, is_causal):
 
 
 def validate(query, key, value, *, attn_mask=None, is_causal=False, scale=None, fp32_dest_acc_en=True):
-    # ----- Tensor-shape contract (ValueError / RuntimeError) -----
+    # ----- Minimal rank guard (needed to build the axes dict / run taggers) -----
     q_shape = tuple(query.shape)
     k_shape = tuple(key.shape)
     v_shape = tuple(value.shape)
@@ -122,8 +137,40 @@ def validate(query, key, value, *, attn_mask=None, is_causal=False, scale=None, 
 
     b_q, h_q, s_q, d_q = q_shape
     b_k, h_kv, s_kv, d_k = k_shape
-    b_v, h_v, s_v, d_v = v_shape
 
+    # ----- Axis dict (mirrors the golden harness) -----
+    #
+    # The registry support gate takes precedence over the finer tensor-shape
+    # contract: a cell whose axes fall outside SUPPORTED (or match EXCLUSIONS)
+    # must raise the support-refusal (NotImplementedError) REGARDLESS of any
+    # accompanying shape issue. Running SUPPORTED/EXCLUSIONS *before* the
+    # detailed shape checks keeps an unsupported cell (e.g. fp32_dest_acc_en=
+    # False) from being misclassified when it also carries a shape-contract
+    # violation (e.g. a batch-broadcast mask) — the axis refusal wins.
+    inputs = (q_shape, k_shape, v_shape)
+    axes = {
+        "dtype": query.dtype,
+        "fp32_dest_acc_en": bool(fp32_dest_acc_en),
+        "layout": query.layout,
+        "mask_mode": _mask_mode(attn_mask, is_causal),
+        "scale_mode": "explicit" if scale is not None else "auto",
+    }
+    for axis_name, tagger in INPUT_TAGGERS.items():
+        axes[axis_name] = tagger(inputs, axes)
+
+    # 1. SUPPORTED — per-axis
+    for axis, allowed in SUPPORTED.items():
+        if axes[axis] not in allowed:
+            raise UnsupportedAxisValue(
+                f"scaled_dot_product_attention: {axis}={axes[axis]!r} not in SUPPORTED {allowed}"
+            )
+
+    # 2. EXCLUSIONS — cell-level
+    for exc in EXCLUSIONS:
+        if all(axes.get(k) == v for k, v in exc.items()):
+            raise ExcludedCell(f"scaled_dot_product_attention: unsupported combination (refinement candidate): {exc}")
+
+    # ----- Tensor-shape contract (ValueError) — only for SUPPORTED cells -----
     if d_q != d_k:
         raise ValueError(f"scaled_dot_product_attention: head_dim mismatch Q({d_q}) vs K({d_k})")
     if k_shape != v_shape:
@@ -148,30 +195,6 @@ def validate(query, key, value, *, attn_mask=None, is_causal=False, scale=None, 
             )
         if m_h not in (1, h_q):
             raise ValueError(f"scaled_dot_product_attention: attn_mask head dim {m_h} must be 1 or H_q({h_q})")
-
-    # ----- Axis dict (mirrors the golden harness) -----
-    inputs = (q_shape, k_shape, v_shape)
-    axes = {
-        "dtype": query.dtype,
-        "fp32_dest_acc_en": bool(fp32_dest_acc_en),
-        "layout": query.layout,
-        "mask_mode": _mask_mode(attn_mask, is_causal),
-        "scale_mode": "explicit" if scale is not None else "auto",
-    }
-    for axis_name, tagger in INPUT_TAGGERS.items():
-        axes[axis_name] = tagger(inputs, axes)
-
-    # 1. SUPPORTED — per-axis
-    for axis, allowed in SUPPORTED.items():
-        if axes[axis] not in allowed:
-            raise UnsupportedAxisValue(
-                f"scaled_dot_product_attention: {axis}={axes[axis]!r} not in SUPPORTED {allowed}"
-            )
-
-    # 2. EXCLUSIONS — cell-level
-    for exc in EXCLUSIONS:
-        if all(axes.get(k) == v for k, v in exc.items()):
-            raise ExcludedCell(f"scaled_dot_product_attention: unsupported combination (refinement candidate): {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -199,11 +222,7 @@ def scaled_dot_product_attention(
 
     # Resolve the compute-kernel config (Phase-1 default: HiFi2 + fp32 DEST acc).
     if compute_kernel_config is None:
-        compute_kernel_config = ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            fp32_dest_acc_en=True,
-            math_approx_mode=False,
-        )
+        compute_kernel_config = default_compute_kernel_config()
     fp32_dest_acc_en = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
 
     validate(

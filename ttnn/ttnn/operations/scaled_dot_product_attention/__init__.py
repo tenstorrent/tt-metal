@@ -6,6 +6,7 @@ from .scaled_dot_product_attention import (
     INPUT_TAGGERS,
     PROPERTIES,
     SUPPORTED,
+    default_compute_kernel_config,
     scaled_dot_product_attention,
     validate,
 )
@@ -17,4 +18,5 @@ __all__ = [
     "SUPPORTED",
     "EXCLUSIONS",
     "PROPERTIES",
+    "default_compute_kernel_config",
 ]
