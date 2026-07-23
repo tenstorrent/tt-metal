@@ -208,9 +208,20 @@ def run_recaption_on_device(
 
     tracer = getattr(forward_logits_fn, "tracer", None)
 
+    # TTFT/TPS: track wall-clock per AR forward step regardless of verbosity.
+    _step_times: list[float] = []
+    _ar_t0 = time.time()
+    _timed = forward_logits_fn
+
+    def forward_logits_fn(ids):
+        t_fwd = time.time()
+        logits = _timed(ids)
+        _step_times.append(time.time() - t_fwd)
+        return logits
+
     if os.environ.get("HY_RECAPTION_VERBOSE", "1") != "0":
         _step = [0]
-        _t0 = time.time()
+        _t0 = _ar_t0
         _orig = forward_logits_fn
 
         def forward_logits_fn(ids):
@@ -261,6 +272,19 @@ def run_recaption_on_device(
         print(f"[recaption] trace replay steps={tracer.replay_steps}", flush=True)
         tracer.release()
 
+    ttft = _step_times[0] if _step_times else None
+    decode_steps = _step_times[1:]
+    tps = (len(decode_steps) / sum(decode_steps)) if decode_steps and sum(decode_steps) > 0 else None
+    num_tokens = len(_step_times)
+    total_seconds = time.time() - _ar_t0
+    if ttft is not None:
+        tps_str = f"{tps:.2f} tok/s" if tps is not None else "n/a (only 1 token generated)"
+        print(
+            f"[recaption] AR decode: tokens={num_tokens} ttft={ttft:.2f}s tps={tps_str} "
+            f"end_of_cot={total_seconds:.2f}s",
+            flush=True,
+        )
+
     cot_text = decode_cot_text(tok, out["sequences"], input_length, bot_task, drop_think=drop_think)
     resolved_size: str | int = image_size
     if params.need_ratio:
@@ -273,4 +297,7 @@ def run_recaption_on_device(
         input_length=input_length,
         image_size=resolved_size,
         stage_params=params,
+        ttft=ttft,
+        tps=tps,
+        total_seconds=total_seconds,
     )
