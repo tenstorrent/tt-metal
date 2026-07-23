@@ -292,7 +292,6 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
     }
     if (op_name == "softplus") {
-        // Wide range: exercises the near-linear region, the polynomial region, and the a > 5 tail.
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-8.0f, 8.0f, numel, seed);
     }
     return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
