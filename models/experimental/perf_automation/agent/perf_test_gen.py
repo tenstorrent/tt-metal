@@ -742,8 +742,34 @@ def test_<task>_perf(device_params, device):
 """
 
 
+def _sibling_component_perf_ref(root, task: str) -> str:
+    """A WORKING per-component perf test for a sibling module of the SAME model, to anchor the
+    device-open / fixture / trace-capture / CCL handling the isolated generator otherwise has to guess.
+    Prefer one proven trace-capable (a .trace_caps.json sidecar next to it). Empty string if none."""
+    try:
+        pdir = root / "tests" / "pcc"
+        cands = [p for p in sorted(pdir.glob("test_*_perf.py")) if p.stem != "test_%s_perf" % task]
+        if not cands:
+            return ""
+        proven = [p for p in cands if (p.parent / (p.name + ".trace_caps.json")).is_file()]
+        ref = (proven or cands)[0]
+        body = ref.read_text(errors="ignore")[:8000]
+        return (
+            "\n\nREFERENCE — a WORKING per-component perf test for a SIBLING module of THIS SAME model, on "
+            "THIS board. Its device-open, `device_params`/`device` fixture params, trace-capture bracket, and "
+            "cross-device-collective handling are CORRECT for this model + hardware. COPY THOSE VERBATIM: use "
+            "the SAME `device_params` dict (do NOT add `fabric_config` and do NOT open a mesh — a component "
+            "runs single-device), and if this module calls a collective (all_reduce / all_gather) reuse the "
+            "sibling's single-device no-op wrapper for it. Change ONLY the module-specific build and the "
+            "`_forward()` body.\n"
+            "<working_sibling path='%s'>\n%s\n</working_sibling>" % (ref.name, body)
+        )
+    except Exception:
+        return ""
+
+
 def _component_prompt(
-    out_rel: str, src_label: str, demo_src: str, task: str, cache_instr: str = "", agentic: bool = False
+    out_rel: str, src_label: str, demo_src: str, task: str, cache_instr: str = "", agentic: bool = False, root=None
 ) -> str:
     """LLM prompt for a single-component perf test — the GENERAL path (covers any module/model type).
     Mirrors the demo path's proven 'lift the build+run from a complete source' recipe, but the source is
@@ -786,7 +812,7 @@ def _component_prompt(
         f"ttnn.to_torch / .item() / .cpu() / torch tensor construction / python shape or control-flow "
         f"decisions inside `_forward()`. If the module's own forward has an irreducible host op, print "
         f"TRACE_NOT_TRACE_CAPABLE=1 and skip the trace so it falls back to the eager number:\n"
-        f"{_SKELETON_COMPONENT}\n\n" + tail
+        f"{_SKELETON_COMPONENT}\n\n" + _sibling_component_perf_ref(root, task) + tail
     )
 
 
@@ -969,7 +995,7 @@ def generate_perf_test(
         "Respond with ONLY the complete python file content as your message text — no prose, no markdown fences."
     )
     if _component:
-        prompt = _component_prompt(out_rel, src_label, demo_src, task, cache_instr=_cache_instr)
+        prompt = _component_prompt(out_rel, src_label, demo_src, task, cache_instr=_cache_instr, root=root)
     if self_traced and not _component:
         prompt = _self_traced_prompt(out_rel, task, src_label, demo_src, self_traced)
     if (
@@ -981,7 +1007,9 @@ def generate_perf_test(
         try:
             from .perf_test_agent import build_component_perf_test
 
-            _body = _component_prompt(out_rel, src_label, demo_src, task, cache_instr=_cache_instr, agentic=True)
+            _body = _component_prompt(
+                out_rel, src_label, demo_src, task, cache_instr=_cache_instr, agentic=True, root=root
+            )
             if build_component_perf_test(root, task, out_rel, _body):
                 _verdict, _ = validate_generated_perf_test(out_path, task, component=True)
                 if _verdict in ("ok_2cq", "ok_1cq", "ok_marker", "skip"):
