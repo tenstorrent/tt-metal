@@ -325,3 +325,18 @@ across the mesh; precomposition adds 8.389 GFLOP of online work, for
 work for a conservative useful-throughput comparison gives 85.71 TFLOP/s or
 7.05%. Both remain far below the 60% aspiration. Prep, scan, and collective
 ownership are unchanged; this result does not motivate a core redistribution.
+
+
+## Rejected fused-collective alternatives
+
+BF16 fused-output partials halve the payload but are not numerically viable.
+The focused TP=8 hardware test produced output PCC 0.004862 against the torch
+reference (required 0.98). FP32 partials remain load-bearing.
+
+Two reduce-scatter workers/link require four CCL rows, so the paired experiment
+used an 8x6 matmul grid and rows 6-9 for CCL. Profile:
+`/tmp/kda_tp_layer_t640_rs_workers2_r10/reports/2026_07_23_12_21_02/ops_perf_results_2026_07_23_12_21_02.csv`.
+Against the matched one-worker 8x8 control, fused-program time regressed
+151.333 -> 166.374 us and whole-layer span regressed
+690.719 -> 706.001 us. The added fabric workers do not repay the lost matmul
+parallelism; retain one worker/link and the 8x8/row-8 placement.

@@ -192,6 +192,12 @@ direct gate columns in the fused input weight. It reduces traced latency
 whole heads and adding no communication. Retain the 80-core prep, 16-core scan,
 and 8x8 output/Ring reduce-scatter map.
 
+Two CCL alternatives are now rejected. BF16 output partials fail correctness
+at PCC 0.004862. Two workers/link require four CCL rows; the resulting
+8x6/four-row placement regresses fused time 151.333 -> 166.374 us and layer
+span 0.69072 -> 0.70600 ms. Keep FP32 partials, one worker/link, the 8x8
+matmul grid, and two CCL rows at offset `(0,8)`.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence
