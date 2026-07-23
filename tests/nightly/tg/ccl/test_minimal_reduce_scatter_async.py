@@ -281,16 +281,24 @@ def test_reduce_scatter_async_quad_host_mesh(
     indirect=["mesh_device", "device_params"],
     ids=["linear", "ring"],
 )
+@pytest.mark.parametrize("dim", [0, 3], ids=["dim0", "dim3"])
 @pytest.mark.parametrize("batch", [1, 2], ids=["batch1", "batch2"])
 @pytest.mark.parametrize("use_barrier_semaphore", [False, True], ids=["no_barrier_sem", "barrier_sem"])
 def test_reduce_scatter_on_reshaped_submesh(
-    *, mesh_device: ttnn.MeshDevice, topology: ttnn.Topology, cluster_axis, batch: int, use_barrier_semaphore: bool
+    *,
+    mesh_device: ttnn.MeshDevice,
+    topology: ttnn.Topology,
+    cluster_axis,
+    dim: int,
+    batch: int,
+    use_barrier_semaphore: bool,
 ) -> None:
     # Regression for the reduce-scatter device-side barriers on a submesh whose logical line is NOT a
-    # contiguous physical line: a 2x2 block reshaped to 1x4. Covers {Linear, Ring} x {single-batch,
-    # multi-batch}; batch>1 additionally exercises the ring per-batch (batch-ready) barrier. The
-    # barriers must use only 1-hop per-link handshakes (not a multi-hop line-multicast), otherwise the
-    # barrier_sem path hangs on this non-physical line.
+    # contiguous physical line: a 2x2 block reshaped to 1x4. Covers {Linear, Ring} x {dim0, dim3} x
+    # {single-batch, multi-batch}. batch>1 (and dim=0, whose scatter dim is >1) exercises the per-batch
+    # (batch-ready) barrier; dim=0 also routes through the dim_zero_* writers. The barriers must use only
+    # 1-hop per-link handshakes (not a multi-hop line-multicast), otherwise barrier_sem hangs on this
+    # non-physical line.
     submesh = mesh_device.create_submesh(ttnn.MeshShape(2, 2))
     submesh.reshape(ttnn.MeshShape(1, 4))
 
@@ -301,7 +309,12 @@ def test_reduce_scatter_on_reshaped_submesh(
     rs_semaphores = [ttnn.create_global_semaphore(submesh, ccl_cores, 0) for _ in range(3)]
     barrier_semaphore = ttnn.create_global_semaphore(submesh, ccl_cores, 0)
 
-    torch_x = torch.randn(batch, 1, 64, 1024, dtype=torch.bfloat16)
+    # dim=0 scatters the (batch) dim, which must be divisible by ring_size (4); making it >1 also
+    # exercises the per-batch barrier. dim=3 scatters the last dim (1024, already divisible by 4).
+    if dim == 0:
+        torch_x = torch.randn(4 * batch, 1, 64, 1024, dtype=torch.bfloat16)
+    else:
+        torch_x = torch.randn(batch, 1, 64, 1024, dtype=torch.bfloat16)
     x = ttnn.from_torch(
         torch_x,
         device=submesh,
@@ -315,7 +328,7 @@ def test_reduce_scatter_on_reshaped_submesh(
 
     tt_out = ttnn.experimental.reduce_scatter_minimal_async(
         x,
-        dim=3,
+        dim=dim,
         cluster_axis=cluster_axis,
         num_links=1,
         topology=topology,
@@ -326,10 +339,10 @@ def test_reduce_scatter_on_reshaped_submesh(
     ttnn.synchronize_device(submesh)
 
     # Input is replicated on every device, so reduce (sum over the cluster axis) == num_devices * torch_x,
-    # then scattered along dim=3. ConcatMeshToTensor reassembles the per-device shards into the full tensor.
+    # then scattered along `dim`. ConcatMeshToTensor reassembles the per-device shards into the full tensor.
     num_devices = submesh.get_num_devices()
-    torch_out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=3))
+    torch_out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=dim))
     golden = num_devices * torch_x.float()
 
     passing, pcc = comp_pcc(golden, torch_out)
-    assert passing, f"PCC failed (topology={topology}, cluster_axis={cluster_axis}, batch={batch}): {pcc}"
+    assert passing, f"PCC failed (topology={topology}, cluster_axis={cluster_axis}, dim={dim}, batch={batch}): {pcc}"
