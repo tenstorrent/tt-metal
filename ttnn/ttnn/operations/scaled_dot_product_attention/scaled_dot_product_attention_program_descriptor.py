@@ -451,6 +451,15 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
         pv_sb_h,
         pv_sb_w,
         int(os.environ.get("TTNN_SDPA_ABLATE", "0")),  # /perf-measure ablation gate (0=normal)
+        # Refinement 3d — SFPU-floor lever (perf): route the compute config's
+        # math_approx_mode into the SFPU exp datapath. The phase-4 exp over the whole
+        # score block is the single dominant SFPU cost (ablation: 21%+ of the wall; fast
+        # exp measured 1.44× — 10.25→7.12 ms — on the flagged shape). Fast exp trades a
+        # little accuracy (flagged PCC 0.9997→0.9967), so it fires ONLY when the user
+        # opts into approximate SFPU math via `math_approx_mode=True`. Default False →
+        # exact exp → byte-identical to prior phases (zero regression on the exact path,
+        # including the flagged perf test which requests math_approx_mode=False).
+        1 if bool(getattr(compute_kernel_config, "math_approx_mode", False)) else 0,
     ]
     # Rebuild the compute config with the dtype-correct fidelity (never pass a
     # HiFi4 + fp32-DEST + bf16 combo through — issue #38306). fp32_dest_acc_en

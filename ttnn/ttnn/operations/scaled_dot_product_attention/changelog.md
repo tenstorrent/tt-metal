@@ -334,3 +334,47 @@
   "surprise" was the decisive 81/19 SFPU/FPU split, which reframes the target for 3d.
 - Tests added: None (reused test_scaled_dot_product_attention_perf.py + the golden suite + unit dir as
   the regression net; the ablation gate is env-driven, no new test file).
+
+## Refinement 3d — Reduce the SFPU/softmax floor on the perf-flagged profile (3c's real lever) (partial)
+- Date: 2026-07-23
+- What was done: Ran the verifier-mandated `/perf-measure` ablation FIRST — extended the kept
+  `TTNN_SDPA_ABLATE` gate (0=normal, 1=matmul-stub) to a full cumulative decomposition of the 8.28 ms
+  SFPU floor (2=+reduce-stub, 3=+exp-stub; all inert/byte-identical at the default 0), then wired the
+  real lever the ablation points at.
+  * Decomposition on the flagged shape `(1,10,9472,128)` bf16 @ fp32_dest_acc_en=False, 110 cores:
+    baseline **10.25 ms** → matmul-stub **8.27 ms** (FPU matmuls **19%**) → +reduce-stub **7.45 ms**
+    (both reduces **0.83 ms = 8%**) → +exp-stub **5.29 ms** (phase-4 exp chain **2.15 ms = 21%**),
+    leaving a **5.29 ms = 52% pure dataflow/CB/NoC floor**.
+  * **All three named sub-levers refuted by measurement** (mirroring R3/3b/3c): (1) the reduces the
+    `reduce_accumulate`/`reduce_block` SFPU-finalize lever targets are only 8%, and only the SUM half is
+    eligible — `reduce`'s `AccumulateViaAdd` datapath is SUM-only and needs `BulkWaitBulkPop`/
+    `WaitAndPopPerTile`, both of which POP, but our rowsum runs `WaitUpfrontNoPop` because P must stay
+    resident for the PV matmul; (2) the softmax `sub→mul→exp` chain is **already DEST-fused** — the only
+    untapped `compute_fusion` seam is the l/O rescale epilogue, which is FPU-consumer (dest-reuse LOSES
+    there per master.md); (3) `sfpu_tile_scope`'s per-row targets (corr-exp, final recip) are ≤ sq=8
+    tiles → negligible on the wall.
+  * **The dominant SFPU cost is the exp op itself (21%+), and the real lever is fast approximate
+    `exp_tile`.** Templated `kv_step` on a compile-time `ExpMode` (`ckl::Approx`), routed BOTH exp sites
+    (phase-4 P-exp + phase-3 corr-exp) through it, added compute-kernel CT arg 14, and drove it from the
+    already-plumbed compute-config `math_approx_mode` (which the kernel previously ignored for the SFPU
+    exp). `if constexpr` dispatch → the unused instantiation is dead-code-eliminated.
+- Accuracy achieved: exact (math_approx_mode=False) PCC ≥ 0.997 (byte-identical to prior phases);
+  approx (math_approx_mode=True) PCC 0.9967 on the flagged shape.
+- Golden test progress: **1061 passed / 848 xfailed** (106.2 s, no hang) — identical to R2/3b/3c, zero
+  regression, zero xpass drift. Unit dir 82 passed / 8 skipped (added the approx perf case).
+- Perf result: **math_approx_mode=True → 10.25 → 7.11 ms = 1.44×** (util ~0.15 → ~0.22), DEVICE KERNEL
+  DURATION, 110 cores. **math_approx_mode=False (default) → 10.2476 ms, byte-identical** (zero
+  regression; the exact perf test at PCC 0.997 stays green).
+- Decision: **[~] partial**. The correct SFPU-floor lever landed and wins 1.44× (kept, not reverted), but
+  the win is realized only under `math_approx_mode=True` at PCC 0.9967; the flagged shape's contract
+  anchor is `math_approx_mode=False` @ PCC ≥ 0.997, which fast exp misses by 0.0003 (exp-polynomial
+  error, not storage width — fp32 intermediates can't recover it). Under the exact config the flagged
+  shape's SFPU floor is exp-dominated and irreducible without approximation. Per "keep a correct lever at
+  its trivial byte-identical default," the approx-exp lever + the ablation-decomposition gate are kept;
+  filed **Refinement 3d-a** naming the exact next lever (a PCC-recovery path — hybrid/near-range exact +
+  deep-negative fast exp, or a corrected fast-exp — so the 1.44× is realizable at the 0.997 contract).
+- Issues encountered: None beyond the measured PCC near-miss. Fast exp came up correct on the first run;
+  the only surprise was how large the exp cost is (a single template flip → 1.44×), which is exactly what
+  reframes the residual as exp-bound.
+- Tests added: test_scaled_dot_product_attention_perf.py extended with a `math_approx_mode` × `pcc_gate`
+  parametrization (exact @ 0.997, approx @ 0.996) — both green; documents the lever's measured tradeoff.

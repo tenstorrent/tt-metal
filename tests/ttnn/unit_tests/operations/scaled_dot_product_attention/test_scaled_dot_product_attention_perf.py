@@ -37,8 +37,21 @@ def _reference(Q, K, V, scale):
     )
 
 
+# Refinement 3d — SFPU-floor lever (fast approximate exp).
+# math_approx_mode=False: exact exp, the perf-1 contract anchor config (PCC >= 0.997,
+#   byte-identical to prior phases, baseline ~10.25 ms).
+# math_approx_mode=True: fast approximate exp_tile — the measured SFPU-floor lever.
+#   The phase-4 exp over the whole score block is the single dominant SFPU cost
+#   (ablation: matmuls 19% / reduces 8% / exp-chain 21% / dataflow floor 52%); fast
+#   exp measured ~1.44x on device (10.25 -> 7.12 ms). It trades a little accuracy, so
+#   the gate is relaxed to PCC >= 0.996 (approximate math is an explicit user opt-in).
+@pytest.mark.parametrize(
+    "math_approx_mode, pcc_gate",
+    [(False, 0.997), (True, 0.996)],
+    ids=["exact", "approx"],
+)
 @pytest.mark.parametrize("shape", [FLAG_SHAPE])
-def test_flagged_shape_perf(device, shape):
+def test_flagged_shape_perf(device, shape, math_approx_mode, pcc_gate):
     B, H, S, D = shape
     scale = 1.0 / math.sqrt(D)
 
@@ -53,11 +66,11 @@ def test_flagged_shape_perf(device, shape):
     cfg = ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         fp32_dest_acc_en=False,
-        math_approx_mode=False,
+        math_approx_mode=math_approx_mode,
     )
 
     out = scaled_dot_product_attention(q, k, v, compute_kernel_config=cfg)
     result = ttnn.to_torch(out).float()
 
     ref = _reference(torch_q, torch_k, torch_v, scale)
-    assert_with_pcc(ref, result, 0.997)
+    assert_with_pcc(ref, result, pcc_gate)

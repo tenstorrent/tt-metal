@@ -65,15 +65,25 @@ struct MMParams {
     uint32_t qk_in0_sb, qk_in1_sb, qk_sb_h, qk_sb_w;
     uint32_t pv_in0_sb, pv_in1_sb, pv_sb_h, pv_sb_w;
     uint32_t has_mask;
-    uint32_t ablate;  // /perf-measure ablation gate: 0=normal, 1=matmul-stub, 2=softmax-stub
+    uint32_t ablate;  // /perf-measure ablation gate: 0=normal, 1=matmul-stub, 2=+reduce-stub, 3=+exp/rescale-stub
 };
 
 // One online-softmax KV-step, updating the running (m,l,O) CBs in place.
+//
+// ExpMode (compile-time): the SFPU exp datapath. Approx::Exact is the numerically
+// exact exp_tile (byte-identical default). Approx::Fast selects the hardware's fast
+// approximate exp_tile — a large SFPU-floor reduction (Refinement 3d measured 1.44×
+// on the flagged shape: 10.25 → 7.12 ms, since the phase-4 exp over the whole score
+// block is the single dominant SFPU cost — 21%+ of the wall). Fast exp trades a small
+// amount of accuracy (flagged shape PCC 0.9997→0.9967), so it is gated on the compute
+// config's `math_approx_mode` (the user's explicit opt-in to approximate SFPU math);
+// the exact default is unchanged.
+template <ckl::Approx ExpMode>
 void kv_step(bool first, const MMParams& p) {
     const uint32_t sq = p.sq, sk = p.sk, dht = p.dht;
 
     // ---- 1. S = Q·Kᵀ  (Q retained across the KV loop; K popped) ----
-    if (p.ablate == 1) {
+    if (p.ablate >= 1) {
         // matmul-stub: keep CB scaffolding, no FPU work (measures SFPU/softmax floor).
         cb_wait_front(cb_q_in, sq * dht);  // Q present (retained; final pop frees it)
         cb_wait_front(cb_k_in, sk * dht);
@@ -104,13 +114,19 @@ void kv_step(bool first, const MMParams& p) {
     }
 
     // ---- 3. rowmax → m_cur ----
-    ckl::reduce<
-        ckernel::PoolType::MAX,
-        ckernel::ReduceDim::REDUCE_ROW,
-        cb_qk_scores,
-        cb_scaler_max,
-        cb_max_new,
-        ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::of(sq, sk));
+    if (p.ablate >= 2) {
+        // reduce-stub: keep CB scaffolding, no reduce (measures the two-reduce cost).
+        cb_reserve_back(cb_max_new, sq);
+        cb_push_back(cb_max_new, sq);
+    } else {
+        ckl::reduce<
+            ckernel::PoolType::MAX,
+            ckernel::ReduceDim::REDUCE_ROW,
+            cb_qk_scores,
+            cb_scaler_max,
+            cb_max_new,
+            ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::of(sq, sk));
+    }
 
     if (first) {
         // m_cur = rowmax → keep it directly in cb_max_cur (then copied into cb_m).
@@ -131,36 +147,47 @@ void kv_step(bool first, const MMParams& p) {
                 ckl::BinaryFpuOp::Sub,
                 ckl::BroadcastDim::None>{},
             ckl::MulUnary<>{p.scale_bits},
-            ckl::Exp<>{},
+            ckl::Exp<ExpMode>{},
             ckl::PackTile<ckl::output(cb_exp_max_diff)>{});
     }
 
     // ---- 4. P = exp((S - m_cur)·scale)  (in place, m_cur col-broadcast) ----
-    ckl::eltwise_chain(
-        ckl::EltwiseShape::grid(sq, sk),
-        ckl::BinaryFpu<
-            ckl::input(cb_qk_scores),
-            ckl::input(cb_max_cur, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Col),
-            ckl::BinaryFpuOp::Sub,
-            ckl::BroadcastDim::Col>{},
-        ckl::MulUnary<>{p.scale_bits},
-        ckl::Exp<>{},
-        ckl::PackTile<ckl::output(cb_qk_scores)>{});
+    // ablate>=3: skip the exp chain (the dominant per-KV-block SFPU op over the whole
+    // sq×sk score block) to isolate its cost. cb_qk_scores is left as the matmul-stub
+    // pushed it (sq·sk tiles present) and popped by the PV matmul-stub → CB balance holds.
+    if (p.ablate < 3) {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::grid(sq, sk),
+            ckl::BinaryFpu<
+                ckl::input(cb_qk_scores),
+                ckl::input(cb_max_cur, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Col),
+                ckl::BinaryFpuOp::Sub,
+                ckl::BroadcastDim::Col>{},
+            ckl::MulUnary<>{p.scale_bits},
+            ckl::Exp<ExpMode>{},
+            ckl::PackTile<ckl::output(cb_qk_scores)>{});
+    }
 
     // m_cur -> running max cb_m (cb_m was popped above for !first; freshly filled for first).
     ckl::copy<ckl::input(cb_max_cur), ckl::output(cb_m)>(ckl::EltwiseShape::tiles(sq));
 
     // ---- 5. rowsum(P) → cb_sum_new  (keep P resident for PV matmul) ----
-    ckl::reduce<
-        ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW,
-        cb_qk_scores,
-        cb_scaler_sum,
-        cb_sum_new,
-        ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::of(sq, sk));
+    if (p.ablate >= 2) {
+        // reduce-stub: keep CB scaffolding, no reduce.
+        cb_reserve_back(cb_sum_new, sq);
+        cb_push_back(cb_sum_new, sq);
+    } else {
+        ckl::reduce<
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_ROW,
+            cb_qk_scores,
+            cb_scaler_sum,
+            cb_sum_new,
+            ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::of(sq, sk));
+    }
 
     // ---- 6. O_new = P·V  (P popped, V popped) ----
-    if (p.ablate == 1) {
+    if (p.ablate >= 1) {
         // matmul-stub: keep CB scaffolding, no FPU work.
         cb_wait_front(cb_qk_scores, sq * sk);
         cb_pop_front(cb_qk_scores, sq * sk);
@@ -222,6 +249,9 @@ void kernel_main() {
     const uint32_t pv_sb_h = get_compile_time_arg_val(11);
     const uint32_t pv_sb_w = get_compile_time_arg_val(12);
     const uint32_t ablate = get_compile_time_arg_val(13);
+    // Refinement 3d — SFPU-floor lever: fast approximate exp_tile. Gated on the
+    // compute config's math_approx_mode (CT arg 14); default 0 = exact = byte-identical.
+    constexpr uint32_t exp_approx = get_compile_time_arg_val(14);
 
     const uint32_t q_count = get_arg_val<uint32_t>(0);
     const uint32_t k_num_chunks = get_arg_val<uint32_t>(1);
@@ -248,7 +278,13 @@ void kernel_main() {
 
     for (uint32_t qb = 0; qb < q_count; ++qb) {
         for (uint32_t k = 0; k < k_num_chunks; ++k) {
-            kv_step(k == 0, p);
+            // exp_approx is a compile-time constant → the unused kv_step instantiation
+            // is dead-code-eliminated (no binary bloat).
+            if constexpr (exp_approx != 0) {
+                kv_step<ckl::Approx::Fast>(k == 0, p);
+            } else {
+                kv_step<ckl::Approx::Exact>(k == 0, p);
+            }
         }
 
         // O /= l, per row (recip in place on cb_l, then O·(1/l) → cb_out).

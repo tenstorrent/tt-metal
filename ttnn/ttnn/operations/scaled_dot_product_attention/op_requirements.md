@@ -315,9 +315,40 @@ at the ceiling, so no further subblock headroom exists to fold in.
 (toward the 0.35 math-util floor) via phase overlap, golden suite green, PCC 0.997 holds, no
 regression on the config-spanning guard set.
 
-### [ ] Refinement 3d — Reduce the SFPU/softmax floor on the perf-flagged profile (3c's real lever)
+### [~] Refinement 3d — Reduce the SFPU/softmax floor on the perf-flagged profile (3c's real lever)
 
 **Type**: perf
+
+**Outcome (2026-07-23)**: Extended the kept `TTNN_SDPA_ABLATE` gate (as the verifier mandated)
+to a full cumulative decomposition of the 8.28 ms SFPU floor on the flagged shape
+`(1,10,9472,128)` bf16 @ `fp32_dest_acc_en=False`: baseline **10.25 ms** → matmul-stub **8.27 ms**
+(FPU matmuls 19%) → +reduce-stub **7.45 ms** (both reduces **0.83 ms = 8%**) → +exp-stub **5.29 ms**
+(phase-4 exp chain **2.15 ms = 21%**), leaving a **5.29 ms = 52% pure dataflow/CB/NoC floor**. This
+**refutes all three named sub-levers as material wins** (mirroring how R3/3b/3c each refuted their
+premise by measurement): the reduces the `reduce_accumulate`/`reduce_block` SFPU-finalize lever
+targets are only 8% (and only the SUM half is eligible — `AccumulateViaAdd` is SUM-only and needs a
+popping policy the no-pop `WaitUpfrontNoPop` P-resident contract forbids); the softmax `sub→mul→exp`
+chain is **already DEST-fused** (`compute_fusion` has no untapped SFPU seam — the l/O rescale epilogue
+is FPU-consumer, where dest-reuse *loses*); and the per-row SFPU ops `sfpu_tile_scope` would scope
+(corr-exp, recip) are ≤ sq=8 tiles → negligible on the wall.
+- **The actual dominant SFPU cost is the exp op itself (21%+), and the real SFPU-floor lever is fast
+  approximate `exp_tile`.** Wired the already-plumbed compute-config `math_approx_mode` knob (which the
+  kernel previously ignored for the SFPU exp) into the exp datapath via a compile-time `ExpMode`
+  template on `kv_step` + CT arg 14. Measured on device: **math_approx_mode=True → 10.25 → 7.11 ms =
+  1.44×** (util ~0.15 → ~0.22), PCC 0.9967. Default (math_approx_mode=False) → exact exp →
+  **byte-identical (10.2476 ms), zero regression.**
+- **Why [~] not [x]**: the win (1.44×) is realized only under `math_approx_mode=True` (PCC 0.9967). The
+  flagged shape's contract-anchor config is `math_approx_mode=False` @ **PCC ≥ 0.997** (the perf-1
+  anchor from R1); fast exp misses that soft gate by 0.0003, and the loss is the exp-approximation
+  polynomial error (not storage width — fp32 intermediates can't recover it). Under the exact config
+  the flagged shape's SFPU floor is **exp-dominated and irreducible without approximation**, so its
+  default device-ns stays byte-identical. Per "keep a correct lever at its trivial byte-identical
+  default": the approx-exp lever is landed and kept (winning 1.44× where the user opts into approximate
+  math), the ablation-decomposition gate is kept as reusable infra, nothing was reverted, and the exact
+  next lever is filed as **Refinement 3d-a** (a PCC-recovery path so the 1.44× is realizable at the
+  0.997 contract). Golden suite **1061 passed / 848 xfailed** (no hang); unit dir 82 passed / 8 skipped;
+  perf test exact PCC 0.997 + approx PCC 0.996 both green. 3b's (8,8) regime and R3's gated mcast path
+  untouched.
 
 **Goal**: Refinement 3c's mandated ablation proved on device that the flagged shape
 `(1,10,9472,128)` bf16 @ `fp32_dest_acc_en=False` is **SFPU/softmax-bound, not FPU/SFPU-balanced**:
@@ -351,6 +382,38 @@ reduces change the reduction datapath, so re-check PCC on every dtype in the gua
 **Done when**: measured device-ns improves materially below 3b's 10.24 ms on the flagged shape
 (toward the 0.35 math-util floor) via SFPU-floor reduction, golden suite green, PCC 0.997 holds, no
 regression on the config-spanning guard set.
+
+### [ ] Refinement 3d-a — PCC-recovery so fast-exp clears the 0.997 contract on the flagged shape
+
+**Type**: perf
+
+**Goal**: Refinement 3d landed the real SFPU-floor lever — fast approximate `exp_tile` (gated on
+`math_approx_mode`), measured **1.44× (10.25 → 7.11 ms)** on the flagged shape `(1,10,9472,128)` bf16 @
+`fp32_dest_acc_en=False`. It is parked at its byte-identical exact default because fast exp lands PCC
+**0.9967**, missing the flagged shape's contract-anchor soft gate (**PCC ≥ 0.997**, the perf-1 anchor)
+by 0.0003. Close that last 0.0003 so the 1.44× is realizable at `math_approx_mode=False` — the config
+the perf goal actually anchors on. The loss is the exp-polynomial error, NOT storage width (3d verified
+fp32 intermediates don't recover it), so the levers are precision-of-the-approximation ones:
+- **Hybrid exp**: fast exp only where the argument is well inside the polynomial's accurate range
+  (`(S − m)·scale` is always ≤ 0 for softmax; the error concentrates near 0 / the diagonal-dominant
+  tiles). Exact exp on the near-0 tiles, fast exp on the deep-negative tiles (which round toward 0
+  anyway) — measure the PCC/perf tradeoff per tile band.
+- **A single Newton/………correction step** on the fast-exp result, or the `exp_tile` built-in `scale_en`
+  path (folds the `MulUnary` scale into exp — also drops one SFPU op) with a higher-precision LUT.
+- Re-use the `TTNN_SDPA_ABLATE=3` exp-stub gate to re-attribute the exp cost after each precision
+  variant so you keep the 1.44× while walking PCC back above 0.997.
+
+**Verifier notes**: This is the precision-recovery half of 3d's SFPU-floor win — a scheme-change on the
+exp datapath, standing alone as a perf phase. If no variant clears 0.997 at a material fraction of the
+1.44×, the honest close is `[~]`: keep the `math_approx_mode`-gated fast-exp lever (correct, 1.44× for
+approx-mode users) and record that the exact-config flagged shape is exp-bound and irreducible without
+approximation (the SFPU floor's dominant cost is the exact exp polynomial). Keep 3b's (8,8) regime,
+R3's gated mcast, and 3d's approx-exp lever + ablation gate untouched.
+
+**Done when**: measured device-ns improves materially below 10.24 ms on the flagged shape **at
+`math_approx_mode=False` with PCC ≥ 0.997**, golden suite green, no regression on the config-spanning
+guard set — OR the exp-bound-without-approximation conclusion is recorded at depth and the
+`math_approx_mode`-gated 1.44× lever is kept.
 
 ### [ ] Refinement 4 — Causal masking (mask_mode=causal)
 
