@@ -136,3 +136,12 @@
 {"source":"tt-probe","pid":508171,"started_at_ms":1784780983138,"wait_ms":204,"run_ms":49013,"test_path":"rms_norm","exit_code":0}
 {"source":"tt-probe","pid":508650,"started_at_ms":1784781052746,"wait_ms":194,"run_ms":52410,"test_path":"rms_norm","exit_code":1}
 {"source":"tt-probe","pid":511015,"started_at_ms":1784781734096,"wait_ms":207,"run_ms":64574,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":513637,"started_at_ms":1784781839938,"wait_ms":2,"run_ms":52561,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":523576,"started_at_ms":1784782096231,"wait_ms":6,"run_ms":92474,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":525047,"started_at_ms":1784782206437,"wait_ms":3,"run_ms":29655,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":525629,"started_at_ms":1784782262497,"wait_ms":2,"run_ms":37509,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op_loose","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":526216,"started_at_ms":1784782300016,"wait_ms":3,"run_ms":51518,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":527580,"started_at_ms":1784782368704,"wait_ms":2,"run_ms":94023,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":530340,"started_at_ms":1784782579280,"wait_ms":3,"run_ms":18992,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_rm_sharded.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":530763,"started_at_ms":1784782607245,"wait_ms":2,"run_ms":19605,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_rm_sharded.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":531207,"started_at_ms":1784782626860,"wait_ms":3,"run_ms":29201,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}

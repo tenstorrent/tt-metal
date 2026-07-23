@@ -259,12 +259,36 @@ single partial-holder) cannot consume the shard. The two
 
 ---
 
-### [ ] Refinement 4b — RM-input sharded: per-core arbitrary-width tilize sub-scheme
+### [x] Refinement 4b — RM-input sharded: per-core arbitrary-width tilize sub-scheme
 
 **Goal**: complete R4a's deferred corner — **RM input + WIDTH/BLOCK sharded** — by
 handling a resident RM shard whose per-core width is an arbitrary multiple of the RM
 granule (8/4 elements), NOT a whole number of 32-wide tiles. Remove the two
 `{layout: ROW_MAJOR, memory_layout: *_SHARDED}` EXCLUSIONS with their cells passing.
+
+**Landed (full `[x]`)**: RM-input WIDTH/BLOCK sharded lands via an `IS_RM` CT flag on the
+three R4 xcore kernels (no forked files), reusing the cross-core combine + transport
+unchanged. The sub-scheme:
+- **Phase-align to the global tile grid** — a core's slice starts at element column
+  `w_offset` (sub-tile). `g0 = w_offset//32` is the first global tile; `phase = w_offset%32`
+  the leading offset. The reader **loopback-repacks** the resident RM shard sticks
+  (`cb_descriptor_from_sharded_tensor` alias → local NoC loopback, no remote re-fetch)
+  into tile-padded `cb_x_sticks` at column `phase`; compute `tilize`s `ceil((phase+sw)/32)`
+  padded tiles.
+- **Per-core partial scaler** — leading `[0,phase)` columns stay 0 (contribute 0 to the
+  SUM reduce), and EVERY core masks its trailing `valid_end%32` lanes via
+  `ReducePartialScaler::last_tile_at(1)` (reader emits full+partial scaler tiles). The
+  associative cross-core sum stays correct.
+- **Aligned gamma** — the gamma W-slice is read at the tile-ALIGNED global column
+  `(g0+wt)*32` (a sub-tile DRAM offset faults), matching x's phase-aligned tiles; gamma
+  applies to the `vwt` valid tiles, copy elsewhere.
+- **Untilize back** — compute `untilize`s `cb_out`; the writer loopback-writes the valid
+  columns `[phase, phase+valid_cols)` into the resident RM output shard.
+Both `{layout: ROW_MAJOR, memory_layout: *_SHARDED}` EXCLUSIONS removed. Probes 13/13
+PCC ≥ 0.99997 (WIDTH/BLOCK × gamma/no-gamma × non-aligned H/W × wide (per_w_t=2) × fp32);
+golden `test_op` sharded slice across ~20 shapes: 0 failed / 0 xpassed, RM-input cells
+xfail→pass (only `{f32, acc=False}` stays xfail via the other EXCLUSION); loose 18/1
+(HEIGHT=R5); unit dir 345 pass / 32 skip; interleaved + TILE-sharded unregressed.
 
 **Verifier notes**: this is a **sub-scheme change**, not the RM-gamma tilize knob-turn
 (R4a shipped that). The exact levers, in one place:

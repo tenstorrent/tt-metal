@@ -315,3 +315,59 @@
 - Tests added: probes 017 (RM-gamma sharded) and 018 (logical W-split decode/wide/
   R2/non-aligned/gamma variants) in `tests/ttnn/unit_tests/operations/rms_norm/probes/`.
   Unit dir unchanged: 345 passed / 32 skipped (no regression).
+
+## Refinement 4b — RM-input sharded: per-core arbitrary-width tilize sub-scheme
+- Date: 2026-07-23
+- Type: scheme-completion (full — `[x]`).
+- What was done: completed R4a's last deferred corner — **RM input + WIDTH/BLOCK
+  sharded** — where a core's resident RM W-slice is `sw` elements wide (a multiple of
+  the RM granule 8/4, generally sub-tile), so core boundaries straddle 32-wide tile
+  columns. Landed as an `IS_RM` CT flag on the three R4 xcore kernels (no forked files),
+  reusing the cross-core combine + transport unchanged.
+  - **Reuse**: the R4 xcore cross-core combine (all-unicast gather → master fold
+    (+eps, rsqrt) → broadcast `1/RMS`) + its 3-semaphore transport + topology
+    derivation; the interleaved RM tilize/untilize dataflow pattern; per-core partial
+    scaler (`prepare_reduce_scaler(..., partial_w)` + `ReducePartialScaler::last_tile_at(1)`).
+  - **Added — phase-aligned sub-scheme (all in the shared `_assemble_xcore_kernels`
+    + `IS_RM` kernel branches)**:
+    * Host geometry: per core, `g0 = w_offset//32` (first global tile), `phase =
+      w_offset%32` (leading offset), `valid_cols = clamp(W - w_offset, 0, sw)`,
+      `valid_end = phase + valid_cols`, `vwt = ceil(valid_end/32)` (reduce tiles),
+      `reduce_partial_w = valid_end%32`; the uniform tilize width `per_w_t =
+      max_cores ceil((phase+sw)/32)`. `Ht_local = ceil(sh/32)` (RM shards H-non-align);
+      per-core `valid_rows_total` clamps H tensor-padding out of the writeback (BLOCK
+      splits H too). WIDTH = one all-core group; BLOCK = one group per grid row.
+    * Reader (`IS_RM`): zeros `cb_x_sticks` once, then **loopback-repacks** the resident
+      RM shard (`cb_shard_in` = `cb_descriptor_from_sharded_tensor` alias; local NoC
+      loopback via `my_x/my_y[noc_index]`, no remote re-fetch) into tile-padded
+      `cb_x_sticks` at column `phase`, reading only `valid_cols` per stick (shard/tensor
+      padding never enters the reduce). gamma read at the tile-ALIGNED column
+      `(g0+wt)*32` (a sub-tile DRAM byte offset faults — the first bug found). Emits
+      full(tile0)+partial(tile1) scaler tiles.
+    * Compute (`IS_RM`): per tile-row `tilize<per_w_t>(cb_x_sticks→cb_x_in)`; pass-1
+      squares/reduces `vwt` tiles (leading `[0,phase)`=0 → 0 contribution, trailing
+      masked by the per-core partial scaler); same master fold; pass-2 `x·rstd·gamma`
+      (gamma on the `vwt` valid tiles, copy elsewhere) → `cb_out`; `untilize<per_w_t>`
+      → `cb_out_sticks`.
+    * Writer (`IS_RM`): after each tile-row's stat round, loopback-writes the valid
+      columns `[phase, phase+valid_cols)` of `cb_out_sticks` into the resident RM
+      output shard (`cb_shard_out` zero-copy alias).
+  - **EXCLUSIONS**: both `{layout: ROW_MAJOR, memory_layout: WIDTH/BLOCK_SHARDED}`
+    removed. The `{float32, fp32_dest_acc_en=False}` cell stays refused by its own
+    EXCLUSION (still xfail-strict, including on this path).
+- Accuracy achieved: PCC ≥ 0.99997, rtol/atol via golden `TOLERANCES` (bf16 PCC≥0.995,
+  f32 PCC≥0.999) on 13 device probes — WIDTH + BLOCK, gamma/no-gamma, W-non-aligned
+  (50), H-non-aligned (17), both, wide `per_w_t=2` (4096), HT_LOCAL=32 (2x4x128x512),
+  3D/2D, and fp32. maxdiff ≤ 0.10 (wide bf16).
+- Golden test progress: `test_op` sharded slice across ~20 shapes (all alignment/rank/
+  wide/BLOCK buckets): **0 failed, 0 xpassed**; input-`ROW_MAJOR` WIDTH/BLOCK cells moved
+  xfail→pass (the only remaining xfails are `{float32, fp32_dest_acc_en=False}`, the
+  standing EXCLUSION). `test_op_loose` 18 passed / 1 xfail (HEIGHT_SHARDED = R5). Unit
+  dir 345 passed / 32 skipped (no regression). Interleaved + TILE-sharded spot checks
+  unregressed (0 failed).
+- Issues encountered: (1) gamma DRAM read at a sub-tile element column offset
+  (`w_offset*elem`, not 32-aligned) tripped an "invalid address alignment in NOC
+  transaction" — fixed by the phase-alignment (gamma read at tile-aligned `(g0+wt)*32`,
+  x's leading columns zeroed). No other defects.
+- Tests added: probes 019 (shard-geometry survey) + 020–024 (RM WIDTH/BLOCK correctness
+  sweeps) in `tests/ttnn/unit_tests/operations/rms_norm/probes/`.
