@@ -105,10 +105,15 @@ HostTensor enqueue_read_tensor(
 /**
  * Read the data of **device_tensor** at the given **coords** into the given **host_tensor**.
  *
- * pre-condition:
- * - **host_tensor** must have shards that cover the given **coords**. (it is okay to have more shards than **coords**.)
+ * pre-conditions:
+ * - **host_tensor** must have populated shards that cover the given **coords**
+ *   (extra shards beyond **coords** may be present, but see post-condition).
  * - **coords** must be in bounds of **cq**'s MeshDevice.
- * post-condition: **host_tensor** shards at **coords** are overwritten with the data from **device_tensor**.
+ *
+ * post-conditions:
+ * - **host_tensor** is rebuilt from a buffer that contains only **coords**.
+ * - Shards at **coords** are overwritten with data from **device_tensor**.
+ * - Any host shards outside **coords** are discarded (shed), not preserved.
  */
 void enqueue_read_tensor(
     distributed::MeshCommandQueue& cq,
