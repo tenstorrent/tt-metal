@@ -472,3 +472,62 @@
 - Tests added: `test_rms_norm_rm_height_sharded.py` (20 cases: RM gamma / no gamma ×
   aligned + W-/H-/both-non-aligned + last-core-short + wide + fp32 + 2D/3D/4D + mixed
   precision). Probes 030-034.
+
+## Refinement 6 — Speed up the decode + sharded perf profiles
+- Date: 2026-07-23
+- Type: perf (partial — `[~]`); no SUPPORTED change.
+- What was done: landed ONE collective-topology lever (NoC-mcast broadcast) on the shared
+  cross-core (`_assemble_xcore_kernels`) transport; the DECODE half of the goal was found
+  ALREADY MET by R4a's logical W-split (measurement, no change needed). Roofline/ablation-first
+  per the perf methodology.
+  - **Measured baseline (blackhole_p150b, 110-core grid, median of 8 fresh trials, exact perf
+    configs; `test_rms_norm_perf_r6.py`)**:
+    * Decode interleaved `(1,1,32,W)` W∈{1024,2304,5120,7168}: 8.7/14.8/16.8/16.9µs vs
+      achievable 9.1/17.0/75.8/104.3µs → **0.95×/0.87×/0.22×/0.16× — already BEATS** (R4a's
+      logical W-split). No R6 change applied to decode (its groups are ragged → all-unicast).
+    * WIDTH sharded 8×1/9×1/8×4/7×4: 1.41×/1.71×/1.95×/1.78× above achievable.
+    * BLOCK sharded 8×8 (HT_LOCAL=32): **5.76×** above achievable — the worst offender.
+  - **Lever — mcast broadcast (`rms_norm_xcore_writer.cpp` + `_assemble_xcore_kernels`)**: the
+    group master now broadcasts the finalized `1/RMS` with ONE `noc_async_write_multicast` +
+    ONE `noc_semaphore_set_multicast` (monotone: set = t+1) instead of K-1 serial unicast
+    writes + K-1 sem-incs — a K-independent broadcast (the R4 writer comment's flagged R6
+    lever). Host detects a GAP-FREE virtual rectangle per group (`group_rect`: bounding-box
+    area == group size) and sets a `use_mcast` RT flag + rect corners; ragged groups keep the
+    byte-identical all-unicast fallback. ONLY the broadcast leg's transport mechanism changed —
+    the 3-monotone-counter protocol (SEM_GATHER/BCAST/DONE) + CB back-pressure are UNCHANGED,
+    so the proven synchronization is intact. Writer RT layout: added `use_mcast`(11) +
+    rect corners(12-15); `WORKER_COORDS_BASE` 11→16.
+  - **Result**: wins **1.15×** on the one gap-free perf geometry (WIDTH 7×4 / K=28:
+    11.20→9.73µs). The other 4 sharded targets did not move — characterized at depth:
+    1. **Blackhole DRAM-column gap**: virtual-coord map skips x=8,9 (logical x=0..10 → virtual
+       [1..7,10..13]), so any group spanning logical x=0..7 (8×1/9×1/8×4/8×8 targets) is not a
+       gap-free virtual rectangle → strict rect check correctly keeps them on unicast (a naive
+       mcast to the [1..10] box would fault on the DRAM columns). Only 7×4 (logical x=0..6)
+       qualifies.
+    2. **The broadcast is only ~14% of a round.** Ablation (`test_rms_norm_r6_ablation.py`,
+       fixed per_w_t=1, gap-free 7-wide, mcast engaged): the per-tile-row synchronous
+       gather→fold→broadcast round costs a FLAT **~3150 ns**, fully serialized × HT_LOCAL
+       (K7·HT4→13.7µs / HT16→51.0µs / HT32→100.8µs, perfectly linear) — this dominates BLOCK's
+       5.76×. Residual **~92 ns/core** gather fan-in K-cost remains (K7→4.3µs, K28→6.2µs).
+- Accuracy achieved: soft PCC gate 0.9995 holds on all decode + sharded perf shapes
+  (PCC ≥ 0.99998). Golden `TOLERANCES` unchanged.
+- Golden test progress: green — `test_op_loose` **19/19**; `test_op` WIDTH/BLOCK cartesian
+  slice **78 passed / 0 failed / 0 xpassed / 18 xfailed** (the standing `{f32,acc=False}`
+  EXCLUSION). No supported_fail, no xpass drift.
+- No regression across the guard set: unit dir 165 correctness (TILE/RM interleaved, gamma
+  layouts, debug) + RM/HEIGHT/RM-HEIGHT sharded pass; R3 prefill perf 4/4. The mcast lever is
+  byte-identical on every ragged/gap group, so nothing regressed. `--dev` clean (watcher, no
+  hang, no assert).
+- Levers: mcast broadcast — CORRECT, KEPT (wins 1.15× on gap-free 7×4; neutral/byte-identical
+  elsewhere; can never regress via the strict `group_rect` gate). NOT reverted — it is the
+  named collective-topology lever, correct, and safely parked. The dominant sharded bottleneck
+  (per-tile-row synchronous round ~3150 ns × HT_LOCAL) needs a round-granularity restructure →
+  filed as R6a (batch C tile-rows/round + gap-aware mcast + two-stage gather, in priority order).
+- Issues encountered: initial hypothesis (K-scaling == broadcast) was confounded by per_w_t
+  differences across the perf cases; the controlled ablation (fixed per_w_t, gap-free grids)
+  corrected it — the per-tile-row synchronous round is the real cost, and the Blackhole
+  DRAM-column gap limits where a raw mcast can engage.
+- Tests added: `test_rms_norm_perf_r6.py` (decode interleaved + WIDTH/BLOCK sharded perf
+  harness at the exact perf configs, N-trial loop + soft PCC gate) and
+  `test_rms_norm_r6_ablation.py` (K-scaling + HT_LOCAL-scaling ablation on gap-free 7-wide
+  grids — documents the per-round-sync bottleneck). Probes 035-037 (grid/topology survey).

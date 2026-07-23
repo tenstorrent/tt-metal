@@ -72,8 +72,22 @@ void kernel_main() {
     const uint32_t valid_rows_total = get_arg_val<uint32_t>(8);  // IS_RM: valid rows in this core's shard
     const uint32_t phase = get_arg_val<uint32_t>(9);             // IS_RM: w_offset % 32 (leading tile offset)
     const uint32_t num_workers = get_arg_val<uint32_t>(10);      // master: K-1, worker: 0
-    // master only: worker virtual coords follow as [vx, vy] * num_workers.
-    constexpr uint32_t WORKER_COORDS_BASE = 11;
+    // Refinement 6 (collective-topology lever): when this group's cores form a GAP-FREE
+    // rectangle (host sets use_mcast=1 iff bounding-box area == group size), the master
+    // broadcasts the finalized 1/RMS with ONE noc_async_write_multicast + ONE
+    // noc_semaphore_set_multicast to the rectangle instead of K-1 serial unicast writes +
+    // K-1 sem incs — a K-independent broadcast. Ragged groups (the logical decode W-split's
+    // first-K row-major cores on the 11-wide grid, or WIDTH auto-shard groups wrapping a
+    // partial row) get use_mcast=0 and keep the topology-agnostic all-unicast fallback.
+    // rect corners are VIRTUAL NoC coords; the master is the low corner of the rectangle.
+    const uint32_t use_mcast = get_arg_val<uint32_t>(11);
+    const uint32_t rect_xlo = get_arg_val<uint32_t>(12);
+    const uint32_t rect_ylo = get_arg_val<uint32_t>(13);
+    const uint32_t rect_xhi = get_arg_val<uint32_t>(14);
+    const uint32_t rect_yhi = get_arg_val<uint32_t>(15);
+    // master only: worker virtual coords follow as [vx, vy] * num_workers (used by the
+    // all-unicast fallback; unused on the mcast path but always emitted by the host).
+    constexpr uint32_t WORKER_COORDS_BASE = 16;
 
     volatile tt_l1_ptr uint32_t* sem_gather = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER));
     volatile tt_l1_ptr uint32_t* sem_bcast = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_BCAST));
@@ -102,19 +116,44 @@ void kernel_main() {
             const uint32_t global_dst = get_write_ptr(cb_stat_global);
             noc_semaphore_wait_min(sem_done, (t + 1) * (K - 1));  // all workers ready to receive
             noc_async_read(get_noc_addr(master_vx, master_vy, handoff_src), global_dst, stat_bytes);  // loopback own
-            for (uint32_t w = 0; w < num_workers; ++w) {
-                const uint32_t wx = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w);
-                const uint32_t wy = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w + 1);
-                noc_async_write(handoff_src, get_noc_addr(wx, wy, global_dst), stat_bytes);
+            if (use_mcast) {
+                // ONE mcast of the finalized 1/RMS to the group rectangle (excl. self;
+                // num_dests = num_workers = K-1). Corners in routing order for this NoC:
+                // NoC0 walks low->high, NoC1 high->low (master is the low corner).
+                const uint64_t mcast_dst =
+                    (noc_index == 1) ? get_noc_multicast_addr(rect_xhi, rect_yhi, rect_xlo, rect_ylo, global_dst)
+                                     : get_noc_multicast_addr(rect_xlo, rect_ylo, rect_xhi, rect_yhi, global_dst);
+                noc_async_write_multicast(handoff_src, mcast_dst, stat_bytes, num_workers);
+            } else {
+                for (uint32_t w = 0; w < num_workers; ++w) {
+                    const uint32_t wx = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w);
+                    const uint32_t wy = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w + 1);
+                    noc_async_write(handoff_src, get_noc_addr(wx, wy, global_dst), stat_bytes);
+                }
             }
-            noc_async_write_barrier();
+            noc_async_write_barrier();  // data flushed before the ready signal
             noc_async_read_barrier();
             cb_push_back(cb_stat_global, 1);  // -> master compute pass 2
             cb_pop_front(cb_stat_handoff, 1);
-            for (uint32_t w = 0; w < num_workers; ++w) {
-                const uint32_t wx = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w);
-                const uint32_t wy = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w + 1);
-                noc_semaphore_inc(get_noc_addr(wx, wy, get_semaphore(SEM_BCAST)), 1);
+            if (use_mcast) {
+                // Signal all workers with ONE mcast semaphore set. Monotone: set the value
+                // to (t+1) each round (matches the workers' noc_semaphore_wait_min(t+1)); the
+                // set replaces the K-1 per-worker atomic incs. The existing SEM_DONE
+                // back-pressure bounds the master to one round ahead, so the depth-1
+                // cb_stat_global is consumed before the next set overwrites it (no race).
+                noc_semaphore_set(sem_bcast, t + 1);
+                const uint64_t mcast_sem =
+                    (noc_index == 1)
+                        ? get_noc_multicast_addr(rect_xhi, rect_yhi, rect_xlo, rect_ylo, get_semaphore(SEM_BCAST))
+                        : get_noc_multicast_addr(rect_xlo, rect_ylo, rect_xhi, rect_yhi, get_semaphore(SEM_BCAST));
+                noc_semaphore_set_multicast(get_semaphore(SEM_BCAST), mcast_sem, num_workers);
+                noc_async_write_barrier();  // flush the mcast signal (non-posted write)
+            } else {
+                for (uint32_t w = 0; w < num_workers; ++w) {
+                    const uint32_t wx = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w);
+                    const uint32_t wy = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w + 1);
+                    noc_semaphore_inc(get_noc_addr(wx, wy, get_semaphore(SEM_BCAST)), 1);
+                }
             }
         } else {
             // ---- worker: reserve receive slot (prev consumed), signal ready, gather ----

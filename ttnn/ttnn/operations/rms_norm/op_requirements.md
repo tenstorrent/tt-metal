@@ -435,7 +435,7 @@ its cells passing; golden green; all prior phases unregressed.
 
 ---
 
-### [ ] Refinement 6 — Speed up the decode + sharded perf profiles
+### [~] Refinement 6 — Speed up the decode + sharded perf profiles
 
 **Type**: perf
 
@@ -463,3 +463,78 @@ shapes (fresh-cache trial loop, cleared against noise) with soft PCC holding and
 golden green, and no regression across the config-spanning guard set (one
 representative per distinct kernel path × layout × placement: TILE interleaved, RM
 interleaved, HEIGHT-sharded, WIDTH-sharded, BLOCK-sharded, no-gamma).
+
+**Landed (partial `[~]`)** — one collective-topology lever (NoC-mcast broadcast) shipped;
+the decode half of the goal was ALREADY MET by R4a. Measured on blackhole_p150b (110-core
+grid, median of 8 fresh trials, exact perf configs; `test_rms_norm_perf_r6.py`):
+- **Decode interleaved already BEATS achievable_ns** — `(1,1,32,W)` for W∈{1024,2304,5120,7168}
+  measure 8.7 / 14.8 / 16.8 / 16.9 µs vs achievable 9.1 / 17.0 / 75.8 / 104.3 µs
+  (0.95× / 0.87× / **0.22×** / **0.16×**). R4a's logical W-split delivered the decode target;
+  no R6 change needed (and none applied — decode groups are ragged, so they keep the
+  byte-identical all-unicast path). The "speed up the decode" half is satisfied.
+- **mcast broadcast lever (the named collective-topology family)**: the group master now
+  broadcasts the finalized `1/RMS` with ONE `noc_async_write_multicast` + ONE
+  `noc_semaphore_set_multicast` instead of K-1 serial unicast writes + K-1 sem-incs — a
+  K-independent broadcast (the R4 writer comment's flagged R6 lever). Gated host-side on a
+  GAP-FREE virtual rectangle (`group_rect`: bounding-box area == group size); ragged groups
+  (logical decode; WIDTH auto-shard wrapping a partial grid row) keep the proven all-unicast
+  fallback (3-monotone-counter protocol + CB back-pressure UNCHANGED — only the broadcast
+  leg's transport mechanism swaps). Correct (--dev clean; golden green; soft PCC ≥ 0.9995).
+  Wins **1.15×** on the one gap-free perf geometry (WIDTH 7×4 / K=28: 11.20→9.73 µs).
+- **Why the other 4 sharded targets did not move — characterized at depth (ablation)**:
+  1. **Blackhole DRAM-column gap.** The virtual-coord map skips x=8,9 (logical x=0..10 →
+     virtual x=[1..7,10,11,12,13]). So any group spanning logical x=0..7 (the 8-wide WIDTH
+     8×1/9×1/8×4 and BLOCK 8×8 targets) is NOT a gap-free virtual rectangle → the strict
+     rect check correctly keeps them on unicast (a naive mcast to the [1..10] box would hit
+     the DRAM columns → NoC fault). Only 7×4 (logical x=0..6, gap-free) qualifies.
+  2. **The broadcast is only ~14% of a round.** Ablation (fixed per_w_t=1, gap-free 7-wide,
+     mcast engaged): the per-tile-row synchronous gather→fold→broadcast round costs a FLAT
+     **~3150 ns**, fully serialized × HT_LOCAL (K7·HT4→13.7µs, HT16→51.0µs, HT32→100.8µs,
+     perfectly linear). This dominates BLOCK's 5.76× headroom. A residual **~92 ns/core**
+     gather fan-in K-cost remains even with mcast (K7→4.3µs, K28→6.2µs).
+- **No regression**: unit dir 165 correctness + RM/HEIGHT/RM-HEIGHT sharded pass; golden
+  `test_op_loose` 19/19; golden `test_op` WIDTH/BLOCK cartesian slice 78 passed / 0 failed /
+  0 xpassed / 18 xfailed (the standing `{f32,acc=False}` EXCLUSION); R3 prefill perf 4/4.
+  The mcast lever is byte-identical on every ragged/gap group, so nothing regressed.
+
+**Deferred to R6a** (the real sharded-latency levers, characterized above, in priority order):
+the per-tile-row synchronous-round cost (`~3150 ns × HT_LOCAL`) is the dominant sharded
+bottleneck and needs a round-granularity restructure, not the broadcast mechanism.
+
+---
+
+### [ ] Refinement 6a — Sharded cross-core: batch the per-tile-row round + gap-aware mcast
+
+**Type**: perf
+
+**Goal**: close the sharded `_perf_case` headroom R6 characterized but could not reach with
+the broadcast-only lever. Measured baselines (blackhole_p150b): WIDTH 8×1 1.41×, 9×1 1.71×,
+8×4 1.95×, 7×4 1.78×, **BLOCK 8×8 5.76×** above achievable. Three levers, in priority order:
+
+1. **Batch C tile-rows' stats per cross-core round (biggest — BLOCK).** The cross-core round
+   is FULLY SERIALIZED per tile-row at a flat ~3150 ns (ablation: BLOCK is `HT_LOCAL × 3150`).
+   Restructure compute+writer+host so one round exchanges C tile-rows' partials: compute
+   produces C local partials (`cb_stat_local` depth C), the writer gathers `K×C` (bounded —
+   `C` is a tunable, keep `cb_gather ≤ K×C` under an L1 gate; C=all OOMs the master at K×HT),
+   the master folds C → C rstds, broadcasts C, then pass-2 over the C tile-rows. This cuts
+   BLOCK's sync rounds from HT_LOCAL to `ceil(HT_LOCAL/C)` — the 5.76× target. This is a
+   scheme change to the round granularity (the R4 "one round per tile-row → cb_gather stays
+   K" invariant is deliberately relaxed to `K×C` under an explicit L1 budget, same exception
+   class as R3's resident dual-path).
+2. **Gap-aware mcast (unblocks the 8-wide WIDTH/BLOCK targets).** Extend the R6 broadcast
+   mcast to groups whose virtual coords straddle the Blackhole DRAM-column gap (x=8,9): either
+   segment the mcast into contiguous virtual runs ([1..7] mcast + [10] unicast) or build the
+   mcast grid via the device's mcast-coordinate utility that excludes DRAM columns. Removes
+   the `group_rect` strict-rectangle restriction for 8×1/9×1/8×4/8×8.
+3. **Two-stage gather (residual K-cost).** The gather fan-in still scales ~92 ns/core even with
+   mcast broadcast (`tensix_all_reduce` grid-two-stage: reduce along x → row-leaders, then y →
+   root). Smallest lever; only meaningful for the large-K 2D WIDTH groups.
+
+**Verifier notes**: R6 landed the broadcast mcast + full bottleneck ablation; R6a is the
+round-batching restructure (lever 1) as the headline, then gap-aware mcast (lever 2). Keep the
+R6 `group_rect`/mcast path — lever 2 extends it, does not replace it. Reuse the R4/R6 xcore
+kernels + transport; do not fork. Gate on soft `pcc_threshold` 0.9995.
+
+**Done when**: measured median device-ns improves on the WIDTH/BLOCK sharded perf shapes
+(fresh-cache trial loop) toward achievable, soft PCC holding, golden green, no regression
+across the guard set.

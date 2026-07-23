@@ -1211,22 +1211,53 @@ def _assemble_xcore_kernels(
         if out_to_dram
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
+    # ---- Refinement 6 collective-topology lever: per-group NoC-mcast eligibility ----
+    # A reduction group can broadcast the finalized 1/RMS with ONE noc_async_write_multicast
+    # (K-independent) instead of K-1 serial unicast writes IFF its cores form a GAP-FREE
+    # rectangle in VIRTUAL NoC space (bounding-box area == group size). The master is the
+    # rectangle's low corner (WIDTH master = cores[0] = (x0,y0); BLOCK master = row x0).
+    # Ragged groups (logical decode W-split's first-K row-major cores; WIDTH auto-shard groups
+    # that wrap a partial grid row) fail the area test and keep the all-unicast fallback —
+    # so the already-fast decode path stays byte-identical. Measured before this lever, the
+    # sharded WIDTH slowdown scaled with K (the master's serial broadcast), which this removes.
+    masters = {}
+    for _c, _si, _master, _iph, _wts, _vwt in entries:
+        _key = (int(_master.x), int(_master.y))
+        masters.setdefault(_key, _master)
+    group_rect = {}
+    for _key, _master in masters.items():
+        _members = [_master] + workers_of.get(_key, [])
+        _vs = [_v(m) for m in _members]
+        _vxlo = min(v[0] for v in _vs)
+        _vxhi = max(v[0] for v in _vs)
+        _vylo = min(v[1] for v in _vs)
+        _vyhi = max(v[1] for v in _vs)
+        _area = (_vxhi - _vxlo + 1) * (_vyhi - _vylo + 1)
+        _use_mcast = 1 if (len(_members) > 1 and _area == len(_members)) else 0
+        group_rect[_key] = (_use_mcast, _vxlo, _vylo, _vxhi, _vyhi)
+
     writer_rt = ttnn.RuntimeArgs()
     out_addr = output_tensor.buffer_address() if out_to_dram else 0
     for c, slice_index, master, _iph, w_tile_start, vwt in entries:
         mvx, mvy = _v(master)
         is_master = 1 if slice_index == 0 else 0
         vc, vrt, _rpw, phase = rm_percore[(int(c.x), int(c.y))] if is_rm else (0, 0, 0, 0)
-        # fixed fields 0-9; num_workers at 10; worker coords from 11 (WORKER_COORDS_BASE).
+        um, rxlo, rylo, rxhi, ryhi = group_rect[(int(master.x), int(master.y))]
+        # fixed fields 0-9; num_workers at 10; use_mcast at 11; rect corners 12-15;
+        # worker coords from 16 (WORKER_COORDS_BASE).
         row = [out_addr, w_tile_start, vwt, is_master, slice_index, mvx, mvy, vc, vrt, phase]
         if is_master:
             wl = workers_of.get((int(master.x), int(master.y)), [])
-            row.append(len(wl))
+            row.append(len(wl))  # 10 num_workers
+            row.append(um)  # 11 use_mcast
+            row.extend([rxlo, rylo, rxhi, ryhi])  # 12-15 rect corners (virtual)
             for w in wl:
                 wvx, wvy = _v(w)
-                row.extend([wvx, wvy])
+                row.extend([wvx, wvy])  # 16+ worker coords (unicast fallback)
         else:
-            row.append(0)
+            row.append(0)  # 10 num_workers
+            row.append(0)  # 11 use_mcast (workers never broadcast)
+            row.extend([0, 0, 0, 0])  # 12-15 rect corners (unused)
         writer_rt[c.x][c.y] = row
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_xcore_writer.cpp"),
