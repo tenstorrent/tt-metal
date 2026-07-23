@@ -55,3 +55,10 @@ noc_estimator:
     "Loopback":
       0: false
       1: true
+quasar_cache_write:
+  attributes:
+    "Write path": "write_path"
+  value_mappings:
+    "Write path":
+      0: "Uncached"
+      1: "Cached+Flush"
