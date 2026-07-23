@@ -119,13 +119,23 @@ Optional AR recaption (`HY_RECAPTION=1`) rewrites the prompt via the text-sampli
 | `HY_RECAPTION_KV` | `1` | `0` disables KV incremental decode on recaption path (required for recaption trace) |
 | `HY_RECAPTION_PREFILL_CHUNK` | `1024` | Chunk size for long-prefix KV prefill (`0` = one shot) |
 | `HY_KEEP_BACKBONE` | `1` | I2I: cache cond VAE/ViT tokens on host and **reuse** the resident backbone for denoise (skip ~140s reload). `0` = old free/rebuild sandwich |
+| `HY_DEVICE_SAMPLING` | `0` | `1` = device-logits AR. **Default:** D2H full-V → host ``topk`` (Instruct ``top_k``, e.g. **1024**) → host shortlist multinomial. Opt-in ``HY_TTNN_SAMPLING_OP=1`` for pure ``ttnn.topk``+``ttnn.sampling`` (k capped at 32). Falls back to host generate for stage-force / ratio / rep-penalty / greedy |
+| `HY_TTNN_SAMPLING_OP` | `0` | `1` = pure ``ttnn.topk`` + ``ttnn.sampling`` under `HY_DEVICE_SAMPLING` (k≤32; often empty/quad Instruct cot today) |
+| `HY_TOP_K` | (Instruct cfg) | Override sampling top-k. Host shortlist uses this value as-is; only the ``HY_TTNN_SAMPLING_OP=1`` path clamps to ≤32 |
+| `HY_LATENT_RESIDENT` | `1` | `1` = keep DiT latent on device between steps (TILE flat; Euler on device; one final D2H for VAE). `0` = legacy per-step ``to_torch``/``from_torch`` hops (debug) |
+| `HY_SEED` | `0` (T2I) / `42` (I2I) | Seed for on-device ``ttnn.randn`` init noise (demos) and AR sampling. Host ``torch.randn`` only for ``HY_DIT_HOST`` / ``HY_TORCH_BACKBONE`` |
 
 > **``HY_TRACE=1``** (default): recaption AR uses CQ0 ``execute_trace`` when recaption runs.
 > Denoise CFG ``execute_trace`` is **auto-enabled only when steps > 8** (default
 > ``HY_DENOISE_TRACE_MIN_STEPS``): step-1 capture + warmup on an 8-step Distil loop costs
 > more than eager replay. Instruct 50-step and base 50-step T2I keep denoise trace on.
 > Force with ``HY_DENOISE_TRACE=1``; disable with ``HY_DENOISE_TRACE=0``.
-> CQ1 async I/O for denoise latent / VAE RGB transfers when 2CQ is active.
+> With ``HY_LATENT_RESIDENT=1`` (default), denoise does **not** use CQ1 inter-step latent D2H —
+> only VAE RGB transfers use CQ1 async I/O when 2CQ is active. Set ``HY_LATENT_RESIDENT=0``
+> to restore legacy host hops (+ optional CQ1 latent D2H).
+> Demos sample init noise with ``ttnn.randn`` (``tt/noise.py``); per-step ``t`` uses
+> ``ttnn.full``. I2I gen-timestep scatter uses ``HunyuanTtTimestepEmbedder`` on device
+> (``scatter_distill_step_embeds_tt``) when demos pass TT emb modules.
 >
 > **``HY_TRACE=0``**: single command queue, no trace replay, no async I/O overlap.
 >
@@ -266,9 +276,12 @@ python_env/bin/python -m pytest \
   Device-side scatter (concat) + image-span slice; no host round-trips.
 - **Multi-step denoise loop** — `tt/pipeline.py` `denoise_loop`
   (`tests/pcc/test_denoise.py`, PCC 0.99999): per-step timestep embedding,
-  scheduler Euler update, CFG. **Trace denoise** (``HY_TRACE=1`` and steps >
-  ``HY_DENOISE_TRACE_MIN_STEPS``): CQ0 ``execute_trace`` CFG loop via ``tt/stage_trace.py``;
-  2CQ latent D2H fallback — see ``tt/denoise_dual_cq.py``.
+  scheduler Euler update, CFG. Default ``HY_LATENT_RESIDENT=1`` keeps the latent
+  TILE-flat on device across DiT steps (no mid-loop ``to_torch``/``from_torch``);
+  one D2H feeds VAE. **Trace denoise** (``HY_TRACE=1`` and steps >
+  ``HY_DENOISE_TRACE_MIN_STEPS``): CQ0 ``execute_trace`` CFG loop via ``tt/stage_trace.py``
+  with the same resident buffers. Legacy hops + CQ1 latent D2H when
+  ``HY_LATENT_RESIDENT=0`` — see ``tt/denoise_dual_cq.py``.
 - **`decode_latent` glue** — `tt/pipeline.py` (`tests/vae/test_decode_pipeline.py`):
   scaling / temporal-dim / denormalize wiring verified with an injected decoder.
 

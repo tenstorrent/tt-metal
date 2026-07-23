@@ -859,6 +859,29 @@ def main():
                 {f"time_embed_2.{k}": v for k, v in weights.load_prefix("time_embed_2").items()},
                 "time_embed_2",
             )
+            # Gen-image timestep scatter on device (no host TimestepEmbedder / embed H2D).
+            timestep_emb_tt = HunyuanTtTimestepEmbedder(
+                mesh_device,
+                H,
+                {f"timestep_emb.{k}": v for k, v in weights.load_prefix("timestep_emb").items()},
+                "timestep_emb",
+            )
+            guidance_emb_tt = None
+            if cfg_distilled:
+                guidance_emb_tt = HunyuanTtTimestepEmbedder(
+                    mesh_device,
+                    H,
+                    {f"guidance_emb.{k}": v for k, v in weights.load_prefix("guidance_emb").items()},
+                    "guidance_emb",
+                )
+            timestep_r_emb_tt = None
+            if use_meanflow:
+                timestep_r_emb_tt = HunyuanTtTimestepEmbedder(
+                    mesh_device,
+                    H,
+                    {f"timestep_r_emb.{k}": v for k, v in weights.load_prefix("timestep_r_emb").items()},
+                    "timestep_r_emb",
+                )
             step = HunyuanTtDenoiseStep(
                 mesh_device,
                 patch_embed=patch_embed,
@@ -885,9 +908,9 @@ def main():
                 cond=cond_tt,
                 uncond=uncond_tt,
                 guidance_scale=GUIDANCE,
-                timestep_emb=timestep_emb_distil,
-                guidance_emb=guidance_emb,
-                timestep_r_emb=timestep_r_emb,
+                timestep_emb=timestep_emb_tt,
+                guidance_emb=guidance_emb_tt,
+                timestep_r_emb=timestep_r_emb_tt,
                 cfg_distilled=cfg_distilled,
                 use_meanflow=use_meanflow,
                 mesh_device=mesh_device,
@@ -899,6 +922,9 @@ def main():
                 backbone,
                 te1,
                 te2,
+                timestep_emb_tt,
+                guidance_emb_tt,
+                timestep_r_emb_tt,
                 step,
                 sched,
                 cond_tt,

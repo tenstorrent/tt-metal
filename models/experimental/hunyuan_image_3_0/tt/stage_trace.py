@@ -4,6 +4,10 @@
 # CQ0 ``execute_trace`` capture/replay for denoise CFG steps and VAE decode.
 # CQ1 stages input H2D / output D2H (2CQ trace pattern, ViT/recaption style).
 #
+# Denoise latents default to legacy per-step host NCHW hops (``HY_LATENT_RESIDENT=0``).
+# Opt in to device-resident TILE flat with ``HY_LATENT_RESIDENT=1`` (needs PCC vs host).
+# seed once, Euler-copy in place between steps, final D2H for VAE only.
+#
 # Enabled when ``HY_TRACE=1``. Capture failures propagate (no eager fallback).
 
 from __future__ import annotations
@@ -87,6 +91,7 @@ class DenoiseStepTracer:
         timestep_r_emb=None,
         cfg_distilled: bool = False,
         use_meanflow: bool = False,
+        latent_resident: bool = False,
     ):
         self.device = device
         self.step = step
@@ -108,6 +113,8 @@ class DenoiseStepTracer:
         self.cfg_distilled = cfg_distilled
         self.use_meanflow = use_meanflow
         self.distill_guidance = 1000.0 * guidance_scale if cfg_distilled else None
+        # TILE flat buffers + device Euler copy (no inter-step latent H2D).
+        self.latent_resident = bool(latent_resident)
         self.io = Trace2CQIO(device)
 
         self.trace_id = None
@@ -148,12 +155,31 @@ class DenoiseStepTracer:
         B, C, hh, ww = latent_bchw.shape
         return latent_bchw.permute(0, 2, 3, 1).reshape(1, 1, B * hh * ww, C).contiguous()
 
-    def _prepare_base_embeds_host(self, c: dict, t_scalar: float) -> torch.Tensor | None:
-        """I2I host embeds for this timestep (optional distill / meanflow scatter).
+    def _device_scatter(self) -> bool:
+        from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import (
+            HunyuanTtTimestepEmbedder,
+        )
 
-        Matches eager ``denoise_loop._prepare_base_embeds`` before the device upload.
-        Returns None for T2I (``text_pre`` path) or when embeds are already on device.
+        return isinstance(self.timestep_emb, HunyuanTtTimestepEmbedder)
+
+    def _tvec_device(self, t_scalar: float) -> ttnn.Tensor:
+        # ttnn.full has no mesh_mapper kwarg; MeshDevice already replicates the fill.
+        return ttnn.full(
+            (1, 1, self.batch, 1),
+            fill_value=float(t_scalar),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _prepare_base_embeds_host(self, c: dict, t_scalar: float) -> torch.Tensor | None:
+        """I2I host embeds for this timestep (legacy host TimestepEmbedder path).
+
+        Returns None for T2I, or when TT device scatter is active (handled separately).
         """
+        if self._device_scatter():
+            return None
         host = c.get("base_embeds_host")
         if host is None:
             return None
@@ -208,8 +234,69 @@ class DenoiseStepTracer:
         self.io.stage_host_to_device(host_tt, buf)
         return buf
 
+    def _ensure_pristine_base(self, c: dict, *, device_attr: str) -> ttnn.Tensor:
+        """Upload I2I ``base_embeds_host`` once for device-side per-step scatter."""
+        key = f"_pristine_{device_attr}"
+        buf = getattr(self, key, None)
+        if buf is None:
+            host = c.get("base_embeds_host")
+            if host is None:
+                raise KeyError("device scatter requires base_embeds_host")
+            nhwc = host.detach().to(torch.bfloat16).contiguous()
+            buf = _upload_trace_buffer(self.device, nhwc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            setattr(self, key, buf)
+            print(
+                "[denoise] trace I2I base_embeds resident — device TimestepEmbedder scatter",
+                flush=True,
+            )
+        return buf
+
+    def _stage_one_base_embeds_device(self, c: dict, t_scalar: float, *, device_attr: str) -> None:
+        from models.experimental.hunyuan_image_3_0.tt.image_gen.cond_instantiate import (
+            scatter_distill_step_embeds_tt,
+        )
+        from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import (
+            HunyuanTtTimestepEmbedder,
+        )
+
+        pristine = self._ensure_pristine_base(c, device_attr=device_attr)
+        cloned = ttnn.allocate_tensor_on_device(pristine.spec, pristine.device())
+        ttnn.copy(pristine, cloned)
+        idx = c.get("gen_timestep_scatter_index")
+        g_emb = self.guidance_emb if isinstance(self.guidance_emb, HunyuanTtTimestepEmbedder) else None
+        r_emb = self.timestep_r_emb if isinstance(self.timestep_r_emb, HunyuanTtTimestepEmbedder) else None
+        t_r = float(self.scheduler.get_timestep_r(t_scalar)) if self.use_meanflow else None
+        scattered = scatter_distill_step_embeds_tt(
+            cloned,
+            t_scalar=float(t_scalar),
+            gen_timestep_scatter_index=idx,
+            timestep_emb=self.timestep_emb,
+            mesh_device=self.mesh_device,
+            guidance_scalar=self.distill_guidance if g_emb is not None else None,
+            guidance_scatter_index=c.get("guidance_scatter_index"),
+            guidance_emb=g_emb,
+            t_r_scalar=t_r if r_emb is not None else None,
+            gen_timestep_r_scatter_index=c.get("gen_timestep_r_scatter_index"),
+            timestep_r_emb=r_emb,
+        )
+        buf = getattr(self, device_attr)
+        if buf is None:
+            # First step: use scattered tensor as the stable buffer (address fixed thereafter).
+            setattr(self, device_attr, scattered)
+        else:
+            ttnn.copy(scattered, buf)
+            if scattered is not buf:
+                ttnn.deallocate(scattered, force=False)
+
     def _stage_base_embeds(self, t_scalar: float) -> None:
-        """Upload I2I ``base_embeds_host`` into fixed device buffers for this step."""
+        """Refresh I2I base_embeds into fixed device buffers for this step."""
+        if self.cond.get("base_embeds_host") is None:
+            return
+        if self._device_scatter():
+            self._stage_one_base_embeds_device(self.cond, t_scalar, device_attr="_base_cond_tt")
+            if self.do_cfg and self.uncond is not None and self.uncond.get("base_embeds_host") is not None:
+                self._stage_one_base_embeds_device(self.uncond, t_scalar, device_attr="_base_uncond_tt")
+            return
         host_c = self._prepare_base_embeds_host(self.cond, t_scalar)
         if host_c is not None:
             self._stage_one_base_embeds(host_c, device_attr="_base_cond_tt", host_attr="_base_cond_host")
@@ -218,19 +305,61 @@ class DenoiseStepTracer:
             if host_u is not None:
                 self._stage_one_base_embeds(host_u, device_attr="_base_uncond_tt", host_attr="_base_uncond_host")
 
-    def _init_buffers(self, latent_bchw: torch.Tensor, t_scalar: float) -> None:
-        nhwc = self._latent_nhwc_host(latent_bchw)
-        t_host = torch.tensor([float(t_scalar)] * self.batch, dtype=torch.float32).reshape(1, 1, self.batch, 1)
+    def _init_buffers(self, latent, t_scalar: float) -> None:
+        """Seed / refresh trace I/O buffers.
+
+        ``latent`` may be torch NCHW, device flat NHWC, or ``None`` (resident replay).
+        Timestep vector is filled on device via ``ttnn.full`` (no torch.tensor H2D).
+        """
+        latent_layout = ttnn.TILE_LAYOUT if self.latent_resident else ttnn.ROW_MAJOR_LAYOUT
+
         if self._latent_tt is None:
-            self._latent_tt = _upload_trace_buffer(self.device, nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            self._sample_tt = _upload_trace_buffer(self.device, nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            self._tvec_tt = _upload_trace_buffer(self.device, t_host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-        self._latent_host = ttnn.from_torch(nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        self._tvec_host = ttnn.from_torch(t_host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-        self.io.stage_host_to_device(self._latent_host, self._latent_tt)
-        self.io.stage_host_to_device(self._tvec_host, self._tvec_tt)
-        self.io.stage_host_to_device(self._latent_host, self._sample_tt)
-        # I2I: re-scatter timestep tokens on host, then stage into stable DRAM buffers.
+            if latent is None:
+                raise TypeError("first _init_buffers call requires init latent")
+            if isinstance(latent, ttnn.Tensor):
+                src = latent
+                if src.layout != latent_layout:
+                    src = ttnn.to_layout(src, latent_layout)
+                self._latent_tt = ttnn.allocate_tensor_on_device(src.spec, src.device())
+                self._sample_tt = ttnn.allocate_tensor_on_device(src.spec, src.device())
+                ttnn.copy(src, self._latent_tt)
+                ttnn.copy(src, self._sample_tt)
+                if src is not latent:
+                    ttnn.deallocate(src, force=False)
+                t0 = self._tvec_device(t_scalar)
+                self._tvec_tt = ttnn.allocate_tensor_on_device(t0.spec, t0.device())
+                ttnn.copy(t0, self._tvec_tt)
+                ttnn.deallocate(t0)
+                print(
+                    "[denoise] trace seeded from device init latent (no torch.randn H2D)",
+                    flush=True,
+                )
+            else:
+                nhwc = self._latent_nhwc_host(latent)
+                self._latent_tt = _upload_trace_buffer(self.device, nhwc, dtype=ttnn.bfloat16, layout=latent_layout)
+                self._sample_tt = _upload_trace_buffer(self.device, nhwc, dtype=ttnn.bfloat16, layout=latent_layout)
+                t0 = self._tvec_device(t_scalar)
+                self._tvec_tt = ttnn.allocate_tensor_on_device(t0.spec, t0.device())
+                ttnn.copy(t0, self._tvec_tt)
+                ttnn.deallocate(t0)
+            if self.latent_resident:
+                print(
+                    "[denoise] trace latent resident (TILE flat) — " "no inter-step latent H2D after seed",
+                    flush=True,
+                )
+
+        # Refresh t on device (no host torch.tensor → from_torch).
+        t_dev = self._tvec_device(t_scalar)
+        ttnn.copy(t_dev, self._tvec_tt)
+        ttnn.deallocate(t_dev)
+
+        if latent is not None and not self.latent_resident and isinstance(latent, torch.Tensor):
+            nhwc = self._latent_nhwc_host(latent)
+            self._latent_host = ttnn.from_torch(nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            self.io.stage_host_to_device(self._latent_host, self._latent_tt)
+            self.io.stage_host_to_device(self._latent_host, self._sample_tt)
+
+        # I2I: re-scatter timestep tokens, then stage into stable DRAM buffers.
         self._stage_base_embeds(float(t_scalar))
 
     def _base_embeds_for(self, c: dict) -> ttnn.Tensor | None:
@@ -298,10 +427,10 @@ class DenoiseStepTracer:
         ttnn.deallocate(te2)
         return pred
 
-    def _capture(self, latent_bchw: torch.Tensor, t_scalar: float) -> None:
+    def _capture(self, latent, t_scalar: float) -> None:
         t0 = time.perf_counter()
         self._ensure_cos_sin()
-        self._init_buffers(latent_bchw, t_scalar)
+        self._init_buffers(latent, t_scalar)
         self.io.fence_compute_before_trace()
         for _ in range(2):
             pred_w = self._step_forward()
@@ -333,15 +462,30 @@ class DenoiseStepTracer:
         ttnn.execute_trace(self.device, self.trace_id, cq_id=COMPUTE_CQ, blocking=True)
         self._timing_replay_total_ms += (time.perf_counter() - t0) * 1000
 
-    def _euler(self, dt_scalar: float) -> torch.Tensor:
+    def _euler(self, dt_scalar: float) -> torch.Tensor | None:
+        """Euler update. Resident: copy into fixed TILE buffers. Legacy: D2H to NCHW."""
         scaled = ttnn.multiply(self._pred_tt, float(dt_scalar))
         nxt = ttnn.add(self._sample_tt, scaled)
         ttnn.deallocate(scaled)
+        if self.latent_resident:
+            # Keep TILE→TILE; addresses of _latent_tt/_sample_tt stay fixed for replay.
+            if nxt.layout != self._sample_tt.layout:
+                aligned = ttnn.to_layout(nxt, self._sample_tt.layout)
+                ttnn.deallocate(nxt)
+                nxt = aligned
+            if nxt.dtype != self._sample_tt.dtype:
+                cast = ttnn.typecast(nxt, self._sample_tt.dtype)
+                ttnn.deallocate(nxt)
+                nxt = cast
+            ttnn.copy(nxt, self._latent_tt)
+            ttnn.copy(nxt, self._sample_tt)
+            ttnn.deallocate(nxt)
+            return None
         latent = latent_tt_to_torch(nxt, self.mesh_device, batch=self.batch, channels=self.channels, h=self.h, w=self.w)
         ttnn.deallocate(nxt)
         return latent
 
-    def run(self, init_latent: torch.Tensor, timesteps) -> torch.Tensor:
+    def run(self, init_latent, timesteps, *, return_device_latent: bool = False) -> torch.Tensor | ttnn.Tensor:
         timesteps = list(timesteps)
         total = len(timesteps)
         latent = init_latent
@@ -366,11 +510,14 @@ class DenoiseStepTracer:
             if self.trace_id is None:
                 self._capture(latent, float(t))
             else:
-                self._init_buffers(latent, float(t))
+                # Resident: buffers already hold Euler output; only refresh t (+ I2I embeds).
+                self._init_buffers(None if self.latent_resident else latent, float(t))
                 self._replay()
                 self.replay_steps += 1
 
-            latent = self._euler(dt)
+            out = self._euler(dt)
+            if out is not None:
+                latent = out
             self.scheduler._step_index += 1
 
             if verbose:
@@ -388,6 +535,19 @@ class DenoiseStepTracer:
             f"(avg {avg:.1f} ms/step)",
             flush=True,
         )
+        if self.latent_resident:
+            if return_device_latent:
+                print("[denoise] returning device latent for on-device VAE (trace, no D2H)", flush=True)
+                return self._sample_tt
+            print("[denoise] final latent D2H for VAE (trace resident path)", flush=True)
+            return latent_tt_to_torch(
+                self._sample_tt,
+                self.mesh_device,
+                batch=self.batch,
+                channels=self.channels,
+                h=self.h,
+                w=self.w,
+            )
         return latent
 
     def release(self) -> None:
@@ -400,7 +560,14 @@ class DenoiseStepTracer:
             ttnn.deallocate(cos_tt)
             ttnn.deallocate(sin_tt)
             self._cos_sin = None
-        for name in ("_base_cond_tt", "_base_uncond_tt", "_base_cond_host", "_base_uncond_host"):
+        for name in (
+            "_base_cond_tt",
+            "_base_uncond_tt",
+            "_base_cond_host",
+            "_base_uncond_host",
+            "_pristine__base_cond_tt",
+            "_pristine__base_uncond_tt",
+        ):
             t = getattr(self, name, None)
             if t is not None:
                 try:

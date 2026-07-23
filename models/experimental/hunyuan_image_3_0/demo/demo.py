@@ -353,8 +353,15 @@ def _run_recaption_host(prompt: str, *, image_size: str | int = 1024):
     return result.cot_text[0], result.image_size
 
 
-def _print_recaption_summary(tok, cot_text: str, *, user_prompt: str, image_size) -> None:
-    """Print raw cot_text plus the extracted rewritten prose (what image gen actually uses)."""
+def _print_recaption_summary(
+    tok, cot_text: str, *, user_prompt: str, image_size, save_path: Path | None = None, note: str | None = None
+) -> str:
+    """Print raw cot_text plus the extracted rewritten prose (what image gen actually uses).
+
+    Also writes the same text to ``save_path`` when set (default: next to ``HY_OUT``),
+    so long runs do not lose it when the terminal scrollback truncates.
+    Returns the extracted written prompt (may be empty).
+    """
     sp = tok.special
     recaption_open = tok.tokenizer.convert_ids_to_tokens(sp.recaption_token_id)
     recaption_close = tok.tokenizer.convert_ids_to_tokens(sp.end_recaption_token_id)
@@ -368,6 +375,7 @@ def _print_recaption_summary(tok, cot_text: str, *, user_prompt: str, image_size
         recaption_open=recaption_open,
     )
     meager = is_meager_recaption_cot(cot_text, recaption_open=recaption_open, recaption_close=recaption_close)
+    echo = _norm_prompt_words(written) == _norm_prompt_words(user_prompt)
     print(f"[demo] recaption raw cot_text:\n{cot_text}", flush=True)
     if think:
         print(f"[demo] recaption think:\n{think}", flush=True)
@@ -382,24 +390,154 @@ def _print_recaption_summary(tok, cot_text: str, *, user_prompt: str, image_size
     print(f"[demo] resolved image_size={image_size}", flush=True)
     if meager:
         print("[demo] warning: recaption has no usable rewritten prose for image gen", flush=True)
+    elif echo:
+        print("[demo] warning: recaption written prompt is an echo of the user prompt", flush=True)
+
+    if save_path is None:
+        save_path = Path(OUT_PNG).with_suffix(".recaption.txt")
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    if note is None and echo:
+        note = "written prompt equals user prompt (recaption did not rewrite)"
+    elif note is None and meager:
+        note = "meager cot (no rewritten prose)"
+    lines = [
+        f"user_prompt: {user_prompt}",
+        f"image_size: {image_size}",
+        "",
+        "=== raw cot_text ===",
+        cot_text,
+        "",
+    ]
+    if think:
+        lines += ["=== think ===", think, ""]
+    lines += ["=== written prompt ===", written or "(none)", ""]
+    if note:
+        lines += ["=== note ===", note, ""]
+    save_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"[demo] saved recaption text -> {save_path.resolve()}", flush=True)
+    return written or ""
 
 
-def _finalize_recaption_cot(tok, prompt: str, cot_text: str, image_size):
-    """Retry host or fall back to the user prompt when device AR has no prose."""
+def _norm_prompt_words(text: str) -> list[str]:
+    return "".join(ch.lower() for ch in text if ch.isalnum() or ch.isspace()).split()
+
+
+def _recaption_is_echo_or_meager(tok, cot_text: str, user_prompt: str) -> bool:
+    """True when AR failed to rewrite (meager / empty / exact echo of the user prompt)."""
     sp = tok.special
     recaption_open = tok.tokenizer.convert_ids_to_tokens(sp.recaption_token_id)
     recaption_close = tok.tokenizer.convert_ids_to_tokens(sp.end_recaption_token_id)
-    if not is_meager_recaption_cot(
-        cot_text,
-        recaption_open=recaption_open,
-        recaption_close=recaption_close,
-    ):
+    if is_meager_recaption_cot(cot_text, recaption_open=recaption_open, recaption_close=recaption_close):
+        return True
+    written = extract_recaption_written_prompt(cot_text, recaption_open=recaption_open, recaption_close=recaption_close)
+    return _norm_prompt_words(written) == _norm_prompt_words(user_prompt)
+
+
+def _run_recaption_on_device_maybe_retry_host_sample(
+    *,
+    backbone,
+    lm_head,
+    mesh_device,
+    recap_bundle,
+    tok,
+    proc,
+    wte,
+    prompt: str,
+    config: SamplingConfig,
+    generator,
+    replicate_to_mesh,
+    image_size: str | int = 1024,
+):
+    """Run device AR.
+
+    With ``HY_DEVICE_SAMPLING=1`` (this demo's preferred path) there is **no**
+    host-sampling / CUDA torch fallback retry — empty/echo cot is left as-is for
+    ``_finalize_recaption_cot`` (string prompt-fallback only, no torch compute).
+
+    Set ``HY_RECAPTION_HOST_RETRY=1`` to restore the old echo→host-multinomial retry.
+    """
+    recap_result = run_recaption_on_device(
+        backbone,
+        lm_head,
+        mesh_device,
+        recap_bundle,
+        tok,
+        BOT_TASK,
+        proc,
+        wte_weight=wte,
+        image_size=image_size,
+        config=config,
+        generator=generator,
+        replicate_to_mesh=replicate_to_mesh,
+    )
+    cot = recap_result.cot_text[0]
+    if not _recaption_is_echo_or_meager(tok, cot, prompt):
+        return recap_result
+
+    # Default: no torch fallback when device sampling was requested.
+    if os.environ.get("HY_DEVICE_SAMPLING", "0") == "1" and os.environ.get("HY_RECAPTION_HOST_RETRY", "0") != "1":
+        print(
+            "[demo] device-sampling recaption looks empty/echo "
+            f"(got {cot!r}); keeping device result "
+            "(set HY_RECAPTION_HOST_RETRY=1 to allow host multinomial retry)",
+            flush=True,
+        )
+        return recap_result
+
+    # Opt-in: retry once with host-side sampling over the same TT logits.
+    print(
+        "[demo] device-sampling recaption looks empty/echo; "
+        "retrying AR with host sampling on device logits (HY_DEVICE_SAMPLING=0) ...",
+        flush=True,
+    )
+    prev = os.environ.get("HY_DEVICE_SAMPLING")
+    os.environ["HY_DEVICE_SAMPLING"] = "0"
+    try:
+        recap_result = run_recaption_on_device(
+            backbone,
+            lm_head,
+            mesh_device,
+            recap_bundle,
+            tok,
+            BOT_TASK,
+            proc,
+            wte_weight=wte,
+            image_size=image_size,
+            config=config,
+            generator=generator,
+            replicate_to_mesh=replicate_to_mesh,
+        )
+    finally:
+        if prev is None:
+            os.environ.pop("HY_DEVICE_SAMPLING", None)
+        else:
+            os.environ["HY_DEVICE_SAMPLING"] = prev
+
+    cot2 = recap_result.cot_text[0]
+    if _recaption_is_echo_or_meager(tok, cot2, prompt):
+        print(
+            f"[demo] host-sampling retry still empty/echo (got {cot2!r})",
+            flush=True,
+        )
+    else:
+        print("[demo] host-sampling retry produced a rewritten recaption", flush=True)
+    return recap_result
+
+
+def _finalize_recaption_cot(tok, prompt: str, cot_text: str, image_size):
+    """String prompt-fallback when AR has no rewrite (no CUDA / host torch gold path).
+
+    CUDA host recaption is opt-in via ``HY_RECAPTION_CUDA_FALLBACK=1`` (and
+    ``HY_RECAPTION_DEVICE`` path). Default stays torch-free.
+    """
+    if not _recaption_is_echo_or_meager(tok, cot_text, prompt):
         return cot_text, image_size
     print(
         "[demo] device recaption produced no rewritten prose " f"(got {cot_text!r}); recovering ...",
         flush=True,
     )
-    if torch.cuda.is_available():
+    if os.environ.get("HY_RECAPTION_CUDA_FALLBACK", "0") == "1" and torch.cuda.is_available():
         return _run_recaption_host(prompt, image_size=image_size)
     cot_text = prompt_fallback_recaption_cot(tok, prompt)
     print(f"[demo] using prompt fallback cot_text: {cot_text!r}", flush=True)
@@ -442,6 +580,7 @@ def _run_recaption_instruct_on_mesh(
         system_prompt=recap_system,
         sequence_template="instruct",
         generator=generator,
+        embed_prefix=False,  # TT path embeds prefix ids on device
     )
     prefix_len = int(recap_bundle.input_ids.shape[1])
     print(f"[demo] instruct recaption prefix_len={prefix_len}", flush=True)
@@ -480,19 +619,19 @@ def _run_recaption_instruct_on_mesh(
     else:
         print("[demo] reusing pre-built instruct backbone for recaption; loading LM head ...", flush=True)
     lm_head = HunyuanTtLMHead(mesh_device, {"lm_head.weight": weights.load("lm_head.weight")})
-    recap_result = run_recaption_on_device(
-        backbone,
-        lm_head,
-        mesh_device,
-        recap_bundle,
-        tok,
-        BOT_TASK,
-        proc,
-        wte_weight=wte,
-        image_size=1024,
+    recap_result = _run_recaption_on_device_maybe_retry_host_sample(
+        backbone=backbone,
+        lm_head=lm_head,
+        mesh_device=mesh_device,
+        recap_bundle=recap_bundle,
+        tok=tok,
+        proc=proc,
+        wte=wte,
+        prompt=prompt,
         config=config,
         generator=generator,
         replicate_to_mesh=rep,
+        image_size=1024,
     )
     del lm_head
     cot_text, image_size = _finalize_recaption_cot(tok, prompt, recap_result.cot_text[0], recap_result.image_size)
@@ -516,6 +655,7 @@ def _run_recaption(mesh_device, ccl, c, tok, proc, wte, prompt, generator, *, ba
         system_prompt=recap_system,
         sequence_template="pretrain",
         generator=generator,
+        embed_prefix=False,  # TT path embeds prefix ids on device
     )
     prefix_len = int(recap_bundle.input_ids.shape[1])
     config = _recaption_sampling_config()
@@ -562,19 +702,19 @@ def _run_recaption(mesh_device, ccl, c, tok, proc, wte, prompt, generator, *, ba
     else:
         print("[demo] reusing pre-built backbone for recaption; loading LM head ...", flush=True)
     lm_head = HunyuanTtLMHead(mesh_device, {"lm_head.weight": _load("lm_head.weight")})
-    recap_result = run_recaption_on_device(
-        backbone,
-        lm_head,
-        mesh_device,
-        recap_bundle,
-        tok,
-        BOT_TASK,
-        proc,
-        wte_weight=wte,
-        image_size=1024,
+    recap_result = _run_recaption_on_device_maybe_retry_host_sample(
+        backbone=backbone,
+        lm_head=lm_head,
+        mesh_device=mesh_device,
+        recap_bundle=recap_bundle,
+        tok=tok,
+        proc=proc,
+        wte=wte,
+        prompt=prompt,
         config=config,
         generator=generator,
         replicate_to_mesh=rep,
+        image_size=1024,
     )
     del lm_head
     cot_text, image_size = _finalize_recaption_cot(tok, prompt, recap_result.cot_text[0], recap_result.image_size)
@@ -602,12 +742,13 @@ def main():
     t = _mark("1_setup_weights_tokenizer", t)
 
     cot_text, image_size = None, 1024
+    recaption_written = ""
     use_tt_recaption_mesh = RECAPTION and _use_tt_recaption() and not TORCH_DENOISE
     can_share_backbone = use_tt_recaption_mesh and RECAPTION_LAYERS == NUM_LAYERS
 
     if RECAPTION and not _use_tt_recaption():
         cot_text, image_size = _run_recaption_host(PROMPT)
-        _print_recaption_summary(tok, cot_text, user_prompt=PROMPT, image_size=image_size)
+        recaption_written = _print_recaption_summary(tok, cot_text, user_prompt=PROMPT, image_size=image_size)
         t = _mark("2_recaption_ar", t)
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
@@ -716,7 +857,7 @@ def main():
                     generator,
                     backbone=backbone,
                 )
-            _print_recaption_summary(recap_tok, cot_text, user_prompt=PROMPT, image_size=image_size)
+            recaption_written = _print_recaption_summary(recap_tok, cot_text, user_prompt=PROMPT, image_size=image_size)
             if can_share_backbone:
                 backbone.apply_final_norm = False
                 print("[demo] reusing shared backbone for denoise (no second weight upload)", flush=True)
@@ -742,6 +883,8 @@ def main():
         ), f"seq_len {S} (image_size {image_size}) exceeds max_position_embeddings {c['MAX_SEQ']}"
 
         torch.manual_seed(SEED)
+        # Host N(0,1) init — known-good layout for resident DiT + VAE. Device
+        # ``ttnn.randn`` / flat→BTHWC TILE reshape previously produced neon garbage.
         init_latent = torch.randn(1, LATENT, grid[0], grid[1])
 
         if TORCH_DENOISE:
@@ -794,6 +937,7 @@ def main():
                     denoise_wte,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 )
+            # Host embed + from_torch for text_pre/post (span.start often not TILE-aligned).
             emb = wte_tt.embedding_torch(ids)  # [2, S, H]
 
             patch_embed = HunyuanTtUNetDown(
@@ -853,18 +997,28 @@ def main():
                 seq_len=S,
             )
 
-            if os.environ.get("HY_SHARDED_MASK", "1") == "1":
+            # Mask SP must match the resident backbone (shared AR+denoise uses sp=1 with KV).
+            denoise_sp = int(getattr(backbone, "sp_factor", 2))
+            if os.environ.get("HY_SHARDED_MASK", "1") == "1" and denoise_sp > 1:
                 mask_tt = build_attention_mask_tt_sp_sharded(
                     mesh_device,
                     S,
                     image_slices=[span],
                     bsz=1,
-                    sp_factor=2,
+                    sp_factor=denoise_sp,
                     dtype=ttnn.bfloat16,
                 )
-                print("[demo] attention mask: SP query-sharded upload path", flush=True)
+                print(
+                    f"[demo] attention mask: SP query-sharded upload path (sp={denoise_sp})",
+                    flush=True,
+                )
             else:
                 mask_tt = build_attention_mask_tt(mesh_device, S, image_slices=[span], bsz=1, dtype=ttnn.bfloat16)
+                if denoise_sp <= 1:
+                    print(
+                        f"[demo] attention mask: full [S,S] (backbone sp={denoise_sp})",
+                        flush=True,
+                    )
             image_infos = [[(span, grid)]]
 
             def cond_dict(row):
@@ -882,6 +1036,8 @@ def main():
             sched.set_timesteps(STEPS)
             t = _mark("4_build_denoise_mesh_backbone", t)
             print(f"[demo] denoising {STEPS} steps (CFG={GUIDANCE}) on resident backbone ...")
+            # Final latent via host D2H then VAE ShardTensor2dMesh (known-good).
+            # Device flat→BTHWC handoff is fixed in pipeline but not default here yet.
             latent = denoise_loop(
                 step,
                 sched,
@@ -951,6 +1107,12 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(arr).save(out_path)
     print(f"[demo] saved image -> {out_path}")
+    if cot_text:
+        recap_path = out_path.with_suffix(".recaption.txt")
+        print(f"[demo] recaption text also at -> {recap_path.resolve()}", flush=True)
+        if recaption_written:
+            preview = recaption_written if len(recaption_written) <= 240 else recaption_written[:237] + "..."
+            print(f"[demo] recaption written prompt (preview): {preview}", flush=True)
     t = _mark("7_save_png", t)
     _print_timing_summary(time.time() - t_start)
 
