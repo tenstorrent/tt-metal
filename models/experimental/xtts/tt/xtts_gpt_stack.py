@@ -55,17 +55,22 @@ class TtXttsGptStack(LightweightModule):
         ``pos`` + the persistent arange. ``write_idx`` (eager int) routes the cache write through the
         O(1) ``ttnn.update_cache``; when None (traced) it builds the one-hot select the blocks use.
         Returns the ``ln_f`` hidden (caches updated in place); all shapes static."""
-        le = ttnn.typecast(ttnn.le(self.arange, pos), ttnn.bfloat16)  # [1,1,1,MAX] 1 for cached positions
-        add_mask = ttnn.multiply(
-            ttnn.add(ttnn.multiply(le, -1.0), 1.0), NEG_INF
-        )  # (1-le)*(-1e30): 0 cached, -inf ahead
+        # add_mask: 0 for cached positions (arange <= pos), -inf ahead. gt(arange, pos) is 1 exactly
+        # on the future positions, so one typecast + one scale gives the mask in 3 ops (vs the old
+        # le -> (1-le) -> *NEG_INF, 5 ops); mathematically identical.
+        # NOTE: add_mask must stay in DRAM — ttnn SDPA hard-asserts the attention mask is DRAM-resident
+        # (sdpa_device_operation.cpp: mask.buffer_type() == DRAM), so it can't be moved to L1.
+        gt = ttnn.typecast(ttnn.gt(self.arange, pos), ttnn.bfloat16)  # [1,1,1,MAX] 1 for future positions
+        add_mask = ttnn.multiply(gt, NEG_INF)  # 0 cached, -inf ahead
         onehot = None
         if write_idx is None:  # traced path needs the data-driven one-hot write selector
             onehot_row = ttnn.typecast(ttnn.eq(self.arange, pos), ttnn.bfloat16)  # [1,1,1,MAX] 1 at col=pos
             onehot = ttnn.reshape(onehot_row, (1, 1, self.max_seq, 1))  # [1,1,MAX,1]
         for block, (k, v) in zip(self.blocks, kv):
             x = block.forward_decode(x, k, v, onehot, add_mask, write_idx)  # k, v updated in place
-        y = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
+        y = ttnn.layer_norm(
+            x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         ttnn.deallocate(x)
         return y
 
@@ -74,7 +79,9 @@ class TtXttsGptStack(LightweightModule):
         forward and discards the returned K/V — the block has no separate full-forward."""
         for block in self.blocks:
             x, _, _ = block.forward_prefill(x)  # full causal block; drop the prompt K/V
-        y = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
+        y = ttnn.layer_norm(
+            x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         ttnn.deallocate(x)
         return y
 
@@ -85,6 +92,8 @@ class TtXttsGptStack(LightweightModule):
         for block in self.blocks:
             x, k, v = block.forward_prefill(x)
             kv.append((k, v))
-        y = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
+        y = ttnn.layer_norm(
+            x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         ttnn.deallocate(x)
         return y, kv
