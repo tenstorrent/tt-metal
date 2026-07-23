@@ -597,8 +597,23 @@ def test_sparse_mla_rotated(
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_accuracy(
-    mesh_device, seq_len, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+    mesh_device,
+    seq_len,
+    device_params,
+    variant,
+    config_only,
+    ds_layer,
+    ds_checkpoint,
+    ds_repo,
+    monkeypatch,
 ):
+    original = ttnn.experimental.indexer_score_dsa
+
+    def check_indexer_q_format(q, *args, **kwargs):
+        assert q.dtype == ttnn.bfloat8_b
+        return original(q, *args, **kwargs)
+
+    monkeypatch.setattr(ttnn.experimental, "indexer_score_dsa", check_indexer_q_format)
     topology = _topology_from_device_params(device_params)
     run_sparse_mla_accuracy_case(variant, config_only, mesh_device, seq_len, topology, ds_layer, ds_checkpoint, ds_repo)
 
