@@ -27,6 +27,7 @@ from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 # Qwen-specific imports
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
+from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import DECODE_FABRIC_CONFIG as _FABRIC_CONFIG
 from transformers import AutoTokenizer
 from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
 
@@ -483,7 +484,7 @@ def create_tt_qwen_model(
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,
-            "fabric_config": True,
+            "fabric_config": _FABRIC_CONFIG,
         }
     ],
     indirect=True,

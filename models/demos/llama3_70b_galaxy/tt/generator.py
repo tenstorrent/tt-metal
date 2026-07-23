@@ -898,13 +898,13 @@ class Generator(WarmupForwardMixin):
                         tt_sampled = tt_sampled[0]
 
                     sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0]).to(torch.int32)
-                    sampled_token = sampled_tokens[0, 0, 0, 0]
+                    sampled_token = sampled_tokens.reshape(-1)[0]
                     sampled_values.append(sampled_token)
                     slot_output_tokens[slot, 0] = sampled_token
 
                     if tt_log_probs is not None:
                         log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0])
-                        log_prob_values.append(log_probs_torch[0, 0, 0, 0])
+                        log_prob_values.append(log_probs_torch.reshape(-1)[0])
 
                     ttnn.deallocate(single_logits_batch)
 
@@ -947,8 +947,11 @@ class Generator(WarmupForwardMixin):
 
                 sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0]).to(torch.int32)
 
-                # sampled_tokens has 32 entries ordered by slot.
-                sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
+                # sampled_tokens has 32 entries ordered by slot. The leading
+                # dims are all 1 but their count varies by arch (e.g. Blackhole
+                # returns a rank-3 tensor vs rank-4 on Wormhole), so flatten
+                # rather than hard-indexing a fixed rank.
+                sampled_tensor = sampled_tokens.reshape(-1)  # Shape: [32]
                 output_toks = sampled_tensor[empty_slots]
                 _log_sampling_debug(
                     self._sampling_debug_enabled,
@@ -961,7 +964,7 @@ class Generator(WarmupForwardMixin):
                 if tt_log_probs is not None:
                     tt_lp = tt_log_probs
                     log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
-                    prefill_log_probs = log_probs_torch[0, 0, 0, :][empty_slots]
+                    prefill_log_probs = log_probs_torch.reshape(-1)[empty_slots]
 
         self._decode_inputs_need_reset = True
 
@@ -1814,8 +1817,10 @@ class Generator(WarmupForwardMixin):
             ttnn.synchronize_device(self.mesh_device)
             return tt_out[0, 0, :, : self.model.vocab_size].unsqueeze(1), tt_log_probs[0, 0, :, :]
 
-        # If not sharded (it is a sampled token), convert directly from device tensor to torch tensor
-        return tt_out[0, 0, 0, :], tt_log_probs[0, 0, 0, :]
+        # If not sharded (it is a sampled token), convert directly from device tensor to torch tensor.
+        # Leading dims are all 1 but their count varies by arch (Blackhole returns
+        # rank-3 vs rank-4 on Wormhole), so flatten instead of hard-indexing a fixed rank.
+        return tt_out.reshape(-1), tt_log_probs.reshape(-1)
 
     def chat_completion(
         self,
