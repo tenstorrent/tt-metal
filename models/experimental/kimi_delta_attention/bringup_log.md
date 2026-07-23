@@ -431,3 +431,12 @@
 - A T=640 smoke initially hung because a raw Aqk intermediate was published through writer-facing `cb_intra`; with multiple work items per core, the writer became a competing consumer. Keeping raw Aqk private and publishing only the masked result removed the race.
 - Realistic T=32 layer output/state PCC after the fix: `0.999933` / `0.999870`; convolution-state PCC: `0.999993`.
 - Full device regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s`. Result: `SAFE_PYTEST_RESULT: PASS`; 12 cases passed in 15.05 s.
+
+
+### 2026-07-23 08:30:02 UTC — Head-major output boundary
+
+- Added an opt-in `output_head_major` KDA result `[B*H,T,V]` in TILE layout. The default token-major API remains unchanged. The aligned layer path applies per-head RMSNorm and output gating directly, then uses the existing TILE-native concat-heads primitive.
+- Direct and composed regression is the 12-case command above; it covers default token-major, flat head-major, realistic T=32, padded T=4, decode, continuity, and both state dtypes.
+- T=640 smoke: `PERF_REPS=2 scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/perf/test_chunk_kda_perf.py -q -s`. Result: `SAFE_PYTEST_RESULT: PASS`; one case passed in 4.21 s after the CB-race correction.
+- Tracy report: `/tmp/kda_chunk_stable_headmajor_profile/reports/2026_07_23_08_30_02/ops_perf_results_2026_07_23_08_30_02.csv`. Ten warm calls averaged `0.825989 ms`, down `96.873 us` or `10.50%` from flat q/k/v token-major and `469.181 us` or `36.23%` from the original baseline.
+- Stable prep/scan averaged `379.582 us` / `284.180 us`; the two remaining gate/beta transposes totaled `136.576 us`, and output untilize/permute were eliminated. Numerical stabilization adds about `38.6 us` to prep while the head-major boundary removes about `136.3 us` of output layout work.

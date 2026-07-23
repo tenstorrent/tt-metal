@@ -36,6 +36,7 @@ def _assert_pcc(name: str, golden: torch.Tensor, actual: torch.Tensor, threshold
     "sequence,heads,key_dim,value_dim,flat_v,flat_qk",
     [
         (32, 2, 32, 32, False, False),
+        (32, 2, 32, 32, True, True),
         (64, 32, 128, 128, False, False),
         (64, 32, 128, 128, True, False),
         (64, 32, 128, 128, True, True),
@@ -78,11 +79,14 @@ def test_chunk_kda_pcc(
             beta_tt,
             initial_state=state_tt,
             output_final_state=True,
+            output_head_major=flat_qk,
             chunk_size=32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     actual_output = ttnn.to_torch(output_tt)
+    if flat_qk:
+        actual_output = actual_output.reshape(1, heads, sequence, value_dim).permute(0, 2, 1, 3)
     actual_state = ttnn.to_torch(final_state_tt)
     label = f"H={heads},K={key_dim},V={value_dim},T={sequence},flat_v={flat_v},flat_qk={flat_qk}"
     _assert_pcc(f"{label} output", golden_output, actual_output)

@@ -134,11 +134,13 @@ def chunk_kda_recurrence(
         scale=key_dim**-0.5,
         initial_state=initial_state,
         output_final_state=True,
+        output_head_major=len(q.shape) == 3,
         chunk_size=32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     assert final_state is not None
-    output = ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if len(q.shape) == 4:
+        output = ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     return output, final_state
 
 

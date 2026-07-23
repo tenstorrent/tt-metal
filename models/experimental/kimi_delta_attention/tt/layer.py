@@ -217,6 +217,7 @@ class KimiDeltaAttention:
         gate = ttnn.multiply(weights.decay_scale, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         assert self.recurrent_state is not None
+        head_major = mode == "chunk" and sequence % ttnn.TILE_SIZE == 0
         recurrence = fused_kda_recurrence if mode == "recurrent" else chunk_kda_recurrence
         output, new_recurrent_state = recurrence(q, k, v, gate, beta, self.recurrent_state)
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
@@ -228,6 +229,11 @@ class KimiDeltaAttention:
             compute_kernel_config=self.compute_config,
         )
         output_gate = ttnn.reshape(output_gate, (batch, sequence, config.num_heads, config.head_v_dim))
+        if head_major:
+            output_gate = ttnn.reshape(
+                ttnn.permute(output_gate, (0, 2, 1, 3)),
+                (batch * config.num_heads, sequence, config.head_v_dim),
+            )
         output = ttnn.rms_norm(
             output,
             weight=weights.norm,
@@ -236,6 +242,9 @@ class KimiDeltaAttention:
         )
         output_gate = ttnn.typecast(ttnn.sigmoid(output_gate), ttnn.float32)
         output = ttnn.multiply(output, output_gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if head_major:
+            output = ttnn.reshape(output, (batch, config.num_heads, sequence, config.head_v_dim))
+            output = ttnn.experimental.nlp_concat_heads(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.reshape(output, (batch, sequence, config.v_dim))
         output = ttnn.linear(
             output,

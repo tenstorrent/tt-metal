@@ -54,6 +54,7 @@ def test_chunk_kda_device_perf(device: ttnn.Device) -> None:
             beta,
             initial_state=state,
             output_final_state=True,
+            output_head_major=True,
             chunk_size=32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
