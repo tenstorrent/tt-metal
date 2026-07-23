@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt_stl/strong_type.hpp>
+#include <hostdevcommon/sem_scope.h>
 
 namespace tt::tt_metal::experimental {
 
@@ -48,6 +49,12 @@ struct SemaphoreSpec {
     // Advanced options (see advanced_options.hpp)
     //////////////////////////////////////////////////////////////////////////////
     SemaphoreAdvancedOptions advanced_options;
+
+    // Physical-path INTENT for this semaphore (Phase-2 auto-path baking). AUTO lets the
+    // host derive it; explicit values force a mechanism and are validated at build time
+    // (e.g. DM_LOCAL_CACHED on a multi-node semaphore is a FATAL). The host resolves this
+    // to a device SemScope that the kernel picks up via CTAD (see noc_semaphore.h).
+    SemaphoreScope scope = SemaphoreScope::AUTO;
 };
 
 }  // namespace tt::tt_metal::experimental
