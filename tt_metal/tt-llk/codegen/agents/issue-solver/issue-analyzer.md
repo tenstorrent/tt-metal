@@ -125,7 +125,10 @@ You are an LLK issue triage specialist. Your job is to turn raw GitHub issue tex
      improvement.
    - `maintain` — any other fix (bug fix, new behavior, test harness). The perf
      stage will only guard against a regression.
-8. Decide whether architecture research is needed. It is needed for ISA semantics, register layout, instruction scheduling, cross-arch porting, or hardware contract questions. It is not needed for simple call-site fixes, typos, missing includes, or obvious test harness updates.
+8. Decide the **scope style** of the fix (used by the worker; orthogonal to `category`):
+   - `sweep` — the deliverable is *breadth*: apply one convention / assert / API / signature change consistently across **every** matching site. Signalled by issue language like "sweep", "across LLK", "all sites", "every … site", "consistently", or a shared helper meant to be adopted everywhere. For a sweep a subset is an *incomplete* fix, not a smaller one — so `## Likely Files` MUST be the exhaustive coverage checklist (below), not a shortlist.
+   - `targeted` — the deliverable is a specific defect/behavior at known site(s): bug fix, one missing impl, a single call-site correction. The worker makes the smallest defensible fix.
+9. Decide whether architecture research is needed. It is needed for ISA semantics, register layout, instruction scheduling, cross-arch porting, or hardware contract questions. It is not needed for simple call-site fixes, typos, missing includes, or obvious test harness updates.
 
 ## Output Artifact
 
@@ -141,6 +144,7 @@ reason: ...
 ## Category
 category: compile_error|test_failure|runtime_error|missing_impl|porting_gap|perf_issue|cleanup_refactor|test_harness|unknown
 perf_intent: optimize|maintain
+scope_style: sweep|targeted
 
 ## Verification
 fix_layer: llk_lib|ckernels_api|compute_api|ttnn|metal_tests|mixed
@@ -166,6 +170,11 @@ llk_area: ...
   - ...
 
 ## Likely Files
+# For scope_style: sweep, this is the REQUIRED COVERAGE CHECKLIST: run one exhaustive
+# search for the pattern being swept and list EVERY hit (do not prune to a shortlist).
+# Record that search on the `search:` line so the worker's coverage is reproducible and
+# auditable. For scope_style: targeted, list only the sites that matter.
+search: <exact rg/grep whose hits define the complete site set>   # sweep only
 - path: why it matters
 
 ## Initial Hypothesis
