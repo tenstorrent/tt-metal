@@ -160,3 +160,25 @@ local matmul (11.843 ms), fused matmul + reduce-scatter (11.752 ms), scan
 optimization should therefore remove layout round trips and fuse adjacent
 pointwise work; adding recurrence cores or changing the retained collective
 grid cannot close the measured gap.
+
+## Native depthwise-convolution result
+
+Profile: `/tmp/kda_tp_layer_t640_native_conv_r10/reports/2026_07_23_11_02_40/ops_perf_results_2026_07_23_11_02_40.csv`.
+Replacing the shifted-FIR wrapper with the repository trace-safe native
+`ttnn.conv1d` pattern reduced the ten-replay median critical path from
+1.263 ms to 0.987 ms (21.8%). The signposted host interval was 10.232 ms, or
+1.023 ms/layer (21.3% below 1.300 ms). Median active kernels fell from
+1.213-1.216 ms to 0.940-0.942 ms/device, proving removed layout work accounts
+for the gain.
+
+The native convolution measures 26.081 us median and removes six
+programs/device plus about 274 us of active time. At 0.987 ms the mesh sustains
+59.99 TFLOP/s, or 4.93% of eight-chip peak; host-observed throughput is
+57.86 TFLOP/s, or 4.76%.
+
+The new active-time order per device/layer is local matmuls (147.781 us),
+fused output matmul + reduce-scatter (146.585 us), scan (96.771 us),
+reshape/view (89.783 us), prep (84.274 us), untilize-with-unpadding
+(81.276 us), tilize-with-padding (56.508 us), and untilize (39.035 us).
+The fused output slowest-device median is 147.859 us, or 34.9% effective CCL
+roofline; convolution does not change the collective distribution decision.

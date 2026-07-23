@@ -124,6 +124,14 @@ next step: the active-time ranking instead prioritizes untilize/tilize removal,
 local matmul/layout fusion, then a fused-output kernel change capable of
 crossing the 129.0 us CCL target.
 
+The first layout reduction retains this map and replaces only aligned B=1
+prefill convolution with native depthwise `ttnn.conv1d`; decode, short,
+batched, and padded paths retain the general FIR. Target-shape trace latency
+falls from 1.263 ms to 0.987 ms and active kernels from about 1.215 ms to
+0.941 ms/device. The unchanged prep, scan, and fused-collective times confirm
+that this is a local layout win, not a work-redistribution effect. Continue
+with output-gate head-layout fusion before reconsidering core allocation.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence
