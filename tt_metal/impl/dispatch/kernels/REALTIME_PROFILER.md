@@ -61,13 +61,14 @@ The **BRISC reader** polls its state mailbox. On `PUSH_A`/`PUSH_B` it issues a
 buffer into the next ring slot, then advances `write_index` (records for
 unprofiled programs are read but not committed). If the ring is full it spins
 (heartbeat `ring_full_wait_count`); in practice this does not happen, because the
-host drains records faster than they are produced. The reader also services host
-clock-sync requests, enqueueing sync-marker records into the same ring.
+host drains records faster than they are produced.
 
 The **NCRISC pusher** owns the slow PCIe path. Each iteration it snapshots
 `write_index`/`read_index`, and if the ring is non-empty it pushes *all*
 available entries in one `push_entries_to_host` call, then advances `read_index`
-by the number drained.
+by the number drained. It also services the host clock-sync handshake — NOC-writing
+the device WALL_CLOCK and token into a host-pinned ACK word — off the record ring
+entirely, so sync work never stalls the reader.
 
 `push_entries_to_host` reserves the pages in the D2H socket, then issues
 coalesced NOC writes over PCIe — up to `NOC_MAX_BURST_SIZE` per write, chunked at
@@ -107,5 +108,6 @@ every record arrives with the device ring and host D2H FIFO never filling.
 - Each MeshDevice manager runs a receiver thread that drains device→host pages and
   publishes decoded records onto its own `BroadcastRing`. A context-wide service
   owns one delivery thread per consumer; that thread reads every attached manager
-  ring and serializes record and clock-sync hooks. A slow callback only drops
+  ring and delivers record batches to that consumer (each record self-carries its
+  clock mapping, so there is no separate sync stream). A slow callback only drops
   records for its own ring reader; it never stalls page draining or dispatch.

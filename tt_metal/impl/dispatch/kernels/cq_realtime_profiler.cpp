@@ -19,6 +19,13 @@
 // Size of timestamp data to read from dispatch core (kernel_start + kernel_end)
 constexpr uint32_t realtime_profiler_timestamp_size = 2 * sizeof(realtime_profiler_timestamp_t);  // 32 bytes
 
+// The pair read below lands in a 16B-aligned ring slot, and the NoC requires src/dst L1-read congruence
+// (NOC_L1_READ_ALIGNMENT_BYTES == 16). kernel_start_{a,b} are the read sources, so both must stay 16B-aligned in the
+// dispatch mailbox; a timestamp record smaller than 16B shifts kernel_start_b off the boundary and silently garbles
+// every buffer-B read.
+static_assert(offsetof(realtime_profiler_msg_t, kernel_start_a) % 16 == 0);
+static_assert(offsetof(realtime_profiler_msg_t, kernel_start_b) % 16 == 0);
+
 // Compile-time defines set by host:
 // DISPATCH_CORE_NOC_X  - NOC X coordinate of dispatch_s core
 // DISPATCH_CORE_NOC_Y  - NOC Y coordinate of dispatch_s core

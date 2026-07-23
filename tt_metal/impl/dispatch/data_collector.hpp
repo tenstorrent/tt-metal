@@ -8,7 +8,6 @@
 #include <atomic>
 #include <cstdint>
 #include <map>
-#include <memory>
 #include <mutex>
 #include <span>
 #include <string>
