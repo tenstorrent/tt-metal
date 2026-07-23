@@ -300,15 +300,14 @@ def test_runtime_fanout(device, rect_name):
 # THIS IS THE REGRESSION the split fixes: with the dense default (ack == fan-out == 4) the sender would
 # wait for 4 acks while only 2 arrive -> HANG (the round-1 conv-1D-weights hang, report.md D2). The
 # explicit ack=2 makes it pass. n_iters=1 keeps the mixed-handshake level-flag protocol unambiguous.
-def _run_split_count(device, payload_tiles):
+def _run_split_count(device, payload_tiles, recv_rect=((0, 0), (0, 3)), ack_subset=2):
     page_bytes = TILE_BYTES
     payload_pages = payload_tiles
-    # 1x4 receiver box at x=0; sender out-of-rect at (5,5).
-    rx0, ry0, rx1, ry1 = 0, 0, 0, 3
+    (rx0, ry0), (rx1, ry1) = recv_rect
     sx, sy = 5, 5
-    area = (rx1 - rx0 + 1) * (ry1 - ry0 + 1)  # 4
+    area = (rx1 - rx0 + 1) * (ry1 - ry0 + 1)
     num_recv = area
-    ack_subset = 2  # only the first 2 box cores ack; fan-out (4) > ack (2)
+    assert 0 < ack_subset < area
 
     in_shape = [1, 1, 32, 32 * payload_tiles]
     payload = torch.arange(0, payload_tiles * 1024, dtype=torch.float32).reshape(in_shape).to(torch.bfloat16)
@@ -375,27 +374,29 @@ def _run_split_count(device, payload_tiles):
     # ---- receivers: first `ack_subset` get pre_handshake=true (ack); the rest pre_handshake=false
     #      (receive the data but don't ack) — ONE mc object, the bit chosen per kernel. Same data_ready. ----
     kernels = [sender_k]
-    for j in range(num_recv):
-        ry = ry0 + j  # column box, so the j-th core is (rx0, ry0+j)
-        acks = j < ack_subset
-        recv_ct = [cb_dst]
-        recv_ct += list(mc.compile_time_args(pre_handshake=acks))
-        recv_ct += [payload_pages, page_bytes, 1]
-        recv_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-        recv_rt = ttnn.RuntimeArgs()
-        recv_rt[rx0][ry] = [output_tensor.buffer_address(), j * payload_pages] + list(
-            mc.runtime_args(ttnn.CoreCoord(rx0, ry))
-        )
-        kernels.append(
-            ttnn.KernelDescriptor(
-                kernel_source=f"{KERNEL_DIR}/pipe_receiver.cpp",
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(rx0, ry), ttnn.CoreCoord(rx0, ry))]),
-                compile_time_args=recv_ct,
-                runtime_args=recv_rt,
-                config=ttnn.WriterConfigDescriptor(),
+    j = 0
+    for ry in range(ry0, ry1 + 1):
+        for rx in range(rx0, rx1 + 1):
+            acks = j < ack_subset
+            recv_ct = [cb_dst]
+            recv_ct += list(mc.compile_time_args(pre_handshake=acks))
+            recv_ct += [payload_pages, page_bytes, 1]
+            recv_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+            recv_rt = ttnn.RuntimeArgs()
+            recv_rt[rx][ry] = [output_tensor.buffer_address(), j * payload_pages] + list(
+                mc.runtime_args(ttnn.CoreCoord(rx, ry))
             )
-        )
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KERNEL_DIR}/pipe_receiver.cpp",
+                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                    core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(rx, ry), ttnn.CoreCoord(rx, ry))]),
+                    compile_time_args=recv_ct,
+                    runtime_args=recv_rt,
+                    config=ttnn.WriterConfigDescriptor(),
+                )
+            )
+            j += 1
 
     pd = ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)
     output = ttnn.generic_op(io_tensors, pd)
@@ -412,6 +413,15 @@ def _run_split_count(device, payload_tiles):
 @pytest.mark.parametrize("payload_tiles", [1, 4])
 def test_split_count(device, payload_tiles):
     _run_split_count(device, payload_tiles=payload_tiles)
+
+
+# On Blackhole, logical workers x=0..7 map to virtual x=1..7,10, so this receiver rectangle crosses
+# non-worker NoC columns 8 and 9. McastRect::area() must exclude those columns for the hardware fan-out,
+# while the consumer-ready wait must remain the smaller explicit subset: all 8 receive, only 4 ack.
+# This is the case a Blackhole-only area correction would still hang if fan-out and ACK count were
+# conflated.
+def test_split_count_across_bh_non_worker_columns(device):
+    _run_split_count(device, payload_tiles=1, recv_rect=((0, 0), (7, 0)), ack_subset=4)
 
 
 # ================== F3: sender IN rect, INCLUDE_SRC loopback (bake-off winner) ==================
