@@ -282,6 +282,16 @@ inline void _llk_math_pack_sync_init_()
 {
     static_assert(DST == DstSync::SyncFull || DST == DstSync::SyncHalf, "Only Dest Sync Half and Full are supported");
 
+    // [#48552] Drain this thread's pipe so the pc_buf semaphore MIRROR is coherent with all retired sync ops
+    // (including PACK's still-in-flight MATH_PACK SEMGET from the previous program's final tile_regs_release)
+    // BEFORE the read-spin below. The Quasar port dropped this; WH keeps it at the identical spot
+    // (tt_llk_wormhole_b0/llk_lib/llk_math_common.h:106). semaphore_read reads the pc_buf mirror, which can
+    // bypass older writes (ckernel.h:149) — so without this fence the spin passes while MATH_PACK is still
+    // non-zero, SEMINIT(0) then races the straggling SEMGET -> count wraps to max -> the next program's MATH
+    // wedges forever in tile_regs_acquire (STALL_ON_MAX). It is a bounded pipe-drain, never a semaphore wait,
+    // so it cannot hang at a clean boundary (sem already 0 -> spin body just doesn't execute).
+    tensix_sync();
+
     // Wait for previous packs to finish before claiming all dest
     while (semaphore_read(semaphore::MATH_PACK) > 0)
     {
