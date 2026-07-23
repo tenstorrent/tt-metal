@@ -822,9 +822,10 @@ class TtMoEGatePrefill(LightweightModule):
         actual_start: int = 0,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         mode = self.fallback_mode
-        logger.debug(f"[MoeGate] fallback_mode={mode.value}")
+        # logger.debug(f"[MoeGate] fallback_mode={mode.value}")
 
         # ---- Phase 1: Logits (matmul) ----
+        # signpost(header="moe_gate_linear")
         if mode in (
             GateComputeMode.DEVICE,
             GateComputeMode.DEVICE_FP32,
@@ -838,8 +839,10 @@ class TtMoEGatePrefill(LightweightModule):
             pass  # the reference HashRouter computes logits from composed host x in Phase 2
         else:  # HOST_MATMUL, HOST_ALL
             host_logits = self._host_matmul(x)
+        # signpost(header="moe_gate_linear")
 
         # ---- Phase 2: Grouped gate ----
+        # signpost(header="moe_gate_grouped_gate")
         # The device gate kernels select the routing rule from n_expert_groups: with a single expert
         # group (n_expert_groups == 1, e.g. Kimi) the grouped-topk op collapses to a plain top-k.
         single_group = self.config.n_expert_groups == 1
@@ -903,6 +906,7 @@ class TtMoEGatePrefill(LightweightModule):
             host_indices, host_scores = self._host_gpt_gate(host_logits)
             ttnn_scores = self._host_scores_to_device(host_scores)
             ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
+        # signpost(header="moe_gate_grouped_gate")
 
         return (
             ttnn_scores,
