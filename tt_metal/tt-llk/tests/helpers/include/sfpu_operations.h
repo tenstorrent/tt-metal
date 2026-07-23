@@ -654,32 +654,16 @@ void call_unary_sfpu_operation_init()
         //     reciprocal), which needs no op-specific init.
         llk_math_eltwise_unary_sfpu_init<SfpuType::unused>();
     }
-    else if constexpr (OPERATION == SfpuType::equal_zero)
+    else if constexpr (
+        OPERATION == SfpuType::equal_zero || OPERATION == SfpuType::not_equal_zero || OPERATION == SfpuType::less_than_zero ||
+        OPERATION == SfpuType::greater_than_zero || OPERATION == SfpuType::less_than_equal_zero || OPERATION == SfpuType::greater_than_equal_zero)
     {
         // Comparison-to-zero ops pair the generic per-op init with the matching metal
         // *_init from llk_sfpu/ckernel_sfpu_comp.h, mirroring production SFPU_UNARY_INIT
-        // (eqz_tile_init -> equal_zero_init, etc.). This reaches those *_init functions.
+        // (eqz_tile_init -> equal_zero_init, etc.). All six of those *_init are byte-identical
+        // (program ADDR_MOD_6 + reset the dest RWC counter), so one representative init covers
+        // the whole group; OPERATION is still forwarded so the per-op init tag stays correct.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu::equal_zero_init);
-    }
-    else if constexpr (OPERATION == SfpuType::not_equal_zero)
-    {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu::not_equal_zero_init);
-    }
-    else if constexpr (OPERATION == SfpuType::less_than_zero)
-    {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu::less_than_zero_init);
-    }
-    else if constexpr (OPERATION == SfpuType::greater_than_zero)
-    {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu::greater_than_zero_init);
-    }
-    else if constexpr (OPERATION == SfpuType::less_than_equal_zero)
-    {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu::less_than_equal_zero_init);
-    }
-    else if constexpr (OPERATION == SfpuType::greater_than_equal_zero)
-    {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu::greater_than_equal_zero_init);
     }
     else
     {
