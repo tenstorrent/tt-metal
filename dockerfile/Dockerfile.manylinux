@@ -46,19 +46,15 @@ ENV TRACY_NO_ISA_EXTENSIONS=1
 # Copy mold linker from pre-built tool image.
 # COPY --link makes these independent merge layers whose blobs depend only on
 # the tool content, not on upstream base-image churn (decouples registry cache).
-COPY --from=mold-layer --link /install/bin/ /usr/local/bin/
-COPY --from=mold-layer --link /install/lib/ /usr/local/lib/
+COPY --from=mold-layer --link /install/ /usr/local/
 RUN mold --version
 
-COPY --from=ccache-layer --link /install/bin/ccache /usr/local/bin/ccache
-COPY --from=ccache-layer --link /install/libexec/ /usr/local/libexec/
+COPY --from=ccache-layer --link /install/ /usr/local/
 RUN test -x /usr/local/libexec/ccache-storage-s3 || { echo "ERROR: ccache-storage-s3 helper missing from ccache-layer" >&2; exit 1; } && \
     ccache --version
 
 # Copy zstd from pre-built tool image
-COPY --from=zstd-layer --link /install/bin/ /usr/local/bin/
-COPY --from=zstd-layer --link /install/lib/ /usr/local/lib/
-COPY --from=zstd-layer --link /install/include/ /usr/local/include/
+COPY --from=zstd-layer --link /install/ /usr/local/
 RUN ldconfig && zstd --version
 
 # Copy OpenMPI (ULFM) from pre-built tool image
