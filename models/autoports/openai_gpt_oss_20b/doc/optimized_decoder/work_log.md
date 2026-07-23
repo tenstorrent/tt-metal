@@ -672,3 +672,11 @@ retained as `logs/autofix_final_o_search_watcher.log`.
   accuracy guard, and positions at and above 128 return to native TTNN SDPA.
   HiFi2 QKV/O projections remain selected from position 127 onward to keep
   routing stable.
+
+## Final local checkpoint
+
+The post-review implementation and evidence checkpoint is
+`251f046a596` (`Finalize GPT-OSS optimized decoder`). All repository hooks
+passed; only the generic 500 KB size hook was intentionally skipped for the
+required 1.64 MB compressed advisor decision trace whose path, size, hash,
+and gzip integrity are recorded above. No commit was pushed.
