@@ -35,6 +35,7 @@ if ROOT not in sys.path:
 
 from models.experimental.hunyuan_image_3_0.ref.weights import ensure_base_weights
 from models.experimental.hunyuan_image_3_0.ref.vae.decoder import Z_CHANNELS, load_decoder, vae_decode_output_to_rgb
+from models.experimental.hunyuan_image_3_0.ref.model_config import VAE_SCALING_FACTOR
 
 WEIGHTS = ensure_base_weights()
 os.environ.setdefault("HUNYUAN_MODEL_DIR", str(WEIGHTS))
@@ -43,7 +44,7 @@ LATENT_PATH = os.environ.get("HY_LATENT")
 GRID = int(os.environ.get("HY_GRID", "64"))
 SEED = int(os.environ.get("HY_SEED", "42"))
 OUT_PNG = os.environ.get("HY_OUT", str(Path(__file__).resolve().parent.parent / "vae_random_torch.png"))
-DEFAULT_SCALING = 0.562679178327931
+DEFAULT_SCALING = VAE_SCALING_FACTOR
 
 
 def _load_latent():

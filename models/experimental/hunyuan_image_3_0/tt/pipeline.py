@@ -36,6 +36,8 @@ import time
 import torch
 import ttnn
 
+from models.experimental.hunyuan_image_3_0.ref.model_config import VAE_SCALING_FACTOR
+
 from .attention.mask import build_attention_mask_tt
 from .denoise_dual_cq import DenoiseDualCQCoordinator, denoise_2cq_enabled, latent_tt_to_torch
 from .matmul_utils import spill_resident_emb_to_dram
@@ -308,10 +310,9 @@ def denoise_loop(
     Host ``TimestepEmbedder`` keeps the legacy scatter-then-upload path. Distil /
     meanflow follow the same rule when their emb args are TT modules.
 
-    Latent representation (default ``HY_LATENT_RESIDENT=0``): legacy per-step torch
-    NCHW ``to_torch``/``from_torch`` hops — known-good image quality. Set
-    ``HY_LATENT_RESIDENT=1`` to keep TILE flat NHWC on device between steps (Euler
-    on device; one final D2H for VAE); that path still needs PCC validation.
+    Latent representation (default ``HY_LATENT_RESIDENT=1``): keep TILE flat NHWC
+    on device between DiT steps (Euler on device; one final D2H for VAE). Set
+    ``HY_LATENT_RESIDENT=0`` for legacy per-step torch NCHW ``to_torch``/``from_torch`` hops.
     """
     import torch
 
@@ -327,9 +328,8 @@ def denoise_loop(
     scheduler.set_begin_index(0)
     num_steps = len(scheduler.timesteps) if scheduler.timesteps is not None else 0
     # Keep latent on device between DiT steps (no to_torch/from_torch mid-loop).
-    # Default OFF: resident TILE Euler previously decoded to neon band garbage.
-    # Opt in with HY_LATENT_RESIDENT=1 once that path is PCC-clean vs host hops.
-    latent_resident = os.environ.get("HY_LATENT_RESIDENT", "0") == "1"
+    # Set HY_LATENT_RESIDENT=0 for the legacy host-hop path.
+    latent_resident = os.environ.get("HY_LATENT_RESIDENT", "1") == "1"
     # Device scatter when TT timestep embedders are passed (I2I / distil / meanflow).
     device_scatter = isinstance(timestep_emb, HunyuanTtTimestepEmbedder)
     # Import only when needed — avoids pulling cond_instantiate on the T2I path.
@@ -716,7 +716,7 @@ def decode_latent(
     mesh_device,  # ttnn.MeshDevice (replicated) — the VAE decoder's device context
     latent,  # torch [B, C, h, w] diffusion latent (single frame)
     *,
-    scaling_factor: float = 0.562679178327931,  # config.json vae.scaling_factor
+    scaling_factor: float = VAE_SCALING_FACTOR,
     decoder=None,  # optional prebuilt VAEDecoderTTNN (reuse across calls)
     grid_hw=None,  # (h, w) latent grid; when set, build the decoder for this size
     dtype=ttnn.bfloat16,

@@ -264,6 +264,9 @@ def decode_mm_program_config(device, M: int, K: int, N: int):
 # per-device seq IS 1024 — and at exactly that bound the interleaved rms_norm CBs
 # clash with the L1 residual (program.cpp validate_circular_buffer_region). Exclusive
 # upper bound keeps decode (Sd=32) and SP=2 prefill (Sd=512) in L1.
+# NOTE: chunked KV *continuation* remainder chunks often have Q < 1024 while K is the
+# full prefix; transformer_layer / attention force DRAM in that path so SDPA CBs for
+# long K do not collide with L1 residuals (demo_i2i last chunk after [4096:5120]).
 RESID_L1_MAX_SEQ = 1024
 
 

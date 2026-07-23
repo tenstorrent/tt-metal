@@ -30,6 +30,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.hunyuan_image_3_0.ref.attention.rope_2d import build_batch_2d_rope
+from models.experimental.hunyuan_image_3_0.ref.model_config import ATTENTION_HEAD_DIM, ROPE_THETA
 
 
 class HunyuanTtRoPE2D(LightweightModule):
@@ -44,7 +45,7 @@ class HunyuanTtRoPE2D(LightweightModule):
 
     Args:
         device:    TTNN device.
-        head_dim:  Per-head dimension (default 128).
+        head_dim:  Per-head dimension (from config attention_head_dim).
 
     Note on rotate_half implementation
     -----------------------------------
@@ -55,7 +56,7 @@ class HunyuanTtRoPE2D(LightweightModule):
     split-half convention (x*cos + rotate_half(x)*sin) as a single device op.
     """
 
-    def __init__(self, device, head_dim: int = 128):
+    def __init__(self, device, head_dim: int = ATTENTION_HEAD_DIM):
         super().__init__()
         self.device = device
         self.head_dim = head_dim
@@ -64,7 +65,7 @@ class HunyuanTtRoPE2D(LightweightModule):
         self,
         seq_len: int,
         image_infos=None,
-        base: int = 10000,
+        base: float = ROPE_THETA,
     ):
         """
         Build 2D RoPE cos/sin tables on CPU and upload to device.

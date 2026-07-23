@@ -8,6 +8,7 @@ from pathlib import Path
 
 import torch
 
+from models.experimental.hunyuan_image_3_0.ref.model_config import HIDDEN_SIZE
 from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR, load_prefixed_state_dict
 
 from models.experimental.hunyuan_image_3_0.ref.vision.siglip2 import (
@@ -49,7 +50,7 @@ def load_timestep_embedder(
     prefix: str,
     model_dir: Path = MODEL_DIR,
     *,
-    hidden_size: int = 4096,
+    hidden_size: int = HIDDEN_SIZE,
     dtype: torch.dtype = torch.float32,
 ) -> TimestepEmbedder:
     state = load_prefixed_state_dict(model_dir, f"{prefix}.", dtype=dtype)

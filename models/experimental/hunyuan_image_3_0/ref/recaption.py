@@ -22,6 +22,7 @@ from models.experimental.hunyuan_image_3_0.ref.generate import (
     SamplingConfig,
     generate_text,
 )
+from models.experimental.hunyuan_image_3_0.ref.model_config import IMAGE_BASE_SIZE
 from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import GenImageHostInputs
 from models.experimental.hunyuan_image_3_0.ref.tokenizer.hunyuan_tokenizer import HunyuanTokenizer
 from models.experimental.hunyuan_image_3_0.ref.tokenizer.special_tokens import SpecialTokens
@@ -66,7 +67,7 @@ def build_recaption_stage_params(
     tok: HunyuanTokenizer,
     bot_task: str,
     *,
-    image_size: str | int = 1024,
+    image_size: str | int = IMAGE_BASE_SIZE,
     sequence_template: str | None = None,
     image_base_size: int | None = None,
 ) -> RecaptionStageParams:
@@ -377,7 +378,7 @@ def run_recaption_ar(
     tok: HunyuanTokenizer,
     bot_task: str,
     *,
-    image_size: str | int = 1024,
+    image_size: str | int = IMAGE_BASE_SIZE,
     sequence_template: str | None = None,
     config: SamplingConfig | None = None,
     generator: torch.Generator | None = None,
@@ -456,7 +457,7 @@ def run_recaption(
     bot_task: str = "recaption",
     system_prompt: str | None = None,
     image=None,
-    image_size: str | int = 1024,
+    image_size: str | int = IMAGE_BASE_SIZE,
     max_new_tokens: int | None = None,
     seed: int | None = None,
     drop_think: bool = False,

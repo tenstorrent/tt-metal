@@ -21,24 +21,33 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor
 
+from models.experimental.hunyuan_image_3_0.ref.model_config import (
+    IMAGE_BASE_SIZE,
+    VAE_GN_EPS,
+    VAE_MID_CHANNELS,
+    VAE_NUM_GROUPS,
+    vae_section,
+)
 from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR, load_prefixed_state_dict, load_tensors
 
-IN_CHANNELS = 3
-Z_CHANNELS = 32
+_VAE = vae_section()
+IN_CHANNELS = int(_VAE["in_channels"])
+Z_CHANNELS = int(_VAE["latent_channels"])
 OUT_PARAM_CHANNELS = 2 * Z_CHANNELS
-BLOCK_OUT_CHANNELS = (128, 256, 512, 1024, 1024)
-MID_CHANNELS = 1024
-PIXEL_T = 4
-PIXEL_H = 1024
-PIXEL_W = 1024
+BLOCK_OUT_CHANNELS = tuple(int(c) for c in _VAE["block_out_channels"])
+MID_CHANNELS = VAE_MID_CHANNELS
+PIXEL_T = int(_VAE["ffactor_temporal"])
+# Canonical generation resolution (config sample_size is a training crop, not demo size).
+PIXEL_H = IMAGE_BASE_SIZE
+PIXEL_W = IMAGE_BASE_SIZE
+FFACTOR_SPATIAL = int(_VAE["ffactor_spatial"])
+FFACTOR_TEMPORAL = int(_VAE["ffactor_temporal"])
 LATENT_T = 1
-LATENT_H = 64
-LATENT_W = 64
-NUM_GROUPS = 32
-GN_EPS = 1e-6
-NUM_RES_BLOCKS = 2
-FFACTOR_SPATIAL = 16
-FFACTOR_TEMPORAL = 4
+LATENT_H = PIXEL_H // FFACTOR_SPATIAL
+LATENT_W = PIXEL_W // FFACTOR_SPATIAL
+NUM_GROUPS = VAE_NUM_GROUPS
+GN_EPS = VAE_GN_EPS
+NUM_RES_BLOCKS = int(_VAE["layers_per_block"])
 
 
 class DownLevelSpec(NamedTuple):
