@@ -354,6 +354,7 @@ public:
     void mark_created_from_spec() { created_from_spec_ = true; }
 
     // Metal 2.0: Add name -> handle mappings (temporary indirection)
+    bool has_metal2_registry() const { return metal2_registry_.has_value(); }
     void register_kernel_spec_name(const std::string& name, KernelHandle handle);
     void register_dfb_spec_name(const std::string& name, uint32_t dfb_id);
     void register_semaphore_spec_name(const std::string& name, uint32_t sem_id);
