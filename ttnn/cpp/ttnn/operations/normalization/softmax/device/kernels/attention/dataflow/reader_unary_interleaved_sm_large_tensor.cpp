@@ -124,6 +124,17 @@ void kernel_main() {
 
 #endif
             }
+            // Complete the CB cycle after a partial last Wt pass so compute can realign to fifo base.
+            // Pad tiles are discarded by compute; contents are unused.
+            const uint32_t cb_align_pad = (cb_length_t - (Wt % cb_length_t)) % cb_length_t;
+            if (cb_align_pad > 0) {
+                cb_id_in0_obj.reserve_back(cb_align_pad);
+                cb_id_in0_obj.push_back(cb_align_pad);
+#if FUSED_SCALE_MASK
+                cb_id_attn_obj.reserve_back(cb_align_pad);
+                cb_id_attn_obj.push_back(cb_align_pad);
+#endif
+            }
         }
 #if CAUSAL_MASK
         ++ht;

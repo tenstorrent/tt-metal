@@ -466,7 +466,7 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
              tile_offset,
              block_size,
              static_cast<uint32_t>(mask_padded_data),
-             num_datum_padded});
+             Wt});
 
         curr_row += num_tile_rows_per_core;
     }

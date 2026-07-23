@@ -64,6 +64,29 @@ template <PoolType reduce_type, uint32_t cb_in_id, uint32_t cb_scaler_id, uint32
 void reduce_cb(bool use_prev_reduce, uint32_t cb_length_t);
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
 
+// CB consumers cannot wrap mid-fifo: pops in one cycle must land exactly on fifo_limit.
+// After a partial last pass (Wt % cb_length_t != 0), rd/wr sit at that offset. Push/pop
+// `pad` tiles to complete the cycle and return pointers to the CB base before the next stage.
+ALWI void realign_cb_after_partial_pass(uint32_t cb_id, uint32_t pad) {
+    if (pad == 0) {
+        return;
+    }
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(pad);
+    cb.push_back(pad);
+    cb.wait_front(pad);
+    cb.pop_front(pad);
+}
+
+ALWI void discard_cb_pad(uint32_t cb_id, uint32_t pad) {
+    if (pad == 0) {
+        return;
+    }
+    CircularBuffer cb(cb_id);
+    cb.wait_front(pad);
+    cb.pop_front(pad);
+}
+
 // for scale+mask+softmax:
 // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
 // bcast add H               example: ( [2,1,1024,64] + [2,1,32,64] ) (bcast W -> H)
@@ -74,32 +97,27 @@ void apply_fused_scale_mask(
     uint32_t cb_in, uint32_t cb_fused_scale_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
     // Requirements:
     //   cb_length_t of cb_in and cb_out are the same.
-    //   blk is a divisor of cb_length_t
+    //   A partial final block (cb_length_t not a multiple of blk) is handled by clamping rem below.
     CircularBuffer cb_in_obj(cb_in);
     CircularBuffer cb_out_obj(cb_out);
     reconfig_data_format(cb_in, cb_fused_scale_mask);
     pack_reconfig_data_format(cb_out);
     mul_tiles_bcast_scalar_init_short(cb_in, cb_fused_scale_mask);
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
-        if(cb_length_t -cur_blk < blk){
-            blk = cb_length_t- cur_blk;
-        }
+        const uint32_t rem = (cur_blk + blk > cb_length_t) ? (cb_length_t - cur_blk) : blk;
         tile_regs_acquire();
-        cb_in_obj.wait_front(blk);
-        cb_out_obj.reserve_back(blk);
-        if (cb_length_t - cur_blk < blk) {
-            blk = cb_length_t - cur_blk;
-        }
-        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        cb_in_obj.wait_front(rem);
+        cb_out_obj.reserve_back(rem);
+        for (uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             mul_tiles_bcast_scalar(cb_in, cb_fused_scale_mask, cur_dst, 0, cur_dst);
         }
         tile_regs_wait();
         tile_regs_commit();
-        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        for (uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_out_obj.push_back(blk);
-        cb_in_obj.pop_front(blk);
+        cb_out_obj.push_back(rem);
+        cb_in_obj.pop_front(rem);
         tile_regs_release();
     }
 }
@@ -118,41 +136,37 @@ void apply_fused_attn_mask(
     add_bcast_rows_init_short(cb_in, cb_fused_attn_mask);
 #endif
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
+        const uint32_t rem = (cur_blk + blk > cb_length_t) ? (cb_length_t - cur_blk) : blk;
         tile_regs_acquire();
-        if(cb_length_t -cur_blk < blk){
-            blk = cb_length_t- cur_blk;
-        }
         tile_regs_wait();
-        cb_in_obj.wait_front(blk);
-        cb_fused_attn_mask_obj.wait_front(blk);  // cumulative wait for up to wt tiles
-        cb_out_obj.reserve_back(blk);
-        if (cb_length_t - cur_blk < blk) {
-            blk = cb_length_t - cur_blk;
-        }
+        cb_in_obj.wait_front(rem);
+        cb_fused_attn_mask_obj.wait_front(rem);  // cumulative wait for up to wt tiles
+        cb_out_obj.reserve_back(rem);
 #ifdef CAUSAL_MASK
-        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        for (uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             add_tiles(cb_in, cb_fused_attn_mask, cur_dst, cur_dst, cur_dst);  // tile *= 1/(sum(exp(x)))
         }
 #else
-        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        for (uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             add_tiles_bcast_rows(cb_in, cb_fused_attn_mask, cur_dst, cur_dst, cur_dst);
         }
 #endif
-        if (do_mask && cur_blk == cb_length_t - blk) {
+        if (do_mask && cur_blk + rem == cb_length_t) {
             // add mask to the last register to pad with -inf
             reconfig_data_format_srca(cb_mask_padded);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_mask_padded);
+            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                cb_mask_padded);
             cb_mask_padded_obj.wait_front(1);
             binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                cb_mask_padded, 0 /*in_tile_index*/, blk - 1);
+                cb_mask_padded, 0 /*in_tile_index*/, rem - 1);
         }
         tile_regs_commit();
-        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        for (uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_out_obj.push_back(blk);
-        cb_in_obj.pop_front(blk);
-        cb_fused_attn_mask_obj.pop_front(blk);
+        cb_out_obj.push_back(rem);
+        cb_in_obj.pop_front(rem);
+        cb_fused_attn_mask_obj.pop_front(rem);
         tile_regs_release();
     }
 }
@@ -167,14 +181,12 @@ void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t b
     pack_reconfig_data_format(cb_out);
     copy_tile_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
+        const uint32_t rem = (cur_blk + blk > cb_length_t) ? (cb_length_t - cur_blk) : blk;
         tile_regs_acquire();
-        cb_in_obj.wait_front(blk);
-        cb_out_obj.reserve_back(blk);
-        if (cb_length_t - cur_blk < blk) {
-            blk = cb_length_t - cur_blk;
-        }
-        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
-            if (cur_dst == blk - 1 && cur_blk == cb_length_t - blk) {
+        cb_in_obj.wait_front(rem);
+        cb_out_obj.reserve_back(rem);
+        for (uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
+            if (cur_dst == rem - 1 && cur_blk + rem == cb_length_t) {
                 add_tiles_init(cb_in, cb_mask_padded);
                 cb_mask_padded_obj.wait_front(1);
                 add_tiles(cb_in, cb_mask_padded, cur_dst, 0, cur_dst);
@@ -184,11 +196,11 @@ void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t b
         }
         tile_regs_wait();
         tile_regs_commit();
-        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        for (uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_out_obj.push_back(blk);
-        cb_in_obj.pop_front(blk);
+        cb_out_obj.push_back(rem);
+        cb_in_obj.pop_front(rem);
         tile_regs_release();
     }
 }
@@ -198,7 +210,7 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
     //   cb_length_t of cb_in and cb_out are the same.
     //   Calculates e^cb_in for cb_length_t num of tiles
     //      Also if numeric stable calcs e^(cb_in- BCASTCOL(cb_max))
-    //   A partial final block (cb_length_t not a multiple of blk) is handled by clamping blk below.
+    //   A partial final block (cb_length_t not a multiple of blk) is handled by clamping rem below.
 
     CircularBuffer cb_in_obj(cb_in);
     CircularBuffer cb_out_obj(cb_out);
@@ -211,33 +223,30 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
     copy_tile_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
 #endif
     exp_tile_init<EXP_APPROX>();
-    uint32_t loop = 0;
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
-        if (cb_length_t - cur_blk < blk) {
-            blk = cb_length_t - cur_blk;
-        }
-        cb_in_obj.wait_front(blk);
-        cb_out_obj.reserve_back(blk);
+        const uint32_t rem = (cur_blk + blk > cb_length_t) ? (cb_length_t - cur_blk) : blk;
+        cb_in_obj.wait_front(rem);
+        cb_out_obj.reserve_back(rem);
         tile_regs_acquire();
 #ifdef NUMERIC_STABLE
-        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        for (uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             sub_tiles_bcast_cols(cb_in, cb_max, cur_dst, 0, cur_dst);
         }
 #else
-        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        for (uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             copy_tile(cb_in, cur_dst, cur_dst);
         }
 #endif
-        cb_in_obj.pop_front(blk);
-        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        cb_in_obj.pop_front(rem);
+        for (uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             exp_tile<EXP_APPROX>(cur_dst);  // exp on DST[0]
         }
         tile_regs_wait();
         tile_regs_commit();
-        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        for (uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_out_obj.push_back(blk);
+        cb_out_obj.push_back(rem);
         tile_regs_release();
     }
 }
@@ -293,22 +302,20 @@ void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb
     cb_recip_obj.wait_front(1);
     mul_bcast_cols_init_short(cb_in, cb_recip);
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
-        cb_in_obj.wait_front(blk);
+        const uint32_t rem = (cur_blk + blk > cb_length_t) ? (cb_length_t - cur_blk) : blk;
+        cb_in_obj.wait_front(rem);
         tile_regs_acquire();
         tile_regs_wait();
-        if (cb_length_t - cur_blk < blk) {
-            blk = cb_length_t - cur_blk;
-        }
-        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        for (uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             mul_tiles_bcast_cols(cb_in, cb_recip, cur_dst, 0, cur_dst);
         }
         tile_regs_commit();
-        cb_out_obj.reserve_back(blk);
-        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        cb_out_obj.reserve_back(rem);
+        for (uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
-        cb_in_obj.pop_front(blk);
-        cb_out_obj.push_back(blk);
+        cb_in_obj.pop_front(rem);
+        cb_out_obj.push_back(rem);
         tile_regs_release();
     }
 }
@@ -360,6 +367,8 @@ void kernel_main() {
     // Ping-pong reduce outputs: odd num_cb_passes -> cb_max/cb_sumexps, even -> cb_prev_max/cb_prev_reduce
     const uint32_t cb_max_final = (num_cb_passes & 1) ? cb_max : cb_prev_max;
     const uint32_t cb_sum_final = (num_cb_passes & 1) ? cb_sumexps : cb_prev_reduce;
+    // Tiles needed after Wt to finish the CB cycle (reader pushes these; we discard/realign).
+    const uint32_t cb_align_pad = (cb_length_t - (Wt % cb_length_t)) % cb_length_t;
 
     // First loop is to parse and find the sum
     uint32_t dst0 = 0;
@@ -400,6 +409,17 @@ void kernel_main() {
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
         }
+        // Finish the CB cycle so the next stage starts at fifo base (see realign helpers).
+        discard_cb_pad(cb_in0, cb_align_pad);
+#if FUSED_SCALE_MASK
+        discard_cb_pad(cb_fused_attn, cb_align_pad);
+        realign_cb_after_partial_pass(cb_scale_mask, cb_align_pad);
+        realign_cb_after_partial_pass(cb_x, cb_align_pad);
+#else
+        if (mask_padded_data) {
+            realign_cb_after_partial_pass(cb_x, cb_align_pad);
+        }
+#endif
         use_prev_reduce = false;
         length_left_t = Wt;
         cur_cb_length_t = cb_length_t;
@@ -439,6 +459,17 @@ void kernel_main() {
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
         }
+        discard_cb_pad(cb_in0, cb_align_pad);
+        realign_cb_after_partial_pass(cb_exps, cb_align_pad);
+#if FUSED_SCALE_MASK
+        discard_cb_pad(cb_fused_attn, cb_align_pad);
+        realign_cb_after_partial_pass(cb_scale_mask, cb_align_pad);
+        realign_cb_after_partial_pass(cb_x, cb_align_pad);
+#else
+        if (mask_padded_data) {
+            realign_cb_after_partial_pass(cb_x, cb_align_pad);
+        }
+#endif
         /*
          * --------------------------------------------------------
          * --------------------------------------------------------
@@ -496,6 +527,17 @@ void kernel_main() {
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
         }
+        discard_cb_pad(cb_in0, cb_align_pad);
+        realign_cb_after_partial_pass(cb_exps, cb_align_pad);
+#if FUSED_SCALE_MASK
+        discard_cb_pad(cb_fused_attn, cb_align_pad);
+        realign_cb_after_partial_pass(cb_scale_mask, cb_align_pad);
+        realign_cb_after_partial_pass(cb_x, cb_align_pad);
+#else
+        if (mask_padded_data) {
+            realign_cb_after_partial_pass(cb_x, cb_align_pad);
+        }
+#endif
         cb_recip_obj.pop_front(1);
 #ifdef NUMERIC_STABLE
         CircularBuffer(cb_max_final).pop_front(1);
