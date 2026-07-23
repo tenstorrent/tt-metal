@@ -518,3 +518,11 @@
 - KDA prep moves `89.211 MB` and reaches `277.75 GB/s` (`54.25%` DRAM roofline); scan moves `72.352 MB` and reaches `398.00 GB/s` (`77.73%`). Both are below the `297 FLOP/byte` ridge and are data-movement dominated; scan is closest to its bandwidth ceiling.
 - Added a real-time-profiler CCL benchmark mirroring sparse-MLA critical-path accounting. Command: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/perf/test_kda_ccl_perf.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 1/1.
 - TP=8 BF16 `[1,1,640,2304]` all-reduce: payload `2.949 MB`, critical path `5.161 MB`, two-link LoudBox roofline `100 GB/s`, theoretical `51.610 us`, measured slowest-chip `219.169 us`, utilization `23.5%`. The standalone collective misses the `40%` aspiration; fused output-matmul + reduce-scatter is the next distributed path.
+
+
+### 2026-07-23 09:47:36 UTC — Distribution crossover and TP=8 plan
+
+- Committed plan: DISTRIBUTION_PLAN.md selects TP=8 whole-head sharding, no sequence parallelism, local complete states, row-parallel output projection, fused reduce-scatter preferred, and all-reduce fallback.
+- Controlled T=640 scan A/B: H=4 four-way V split 96.132 us vs full-V 148.009 us (35.1% faster); H=8 split 138.286 us vs 149.206 us (7.3% faster); H=16 full-V 153.672 us vs split 260.952 us (41.1% faster); H=32 full-V remains 181.788 us.
+- Production K=V=128 selection is four V blocks per head when local heads <=8, otherwise one complete V block per head. TP=8 maps 80 independent head-chunk prep items to 80 cores and four heads x four V blocks to 16 scan cores.
+- Sequence parallelism is rejected for this phase because it inserts ordered state handoff on the scan dependency chain. The low-rank f_a and g_a projections remain replicated; beta and all head-width outputs are sharded.
