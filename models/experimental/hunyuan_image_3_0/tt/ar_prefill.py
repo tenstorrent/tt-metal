@@ -50,7 +50,10 @@ def run_kv_prefill(tracer, *, use_trace_prefill: bool) -> ttnn.Tensor:
     return _single_prefill_step(tracer, start=0, end=tracer.prefix_len, return_logits=True)
 
 
-def _upload_mask(tracer, query_start: int, query_end: int, total_len: int) -> ttnn.Tensor:
+def _upload_mask(tracer, query_start: int, query_end: int, total_len: int) -> ttnn.Tensor | None:
+    # Text-only: SDPA ``is_causal`` handles prefill — skip host S×S build/upload.
+    if not tracer.attn_slices:
+        return None
     if query_start == 0 and query_end == total_len:
         mask_bool = build_attention_mask(total_len, tracer.attn_slices, bsz=1)
         mask_add = to_additive(mask_bool, dtype=torch.bfloat16).reshape(1, 1, total_len, total_len)
@@ -72,7 +75,7 @@ def _upload_mask(tracer, query_start: int, query_end: int, total_len: int) -> tt
 
 def _single_prefill_step(tracer, *, start: int, end: int, return_logits: bool) -> ttnn.Tensor | None:
     chunk_len = end - start
-    hidden_tt = tracer._upload_hidden(tracer.prefix_embeds[:1, start:end].float())
+    hidden_tt = tracer.prefix_hidden_slice(start, end)
     if tracer._cos_full is None or tracer._sin_full is None:
         tracer._cos_full, tracer._sin_full = tracer.model.layers[0].self_attn.rope.prepare_cos_sin(
             tracer.max_cache_len, image_infos=tracer.image_infos
