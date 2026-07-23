@@ -5,6 +5,7 @@ set(HOSTDEVCOMMON_JIT_API_HEADERS
     api/hostdevcommon/fabric_mux_v2_common.h
     api/hostdevcommon/kernel_structs.h
     api/hostdevcommon/profiler_common.h
+    api/hostdevcommon/sem_scope.h
     api/hostdevcommon/flags.hpp
     api/hostdevcommon/fabric_common.h
     api/hostdevcommon/tensor_accessor/arg_config.hpp
