@@ -18,6 +18,7 @@
 /**
  * @brief Programs packer0 L1 information & math destination register format
  *
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit Destination register mode
  * @param pack_output The output DataFlow Buffer identifier
  */
 template <bool EN_32BIT_DEST>
