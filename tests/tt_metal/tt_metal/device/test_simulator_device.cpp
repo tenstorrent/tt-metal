@@ -74,7 +74,7 @@ TEST_F(SimulatorFixture, SimulatorDeviceInitialization) {
     }
 }
 
-TEST_F(SimulatorFixture, QuasarStaticTlbReadWrite) {
+TEST_F(FastDispatchMeshDeviceFixture, QuasarStaticTlbReadWrite) {
     auto& cluster = MetalContext::instance().get_cluster();
     if (cluster.arch() != tt::ARCH::QUASAR) {
         GTEST_SKIP();

@@ -15,7 +15,7 @@
 
 namespace tt::tt_metal {
 
-class MeshDeviceFixture : public MeshDispatchFixture {
+class FastDispatchMeshDeviceFixture : public MeshDispatchFixture {
 private:
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
 
@@ -24,10 +24,6 @@ protected:
     static void TearDownTestSuite() {}
 
     void SetUp() override {
-        // Save time. Don't do any setup if invalid dispatch mode
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         // Some CI machines have lots of cards, running all tests on all cards is slow
@@ -53,17 +49,6 @@ protected:
         }
     }
 
-    bool validate_dispatch_mode() {
-        this->slow_dispatch_ = true;
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
-            this->slow_dispatch_ = false;
-            return false;
-        }
-        return true;
-    }
-
     void create_devices(const std::vector<ChipId>& device_ids) {
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
@@ -76,7 +61,7 @@ protected:
         this->num_devices_ = this->devices_.size();
     }
 
-    explicit MeshDeviceFixture(
+    explicit FastDispatchMeshDeviceFixture(
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
         MeshDispatchFixture(l1_small_size, trace_region_size) {}
 
@@ -95,15 +80,38 @@ public:
     }
 };
 
-class MeshDeviceSingleCardFixture : public MeshDispatchFixture {
+class MeshDeviceFixture : public FastDispatchMeshDeviceFixture {
+protected:
+    void SetUp() override {
+        // Save time. Don't do any setup if invalid dispatch mode
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        FastDispatchMeshDeviceFixture::SetUp();
+    }
+
+    bool validate_dispatch_mode() {
+        this->slow_dispatch_ = true;
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (!slow_dispatch) {
+            log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
+            this->slow_dispatch_ = false;
+            return false;
+        }
+        return true;
+    }
+
+    explicit MeshDeviceFixture(
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
+        FastDispatchMeshDeviceFixture(l1_small_size, trace_region_size) {}
+};
+
+class FastDispatchMeshDeviceSingleCardFixture : public MeshDispatchFixture {
 protected:
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
 
     void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
         init_max_cbs();
@@ -115,17 +123,6 @@ protected:
                 device.reset();
             }
         }
-    }
-
-    virtual bool validate_dispatch_mode() {
-        this->slow_dispatch_ = true;
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
-            this->slow_dispatch_ = false;
-            return false;
-        }
-        return true;
     }
 
     virtual size_t num_command_queues() const { return 1; }
@@ -149,6 +146,28 @@ protected:
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
     size_t num_devices_{};
+};
+
+// Same as MeshDeviceSingleCardFixture but remove the check for slow dispatch mode
+class MeshDeviceSingleCardFixture : public FastDispatchMeshDeviceSingleCardFixture {
+protected:
+    void SetUp() override {
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        FastDispatchMeshDeviceSingleCardFixture::SetUp();
+    }
+
+    virtual bool validate_dispatch_mode() {
+        this->slow_dispatch_ = true;
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (!slow_dispatch) {
+            log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
+            this->slow_dispatch_ = false;
+            return false;
+        }
+        return true;
+    }
 };
 
 class MeshDeviceSingleCardBufferFixture : public MeshDeviceSingleCardFixture {};

@@ -514,7 +514,8 @@ bool reader_datacopy_writer(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    distributed::MeshWorkload workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    Program& program = workload.get_programs().begin()->second;
 
     log_info(tt::LogTest, "Num tiles per thread: {}", num_tiles_per_thread);
 
@@ -542,7 +543,7 @@ bool reader_datacopy_writer(
     };
     experimental::SetProgramRunArgs(program, params);
 
-    tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
 
     return verify_reader_datacopy_writer_output(ctx);
 }
@@ -587,7 +588,7 @@ TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderWriter) {
         ASSERT_TRUE(unit_tests::dram::direct::reader_writer(devices_.at(id), test_config));
     }
 }
-TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
+TEST_F(FastDispatchMeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
     unit_tests::dram::direct::ReaderDatacopyWriterConfig test_config = {
         .num_tiles = 1,
         .tile_byte_size = 2 * 32 * 32,
