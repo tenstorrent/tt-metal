@@ -30,6 +30,8 @@
 // Runtime args:
 //   0: n_tiles
 //   1: program_id  (PROG_ID in device CSV; 0 = pre-compile / warmup)
+//   2: workload_repeat  (--kernel-unroll; repeat the tile loop this many times inside ONE
+//                        invocation with NO barrier between reps; 0/1 = normal single pass)
 //
 // Do **not** use DeviceZoneScopedMainN in compute kernel_main (breaks TRISC-KERNEL
 // marker pairing). Program-level host gaps: --use-realtime-profiler.
@@ -48,6 +50,9 @@ void kernel_main() {
 
     const uint32_t n_tiles = get_arg_val<uint32_t>(0);
     const uint32_t program_id = get_arg_val<uint32_t>(1);
+    // Kernel-unroll (experiment): consume the workload this many times inside ONE invocation,
+    // no barrier between reps. Matches the reader/writer unroll so the whole op runs un-synced.
+    const uint32_t workload_repeat = get_arg_val<uint32_t>(2) > 0 ? get_arg_val<uint32_t>(2) : 1;
 
     unary_op_init_common(cb_in, cb_out);
     copy_tile_init(cb_in);
@@ -84,29 +89,31 @@ void kernel_main() {
         tile_regs_release();
     };
 
-    for (uint32_t i = 0; i < n_tiles; ++i) {
-        cb_wait_front(cb_in, 1);
-        cb_reserve_back(cb_out, 1);
+    for (uint32_t rep = 0; rep < workload_repeat; ++rep) {  // kernel-unroll: no barrier between reps
+        for (uint32_t i = 0; i < n_tiles; ++i) {
+            cb_wait_front(cb_in, 1);
+            cb_reserve_back(cb_out, 1);
 
-        // Per-tile TILE_IDX marker only in profiling mode; lean mode keeps just tile 0
-        // (op-to-op latency needs the program's first-tile compute start).
-        if constexpr (profile_per_tile) {
-            UNPACK(DeviceTimestampedData("TILE_IDX", i));
-        } else {
-            if (i == 0) {
-                UNPACK(DeviceRecordEvent(EV_UNPACK_TILE0));  // lean: payload-free first-math (tile 0)
+            // Per-tile TILE_IDX marker only in profiling mode; lean mode keeps just tile 0
+            // (op-to-op latency needs the program's first-tile compute start).
+            if constexpr (profile_per_tile) {
+                UNPACK(DeviceTimestampedData("TILE_IDX", i));
+            } else {
+                if (rep == 0 && i == 0) {
+                    UNPACK(DeviceRecordEvent(EV_UNPACK_TILE0));  // lean: payload-free first-math (rep0 tile0)
+                }
             }
-        }
 
-        if constexpr (profile_per_tile) {
-            DeviceZoneScopedN("MATH");
-            copy_one_tile();
-        } else {
-            copy_one_tile();
-        }
+            if constexpr (profile_per_tile) {
+                DeviceZoneScopedN("MATH");
+                copy_one_tile();
+            } else {
+                copy_one_tile();
+            }
 
-        cb_push_back(cb_out, 1);
-        cb_pop_front(cb_in, 1);
+            cb_push_back(cb_out, 1);
+            cb_pop_front(cb_in, 1);
+        }
     }
 
     // Payload-free pack-finish; the owning program is recovered from the PROG_ID marker above.
