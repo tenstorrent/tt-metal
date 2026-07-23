@@ -2417,15 +2417,17 @@ void sdpa_ring_v2(
         return false;
     };
 
-    // Sparse-frames skip: this (q_frame, k_frame) pair is disallowed by the packed bitmap.
-    // The reader ALSO skips these chunks (reader mirrors this predicate using the same broadcast
-    // frame_allow bitmap), so nothing was pushed to cb_kt_in / cb_v_in for a disallowed chunk —
-    // no drain needed here, just return true. Reader-side skip is required for head/batch/gqa
-    // chain multicast to stay in lockstep across cores at high work-items-per-core; without it,
-    // sparse's variable per-chunk compute latency broke chain sync at nh=40.
+    // Sparse-frames skip: this (q_frame, k_frame) pair is disallowed for this Q chunk. Reader
+    // uses a SHARD-AGGREGATE decision (skips only when NO q_frame in the shard attends the
+    // k_frame — required for head/batch/gqa chain sync across cores handling different q_chunks
+    // with different allow rows). So the reader may have PUSHED K/V for a chunk this specific
+    // Q chunk doesn't attend — we drain those here.
     //
     //   bit_idx = q_frame * num_frames_padded_compile + k_frame
     //   allowed = (frame_allow_words[bit_idx / 32] >> (bit_idx % 32)) & 1
+    //
+    // The aggregate check: if no q_frame in the shard attends this k_frame either, the reader
+    // also skipped and we return true without draining. Otherwise reader pushed → drain.
     auto try_skip_sparse_frames = [&](uint32_t k_chunk, uint32_t q_frame_for_chunk, bool kv_chunk_is_joint) -> bool {
         if constexpr (sparse_frames_enabled) {
             if (kv_chunk_is_joint) {
@@ -2438,7 +2440,29 @@ void sdpa_ring_v2(
             const uint32_t word = frame_allow_words[bit_idx >> 5];
             const uint32_t bit = (word >> (bit_idx & 31u)) & 1u;
             if (bit == 0u) {
-                return true;  // reader also skipped — nothing pushed, nothing to drain
+                // This Q chunk doesn't attend this k_frame. Check if reader pushed (aggregate).
+                const uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
+                const uint32_t q_frame_base = (q_frame_offset / q_frames_per_shard) * q_frames_per_shard;
+                bool aggregate_allowed = false;
+                for (uint32_t qf_local = 0; qf_local < q_frames_per_shard; ++qf_local) {
+                    const uint32_t qf = q_frame_base + qf_local;
+                    const uint32_t agg_bit_idx = qf * num_frames_padded_compile + k_frame;
+                    if (((frame_allow_words[agg_bit_idx >> 5] >> (agg_bit_idx & 31u)) & 1u) != 0u) {
+                        aggregate_allowed = true;
+                        break;
+                    }
+                }
+                if (aggregate_allowed) {
+                    // Reader pushed but this Q chunk doesn't attend — drain.
+                    CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+                    if constexpr (!kt_inplace_v) {
+                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                    }
+                    KV_chunks_processed_in_iter++;
+                }
+                return true;  // skip either way (whether we drained or not)
             }
         }
         return false;
@@ -2525,10 +2549,46 @@ void sdpa_ring_v2(
         // inline here and `continue`ing bypasses the entire acc_state state machine for this
         // Q chunk in this iter — real Q chunks resume normally in their next processing iter,
         // and zero-total-work Q chunks push placeholder outputs on the last host-mask iter.
-        // Note: reader is sparse-aware and does NOT push K/V for disallowed chunks, so there is
-        // nothing to drain here — no wait_front/pop_front loop. OOB is also handled by the reader.
+        // Note: reader uses SHARD-AGGREGATE allow (union across shard's q_frames), so it may
+        // have pushed K/V for chunks this specific Q chunk doesn't attend — we must drain those.
         if constexpr (sparse_frames_enabled) {
             if (per_q_valid_kv == 0) {
+                // Drain any k_chunks reader pushed. Aggregate = union of shard's q_frame rows;
+                // reader pushed if ANY q_frame in shard attends this k_frame. Since this q_chunk
+                // has per_q_valid_kv==0, we drain (not process) every pushed chunk.
+                const uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
+                const uint32_t q_frame_base = (q_frame_offset / q_frames_per_shard) * q_frames_per_shard;
+                for (uint32_t k = 0; k < num_kv_chunks; ++k) {
+                    const bool is_joint_ = (k >= num_local_k_chunks);
+                    if (try_skip_oob_kv(k, is_joint_)) {
+                        continue;
+                    }
+                    if (!is_joint_) {
+                        // Aggregate check: reader pushed only if some q_frame in shard attends.
+                        const uint32_t k_global_start_tile = local_padded_Nt * ring_id + k * Sk_chunk_t;
+                        const uint32_t k_frame = k_global_start_tile / frame_seqlen_tiles;
+                        bool aggregate_allowed = false;
+                        for (uint32_t qf_local = 0; qf_local < q_frames_per_shard; ++qf_local) {
+                            const uint32_t qf = q_frame_base + qf_local;
+                            const uint32_t bit_idx = qf * num_frames_padded_compile + k_frame;
+                            if (((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31u)) & 1u) != 0u) {
+                                aggregate_allowed = true;
+                                break;
+                            }
+                        }
+                        if (!aggregate_allowed) {
+                            continue;  // reader also skipped — nothing to drain
+                        }
+                    }
+                    // Drain K/V that reader pushed.
+                    CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+                    if constexpr (!kt_inplace_v) {
+                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                    }
+                    KV_chunks_processed_in_iter++;
+                }
                 // Per-iter handshake with writer (multi-Q only; matches writer's cb_signal wait
                 // in ring_joint_writer.cpp:775-778).
                 if (q_per_core > 1) {

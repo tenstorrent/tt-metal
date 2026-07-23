@@ -665,22 +665,30 @@ void kernel_main() {
                     continue;
                 }
 
-                // Sparse-frames skip: mirrors compute's try_skip_sparse_frames decision. Reader
-                // skips reserve+chain+push for disallowed (q_frame, k_frame) pairs. Because all
-                // chain participants (sender + receivers) read the same broadcast frame_allow
-                // bitmap and use the same math, they make identical skip decisions and the head/
-                // batch/gqa chain rounds stay in lockstep — even when compute takes different-
-                // latency paths per Q chunk under sparse (which was the root cause of the nh=40
-                // head-chain deadlock). Joint K/V chunks always attend (no frame semantics).
+                // Sparse-frames skip based on the SHARD-AGGREGATE allow (union of allow rows across
+                // all q_frames this device holds). Different cores in the same head/batch/gqa
+                // chain handle different q_chunks with potentially different frame_allow rows —
+                // if reader skipped per-q_chunk, chain participants would disagree per k_chunk
+                // and chain sync would break. Aggregate means "does ANY q_frame in the shard
+                // attend this k_frame?" — the answer is the same for all cores in the chain
+                // (they share the same shard, same q_frame set). Compute still does per-q_chunk
+                // drain for chunks reader pushed but this specific q_chunk doesn't attend.
                 if constexpr (sparse_frames_enabled == 1) {
                     if (!kv_chunk_is_joint) {
-                        const uint32_t q_frame_local = (q_chunk * Sq_chunk_t) / sparse_frame_seqlen_tiles;
-                        const uint32_t q_frames_per_shard = q_local_padded_Nt / sparse_frame_seqlen_tiles;
-                        const uint32_t q_frame = q_frame_local + ring_index * q_frames_per_shard;
                         const uint32_t k_global_start_tile = kv_local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
                         const uint32_t k_frame = k_global_start_tile / sparse_frame_seqlen_tiles;
-                        const uint32_t bit_idx = q_frame * sparse_num_frames_padded + k_frame;
-                        if (((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) == 0u) {
+                        const uint32_t q_frames_per_shard = q_local_padded_Nt / sparse_frame_seqlen_tiles;
+                        const uint32_t q_frame_base = ring_index * q_frames_per_shard;
+                        bool any_q_attends = false;
+                        for (uint32_t qf_local = 0; qf_local < q_frames_per_shard; ++qf_local) {
+                            const uint32_t qf = q_frame_base + qf_local;
+                            const uint32_t bit_idx = qf * sparse_num_frames_padded + k_frame;
+                            if (((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) != 0u) {
+                                any_q_attends = true;
+                                break;
+                            }
+                        }
+                        if (!any_q_attends) {
                             continue;
                         }
                     }
