@@ -27,6 +27,29 @@ using address_t = uint32_t;
 using ttnn::ccl::Topology;
 using namespace tt::tt_fabric::linear::experimental;
 
+// Helper class to polymorphically manage mux eager staging
+template <class ConnectionType>
+struct MuxFlusher {
+public:
+    MuxFlusher(ConnectionType&) {};
+    void flush() {};
+};
+
+template <>
+struct MuxFlusher<tt::tt_fabric::FabricMuxV2Sender<true, 0>> {
+    tt::tt_fabric::FabricMuxV2Sender<true, 0>& m_mux_sender;
+    bool m_flushed;
+
+public:
+    MuxFlusher(tt::tt_fabric::FabricMuxV2Sender<true, 0>& mux_sender) : m_mux_sender(mux_sender), m_flushed(false) {};
+    void flush() {
+        if (!m_flushed) {
+            m_mux_sender.flush</*blocking=*/true>();
+            m_flushed = true;
+        }
+    };
+};
+
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
@@ -142,6 +165,8 @@ void kernel_main() {
         direction ? &fabric_connection.get_forward_connection() : &fabric_connection.get_backward_connection();
 #endif
 
+    MuxFlusher mf(*fabric_direction_connection);
+
     Noc noc_obj;
     CircularBuffer cb_compute_output(cb_compute_output_id);
     CircularBuffer cb_reader_output(cb_reader_output_id);
@@ -168,6 +193,8 @@ void kernel_main() {
             fabric_direction_connection,
             pkt_hdr_mcastseminc,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+
+        mf.flush();
 
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 2 * (ring_size - 1));
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
@@ -215,6 +242,7 @@ void kernel_main() {
             fabric_direction_connection,
             pkt_hdr_seminc,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, 0});
+        mf.flush();
         noc_obj.async_writes_flushed();
     };
 
@@ -367,6 +395,9 @@ void kernel_main() {
                                             tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr},
                                             payload_bytes);
                                     }
+
+                                    mf.flush();
+
                                     noc_obj.async_writes_flushed();
                                     l1_read_addr += payload_bytes;
                                     tiles_read += tiles_in_packet;
