@@ -371,10 +371,10 @@ class KimiDeltaAttention:
         if head_major:
             output = ttnn.reshape(output, (batch, config.num_heads, sequence, config.head_v_dim))
             output = ttnn.experimental.nlp_concat_heads(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        output_gate = ttnn.sigmoid(output_gate)
         output = ttnn.multiply(
-            output,
             output_gate,
+            output,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID],
             dtype=ttnn.float32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
