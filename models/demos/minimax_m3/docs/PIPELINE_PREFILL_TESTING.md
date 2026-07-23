@@ -63,7 +63,7 @@ Two processes: the runner (blocks waiting for input) and the producer on rank 0'
 PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
   models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_1rank.yaml \
-  bh-glx-b08u02:1 \
+  bh-glx-b09u02:1 \
   2>&1 | tee /data/philei/health/pp_1rank.log
 ```
 
@@ -72,7 +72,7 @@ PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
 PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
   models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_2rank.yaml \
-  bh-glx-b08u02:1,bh-glx-b08u08:1 \
+  bh-glx-b09u02:1,bh-glx-b09u08:1 \
   2>&1 | tee /data/philei/health/pp_2rank.log
 ```
 
@@ -89,7 +89,7 @@ Wait for `[pp rank 0] [h2d] descriptor …` before starting Process 2.
 
 ### Process 2 — producer (on rank 0's host = first `--host`)
 
-Second terminal; attach a shell to rank 0's node (`b08u02` for 1/2 galaxies, `b09u02` for 4):
+Second terminal; attach a shell to rank 0's node — `b09u02` for every config (it's the first `--host` in all of them):
 ```bash
 squeue --me                                                     # get JOBID
 srun --jobid=<JOBID> --nodelist=<rank0-host> --overlap --pty bash
@@ -125,8 +125,8 @@ python -m models.demos.deepseek_v3_d_p.scripts.plot_pipeline_trace \
 
 | galaxies | request binding | `--host` order | NUM_USERS | MAX_REQUESTS | rank0 host | log |
 |---|---|---|---|---|---|---|
-| 1 | `..._request_1rank.yaml` | `b08u02` | 1 | 5 | b08u02 | pp_1rank.log |
-| 2 | `..._request_2rank.yaml` | `b08u02, b08u08` | 2 | 10 | b08u02 | pp_2rank.log |
+| 1 | `..._request_1rank.yaml` | `b09u02` | 1 | 5 | b09u02 | pp_1rank.log |
+| 2 | `..._request_2rank.yaml` | `b09u02, b09u08` | 2 | 10 | b09u02 | pp_2rank.log |
 | 4 | `..._request_4rank.yaml` | `b09u02, b09u08, b08u08, b08u02` | 4 | 20 | b09u02 | pp_4rank.log |
 
 Hold `PREFILL_CHUNK_SIZE`, the trace, and per-stage `NUM_USERS` fixed across runs; compare `E2E_CLOCK`
