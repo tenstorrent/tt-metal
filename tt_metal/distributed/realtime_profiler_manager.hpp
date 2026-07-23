@@ -188,7 +188,8 @@ private:
     std::unique_ptr<RealtimeProfilerTracyHandler> tracy_handler_;
 
     // Receiver diagnostics
-    std::atomic<uint32_t> peak_fifo_pages_{0};        // peak D2H FIFO usage
+    std::atomic<uint32_t> peak_fifo_pages_{0};        // all-time peak D2H FIFO usage
+    uint32_t windowed_peak_fifo_pages_ = 0;           // for plotting in Tracy; gets reset each plot sample
     std::atomic<uint64_t> num_published_records_{0};  // count of records published to the ring
     std::atomic<uint64_t> num_published_batches_{0};  // count of batches published to the ring
 

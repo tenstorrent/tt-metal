@@ -331,32 +331,25 @@ void RealtimeProfilerManager::publish_pages(
     const uint32_t chip_id = dev_state.chip_id;
     const double sync_frequency = dev_state.sync_frequency;
     const DataCollector* const data_collector = data_collector_;
-    {
-        TTZoneScopedDN(RT_PROFILER, "BuildRecords");
-        for (uint32_t page = 0; page < num_pages; ++page) {
-            const uint32_t* rp = page_buf + page * kPageWords;
-            if (!is_record(rp)) {
-                continue;
-            }
-            records.emplace_back(
-                rp[2],
-                chip_id,
-                (static_cast<uint64_t>(rp[0]) << 32) | rp[1],
-                (static_cast<uint64_t>(rp[4]) << 32) | rp[5],
-                sync_frequency,
-                data_collector->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])));
+    for (uint32_t page = 0; page < num_pages; ++page) {
+        const uint32_t* rp = page_buf + page * kPageWords;
+        if (!is_record(rp)) {
+            continue;
         }
+        records.emplace_back(
+            rp[2],
+            chip_id,
+            (static_cast<uint64_t>(rp[0]) << 32) | rp[1],
+            (static_cast<uint64_t>(rp[4]) << 32) | rp[5],
+            sync_frequency,
+            data_collector->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])));
     }
     if (records.empty()) {
         return;
     }
     num_published_records_.fetch_add(records.size(), std::memory_order_relaxed);
     num_published_batches_.fetch_add(1, std::memory_order_relaxed);
-    {
-        TTZoneScopedDN(RT_PROFILER, "PublishBatch");
-        TTZoneValueD(RT_PROFILER, records.size());
-        ring_->writer().publish_batch(std::span<const tt::ProgramRealtimeRecord>(records));
-    }
+    ring_->writer().publish_batch(std::span<const tt::ProgramRealtimeRecord>(records));
 }
 
 bool RealtimeProfilerManager::has_active_finish_sync() const {
@@ -926,6 +919,7 @@ uint32_t RealtimeProfilerManager::drain_device_pages(
     if (available > peak_fifo_pages_.load(std::memory_order_relaxed)) {
         peak_fifo_pages_.store(available, std::memory_order_relaxed);
     }
+    windowed_peak_fifo_pages_ = std::max(windowed_peak_fifo_pages_, available);
     if (available >= RealtimeProfilerRuntimeSizes::fifo_pages && !dev_state.fifo_reached_capacity) {
         dev_state.fifo_reached_capacity = true;
         log_warning(
@@ -938,8 +932,6 @@ uint32_t RealtimeProfilerManager::drain_device_pages(
         return 0;
     }
     const uint32_t num_pages_to_read = std::min(available, kMaxSocketPagesPerRead);
-    TTZoneScopedDN(RT_PROFILER, "DrainDevice");
-    TTZoneValueD(RT_PROFILER, num_pages_to_read);
     {
         TTZoneScopedDN(RT_PROFILER, "SocketRead");
         dev_state.socket->read(page_buf.data(), num_pages_to_read);
@@ -980,15 +972,26 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
     std::vector<tt::ProgramRealtimeRecord> record_buf;
     record_buf.reserve(kMaxSocketPagesPerRead);
     constexpr std::chrono::microseconds kReceiverMaxBackoff{100};
+    constexpr auto kFifoPlotInterval = std::chrono::milliseconds(10);
     std::chrono::microseconds backoff{1};
     uint64_t num_pages_received = 0;
+    auto last_fifo_plot = std::chrono::steady_clock::now();
     while (!stop_.load(std::memory_order_acquire)) {
         const bool scan_sync_marker = finish_sync_busy_.load(std::memory_order_acquire);
         const uint32_t num_pages = drain_all_devices(scan_sync_marker, page_buf, record_buf);
         num_pages_received += num_pages;
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_fifo_plot >= kFifoPlotInterval) {
+            TTPlotD(
+                RT_PROFILER,
+                "RT profiler D2H FIFO high-water mark (pages)",
+                static_cast<int64_t>(windowed_peak_fifo_pages_));
+            windowed_peak_fifo_pages_ = 0;
+            last_fifo_plot = now;
+        }
         const bool sync_requested = finish_sync_requested_.load(std::memory_order_acquire);
         if (scan_sync_marker || sync_requested) {
-            service_finish_sync(std::chrono::steady_clock::now(), sync_requested);
+            service_finish_sync(now, sync_requested);
         }
         if (num_pages > 0) {
             backoff = std::chrono::microseconds{1};
@@ -1082,11 +1085,7 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
         // stop_consumer sets the stop mode then wakes, so waiting on a token sampled only inside wait() could miss that
         // wake and hang
         const auto token = consumer.reader.wait_token();
-        std::span<tt::ProgramRealtimeRecord> batch;
-        {
-            TTZoneScopedDN(RT_PROFILER, "ReadBatch");
-            batch = consumer.reader.read_batch(records);
-        }
+        std::span<tt::ProgramRealtimeRecord> batch = consumer.reader.read_batch(records);
         const uint64_t dropped_total = consumer.reader.dropped();
         const ConsumerStopMode stop_mode = consumer.stop_mode.load(std::memory_order_acquire);
         if (stop_mode == ConsumerStopMode::StopWithoutDrain) {
