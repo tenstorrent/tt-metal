@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Correctness of the ring-fused indexer_score op (ttnn.experimental.ring_indexer_score_dsa) on the 8-chip
-LoudBox (2x4 -> 1x4 submesh). One op co-schedules the ring_attention all-gather with the score; the reader
-gates each K band on only the SP shards it touches and dual-sources its own slab from k_local. Checked vs the
-same per-SP DSA reference the two-op path uses, over both K layouts, both head counts, and both link counts,
-plus the runtime knobs (bfp8_b K, multi-user cache, straddle, kv_len, program-cache reuse, validate reject).
+Correctness of the ring-fused indexer_score op (ttnn.experimental.ring_indexer_score_dsa) on a ring of 4
+(a (1, 4) mesh; the op is SP=4, so it runs on 4 devices). One op co-schedules the
+ring_attention all-gather with the score; the reader gates each K band on only the SP shards it touches and
+dual-sources its own slab from k_local. Checked vs the same per-SP DSA reference the two-op path uses, over
+both K layouts, both head counts, and both link counts, plus the runtime knobs (bfp8_b K, multi-user cache,
+straddle, kv_len, program-cache reuse, validate reject). The 2D SP×TP variant lives in the _4d companion file.
 
 Run:  scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/experimental/test_ring_indexer_score_dsa.py
 """
@@ -45,7 +46,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.ring4_ccl_helpers imp
 
 pytestmark = [
     pytest.mark.skipif(not ttnn.device.is_blackhole(), reason="indexer_score is Blackhole-only"),
-    pytest.mark.skipif(ttnn.get_num_devices() < 8, reason="ring-of-4 needs the 8-chip LoudBox (2x4)"),
+    pytest.mark.skipif(ttnn.get_num_devices() < 4, reason="ring-of-4 needs 4 devices"),
 ]
 
 

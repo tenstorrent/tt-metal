@@ -27,8 +27,8 @@
 namespace ttnn::operations::experimental::indexer_score::program {
 
 // Runtime-arg slots, shared by create_at()/override_runtime_arguments() and matched positionally by the
-// kernels. Reader: q,k,w addrs then schedule(6) + mcast(2x8) + persistent-cache(2); compute: schedule(6)
-// then kv_len_tiles[6] + chunk_start_tiles[7]; writer: out addr then schedule(6) + kv_len_tiles.
+// kernels. Reader: q,k,w addrs then schedule(6) + mcast(2 dirs, 8 args each) + persistent-cache(2); compute:
+// schedule(6) then kv_len_tiles[6] + chunk_start_tiles[7]; writer: out addr then schedule(6) + kv_len_tiles.
 namespace rt_arg {
 constexpr uint32_t reader_q_addr = 0;
 constexpr uint32_t reader_k_addr = 1;

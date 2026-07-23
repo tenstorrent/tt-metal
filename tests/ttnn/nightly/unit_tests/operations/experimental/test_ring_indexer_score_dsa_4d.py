@@ -2,17 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Ring-fused indexer_score correctness on a 4-device Blackhole box (QuietBox-class), covering the two mesh
-layouts that fit in 4 chips:
+Ring-fused indexer_score correctness for the 2D SP×TP layout on a (2, 2) mesh: sp=2 ring (cluster_axis) ×
+tp=2 query seq sub-shard (seq_subshard_axis). K stays SP-sharded + TP-replicated so the AG is unchanged; TP
+sub-shards the query rows and seq_subshard_axis threads each device's tp sub-offset into the causal score.
+Fused analogue of the classic-path test_indexer_score.py::test_indexer_score_sp2_tp2_seq_subshard_rotated.
 
-  * SP-only ring-of-4 on a (1, 4) mesh -- the same fused op the LoudBox suite runs, here on 4 chips directly.
-  * 2D SP×TP on a (2, 2) mesh: sp=2 ring (cluster_axis) × tp=2 query seq sub-shard (seq_subshard_axis). K
-    stays SP-sharded + TP-replicated so the AG is unchanged; TP sub-shards the query rows and seq_subshard_axis
-    threads each device's tp sub-offset into the causal score. Fused analogue of the classic-path
-    test_indexer_score.py::test_indexer_score_sp2_tp2_seq_subshard_rotated.
-
-Unlike the LoudBox suite these open the target mesh DIRECTLY (no (2,4)->(1,4) carve), so they run on any
-4-device Blackhole box. Gathered buffer seeded with ZEROS -> a correct score proves device-side local sourcing.
+Opens the (2, 2) mesh DIRECTLY, so it runs on any 4-device Blackhole box. The gathered buffer is seeded with
+ZEROS -> a correct score proves device-side local sourcing. (The SP-only ring-of-4 coverage lives in the
+sibling test_ring_indexer_score_dsa.py, which also runs on 4 devices.)
 
 Run:  scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/experimental/test_ring_indexer_score_dsa_4d.py
 """
@@ -28,11 +25,9 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.test_indexer_score im
     glx_config,
     indexer_score_dsa_ref,
     _global_inputs,
-    _per_sp_ref,
     _to_slab,
     QB_SQ,
     QB_HISTORY,
-    QB_DIM,
     QB_CASES,
     QB_IDS,
 )
@@ -46,9 +41,9 @@ pytestmark = [
 
 
 def _open_ccl(mesh_shape):
-    """Open `mesh_shape` directly (no parent carve), load a worker sub-device, make 2 ccl semaphores (the two
-    ring directions). Mirrors ring4_ccl_helpers._open_ring4_ccl without the (2,4)->(1,4) submesh step, so it
-    runs on a 4-chip box. Returns (mesh, ccl_semaphores, worker_sub_device_id, stall_group)."""
+    """Open `mesh_shape` directly, load a worker sub-device, make 2 ccl semaphores (the two ring directions).
+    Same recipe as ring4_ccl_helpers._open_ring4_ccl but parameterized by mesh shape (here (2, 2) for SP×TP).
+    Returns (mesh, ccl_semaphores, worker_sub_device_id, stall_group)."""
     ttnn.set_fabric_config(
         ttnn.FabricConfig.FABRIC_1D,
         ttnn.FabricReliabilityMode.STRICT_INIT,
@@ -86,60 +81,6 @@ def _close_ccl(mesh):
             ttnn.close_mesh_device(mesh)
     finally:
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-
-
-# ---- SP-only ring-of-4 on a (1, 4) mesh ------------------------------------------------------------
-RING4 = 4
-SP4_AXIS = 1  # the length-4 axis of the (1, 4) mesh == cluster_axis
-CHUNK4 = RING4 * QB_SQ  # 2560 global prefill chunk (chunk_local = QB_SQ per SP shard)
-T4 = QB_HISTORY + CHUNK4  # 28160 all-gathered keys
-
-
-@pytest.mark.parametrize("block_cyclic", [False, True], ids=["contiguous", "block_cyclic"])
-@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
-def test_indexer_score_ring4_fused_4d(case_id, heads, block_cyclic):
-    """SP-only ring-of-4 fused op on a directly-opened (1,4) mesh, checked vs the per-SP reference."""
-    mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl((1, RING4))
-    try:
-        q_g, k_nat, w_g = _global_inputs(heads, CHUNK4, T4, seed=42)
-        k_host = _to_slab(k_nat, RING4, CHUNK4) if block_cyclic else k_nat
-
-        shard = ttnn.ShardTensorToMesh(mesh, dim=2)  # SP-shard seq over the 4 devices
-        q_dev = ttnn.from_torch(q_g, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
-        w_dev = ttnn.from_torch(w_g, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
-        k_local = ttnn.from_torch(k_host, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
-        # Gathered buffer: full T per device, zero-seeded (AG fills remote bands; zeros prove local sourcing).
-        k_gathered = ttnn.from_torch(
-            torch.zeros_like(k_nat),
-            device=mesh,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-        )
-
-        bc_kwargs = dict(block_cyclic_sp_axis=SP4_AXIS, block_cyclic_chunk_local=QB_SQ) if block_cyclic else {}
-        out = ttnn.experimental.ring_indexer_score_dsa(
-            q_dev,
-            k_gathered,
-            w_dev,
-            k_local,
-            ccl_semaphores,
-            cluster_axis=SP4_AXIS,
-            topology=ttnn.Topology.Linear,
-            num_links=1,
-            ag_sub_device_id=subdevice_id,
-            program_config=glx_config(heads),
-            **bc_kwargs,
-        )
-        ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
-        out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2))
-
-        ref = _per_sp_ref(q_g, k_nat, w_g, RING4, QB_HISTORY)
-        assert_indexer_match(out_t, ref, CHUNK4, T4, check_neg=True)
-        layout = "block_cyclic" if block_cyclic else "contiguous"
-        logger.info(f"4d ring4 fused {layout} (heads={heads}): matched reference")
-    finally:
-        _close_ccl(mesh)
 
 
 # ---- 2D SP×TP on a (2, 2) mesh: sp=2 ring × tp=2 sequence sub-shard ---------------------------------

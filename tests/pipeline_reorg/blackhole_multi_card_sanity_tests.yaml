@@ -71,10 +71,16 @@
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
 
-- name: indexer_score multi-device tests (QB2 only)
-  # The per-device chunk_start (SP=4 and SP=2xTP=2) mesh tests; single-chip cases in the same
-  # file run in tt-metal-l2-nightly. -k selects only the multi-device functions.
-  cmd: pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py -k indexer_score_qb -svv
+- name: indexer_score multi-device + ring-fused tests (QB2 only)
+  # Multi-device indexer_score coverage, all ring-of-4 / 4-device so they run on the 4-chip QuietBox:
+  #   * classic two-op path: per-device chunk_start mesh tests (SP=4 and SP=2xTP=2); -k selects only the
+  #     multi-device functions (single-chip cases run in tt-metal-l2-nightly).
+  #   * ring-fused op (ring_indexer_score_dsa): the full feature matrix on a (1,4) ring, plus the 2D SP×TP
+  #     (2,2) variant. The op is SP=4, so 4 devices suffice.
+  cmd: |
+    pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py -k indexer_score_qb -svv
+    pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_ring_indexer_score_dsa.py -svv
+    pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_ring_indexer_score_dsa_4d.py -svv
   skus:
     bh_quietbox_2:
       timeout: 10

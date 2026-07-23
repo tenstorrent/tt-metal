@@ -152,8 +152,8 @@ void kernel_main() {
         for (uint32_t band_i = 0; band_i < num_bands; ++band_i) {
             uint32_t band = band_i;
             if constexpr (fused_ring_enabled) {
-                // Reordered band-visit order, IDENTICAL to reader/compute (perm starts at rt slot 11).
-                band = get_arg_val<uint32_t>(11 + band_i);
+                // Reordered band-visit order, IDENTICAL to reader/compute so the cb_out FIFO stays in lockstep.
+                band = get_arg_val<uint32_t>(iscore::fused_rt::writer_band_perm_base + band_i);
             }
             span.set(group, band0 + band);
             const uint32_t k_tile0 = span.k_tile_start();

@@ -469,9 +469,13 @@ void kernel_main() {
         for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
             uint32_t band = band_i;
             if constexpr (fused_ring_enabled) {
-                // Reordered band-visit order (local-first, then remote by ring arrival), IDENTICAL to
-                // reader/writer so the cb_k / cb_out FIFOs stay in lockstep. Permutation starts at rt slot 10.
-                band = get_arg_val<uint32_t>(10 + band_i);
+                // Fused ring visits bands in a reordered order (local-first, then remote by ring arrival) so a
+                // core scores its already-arrived shards while farther slabs are still in flight. Compute has to
+                // follow that permutation -- not just the reader -- because span.set(group, band0 + band) below
+                // derives the causal mask from the band's ABSOLUTE column position, so it needs the true band id
+                // for each cb_k/cb_out FIFO slot; walking bands in natural order here would mask the wrong
+                // columns. The reader/writer read the IDENTICAL permutation so all three FIFOs stay in lockstep.
+                band = get_arg_val<uint32_t>(iscore::fused_rt::compute_band_perm_base + band_i);
             }
             if constexpr (stream_heads) {
                 if (band >= num_bands) {

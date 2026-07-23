@@ -44,32 +44,17 @@ using tt::tt_metal::WriterConfigDescriptor;
 
 namespace {
 
-// Runtime-arg slots the kernels match POSITIONALLY. The reader shares the classic factory's layout for slots
-// 0..26 (q/k/w addrs, schedule(6), 2 mcast dirs, persistent-cache), then appends a fused-ring tail. Derived
-// (not hardcoded) from one source and locked to the kernel-side offsets by the static_assert below, so a drift
-// fails the build instead of silently desyncing the kernels. File-local, mirroring the classic factory.
-namespace rt_arg {
-constexpr uint32_t reader_num_scalars = 3 + 6;  // q/k/w addrs + schedule {row_group0..max_bands}
-constexpr uint32_t mcast_args_per_dir = 8;      // role, rect(xs,ys,xe,ye), sender(sx,sy), ndst
-constexpr uint32_t reader_num_mcast_dirs = 2;   // K column, then Q/W row
-constexpr uint32_t fused_rt_width = 6;          // {ring_size, ring_index, fwd, bwd, sem0, sem1}
-constexpr uint32_t reader_k_batch_offset = reader_num_scalars + reader_num_mcast_dirs * mcast_args_per_dir;  // 25
-constexpr uint32_t reader_kv_len_tiles = reader_k_batch_offset + 1;                                          // 26
-constexpr uint32_t reader_fused_rt_base = reader_kv_len_tiles + 1;                                           // 27
-constexpr uint32_t reader_k_local_addr = reader_fused_rt_base + fused_rt_width;                              // 33
-constexpr uint32_t reader_band_perm_base = reader_k_local_addr + 1;                                          // 34
-// Compute RT: schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, then perm.
-constexpr uint32_t compute_band_perm_base = 6 + 4;  // 10
-// Writer RT: out addr, schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, perm.
-constexpr uint32_t writer_band_perm_base = 1 + 6 + 4;  // 11
-// Lock the derived offsets to the values the kernels hardcode (reader receiver reads the fused block at 27;
-// compute/writer read their perm at 10/11). A drift here would silently desync the kernels -> this fails to build.
+// Runtime-arg slots the kernels match POSITIONALLY. The layout is single-sourced in indexer_score_cb.hpp
+// (fused_rt), shared verbatim with the reader/compute/writer kernels so a push-order (host) vs read-order
+// (device) drift is impossible -- the kernels read their perm/fused bases from the SAME constants this factory
+// pushes to. Alias it locally and pin the concrete values so any future layout change fails the build here
+// (with these names) instead of silently desyncing the kernels.
+namespace rt_arg = ttnn::operations::experimental::indexer_score::fused_rt;
 static_assert(
-    reader_k_batch_offset == 25 && reader_kv_len_tiles == 26 && reader_fused_rt_base == 27 &&
-        reader_k_local_addr == 33 && reader_band_perm_base == 34 && compute_band_perm_base == 10 &&
-        writer_band_perm_base == 11,
+    rt_arg::reader_k_batch_offset == 25 && rt_arg::reader_kv_len_tiles == 26 && rt_arg::reader_fused_rt_base == 27 &&
+        rt_arg::reader_k_local_addr == 33 && rt_arg::reader_band_perm_base == 34 &&
+        rt_arg::compute_band_perm_base == 10 && rt_arg::writer_band_perm_base == 11,
     "indexer_score fused rt_arg slot layout drifted from the kernel-side expectations");
-}  // namespace rt_arg
 
 // forward/backward all-gather writes expected for this device on the given topology (mirrors ring_joint's
 // build_ring_write_plan: Linear swaps num_targets_{fwd,bwd} into the plan).
@@ -697,12 +682,14 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         const auto desc =
             build_ring_program_descriptor(args, tensors, out, range.start_coord(), /*consumers_only=*/true);
         // kernel_idx: reader=0, writer=1, compute=2 (AG worker kernels 3.. carry no per-dispatch scalars).
-        // Slots are literals (matching the file-local rt_arg static_assert: reader_k_batch_offset==25,
-        // reader_kv_len_tiles==26) -- rt_arg is in an anonymous namespace not visible here.
-        patch_scalars(program, desc, 0, {25u, 26u});  // reader: k_batch_page_offset, kv_len_tiles
-        // compute: kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles (slots [6, perm_base)).
+        // Slots come from the single-sourced fused_rt layout (indexer_score_cb.hpp) the kernels also read.
+        namespace ns = ttnn::operations::experimental::indexer_score::fused_rt;
+        // reader: k_batch_page_offset, kv_len_tiles.
+        patch_scalars(program, desc, 0, {ns::reader_k_batch_offset, ns::reader_kv_len_tiles});
+        // compute: the causal scalars kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles --
+        // the causal_scalars block [sched_width, compute_band_perm_base) that sits just before the perm.
         patch_scalars(program, desc, 2, {6u, 7u, 8u, 9u});
-        // writer: same four scalars after out-addr(0) + schedule(1..6) (slots [7, perm_base)).
+        // writer: the same four causal scalars, after out-addr(0) + schedule(1..6): [1+sched_width, writer_perm).
         patch_scalars(program, desc, 1, {7u, 8u, 9u, 10u});
     }
 }

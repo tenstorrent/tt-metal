@@ -483,76 +483,79 @@ void kernel_main() {
     static_assert(!fused_ring_enabled || !stream_heads, "fused ring requires all heads resident");
     static_assert(!fused_ring_enabled || fuse_single == 0, "fused ring is incompatible with fuse_single");
 
-    // The gate exists only on the fused branch. Passing a pointer into one shared loop keeps all fused runtime
-    // argument reads behind if constexpr, so the regular binary never touches slots 27+.
-    const auto run = [&](const FusedRingGate* gate) {
-        build_mask_tiles(noc);
-        if constexpr (block_pool) {
-            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                cb_scaler,
-                ckernel::PoolType::MAX,
-                ckernel::ReduceDim::REDUCE_ROW>();
-        }
+    build_mask_tiles(noc);
+    if constexpr (block_pool) {
+        // 1.0 reduce-MAX scaler for the block-max-pool (row-0 fill, the layout reduce_block_max_row expects).
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    }
 
-        WorkUnitSpan span;
-        span.set_valid_k_len_tiles(kv_len_tiles);
-        const uint32_t band_iters = stream_heads ? max_bands : num_bands;
+    WorkUnitSpan span;
+    span.set_valid_k_len_tiles(kv_len_tiles);
+
+    if constexpr (fused_ring_enabled) {
+        // FUSED RING path (DSA-only: all heads resident, no fuse_single / no head streaming, so the band loop
+        // is linear). Stand up the all-gather receiver + per-band gate from the fused runtime-arg tail (slots
+        // 27+, which exist only on this binary):
+        //   * RingSDPAOpReceiver reads the 6-word fused block {ring_size, ring_index, fwd, bwd, sem0, sem1} and,
+        //     with wait_for_op_signal=true, blocks until the co-scheduled all-gather has come online for this
+        //     core. (build_mask_tiles above already ran and overlaps that wait -- it touches no gathered data.)
+        //   * FusedRingGate then takes the k_local address and the band-permutation base, building the
+        //     shard -> (direction, wait-threshold) table it uses to gate each band (see the struct above).
+        uint32_t fused_argidx = iscore::fused_rt::reader_fused_rt_base;
+        RingSDPAOpReceiver fused_recv(/*wait_for_op_signal=*/true, fused_argidx);
+        const FusedRingGate gate(fused_recv, fused_argidx);
+
         for (uint32_t phase = 0; phase < num_groups; ++phase) {
             const uint32_t group = row_group0 + phase * group_stride;
             const uint32_t q_row_start = group * q_tiles_per_unit;
-            if constexpr (fuse_single) {
-                read_q_rows(noc, q_acc, q_row_start, q_dir);
-                read_w_group(noc, w_acc, q_row_start, q_dir);
+            // Finish the q/w row-multicast up front, then gate + read each K band in ring-arrival order.
+            read_q_rows(noc, q_acc, q_row_start, q_dir);
+            read_w_group(noc, w_acc, q_row_start, q_dir);
+            for (uint32_t band_i = 0; band_i < num_bands; ++band_i) {
+                const uint32_t band = gate.band(band_i);  // absolute band this column visits at iteration band_i
+                span.set(group, band0 + band);
+                gate.read_k(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
+            }
+        }
+        return;
+    }
+
+    // CLASSIC path: q/w read order depends on the mode (fuse_single / head-streaming); K in natural band order.
+    // Streaming pads the band loop to max_bands for q-mcast lockstep -- a phantom band [num_bands, max_bands)
+    // re-issues only the band-independent q reads (no k / no output). Resident reads q once per group.
+    const uint32_t band_iters = stream_heads ? max_bands : num_bands;
+    for (uint32_t phase = 0; phase < num_groups; ++phase) {
+        const uint32_t group = row_group0 + phase * group_stride;
+        const uint32_t q_row_start = group * q_tiles_per_unit;
+        if constexpr (fuse_single) {
+            read_q_rows(noc, q_acc, q_row_start, q_dir);  // fused: q+w gate the matmul, read first
+            read_w_group(noc, w_acc, q_row_start, q_dir);
+        }
+        if constexpr (stream_heads) {
+            read_w_group(noc, w_acc, q_row_start, q_dir);  // gates before the streamed q (once per group)
+        }
+        for (uint32_t band = 0; band < band_iters; ++band) {
+            const bool real_band = band < num_bands;  // phantom bands (streaming pad) carry q-mcast only
+            if (real_band) {
+                span.set(group, band0 + band);
+                if constexpr (fuse_single && fused_stream_k) {
+                    read_k_chunk_streaming(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);
+                } else {
+                    read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
+                }
+                if (band == 0 && !stream_heads && !fuse_single) {
+                    read_q_rows(noc, q_acc, q_row_start, q_dir);  // resident: q/w deferred behind q/k
+                    read_w_group(noc, w_acc, q_row_start, q_dir);
+                }
             }
             if constexpr (stream_heads) {
-                read_w_group(noc, w_acc, q_row_start, q_dir);
-            }
-            if constexpr (fused_ring_enabled) {
-                // Complete q/w multicast before waiting on per-band fabric arrival.
-                read_q_rows(noc, q_acc, q_row_start, q_dir);
-                read_w_group(noc, w_acc, q_row_start, q_dir);
-            }
-            for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
-                if constexpr (fused_ring_enabled) {
-                    const uint32_t band = gate->band(band_i);
-                    span.set(group, band0 + band);
-                    gate->read_k(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
-                } else {
-                    const uint32_t band = band_i;
-                    const bool real_band = band < num_bands;
-                    if (real_band) {
-                        span.set(group, band0 + band);
-                        if constexpr (fuse_single && fused_stream_k) {
-                            read_k_chunk_streaming(
-                                noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);
-                        } else {
-                            read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
-                        }
-                        if (band == 0 && !stream_heads && !fuse_single) {
-                            read_q_rows(noc, q_acc, q_row_start, q_dir);
-                            read_w_group(noc, w_acc, q_row_start, q_dir);
-                        }
-                    }
-                    if constexpr (stream_heads) {
-                        for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * k_tiles_per_unit; ++tile_idx) {
-                            for (uint32_t first_head = 0; first_head < num_heads; first_head += heads_per_group) {
-                                read_q_block(noc, q_acc, q_row_start, first_head, q_dir);
-                            }
-                        }
+                for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * k_tiles_per_unit; ++tile_idx) {
+                    for (uint32_t first_head = 0; first_head < num_heads; first_head += heads_per_group) {
+                        read_q_block(noc, q_acc, q_row_start, first_head, q_dir);
                     }
                 }
             }
         }
-    };
-
-    if constexpr (fused_ring_enabled) {
-        // The receiver consumes the six fused args at slot 27 and waits for the producer signal. The gate then
-        // consumes k_local and records the following band-permutation base.
-        uint32_t fused_argidx = 27;
-        RingSDPAOpReceiver fused_recv(/*wait_for_op_signal=*/true, fused_argidx);
-        const FusedRingGate gate(fused_recv, fused_argidx);
-        run(&gate);
-    } else {
-        run(nullptr);
     }
 }
