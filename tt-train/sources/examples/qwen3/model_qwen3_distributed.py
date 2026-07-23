@@ -237,7 +237,6 @@ class DistributedQwen3Attention(AbstractModuleBase):
     ):
         q = self.q_proj(hidden_states)
         # Single fused KV matmul; already produces the per-device [K_local | V_local]
-        # feature layout that grouped_heads_creation consumes, so no ConcatLastDim.
         kvs = self.kv_proj(hidden_states)
         (
             query_heads,

@@ -67,8 +67,7 @@ class Qwen3Attention(AbstractModuleBase):
             bias_init=ttml.init.zeros(),
         )
         # Fused KV projection (Llama-style): a single [hidden -> 2*kv_out] matmul
-        # produces the [K | V] tensor that grouped_heads_creation consumes directly,
-        # replacing separate k_proj/v_proj + a ConcatLastDim. Layout is K features
+        # produces the [K | V] tensor that grouped_heads_creation consumes directly. Layout is K features
         # first, V features second (grouped_heads_creation / nlp_create_qkv_heads
         # splits the last dim at the midpoint into K then V). The HF loader builds
         # this fused weight by concatenating k_proj (K rows) and v_proj (V rows).
@@ -98,9 +97,7 @@ class Qwen3Attention(AbstractModuleBase):
         position_offset: int = 0,
     ):
         q = self.q_proj(hidden_states)
-        # Single fused KV matmul produces the [K | V] tensor directly, so no
-        # ConcatLastDim is needed to reassemble it for grouped_heads_creation.
-        kvs = self.kv_proj(hidden_states)
+        # Single fused KV matmul produces the [K | V] tensor directly        kvs = self.kv_proj(hidden_states)
 
         query_heads, key_heads, value_heads = ttml.ops.multi_head_utils.grouped_heads_creation(
             q,
