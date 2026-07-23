@@ -215,13 +215,18 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
         else:
             print(f"[{label}] HY_TT_QWEN set but no Qwen submesh carved; text-encode stays on CPU", flush=True)
 
+    _prompt = os.environ.get("HY_PROMPT", "A cat walks on the grass, realistic")
+    _neg = os.environ.get("HY_NEG_PROMPT") or None
+    _pkw = {"negative_prompt": _neg} if _neg is not None else {}
+    print(f"[{label}] prompt: {_prompt}\n[{label}] negative: {_neg}", flush=True)
     out = pipe(
-        prompt="A cat walks on the grass, realistic",
+        prompt=_prompt,
         height=height,
         width=width,
         num_frames=frames,
         num_inference_steps=steps,
         generator=torch.Generator().manual_seed(0),
+        **_pkw,
     ).frames[0]
     print(
         f"\n[{label}] generated {len(out)} frames; transformer __call__s={calls['n']}, "
