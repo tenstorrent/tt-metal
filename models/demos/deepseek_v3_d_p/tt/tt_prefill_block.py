@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
 
 # Optional per-layer MLA-vs-FFN host timing (rough ratio only). Gated by TT_PREFILL_BLOCK_TIMING=1.
 # Host wall-clock with a device sync bracketing each region, so the syncs serialize the pipeline and
@@ -225,6 +226,7 @@ class TtPrefillBlock(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
+        sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -289,6 +291,7 @@ class TtPrefillBlock(LightweightModule):
             slot_num=slot_num,
             layer_num=layer_num,
             kv_only=kv_only,
+            sparse_kv_cache_format=sparse_kv_cache_format,
         )
 
         if kv_only:
@@ -425,7 +428,7 @@ class TtPrefillBlock(LightweightModule):
         self,
         x: ttnn.Tensor,
         rope_tensors: dict,
-        kvpe_cache: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
         cache_layer_idx: int = 0,
         return_kv_cache: bool = False,
         return_intermediates: bool = False,
@@ -511,9 +514,10 @@ class TtPrefillBlock(LightweightModule):
             # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
             # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
             # sparse.
-            if kvpe_cache.layout == ttnn.TILE_LAYOUT:
+            cache_tensor = kvpe_cache.storage
+            if cache_tensor.layout == ttnn.TILE_LAYOUT:
                 ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                    kvpe_cache,
+                    cache_tensor,
                     cache_user_id,
                     cache_layer_idx,
                     self.mla.layer_num,
