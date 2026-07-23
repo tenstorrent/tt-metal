@@ -35,6 +35,9 @@ constexpr uint32_t cb_x_in = 1;
 constexpr uint32_t cb_scaler = 2;
 constexpr uint32_t cb_gamma = 3;
 constexpr uint32_t cb_gamma_sticks = 4;
+// RM input + HEIGHT_SHARDED (Refinement 5a): zero-copy alias of the resident RM
+// row-shard (full-W stick pages); the reader loopback-repacks it into cb_x_sticks.
+constexpr uint32_t cb_shard_in = 8;
 constexpr uint32_t TILE_DIM = 32;
 }  // namespace
 
@@ -106,6 +109,58 @@ void kernel_main() {
         for (uint32_t k = 0; k < (nbytes >> 2); ++k) {
             p[k] = 0;
         }
+    }
+
+    // ---- RM input + HEIGHT_SHARDED (Refinement 5a): loopback-repack resident shard ----
+    // The core's full-W row-shard is resident RM sticks (cb_shard_in, contiguous at
+    // SHARD_STICK_BYTES = in_page stride). Loopback-repack it into tile-padded cb_x_sticks
+    // (local NoC loopback via my_x/my_y — no remote re-fetch, no DRAM read of x), reading
+    // only origin_W valid columns per stick (phase=0; the W%32 pad stays 0 from the up-front
+    // zeroing above, masked by the partial scaler in the reduce). Mirrors the interleaved
+    // streaming RM reader order EXACTLY (2 passes; gamma interleaved per pass-2 block) so the
+    // existing streaming RM compute consumes it unchanged. Streaming (re-tilize per pass)
+    // keeps every CB bounded (cb_x_in = DEPTH*BLOCK_SIZE), so it fits any W/dtype — a resident
+    // whole-row cb_x_in (Wt tiles) would OOM for wide fp32; that single-loopback fast-path is
+    // the R6 sharded-perf lever. gamma is RM sticks (TILE gamma is INVALID with RM input).
+    if constexpr (IS_RM && X_RESIDENT) {
+        const uint32_t valid_rows_total = get_arg_val<uint32_t>(4);
+        const uint32_t SHARD_STICK_BYTES = in_page;
+        const uint32_t shard_base = get_read_ptr(cb_shard_in);
+        constexpr uint32_t PADDED_ROW_BYTES = BLOCK_SIZE * TILE_DIM * in_elem;
+        for (uint32_t t = 0; t < num_rows; ++t) {  // num_rows = Ht_local tile-rows
+            uint32_t valid_rows = (valid_rows_total > t * TILE_DIM) ? (valid_rows_total - t * TILE_DIM) : 0;
+            if (valid_rows > TILE_DIM) {
+                valid_rows = TILE_DIM;
+            }
+            for (uint32_t pass = 0; pass < 2; ++pass) {  // 2-pass streaming (re-tilize per pass)
+                for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
+                    const uint32_t col0 = b * BLOCK_SIZE * TILE_DIM;
+                    uint32_t cols = (col0 < origin_W) ? (origin_W - col0) : 0;
+                    if (cols > BLOCK_SIZE * TILE_DIM) {
+                        cols = BLOCK_SIZE * TILE_DIM;
+                    }
+                    cb_reserve_back(cb_x_sticks, BLOCK_SIZE);
+                    const uint32_t dst = get_write_ptr(cb_x_sticks);
+                    for (uint32_t s = 0; s < valid_rows; ++s) {
+                        const uint32_t src = shard_base + (t * TILE_DIM + s) * SHARD_STICK_BYTES + col0 * in_elem;
+                        noc_async_read(
+                            get_noc_addr(my_x[noc_index], my_y[noc_index], src),
+                            dst + s * PADDED_ROW_BYTES,
+                            cols * in_elem);
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_x_sticks, BLOCK_SIZE);
+                    // gamma: pass 2 only, interleaved per block (compute consumes it there).
+                    if constexpr (HAS_GAMMA) {
+                        if (pass == 1) {
+                            dataflow_kernel_lib::read_sticks_for_tilize<cb_gamma_sticks>(
+                                gamma_accessor, 1, cols * gamma_elem, 0, col0 * gamma_elem);
+                        }
+                    }
+                }
+            }
+        }
+        return;
     }
 
     // ---- Resident single-read fast-path (TILE input, TILE/no gamma) ----

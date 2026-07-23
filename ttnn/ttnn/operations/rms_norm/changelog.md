@@ -417,3 +417,58 @@
   op_design.md §7 "no CB sized by an op dimension"). No other defects.
 - Tests added: `test_rms_norm_height_sharded.py` (22 cases: TILE/RM/no gamma × aligned +
   non-aligned + per_h>1 + wide + fp32 + bf8b + 2D/3D/4D + mixed precision). Probes 025-028.
+
+## Refinement 5a — RM-input HEIGHT_SHARDED (tilize-on-resident-shard)
+- Date: 2026-07-23
+- Type: scheme-completion (full — `[x]`).
+- What was done: completed R5's deferred corner — **RM input + HEIGHT_SHARDED** — where a
+  core's resident row-shard is full-W ROW-MAJOR sticks (not tiles). Each core keeps FULL-W
+  rows so the RMS reduce stays LOCAL per core (no cross-core combine, phase=0, only the
+  standard W%32 mask). Removed the one `{layout: ROW_MAJOR, memory_layout: HEIGHT_SHARDED}`
+  EXCLUSION.
+  - **Reuse**: extended the interleaved `_create_height_sharded_descriptor` and the shared
+    `rms_norm_{reader,compute,writer}.cpp` via CT-arg flags (no forked kernel files). The
+    compute REUSES the existing streaming RM path UNCHANGED — the RM boundary is entirely
+    in the reader (loopback source) and writer (loopback sink).
+  - **Reader** (`IS_RM && X_RESIDENT`): loopback-repacks the resident RM row-shard sticks
+    (`cb_shard_in` = zero-copy `cb_descriptor_from_sharded_tensor` alias → local NoC loopback
+    via `my_x/my_y`, no DRAM/remote read — native local consumption) into tile-padded
+    `cb_x_sticks`, reading only `origin_W` valid columns per stick (phase=0; W%32 pad stays 0
+    from the up-front zeroing). Mirrors the interleaved streaming RM reader order exactly
+    (2 passes; gamma interleaved per pass-2 block). gamma = RM sticks or none (RM+TILE-gamma
+    INVALID).
+  - **Compute**: streaming RM path unchanged (`use_resident=0`, `is_rm=1`): tilize
+    `cb_x_sticks`→`cb_x_in` per block per pass, two-pass reduce/normalize, untilize
+    `cb_out`→`cb_out_sticks` per block. Every CB stays per-block (`DEPTH*BLOCK_SIZE`, never
+    Wt), so it fits any W/dtype.
+  - **Writer** (NEW loopback branch, `IS_RM && X_RESIDENT`): loopback-writes the valid
+    columns of `cb_out_sticks` into the resident RM output shard (`cb_shard_out` alias).
+    Per-core `valid_rows_total` handles H non-alignment / the short last core; pad rows/cols
+    (tensor padding) are not written.
+  - **Host geometry**: RM HEIGHT shard = `sh` per-core rows (RM granule 1, generally not a
+    mult of 32) × `sw` = W padded to 8/4. `Ht_local = ceil(sh/32)`; the collapsed NC*H row
+    sequence is split `sh` rows/core row-major, so per-core `valid_rows_total =
+    clamp(NC*H - i*sh, 0, sh)`. `SHARD_STICK_BYTES = buffer_aligned_page_size = sw*elem`.
+  - **OOM fix (why streaming, not the note's resident single-tilize)**: a whole-tile-row
+    resident `cb_x_in` (Wt fp32 tiles = 1 MB at W=8192) + intermediates + shards clashes L1
+    (golden CB-clash on fp32 W=8192 — a *feasible* cell, since RM shards are small/per-row,
+    unlike TILE HEIGHT which the harness SKIPs via oom_guard). The streaming re-tilize
+    (2× LOCAL loopback, no DRAM) fits every cell; the single-tilize fast-path is folded into
+    the R6 sharded-perf pass.
+- Accuracy achieved: PCC ≥ 0.99996 (rtol/atol via golden `TOLERANCES`: bf16 PCC≥0.995,
+  f32 PCC≥0.999) on 13 device probes + 20 regression cases — tile-aligned + W-/H-/both-non-
+  aligned, last-core-short (per_h < shard), wide W=8192 (incl. the prior-OOM fp32 W=8192),
+  fp32, 2D/3D/4D, RM gamma / no gamma / mixed precision. maxdiff ≤ 0.14 (bf16).
+- Golden test progress: HEIGHT_SHARDED cartesian slice **1168 passed / 0 failed / 0 xpassed
+  / 315 xfailed** (RM-input HEIGHT cells moved xfail→pass; the remaining 315 xfails are the
+  standing `{float32, fp32_dest_acc_en=False}` EXCLUSION, which applies across all layouts).
+  HEIGHT+ROW_MAJOR slice 599 passed / 0 failed. `test_op_loose` 19 passed / 0 failed.
+  Interleaved + WIDTH/BLOCK spot 216 passed / 0 failed (writer CT-arg addition
+  X_RESIDENT=0 unregressed). Unit dir 401 passed / 32 skipped (`--dev` + non-dev,
+  race-clean).
+- Issues encountered: initial resident single-tilize approach (per the verifier note) OOM'd
+  on fp32 W=8192 RM HEIGHT (resident cb_x_in = 1 MB); pivoted to the streaming re-tilize
+  path (reuses the streaming RM compute unchanged, fits any W/dtype). No other defects.
+- Tests added: `test_rms_norm_rm_height_sharded.py` (20 cases: RM gamma / no gamma ×
+  aligned + W-/H-/both-non-aligned + last-core-short + wide + fp32 + 2D/3D/4D + mixed
+  precision). Probes 030-034.

@@ -138,11 +138,14 @@ SUPPORTED = {
 EXCLUSIONS = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
     # Refinement 5 lands HEIGHT_SHARDED for TILE input (TILE gamma, RM gamma, no gamma)
-    # via the zero-copy resident-shard row-parallel path. RM INPUT + HEIGHT still needs the
-    # tilize/untilize-on-resident-shard plumbing (a local-reduction analog of the R4b RM
-    # sub-scheme) — deferred to R5a. Refused cell-level so it stays xfail-strict:
-    #   * RM INPUT + HEIGHT: covers RM+no-gamma and RM+RM-gamma (RM+TILE-gamma is INVALID).
-    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED},
+    # via the zero-copy resident-shard row-parallel path. Refinement 5a completes the
+    # corner — RM INPUT + HEIGHT — with the tilize/untilize-on-resident-shard plumbing
+    # (a local-reduction analog of the R4b RM sub-scheme): the reader loopback-repacks the
+    # resident RM row-shard sticks into tile-padded cb_x_sticks, compute tilizes them into
+    # an allocated cb_x_in (still local — no DRAM/remote read) and untilizes cb_out back to
+    # cb_out_sticks, and a writer loopback-writes the valid columns into the resident RM
+    # output shard. RM+HEIGHT+TILE-gamma stays INVALID (feature_spec). No EXCLUSION remains
+    # for RM+HEIGHT.
     # Refinement 4a lands RM-gamma on the cross-core path (reader reads the gamma
     # W-slice as row-major sticks, compute tilizes them into cb_gamma before the
     # pass-2 ·gamma). Refinement 4b lands RM-INPUT + WIDTH/BLOCK sharded: the reader

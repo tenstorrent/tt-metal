@@ -371,12 +371,45 @@ stays xfail-strict (not silenced; it is R5a's baseline). RM+HEIGHT+TILE-gamma is
 
 ---
 
-### [ ] Refinement 5a — RM-input HEIGHT_SHARDED (tilize-on-resident-shard)
+### [x] Refinement 5a — RM-input HEIGHT_SHARDED (tilize-on-resident-shard)
 
 **Goal**: complete R5's deferred corner — **RM input + HEIGHT_SHARDED** — where a core's
 resident row-shard is full-W row-major sticks, not tiles. Remove the one
 `{layout: ROW_MAJOR, memory_layout: HEIGHT_SHARDED}` EXCLUSION with its cells passing
 (~630 golden xfail cells; RM+HEIGHT+TILE-gamma stays INVALID).
+
+**Landed (full `[x]`)**: RM input + HEIGHT_SHARDED lands by extending the interleaved
+`_create_height_sharded_descriptor` + the shared `rms_norm_{reader,compute,writer}.cpp`
+via CT-arg flags (no forked files); the EXCLUSION is removed. Each core holds FULL-W
+rows so the reduce stays LOCAL (no cross-core combine, phase=0, only the W%32 mask). The
+sub-scheme:
+- **Reader** (`IS_RM && X_RESIDENT`): loopback-repacks the resident RM row-shard sticks
+  (`cb_shard_in` = `cb_descriptor_from_sharded_tensor` alias → local NoC loopback via
+  `my_x/my_y`, **no DRAM/remote read** — native local consumption) into tile-padded
+  `cb_x_sticks`, reading only `origin_W` valid columns per stick, up-front-zeroing the
+  W%32 pad. Mirrors the interleaved streaming RM reader order EXACTLY (2 passes; gamma
+  interleaved per pass-2 block) so the compute is consumed unchanged. gamma = RM sticks
+  (TILE gamma INVALID with RM input) or none.
+- **Compute**: REUSES the existing streaming RM path UNCHANGED (`use_resident=0`): tilize
+  `cb_x_sticks`→`cb_x_in` per block per pass, two-pass reduce/normalize, untilize
+  `cb_out`→`cb_out_sticks` per block. Streaming keeps every CB bounded
+  (`cb_x_in = DEPTH*BLOCK_SIZE`, never Wt) so it fits any W/dtype.
+- **Writer** (NEW branch, `IS_RM && X_RESIDENT`): loopback-writes the valid columns of
+  `cb_out_sticks` into the resident RM output shard (`cb_shard_out` alias). H
+  non-alignment via per-core `valid_rows_total` (the last core is short); pad rows/cols
+  are tensor-padding, not written.
+- **Why streaming, not the resident single-tilize the note sketched**: a whole-tile-row
+  resident `cb_x_in` (Wt fp32 tiles = 1 MB at W=8192) + intermediates + shards OOMs L1
+  (golden CB-clash on fp32 W=8192, a *feasible* cell since RM shards are small/per-row).
+  The streaming re-tilize (2× local loopback, no DRAM) fits every cell; the single-tilize
+  fast-path is folded into the R6 sharded-perf pass.
+
+Probes 13/13 PCC ≥ 0.99996 (no-gamma/RM-gamma × aligned/W-/H-/both-non-aligned ×
+4D-last-core-short/3D/2D × fp32 × wide W=8192, incl. the prior-OOM fp32 W=8192).
+Golden HEIGHT slice **1168 passed / 0 failed / 0 xpassed / 315 xfailed** (RM-input cells
+xfail→pass; the 315 xfails are the standing `{f32, acc=False}` EXCLUSION). Loose 19/19.
+Unit dir 401 passed / 32 skipped (`--dev` + non-dev). Interleaved + WIDTH/BLOCK + TILE
+HEIGHT unregressed.
 
 **Verifier notes**: local-reduction analog of the R4b RM sub-scheme, but SIMPLER — each
 core holds FULL-W rows, so there is no cross-core combine, no phase-alignment, and no
