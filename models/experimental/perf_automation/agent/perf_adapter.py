@@ -175,16 +175,39 @@ class PipelineStageAdapter:
         self._pipe = None
         self.stages = []
 
+    def _inputs_dict(self):
+        if self._prompt is None:
+            return None
+        import torch
+
+        ids = [int(x) for x in self._prompt]
+        return {"input_ids": torch.tensor(ids, dtype=torch.long).reshape(self.batch, -1)}
+
+    def _call_with_inputs(self, fn, primary):
+        try:
+            return fn(primary)
+        except (AttributeError, TypeError, KeyError, IndexError):
+            inp = self._inputs_dict()
+            if inp is None:
+                raise
+            return fn(inp)
+
     def setup(self, device) -> None:
         p = self._pipe = self._build(device)
         stages = []
-        for name in list(getattr(p, "PIPELINE_STAGES", []) or []):
+        _stage_names = getattr(p, "PIPELINE_STAGES", None)
+        if not _stage_names:
+            import sys as _sys
+
+            _pmod = _sys.modules.get(type(p).__module__)
+            _stage_names = getattr(_pmod, "PIPELINE_STAGES", []) if _pmod else []
+        for name in list(_stage_names or []):
             step = getattr(p, "%s_trace_step" % name, None)
             if not callable(step):
                 continue
             setup = getattr(p, "%s_trace_setup" % name, None)
             if callable(setup):
-                setup(None)  # host prep + pre-upload, OUTSIDE the trace
+                self._call_with_inputs(setup, None)  # host prep + pre-upload, OUTSIDE the trace
             write = getattr(p, "%s_write_inputs" % name, None)
             stages.append(_Stage(name, step, write if callable(write) else None))
         if stages:
@@ -198,7 +221,7 @@ class PipelineStageAdapter:
                 "its decode is repeat-prefill — run the structural decode lever to add a cached step"
             )
         prefill = getattr(p, "decode_prefill", None)
-        box = {"state": prefill(self._prompt) if callable(prefill) else None}
+        box = {"state": self._call_with_inputs(prefill, self._prompt) if callable(prefill) else None}
 
         def _dstep():
             box["state"] = step(box["state"])
