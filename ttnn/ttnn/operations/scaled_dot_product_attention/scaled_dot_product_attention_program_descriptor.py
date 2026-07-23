@@ -206,25 +206,72 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
 
     total_q_blocks = b * h_q * q_num_chunks
 
-    grid = query.device().compute_with_storage_grid_size()
-    (
-        num_cores,
-        all_cores,
-        core_group_1,
-        core_group_2,
-        units_per_core_g1,
-        units_per_core_g2,
-    ) = ttnn.split_work_to_cores(grid, total_q_blocks)
+    device = query.device()
+    grid = device.compute_with_storage_grid_size()
+    grid_cols, grid_rows = grid.x, grid.y
 
-    # Per-core flat work slice [q_start, q_start+q_count).
-    assignment = []
-    start = 0
-    for group, per_core in ((core_group_1, units_per_core_g1), (core_group_2, units_per_core_g2)):
-        if per_core == 0:
-            continue
-        for core in ttnn.corerange_to_cores(group, None, True):
-            assignment.append((core, start, per_core))
-            start += per_core
+    # ---- Refinement 3: K/V reuse-multicast gate (perf, scheme-change) ----------
+    # K/V do not vary along S_q, so every core owning a Q-block of the same
+    # (batch,head) re-reads the identical K/V from DRAM — the dominant bottleneck
+    # on the flagged profile (~740 Q-blocks over 110 cores, ~2.4 MB K + 2.4 MB V
+    # re-pulled per core). When the (batch,head) groups map exactly one-per-grid-row
+    # (b·H_q == grid rows) and there is no mask (mask varies along S_q → not shared),
+    # switch to a one-injector-per-row broadcast: col 0 of each row reads each
+    # KV-block once and NoC-multicasts it across its row (ttnn.Mcast1D PerRow +
+    # mcast_pipe). Every core in the row processes `rounds = ceil(q_num_chunks/GC)`
+    # Q-blocks in perfect cb_k_in/cb_v_in lockstep (dummy slots re-run Q-chunk 0 —
+    # a benign bit-identical redundant output), keeping the mcast landing address
+    # identical across the row. All other cells keep the per-core DRAM path,
+    # byte-identical to prior phases (USE_MCAST=0). No SUPPORTED change.
+    use_mcast = (not has_mask) and (b * h_q == grid_rows) and (grid_cols > 1)
+
+    semaphores = []
+    mcast_ct = [0, 0, 0, 0, 0]  # McastArgs CT block (5 words); inert when !use_mcast
+
+    if use_mcast:
+        mcast_rounds = (q_num_chunks + grid_cols - 1) // grid_cols
+        grid_crs = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_cols - 1, grid_rows - 1))]
+        )
+        mc = ttnn.Mcast1D(
+            device,
+            grid_crs,
+            ttnn.Mcast1DShape.PerRow,
+            0,  # sender_index: col 0 injects each row
+            ttnn.McastConfig(handshake=True, base_sem_id=0),
+        )
+        semaphores = mc.owned_semaphores()
+        mcast_ct = list(mc.compile_time_args())
+        all_cores = grid_crs
+
+        # Per-core work: (core, q_start, q_count, row_y, col_x, rounds, is_sender, mcast_rt[4]).
+        # q_start/q_count are unused on the mcast path (compute drives off `rounds`).
+        assignment = []
+        for y in range(grid_rows):
+            for x in range(grid_cols):
+                core = ttnn.CoreCoord(x, y)
+                assignment.append(
+                    (core, 0, 0, y, x, mcast_rounds, int(mc.is_sender(core)), list(mc.runtime_args(core)))
+                )
+    else:
+        (
+            num_cores,
+            all_cores,
+            core_group_1,
+            core_group_2,
+            units_per_core_g1,
+            units_per_core_g2,
+        ) = ttnn.split_work_to_cores(grid, total_q_blocks)
+
+        # Per-core flat work slice [q_start, q_start+q_count).
+        assignment = []
+        start = 0
+        for group, per_core in ((core_group_1, units_per_core_g1), (core_group_2, units_per_core_g2)):
+            if per_core == 0:
+                continue
+            for core in ttnn.corerange_to_cores(group, None, True):
+                assignment.append((core, start, per_core, 0, 0, 0, 0, [0, 0, 0, 0]))
+                start += per_core
 
     # ---- Circular buffers (built from the shared _cb_specs — single source) ----
     # Per-role dtype rationale (formats resolved above, before the block-factor pick):
@@ -269,7 +316,10 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
         k_num_chunks,
         1 if has_mask else 0,
         mask_broadcast_head,
+        1 if use_mcast else 0,
+        grid_cols,
     ]
+    reader_ct.extend(mcast_ct)  # McastArgs CT block -> reader CT [14..18]
     reader_ct.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
@@ -287,10 +337,24 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     v_addr = value.buffer_address()
     m_addr = attn_mask.buffer_address() if has_mask else 0
     o_addr = output_tensor.buffer_address()
-    for core, q_start, q_count in assignment:
-        reader_rt[core.x][core.y] = [q_addr, k_addr, v_addr, m_addr, q_start, q_count]
-        writer_rt[core.x][core.y] = [o_addr, q_start, q_count]
-        compute_rt[core.x][core.y] = [q_count, k_num_chunks]
+    for core, q_start, q_count, row_y, col_x, rnds, is_sender, mrt in assignment:
+        # Reader RT: [q,k,v,m addrs | q_start,q_count | row_y,col_x,rounds,is_sender | mcast_rt(4)]
+        reader_rt[core.x][core.y] = [
+            q_addr,
+            k_addr,
+            v_addr,
+            m_addr,
+            q_start,
+            q_count,
+            row_y,
+            col_x,
+            rnds,
+            is_sender,
+        ] + mrt
+        # Writer RT: [o_addr, q_start, q_count, row_y, col_x, rounds]
+        writer_rt[core.x][core.y] = [o_addr, q_start, q_count, row_y, col_x, rnds]
+        # Compute drives off block count: rounds (mcast) or the flat q_count slice.
+        compute_rt[core.x][core.y] = [rnds if use_mcast else q_count, k_num_chunks]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_reader.cpp"),
@@ -339,7 +403,7 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     )
 
     # ---- Writer kernel ----
-    writer_ct = [b, h_q, sqt, dht, sq_chunk_t, q_num_chunks]
+    writer_ct = [b, h_q, sqt, dht, sq_chunk_t, q_num_chunks, 1 if use_mcast else 0, grid_cols]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_writer.cpp"),
@@ -351,7 +415,7 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
 
     descriptor = ttnn.ProgramDescriptor(
         kernels=[reader_kernel, compute_kernel, writer_kernel],
-        semaphores=[],
+        semaphores=semaphores,  # Refinement 3: mcast data_ready + consumer_ready (empty otherwise)
         cbs=cbs,
     )
 
