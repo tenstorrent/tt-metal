@@ -16,6 +16,9 @@ void kernel_main() {
         get_arg_val<uint32_t>(3);  // same arg index as in reader_unary and in reader_unary_transpose_wh_8bank
     const uint32_t tile_offset = get_arg_val<uint32_t>(4);
     const uint32_t Wt = get_arg_val<uint32_t>(5);
+    // factory [10] = in0 CB capacity; pad finishes the fifo cycle between rows.
+    const uint32_t in0_t = get_arg_val<uint32_t>(10);
+    const uint32_t in0_pad = (in0_t > 0 && Wt > 0) ? ((in0_t - (Wt % in0_t)) % in0_t) : 0;
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
@@ -88,6 +91,10 @@ void kernel_main() {
             }
             noc.async_read_barrier();
             cb_id_in0_obj.push_back(rem);
+        }
+        if (in0_pad > 0) {
+            cb_id_in0_obj.reserve_back(in0_pad);
+            cb_id_in0_obj.push_back(in0_pad);
         }
 
 #if FUSED_SCALE_MASK

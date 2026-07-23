@@ -369,6 +369,8 @@ void kernel_main() {
     const uint32_t cb_sum_final = (num_cb_passes & 1) ? cb_sumexps : cb_prev_reduce;
     // Tiles needed after Wt to finish the CB cycle (reader pushes these; we discard/realign).
     const uint32_t cb_align_pad = (cb_length_t - (Wt % cb_length_t)) % cb_length_t;
+    // out0 is sized 2*blk; pad so multi-row cores realign (writer drains the same count).
+    const uint32_t out0_pad = ((blk * 2) - (Wt % (blk * 2))) % (blk * 2);
 
     // First loop is to parse and find the sum
     uint32_t dst0 = 0;
@@ -538,6 +540,11 @@ void kernel_main() {
             realign_cb_after_partial_pass(cb_x, cb_align_pad);
         }
 #endif
+        if (out0_pad > 0) {
+            CircularBuffer cb_out0_obj(cb_out0);
+            cb_out0_obj.reserve_back(out0_pad);
+            cb_out0_obj.push_back(out0_pad);
+        }
         cb_recip_obj.pop_front(1);
 #ifdef NUMERIC_STABLE
         CircularBuffer(cb_max_final).pop_front(1);

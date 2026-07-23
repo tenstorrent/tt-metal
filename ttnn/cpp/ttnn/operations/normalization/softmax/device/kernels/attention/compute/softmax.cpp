@@ -63,6 +63,27 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
     cb_out_obj.wait_front(Wt);
 }
 
+// Complete a CB fifo cycle after a partial row (Wt may not fill the CB).
+inline void drain_pad(uint32_t cb_id, uint32_t pad) {
+    if (pad == 0) {
+        return;
+    }
+    CircularBuffer cb(cb_id);
+    cb.wait_front(pad);
+    cb.pop_front(pad);
+}
+
+inline void cycle_pad(uint32_t cb_id, uint32_t pad) {
+    if (pad == 0) {
+        return;
+    }
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(pad);
+    cb.push_back(pad);
+    cb.wait_front(pad);
+    cb.pop_front(pad);
+}
+
 void kernel_main() {
     const uint32_t NCHt = get_arg_val<uint32_t>(0);
     const uint32_t Ht = get_arg_val<uint32_t>(1);
@@ -70,6 +91,12 @@ void kernel_main() {
     const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
+    const uint32_t in0_t = get_arg_val<uint32_t>(6);  // factory: in0 CB tile capacity
+    const uint32_t out0_t = ndst * 2;                 // matches factory out0_t = block_size * 2 (double-buffered)
+    const uint32_t full_cb_t = ((Wt + ndst - 1) / ndst) * ndst;
+    const uint32_t in0_pad = (in0_t > 0 && Wt > 0) ? ((in0_t - (Wt % in0_t)) % in0_t) : 0;
+    const uint32_t out0_pad = (out0_t > 0 && Wt > 0) ? ((out0_t - (Wt % out0_t)) % out0_t) : 0;
+    const uint32_t full_pad = (full_cb_t > Wt) ? (full_cb_t - Wt) : 0;
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
 
     constexpr uint32_t onetile = 1;
@@ -323,6 +350,23 @@ void kernel_main() {
         }
         cb_recipsumexps_obj.pop_front(1);
         cb_exps_obj.pop_front(Wt);
+
+        // Realign CBs before the next row when Wt does not fill them exactly.
+        drain_pad(cb_in0, in0_pad);
+        cycle_pad(cb_exps, full_pad);
+#if FUSED_SCALE_MASK
+        cycle_pad(cb_scale_mask, full_pad + ndst);  // im3_t = full_cb_t + ndst
+        cycle_pad(cb_x, full_pad);
+#elif defined(NUMERIC_STABLE)
+        // Without NUMERIC_STABLE, cb_x aliases cb_exps (already cycled).
+        if (mask_padded_data) {
+            cycle_pad(cb_x, full_pad);
+        }
+#endif
+        if (out0_pad > 0) {
+            cb_out0_obj.reserve_back(out0_pad);
+            cb_out0_obj.push_back(out0_pad);  // writer drains, does not write to DRAM
+        }
     }  // NCHt loop
     // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at
     // the end so the CBs are left balanced.
