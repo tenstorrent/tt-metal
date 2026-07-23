@@ -53,6 +53,20 @@ def _diff_b2_cfg(cx, cy, pn):
 _DIFF_N4608_B2 = _diff_b2_cfg(8, 9, 2)  # gate / up / head-layer modulation  (K=1536, N=4608)
 _DIFF_N1536_B2 = _diff_b2_cfg(8, 3, 2)  # swiglu down                        (K=4608, N=1536)
 _DIFF_N3072_B2 = _diff_b2_cfg(8, 6, 2)  # final-layer modulation             (K=1536, N=3072)
+# final_linear 1536→64: auto runs on 2 cores (~36 µs, SLOW).  in0_block_w=2 matches auto's
+# K-reduction (maxabsdiff==0 vs auto; tests/perf/diffusion_final_linear_byteident_sweep.py).
+# Device: 36→21 µs (diffusion_exp3).  ibw≠2 is math-CHANGING (long-form-unsafe).
+_DIFF_N64_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(1, 2),
+    in0_block_w=2,
+    out_subblock_h=1,
+    out_subblock_w=1,
+    per_core_M=2,
+    per_core_N=1,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
 
 
 @dataclass
@@ -356,6 +370,7 @@ class TTDiffusionHead:
             x_mod,
             w.final_linear_w,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_DIFF_N64_B2 if x_mod.shape[0] == 2 else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return out
