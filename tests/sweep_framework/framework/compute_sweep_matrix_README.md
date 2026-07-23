@@ -27,15 +27,16 @@ Run type is determined by `SWEEP_NAME` (authoritative in CI) or, when absent, by
 
 ## Routing Policy
 
-All runner assignment logic lives in `matrix_runner_config.py`:
+Routing logic lives in `matrix_runner_config.py`; the physical runner labels
+(`runs_on`) live in `.github/sku_config.yaml`:
 
 - `TEST_GROUPS` — logical lane names and their associated runner profiles
-- `RUNNER_PROFILES` — physical runner properties (`runs_on`, `runner_label`, `arch`, `tt_smi_cmd`)
+- `RUNNER_PROFILES` — runner properties (`runner_label`, `arch`, `tt_smi_cmd`) plus an `sku` name. The actual `runs_on` label set is resolved from `.github/sku_config.yaml` by that SKU name — it is **not** stored here.
 - `LEAD_MODELS_MESH_TEST_GROUPS` / `MODEL_TRACED_MESH_TEST_GROUPS` — mesh shape → test group mappings
 - `LEAD_MODELS_BATCH_POLICY` — per-lane batch overrides for lead models
 - `HW_GROUP_MATRIX_KEYS` — which test groups belong to each per-hardware output bucket
 
-To change runner assignment for any run type, update `matrix_runner_config.py`.
+To change **which runner pool / labels** a lane lands on, edit the `*_sweeps` SKU in `.github/sku_config.yaml`. To change **which profile a logical test group selects** (or any other routing logic), edit `matrix_runner_config.py`.
 
 ## Artifacts: `generation_manifest.json`
 
@@ -93,6 +94,7 @@ python3 tests/sweep_framework/framework/compute_sweep_matrix.py | python3 -m jso
 ## Related Files
 
 - `.github/workflows/ttnn-run-sweeps.yaml` — workflow that calls this script
-- `tests/sweep_framework/framework/matrix_runner_config.py` — all routing and runner policy
+- `tests/sweep_framework/framework/matrix_runner_config.py` — routing and runner-profile policy (SKU selection)
+- `.github/sku_config.yaml` — physical runner labels (`runs_on`) for each sweeps SKU
 - `tests/sweep_framework/sweeps_parameter_generator.py` — generates vector files and manifest
 - `tests/sweep_framework/framework/vector_source.py` — loads and filters vectors at runtime
