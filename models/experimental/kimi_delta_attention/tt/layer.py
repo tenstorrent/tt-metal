@@ -218,6 +218,8 @@ class KimiDeltaAttention:
 
         assert self.recurrent_state is not None
         head_major = mode == "chunk" and sequence % ttnn.TILE_SIZE == 0
+        if head_major:
+            gate = ttnn.reshape(gate, (batch, sequence, config.num_heads * config.head_k_dim))
         recurrence = fused_kda_recurrence if mode == "recurrent" else chunk_kda_recurrence
         output, new_recurrent_state = recurrence(q, k, v, gate, beta, self.recurrent_state)
         if new_recurrent_state.dtype != config.recurrent_state_dtype:

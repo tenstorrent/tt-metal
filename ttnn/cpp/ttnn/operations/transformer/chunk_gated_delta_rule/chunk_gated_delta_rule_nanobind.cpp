@@ -77,6 +77,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         Chunk-parallel Kimi Delta Attention recurrence with per-key vector decay.
 
         q/k must be L2-normalized. Shapes: q/k/g [B,T,H,K], v [B,T,H,V],
+        with rank-3 flat [B,T,H*D] q/k/v/g accepted for tile-aligned sequences;
         beta [B,T,H], initial_state [B,H,K,V]. chunk_size is currently 32.
         Returns token-major output [B,T,H,V], or TILE [B*H,T,V] when output_head_major=True,
         and an optional final state.

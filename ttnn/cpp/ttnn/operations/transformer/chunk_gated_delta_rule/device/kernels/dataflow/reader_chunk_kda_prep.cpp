@@ -32,6 +32,7 @@ void kernel_main() {
     // OPT-A: trailing compile args (after all TensorAccessorArgs). 1 => read that tensor FLAT token-major.
     constexpr uint32_t V_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset());
     constexpr uint32_t QK_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 1);
+    constexpr uint32_t G_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 2);
 
     // Chunk-parallel: this core handles the contiguous work-item slice [wi_start, wi_start+wi_count).
     // A work-item is a flat (head, chunk) index; it is exactly the DRAM tile-group index (h*NC + c).
@@ -133,6 +134,27 @@ void kernel_main() {
         cb.push_back(ck);
     };
 
+    // Flat vector-gate token-major read. KDA has one gate head per value head, so this is the flat-v
+    // address map with Kt columns and fp32 pages.
+    auto read_g_flat = [&](uint32_t hc) {
+        const uint32_t bh = hc / NC;
+        const uint32_t c = hc % NC;
+        const uint32_t hv = bh % HV;
+        const uint32_t b = bh / HV;
+        const uint32_t row_stride = HV * Kt;
+        const uint32_t batch_base = b * NC * Ct * row_stride;
+        CircularBuffer cbg(cb_g);
+        cbg.reserve_back(ck);
+        for (uint32_t rt = 0; rt < Ct; rt++) {
+            for (uint32_t kt = 0; kt < Kt; kt++) {
+                const uint32_t page = batch_base + (c * Ct + rt) * row_stride + hv * Kt + kt;
+                noc.async_read(g_acc, cbg, tb_f, {.page_id = page}, {.offset_bytes = (rt * Kt + kt) * tb_f});
+            }
+        }
+        noc.async_read_barrier();
+        cbg.push_back(ck);
+    };
+
     for (uint32_t i = 0; i < wi_count; i++) {
         const uint32_t hc = wi_start + i;  // flat (head, chunk) index
         if constexpr (QK_FLAT) {
@@ -147,7 +169,11 @@ void kernel_main() {
         } else {
             read_into(v_acc, cb_v, hc * cv, cv, tb_io);
         }
-        read_into(g_acc, cb_g, hc * ck, ck, tb_f);
+        if constexpr (G_FLAT) {
+            read_g_flat(hc);
+        } else {
+            read_into(g_acc, cb_g, hc * ck, ck, tb_f);
+        }
         read_into(b_acc, cb_beta, hc * Ct, Ct, tb_f);
     }
 }

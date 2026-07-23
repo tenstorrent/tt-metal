@@ -121,7 +121,7 @@ def chunk_kda_recurrence(
     initial_state: ttnn.Tensor,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Execute chunk-parallel KDA with FP32 recurrent state."""
-    key_dim = gate.shape[-1]
+    key_dim = q.shape[-1] // beta.shape[-1] if len(q.shape) == 3 else q.shape[-1]
     if len(q.shape) == 4:
         q = l2_norm_ttnn(q, dim=-1)
         k = l2_norm_ttnn(k, dim=-1)

@@ -253,6 +253,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     // OPT-A: trailing compile args after all TensorAccessorArgs — 1 => read that tensor flat token-major.
     reader_ct.push_back(attrs.v_flat ? 1u : 0u);
     reader_ct.push_back(attrs.qk_flat ? 1u : 0u);
+    reader_ct.push_back(attrs.g_flat ? 1u : 0u);
 
     std::vector<uint32_t> writer_ct = ct_args;
     for (auto& t : outputs) {
@@ -319,7 +320,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
         const auto& core = dist.cores[i];
         const uint32_t wi_start = dist.wi_start[i];
         const uint32_t wi_count = dist.wi_count[i];
-        // Trailing runtime args NC, HV, Hk are consumed by the reader's flat branches (V_FLAT/QK_FLAT).
+        // Trailing runtime args NC, HV, Hk are consumed by the reader's flat branches.
         reader.emplace_runtime_args(
             core,
             {wi_start,
