@@ -448,8 +448,13 @@ class HunyuanTtAttention(LightweightModule):
         # via unsqueeze+concat+reshape on the (non-tiled) heads dim, staying in TILE.
         if self.num_kv_heads < self.num_heads:
             grp = self.num_heads // self.num_kv_heads
-            k_attn = _repeat_interleave_heads(k_attn, grp, dim=1, memory_config=attn_mc)
-            v_attn = _repeat_interleave_heads(v_attn, grp, dim=1, memory_config=attn_mc)
+            # k_attn/v_attn hold the full K/V sequence (cache_len at decode, not the
+            # 1-token decode step attn_mc was sized for) — size this expansion's output
+            # by that length, else a small decode step's L1 attn_mc gets reused for a
+            # large cached sequence and OOMs (seen at ISL~22800: 187MB into L1).
+            kv_mc = resid_mem_config(int(k_attn.shape[-2]))
+            k_attn = _repeat_interleave_heads(k_attn, grp, dim=1, memory_config=kv_mc)
+            v_attn = _repeat_interleave_heads(v_attn, grp, dim=1, memory_config=kv_mc)
 
         # ---- 6. SDPA -------------------------------------------------------
         # A pure-causal prefill (no explicit mask) uses SDPA's built-in causal path:
@@ -473,7 +478,12 @@ class HunyuanTtAttention(LightweightModule):
         use_explicit_chunks = (not decode_step) and (q_len >= _SDPA_PREFILL_MIN_Q or chunked_kv_continuation)
         if use_explicit_chunks:
             q_chunk = _SDPA_CAUSAL_Q_CHUNK if is_causal else _SDPA_PREFILL_Q_CHUNK
-            if is_causal and (chunked_kv_continuation or k_len > q_len):
+            # The 512 causal chunk was only measured against recaption/denoise prefill,
+            # which carry no other L1-resident state. The KV-cache path's cache machinery
+            # (and chunked continuation) eats into that budget and overflows L1 at the
+            # same S, so keep it at 256 whenever the cache is active or K>Q.
+            is_kv_cache_path = use_cache and kv_cache is not None
+            if is_causal and (chunked_kv_continuation or k_len > q_len or is_kv_cache_path):
                 q_chunk = _SDPA_PREFILL_Q_CHUNK
             sdpa_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),

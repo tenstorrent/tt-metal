@@ -154,6 +154,7 @@ class KvCachePccContext:
             weight_dtype=ttnn.bfloat8_b,
             bf16_layers=[],
             sp_factor=1,
+            model_dir=h.I2I_WEIGHTS,
         )
         self.lm_head = HunyuanTtLMHead(device, {"lm_head.weight": h.load_tensor("lm_head.weight")})
 

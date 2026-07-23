@@ -304,7 +304,9 @@ NORM_SHARD_MAX_M = 64
 def rmsnorm_shard_config(device, M: int, H: int):
     """Return (program_config, shard_memory_config) to run a 2-D block-sharded rms_norm
     for a small-M / wide-H norm, or None => keep the interleaved kernel. Safe to call for
-    any norm shape: returns None outside the measured-safe regime (large M, narrow QK)."""
+    any norm shape: returns None outside the measured-safe regime (large M, narrow QK).
+    M is the total flattened row count (batch * seq_len), matching the tensor's height
+    once tiled — the caller must fold batch in, not pass seq_len alone."""
     if M > NORM_SHARD_MAX_M or M % TILE or H % TILE:
         return None
     Mt, Ht = M // TILE, H // TILE
