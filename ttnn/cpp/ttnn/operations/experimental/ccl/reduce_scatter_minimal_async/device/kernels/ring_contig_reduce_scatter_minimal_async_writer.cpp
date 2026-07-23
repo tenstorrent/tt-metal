@@ -37,7 +37,6 @@ constexpr uint32_t cb_compute_output_id = get_named_compile_time_arg_val("cb_com
 constexpr uint32_t cb_reader_output_id = get_named_compile_time_arg_val("cb_reader_output_id");
 constexpr uint32_t tile_granularity = get_named_compile_time_arg_val("tile_granularity");
 constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
-constexpr uint32_t num_tiles_to_write_per_packet = get_named_compile_time_arg_val("num_tiles_to_write_per_packet");
 constexpr uint32_t output_batch_num_pages = get_named_compile_time_arg_val("output_batch_num_pages");
 constexpr uint32_t output_channel_num_pages = get_named_compile_time_arg_val("output_channel_num_pages");
 constexpr uint32_t input_tensor_B = get_named_compile_time_arg_val("input_tensor_B");
@@ -88,11 +87,14 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    // Shortcut staging buffer for the 2nd-last iteration's direct-to-remote contribution (replaces
+    // the legacy scatter-write to output_tensor; see rs-contiguous-interm-design).
+    address_t shortcut_tensor_address = get_arg_val<address_t>(arg_idx++);
 #ifdef USE_WORKER_MUX
     // The V2 mux client args are the last runtime args; FabricMuxV2Sender::build_from_args consumes
     // exactly what FabricMuxV2Config::append_client_connection_rt_args serialized on the host.
     size_t mux_arg_idx = arg_idx;
-    auto mux_sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(mux_arg_idx);
+    auto mux_sender = tt::tt_fabric::FabricMuxV2Sender</*EAGER_STAGING=*/true>::build_from_args(mux_arg_idx);
     arg_idx = mux_arg_idx;
 #endif
 
@@ -108,29 +110,22 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<interm_tensor_args.next_compile_time_args_offset()>();
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
+    constexpr auto shortcut_tensor_args = TensorAccessorArgs<output_tensor_args.next_compile_time_args_offset()>();
+    auto shortcut_tensor_accessor = TensorAccessor(shortcut_tensor_args, shortcut_tensor_address);
+
 #ifndef USE_WORKER_MUX
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 #endif
     // pre-populate packet headers
-    auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
-    auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
     auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
     auto pkt_hdr_mcastseminc = PacketHeaderPool::allocate_header();
-    // Fused write + atomic-inc headers, used to fold a chunk's semaphore increment into its final
-    // data packet (unicast for a 1-tile tail, scatter for a 2-tile tail).
-    auto pkt_hdr_fused_unicast = PacketHeaderPool::allocate_header();
-    auto pkt_hdr_fused_scatter = PacketHeaderPool::allocate_header();
-    // Dedicated headers for contiguous writes to the chunk-paged intermediate. Kept separate from the
-    // output-path headers above because their payload size is patched per packet (PayloadSize mask), and
-    // sharing a header would leave stale payload state on the fixed-size output writes.
+    // Headers for contiguous writes to the chunk-paged staging buffers (main intermediate and the
+    // 2nd-last-iteration shortcut region both use these; see write_contig_chunk below). Their payload
+    // size is patched per packet (PayloadSize mask).
     auto pkt_interm_unicast_hdr = PacketHeaderPool::allocate_header();
     auto pkt_interm_fused_hdr = PacketHeaderPool::allocate_header();
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_fused_unicast, unicast_route_info);
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_fused_scatter, unicast_route_info);
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_interm_unicast_hdr, unicast_route_info);
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_interm_fused_hdr, unicast_route_info);
 
@@ -178,19 +173,6 @@ void kernel_main() {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
-    static_assert(num_tiles_to_write_per_packet <= 4, "tiles per packet > 4 is unsupported");
-    uint64_t remote_noc_addrs[4] = {0, 0, 0, 0};
-    uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
-    fabric_unicast_noc_scatter_write_set_state<
-        UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-        pkt_scatter_hdr,
-        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-        NocUnicastScatterCommandHeader(remote_noc_addrs, chunk_sizes, num_tiles_to_write_per_packet),
-        page_size * num_tiles_to_write_per_packet);
-
-    fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-        pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
-
     fabric_unicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         pkt_hdr_seminc,
@@ -199,35 +181,9 @@ void kernel_main() {
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
 
-    // Fused-packet state: payload size, increment value (1) and flush are constant across the run;
-    // only the write and semaphore destination addresses are patched per packet via with_state.
-    fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<
-        UnicastFusedAtomicIncUpdateMask::PayloadSize | UnicastFusedAtomicIncUpdateMask::Val |
-        UnicastFusedAtomicIncUpdateMask::Flush>(
-        pkt_hdr_fused_unicast,
-        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-            0,                          // write dst (patched per packet)
-            0,                          // semaphore dst (patched per packet)
-            static_cast<uint32_t>(1)},  // increment 1
-        page_size);
-
-    fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state<
-        UnicastFusedScatterWriteAtomicIncUpdateMask::PayloadSize |
-        UnicastFusedScatterWriteAtomicIncUpdateMask::WriteChunkSizes |
-        UnicastFusedScatterWriteAtomicIncUpdateMask::Val | UnicastFusedScatterWriteAtomicIncUpdateMask::Flush>(
-        pkt_hdr_fused_scatter,
-        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-        tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader{
-            {0, 0},                              // write dsts (patched per packet)
-            0,                                   // semaphore dst (patched per packet)
-            {static_cast<uint16_t>(page_size)},  // first chunk size (second is implicit)
-            static_cast<uint16_t>(1)},           // increment 1
-        static_cast<uint16_t>(page_size * 2));
-
-    // Contiguous intermediate writes: the destination address and payload size are patched per packet,
-    // so PayloadSize is included in the per-packet update mask below. Only route + (for the fused header)
-    // the increment value/flush are fixed here.
+    // Contiguous staging writes (main intermediate + shortcut region): the destination address and
+    // payload size are patched per packet, so PayloadSize is included in the per-packet update mask
+    // below. Only route + (for the fused header) the increment value/flush are fixed here.
     fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
         pkt_interm_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
     fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<
@@ -260,55 +216,6 @@ void kernel_main() {
             pkt_hdr_seminc,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, 0});
         noc_obj.async_writes_flushed();
-    };
-
-    // Write one packet worth of tiles (addresses staged in remote_noc_addrs) to the remote tensor.
-    // When fuse_seminc is set, this chunk's semaphore increment is folded onto the packet and the
-    // function returns true. The fused fabric ops carry at most a 2-tile scatter write plus the
-    // semaphore chunk, so packets wider than 2 tiles cannot fuse (caller falls back to send_seminc).
-    auto send_write_packet =
-        [&](size_t l1_read_addr, uint32_t num_tiles, bool fuse_seminc, uint64_t sem_noc_addr) -> bool {
-        if (fuse_seminc && num_tiles <= 2) {
-            if (num_tiles == 2) {
-                fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state<
-                    UnicastFusedScatterWriteAtomicIncUpdateMask::WriteDstAddrs |
-                    UnicastFusedScatterWriteAtomicIncUpdateMask::SemaphoreDstAddr>(
-                    fabric_direction_connection,
-                    pkt_hdr_fused_scatter,
-                    l1_read_addr,
-                    tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader{
-                        {remote_noc_addrs[0], remote_noc_addrs[1]},
-                        sem_noc_addr,
-                        {static_cast<uint16_t>(page_size)},
-                        static_cast<uint16_t>(1)});
-            } else {
-                fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state<
-                    UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr>(
-                    fabric_direction_connection,
-                    pkt_hdr_fused_unicast,
-                    l1_read_addr,
-                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                        remote_noc_addrs[0], sem_noc_addr, static_cast<uint32_t>(1)});
-            }
-            return true;
-        }
-        if (num_tiles > 1) {
-            fabric_unicast_noc_scatter_write_with_state<
-                UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                UnicastScatterWriteUpdateMask::PayloadSize>(
-                fabric_direction_connection,
-                pkt_scatter_hdr,
-                l1_read_addr,
-                NocUnicastScatterCommandHeader(remote_noc_addrs, chunk_sizes, num_tiles),
-                page_size * num_tiles);
-        } else {
-            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                fabric_direction_connection,
-                pkt_unicast_hdr,
-                l1_read_addr,
-                NocUnicastCommandHeader{remote_noc_addrs[0]});
-        }
-        return false;
     };
 
     for (uint32_t b = 0; b < input_tensor_B; ++b) {
@@ -381,6 +288,10 @@ void kernel_main() {
                 uint32_t total_tiles_to_read = start_tiles_to_read;
                 // Base chunk page id for this (slice, channel).
                 const uint32_t interm_channel_chunk_base = interm_chunk_base + c * chunks_per_channel;
+                // Shortcut staging buffer has no slice_idx axis (each device receives exactly one
+                // such contribution, from exactly one neighbor, at exactly one iteration), so its
+                // base is the channel offset alone.
+                const uint32_t shortcut_channel_chunk_base = c * chunks_per_channel;
 
                 while (tiles_read < total_tiles_to_read) {
                     const auto [is_even_chunk, tiles_to_read] =
@@ -415,16 +326,17 @@ void kernel_main() {
                             const bool fuse_seminc = (sync_counter + 1 == chunks_per_sync);
                             bool seminc_fused = false;
 
-                            // Write tiles to remote tensor over Fabric
+                            // Write tiles to remote tensor over Fabric. Both write_to_interm (mid-ring
+                            // hops) and the 2nd-last-iteration shortcut now target a chunk-paged
+                            // staging buffer (main intermediate or the dedicated shortcut region) with
+                            // the same contiguous fused-unicast packetization: one page = one chunk, so
+                            // the whole chunk is contiguous at the destination and each fabric packet
+                            // is a single unicast write (no scatter). The packet that reaches
+                            // chunks_per_sync fuses its semaphore increment; no standalone seminc.
                             cb_out.wait_front(tile_granularity);
                             size_t l1_read_addr = cb_out.get_read_ptr();
-                            if (write_to_interm) {
-                                // Contiguous chunk write to the chunk-paged staging intermediate: one page =
-                                // one chunk, so the whole chunk is contiguous at the destination and each
-                                // fabric packet is a single unicast write (no scatter). The packet that
-                                // reaches chunks_per_sync fuses its semaphore increment; no standalone seminc.
-                                const uint32_t chunk_page_id =
-                                    interm_channel_chunk_base + tiles_read / tile_granularity;
+                            auto write_contig_chunk = [&](auto& dst_accessor, uint32_t channel_chunk_base) {
+                                const uint32_t chunk_page_id = channel_chunk_base + tiles_read / tile_granularity;
                                 const uint32_t in_chunk_offset = (tiles_read % tile_granularity) * page_size;
                                 for (uint32_t j = 0; j < tiles_to_read; j += interm_tiles_per_packet) {
                                     const uint32_t tiles_in_packet =
@@ -432,7 +344,7 @@ void kernel_main() {
                                     const uint16_t payload_bytes = static_cast<uint16_t>(tiles_in_packet * page_size);
                                     const uint64_t dst_noc_addr =
                                         tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                            interm_tensor_accessor, chunk_page_id, in_chunk_offset + j * page_size);
+                                            dst_accessor, chunk_page_id, in_chunk_offset + j * page_size);
                                     const bool last_packet = (j + interm_tiles_per_packet >= tiles_to_read);
                                     if (fuse_seminc && last_packet) {
                                         fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state<
@@ -459,29 +371,15 @@ void kernel_main() {
                                     l1_read_addr += payload_bytes;
                                     tiles_read += tiles_in_packet;
                                 }
+                            };
+                            if (write_to_interm) {
+                                write_contig_chunk(interm_tensor_accessor, interm_channel_chunk_base);
                             } else {
-                                // Remote write to the tiled output tensor (2nd-last iter): tiles are
-                                // bank-interleaved, so keep the legacy per-packet scatter path.
-                                for (uint32_t j = 0; j < tiles_to_read; j += num_tiles_to_write_per_packet) {
-                                    uint32_t tiles_to_put_in_current_packet =
-                                        std::min(tiles_to_read - j, num_tiles_to_write_per_packet);
-
-                                    for (uint32_t k = 0; k < tiles_to_put_in_current_packet; ++k) {
-                                        auto output_tile_id = get_next_output_tile_id();
-                                        remote_noc_addrs[k] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                            output_tensor_accessor, output_tile_id, 0);
-                                    }
-
-                                    const bool last_packet = (j + num_tiles_to_write_per_packet >= tiles_to_read);
-                                    seminc_fused |= send_write_packet(
-                                        l1_read_addr,
-                                        tiles_to_put_in_current_packet,
-                                        fuse_seminc && last_packet,
-                                        sem_noc_addr);
-                                    noc_obj.async_writes_flushed();
-                                    l1_read_addr += page_size * tiles_to_put_in_current_packet;
-                                    tiles_read += tiles_to_put_in_current_packet;
-                                }
+                                // 2nd-last iteration shortcut: stages this direction's contribution into
+                                // the dedicated shortcut buffer instead of scatter-writing into the tiled
+                                // output tensor. The receiver's final iteration reads it back as the 3rd
+                                // term of its local 3-way reduce. See rs-contiguous-interm-design.
+                                write_contig_chunk(shortcut_tensor_accessor, shortcut_channel_chunk_base);
                             }
                             cb_out.pop_front(tile_granularity);
 

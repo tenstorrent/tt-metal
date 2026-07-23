@@ -71,40 +71,18 @@ def run_reduce_scatter_impl(
         ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
 
-    ### Create persistent output buffers
-    logger.info("Creating persistent buffers")
+    rs_output_shape = rs_input_shape[:]
+    rs_output_shape[dim] //= num_devices
     intermediate_shape = rs_input_shape[:]
     if rs_topology == ttnn.Topology.Linear:
         # Line RS requires double-sized input for forward/backward
         intermediate_shape.insert(0, 2)
-    if use_persistent_buffers:
-        persistent_intermediate_buffers = [
-            ttnn.from_torch(
-                torch.zeros(intermediate_shape),
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=rs_input_dtype,
-                memory_config=mem_config_intermediate,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            for _ in range(num_iters)
-        ]
-    rs_output_shape = rs_input_shape[:]
-    rs_output_shape[dim] //= num_devices
-    if use_persistent_buffers:
-        persistent_output_buffers = [
-            ttnn.from_torch(
-                torch.zeros(rs_output_shape),
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=rs_input_dtype,
-                memory_config=mem_config_rs,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            for _ in range(num_iters)
-        ]
-
-    logger.info("Done creating persistent buffers")
+    # Ring / scatter-dim != 0 uses the contiguous fast path: the intermediate is a chunk-paged staging
+    # buffer (not input-shaped) and the 2nd-last ring iteration stages one direction's contribution into
+    # a second "shortcut" staging buffer instead of scatter-writing into the tiled output. Both must be
+    # allocated via the op's own sizing helper (input-shaped tensors fail validation on this path); other
+    # configs keep the legacy input-shaped intermediate and have no shortcut buffer.
+    use_contiguous_staging = rs_topology == ttnn.Topology.Ring and dim != 0
 
     ##### All gather input setup #####
     logger.info(f"Reduce scatter shape: {rs_input_shape}")
@@ -143,6 +121,41 @@ def run_reduce_scatter_impl(
 
         tt_input_tensor_mesh_list.append(input_tensor_mesh)
 
+    ### Create persistent output buffers
+    logger.info("Creating persistent buffers")
+    persistent_intermediate_buffers = []
+    persistent_output_buffers = []
+    persistent_shortcut_buffers = []
+    if use_persistent_buffers:
+        for i in range(num_iters):
+            if use_contiguous_staging:
+                interm_buf, shortcut_buf = ttnn.experimental.reduce_scatter_minimal_async_create_intermediate_buffer(
+                    tt_input_tensor_mesh_list[i], dim=dim, topology=rs_topology, cluster_axis=cluster_axis
+                )
+            else:
+                interm_buf = ttnn.from_torch(
+                    torch.zeros(intermediate_shape),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=rs_input_dtype,
+                    memory_config=mem_config_intermediate,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                shortcut_buf = None
+            persistent_intermediate_buffers.append(interm_buf)
+            persistent_shortcut_buffers.append(shortcut_buf)
+            persistent_output_buffers.append(
+                ttnn.from_torch(
+                    torch.zeros(rs_output_shape),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=rs_input_dtype,
+                    memory_config=mem_config_rs,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+            )
+    logger.info("Done creating persistent buffers")
+
     ##### Perform torch ops #####
     torch_reduce_scatter_output_list = []
     for i in range(num_iters):
@@ -171,11 +184,15 @@ def run_reduce_scatter_impl(
             )
         else:
             logger.info(f"Using experimental reduce scatter")
+            if use_persistent_buffers:
+                buffers = [persistent_intermediate_buffers[i], persistent_output_buffers[i]]
+                if persistent_shortcut_buffers[i] is not None:
+                    buffers.append(persistent_shortcut_buffers[i])
+            else:
+                buffers = None
             tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
                 tt_input_tensor_mesh_list[i],
-                persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]]
-                if use_persistent_buffers
-                else None,
+                persistent_output_buffers=buffers,
                 dim=dim,
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
                 barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,

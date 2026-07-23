@@ -74,6 +74,7 @@ ttnn::Tensor reduce_scatter_minimal_async(
 
     std::optional<ttnn::Tensor> optional_intermediate_tensor = std::nullopt;
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt;
+    std::optional<ttnn::Tensor> optional_shortcut_tensor = std::nullopt;
 
     if (using_persistent_buffers) {
         const auto& buffers = persistent_output_buffers.value();
@@ -83,6 +84,9 @@ ttnn::Tensor reduce_scatter_minimal_async(
         if (buffers.size() >= 2) {
             optional_output_tensor = buffers[1];
         }
+        if (buffers.size() >= 3) {
+            optional_shortcut_tensor = buffers[2];
+        }
     }
 
     // Call the prim operation
@@ -90,6 +94,7 @@ ttnn::Tensor reduce_scatter_minimal_async(
         input_tensor,
         optional_intermediate_tensor,
         optional_output_tensor,
+        optional_shortcut_tensor,
         scatter_dim,
         resolved_num_links,
         num_devices,
@@ -110,7 +115,7 @@ ttnn::Tensor reduce_scatter_minimal_async(
     return result.at(1);
 }
 
-ttnn::Tensor reduce_scatter_minimal_async_create_intermediate_buffer(
+std::vector<ttnn::Tensor> reduce_scatter_minimal_async_create_intermediate_buffer(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     ttnn::ccl::Topology topology,
@@ -144,7 +149,11 @@ ttnn::Tensor reduce_scatter_minimal_async_create_intermediate_buffer(
         "(Ring topology, scatter dim != 0). For other configurations the intermediate has the input tensor "
         "shape and can be allocated directly.");
 
-    return create_device_tensor(*stage_spec, mesh_device);
+    auto shortcut_spec = ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
+        input_tensor, usable_topology, scatter_dim, num_devices, fp32_dest_acc_en);
+    TT_FATAL(shortcut_spec.has_value(), "shortcut staging spec must apply whenever the intermediate one does");
+
+    return {create_device_tensor(*stage_spec, mesh_device), create_device_tensor(*shortcut_spec, mesh_device)};
 }
 
 }  // namespace ttnn::experimental

@@ -42,6 +42,7 @@ std::vector<Tensor> reduce_scatter_minimal_async(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<ttnn::Tensor>& optional_shortcut_tensor,
     uint32_t dim,
     uint32_t num_links,
     uint32_t ring_size,

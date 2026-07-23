@@ -66,7 +66,8 @@ struct ReduceScatterDeviceOperation {
             tensor_return_value_t& tensor_return_value,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
-            const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
+            const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
+            const std::optional<Tensor>& shortcut_tensor);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_workload,

@@ -82,6 +82,21 @@ std::optional<ttnn::TensorSpec> reduce_scatter_ring_interm_staging_spec(
     uint32_t ring_size,
     bool fp32_dest_acc_en);
 
+// Builds the TensorSpec for the "shortcut" staging buffer: a small chunk-paged region (same
+// row-major UINT8 / interleaved DRAM layout as the main intermediate) used by the ring contiguous
+// path's second-to-last iteration to stage one direction's contribution ahead of schedule, instead
+// of scatter-writing it directly into the tiled output tensor. Unlike the main intermediate, this
+// buffer is addressed without a slice_idx term (shape total_chunks/ring_size == slice_C *
+// chunks_per_channel pages): each device receives exactly one such contribution, from exactly one
+// neighbor, at exactly one iteration, so no ring-position axis is needed. Returns nullopt when the
+// contiguous path does not apply. See rs-contiguous-interm-design.
+std::optional<ttnn::TensorSpec> reduce_scatter_ring_shortcut_staging_spec(
+    const ttnn::Tensor& input_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t ring_size,
+    bool fp32_dest_acc_en);
+
 // Maps an ND tensor shape + dim to a canonical 4D (normalized_dim, C, B) representation.
 // Requires rank >= 3.
 std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_nd_to_4d(const ttnn::Shape& shape, uint32_t dim);

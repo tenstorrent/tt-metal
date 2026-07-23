@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
@@ -339,6 +340,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& shortcut_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -629,6 +631,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
+    if (use_contiguous_interm) {
+        TT_FATAL(shortcut_tensor.has_value(), "contiguous-interm path requires a shortcut staging tensor");
+        tt::tt_metal::TensorAccessorArgs(shortcut_tensor->buffer()).append_to(reader_compile_args);
+    }
 
     std::string reader_kernel_path =
         normalized_dim == 0     ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -680,6 +686,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
+    if (use_contiguous_interm) {
+        tt::tt_metal::TensorAccessorArgs(shortcut_tensor->buffer()).append_to(writer_compile_args);
+    }
 
     std::string writer_kernel_path =
         normalized_dim == 0     ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -797,6 +806,11 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         start_pages_read_in_row,                  // start_pages_read_in_row
                         start_row_offset,                         // start_row_offset
                     };
+                    if (use_contiguous_interm) {
+                        // shortcut_tensor_address: only the contig kernel variant reads this trailing
+                        // arg, so it must stay after everything the legacy kernel already expects.
+                        reader_rt_args.push_back(shortcut_tensor->buffer()->address());
+                    }
                 }
                 if (fuse_op) {
                     fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
@@ -844,6 +858,11 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         start_tiles_read,         // start_tiles_read
                         start_tiles_to_read,      // tiles_to_read
                     };
+                    if (use_contiguous_interm) {
+                        // shortcut_tensor_address: appended before the mux/fabric-connection args
+                        // below, which are themselves appended after this block.
+                        writer_rt_args.push_back(shortcut_tensor->buffer()->address());
+                    }
                 }
                 if (num_mux_cores_per_direction_per_link) {
                     // V2 fabric mux client connection: this worker is channel `worker` on its
@@ -901,7 +920,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         num_workers_per_direction,
         num_mux_cores_per_direction_per_link,
         num_cores_per_link,
-        normalized_dim};
+        normalized_dim,
+        shortcut_tensor};
 }
 
 void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
@@ -973,6 +993,9 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    // Unused (Line never takes the Ring-only contiguous shortcut path); present only for call-signature
+    // parity with build_ring_reduce_scatter_minimal_async_program_artifacts.
+    [[maybe_unused]] const std::optional<Tensor>& shortcut_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -1612,6 +1635,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& shortcut_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -1635,6 +1659,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         program,
         input_tensor,
         intermediate_tensor,
+        shortcut_tensor,
         sender_device_coord,
         forward_coord,
         backward_coord,
@@ -1660,6 +1685,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& shortcut_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -1683,6 +1709,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         program,
         input_tensor,
         intermediate_tensor,
+        shortcut_tensor,
         sender_device_coord,
         forward_coord,
         backward_coord,
@@ -1781,8 +1808,28 @@ RingReduceScatterMeshWorkloadFactory::cached_mesh_workload_t RingReduceScatterMe
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
+    // Ring contiguous fast path only: the "shortcut" staging buffer used by the 2nd-last iteration to
+    // stage one direction's contribution ahead of schedule (instead of scatter-writing it directly
+    // into the tiled output tensor). A caller-provided persistent buffer (allocated via
+    // reduce_scatter_minimal_async_create_intermediate_buffer) takes priority; otherwise allocate one
+    // internally, once per program build (this function runs once per program-cache miss), reused for
+    // the lifetime of the cached program via shared_variables_t. nullopt when the contiguous path does
+    // not apply (Linear, or Ring with scatter dim 0). See rs-contiguous-interm-design.
+    std::optional<Tensor> shortcut_tensor = tensor_args.optional_shortcut_tensor;
+    if (!shortcut_tensor.has_value()) {
+        const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
+        if (auto shortcut_spec = ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
+                tensor_args.input_tensor,
+                operation_attributes.topology,
+                operation_attributes.dim,
+                operation_attributes.ring_size,
+                fp32_dest_acc_en)) {
+            shortcut_tensor = create_device_tensor(*shortcut_spec, tensor_args.input_tensor.device());
+        }
+    }
+
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value, shortcut_tensor);
         mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -1795,7 +1842,8 @@ RingReduceScatterMeshWorkloadFactory::create_at(
     const ReduceScatterMinimalAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const ReduceScatterMinimalAsyncInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
+    std::vector<Tensor>& tensor_return_value,
+    const std::optional<Tensor>& shortcut_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto& intermediate_tensor = tensor_return_value.at(0);
     auto& output_tensor = tensor_return_value.at(1);
@@ -1815,6 +1863,7 @@ RingReduceScatterMeshWorkloadFactory::create_at(
         program,
         input_tensor,
         intermediate_tensor,
+        shortcut_tensor,
         mesh_coordinate,
         forward_coord,
         backward_coord,
@@ -1911,6 +1960,7 @@ LineReduceScatterMeshWorkloadFactory::create_at(
         program,
         input_tensor,
         intermediate_tensor,
+        /*shortcut_tensor=*/std::nullopt,
         mesh_coordinate,
         forward_coord,
         backward_coord,
