@@ -132,8 +132,13 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Compute
     //-------------------------------------------------------------------------
+    // One-time hardware startup: must be the first Compute API call and run exactly once. Configure
+    // for the main matmul (SrcOrder::Reverse); the ones-tile fill below only re-points the packer
+    // instead of issuing a second (mid-kernel) startup.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in_id, cb_r2c_w0_w1_id, cb_s2c_in2_id);
+
     // Create a ones-tile for bias addition (matmul with ones × bias_row = bias)
-    compute_kernel_hw_startup(cb_c2c_ones_tile_id, cb_c2c_ones_tile_id);
+    pack_reconfig_data_format(cb_c2c_ones_tile_id);
     copy_init(cb_c2c_ones_tile_id);
     tile_regs_acquire();
     fill_tile_init();
@@ -145,8 +150,6 @@ void kernel_main() {
     pack_tile(dst0, cb_c2c_ones_tile_id);
     tile_regs_release();
     cb_c2c_ones_tile.push_back(1);
-
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in_id, cb_r2c_w0_w1_id, cb_s2c_in2_id);
 
     // Pack is always configured to Float16_b
     pack_reconfig_data_format(cb_s2c_in2_id);

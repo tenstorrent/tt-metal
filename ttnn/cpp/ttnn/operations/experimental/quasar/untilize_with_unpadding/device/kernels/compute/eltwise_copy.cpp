@@ -18,7 +18,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
     copy_init(dfb::in);
-    copy_init(dfb::in);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         tile_regs_acquire();
 

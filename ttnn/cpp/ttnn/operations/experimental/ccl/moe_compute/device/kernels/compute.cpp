@@ -246,7 +246,9 @@ void kernel_main() {
     if constexpr (has_bias) {
         // Create a ones-tile for bias addition (matmul with ones × bias_row = bias).
         // Same sequence as moe_gpt compute.cpp for GPT-OSS compatibility.
-        compute_kernel_hw_startup(cb_c2c_ones_tile_id, cb_c2c_ones_tile_id);
+        // The one-time compute_kernel_hw_startup already ran above; only re-point the packer at the
+        // ones-tile CB for this fill (reset to cb_s2c_in2_id after the block) instead of a second startup.
+        pack_reconfig_data_format(cb_c2c_ones_tile_id);
         copy_init(cb_c2c_ones_tile_id);
         tile_regs_acquire();
         fill_tile_init();

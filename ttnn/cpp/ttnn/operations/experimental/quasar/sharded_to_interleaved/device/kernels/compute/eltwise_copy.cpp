@@ -17,7 +17,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in0, dfb::out);
     copy_init(dfb::in0);
-    copy_init(dfb::in0);
 
     DataflowBuffer cb_in0(dfb::in0);
     DataflowBuffer cb_out(dfb::out);

@@ -47,7 +47,6 @@ void kernel_main() {
 
         compute_kernel_hw_startup(cb_input, cb_output);
         copy_init(cb_input);
-        copy_init(cb_input);
         cb_scaler_obj.wait_front(onetile);
         PACK((llk_pack_reduce_mask_config<REDUCE_DIM, PackMode::Default>(cb_output)));
 

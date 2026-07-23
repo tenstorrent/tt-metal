@@ -45,7 +45,8 @@ ALWI void process_tile(
     DataflowBuffer exp_dfb_other(CB_OTHER);
     DataflowBuffer exp_dfb_llk_post(cb_llk_post);
 
-    compute_kernel_hw_startup(cb_left, cb_out);
+    // compute_kernel_hw_startup is hoisted to kernel_main (must be the first Compute API call and run
+    // exactly once); process_tile is called per iteration, so it only re-inits the op here.
     copy_init(cb_left);
     BINARY_SFPU_INIT
 
@@ -141,6 +142,15 @@ void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
+
+    // One-time hardware startup: must be the first Compute API call and run exactly once. Match the
+    // cb_left process_tile configures the copy from (c_5 when the bcast input is B, else cb_in0).
+#if BCAST_INPUT
+    constexpr auto cb_startup_lhs = tt::CBIndex::c_5;
+#else
+    constexpr auto cb_startup_lhs = cb_in0;
+#endif
+    compute_kernel_hw_startup(cb_startup_lhs, cb_out);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;

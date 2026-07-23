@@ -28,7 +28,6 @@ void kernel_main() {
     DataflowBuffer dfb_out_exp(cb_out);
 
     compute_kernel_hw_startup(cb_in, cb_out);
-    compute_kernel_hw_startup(cb_in, cb_out);
     copy_init(cb_in);
 
     for (uint32_t n = 0; n < num_blocks; n++) {

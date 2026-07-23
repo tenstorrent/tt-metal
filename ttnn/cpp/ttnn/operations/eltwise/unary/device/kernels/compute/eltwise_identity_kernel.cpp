@@ -19,7 +19,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_input, cb_output);
     copy_init(cb_input);
-    copy_init(cb_input);
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();

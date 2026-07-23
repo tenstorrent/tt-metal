@@ -110,7 +110,7 @@ void cpy(uint32_t in, uint32_t o, uint32_t n) {
     cb_reserve_back(o, n);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(in);  // unary: in->srcA
-    copy_tile_to_dst_init_short(in);
+    copy_init(in);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
         copy_tile(in, i, 0);
@@ -126,7 +126,7 @@ void expc(uint32_t in, uint32_t o, uint32_t n) {
     cb_reserve_back(o, n);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(in);  // unary: in->srcA
-    copy_tile_to_dst_init_short(in);
+    copy_init(in);
     exp_tile_init();
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
