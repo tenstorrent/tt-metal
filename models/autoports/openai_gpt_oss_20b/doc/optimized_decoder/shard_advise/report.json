@@ -478,6 +478,6 @@
   "artifacts": {
     "final_ir": "/home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/shard_advise/final_ir.mlir",
     "report_txt": "/home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/shard_advise/report.txt",
-    "decision_trace": "/home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/shard_advise/decision_trace/decode_decision_trace.json"
+    "decision_trace": "decision_trace/decode_decision_trace.json.gz"
   }
 }

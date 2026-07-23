@@ -43,6 +43,44 @@ def _optimization_config(variant: str | None = None) -> OptimizationConfig:
         ),
         "attention_lofi": base.with_changes(attention_math_fidelity="lofi"),
         "attention_hifi2": base.with_changes(attention_math_fidelity="hifi2"),
+        "manual_long_decode": base.with_changes(use_manual_long_decode_attention=True),
+        "long_decode_sdpa": base.with_changes(use_manual_long_decode_attention=False),
+        "qkv_input30_block3": base.with_changes(
+            advisor_qkv_input_cores=30,
+            advisor_qkv_in0_block_w=3,
+        ),
+        "qkv_input18_block5": base.with_changes(
+            advisor_qkv_input_cores=18,
+            advisor_qkv_in0_block_w=5,
+        ),
+        "qkv_input15_block6": base.with_changes(
+            advisor_qkv_input_cores=15,
+            advisor_qkv_in0_block_w=6,
+        ),
+        "qkv_input9_block10": base.with_changes(
+            advisor_qkv_input_cores=9,
+            advisor_qkv_in0_block_w=10,
+        ),
+        "o_p2_block8_subblock2": base.with_changes(
+            advisor_o_per_core_n=2,
+            advisor_o_in0_block_w=8,
+            advisor_o_out_subblock_w=2,
+        ),
+        "o_p2_block32_subblock2": base.with_changes(
+            advisor_o_per_core_n=2,
+            advisor_o_in0_block_w=32,
+            advisor_o_out_subblock_w=2,
+        ),
+        "o_p3_block32_subblock3": base.with_changes(
+            advisor_o_per_core_n=3,
+            advisor_o_in0_block_w=32,
+            advisor_o_out_subblock_w=3,
+        ),
+        "o_p3_block8_subblock3": base.with_changes(
+            advisor_o_per_core_n=3,
+            advisor_o_in0_block_w=8,
+            advisor_o_out_subblock_w=3,
+        ),
         "dram_attention_bfp4": base.with_changes(
             use_dram_sharded_attention=True,
             dram_attention_weight_dtype="bfloat4_b",
@@ -187,6 +225,9 @@ def test_optimized_runtime_is_distinct_and_has_no_host_fallback():
     assert policy.kv_cache_dtype == "bfloat8_b"
     assert policy.prefill_matmul_config == "auto"
     assert policy.explicit_sdpa_program_config
+    assert not policy.use_manual_long_decode_attention
+    assert policy.advisor_o_per_core_n == 1
+    assert policy.advisor_o_out_subblock_w == 1
     assert OptimizedDecoder.prefill_forward is not FusedDecoder.prefill_forward
     assert OptimizedDecoder.decode_forward is not FusedDecoder.decode_forward
     assert OptimizedDecoder.prefill_forward is not FunctionalDecoder.prefill_forward
@@ -202,6 +243,7 @@ def test_optimized_runtime_is_distinct_and_has_no_host_fallback():
         OptimizedDecoder._dense_reference_experts,
         OptimizedDecoder._optimized_moe_forward,
         OptimizedDecoder._bounded_prefill_linear,
+        OptimizedDecoder._fill_prefill_cache,
         OptimizedDecoder._manual_prefill_attention,
         OptimizedDecoder._manual_full_decode_attention,
         OptimizedDecoder._prefill_attention,
@@ -334,6 +376,75 @@ def test_real_weight_layer_kind_boundary_beyond_emitted_cache(mesh_device, layer
             0.99,
             f"layer{layer_idx} decode position={prefill_len}",
         )
+        del decoder, reference_layer, state
+        gc.collect()
+
+
+@pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_repeated_decode_across_emitted_boundary(mesh_device, layer_idx):
+    """Exercise the selected accuracy guard and native SDPA across the boundary."""
+
+    prefill_len = 127
+    with _functional_helpers_for_layer(layer_idx):
+        config = functional_test._config()
+        state = functional_test._real_state()
+        decoder = _decoder(state, config, mesh_device, layer_idx=layer_idx, max_cache_len=256)
+        assert not decoder.optimization_config.use_manual_long_decode_attention
+        reference_layer = functional_test._hf_layer(state, config)
+        key_cache, value_cache = decoder.create_kv_cache()
+        generator = torch.Generator().manual_seed(30100 + layer_idx)
+        hidden = torch.randn((1, 1, prefill_len, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+        _, _, _, reference_cache = functional_test._reference_layer(reference_layer, hidden, config)
+        actual = decoder.prefill_forward(functional_test._tt_tensor(hidden, mesh_device), key_cache, value_cache)
+        actual.deallocate(True)
+        history = hidden
+
+        for current_pos in range(prefill_len, 132):
+            token = torch.randn((1, 1, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+            history = torch.cat((history, token), dim=2)
+            if decoder.attention_window is None:
+                reference, decode_key, decode_value, reference_cache = functional_test._reference_layer(
+                    reference_layer,
+                    token,
+                    config,
+                    start_pos=current_pos,
+                    cache=reference_cache,
+                )
+            else:
+                reference, decode_key, decode_value, _ = functional_test._reference_layer(
+                    reference_layer,
+                    history,
+                    config,
+                )
+            actual = decoder.decode_forward(
+                functional_test._tt_tensor(token, mesh_device),
+                key_cache,
+                value_cache,
+                current_pos=current_pos,
+            )
+            functional_test._assert_pcc(
+                reference[:, :, -1:, :],
+                functional_test._to_host(actual),
+                0.99,
+                f"layer{layer_idx} repeated boundary output position={current_pos}",
+            )
+            functional_test._assert_pcc(
+                decode_key[:, :, -1:, :],
+                functional_test._to_host(key_cache)[:, :, current_pos : current_pos + 1, :],
+                0.99,
+                f"layer{layer_idx} repeated boundary key position={current_pos}",
+            )
+            functional_test._assert_pcc(
+                decode_value[:, :, -1:, :],
+                functional_test._to_host(value_cache)[:, :, current_pos : current_pos + 1, :],
+                0.99,
+                f"layer{layer_idx} repeated boundary value position={current_pos}",
+            )
+            actual.deallocate(True)
+
+        assert torch.count_nonzero(functional_test._to_host(key_cache)[:, :, 132:, :]) == 0
+        assert torch.count_nonzero(functional_test._to_host(value_cache)[:, :, 132:, :]) == 0
         del decoder, reference_layer, state
         gc.collect()
 
@@ -503,7 +614,13 @@ def test_real_weight_layer_kind_prefill_and_decode(mesh_device, layer_idx, seed)
     with _functional_helpers_for_layer(layer_idx):
         config = functional_test._config()
         state = functional_test._real_state()
-        decoder = _decoder(state, config, mesh_device, layer_idx=layer_idx)
+        decoder = _decoder(
+            state,
+            config,
+            mesh_device,
+            layer_idx=layer_idx,
+            variant=os.environ.get("OPTIMIZED_DECODER_CORRECTNESS_VARIANT"),
+        )
         reference_layer = functional_test._hf_layer(state, config)
         key_cache, value_cache = _empty_caches_for_decoder(config, mesh_device, decoder)
         generator = torch.Generator().manual_seed(seed)
@@ -830,7 +947,13 @@ def test_profile_optimized_warmed_windows(mesh_device, device_params):
     del baseline
     gc.collect()
 
-    decoder = _decoder(state, config, mesh_device, layer_idx=SLIDING_LAYER)
+    decoder = _decoder(
+        state,
+        config,
+        mesh_device,
+        layer_idx=SLIDING_LAYER,
+        variant=os.environ.get("OPTIMIZED_DECODER_PROFILE_VARIANT", "optimized"),
+    )
     profile_decoder(decoder, "OPTIMIZED")
     prefill_128 = functional_test._tt_tensor(
         torch.randn((1, 1, 128, config.hidden_size), generator=generator, dtype=torch.bfloat16), mesh_device
@@ -846,6 +969,93 @@ def test_profile_optimized_warmed_windows(mesh_device, device_params):
     output.deallocate(True)
     del decoder, state
     gc.collect()
+
+
+def _run_boundary_attention_policy_perf(mesh_device, layer_idx, device_params):
+    config = functional_test._config()
+    state = functional_test._real_state()
+    current_pos = int(os.environ.get("OPTIMIZED_DECODER_BOUNDARY_PERF_POSITION", "129"))
+    warmups = int(os.environ.get("OPTIMIZED_DECODER_BOUNDARY_PERF_WARMUPS", "20"))
+    replays = int(os.environ.get("OPTIMIZED_DECODER_BOUNDARY_PERF_REPLAYS", "200"))
+    cache_len = max(256, current_pos + 128)
+    generator = torch.Generator().manual_seed(41100 + layer_idx + current_pos)
+    prefill_hidden = torch.randn(
+        (1, 1, current_pos, config.hidden_size),
+        generator=generator,
+        dtype=torch.bfloat16,
+    )
+    decode_hidden = torch.randn((1, 1, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+    results = {}
+
+    for backend, use_manual in (("manual", True), ("native", False)):
+        decoder = OptimizedDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=layer_idx,
+            mesh_device=mesh_device,
+            max_cache_len=cache_len,
+            optimization_config=OptimizationConfig().with_changes(
+                use_manual_long_decode_attention=use_manual,
+            ),
+        )
+        key_cache, value_cache = decoder.create_kv_cache()
+        prefill_input = functional_test._tt_tensor(prefill_hidden, mesh_device)
+        decode_input = functional_test._tt_tensor(decode_hidden, mesh_device)
+        output = decoder.prefill_forward(prefill_input, key_cache, value_cache)
+        ttnn.synchronize_device(mesh_device)
+        output.deallocate(True)
+        for _ in range(warmups):
+            output = decoder.decode_forward(
+                decode_input,
+                key_cache,
+                value_cache,
+                current_pos=current_pos,
+            )
+            ttnn.synchronize_device(mesh_device)
+            output.deallocate(True)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        trace_output = decoder.decode_forward(
+            decode_input,
+            key_cache,
+            value_cache,
+            current_pos=current_pos,
+        )
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        samples = []
+        for replay in range(replays):
+            if replay == 0:
+                signpost(header=f"BOUNDARY_{backend.upper()}_L{layer_idx}_P{current_pos}")
+            start = time.perf_counter()
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            samples.append((time.perf_counter() - start) * 1000)
+            if replay == 0:
+                signpost(header=f"BOUNDARY_{backend.upper()}_L{layer_idx}_P{current_pos}_END")
+        results[backend] = {
+            "mean_ms": statistics.mean(samples),
+            "median_ms": statistics.median(samples),
+            "stdev_ms": statistics.pstdev(samples),
+            "min_ms": min(samples),
+        }
+        ttnn.release_trace(mesh_device, trace_id)
+        trace_output.deallocate(True)
+        del decoder
+        gc.collect()
+
+    print(f"boundary_attention_layer={layer_idx} position={current_pos} results={results}")
+    assert results["native"]["mean_ms"] < results["manual"]["mean_ms"]
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_OPTIMIZED_DECODER_BOUNDARY_PERF") != "1",
+    reason="opt-in final-policy manual/native boundary comparison",
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 128_000_000}], indirect=True)
+@pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_boundary_attention_policy_perf(mesh_device, layer_idx, device_params):
+    with _functional_helpers_for_layer(layer_idx):
+        _run_boundary_attention_policy_perf(mesh_device, layer_idx, device_params)
 
 
 @pytest.mark.skipif(os.environ.get("RUN_OPTIMIZED_DECODER_PERF") != "1", reason="opt-in hardware performance gate")
