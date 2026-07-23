@@ -18,6 +18,7 @@ from models.tt_cnn.tt.pipeline import get_memory_config_for_persistent_dram_tens
 from models.experimental.mobileNetV3.tt.custom_preprocessor import create_custom_preprocessor
 from models.experimental.atss_swin_l_dyhead.tt.tt_atss_model import TtATSSModel
 from models.experimental.atss_swin_l_dyhead.reference.model import build_atss_model
+from models.experimental.atss_swin_l_dyhead.common import get_checkpoint_num_classes, get_checkpoint_path
 
 
 class ATSSPerformanceRunnerInfra:
@@ -53,7 +54,8 @@ class ATSSPerformanceRunnerInfra:
         self.outputs_mesh_composer = outputs_mesh_composer
         self.real_input_path = input_path
 
-        self.torch_model = build_atss_model()
+        checkpoint_path = get_checkpoint_path()
+        self.torch_model = build_atss_model(num_classes=get_checkpoint_num_classes(checkpoint_path))
 
         # Create input tensor
         if self.real_input_path and os.path.exists(self.real_input_path):
@@ -81,10 +83,8 @@ class ATSSPerformanceRunnerInfra:
             device=None,
         )
 
-        ATSS_CKPT_PATH = "models/experimental/atss_swin_l_dyhead/weights/atss_swin-l-p4-w12_fpn_dyhead_mstrain_2x_coco_20220509_100315-bc5b6516.pth"
-
         self.ttnn_model = TtATSSModel.from_checkpoint(
-            ATSS_CKPT_PATH,
+            checkpoint_path,
             device=self.device,
             input_h=resolution[0],
             input_w=resolution[1],

@@ -60,6 +60,32 @@ ATSS_NMS_PRE = 1000
 ATSS_MAX_PER_IMG = 100
 
 
+def get_checkpoint_num_classes(checkpoint_path: str, num_anchors: int = ATSS_NUM_ANCHORS) -> int:
+    """Infer the classification count from an mmdet ATSS checkpoint."""
+    import torch
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    state_dict = checkpoint.get("state_dict", checkpoint.get("model", checkpoint))
+    cls_weight = state_dict.get("bbox_head.atss_cls.weight")
+    if cls_weight is None:
+        raise KeyError("Missing key in checkpoint: bbox_head.atss_cls.weight")
+    if cls_weight.shape[0] % num_anchors != 0:
+        raise ValueError(
+            f"ATSS classification channels ({cls_weight.shape[0]}) are not divisible by num_anchors ({num_anchors})"
+        )
+    return cls_weight.shape[0] // num_anchors
+
+
+def get_checkpoint_classes(checkpoint_path: str) -> tuple[str, ...]:
+    """Return class names stored in checkpoint metadata, when available."""
+    import torch
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    meta = checkpoint.get("meta", {})
+    dataset_meta = meta.get("dataset_meta", {}) if isinstance(meta, dict) else {}
+    return tuple(dataset_meta.get("classes", ()))
+
+
 def _download_checkpoint():
     """Download the ATSS checkpoint via ``mim download mmdet``."""
     _WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -130,4 +156,9 @@ def get_config_path() -> str:
 
 
 ATSS_CHECKPOINT = get_checkpoint_path()
-ATSS_CONFIG = get_config_path()
+try:
+    ATSS_CONFIG = get_config_path()
+except FileNotFoundError:
+    # A config is only required for comparisons against MMDetection. The
+    # standalone reference and TTNN models load directly from the checkpoint.
+    ATSS_CONFIG = None

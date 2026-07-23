@@ -137,10 +137,10 @@ class ATSSHead(nn.Module):
         return cls_scores, bbox_preds, centernesses
 
 
-def build_atss_head() -> ATSSHead:
+def build_atss_head(num_classes: int = 80) -> ATSSHead:
     """Instantiate ATSS head matching the Swin-L + DyHead config."""
     return ATSSHead(
-        num_classes=80,
+        num_classes=num_classes,
         in_channels=256,
         feat_channels=256,
         stacked_convs=0,

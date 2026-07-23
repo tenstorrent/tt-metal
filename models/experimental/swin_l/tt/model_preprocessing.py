@@ -116,7 +116,7 @@ def load_backbone_weights(
     if isinstance(checkpoint_path_or_state_dict, dict):
         sd = checkpoint_path_or_state_dict
     else:
-        ckpt = torch.load(checkpoint_path_or_state_dict, map_location="cpu")
+        ckpt = torch.load(checkpoint_path_or_state_dict, map_location="cpu", weights_only=False)
         sd = ckpt.get("state_dict", ckpt)
 
     params: Dict = {}

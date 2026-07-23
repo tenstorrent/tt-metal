@@ -160,13 +160,14 @@ def draw_detections(image_bgr, results, title="", score_thr=0.3):
 
 def run_pytorch_inference(checkpoint_path, img_tensor, img_shape, score_thr=0.3):
     """Run inference with standalone PyTorch reference model."""
+    from models.experimental.atss_swin_l_dyhead.common import get_checkpoint_num_classes
     from models.experimental.atss_swin_l_dyhead.reference.model import (
         build_atss_model,
         load_mmdet_checkpoint,
     )
 
     print("[PyTorch] Building model...")
-    model = build_atss_model()
+    model = build_atss_model(num_classes=get_checkpoint_num_classes(checkpoint_path))
     load_mmdet_checkpoint(model, checkpoint_path)
     model.eval()
 
@@ -263,11 +264,14 @@ def main():
     parser.add_argument("--skip-pytorch", action="store_true", help="Skip PyTorch inference")
     args = parser.parse_args()
 
-    from models.experimental.atss_swin_l_dyhead.common import ATSS_CHECKPOINT
+    from models.experimental.atss_swin_l_dyhead.common import ATSS_CHECKPOINT, get_checkpoint_classes
 
     checkpoint = args.checkpoint or ATSS_CHECKPOINT
     if not Path(checkpoint).is_file():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
+    checkpoint_classes = get_checkpoint_classes(checkpoint)
+    if checkpoint_classes:
+        COCO_CLASSES[:] = checkpoint_classes
 
     img_bgr, img_tensor, img_shape = load_image(args.image)
     print(f"Image: {args.image} ({img_shape[1]}x{img_shape[0]})")

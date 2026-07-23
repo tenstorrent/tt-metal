@@ -28,7 +28,6 @@ from models.experimental.atss_swin_l_dyhead.common import (
     ATSS_FPN_IN_CHANNELS,
     ATSS_FPN_OUT_CHANNELS,
     ATSS_FPN_NUM_OUTS,
-    ATSS_NUM_CLASSES,
     ATSS_NUM_ANCHORS,
     ATSS_PIXEL_MEAN,
     ATSS_PIXEL_STD,
@@ -36,6 +35,7 @@ from models.experimental.atss_swin_l_dyhead.common import (
     ATSS_SCORE_THR,
     ATSS_NMS_IOU_THR,
     ATSS_MAX_PER_IMG,
+    get_checkpoint_num_classes,
 )
 from models.experimental.atss_swin_l_dyhead.tt.tt_fpn import TtFPN
 from models.experimental.atss_swin_l_dyhead.tt.tt_atss_head import TtATSSHead
@@ -155,11 +155,12 @@ class TtATSSModel:
             dyhead = pt_dyhead
 
         # 4. ATSS Head (TTNN)
-        head_params = load_atss_head_weights(checkpoint_path, device)
+        num_classes = get_checkpoint_num_classes(checkpoint_path)
+        head_params = load_atss_head_weights(checkpoint_path, device, num_classes=num_classes)
         head = TtATSSHead(
             device,
             head_params,
-            num_classes=ATSS_NUM_CLASSES,
+            num_classes=num_classes,
             in_channels=ATSS_FPN_OUT_CHANNELS,
             num_anchors=ATSS_NUM_ANCHORS,
             num_levels=ATSS_FPN_NUM_OUTS,

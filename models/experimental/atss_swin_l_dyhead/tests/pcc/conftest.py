@@ -62,12 +62,13 @@ def atss_mmdet_model(atss_config_path, atss_ckpt_path):
 @pytest.fixture(scope="module")
 def atss_ref_model(atss_ckpt_path):
     """Load standalone reference model."""
+    from models.experimental.atss_swin_l_dyhead.common import get_checkpoint_num_classes
     from models.experimental.atss_swin_l_dyhead.reference.model import (
         build_atss_model,
         load_mmdet_checkpoint,
     )
 
-    model = build_atss_model()
+    model = build_atss_model(num_classes=get_checkpoint_num_classes(atss_ckpt_path))
     load_mmdet_checkpoint(model, atss_ckpt_path)
     model.eval()
     return model

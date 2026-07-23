@@ -47,12 +47,13 @@ from typing import List, Tuple
 import cv2
 import numpy as np
 import torch
-from torchvision.ops import batched_nms
+from torchvision.ops import batched_nms, box_iou
 
 import ttnn
 from loguru import logger
 
 from models.demos.utils.common_demo_utils import get_mesh_mappers
+from models.common.utility_functions import comp_pcc
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 
 from models.experimental.atss_swin_l_dyhead.common import (
@@ -62,6 +63,8 @@ from models.experimental.atss_swin_l_dyhead.common import (
     ATSS_PIXEL_STD,
     ATSS_SCORE_THR,
     ATSS_NMS_IOU_THR,
+    get_checkpoint_classes,
+    get_checkpoint_num_classes,
 )
 from models.experimental.atss_swin_l_dyhead.tt.tt_atss_model import TtATSSModel
 from models.experimental.atss_swin_l_dyhead.reference.postprocess import atss_postprocess
@@ -443,6 +446,123 @@ def run_4dev_inference(
     return tiles, cls_scores, bbox_preds, centernesses, {"compile_ms": compile_ms, "infer_ms": infer_ms}
 
 
+def run_pytorch_sliced_inference(img_bgr: np.ndarray, checkpoint: str):
+    """Run the reference model sequentially on the same four 640x640 tiles."""
+    from models.experimental.atss_swin_l_dyhead.reference.model import build_atss_model, load_mmdet_checkpoint
+
+    h, w = img_bgr.shape[:2]
+    tiles = build_overlap_grid(h, w, TILE_SIZE, TILE_SIZE)
+    tiles_bgr = slice_image_to_tiles(img_bgr, tiles, TILE_SIZE, TILE_SIZE)
+    tiles_preproc = preprocess_tiles(tiles_bgr)
+
+    logger.info("Building PyTorch reference model...")
+    t0 = time.perf_counter()
+    model = build_atss_model(num_classes=get_checkpoint_num_classes(checkpoint))
+    load_mmdet_checkpoint(model, checkpoint)
+    model.eval()
+    build_ms = (time.perf_counter() - t0) * 1000
+
+    branch_outputs = [[], [], []]
+    logger.info("Running PyTorch reference sequentially on 4 tiles...")
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        for tile_index in range(len(tiles)):
+            outputs = model(tiles_preproc[tile_index : tile_index + 1])
+            for branch_index, levels in enumerate(outputs):
+                branch_outputs[branch_index].append(levels)
+    infer_ms = (time.perf_counter() - t0) * 1000
+
+    merged_outputs = []
+    for per_tile_branch in branch_outputs:
+        merged_outputs.append(
+            [torch.cat([tile_levels[level] for tile_levels in per_tile_branch], dim=0) for level in range(5)]
+        )
+
+    logger.info(f"  PyTorch build/load: {build_ms:.1f} ms")
+    logger.info(f"  PyTorch inference: {infer_ms:.1f} ms ({len(tiles) / (infer_ms / 1000):.2f} tiles/s)")
+    return tiles, *merged_outputs, {"build_ms": build_ms, "infer_ms": infer_ms}
+
+
+def log_reference_pcc(ttnn_outputs, reference_outputs):
+    """Log per-branch PCC between TTNN and PyTorch raw head outputs."""
+    for name, tt_levels, ref_levels in zip(("cls", "reg", "cent"), ttnn_outputs, reference_outputs):
+        pccs = [comp_pcc(ref, tt, 0.0)[1] for tt, ref in zip(tt_levels, ref_levels)]
+        logger.info(f"{name} PCC range: [{min(pccs):.6f}, {max(pccs):.6f}]")
+
+
+def compare_detections(ttnn_results, reference_results, iou_threshold: float = 0.5, score_threshold: float = 0.3):
+    """Class-aware one-to-one matching of final TTNN and PyTorch detections."""
+
+    def _filtered(results):
+        keep = results["scores"] >= score_threshold
+        return {name: tensor[keep] for name, tensor in results.items()}
+
+    tt = _filtered(ttnn_results)
+    ref = _filtered(reference_results)
+    num_tt = tt["bboxes"].shape[0]
+    num_ref = ref["bboxes"].shape[0]
+    ious = box_iou(tt["bboxes"], ref["bboxes"])
+    if num_tt and num_ref:
+        same_class = tt["labels"][:, None] == ref["labels"][None, :]
+        candidates = torch.nonzero(same_class & (ious >= iou_threshold), as_tuple=False)
+        candidates = sorted(candidates.tolist(), key=lambda pair: float(ious[pair[0], pair[1]]), reverse=True)
+    else:
+        candidates = []
+
+    matched_tt, matched_ref, matches = set(), set(), []
+    for tt_index, ref_index in candidates:
+        if tt_index in matched_tt or ref_index in matched_ref:
+            continue
+        matched_tt.add(tt_index)
+        matched_ref.add(ref_index)
+        matches.append((tt_index, ref_index, float(ious[tt_index, ref_index])))
+
+    tt_only = [i for i in range(num_tt) if i not in matched_tt]
+    ref_only = [i for i in range(num_ref) if i not in matched_ref]
+    matched_ious = [match[2] for match in matches]
+
+    logger.info(
+        f"Detection matching (score >= {score_threshold:.2f}, class-aware IoU >= {iou_threshold:.2f}): "
+        f"matched={len(matches)}, TTNN-only={len(tt_only)}, PyTorch-only={len(ref_only)}"
+    )
+    if matched_ious:
+        logger.info(
+            f"Matched IoU: mean={sum(matched_ious) / len(matched_ious):.4f}, "
+            f"min={min(matched_ious):.4f}, max={max(matched_ious):.4f}"
+        )
+
+    def _log_unmatched(name, detections, indices, other_results):
+        for index in sorted(indices, key=lambda i: float(detections["scores"][i]), reverse=True):
+            label = int(detections["labels"][index])
+            class_name = COCO_CLASSES[label] if label < len(COCO_CLASSES) else str(label)
+            score = float(detections["scores"][index])
+            box = detections["bboxes"][index].tolist()
+            other_same_class = other_results["labels"] == label
+            nearest = ""
+            if other_same_class.any():
+                other_boxes = other_results["bboxes"][other_same_class]
+                other_scores = other_results["scores"][other_same_class]
+                nearest_ious = box_iou(detections["bboxes"][index : index + 1], other_boxes)[0]
+                best_index = int(nearest_ious.argmax())
+                nearest = (
+                    f", nearest-other IoU={float(nearest_ious[best_index]):.3f}"
+                    f" score={float(other_scores[best_index]):.3f}"
+                )
+            logger.info(
+                f"  {name}: {class_name} score={score:.3f} "
+                f"box=[{box[0]:.1f},{box[1]:.1f},{box[2]:.1f},{box[3]:.1f}]{nearest}"
+            )
+
+    _log_unmatched("TTNN-only", tt, tt_only, reference_results)
+    _log_unmatched("PyTorch-only", ref, ref_only, ttnn_results)
+    return {
+        "matched": len(matches),
+        "ttnn_only": len(tt_only),
+        "pytorch_only": len(ref_only),
+        "matched_ious": matched_ious,
+    }
+
+
 def postprocess_and_merge(
     tiles: List[TileSpec],
     cls_scores,
@@ -600,6 +720,17 @@ def main():
     parser.add_argument("--class-agnostic", action="store_true")
     parser.add_argument("--no-trace", action="store_true", help="Disable trace (2CQ only)")
     parser.add_argument(
+        "--run-pytorch",
+        action="store_true",
+        help="Run the PyTorch reference on the same four tiles and save a comparison image.",
+    )
+    parser.add_argument(
+        "--compare-iou",
+        type=float,
+        default=0.5,
+        help="Minimum IoU for one-to-one TTNN/PyTorch detection matching (default 0.5).",
+    )
+    parser.add_argument(
         "--overlap",
         type=int,
         default=128,
@@ -637,6 +768,9 @@ def main():
     checkpoint = args.checkpoint or ATSS_CHECKPOINT
     if not Path(checkpoint).is_file():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
+    checkpoint_classes = get_checkpoint_classes(checkpoint)
+    if checkpoint_classes:
+        COCO_CLASSES[:] = checkpoint_classes
 
     img_bgr = cv2.imread(args.image)
     if img_bgr is None:
@@ -726,6 +860,43 @@ def main():
     out_path = out_dir / "atss_slice_4dev_detections.jpg"
     cv2.imwrite(str(out_path), vis)
     logger.info(f"Saved: {out_path}")
+
+    if args.run_pytorch:
+        ref_tiles, ref_cls, ref_reg, ref_cent, ref_timings = run_pytorch_sliced_inference(img_bgr_infer, checkpoint)
+        ref_results = postprocess_and_merge(
+            ref_tiles,
+            ref_cls,
+            ref_reg,
+            ref_cent,
+            frame_size=infer_size,
+            score_thr=ATSS_SCORE_THR,
+            merge_mode=args.merge_mode,
+            merge_iou_thr=args.merge_iou,
+            merge_match=args.merge_match,
+            class_agnostic=args.class_agnostic,
+            seam_merge=args.seam_merge,
+            seam_tol=(max(overlap, 20) if args.seam_tol < 0 else args.seam_tol),
+            max_per_tile=args.max_per_tile,
+            max_per_frame=args.max_per_frame,
+        )
+        if infer_size != FRAME_SIZE and ref_results["bboxes"].numel() > 0:
+            ref_results["bboxes"] = ref_results["bboxes"] * (FRAME_SIZE / infer_size)
+            ref_results["bboxes"][:, 0::2].clamp_(0, FRAME_SIZE)
+            ref_results["bboxes"][:, 1::2].clamp_(0, FRAME_SIZE)
+
+        log_reference_pcc((cls_scores, bbox_preds, centernesses), (ref_cls, ref_reg, ref_cent))
+        logger.info(f"Detection count: TTNN={results['bboxes'].shape[0]}, PyTorch={ref_results['bboxes'].shape[0]}")
+        compare_detections(
+            results,
+            ref_results,
+            iou_threshold=args.compare_iou,
+            score_threshold=args.score_thr,
+        )
+        ref_title = f"PyTorch reference | 4 tiles | infer: {ref_timings['infer_ms']:.0f} ms" if args.overlay else ""
+        ref_vis = draw_detections(img_bgr, ref_results, title=ref_title, score_thr=args.score_thr)
+        ref_out_path = out_dir / "pytorch_slice_detections.jpg"
+        cv2.imwrite(str(ref_out_path), ref_vis)
+        logger.info(f"Saved: {ref_out_path}")
 
 
 if __name__ == "__main__":

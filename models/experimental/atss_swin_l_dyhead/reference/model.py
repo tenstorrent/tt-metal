@@ -268,10 +268,10 @@ def load_mmdet_checkpoint(
     return missing, unexpected
 
 
-def build_atss_model() -> ATSSModel:
+def build_atss_model(num_classes: int = 80) -> ATSSModel:
     """Build the full ATSS model with default config."""
     backbone = build_swin_l_backbone()
     fpn = build_fpn_for_atss()
     dyhead = build_dyhead_for_atss()
-    head = build_atss_head()
+    head = build_atss_head(num_classes=num_classes)
     return ATSSModel(backbone, fpn, dyhead, head)
