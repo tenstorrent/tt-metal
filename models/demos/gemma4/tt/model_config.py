@@ -234,12 +234,21 @@ class Gemma4ModelArgs:
         cache_dir.mkdir(parents=True, exist_ok=True)
         return cache_dir
 
-    def weight_cache_path(self, dtype):
-        """Return weight cache path for the model."""
+    def weight_cache_path(self, dtype, mesh_shape=None):
+        """Return weight cache path for the model.
+
+        Multi-device layouts are qualified by mesh geometry. ``ttnn.as_tensor``
+        reloads tensorbins as-is and ignores ``mesh_mapper``, so a TP=4 cache
+        built on ``MeshShape([2,4])`` must not be reused on ``[1,4]`` (QB2).
+        """
         if self.model_cache_path is None:
             raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
-        cache_path = self.model_cache_path / f"tensor_cache_{dtype_str}"
+        suffix = f"tensor_cache_{dtype_str}"
+        shape = mesh_shape if mesh_shape is not None else getattr(self, "cluster_shape", None)
+        if shape is not None and shape[0] * shape[1] > 1:
+            suffix += "_mesh" + "x".join(str(d) for d in shape)
+        cache_path = self.model_cache_path / suffix
         cache_path.mkdir(parents=True, exist_ok=True)
         return cache_path
 
@@ -297,10 +306,14 @@ class Gemma4AssistantArgs:
     def resolve_model_cache_path(model_path):
         return Gemma4ModelArgs.resolve_model_cache_path(model_path)
 
-    def weight_cache_path(self, dtype):
+    def weight_cache_path(self, dtype, mesh_shape=None):
         if self.model_cache_path is None:
             raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
-        cache_path = self.model_cache_path / f"assistant_tensor_cache_{dtype_str}"
+        suffix = f"assistant_tensor_cache_{dtype_str}"
+        shape = mesh_shape if mesh_shape is not None else getattr(self, "cluster_shape", None)
+        if shape is not None and shape[0] * shape[1] > 1:
+            suffix += "_mesh" + "x".join(str(d) for d in shape)
+        cache_path = self.model_cache_path / suffix
         cache_path.mkdir(parents=True, exist_ok=True)
         return cache_path

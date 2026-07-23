@@ -18,7 +18,7 @@ from models.demos.gemma4.config import MeshConfig, Mode
 from .weights import AttentionWeights, load_attention_weights
 from .kv_cache import init_kv_cache
 from .decode import decode_forward, packed_decode_forward
-from .prefill import prefill_forward
+from .prefill import flush_deferred_bounded_fills, prefill_forward
 
 
 class Gemma4AttentionConfig:
