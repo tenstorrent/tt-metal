@@ -53,9 +53,9 @@ from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
 from formatting import HEADER_WIDTH, print_footer, print_header, shorten_home
 from model_builders import (
     FLOPS_REGISTRY,
+    LlamaSpec,
     Model,
     ModelConfig,
-    _LlamaSpec,
     instantiate_model_from_config,
     parse_model_config,
 )
@@ -795,7 +795,7 @@ def main() -> None:
     device_cfg = DeviceConfig(yaml_config)
 
     if args.embedding_placement is not None:
-        if not isinstance(model_cfg.spec, _LlamaSpec):
+        if not isinstance(model_cfg.spec, LlamaSpec):
             raise SystemExit("error: --embedding-placement is only supported for model_type=llama")
         try:
             placement = ttml.models.EmbeddingPlacement.from_string(args.embedding_placement)
