@@ -126,3 +126,37 @@ is a conservative combined-program metric because its 166.069 us also includes
 the local output matmul; it nevertheless misses the 40% goal, which requires
 at most 129.0 us. Controlled grid/worker-placement sweeps did not improve the
 8x8 matmul plus row-8 reduce-scatter baseline.
+
+## Traced TP=8 execution
+
+Profile:
+`/tmp/kda_tp_layer_t640_trace_r10/reports/2026_07_23_10_49_42/ops_perf_results_2026_07_23_10_49_42.csv`.
+One warm trace replay preceded ten measured target-shape replays. Their median
+slowest-device critical path was 1.263 ms, while the signposted host interval
+was 12.999 ms, or 1.300 ms/layer. This is 4.55x faster than the 5.749 ms eager
+device span. Each device spends a median 1.213-1.216 ms in kernels, leaving
+only about 47 us between programs. The experiment therefore validates host
+dispatch as the cause of the eager gap; trace replay is now the performance
+baseline.
+
+At the device critical path, the mesh sustains 46.89 TFLOP/s from the same
+59.205 GFLOP executed work, or 3.85% of the eight-chip HiFi4 ceiling. At the
+host-observed 1.300 ms it sustains 45.55 TFLOP/s, or 3.74%. Both figures
+remain far below the 60% aspiration because the layer is a serial chain of 51
+small programs/device, most of which are layout or pointwise operations, and
+because whole-chip peak is not renormalized to each program's active cores.
+
+The measured slowest-device program medians are 84.602 us for 80-core prep,
+96.252 us for 16-core scan, and 148.023 us for fused output matmul +
+reduce-scatter. The traced fused collective reaches `51.610 / 148.023 =
+34.9%` effective fabric-roofline utilization. It still misses the 40% goal and
+129.0 us target, but the improvement from the eager 166.069 us shows that
+launch jitter was part of the earlier combined-program measurement.
+
+Aggregated over the measured ten replays and eight devices, the largest active
+kernel groups were untilize-with-unpadding (12.941 ms), tilize (12.468 ms),
+local matmul (11.843 ms), fused matmul + reduce-scatter (11.752 ms), scan
+(7.693 ms), reshape/view (7.219 ms), and prep (6.749 ms). The next whole-layer
+optimization should therefore remove layout round trips and fuse adjacent
+pointwise work; adding recurrence cores or changing the retained collective
+grid cannot close the measured gap.

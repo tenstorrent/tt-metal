@@ -106,10 +106,23 @@ and tensor ownership fixed:
 Horizontal offset `(1,7)` is illegal for this CCL worker geometry and aborted
 before yielding a timing. The safe wrapper recovered and reset all devices.
 
-The 5.749 ms steady device span versus 1.20-1.23 ms summed active kernels also
-changes the layer-level priority. After the CCL placement sweep, capture the
-layer in a device trace and fuse/remove host-visible layout and pointwise
-boundaries. Adding recurrence cores cannot address the measured idle gap.
+Trace capture removed the eager dispatch gap: ten target-shape replays have a
+1.263 ms median slowest-device span and 1.213-1.216 ms median active
+kernels/device, versus 5.749 ms eager. The retained map is therefore:
+
+- TP=8 whole-head ownership, replicated sequence and low-rank inputs;
+- 80 prep workers, one per local `(head,chunk)`;
+- 16 scan workers, four V blocks per local head;
+- 8x8 output matmul with two Ring reduce-scatter worker rows at offset `(0,8)`;
+- model/layer-owned, mesh-replicated chunk constants so the full layer is
+  trace-capturable without host uploads.
+
+Under trace, the fused output program measures 148.023 us on the slowest device
+and reaches 34.9% effective CCL roofline. Prep and scan remain 84.602 us and
+96.252 us. This evidence rejects further recurrence-core redistribution as the
+next step: the active-time ranking instead prioritizes untilize/tilize removal,
+local matmul/layout fusion, then a fused-output kernel change capable of
+crossing the 129.0 us CCL target.
 
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
