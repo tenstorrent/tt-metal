@@ -16,6 +16,11 @@
 //   Phase 2a: tilize fp32 RM input -> tile  (cb_in_tile)
 //   Phase 2c: cb_out_tile = cb_in_tile * bcast(scale)
 //   Phase 3 : untilize cb_out_tile -> row-major output
+//
+// num_blocks source (TOKEN_COUNT_AWARE define):
+//   * plain             : passed as a runtime arg.
+//   * token_count_aware : delivered by the reader via the cb_loop_count mailbox (read_tile_value
+//                         distributes the UNPACK read to MATH/PACK so all three threads agree).
 
 #include <cstdint>
 
@@ -43,6 +48,7 @@ void kernel_main() {
     // Tile dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(6);
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_loop_count_id = get_compile_time_arg_val(8);
     constexpr uint32_t block_w = 128;                // BlockW
     constexpr uint32_t block_wt = block_w / tile_w;  // BlockWt
     constexpr uint32_t block_ht = 1;                 // BlockHt
@@ -50,9 +56,18 @@ void kernel_main() {
 
     constexpr uint32_t IDST0 = 0;
 
-    uint32_t num_blocks = get_arg_val<uint32_t>(0);  // tile_h x 128 blocks for this core
-
     compute_kernel_hw_startup(cb_input_e4m3_id, cb_out_fp32_id);
+
+#ifdef TOKEN_COUNT_AWARE
+    // num_blocks is computed by the reader and delivered via the loop-count mailbox.
+    CircularBuffer cb_loop_count(cb_loop_count_id);
+    cb_loop_count.wait_front(1);
+    uint32_t num_blocks = cb_loop_count.read_tile_value(0, 0);
+    cb_loop_count.pop_front(1);
+#else
+    (void)cb_loop_count_id;
+    uint32_t num_blocks = get_arg_val<uint32_t>(0);  // tile_h x 128 blocks for this core
+#endif
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         {
