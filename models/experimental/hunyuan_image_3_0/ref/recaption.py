@@ -48,6 +48,9 @@ class RecaptionResult:
     input_length: int
     image_size: str | int | None = None
     stage_params: RecaptionStageParams | None = None
+    ttft: float | None = None  # seconds to first generated token's logits
+    tps: float | None = None  # tokens/sec over tokens generated after the first
+    total_seconds: float | None = None  # wall-clock for the whole AR decode (end-of-CoT time)
 
 
 def _ratio_stop_token_ids(sp: SpecialTokens) -> list[int]:
