@@ -26,7 +26,7 @@ struct FusedPrePostInputs {
     const Tensor& hidden_streams;
 };
 
-using FusedPrePostSpecReturn = std::array<TensorSpec, 2>;
+using FusedPrePostSpecReturn = std::array<tt::tt_metal::TensorSpec, 2>;
 using FusedPrePostTensorReturn = std::array<Tensor, 2>;
 
 }  // namespace ttnn::operations::experimental::deepseek::hyperconnection
