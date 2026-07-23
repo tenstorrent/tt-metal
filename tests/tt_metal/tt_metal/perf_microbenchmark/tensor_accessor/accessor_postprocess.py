@@ -73,8 +73,15 @@ FULL_CHIP_TOPOLOGIES = {
 ZONE_CANDIDATES = ["0000000", "0000001"]
 
 
-def _binary_path(home: Path) -> Path:
-    return home / "build" / "test" / "ttnn" / "unit_tests_ttnn_accessor"
+# The repository root is derived from this file's own location (module-controlled), never
+# from the TT_METAL_HOME environment variable, so no external/user-defined value is ever
+# incorporated into the benchmark subprocess command below (Cycode SAST: unsanitized input
+# in OS command). Layout: <root>/tests/tt_metal/tt_metal/perf_microbenchmark/tensor_accessor/.
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+
+
+def _binary_path() -> Path:
+    return _REPO_ROOT / "build" / "test" / "ttnn" / "unit_tests_ttnn_accessor"
 
 
 def _natural_key(name: str):
@@ -97,15 +104,16 @@ def _validate_gtest_id(value: str) -> str:
 # --------------------------------------------------------------------------- #
 # Running the gtest benchmark suites
 # --------------------------------------------------------------------------- #
-def run_suites(home: Path, suites: list[str]) -> None:
+def run_suites(suites: list[str]) -> None:
     """Run each full-chip benchmark suite once under the device profiler.
 
     Each suite is a single parametrized gtest case (…/GetNocAddr). Its per-topology
     instances each call SetDeviceProfilerDir()/FreshProfilerDeviceLog() internally, so a
     single process run emits one profiler dir per topology — no per-test fan-out (and no
-    parsing of the binary's own output back into a command) is needed.
+    parsing of the binary's own output back into a command) is needed. The result dirs are
+    written under the repo root (subprocess cwd), where parse_suite() reads them back.
     """
-    binary = _binary_path(home)
+    binary = _binary_path()
     if not binary.exists():
         raise SystemExit(
             f"ERROR: accessor benchmark binary not found: {binary}\n"
@@ -121,7 +129,7 @@ def run_suites(home: Path, suites: list[str]) -> None:
         # via the list form (no shell), so no argument can be shell-interpreted or injected.
         gtest_filter = _validate_gtest_id(f"{SUITES[suite]['gtest_suite']}/*")
         print(f"Running {gtest_filter}")
-        subprocess.run([str(binary), f"--gtest_filter={gtest_filter}"], env=env)
+        subprocess.run([str(binary), f"--gtest_filter={gtest_filter}"], cwd=_REPO_ROOT, env=env)
 
 
 # --------------------------------------------------------------------------- #
@@ -150,7 +158,7 @@ def _load_setup(zone_names: list[str]):
     return setup
 
 
-def parse_suite(home: Path, suite: str) -> dict:
+def parse_suite(suite: str) -> dict:
     """Return {metric_key: average_cycles} for one full-chip suite, per topology.
 
     metric_key = "<suite>.<topology>", e.g. "GetNocAddr.sharded_dram_nd". The topology
@@ -170,7 +178,7 @@ def parse_suite(home: Path, suite: str) -> dict:
     zone_names = [f"SHARDED_ACCESSOR_{c}" for c in ZONE_CANDIDATES]
     setup = _load_setup(zone_names)
 
-    results_dir = home / cfg["res_dir"]
+    results_dir = _REPO_ROOT / cfg["res_dir"]
     metrics: dict[str, float] = {}
     if not results_dir.is_dir():
         print(f"WARNING: no results dir for suite {suite}: {results_dir}", file=sys.stderr)
@@ -277,7 +285,7 @@ def main() -> int:
     ap.add_argument(
         "--no-run",
         action="store_true",
-        help="skip running the gtest; only parse existing result dirs under $TT_METAL_HOME",
+        help="skip running the gtest; only parse existing result dirs under the repo root",
     )
     ap.add_argument("--out-json", type=Path, default=None, help="write the full metrics JSON to this path")
     ap.add_argument(
@@ -292,14 +300,12 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    home = Path(os.environ.get("TT_METAL_HOME", "."))
-
     if not args.no_run:
-        run_suites(home, args.suites)
+        run_suites(args.suites)
 
     metrics: dict[str, float] = {}
     for suite in args.suites:
-        metrics.update(parse_suite(home, suite))
+        metrics.update(parse_suite(suite))
 
     if metrics:
         width = max(len(k) for k in metrics)
