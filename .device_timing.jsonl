@@ -123,3 +123,4 @@
 {"source":"run_safe_pytest","pid":452342,"started_at_ms":1784777055476,"wait_ms":2,"run_ms":37484,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op_loose","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
 {"source":"run_safe_pytest","pid":452975,"started_at_ms":1784777103917,"wait_ms":2,"run_ms":139219,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
 {"source":"run_safe_pytest","pid":456370,"started_at_ms":1784777251964,"wait_ms":2,"run_ms":36535,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":458794,"started_at_ms":1784777432804,"wait_ms":3,"run_ms":484759,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}

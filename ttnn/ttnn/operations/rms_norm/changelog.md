@@ -262,3 +262,56 @@
   (3) per_w_t>1 gave PCC 0.965/maxdiff 4 — fixed by the single block-reduce (above).
 - Tests added: probes in `tests/ttnn/unit_tests/operations/rms_norm/probes/`
   (controlled + auto shard geometries, per_w_t/R sweeps, BLOCK multi-group).
+
+## Refinement 4a — Cross-core W-split: RM tilize path + logical interleaved W-split
+- Date: 2026-07-23
+- Type: scheme-completion (partial — `[~]`).
+- What was done: completed two of R4's three deferred corners, reusing the R4 xcore
+  cross-core combine (reader/compute/writer kernels + topology) via CT-arg flags —
+  no forked kernel files. Extracted a shared `_assemble_xcore_kernels()` so the
+  physical-shard and logical-interleaved builders single-source the kernel arg
+  layout + CB set.
+  - **Part 1 — RM gamma + sharded (TILE input)**: `GAMMA_IS_RM` flag on the xcore
+    reader + compute. Reader reads this core's gamma W-slice as row-major sticks (one
+    tile-column per `read_sticks_for_tilize`, `cb_gamma_sticks`); compute
+    `tilize<1, cb_gamma_sticks, cb_gamma>(vwt)` once before the pass-2 `·gamma`, held
+    resident. gamma stays interleaved DRAM (only the input is sharded). Mirror of the
+    interleaved RM-gamma knob-turn. Removed the two `{gamma_layout: ROW_MAJOR,
+    memory_layout: *_SHARDED}` EXCLUSIONS.
+  - **Part 3 — logical wide-interleaved / decode W-split**: new
+    `_create_logical_xcore_descriptor` (one group of `K = min(Wt, num_cores)` cores
+    splits W; each core handles all `R` tile-rows, `HT_LOCAL = R`) + a host trigger in
+    the interleaved builder (`TILE input AND INTERLEAVED AND R < num_cores AND Wt > R`).
+    Kernel flags: `X_FROM_DRAM` (reader reads its W/K slice tiles from interleaved DRAM
+    into `cb_x_in` via `TensorAccessor`, `tile_id = t*Wt + w_tile_start + w`),
+    `X_ZERO_COPY=0` (compute waits on the reader's push instead of self-arming the
+    zero-copy shard), `OUT_TO_DRAM` (writer drains `cb_out` to DRAM per tile-row after
+    the stat round). `cb_x_in`/`cb_out` allocated (not zero-copy) on the logical path.
+    Wide (`W=16384/32768/12288`) + decode (`rows=32`) shapes now fill `K>1` cores
+    instead of 1–2. Prefill (`R=256 ≥ num_cores`) is untouched — stays on the R3
+    resident single-read path.
+  - **Deferred to Refinement 4b — RM input + sharded** (structural, characterized at
+    depth): RM WIDTH/BLOCK `auto_shard_config` uses a width granule of 8 (bf16) / 4
+    (fp32), so a core's resident W-slice is `8·k` elements wide — NEVER a multiple of
+    32 for any golden W (W=64→8el, W=1024→16el, W=4096→40el, W=8192→80el). Core
+    boundaries straddle 32-wide tile-column boundaries, so the tile-based cross-core
+    reduce (whole `per_w_t` tiles + one partial-holder) cannot consume the shard. Needs
+    a per-core arbitrary-width tilize into `ceil(w/32)` padded tiles + a per-core
+    partial scaler (EVERY core zeros its last tile's `[w%32, 32)`) + untilize back —
+    filed as R4b with the exact levers. The two `{layout: ROW_MAJOR, memory_layout:
+    *_SHARDED}` EXCLUSIONS stay xfail-strict (not silenced; they are R4b's baseline).
+- Accuracy achieved: PCC ≥ 0.999996 on all probed geometries — RM-gamma sharded
+  (WIDTH per_w_t=1/2, R=2, auto-64, BLOCK 256×512, non-aligned W=50); logical W-split
+  decode (1024/2304), wide (16384/32768, PCC≈1.0), R=2 (12288, PCC≈1.0), no-gamma,
+  RM-gamma, non-aligned W=4100. Golden `TOLERANCES` (bf16 PCC≥0.995) met throughout.
+- Golden test progress: full `test_golden.py` — **3258 passed, 33900 skipped, 3181
+  xfailed, 0 failed, 0 xpassed** (was 2660 passed / 3760 xfailed at R4) → +598
+  RM-gamma sharded cells moved xfail→pass. Sharded slice 1740 passed / 1260 xfailed
+  (was 1160/1840). Interleaved slice 1500 passed / 0 failed (non-dev race check).
+  `test_op_loose` 18 passed / 1 xfail (HEIGHT=R5). The remaining 1260 sharded xfails
+  are the RM-input EXCLUSIONS (R4b).
+- Issues encountered: None for the two shipped parts. (RM-input sharded is a
+  characterized structural gap, deferred to R4b — see above.)
+- Tests added: probes 017 (RM-gamma sharded) and 018 (logical W-split decode/wide/
+  R2/non-aligned/gamma variants) in `tests/ttnn/unit_tests/operations/rms_norm/probes/`.
+  Unit dir unchanged: 345 passed / 32 skipped (no regression).

@@ -205,7 +205,7 @@ this is a perf-parallelism gap folded into R4a, not a correctness gap.
 
 ---
 
-### [ ] Refinement 4a — Cross-core W-split: RM tilize path + logical interleaved W-split
+### [~] Refinement 4a — Cross-core W-split: RM tilize path + logical interleaved W-split
 
 **Goal**: complete R4's deferred corners, all needing a tilize/untilize on the
 cross-core (`rms_norm_xcore_*`) kernels or a new host dispatch:
@@ -231,6 +231,57 @@ the RM-input/RM-gamma sharded EXCLUSIONS; they xfail-strict today (not silenced)
 **Done when**: the four EXCLUSIONS above removed with their cells passing; wide
 interleaved / decode shapes fill more than one core; golden green; prior phases
 unregressed.
+
+**Landed (partial `[~]`)**: two of the three corners shipped, reusing the R4 xcore
+combine (kernels + topology) via CT-arg flags — no forked kernel files:
+- **RM gamma + sharded** (TILE input): `GAMMA_IS_RM` flag on the xcore reader/compute;
+  the reader reads the gamma W-slice as row-major sticks (one tile-column per
+  `read_sticks_for_tilize`), compute `tilize<1,cb_gamma_sticks,cb_gamma>(vwt)` before
+  the pass-2 `·gamma` (held resident). gamma stays interleaved DRAM. The two
+  `{gamma_layout: ROW_MAJOR, memory_layout: *_SHARDED}` EXCLUSIONS are **removed** →
+  +598 RM-gamma sharded cells xfail→pass (full golden `test_op` 2660→3258 passed,
+  0 failed, 0 xpassed; probes PCC ≥ 0.999996 incl non-aligned W).
+- **Logical wide-interleaved / decode W-split**: `_create_logical_xcore_descriptor`
+  (one group of `K = min(Wt, num_cores)` cores splits W, `HT_LOCAL = R`) + host trigger
+  (TILE input, INTERLEAVED, `R < num_cores`, `Wt > R`). Kernel flags `X_FROM_DRAM`
+  (reader reads its W/K slice tiles from interleaved DRAM into `cb_x_in`), `X_ZERO_COPY=0`
+  (compute waits on the reader's push), `OUT_TO_DRAM` (writer drains `cb_out` to DRAM
+  per tile-row). Wide (`W=16384/32768/12288`) + decode (`rows=32`) now fill `K>1` cores
+  instead of 1–2 (probes PCC ≥ 0.999996; prefill `R≥cores` stays on the R3 resident path).
+
+**Deferred to R4b** (structural, characterized at depth): **RM input + sharded**. RM
+WIDTH/BLOCK `auto_shard_config` uses a width granule of 8 (bf16) / 4 (fp32), so the
+per-core resident W-slice is width-`8·k` — **never a multiple of 32 for any golden W**
+(W=64→8el, W=1024→16el, W=4096→40el, W=8192→80el). Core boundaries straddle tile-column
+boundaries, so the tile-based cross-core reduce (whole `per_w_t` tiles per core + a
+single partial-holder) cannot consume the shard. The two
+`{layout: ROW_MAJOR, memory_layout: *_SHARDED}` EXCLUSIONS stay xfail-strict (see R4b).
+
+---
+
+### [ ] Refinement 4b — RM-input sharded: per-core arbitrary-width tilize sub-scheme
+
+**Goal**: complete R4a's deferred corner — **RM input + WIDTH/BLOCK sharded** — by
+handling a resident RM shard whose per-core width is an arbitrary multiple of the RM
+granule (8/4 elements), NOT a whole number of 32-wide tiles. Remove the two
+`{layout: ROW_MAJOR, memory_layout: *_SHARDED}` EXCLUSIONS with their cells passing.
+
+**Verifier notes**: this is a **sub-scheme change**, not the RM-gamma tilize knob-turn
+(R4a shipped that). The exact levers, in one place:
+- Tilize the resident RM shard (a `cb_descriptor_from_sharded_tensor` on the RM buffer
+  → stick pages, or the `compute_block_size` page-override to tile pages) into
+  `ceil(shard_w / 32)` **padded** tiles per tile-row — the shard width is arbitrary
+  (e.g. 40 el → 1 full tile + an 8-wide partial tile).
+- Per-core partial scaler: EVERY core (not just the globally-last one) zeros the last
+  tile's `[shard_w % 32, 32)` padded lanes, since every core's width is sub-tile-aligned.
+  The reader prepares a per-core-`valid_cols` partial scaler; the SUM-reduce over the
+  padded tiles yields the slice's partial Σx², and the cross-core sum stays correct
+  (sum is associative — tile alignment is irrelevant to the total).
+- Untilize `cb_out` back to the resident RM shard (arbitrary width, `write_sticks`-style).
+- Reuse the existing xcore cross-core combine + writer transport unchanged.
+
+**Done when**: `{layout: ROW_MAJOR, memory_layout: *_SHARDED}` EXCLUSIONS removed with
+their cells passing (~1260 xfail cells); golden green; prior phases unregressed.
 
 ---
 
