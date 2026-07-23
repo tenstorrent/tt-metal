@@ -475,3 +475,11 @@
 - Full build and hardware suite: `./build_metal.sh --build-ttnn && scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 12/12 in 21.06 s.
 - Confirmation report: `/tmp/kda_chunk_full_v_default_profile/reports/2026_07_23_09_07_51/ops_perf_results_2026_07_23_09_07_51.csv`. Ten warm T=640 calls averaged 553.9449 us: transpose 1.7821 us, reshape 25.4826 us, prep 343.9508 us, scan 182.7294 us.
 - The confirmed default is 93.9625 us or 14.50% faster than the controlled 647.9074 us value-split baseline, and 741.2251 us or 57.23% faster than the original 1295.1700 us baseline.
+
+### 2026-07-23 09:16:15 UTC — Move q/k squaring to SFPU
+
+- Diagnosis: prep is compute-bound, and its in-kernel q/k normalization squared eight tiles per work item through binary matrix-FPU multiplies even though the elementwise operation does not require that unit. Existing RMSNorm kernels use SFPU for the same operation.
+- Added a local SFPU destination-register multiply helper for q/k squares. The KDA algorithm and public API are unchanged.
+- Direct Blackhole regression passed 5/5. Full regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 12/12 in 17.47 s. The HiFi2 T=64 flat-path output/state PCC remained 0.999926/0.999928.
+- Tracy report: `/tmp/kda_chunk_sfpu_square_profile/reports/2026_07_23_09_13_38/ops_perf_results_2026_07_23_09_13_38.csv`. Ten warm T=640 calls averaged 530.8974 us: transpose 2.0228 us, reshape 25.7210 us, prep 321.2216 us, scan 181.9320 us. Prep improved 22.7292 us or 6.61% against the immediately preceding 343.9508 us profile; total improved 23.0475 us or 4.16%.
+- Batching two fp32 tiles per destination-register acquisition was correct (5/5) but neutral at 321.2801 us prep, so the simpler single-tile helper was retained. The retained path is 764.2726 us or 59.01% faster than the original 1295.1700 us bringup baseline.
