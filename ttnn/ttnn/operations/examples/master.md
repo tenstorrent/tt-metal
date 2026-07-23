@@ -17,6 +17,45 @@ on. They are illustrative of the *effect*, not CI bounds.
 
 ---
 
+## ⭐ T1 — [`constant_synthesis`](constant_synthesis/README.md)
+**Concept:** a constant-valued output needs no source bytes — synthesize one page in L1 and replicate it
+(zero DRAM reads), instead of streaming a DRAM-resident constant tensor through the reader.
+**Situation:** you must materialize a large output region that is entirely one constant value, and you write
+the obvious kernel: read a DRAM constant tensor and write it back out — paying the full read half of the
+roofline for bytes that carry no information.
+**Measured win:** inventing the constant on-core and replicating it is **~1.31–1.45× faster** at the full
+grid (WH B0, 64 cores; **grows with output size** 1.31× @ 4 MB → 1.45× @ 16 MB), and **~1.05× at 1 core**.
+The gap is **~1.45×, not 2×**: the baseline is DRAM-**combined**-bandwidth-bound (reads NoC0 + writes NoC1
+saturate the controller at ~195 GB/s), while the candidate's **pure-write** stream tops out at ~142 GB/s —
+so removing half the bytes gives `2×(142/195)≈1.46×`, not 2×. At 1 core DRAM isn't the wall, so the
+baseline's reads overlap its writes on the other NoC for free and removing them saves ~nothing.
+**Gist:** for a constant-valued output, don't read a DRAM constant — build one page (word-replicated L1
+stores) and `noc_async_write` it to every output page; keep reads on NoC0 / writes on NoC1, batch writes
+(`block` in flight per barrier). Only pays off when the move is DRAM-bandwidth-bound (many cores); no-op at
+1 core where read/write overlap already hides the read. Ceiling is set by pure-write vs combined DRAM
+bandwidth, so expect ~1.4–1.5× at grid scale, not 2×.
+
+## ⭐ T1 — [`page_walk_order`](page_walk_order/README.md)
+**Concept:** the temporal ORDER a single reader walks its interleaved-DRAM page indices — a large
+constant stride that collides with the bank count serializes reads on one bank; a unit (or coprime)
+stride spreads them across all banks. Independent of core placement.
+**Situation:** one reader streams N pages and an index mapping makes it walk the page indices with a
+stride equal to the DRAM bank count (the author picked a loop order without noticing the collision).
+Interleaved DRAM puts page `p` in bank `p % num_banks`, so every read in a block hits the same bank —
+serialized, no cross-bank parallelism — and it is mysteriously slow.
+**Measured win:** walking with **stride 1 (or a stride coprime to the bank count) is ~1.26–1.31×
+faster** than stride == bank count (WH B0, 1 core, num_banks=12 queried; 2 KB pages 1.26×, 4 KB 1.31×;
+17.6→22.2 GB/s). The win is **bounded, not ~12×**: a single reader is NCRISC-issue / one-NoC-port
+limited (~26 GB/s vs ~200 GB/s DRAM) so it can't keep all banks busy — walk order only sets how well
+the limited concurrency spreads. It is bank **spread**, not contiguity (`coprime` ≡ `unit`), and the
+gap only appears once reads are DRAM-service-bound: ~1.0× at 512 B pages (issue-bound), growing to
+1.31× at 4 KB.
+**Gist:** don't let a reader's page-index stride be a multiple of `num_dram_banks` — query the bank
+count (`device.dram_grid_size().x*.y`) and keep the stride 1 or coprime to it so consecutive reads
+land on different banks. Issue a block of reads under one barrier so several are outstanding (bank
+parallelism needs concurrency to manifest). Bounded ~1.3× on one core; matters most for larger pages
+(≥2 KB) where reads are DRAM-service-bound. No effect for tiny pages or a single-bank/single-page source.
+
 ## ⭐⭐ T2 — [`noc_placement`](noc_placement/README.md)
 **Concept:** two knobs for interleaved-DRAM NoC contention — core **placement** (column/row/diagonal)
 and **NoC selection** (which NoC a read/write stream uses) — as a switchable placement × NoC × op matrix.
@@ -47,6 +86,46 @@ wall time. **No gain once DRAM-bandwidth-bound** — 64 cores hit **190.8 GB/s**
 and size each CB to `2 * block` tiles (double-buffered). Small sweet spot (~4–8); bigger wastes L1.
 Use the smallest dtype your accuracy allows. Skip all of it if you're already bandwidth-bound (enough
 cores) or compute-bound.
+
+## ⭐⭐ T2 — [`index_staging`](index_staging/README.md)
+**Concept:** index-driven access (`out[w] = src[idx[w]]`) — one bulk read of the indexable dimension
+into L1 + SRAM-local indexing, vs. one remote NoC transaction per index.
+**Situation:** you need `out[w] = src[idx[w]]` for an arbitrary index list and write the obvious kernel:
+a separate remote DRAM read per index. Each read pulls a whole aligned line (32 B) to extract the one
+element you want (2 B for bf16), and each read command carries a fixed NCRISC issue cost.
+**Measured win:** bulk-reading the whole source row once and extracting every element in L1 is
+**~2.1–2.2× faster** than a per-index remote read (WH B0, 1 core), holding across W=128→8192 and in
+steady state. The win is **bounded** (not the 16× byte-waste ratio) because both variants share the
+same W-element local-extract loop — that common floor caps the ratio, so it barely grows with W.
+**Index distribution (sorted vs. shuffled) had no effect:** the whole indexable dimension is one
+interleaved DRAM page, so the pipelined per-index reads hit one open DRAM row and the loop is bound on
+**transaction *count* (NCRISC issue)**, not DRAM locality — and count is order-independent.
+**Gist:** for an indexed select over a dimension that fits in L1, **read it once in bulk and index locally**;
+don't issue one remote read per index. The win is collapsing the transaction count, not improving
+locality — so it applies whenever the index list touches most of a row, regardless of index order.
+
+## ⭐⭐ T2 — [`transfer_alignment`](transfer_alignment/README.md)
+**Concept:** the NoC read alignment-residue tax on sub-page spans. A `noc_async_read` can only move a
+range when the source and destination byte addresses are congruent modulo the alignment window; a span
+whose start residue doesn't match the destination residue **cannot be one transfer** — the kernel must
+round the source down, over-read `width + residue` into an aligned scratch, then do a local L1 `memmove`
+to realign the useful bytes.
+**Situation:** a reader extracts many `width`-byte row-spans from DRAM, each starting at an arbitrary
+byte offset, into a CB — and unknowingly trips the residue-mismatch path on every span (over-read + a
+per-span CPU realign), never noticing it's off the single-read fast path.
+**Measured win:** arranging the span start alignment-**congruent** so one direct read moves exactly
+`width` bytes is **~1.7× (64 B spans) up to ~19× (4 KB spans) faster** than the misaligned
+over-read+realign (WH B0, 1 core, DRAM window=32 B queried). Counter to the naive "the over-read
+amortizes with width" guess, the win **grows** with width: the over-read is only +residue (16 B,
+negligible even at 4 KB), so the tax is entirely the CPU `memmove`, which runs off the NoC on a scalar
+RISC and scales with `width`, while the direct read is a single NoC transfer nearly width-independent in
+the single-core latency regime. Ratio is flat across span count `N` (both scale linearly); the absolute
+ns saved grows with `N` (realign paid `N` times).
+**Gist:** for sub-page span reads at arbitrary byte offsets, arrange the span offset / CB write-pointer
+so `(src_off % align) == (dst_off % align)` (query `ttnn.get_dram_alignment()`); then the read stays one
+direct `noc_async_read` instead of over-read-into-aligned-scratch + local `memmove`. The tax is the
+forced CPU realign, not the wasted bytes — so it hurts most for wide spans; still a ~1.7× win even for
+tiny ones.
 
 ## ⭐⭐ T2 — [`tile_reorder`](tile_reorder/README.md)
 **Concept:** transfer coalescing on a DRAM-bandwidth-bound move.
