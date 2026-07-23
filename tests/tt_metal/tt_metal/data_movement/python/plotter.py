@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import matplotlib.pyplot as plt
-from matplotlib.gridspec import GridSpec
 import itertools
+import os
+
+import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from loguru import logger  # type: ignore
+from matplotlib.gridspec import GridSpec
 
 from tests.tt_metal.tt_metal.data_movement.python.constants import *
 
@@ -160,6 +161,8 @@ class Plotter:
                 # For NOC API Latency tests, plot cycles per transaction
                 self.plot_transaction_size_vs_cycles_per_transaction(axes[0], plot_data[test_id])
                 self.plot_num_transactions_vs_total_cycles(axes[1], plot_data[test_id])
+            elif "Quasar Cache Write" in test_name:
+                self.plot_quasar_cache_write_duration(axes[0], plot_data[test_id])
             else:  # Packet Sizes
                 self.plot_durations(axes[0], plot_data[test_id])
                 self.plot_data_size_vs_bandwidth(
@@ -280,6 +283,22 @@ class Plotter:
             xbase=2,
             yscale="log",
             ybase=10,
+        )
+
+    # Quasar Cache Write: Total Data Size vs Write Duration (one line per path)
+    def plot_quasar_cache_write_duration(self, ax, data):
+        self._plot_series(
+            ax=ax,
+            data=data,
+            x_key="transaction_size",  # holds total bytes written (N)
+            y_key="duration_cycles",
+            series_keys=["write_path"],
+            label_format=lambda combo, keys: f"{combo[0]}",
+            title="Data Size vs Write Duration",
+            xlabel="Total Data Size (bytes)",
+            ylabel="Duration (cycles)",
+            xscale="log",
+            xbase=2,
         )
 
     # Packet Sizes: Transaction Size vs Bandwidth
