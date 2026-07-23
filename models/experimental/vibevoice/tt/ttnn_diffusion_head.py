@@ -256,7 +256,12 @@ class TTDiffusionHead:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         gate = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        hidden = ttnn.mul(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Place the SwiGLU product (down_proj's in0) in L1: the down_proj is the SLOW head matmul
+        # (K=4608, 24c, ~37% DRAM BW) and reads in0 ~9 us faster from L1 than DRAM.  Memory placement
+        # only changes WHERE the tensor lives, not its bits (same in0_block_w reduction) => byte-identical
+        # (proven maxabsdiff==0 in tests/perf/diffusion_l1_input_sweep.py: 79.4->70.7 us).  Only down
+        # benefits; L1 in0 REGRESSES final_adaLN (41->108 us) so it stays DRAM.
+        hidden = ttnn.mul(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = ttnn.linear(
             hidden,
             w.layer_ffn_down_w[layer_idx],
