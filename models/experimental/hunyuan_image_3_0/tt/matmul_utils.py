@@ -205,7 +205,10 @@ def matmul_1d_program_config(
         per_core_M=max(1, math.ceil(m_padded / TILE_SIZE)),
         per_core_N=per_core_N,
         mcast_in0=True,
-        fuse_batch=m_padded <= TILE_SIZE,
+        # TTNN requires fuse_batch=True whenever input A is sharded (this config's
+        # only caller, act_width_sharded_linear, always feeds a WIDTH_SHARDED
+        # activation) — unconditional, not gated on M size.
+        fuse_batch=True,
         fused_activation=None,
     )
 
@@ -221,12 +224,12 @@ def _width_shard_specs_match(a: ttnn.MemoryConfig, b: ttnn.MemoryConfig) -> bool
 
 
 def _pad_m_to_tile(x: ttnn.Tensor, m_dim: int) -> ttnn.Tensor:
-    """Pad the M (seq/batch) dim of ``x`` up to ``TILE_SIZE``.
+    """Pad the M (seq/batch) dim of ``x`` up to the nearest tile multiple.
 
     ``ttnn.pad`` requires one (before, after) pair per rank. lm_head last-token
     paths pass rank-3 ``[B,1,H]``; timestep / 4D paths use ``[1,1,M,K]``.
     """
-    pad_amt = TILE_SIZE - m_dim
+    pad_amt = nearest_32(m_dim) - m_dim
     rank = len(list(x.shape))
     if rank == 4:
         padding = [(0, 0), (0, 0), (0, pad_amt), (0, 0)]
@@ -284,7 +287,7 @@ def _ensure_width_sharded_act(
         owns_work = True
 
     m_dim = int(list(work.shape)[-2])
-    if m_dim < TILE_SIZE:
+    if m_dim % TILE_SIZE != 0:
         padded = _pad_m_to_tile(work, m_dim)
         if owns_work:
             ttnn.deallocate(work)
@@ -385,7 +388,7 @@ def act_width_sharded_linear(
         in0_block_w = None
 
     m_dim = int(list(x.shape)[-2])
-    m_work = nearest_32(m_dim) if m_dim < TILE_SIZE else m_dim
+    m_work = nearest_32(m_dim) if m_dim % TILE_SIZE != 0 else m_dim
     num_cores = grid_size[0] * grid_size[1]
     act_mc = ttnn.create_sharded_memory_config_(
         [m_work, k // num_cores],

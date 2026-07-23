@@ -81,7 +81,8 @@ class HunyuanTtRMSNorm(LightweightModule):
         # cores instead of serialized on 1 core. rmsnorm_shard_config returns None
         # outside the measured-safe regime (large M, or the narrow QK-norm), so this
         # transparently falls back to the interleaved kernel below.
-        cfg = rmsnorm_shard_config(self.device, x.shape[-2], x.shape[-1]) if _SHARD_NORM else None
+        total_rows = x.shape[0] * x.shape[-2]
+        cfg = rmsnorm_shard_config(self.device, total_rows, x.shape[-1]) if _SHARD_NORM else None
         if cfg is not None:
             program_config, shard_mc = cfg
             x_sharded = ttnn.interleaved_to_sharded(x, shard_mc)
