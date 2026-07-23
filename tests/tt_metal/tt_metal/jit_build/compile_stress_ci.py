@@ -172,6 +172,12 @@ def run_repetition(test_binary: Path, args: argparse.Namespace, work_dir: Path, 
     # Force the local compile path: never route to a remote JIT compile server.
     env.pop("TT_METAL_JIT_SERVER_ENDPOINTS", None)
     env["TT_METAL_JIT_SERVER_ENABLE"] = "0"
+    # Force a true cold host compile: disable the opt-in kernel ccache so a warm
+    # ccache (esp. the shared Redis backend some CI jobs enable) can't turn the
+    # identical, deterministic kernel set into a ~2.4x-faster cache-hit run. This
+    # removes the warm/cold bimodality so the measurement is reproducible.
+    env.pop("TT_METAL_CCACHE_KERNEL_SUPPORT", None)
+    env["CCACHE_DISABLE"] = "1"
     env.update(
         {
             "TT_METAL_COMPILE_STRESS_MOCK": "0",
