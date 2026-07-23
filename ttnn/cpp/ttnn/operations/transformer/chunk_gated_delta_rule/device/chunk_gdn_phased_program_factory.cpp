@@ -131,12 +131,13 @@ struct ScanWorkDist {
     CoreRangeSet core_set;
 };
 
-ScanWorkDist distribute_scan(CoreCoord grid, uint32_t BH, uint32_t Vt) {
+ScanWorkDist distribute_scan(CoreCoord grid, uint32_t BH, uint32_t Vt, bool vector_gate) {
     const uint32_t ncores = grid.x * grid.y;
     TT_FATAL(BH <= ncores, "num_heads {} exceeds compute cores {}", BH, ncores);
-    // QWEN_GDN_SCAN_VALUE_SPLIT=1 enables the previous finest-grain V split for perf A/B only.
+    // The measured KDA crossover favors finest-grain V splitting at <=8 local heads and complete
+    // V blocks at >=16. Scalar GDN retains its established full-V mapping.
     const char* split_env = std::getenv("QWEN_GDN_SCAN_VALUE_SPLIT");
-    const bool value_split = split_env && split_env[0] == '1';
+    const bool value_split = split_env ? split_env[0] == '1' : (vector_gate && BH <= 8);
     uint32_t NV = 1;
     if (value_split) {
         for (uint32_t cand = Vt; cand >= 1; cand--) {  // cand==1 always satisfies
@@ -367,7 +368,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
 
     auto* device = in.v_beta.device();
     // Value-parallel fan-out: each core runs one (head, v-block) sequential scan.
-    auto sdist = distribute_scan(device->compute_with_storage_grid_size(), BH, Vt_full);
+    auto sdist = distribute_scan(device->compute_with_storage_grid_size(), BH, Vt_full, attrs.vector_gate);
     const CoreRangeSet& cores = sdist.core_set;
     const uint32_t Vt = sdist.Vtl;  // per-core V-block width; CBs/compute use this
     const uint32_t n_used = static_cast<uint32_t>(sdist.cores.size());

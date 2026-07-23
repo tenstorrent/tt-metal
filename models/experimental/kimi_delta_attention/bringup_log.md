@@ -526,3 +526,12 @@
 - Controlled T=640 scan A/B: H=4 four-way V split 96.132 us vs full-V 148.009 us (35.1% faster); H=8 split 138.286 us vs 149.206 us (7.3% faster); H=16 full-V 153.672 us vs split 260.952 us (41.1% faster); H=32 full-V remains 181.788 us.
 - Production K=V=128 selection is four V blocks per head when local heads <=8, otherwise one complete V block per head. TP=8 maps 80 independent head-chunk prep items to 80 cores and four heads x four V blocks to 16 scan cores.
 - Sequence parallelism is rejected for this phase because it inserts ordered state handoff on the scan dependency chain. The low-rank f_a and g_a projections remain replicated; beta and all head-width outputs are sharded.
+
+
+### 2026-07-23 09:58:44 UTC — Apply the measured KDA scan crossover
+
+- Localized the distribution rule to vector-gated KDA: split the four value tiles across four scan cores when `B*H <= 8`; retain one complete value block per head above the measured crossover. Scalar GDN keeps its established full-value mapping.
+- `QWEN_GDN_SCAN_VALUE_SPLIT=0|1` remains an explicit A/B override. Without an override, H=4 now selects the TP=8 production mapping automatically.
+- Full build: `./build_metal.sh --build-ttnn` passed.
+- Hardware regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 12/12 in 10.77 s.
+- Tracy confirmation: `/tmp/kda_chunk_h4_adaptive_profile/reports/2026_07_23_09_58_44/ops_perf_results_2026_07_23_09_58_44.csv`. Eleven H=4,T=640 scan calls averaged `95.940 us` (min `95.133 us`, max `97.238 us`), matching the forced-split crossover measurement (`96.132 us`) within `0.2%`.
