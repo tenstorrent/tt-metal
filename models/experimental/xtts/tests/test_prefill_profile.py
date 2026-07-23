@@ -52,10 +52,14 @@ def test_prefill_profile(device, xtts_state_dict, prompt):
         wrapped = F.pad(wrapped, (0, pad), value=STOP_TEXT_TOKEN)
 
     tt = TtXttsGptModel(sd, device)
-    print(f"PREFILLINFO prompt={prompt} len={cond.shape[1] + wrapped.shape[1]}")
+    prompt_len = cond.shape[1] + wrapped.shape[1]
+    print(f"PREFILLINFO prompt={prompt} len={prompt_len}")
 
     cond_tt = ttnn.from_torch(cond.float(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    kv = tt.prefill(wrapped, cond_tt)
+    # prefill allocates the fixed KV cache of size max_seq; mirror the generator's budget
+    # (prompt + full audio-token budget, tile-aligned) so the profiled allocation is representative.
+    max_seq = -(-(prompt_len + 606) // 32) * 32
+    kv = tt.prefill(wrapped, cond_tt, max_seq)
     ttnn.deallocate(cond_tt)
     for k, v in kv:
         ttnn.deallocate(k)
