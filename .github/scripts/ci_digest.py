@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -60,30 +61,42 @@ def latest_run(repo: str, workflow: str, branch: str) -> dict | None:
 
 
 def fetch_run_summary(repo: str, run_id: int) -> dict | None:
-    """Download a run's ``ai_run_summary_<run_id>`` artifact and parse its JSON.
+    """Download the latest attempt's ``ai_run_summary_<run_id>`` JSON.
 
-    The ai_summary/run action uploads ``ai_run_summary_<run_id>.json`` (the
-    factual, deterministic run report: succeeded / failed / infra_failure) inside
-    that artifact. Returns None when the artifact is absent — the workflow doesn't
-    run ai_summary/run, or the run predates JSON output — so the caller can fall
-    back to the run's conclusion.
+    Each re-run uploads another artifact under this same name and they coexist on
+    the run, so pick the newest by created_at instead of relying on the undefined
+    choice ``gh run download -n`` makes among duplicates. Returns None when no
+    such artifact exists — the workflow doesn't run ai_summary/run, or the run
+    predates JSON output — so the caller can fall back to the run's conclusion.
     """
     name = f"ai_run_summary_{run_id}"
+    listing = subprocess.run(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100",
+            "--jq",
+            f'.artifacts[] | select(.name == "{name}") | "\\(.created_at)\\t\\(.id)"',
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    if not listing:
+        return None
+    _, art_id = max(listing, key=lambda ln: (ln.split("\t")[0], int(ln.split("\t")[1]))).split("\t")
     with tempfile.TemporaryDirectory() as d:
-        try:
-            subprocess.run(
-                ["gh", "run", "download", str(run_id), "-R", repo, "-n", name, "-D", d],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError:
-            return None  # no such artifact on this run
+        zip_path = os.path.join(d, "artifact.zip")
+        with open(zip_path, "wb") as fh:
+            subprocess.run(["gh", "api", f"repos/{repo}/actions/artifacts/{art_id}/zip"], stdout=fh, check=True)
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(d)
         matches = _glob.glob(os.path.join(d, "**", f"{name}.json"), recursive=True)
         if not matches:
             return None  # artifact present but .md-only (run predates JSON output)
-        with open(matches[0], encoding="utf-8") as f:
-            return json.load(f)
+        with open(matches[0], encoding="utf-8") as fh:
+            return json.load(fh)
 
 
 @dataclass(frozen=True)
@@ -183,7 +196,9 @@ def _section(r: dict) -> list[str]:
     failed-jobs table; a green run stops at the counts line (it's enough to see
     it's green)."""
     when = f" · {_fmt_ts(r['latest_ts'])} UTC" if r.get("latest_ts") else ""
-    out = [f"### {_link(r)}"]
+    attempt = r.get("run_attempt")
+    hdr = _link(r) + (f" (attempt {attempt})" if attempt and attempt > 1 else "")
+    out = [f"### {hdr}"]
     c = r.get("counts") or {}
     total = c.get("broken", 0) + c.get("infra", 0) + c.get("passing", 0)
     if total:
@@ -266,6 +281,7 @@ def check_workflow(repo: str, branch: str, workflow: str) -> dict:
             **base,
             **meta,
             "outcome": report.outcome,
+            "run_attempt": data.get("run_attempt"),
             "real_jobs": report.failed,
             "infra_jobs": report.infra,
             "counts": {"broken": len(report.failed), "infra": len(report.infra), "passing": report.passing},
@@ -338,6 +354,7 @@ class TestRender(unittest.TestCase):
             "outcome": "REAL_FAIL",
             "latest_url": "http://run/2",
             "latest_ts": "2026-06-14T06:34:32Z",
+            "run_attempt": 2,
             "counts": {"broken": 1, "infra": 1, "passing": 3},
             "real_jobs": [
                 {
@@ -364,6 +381,7 @@ class TestRender(unittest.TestCase):
             "models", [self._broken(), {"workflow": "WF-D", "outcome": "GREEN", "latest_url": "http://run/3"}]
         )
         self.assertIn("[WF-A](http://run/2)", md)
+        self.assertIn("(attempt 2)", md)  # re-run exposed in the header
         self.assertIn("[job-x](http://job/x)", md)
         self.assertIn("🟣", md)
         self.assertIn("TESTS_FAILED", md)  # precise status surfaced
