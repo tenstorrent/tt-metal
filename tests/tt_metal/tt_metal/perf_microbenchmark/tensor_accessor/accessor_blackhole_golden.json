@@ -1,0 +1,15 @@
+{
+  "arch": "blackhole",
+  "description": "TensorAccessor full-chip address-calculation (get_noc_addr) CI golden (Blackhole, bh_p150_perf). Metric = average device cycles for get_noc_addr across the full Tensix grid, one pinned all-static config per tensor topology, keyed by GetNocAddr.<topology>. All values are null = record mode while the silicon baseline is collected on CI; re-arm once run-to-run spread is known.",
+  "pinned_config": "unit_tests_ttnn_accessor AccessorFullChipBenchmarks.GetNocAddr, full compute grid, all-static config per topology, device profiler",
+  "golden": {
+    "GetNocAddr.interleaved_l1": null,
+    "GetNocAddr.interleaved_dram": null,
+    "GetNocAddr.sharded_l1_1d": null,
+    "GetNocAddr.sharded_l1_2d": null,
+    "GetNocAddr.sharded_l1_nd": null,
+    "GetNocAddr.sharded_dram_2d": null,
+    "GetNocAddr.sharded_dram_nd": null,
+    "tolerance_pct": 15.0
+  }
+}

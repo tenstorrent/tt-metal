@@ -1,0 +1,42 @@
+# Runtime performance tests that require a profiler-enabled (ENABLE_TRACY=ON) build.
+# These run in the (Runtime) Performance Tests pipeline against a separate
+# profiler build artifact, so the non-profiler dispatch/bandwidth microbenchmarks
+# in runtime_perf_tests.yaml are not perturbed by profiler instrumentation.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration (timeout in minutes).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#
+# For max allowed timeout refer to .github/time_budget.yaml (subheading: perf_profiler).
+
+# --- TensorAccessor full-chip address-calculation microbenchmark ---
+# Runs the accessor benchmark gtest (unit_tests_ttnn_accessor,
+# AccessorFullChipBenchmarks.GetNocAddr) with the device profiler: the get_noc_addr
+# address-calc kernel runs on the full Tensix grid for every supported tensor topology
+# (interleaved L1/DRAM, 1D/2D/ND sharded L1, sharded DRAM). It then post-processes the
+# per-topology average device cycles and gates them against the per-arch golden. The
+# metric comes only from the standard device profiler so it behaves identically on
+# Wormhole and Blackhole. Goldens ship in record mode (null) until populated on silicon.
+- name: runtime_perf_tensor_accessor
+  cmd: |
+    export TT_METAL_DEVICE_PROFILER=1
+    GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/tensor_accessor/accessor_golden.json
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/tensor_accessor/accessor_blackhole_golden.json
+    fi
+    # The post-proc imports the profiler team's parser (tracy.process_device_log /
+    # device_post_proc_config), which lives under tools/. Put tools/ (plus repo root
+    # and ttnn) on PYTHONPATH so it resolves.
+    export PYTHONPATH="${TT_METAL_HOME}/tools:${TT_METAL_HOME}:${TT_METAL_HOME}/ttnn${PYTHONPATH:+:${PYTHONPATH}}"
+    python3 tests/tt_metal/tt_metal/perf_microbenchmark/tensor_accessor/accessor_postprocess.py \
+      --golden "$GOLDEN"
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+    bh_p150_perf:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
