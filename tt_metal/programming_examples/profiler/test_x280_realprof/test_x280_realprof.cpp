@@ -90,6 +90,7 @@ static void pin_thread_to_core(std::thread& t, int core) {
 #if defined(TRACY_ENABLE)
 #include "tools/profiler/perf_debug_profiler_packets.hpp"
 #include "tools/profiler/perf_debug_profiler_tracy_handler.hpp"
+#include "impl/profiler/profiler.hpp"  // generateZoneSourceLocationsHashes (zone hash -> name)
 #endif
 
 using tt::Cluster;
@@ -1178,10 +1179,23 @@ int main(int argc, char** argv) {
     }
     auto tracy_consumer = [&]() {
         Batch b;
-        uint64_t ts_base = 0;   // first device timestamp seen; markers are rebased to it so the device
-        bool anchored = false;  // timeline starts at the capture origin (the context anchor's gpuTime=0),
-        uint64_t cnt = 0;       // not ~device-ts (~seconds) into the trace. Durations are unaffected.
+        uint64_t ts_base = 0;       // first device timestamp seen; markers are rebased to it so the device
+        bool anchored = false;      // timeline starts at the capture origin (the context anchor's gpuTime=0),
+        bool names_loaded = false;  // not ~device-ts (~seconds) into the trace. Durations are unaffected.
+        uint64_t cnt = 0;
         while (mq.pop(b)) {
+            if (!names_loaded) {
+                // Resolve real zone names NOW (first batch) -- the kernels have JIT-compiled by the time any
+                // marker arrives, so their zone-source-location hashes are in the build log. Loading at tracy
+                // setup (before dispatch) was too early -> everything fell back to "Zone_0x<hash>".
+                names_loaded = true;
+                try {
+                    for (auto& [h, md] : tt::tt_metal::generateZoneSourceLocationsHashes()) {
+                        zone_names.emplace((uint32_t)h, md.marker_name);
+                    }
+                } catch (const std::exception&) {
+                }
+            }
             for (auto& r : b) {
                 uint32_t ci = r.lane / (uint32_t)NRISC, risc = r.lane % (uint32_t)NRISC;
                 if (ci >= num_cores) {
@@ -1512,10 +1526,17 @@ int main(int argc, char** argv) {
 #if defined(TRACY_ENABLE)
         if (do_tracy && tracy_handler) {
             tracy_handler.reset();  // dtor logs the orphan-end summary + destroys all Tracy contexts
-            // The final std::_Exit is abrupt (skips atexit) -- give the in-process Tracy client a moment to
-            // ship the queued zones to a connected tracy-capture/GUI before we bail.
-            printf("[tracy] flushing zones to Tracy client (3s)...\n");
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            // The final std::_Exit is abrupt (skips atexit). A fixed sleep raced the in-process Tracy client:
+            // at high zone counts it couldn't ship the whole queue to tracy-capture in time, so the TAIL
+            // (some ZONE_ENDs) was cut -> zones left OPEN -> Tracy extends them to the trace end -> giant
+            // parent zones swallowing later ones. Instead do Tracy's DETERMINISTIC shutdown handshake: request
+            // shutdown, then wait until the client has flushed its queue and the server acked (bounded cap).
+            printf("[tracy] flushing zones to Tracy client (shutdown handshake)...\n");
+            tracy::GetProfiler().RequestShutdown();
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+            while (!tracy::GetProfiler().HasShutdownFinished() && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
         }
 #endif
     } else {
