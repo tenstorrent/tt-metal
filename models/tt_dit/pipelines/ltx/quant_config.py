@@ -4,9 +4,9 @@
 
 """Quantization and compute precision configuration for the LTX pipeline.
 
-Ported from ``pipelines/wan/quant_config.py``. The dataclasses are identical; only
-``apply_quant_config``'s block-walk differs — LTX block structure (attn1/attn2/ffn,
-plus an optional audio path) and its linear hook surface differ from Wan's.
+Ported from ``pipelines/wan/quant_config.py``. The config dataclass field definitions are
+identical; the presets and ``apply_quant_config``'s block-walk differ — LTX block structure
+(attn1/attn2/ffn, plus an optional audio path) and its linear hook surface differ from Wan's.
 
 LTX hook surface: the LTX linears do NOT read each ``Linear.compute_config`` — the
 attention matmuls take ``LTXAttention.mm_compute_kernel_config`` explicitly and the
@@ -40,7 +40,7 @@ LTX_QUANT_ACTIVATIONS = os.environ.get("LTX_QUANT_ACTIVATIONS", "1") in ("1", "t
 LTX_QUANT_SDPA_BF8 = os.environ.get("LTX_QUANT_SDPA_BF8", "1") in ("1", "true", "True")
 
 # ---------------------------------------------------------------------------
-# Config dataclasses (identical to the Wan template)
+# Config dataclasses (field definitions identical to the Wan template)
 # ---------------------------------------------------------------------------
 
 
@@ -186,8 +186,7 @@ def _apply_linear_quant(linear, lc: LinearQuantConfig) -> None:
 def apply_quant_config_to_block(block, config: QuantConfig, arch, has_audio: bool) -> None:
     """Quantize a single ``LTXTransformerBlock`` in place (weights + compute configs).
 
-    Factored out so the transformer-block PCC test can apply the exact same quant path the
-    pipeline uses against the diffusers torch oracle. ``arch`` is the device arch enum.
+    Invoked per block by ``apply_quant_config``'s block walk. ``arch`` is the device arch enum.
 
     Per-block attribute mapping:
     - Self-attn QKV / out:  block.attn1.to_qkv, block.attn1.to_out (mm/sdpa compute on attn1)
@@ -235,9 +234,9 @@ def apply_quant_config_to_block(block, config: QuantConfig, arch, has_audio: boo
     if has_audio:
         _quant_self_attn(getattr(block, "audio_attn1", None))
         _quant_cross_attn(getattr(block, "audio_attn2", None))
-        # A2V / V2A cross-attn use a separate (non-fused) addcmul on their outputs, so their
-        # to_out could be bf8; keep them on cross_attn_out (bf16 carve-out) conservatively —
-        # audio is already optimized and these are small relative to the video GEMMs.
+        # A2V / V2A to_out run the fused addcmul epilogue, whose ternary addcmul inputs must
+        # match the weight tile format, so their to_out weights must stay bf16 (cross_attn_out
+        # carve-out), same invariant as self_attn_out / video cross_attn_out.
         _quant_cross_attn(getattr(block, "audio_to_video_attn", None))
         _quant_cross_attn(getattr(block, "video_to_audio_attn", None))
         audio_ff = getattr(block, "audio_ff", None)

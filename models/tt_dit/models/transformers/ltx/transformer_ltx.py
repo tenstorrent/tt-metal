@@ -353,7 +353,6 @@ class LTXTransformerBlock(Module):
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
-        video_kv_logical_n: int | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         # Video modulation; `_p1` chunks carry +1 baked into the scale slot (see _prepare_torch_state).
         shifted_v = self.scale_shift_table.data + video_temb
@@ -508,9 +507,7 @@ class LTXTransformerBlock(Module):
                 # the ring SDPA gathers internally instead of a separate K/V all-gather.
                 k_rope_cos=video_cross_pe_cos,
                 k_rope_sin=video_cross_pe_sin,
-                # Audio syncs to the decoded (stripped) grid, so exclude any appended anchor tokens
-                # from the video context it attends to. Defaults to video_N when unset.
-                kv_logical_n=video_kv_logical_n if video_kv_logical_n is not None else video_N,
+                kv_logical_n=video_N,
                 trans_mat=trans_mat,
                 addcmul_residual=audio_1BND,
                 addcmul_gate=a_ca_gate,
@@ -850,7 +847,6 @@ class LTXTransformerModel(Module):
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
-        video_kv_logical_n: int | None = None,
         gather_output: bool = True,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Device-only, trace-capturable denoising step. All tensor args are ttnn (no torch).
@@ -1001,19 +997,11 @@ class LTXTransformerModel(Module):
                 audio_padding_mask=audio_padding_mask,
                 audio_padding_mask_full=audio_padding_mask_full,
                 video_padding_mask=video_padding_mask,
-                video_kv_logical_n=video_kv_logical_n,
             )
             if self.has_audio:
                 video_1BND, audio_1BND = result
             else:
                 video_1BND = result
-            # Profiler drain every 16 blocks (LTX_PROFILE_FLUSH): 16 blocks × ~35 ops stays under the
-            # 12k-marker DRAM buffer, so markers are never dropped, while a per-BLOCK drain (a host
-            # readback of all 32 devices each block) is far too slow. Profiling only; no effect traced.
-            if os.environ.get("LTX_PROFILE_FLUSH") and (
-                block_idx % 16 == 15 or block_idx == len(self.transformer_blocks) - 1
-            ):
-                ttnn.ReadDeviceProfiler(self.mesh_device)
 
         v_inner_local = video_emb_ts.shape[-1]
         if self.image_conditioning:

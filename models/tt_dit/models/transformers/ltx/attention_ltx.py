@@ -174,11 +174,6 @@ class LTXAttention(Module):
             self.parallel_config.tensor_parallel.factor,
         )
         ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(mesh_key, self.default_sdpa_chunk_size)
-        # Tuning hook: LTX_SDPA_RING_CHUNK="q,k" overrides the ring self-attn chunk for a sweep.
-        _ring_chunk_override = os.environ.get("LTX_SDPA_RING_CHUNK")
-        if _ring_chunk_override:
-            _q, _k = (int(v) for v in _ring_chunk_override.split(","))
-            ring_sdpa_chunk_size = (_q, _k)
         self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=ring_sdpa_chunk_size[0],
