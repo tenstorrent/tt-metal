@@ -40,8 +40,6 @@ from ...utils.conv3d import (
     count_convs,
     get_conv3d_config,
 )
-
-register_fibo_conv3d_configs()
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import (
     fast_device_to_host,
@@ -54,6 +52,8 @@ from ...utils.tensor import (
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+register_fibo_conv3d_configs()
 
 CACHE_T = 2
 

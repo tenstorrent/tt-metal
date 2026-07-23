@@ -140,7 +140,7 @@ _BH_GALAXY_MAX_CORE_GRID = (12, 10)
 
 
 def get_matmul_core_grid(mesh_device):
-    """Return the compute core grid, clamped to 11x10 on Blackhole Galaxy (power constraint)."""
+    """Return the compute core grid (12x10 on Blackhole Galaxy with 11x10 as fallback)."""
     core_grid = mesh_device.compute_with_storage_grid_size()
     if ttnn.device.is_blackhole() and mesh_device.get_num_devices() >= _BH_GALAXY_MIN_DEVICES:
         core_grid = ttnn.CoreCoord(
