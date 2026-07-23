@@ -143,7 +143,7 @@ void kernel_main() {
 #if defined(ARCH_BLACKHOLE)
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
 #elif defined(ARCH_QUASAR)
-        PACK((llk_pack_hw_configure(dfb_out_id)));
+        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
 #endif
 
         // --- Binary op (SFPU path; mirrors eltwise_binary_sfpu_no_bcast_dfb.cpp's body, single tile). ---

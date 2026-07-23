@@ -61,8 +61,7 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     UNPACK((llk_unpack_hw_configure(icb)));
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     // 32bit formats require the A2D unpack-to-dest path (SrcB is only 19 bits wide), which is not
-    // implemented for Quasar yet; only the B2D path is supported here. The Quasar DataFormat enum has
-    // no UInt32 (its 32-bit formats are Float32 and Int32), so it is not part of this check.
+    // implemented for Quasar yet; only the B2D path is supported here.
     const std::uint32_t dst_format = get_operand_dst_format(icb);
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
@@ -107,8 +106,7 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     // Broadcast mode and B2D vs A2D are fixed in unary_bcast_init; pass logical operand ids through to LLK.
     // 32bit formats would require the A2D unpack-to-dest path (SrcB is only 19 bits wide), which is not
-    // implemented for Quasar yet; only the B2D path is supported here. The Quasar DataFormat enum has
-    // no UInt32 (its 32-bit formats are Float32 and Int32), so it is not part of this check.
+    // implemented for Quasar yet; only the B2D path is supported here.
     const std::uint32_t dst_format = get_operand_dst_format(icb);
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);

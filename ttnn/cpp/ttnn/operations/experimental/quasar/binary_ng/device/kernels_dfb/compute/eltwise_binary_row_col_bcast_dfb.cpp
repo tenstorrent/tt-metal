@@ -112,7 +112,7 @@ ALWI void process_tile(
 #if defined(ARCH_BLACKHOLE)
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
 #elif defined(ARCH_QUASAR)
-        PACK((llk_pack_hw_configure(dfb_out_id)));
+        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
 #endif
 
         // ROW operand's activation chain (reads the expanded llk_post tile). No-op (post aliases llk_post)

@@ -102,7 +102,7 @@ ALWI void process_tile(
 #if defined(ARCH_BLACKHOLE)
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
 #elif defined(ARCH_QUASAR)
-    PACK((llk_pack_hw_configure(dfb_out_id)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
 #endif
 
     // Broadcast operand's activation chain runs ONCE (its expanded tile is reused across the whole slab).
