@@ -13,7 +13,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.llama3_70b_galaxy.reference.llama import TransformerBlock
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -97,7 +96,7 @@ def test_llama_decoder_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model = TransformerBlock(layer_id=0, args=model_args)
+    reference_model = model_args.reference_decoder()
     reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 127

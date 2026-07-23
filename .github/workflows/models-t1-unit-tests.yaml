@@ -24,7 +24,7 @@ on:
           - dit-common
           - wan-2.2-t2v
           - wan-2.2-i2v
-          # llama3.3-70b-galaxy: disabled — see #42139
+          - llama3.3-70b-galaxy
           - flux.1-schnell
           - flux.1-dev
       sku:
