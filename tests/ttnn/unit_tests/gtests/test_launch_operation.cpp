@@ -107,13 +107,13 @@ static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<NewInfraWorkloa
 static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFactory>);
 
 // ---------------------------------------------------------------------------
-// MetalV2FactoryConcept (Metal 2.0 op-porting stepping stone)
+// ProgramSpecFactoryConcept (Metal 2.0 op-porting stepping stone)
 //
 // No real op uses create_program_artifacts yet, so the adapter's templated
 // method bodies — including the op-owned tensor enumeration and parking added
 // for this concept — are never instantiated by a normal build. The checks below
 // (a) pin the concept's classification (it recognizes a create_program_artifacts
-// factory and is mutually exclusive with the other three factory concepts, per
+// factory and is mutually exclusive with the other factory concepts, per
 // all_factories_valid), and (b) force-instantiate the adapter so its bodies are
 // actually compiled.
 //
@@ -122,34 +122,64 @@ static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFacto
 // real op dispatched through the launch path, i.e. the first op port. Until then
 // this is compile-coverage only.
 // ---------------------------------------------------------------------------
-struct MetalV2Factory {
+struct ProgramSpecFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
         return ttnn::device_operation::ProgramArtifacts{};
     }
 };
 
+// Same, but additionally provides override_runtime_arguments -> classified as the
+// custom variant, whose cache-hit path applies the returned ProgramRunArgs via
+// UpdateProgramRunArgs.
+struct CustomProgramSpecFactory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
+        return ttnn::device_operation::ProgramArtifacts{};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        const OperationAttributes& /*attrs*/,
+        const Tensor& /*tensor_args*/,
+        Tensor& /*tensor_return_value*/,
+        const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/ = std::nullopt) {
+        return {};
+    }
+};
+
 // Minimal device operation supplying just the typedefs the adapter inherits.
-struct MetalV2MinimalOp {
+struct ProgramSpecMinimalOp {
     using operation_attributes_t = OperationAttributes;
     using tensor_args_t = Tensor;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 };
 
-static_assert(ttnn::device_operation::MetalV2FactoryConcept<MetalV2Factory>);
-static_assert(!ttnn::device_operation::ProgramFactoryConcept<MetalV2Factory>);
-static_assert(!ttnn::device_operation::MeshWorkloadFactoryConcept<MetalV2Factory>);
-static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<MetalV2Factory>);
+static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<ProgramSpecFactory>);
+static_assert(!ttnn::device_operation::CustomProgramSpecFactoryConcept<ProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramFactoryConcept<ProgramSpecFactory>);
+static_assert(!ttnn::device_operation::MeshWorkloadFactoryConcept<ProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<ProgramSpecFactory>);
+
+// The custom variant is mutually exclusive with the base one.
+static_assert(ttnn::device_operation::CustomProgramSpecFactoryConcept<CustomProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramSpecFactoryConcept<CustomProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramFactoryConcept<CustomProgramSpecFactory>);
+static_assert(!ttnn::device_operation::MeshWorkloadFactoryConcept<CustomProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<CustomProgramSpecFactory>);
 
 // Compile-coverage: taking the adapter methods' addresses ODR-uses them, forcing
 // the (otherwise un-instantiated) bodies to compile. Never dispatched.
-TEST(LaunchOperationTest, MetalV2AdapterCompiles) {
-    using Adapter = device_operation::MeshDeviceOperationAdapter<MetalV2MinimalOp>::MetalV2MeshWorkloadFactoryAdapter<
-        MetalV2Factory>;
+TEST(LaunchOperationTest, ProgramSpecAdapterCompiles) {
+    using Adapter = device_operation::MeshDeviceOperationAdapter<
+        ProgramSpecMinimalOp>::ProgramSpecMeshWorkloadFactoryAdapter<ProgramSpecFactory>;
     [[maybe_unused]] auto create = &Adapter::create_mesh_workload;
     [[maybe_unused]] auto apply = &Adapter::apply_descriptor;
     [[maybe_unused]] auto resolve = &Adapter::resolve_bindings;
+
+    using CustomAdapter = device_operation::MeshDeviceOperationAdapter<
+        ProgramSpecMinimalOp>::CustomProgramSpecMeshWorkloadFactoryAdapter<CustomProgramSpecFactory>;
+    [[maybe_unused]] auto ccreate = &CustomAdapter::create_mesh_workload;
+    [[maybe_unused]] auto capply = &CustomAdapter::apply_descriptor;
     SUCCEED();
 }
 

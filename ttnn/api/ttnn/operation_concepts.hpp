@@ -14,6 +14,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include <cstdint>
 
@@ -87,9 +88,44 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // NOTE: This is a stepping-stone concept for incremental migration of operations to
 // Metal 2.0. It is not designed for production use — the cache-hit fast path re-patches
 // op-owned tensors redundantly rather than skipping them.
+//
+namespace detail {
+template <typename F>
+struct static_fn_return {};
+template <typename R, typename... A>
+struct static_fn_return<R (*)(A...)> {
+    using type = R;
+};
+
+// True iff T has a single static override_runtime_arguments returning ProgramRunArgs. Keyed on the
+// return type, not presence, so the legacy void-returning override_runtime_arguments (some matmul
+// factories) doesn't match. The requires-wrap makes any ill-formed step leave it unsatisfied.
 template <typename T>
-concept MetalV2FactoryConcept = requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> &&
-                                !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
+concept HasSpecRuntimeArgsOverride = requires {
+    requires std::same_as<
+        typename static_fn_return<decltype(&T::override_runtime_arguments)>::type,
+        tt::tt_metal::experimental::ProgramRunArgs>;
+};
+}  // namespace detail
+
+// Base spec factory: cache hit refreshes only tensor bindings.
+template <typename T>
+concept ProgramSpecFactoryConcept =
+    requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> &&
+    !ProgramDescriptorFactoryConcept<T> && !detail::HasSpecRuntimeArgsOverride<T>;
+
+// Spec factory that additionally re-applies per-dispatch runtime args on every cache hit: its
+// override_runtime_arguments returns a ProgramRunArgs applied via UpdateProgramRunArgs (the
+// spec-path analog of the ProgramDescriptor path's get_dynamic_runtime_args). Args it omits are
+// retained from the cache-miss SetProgramRunArgs, so they must be enqueue-loop invariant. Full
+// signature (only the return type is concept-enforced):
+//   static ProgramRunArgs override_runtime_arguments(
+//       const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,
+//       const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
+template <typename T>
+concept CustomProgramSpecFactoryConcept =
+    requires { &T::create_program_artifacts; } && detail::HasSpecRuntimeArgsOverride<T> && !ProgramFactoryConcept<T> &&
+    !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
 // Detect operations that put create_descriptor directly on the operation struct
 // (no program_factory_t wrapper needed for single-descriptor operations).
@@ -128,7 +164,7 @@ concept HasSelectProgramFactory = requires(
 
 // Validate that all variant alternatives in a program_factory_t satisfy exactly one of
 // ProgramFactoryConcept, MeshWorkloadFactoryConcept, ProgramDescriptorFactoryConcept,
-// or MetalV2FactoryConcept.
+// ProgramSpecFactoryConcept, or CustomProgramSpecFactoryConcept.
 namespace detail {
 template <typename Variant, std::size_t... Is>
 consteval bool all_factories_valid(std::index_sequence<Is...>) {
@@ -136,7 +172,8 @@ consteval bool all_factories_valid(std::index_sequence<Is...>) {
         ((ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>> +
-          MetalV2FactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
+          ProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          CustomProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
 }  // namespace detail

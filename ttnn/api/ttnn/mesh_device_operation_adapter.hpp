@@ -29,6 +29,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
 #include <tt_stl/reflection.hpp>
@@ -630,9 +631,9 @@ public:
     };
 
     // -----------------------------------------------------------------------
-    // MetalV2MeshWorkloadFactoryAdapter
+    // ProgramSpecMeshWorkloadFactoryAdapter
     //
-    // Adapts a MetalV2FactoryConcept factory (Metal 2.0,
+    // Adapts a ProgramSpecFactoryConcept factory (Metal 2.0,
     // single-program / SPMD-flavored) for mesh dispatch. The op author writes
     // ONLY create_program_artifacts, returning a single ProgramArtifacts (one
     // ProgramSpec + ProgramRunArgs + any op-owned tensors). The adapter stamps a
@@ -661,8 +662,8 @@ public:
     //
     // TODO: consider replacing with a general MeshWorkloadSpecFactoryAdapter?
     // -----------------------------------------------------------------------
-    template <MetalV2FactoryConcept MetalV2Factory>
-    struct MetalV2MeshWorkloadFactoryAdapter {
+    template <typename SpecFactory>
+    struct ProgramSpecMeshWorkloadFactoryAdapter {
         using TensorParamName = tt::tt_metal::experimental::TensorParamName;
         using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
 
@@ -742,14 +743,17 @@ public:
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            // Metal 2.0's MakeProgramFromSpec needs a MeshDevice; pull from the
-            // first device tensor reachable from tensor_args. Op factories
-            // satisfying this concept are tensor-driven, so first_tensor is
-            // always populated for current callers.
+            // Metal 2.0's MakeProgramFromSpec needs a MeshDevice; pull from the first device tensor
+            // reachable from tensor_args, falling back to tensor_return_value for output-only ops
+            // (e.g. rand) whose tensor_args carry no input tensor.
             auto first_tensor = ttsl::reflection::get_first_object_of_type<tt::tt_metal::Tensor>(tensor_args);
+            if (!first_tensor.has_value()) {
+                first_tensor = ttsl::reflection::get_first_object_of_type<tt::tt_metal::Tensor>(tensor_return_value);
+            }
             TT_FATAL(
                 first_tensor.has_value(),
-                "MetalV2 factory adapter requires at least one Tensor in tensor_args to source the MeshDevice");
+                "ProgramSpec factory adapter requires at least one Tensor in tensor_args or "
+                "tensor_return_value to source the MeshDevice");
             auto* mesh_device = first_tensor.value().device();
             TT_FATAL(mesh_device != nullptr, "First tensor in tensor_args must be allocated on a MeshDevice");
 
@@ -757,7 +761,7 @@ public:
             // across all coordinate ranges. Bindings derive from the (single) set of
             // factory tensor_args and are identical for every stamped program; copy
             // per range into the cached shared state.
-            auto artifacts = MetalV2Factory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
+            auto artifacts = SpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
 
             // Enumerate io tensors (inputs + outputs), then append the factory's
             // op-owned tensors. resolve_bindings maps each TensorArgument to an
@@ -815,6 +819,30 @@ public:
                     fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
                 }
                 tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args);
+            }
+        }
+    };
+
+    // Like ProgramSpecMeshWorkloadFactoryAdapter (cache-miss build inherited unchanged), but the
+    // cache-hit path calls the factory's override_runtime_arguments and applies the returned
+    // ProgramRunArgs via UpdateProgramRunArgs instead of the base's tensor-only UpdateTensorArgs.
+    template <CustomProgramSpecFactoryConcept CustomSpecFactory>
+    struct CustomProgramSpecMeshWorkloadFactoryAdapter : ProgramSpecMeshWorkloadFactoryAdapter<CustomSpecFactory> {
+        using Base = ProgramSpecMeshWorkloadFactoryAdapter<CustomSpecFactory>;
+        using typename Base::cached_mesh_workload_t;
+
+        static void apply_descriptor(
+            cached_mesh_workload_t& cached_workload,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                auto run_args = CustomSpecFactory::override_runtime_arguments(
+                    attrs,
+                    tensor_args,
+                    tensor_return_value,
+                    std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args);
             }
         }
     };
