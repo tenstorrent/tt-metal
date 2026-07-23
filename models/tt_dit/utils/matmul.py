@@ -133,9 +133,9 @@ grid_11_10_configs = {
 
 _BH_GALAXY_MIN_DEVICES = 32
 # Full 12x10 compute grid on the 4x8 Blackhole Galaxy. Previously clamped to 11x10 for a power
-# constraint; verified 2026-07-15 that the full 12x10 grid runs cleanly on all 32 devices (FIBO
-# denoise forward, no fabric/power fault) and every FIBO matmul is faster at 12x10 than 11x10
-# (see the swept configs in transformer_bria_fibo.py). 11x10 configs are retained as a fallback.
+# constraint; the full 12x10 grid has since been verified to run cleanly on all 32 devices (no
+# fabric/power fault) and is faster than 11x10 for the matmul shapes exercised on this platform.
+# 11x10 configs are retained as a fallback.
 _BH_GALAXY_MAX_CORE_GRID = (12, 10)
 
 
