@@ -952,22 +952,6 @@
 # ----------------------------------------------------------------------------
 # WAN 2.2 multihost quad-galaxy tests (bh_sc4)
 # ----------------------------------------------------------------------------
-# bh_sc4 carries an `allocation` block in .github/sku_config.yaml (4 galaxies cabled
-# together => 4 hosts x 32 chips), so the pipeline routes these legs to the
-# `models-unit-tests-multihost` job. ttop provisions the cluster and writes the hostfile
-# to /etc/ttop/hostfile; tt-run auto-allocation turns the quad mesh graph descriptor plus
-# the allocated host list into rank bindings/rankfile and launches one rank per galaxy.
-# These run only on an explicit workflow_dispatch (bh_sc4 is dispatch-only, not in ALL_SKUS).
-#
-# The quad config that is actually validated on hardware is test_performance_wan.py's
-# `bh_4x32sp1tp0` param at 720p (trace + ring_params_8k). The plain unit pipeline tests
-# (test_pipeline_wan*.py) are NOT quad-ready (they deadlock in cold distributed weight-load).
-# REQUIREMENTS for these legs to pass:
-#   - A prebuilt TT_DIT_CACHE_DIR must be available to the multihost job; without it the
-#     cold weight-load path deadlocks across ranks. (Infra follow-up: stage the cache.)
-#   - test_performance_wan.py needs a (4, 32) entry in its is_ci_env `device_name_map`
-#     (else KeyError in CI); and the 720p encoder perf target is tight (owner follow-up).
-#   - 4x32 is 720p-only (test asserts height == 720).
 - name: TT-DiT Wan2.2-T2V-A14B multihost quad tests
   cmd: |
     unset HF_HUB_OFFLINE
