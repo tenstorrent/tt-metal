@@ -338,6 +338,15 @@ void Kernel::process_scratchpad_binding_handles(
     }
 }
 
+// EXPERIMENTAL: named kernel args
+void Kernel::process_named_runtime_args(const std::function<void(const NamedRuntimeArgNamespaces&)> callback) const {
+    callback(this->named_runtime_arg_namespaces());
+}
+
+void Kernel::process_named_ct_arg_namespaces(const std::function<void(const NamedCTArgNamespaces&)> callback) const {
+    callback(this->named_ct_arg_namespaces());
+}
+
 void Kernel::process_include_paths(const std::function<void(const std::string& path)>& callback) const {
     // For FILE_PATH kernels, add the kernel source directory to the include path.
     // This enables relative includes (e.g., #include "foo.inc") to work when the kernel

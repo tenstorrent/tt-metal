@@ -83,6 +83,7 @@
 #include "host_api.hpp"
 #include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
+#include <tt-metalium/experimental/named_kernel_args.hpp>
 #include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -464,10 +465,15 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                 ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
                 : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
 
-        for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
-            SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);
+        // EXPERIMENTAL: named kernel args
+        if (!kernel_descriptor.named_args.empty() || !kernel_descriptor.named_compile_time_args.empty()) {
+            experimental::process_named_args(*this, kernel_descriptor, kernel_handle);
+        } else {
+            for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
+                SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);
+            }
+            SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
         }
-        SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
     }
 }
 
