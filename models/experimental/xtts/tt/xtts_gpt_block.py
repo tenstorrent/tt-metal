@@ -133,13 +133,14 @@ class TtXttsGptBlock(LightweightModule):
         ``[b, heads, seq, head_dim]``) used to seed the decode KV cache. K/V are kept
         (returned for the cache); every other intermediate is deallocated. Also serves the
         full teacher-forced pass (callers that want only the hidden state take ``[0]``)."""
-        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS)
+        # print(f"[TtXttsGptBlock.forward_prefill] layer={self.layer_idx} x={list(x.shape)}")
+        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS, memory_config=L1)
         q, k, v = self._qkv(h)
         ttnn.deallocate(h)
-        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True)
+        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, memory_config=L1)
         ttnn.deallocate(q)  # k, v kept for the cache
         ao = self._attn_out(attn)
-        xa = ttnn.add(x, ao)
+        xa = ttnn.add(x, ao, memory_config=L1)
         ttnn.deallocate(x)
         ttnn.deallocate(ao)
         return self._residual_ffn(xa), k, v
@@ -158,6 +159,7 @@ class TtXttsGptBlock(LightweightModule):
           * TRACED (``write_idx`` None): a device one-hot select ``where(onehot, newKV, cache)``
             ([1,1,MAX,1], 1 at the write row) — data-driven, so one capture replays at any position.
         Returns the FFN output."""
+        # print(f"[TtXttsGptBlock.forward_decode] layer={self.layer_idx} x={list(x.shape)} write_idx={write_idx}")
         h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS, memory_config=L1)
         q, k, v = self._qkv(h)  # each [1, heads, 1, head_dim]
         ttnn.deallocate(h)
