@@ -106,11 +106,18 @@ def _register_fibo_matmul_configs() -> None:
                 # -- RE-SWEEP at M=1024 via sweep_mm_block_sizes.py (bh_4x8_fibo, 12x10).
                 (1024, 4096, 384): (3, 8, 2, (3, 1)),  # context_embedder prompt (seed from M=864)
                 (1024, 2048, 1536): (3, 4, 4, (1, 4)),  # caption_projection prompt (seed from M=864)
-                # NOTE (2026-07-23): with the 256 encoder bucket, a short/empty CFG negative pads to the
-                # 256 bucket, so its DiT prompt branch runs at M=256 -- a shape NOT registered here (neither
-                # the M=1024 padded-positive entries nor the M=32 unpadded-short twins). It currently falls
-                # back to the generic matmul config (correct, not perf-tuned). RE-SWEEP the 7 prompt (K,N)
-                # shapes at M=256 via sweep_mm_block_sizes.py (bh_4x8_fibo) to close the gap.
+                # DiT prompt-branch matmuls at M=256: the short/empty CFG NEGATIVE branch under the 256
+                # encoder bucket (keep_padding pads it to the 256 bucket). Distinct from the M=1024
+                # padded-positive, M=864 unpadded-JSON, and M=128/M=32 twins. Swept 2026-07-23 via
+                # sweep_mm_block_sizes.py (bh_4x8_fibo, 12x10; all 7 measured 0-OOM). M_block=2 throughout
+                # (M=256 = 8 tiles); sb (2,2) forced by fp32 dest. ns = HiFi2 per-op.
+                (256, 4096, 384): (2, 8, 4, (2, 2)),  # context_embedder prompt — 26480 ns
+                (256, 2048, 1536): (2, 8, 8, (2, 2)),  # caption_projection prompt — 35288 ns
+                (256, 3072, 1152): (2, 8, 4, (2, 2)),  # to_qkv prompt (chunks=3, approx) — 38632 ns
+                (256, 3072, 384): (2, 8, 2, (2, 2)),  # attn to_add_out prompt (addcmul, approx) — 21512 ns
+                (256, 3072, 1536): (2, 6, 4, (2, 2)),  # ff_context.ff1 prompt (fused GELU) — 65167 ns
+                (256, 1536, 3072): (2, 4, 8, (2, 2)),  # ff_context.ff2 prompt — 47950 ns
+                (256, 1920, 3072): (2, 4, 10, (2, 2)),  # single proj_out prompt — 56791 ns
                 # SmolLM3 text encoder (tensor-parallel, tp=8) matmuls on the 4x8 Galaxy. M=32 (short
                 # prompt, one tile), K=2048=hidden. Swept 2026-07-15 (bh_4x8_fibo). SmolLM3 has no matmul
                 # registration of its own and FIBO is its only user, so its configs live here (additive,
@@ -156,11 +163,11 @@ def _register_fibo_matmul_configs() -> None:
                 # from the 12x10 M=864 winners -- RE-SWEEP at M=1024 (bh_4x8_fibo, 11x10).
                 (1024, 4096, 384): (3, 8, 2, (3, 1)),  # context_embedder prompt (seed from M=864)
                 (1024, 2048, 1536): (3, 4, 4, (1, 4)),  # caption_projection prompt (seed from M=864)
-                # NOTE (2026-07-23): with the 256 encoder bucket, a short/empty CFG negative pads to the
-                # 256 bucket, so its DiT prompt branch runs at M=256 -- a shape NOT registered here (neither
-                # the M=1024 padded-positive entries nor the M=32 unpadded-short twins). It currently falls
-                # back to the generic matmul config (correct, not perf-tuned). RE-SWEEP the 7 prompt (K,N)
-                # shapes at M=256 via sweep_mm_block_sizes.py (bh_4x8_fibo) to close the gap.
+                # NOTE (2026-07-23): the 256 encoder bucket adds a short/empty CFG negative DiT prompt
+                # branch at M=256. The 7 M=256 prompt (K,N) shapes were swept and registered for the 12x10
+                # runtime grid above; this 11x10 dormant-fallback grid was NOT swept, so M=256 falls back to
+                # the generic matmul config here (correct, not perf-tuned). RE-SWEEP at 11x10 if the grid is
+                # ever clamped back (see get_matmul_core_grid).
                 (32, 256, 3072): (2, 2, 10, (2, 2)),  # timestep_embedder linear_1 — 15618 ns
                 (32, 3072, 3072): (2, 4, 16, (2, 2)),  # timestep_embedder linear_2 — 89023 ns
                 (32, 3072, 6144): (2, 8, 12, (2, 2)),  # time_embed_out — 164954 ns
