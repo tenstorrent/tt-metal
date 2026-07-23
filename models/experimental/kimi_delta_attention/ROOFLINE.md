@@ -340,3 +340,18 @@ Against the matched one-worker 8x8 control, fused-program time regressed
 151.333 -> 166.374 us and whole-layer span regressed
 690.719 -> 706.001 us. The added fabric workers do not repay the lost matmul
 parallelism; retain one worker/link and the 8x8/row-8 placement.
+
+
+## Direct auxiliary slicing
+
+Profile:
+`/tmp/kda_tp_layer_t640_direct_aux_slices_r10/reports/2026_07_23_12_25_10/ops_perf_results_2026_07_23_12_25_10.csv`.
+Slicing decay, output gate, and beta directly from the fused projection removes
+the redundant enclosing auxiliary copy. Against the precomposed-gate control,
+median device span falls 690.719 -> 683.463 us (1.05%), active time falls
+657.757 -> 650.942 us/device, and programs fall 35 -> 34/device/layer.
+Aggregate slice time falls 36.944 -> 30.514 us/device/layer.
+
+The 67.594 GFLOP executed path reaches 98.90 TFLOP/s or 8.13% of eight-chip
+peak. Conservative factorized-work throughput is 86.62 TFLOP/s or 7.12%.
+Recurrence and CCL mappings remain unchanged.

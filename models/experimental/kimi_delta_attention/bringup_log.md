@@ -691,3 +691,12 @@
 - Worker hypothesis: two workers/link may improve fabric throughput enough to offset reserving four CCL rows. The temporary experiment changed the fused op default to two workers/link and paired it with an 8x6 matmul plus CCL offset `(0,6)`; build and TP correctness passed at output/recurrent/convolution PCC 0.999952/0.999903/0.999997.
 - Matched report: `/tmp/kda_tp_layer_t640_rs_workers2_r10/reports/2026_07_23_12_21_02/ops_perf_results_2026_07_23_12_21_02.csv`; control: `/tmp/kda_tp_layer_t640_precomposed_gate_r10/reports/2026_07_23_12_13_23/ops_perf_results_2026_07_23_12_13_23.csv`.
 - Two workers regressed fused-program time 151.333 -> 166.374 us, median layer span 690.719 -> 706.001 us, and active time 657.757 -> 673.180 us/device. Restored and rebuilt the one-worker 8x8 implementation.
+
+
+### 2026-07-23 12:25:10 UTC — Slice auxiliary outputs directly
+
+- Hypothesis: decay, direct output gate, and beta can slice from the fused projection directly, removing the enclosing auxiliary slice without changing layout.
+- Full hardware regression passed: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 9/9 in 11.83 s. TP output/recurrent/convolution PCC was 0.999952/0.999903/0.999997.
+- Report: `/tmp/kda_tp_layer_t640_direct_aux_slices_r10/reports/2026_07_23_12_25_10/ops_perf_results_2026_07_23_12_25_10.csv`; control: `/tmp/kda_tp_layer_t640_precomposed_gate_r10/reports/2026_07_23_12_13_23/ops_perf_results_2026_07_23_12_13_23.csv`.
+- Ten replays reduced median slowest-device span 690.719 -> 683.463 us (1.05%), active time 657.757 -> 650.942 us/device, programs 35 -> 34/device/layer, and slice time 36.944 -> 30.514 us.
+- Executed-work throughput is 98.90 TFLOP/s or 8.13% of peak; conservative factorized-work throughput is 86.62 TFLOP/s or 7.12%. Distribution is unchanged.
