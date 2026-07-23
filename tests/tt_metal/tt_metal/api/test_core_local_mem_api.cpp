@@ -27,7 +27,7 @@
 namespace {
 
 void RunTest(tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    const CoreCoord core = {0, 0};
+    const tt::tt_metal::CoreCoord core = {0, 0};
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::distributed::MeshWorkload workload;
 
@@ -49,7 +49,7 @@ void RunTest(tt::tt_metal::distributed::MeshDevice* mesh_device) {
     uint32_t num_iterations = 1000;
 
     // Try using the memory API with the NoC API to send random data to the neighbor core
-    CoreCoord neighbor_core{core.x + 1, core.y};
+    tt::tt_metal::CoreCoord neighbor_core{core.x + 1, core.y};
     auto neighbor_virtual_core = mesh_device->worker_core_from_logical_core(neighbor_core);
 
     std::random_device rd;
