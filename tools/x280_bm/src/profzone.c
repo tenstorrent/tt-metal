@@ -51,7 +51,12 @@
 #define STAGE_BASE 0x08020000UL
 #define STAGE_STRIDE 0x10000UL   /* 64 KiB per reader */
 #define STAGE_WORDS_NORMAL 4096u /* 16 KiB LIM SPSC (per-risc mode; >= 8 worker rings) */
-#define STAGE_WORDS_BULK 16384u  /* 64 KiB LIM SPSC (bulkcore: holds several 2560-word cores; fills stride) */
+#define STAGE_WORDS_BULK                                                               \
+    16384u /* 64 KiB LIM SPSC (bulkcore: holds several 2560-word cores; fills stride)  \
+            * NOTE: 4x'ing this (256 KiB) did NOT lower the multi-node knee -- readers \
+            * show spsc-wait=0 (never block on this buffer) + relays idle, so the      \
+            * reader->relay SPSC is not the bottleneck; the knee is reader round-robin \
+            * coverage / per-read NoC latency under concurrent clusters. */
 
 #define P_PCIE_ENC (MBOX_PARAMS + 0x00)
 #define P_HOST_BASE (MBOX_PARAMS + 0x08)
