@@ -496,6 +496,37 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         y = _row_linear(y, w2, b2)
         return y
 
+    def _wln(x, eps):
+        # grid knob: LN input is a single ragged tile-row (M_tiles=1). Build a
+        # tile-PADDED width-sharded L1 spec by hand (create_sharded_memory_config
+        # derives height from the ragged logical L and fails tile-alignment) so the
+        # width dim spreads over a row of gx cores instead of the default tiny grid.
+        B, L, Cx = (int(d) for d in x.shape)
+        Mt = (B * L + 31) // 32
+        Nt = Cx // 32
+        gx = 8
+        while gx > 1 and Nt % gx != 0:
+            gx -= 1
+        padded_m = Mt * 32
+        shard_shape = [padded_m, (Nt // gx) * 32]
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, 0))})
+        spec = ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, spec)
+        xs = ttnn.to_memory_config(x, mem)
+        bw = Nt // gx
+        sw = min(bw, 3)  # fp32 mode requires subblock_w < 4 tiles
+        while sw > 1 and bw % sw != 0:
+            sw -= 1
+        pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(gx, 1),
+            subblock_w=sw,
+            block_h=Mt,
+            block_w=bw,
+            inplace=False,
+        )
+        y = ttnn.layer_norm(xs, epsilon=eps, program_config=pc, compute_kernel_config=compute_config)
+        return ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+
     def forward(
         hidden_states, encoder_hidden_states=None, temb=None, attention_mask=None, freqs_cis=None, *args, **kwargs
     ):
@@ -525,9 +556,9 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
 
         # norm2 modulation fused to addcmul(shift, norm, scale); scale_mlp already
         # carries (1+scale) (+1 baked into the AdaLN bias in ada_chunks).
-        nh2 = ttnn.layer_norm(h, epsilon=norm2_eps, compute_kernel_config=compute_config)
+        nh2 = _wln(h, norm2_eps)
         nh2 = ttnn.addcmul(_unsq(shift_mlp), nh2, _unsq(scale_mlp))
-        ne2 = ttnn.layer_norm(e, epsilon=norm2c_eps, compute_kernel_config=compute_config)
+        ne2 = _wln(e, norm2c_eps)
         ne2 = ttnn.addcmul(_unsq(c_shift_mlp), ne2, _unsq(c_scale_mlp))
 
         h = ttnn.addcmul(h, _unsq(gate_mlp), _ff(nh2, ff_p))
