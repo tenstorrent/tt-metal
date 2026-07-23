@@ -192,3 +192,57 @@
 - Command: `pre-commit run --files` over all four new Python files.
 - Result: all applicable hooks passed.
 - Phase 3 reference/config gate complete; composed full-device layer starting.
+
+### 2026-07-23 06:42:11 UTC — Target-width native convolution
+
+- Hypothesis: native depthwise `ttnn.conv1d` supports each Kimi q/k/v stream
+  at D=4096 with kernel size 4 on Blackhole.
+- Disposable spike used independent random BF16 input/history/weights and the
+  pure-torch causal convolution as golden.
+- Command:
+  `scripts/run_safe_pytest.sh
+  models/experimental/kimi_delta_attention/tests/test_conv_spike.py -q -s`.
+- Result: `SAFE_PYTEST_RESULT: PASS`; two tests passed in 11.36 s.
+- T=1 output/state PCC: `0.999991` / `1.000000`.
+- T=32 output/state PCC: `0.999992` / `1.000000`.
+- Decision: native conv is a valid composed-prefill path. Keep the trusted
+  explicit four-tap device FIR for decode until warm profiling compares both.
+- The disposable spike was deleted after this evidence was recorded.
+
+### 2026-07-23 06:50:46 UTC — Composed full-device layer
+
+- Added fused q/k/v and auxiliary input projections, fused q/k/v causal FIR,
+  exact vector-decay recurrence, sigmoid-gated RMSNorm, output projection, and
+  persistent fused-convolution/recurrent state.
+- Forward tests run under
+  `ttnn.manage_config("throw_exception_on_fallback", True)`.
+- First run failed before dispatch because TTNN `Shape` supports integer
+  indexing but not `shape[:2]`; traceback pointed to `_validate_forward`.
+- Fix: read batch and sequence with `shape[0]` and `shape[1]`. No device,
+  layout, numerical, timeout, or resource hypothesis was involved.
+- Passing command:
+  `scripts/run_safe_pytest.sh
+  models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s`.
+- Result: `SAFE_PYTEST_RESULT: PASS`; three tests passed in 28.41 s.
+- T=1 output/recurrent/conv PCC:
+  `0.999973` / `0.999952` / `0.999992`.
+- T=4 output/recurrent/conv PCC:
+  `0.999935` / `0.999966` / `0.999993`.
+- Prefill output PCC: `0.999973`; following decode output PCC: `0.999882`.
+- Final cache-continuity recurrent/conv PCC:
+  `0.999961` / `0.999994`.
+- Coverage: small production-aligned tile dimensions, nonuniform vector gate,
+  full layer, output and both cache families, T=1/T=4, split execution, and
+  fallback rejection. Not yet covered: target dimensions, long decode,
+  chunk-parallel prefill, external trace-stable state, or mesh distribution.
+- Exact post-dtype-enforcement rerun: all hooks passed and the same safe suite
+  passed three tests in 4.20 s warm with identical PCC values.
+- Persistent recurrent output is cast back to the configured FP32/BF16 dtype;
+  external recurrent and convolution buffer dtypes are validated.
+- `origin/main` advanced to `133e9563f37`; divergence was previewed, the two
+  local commits were rebased cleanly, and the uncommitted layer was restored
+  from a named stash. Upstream touched scalar remainder/unary code only.
+- Post-rebase hooks passed; the full safe suite passed in 9.33 s with the same
+  PCC values and fallback rejection enabled.
+- Phase 3 composed correctness oracle complete; target-shape and state-dtype
+  validation starting.
