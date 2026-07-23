@@ -33,15 +33,21 @@ Op: `ttnn.experimental.all_gather_regime_a_matmul_async`. Branch: `cglagovich/re
 
 ## Profiler/watcher: usable with workarounds (Task 4 done); Tasks 5-8/10 remain
 
-Per-RISC overlap evidence and the direct-L1 ceiling estimate that the plan gates Tasks 5-8/10 on **cannot be
-captured in this container** — see `agmm-profiler-watcher-blocked` memory:
-- Watcher overflows the ACTIVE_ETH kernel-config buffer under fabric.
-- `ttnn.ReadDeviceProfiler(mesh)` writes no `profile_log_device.csv` for a MeshDevice; tracy targets an
-  unwritable `build/profiler/build_wasm`.
-- Host wall is overhead-bound at corpus shapes (fused ~1250 µs vs ~88 µs single-chip compute).
+Both mechanisms run on this container with the setup in the `agmm-profiler-watcher-blocked` memory:
+- **Watcher:** `TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1` → D=4 test passes watcher-clean (ETH cores
+  run the fabric router, not our kernels; Tensix kernels fully watched). Without DISABLE_ETH the fabric-router
+  program overflows the ACTIVE_ETH kernel-config buffer.
+- **Profiler:** `TT_METAL_DEVICE_PROFILER=1` + pre-created tracy dirs + `TT_METAL_HOME`=worktree + a CLEAN
+  submesh teardown (reset stall group / clear+remove sub-device manager / close submesh then parent) →
+  `ReadMeshDeviceProfilerResults` flushes `profile_log_device.csv`. `tools/mm_sweep/agmm_profile.py` parses it.
+- **Host wall is overhead-bound** (~1250 µs vs ~88 µs single-chip compute) — use profiler total-device-span.
 
-**Resume on a profiler/watcher-capable bare-metal galaxy or CI:** run `tools/mm_sweep/agmm_profile.py`
-(per-RISC overlap already coded) and the watcher, then proceed to Task 5 (direct-L1) with the measured ceiling.
+Task 4 measured (see `REGIME_A_AGMM_TASK4_REPORT.md`): at Mt=1 corpus shapes compute span > gather span so the
+gather is mostly hidden in both modes; streaming wins ~2% on narrow-N (32x15360x768). Fused compute span
+(~143 µs) >> single-chip (~88 µs) → DRAM staging adds a 2nd in0 read → Phase-B direct-L1 ceiling ≈ ~55 µs.
+
+**Next (Tasks 5-8/10):** implement Phase-B direct remote-L1 streaming (Task 5), A/B it against staged DRAM
+(Task 6) using `agmm_profile.py`, then placement sweeps (7-8) and the fabric-aware picker (10).
 
 ## Build/run notes (critical)
 
