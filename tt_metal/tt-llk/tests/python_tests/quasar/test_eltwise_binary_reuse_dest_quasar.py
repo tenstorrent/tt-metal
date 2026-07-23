@@ -378,7 +378,6 @@ def test_eltwise_binary_reuse_dest_quasar(
         ),
         "unpack_to_dest": False,
         "dest_acc": DestAccumulation.No,
-        "boot_mode": boot_mode,
         "disable_format_inference": disable_format_inference,
     }
 
@@ -390,6 +389,7 @@ def test_eltwise_binary_reuse_dest_quasar(
     configuration = TestConfig(
         **{
             **test_config_kwargs,
+            "boot_mode": boot_mode,
             "templates": test_config_kwargs["templates"]
             + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
         },
