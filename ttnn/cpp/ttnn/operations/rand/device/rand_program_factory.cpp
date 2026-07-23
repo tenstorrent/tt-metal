@@ -8,15 +8,19 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "rand_device_operation.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::rand {
 
 using namespace tt;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace {
 
@@ -25,10 +29,17 @@ std::uniform_int_distribution distribution(1, std::numeric_limits<int32_t>::max(
 
 auto get_random_seed() -> uint32_t { return distribution(rng); }
 
-constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/uniform/device/kernels/writer_uniform.cpp";
-constexpr const char* COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/uniform/device/kernels/compute_uniform.cpp";
+constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device/kernels/writer_rand_spec.cpp";
+constexpr const char* COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device/kernels/compute_rand_spec.cpp";
 
-// Work split + per-device seed offset, shared by create_descriptor (cache miss) and
+// Spec resource names (prefixed to stay distinct under unity builds).
+const KernelSpecName RAND_COMPUTE{"rand_compute"};
+const KernelSpecName RAND_WRITER{"rand_writer"};
+const DFBSpecName RAND_INTERMED{"rand_intermed"};
+const DFBSpecName RAND_DST{"rand_dst"};
+const TensorParamName RAND_OUTPUT{"rand_output"};
+
+// Work split + per-device seed offset, shared by create_program_artifacts (cache miss) and
 // override_runtime_arguments (cache hit) so both derive the identical core list and seed offset.
 struct RandWorkSplit {
     uint32_t num_cores = 0;
@@ -84,9 +95,8 @@ uint32_t rand_seed_for_core(
     return attrs.seed != 0 ? attrs.seed + i + device_seed_offset : get_random_seed();
 }
 
-// Per-core work assignment. Single-sourced so the cache-miss build (create_descriptor) and the
-// cache-hit patch (override_runtime_arguments) can never drift on core-group selection or tile_offset
-// accumulation — each derives its runtime args from the same layout.
+// Per-core work assignment (core, units_per_core, tile_offset). Single-sourced so the cache-miss
+// build and the cache-hit override can never drift on core-group selection or tile_offset.
 struct RandCoreWork {
     CoreCoord core;
     uint32_t units_per_core;
@@ -113,144 +123,153 @@ std::vector<RandCoreWork> rand_core_layout(const RandWorkSplit& ws) {
 
 }  // namespace
 
-ProgramDescriptor RandDeviceOperation::RandProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts RandDeviceOperation::RandProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& output,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    const auto ws = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
-    const auto& all_cores = ws.all_cores;
-    const auto num_cores_total = ws.cores.size();
+    tensor_return_value_t& output) {
+    // create_program_artifacts is called once and the resulting spec is stamped across the mesh, so the
+    // (per-device) seed offset is baked at the zero coordinate here; override_runtime_arguments re-applies
+    // the correct per-coordinate seeds on every cache hit.
+    const auto ws = compute_rand_work_split(operation_attributes, output, std::nullopt);
 
-    DataType output_dtype = output.dtype();
-    auto out_data_format = datatype_to_dataformat_converter(output_dtype);
+    const DataType output_dtype = output.dtype();
+    const auto out_data_format = datatype_to_dataformat_converter(output_dtype);
     const uint32_t dtype_tile_size = tile_size(out_data_format);
     const uint32_t intermed_tile_size = tile_size(tt::DataFormat::Float32);
-
-    constexpr uint32_t in_out_num_tiles = 1;
-    constexpr uint32_t intermed_num_tiles = 2;
-
-    constexpr uint32_t intermed_cb_id = CBIndex::c_24;
-    constexpr uint32_t dst_cb_id = CBIndex::c_0;
-
-    ProgramDescriptor desc;
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = intermed_num_tiles * intermed_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = intermed_cb_id,
-            .data_format = tt::DataFormat::Float32,
-            .page_size = intermed_tile_size,
-        }}},
-    });
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in_out_num_tiles * dtype_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = dst_cb_id,
-            .data_format = out_data_format,
-            .page_size = dtype_tile_size,
-        }}},
-    });
-
-    KernelDescriptor::CompileTimeArgs writer_ct_args;
-    writer_ct_args.reserve(8);
-    writer_ct_args.push_back(intermed_cb_id);
-    writer_ct_args.push_back(dst_cb_id);
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = WRITER_KERNEL_PATH;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    const bool is_bfloat16 = output_dtype == DataType::BFLOAT16;
     switch (output_dtype) {
-        case DataType::BFLOAT16: writer_desc.defines.emplace_back("OUTPUT_DTYPE_BFLOAT16", "1"); break;
-        case DataType::FLOAT32: writer_desc.defines.emplace_back("OUTPUT_DTYPE_FLOAT32", "1"); break;
+        case DataType::BFLOAT16:
+        case DataType::FLOAT32: break;
         default:
             // The writer kernel only implements float32 and bfloat16 output paths.
-            // Fail fast here so we never instantiate a program that can hang at runtime.
             TT_THROW("RandDeviceOperation: unsupported output dtype for writer kernel");
     }
-    writer_desc.runtime_args.reserve(num_cores_total);
-
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = {intermed_cb_id};
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-        .fp32_dest_acc_en = true,  // if fp32_dest_acc_en set to false a precision error may occur which makes
-                                   // generated number out of range [from, to)
-        .dst_full_sync_en = false,
-        .math_approx_mode = true,
-    };
-    compute_desc.runtime_args.reserve(num_cores_total);
 
     const float eps = 1e-6f;
     const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
     const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
+
+    // ---- ProgramSpec ----
+    ProgramSpec spec;
+    spec.name = "rand";
+
+    spec.tensor_parameters = {TensorParameter{.unique_id = RAND_OUTPUT, .spec = output.tensor_spec()}};
+
+    // Intermediate DFB: compute PRODUCES Float32 tiles, writer CONSUMES them (double-buffered).
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = RAND_INTERMED,
+        .entry_size = intermed_tile_size,
+        .num_entries = 2,
+        .data_format_metadata = tt::DataFormat::Float32,
+    });
+    // bfloat16 output uses a writer-local staging DFB (self-loop) for the fp32->bf16 conversion.
+    if (is_bfloat16) {
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = RAND_DST,
+            .entry_size = dtype_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = out_data_format,
+        });
+    }
+
+    // Compute kernel: producer of the intermediate DFB.
+    KernelSpec compute{
+        .unique_id = RAND_COMPUTE,
+        .source = COMPUTE_KERNEL_PATH,
+        .dfb_bindings = {ProducerOf(RAND_INTERMED, "intermed")},
+        .runtime_arg_schema = {.runtime_arg_names = {"seed", "from", "to", "tile_offset", "units_per_core"}},
+        .hw_config = ttnn::to_compute_hardware_config(
+            output.device()->arch(),
+            ttnn::ComputeKernelConfig{
+                .math_fidelity = MathFidelity::HiFi4,
+                // if fp32_dest_acc_en is false a precision error may make numbers out of range [from, to)
+                .math_approx_mode = true,
+                .fp32_dest_acc_en = true,
+                .dst_full_sync_en = false,
+            }),
+    };
+    // tile_offset/units_per_core are static per core; only seed/from/to change per dispatch.
+    compute.advanced_options.enqueue_invariant_runtime_args = {"tile_offset", "units_per_core"};
+
+    // Writer kernel: consumer of the intermediate DFB; writes to the interleaved output.
+    KernelSpec writer{
+        .unique_id = RAND_WRITER,
+        .source = WRITER_KERNEL_PATH,
+        .dfb_bindings = {ConsumerOf(RAND_INTERMED, "intermed")},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = RAND_OUTPUT, .accessor_name = "output"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"tile_offset", "units_per_core"}},
+        .hw_config = ttnn::create_writer_datamovement_config(output.device()->arch()),
+    };
+    writer.advanced_options.enqueue_invariant_runtime_args = {"tile_offset", "units_per_core"};
+    if (is_bfloat16) {
+        writer.compiler_options.defines.emplace("OUTPUT_DTYPE_BFLOAT16", "1");
+        // Writer-local self-loop staging DFB (one PRODUCER + one CONSUMER on the same kernel).
+        writer.dfb_bindings.push_back(ProducerOf(RAND_DST, "dst"));
+        writer.dfb_bindings.push_back(ConsumerOf(RAND_DST, "dst"));
+    }
+
+    spec.kernels.push_back(compute);
+    spec.kernels.push_back(writer);
+
+    Group<KernelSpecName> wu_kernels = {RAND_COMPUTE, RAND_WRITER};
+    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = wu_kernels, .target_nodes = ws.all_cores}};
+
+    // ---- ProgramRunArgs ----
+    ProgramRunArgs run_args;
+    KernelRunArgs compute_run{.kernel = RAND_COMPUTE};
+    KernelRunArgs writer_run{.kernel = RAND_WRITER};
 
     const auto layout = rand_core_layout(ws);
     for (int i = 0; i < static_cast<int>(layout.size()); ++i) {
         const auto& [core, units_per_core, tile_offset] = layout[i];
         const uint32_t seed = rand_seed_for_core(operation_attributes, i, ws.device_seed_offset);
 
-        // seed/from/to are DYNAMIC (omitted from the cache key / attribute_names): baked here for the
-        // cache-miss build, and re-applied on every cache hit via override_runtime_arguments().
-        compute_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{seed, from_bits, to_bits, tile_offset, units_per_core});
-
-        // Register the output address as a Buffer* binding so rand takes the fast cache-hit path
-        // (real program caching) with the address correctly re-patched each dispatch.
-        writer_desc.emplace_runtime_args(core, {output.buffer(), tile_offset, units_per_core});
+        AddRuntimeArgsForNode(
+            compute_run.runtime_arg_values,
+            core,
+            {{"seed", seed},
+             {"from", from_bits},
+             {"to", to_bits},
+             {"tile_offset", tile_offset},
+             {"units_per_core", units_per_core}});
+        AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values, core, {{"tile_offset", tile_offset}, {"units_per_core", units_per_core}});
     }
 
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    run_args.kernel_run_args.push_back(compute_run);
+    run_args.kernel_run_args.push_back(writer_run);
+    run_args.tensor_args.emplace(RAND_OUTPUT, TensorArgument{output.mesh_tensor()});
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-void RandDeviceOperation::RandProgramFactory::override_runtime_arguments(
-    tt::tt_metal::Program& program,
+tt::tt_metal::experimental::ProgramRunArgs RandDeviceOperation::RandProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    // Re-derive every per-dispatch arg on each cache hit from the same builder create_descriptor uses:
-    // compute's seed/from/to and the writer's output address. override replaces resolve_bindings, so
-    // the address is ours to re-apply too. Push order in create_descriptor: writer 0, compute 1.
-    constexpr uint32_t writer_kernel_idx = 0;
-    constexpr uint32_t compute_kernel_idx = 1;
-
+    // seed/from/to are DYNAMIC (omitted from the cache key) and re-applied every dispatch; the static
+    // tile_offset/units_per_core args are enqueue-invariant and retained from the cache-miss
+    // SetProgramRunArgs. The output tensor arg is re-supplied so its (freshly allocated) address is
+    // re-patched (UpdateProgramRunArgs applies both).
     const auto ws = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
+
     const float eps = 1e-6f;
     const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
     const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
-    const uint32_t out_addr = output.buffer()->address();
 
+    ProgramRunArgs run_args;
+    KernelRunArgs compute_run{.kernel = RAND_COMPUTE};
     const auto layout = rand_core_layout(ws);
     for (int i = 0; i < static_cast<int>(layout.size()); ++i) {
-        const auto& [core, units_per_core, tile_offset] = layout[i];
+        const auto& core = layout[i].core;
         const uint32_t seed = rand_seed_for_core(operation_attributes, i, ws.device_seed_offset);
-
-        auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, compute_kernel_idx, core);
-        compute_args[0] = seed;
-        compute_args[1] = from_bits;
-        compute_args[2] = to_bits;
-        compute_args[3] = tile_offset;
-        compute_args[4] = units_per_core;
-
-        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_idx, core);
-        writer_args[0] = out_addr;
-        writer_args[1] = tile_offset;
-        writer_args[2] = units_per_core;
+        AddRuntimeArgsForNode(
+            compute_run.runtime_arg_values, core, {{"seed", seed}, {"from", from_bits}, {"to", to_bits}});
     }
+    run_args.kernel_run_args.push_back(compute_run);
+    run_args.tensor_args.emplace(RAND_OUTPUT, TensorArgument{output.mesh_tensor()});
+    return run_args;
 }
 
 }  // namespace ttnn::operations::rand
