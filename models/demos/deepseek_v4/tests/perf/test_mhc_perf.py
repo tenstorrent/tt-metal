@@ -34,7 +34,8 @@ ITERS = 3  # measured dispatches per variant (after a warmup); keep small so the
 @pytest.mark.parametrize("T", [2048, 8192], ids=["T2048", "T8192"])
 def test_mhc_parametrize_naive_vs_fused(device, T):
     torch.manual_seed(0)
-    cfg = MHCConfig(dim=64, n=4)  # dim only feeds the (unused-here) projection weight
+    cfg = MHCConfig(dim=7168, n=4)  # V4-Pro C; the kernel is hidden-dim-independent (acts on
+    # mixes[T,24]), so dim only sizes the projection weight that this test never exercises
     g = torch.Generator().manual_seed(1)
     mixes = torch.randn(T, cfg.mix_hc, generator=g)
     scale = torch.full((3,), 1.0)
