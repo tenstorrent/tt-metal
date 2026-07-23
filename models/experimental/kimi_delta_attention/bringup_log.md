@@ -594,3 +594,12 @@
 - At 59.205 GFLOP/layer, trace sustains 46.89 TFLOP/s or 3.85% of the eight-chip HiFi4 peak by device span; host-observed throughput is 45.55 TFLOP/s or 3.74%. The 60% aspiration remains unmet and is not renormalized to active cores.
 - Slowest-device medians were prep 84.602 us, scan 96.252 us, and fused output matmul + reduce-scatter 148.023 us. The latter reaches 34.9% of the two-link fabric roofline, still below the 40% target. Retain the committed 80-core/16-core/8x8 distribution and next remove layout round trips.
 - Final hardware regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 9/9 in 9.06 s. TP output/recurrent/convolution PCC remained 0.999949/0.999914/0.999997.
+
+### 2026-07-23 11:02:40 UTC — Replace shifted FIR with native depthwise conv1d
+
+- Hypothesis: three unaligned shifted FIR windows cause the dominant untilize/tilize traffic; the trace-safe native depthwise conv1d pattern already used by Qwen GDN should remove it without changing KDA ownership.
+- Added a host-held, whole-head-grouped `[Q|K|V,1,K]` weight prepared once per input length. Native conv is local to aligned B=1 chunk prefill; decode, short, batched, and padded inputs retain the general FIR.
+- Single-device T=32 passed at output/recurrent/convolution PCC 0.999965/0.999884/0.999997. TP=8 trace smoke with T=64 passed 1/1, validating weight sharding and capture safety.
+- Matched Tracy report: `/tmp/kda_tp_layer_t640_native_conv_r10/reports/2026_07_23_11_02_40/ops_perf_results_2026_07_23_11_02_40.csv`. Ten replays reduced device span 1.263 -> 0.987 ms, host time 1.300 -> 1.023 ms/layer, and active kernels 1.213-1.216 -> 0.940-0.942 ms/device.
+- Native conv measured 26.081 us. Removed shifted-window relayouts saved about 274 us active time/device; mesh throughput rose to 59.99 TFLOP/s or 4.93% of eight-chip peak.
+- Full hardware regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 9/9 in 13.05 s.

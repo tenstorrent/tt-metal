@@ -54,6 +54,7 @@ class KimiDeltaAttention:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
         self.chunk_const_tiles = build_fused_const_tiles(mesh_device, _FUSED_CHUNK_SIZE)
+        self._prepared_convolution_weights: dict[int, ttnn.Tensor] = {}
         self.recurrent_state: ttnn.Tensor | None = None
         self.convolution_state: ttnn.Tensor | None = None
         self.use_inplace_state = False
@@ -159,6 +160,87 @@ class KimiDeltaAttention:
             raise ValueError(f"state batch {self.recurrent_state.shape[0]} != input batch {batch}")
         return batch, sequence
 
+    def _causal_conv1d_prefill(
+        self,
+        qkv: ttnn.Tensor,
+        sequence: int,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Run trace-safe native depthwise convolution over QKV and its carry."""
+        assert self.convolution_state is not None
+        config = self.config
+        channels = self._convolution_width
+        input_length = sequence + config.conv_kernel_size - 1
+        new_state = ttnn.slice(
+            qkv,
+            (0, sequence - (config.conv_kernel_size - 1), 0),
+            (1, sequence, channels),
+        )
+        new_state = ttnn.to_memory_config(
+            ttnn.to_layout(new_state, ttnn.TILE_LAYOUT),
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        conv_input = ttnn.concat(
+            [self.convolution_state, qkv],
+            dim=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        conv_input = ttnn.to_layout(
+            conv_input,
+            ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        conv_input = ttnn.reshape(conv_input, (1, input_length, 1, channels))
+        conv_config = ttnn.Conv1dConfig(
+            weights_dtype=ttnn.bfloat16,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        )
+        if input_length not in self._prepared_convolution_weights:
+            self._prepared_convolution_weights[input_length] = ttnn.prepare_conv_weights(
+                weight_tensor=self.weights.convolution_weight,
+                input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                input_layout=ttnn.ROW_MAJOR_LAYOUT,
+                weights_format="OIHW",
+                in_channels=channels,
+                out_channels=channels,
+                batch_size=1,
+                input_height=1,
+                input_width=input_length,
+                kernel_size=(1, config.conv_kernel_size),
+                stride=(1, 1),
+                padding=(0, 0),
+                dilation=(1, 1),
+                has_bias=False,
+                groups=channels,
+                device=self.device,
+                input_dtype=ttnn.bfloat16,
+                conv_config=conv_config,
+                compute_config=self.compute_config,
+            )
+        output = ttnn.conv1d(
+            input_tensor=conv_input,
+            weight_tensor=self._prepared_convolution_weights[input_length],
+            device=self.device,
+            in_channels=channels,
+            out_channels=channels,
+            batch_size=1,
+            input_length=input_length,
+            kernel_size=config.conv_kernel_size,
+            stride=1,
+            padding=0,
+            dilation=1,
+            groups=channels,
+            dtype=ttnn.bfloat16,
+            conv_config=conv_config,
+            compute_config=self.compute_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            return_output_dim=False,
+            return_weights_and_bias=False,
+        )
+        output = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.reshape(output, (1, sequence, channels))
+        output = ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.silu(output, memory_config=ttnn.DRAM_MEMORY_CONFIG), new_state
+
     def forward(
         self,
         hidden_states: ttnn.Tensor,
@@ -179,16 +261,19 @@ class KimiDeltaAttention:
             memory_config=memory_config,
             compute_kernel_config=self.compute_config,
         )
-        qkv, new_convolution_state = _causal_conv1d_fir(
-            qkv,
-            None,
-            None,
-            config.conv_kernel_size,
-            self.device,
-            memory_config=memory_config,
-            conv_state=self.convolution_state,
-            weight_taps=weights.convolution_taps,
-        )
+        if mode == "chunk" and batch == 1 and sequence >= ttnn.TILE_SIZE:
+            qkv, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence)
+        else:
+            qkv, new_convolution_state = _causal_conv1d_fir(
+                qkv,
+                None,
+                None,
+                config.conv_kernel_size,
+                self.device,
+                memory_config=memory_config,
+                conv_state=self.convolution_state,
+                weight_taps=weights.convolution_taps,
+            )
         q = _slice_width(qkv, 0, config.q_dim)
         k = _slice_width(qkv, config.q_dim, config.q_dim + config.k_dim)
         if mode == "recurrent" or sequence % ttnn.TILE_SIZE != 0:
