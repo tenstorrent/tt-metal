@@ -58,8 +58,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
  * Chunk-parallel Kimi Delta Attention recurrence with per-key vector decay.
  * q/k must be L2-normalized; scale defaults to K^-0.5.
  *
- * q, k, g [B,T,H,K], v [B,T,H,V], beta [B,T,H].
- * Returns o [B,T,H,V] and optional final_state [B,H,K,V].
+ * q, k, g [B,T,H,K], v [B,T,H,V], beta [B,T,H]. Rank-3 flat [B,T,H*D] q/k/v/g is also accepted for tile-aligned
+ * sequences. Returns o [B,T,H,V] and optional final_state [B,H,K,V].
  */
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     const ttnn::Tensor& q,

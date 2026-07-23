@@ -50,6 +50,12 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
         TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
     }
     check(in.g, "g", DataType::FLOAT32);
+    if (attrs.g_flat) {
+        TT_FATAL(attrs.vector_gate && attrs.HV > 0, "g_flat requires vector_gate and HV > 0");
+        const auto& gs = in.g.logical_shape();
+        TT_FATAL(gs.rank() == 3, "g_flat expects a flat [B,T,HV*K] g (got rank {})", gs.rank());
+        TT_FATAL(gs[2] == attrs.HV * attrs.key_dim, "g_flat width {} != HV*K ({}*{})", gs[2], attrs.HV, attrs.key_dim);
+    }
     check(in.beta, "beta", DataType::FLOAT32);
     check(in.eye_c, "eye_c", DataType::FLOAT32);
     check(in.tril_c, "tril_c", DataType::FLOAT32);
@@ -109,6 +115,7 @@ std::vector<Tensor> chunk_gdn_prep(
     float scale,
     bool qk_flat,
     uint32_t Hk,
+    bool g_flat,
     bool vector_gate) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
@@ -128,6 +135,7 @@ std::vector<Tensor> chunk_gdn_prep(
         .HV = HV,
         .qk_flat = qk_flat,
         .Hk = Hk,
+        .g_flat = g_flat,
         .qk_norm = qk_norm,
         .scale = scale,
         .vector_gate = vector_gate,

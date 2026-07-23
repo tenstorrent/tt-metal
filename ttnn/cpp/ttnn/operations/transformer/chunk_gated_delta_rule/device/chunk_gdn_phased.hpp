@@ -42,6 +42,8 @@ struct ChunkGdnPrepParams {
     // head hk=hv/G (GQA) out of the flat grid. Hk = key-head count (flat q/k row stride = Hk*Kt).
     bool qk_flat = false;
     uint32_t Hk = 0;
+    // KDA vector gate may stay flat token-major [B,T,HV*K]; the prep reader gathers one head/chunk.
+    bool g_flat = false;
     // OPT-B: qk_norm => the prep compute L2-normalizes q/k over K in-kernel (host skipped it) and
     // folds `scale` into q's norm. Only valid for chunk_size==32 (Ct==1). scale defaults to no-op.
     bool qk_norm = false;
@@ -55,7 +57,7 @@ struct ChunkGdnPrepInputs {
     Tensor q;        // [BH, NC, C, K] bf16
     Tensor k;        // [BH, NC, C, K] bf16
     Tensor v;        // [BH, NC, C, V] bf16  (or FLAT [B, T, HV*V] bf16 when params.v_flat)
-    Tensor g;        // [BH, NC, C, 1|K] fp32 (scalar GDN or vector KDA gate)
+    Tensor g;        // [BH, NC, C, 1|K] fp32 (or KDA FLAT [B,T,HV*K] when params.g_flat)
     Tensor beta;     // [BH, NC, C, 1] fp32 (column)
     Tensor eye_c;    // [1,1,C,C] fp32
     Tensor tril_c;   // [1,1,C,C] fp32
@@ -103,6 +105,7 @@ std::vector<Tensor> chunk_gdn_prep(
     float scale = 1.0f,
     bool qk_flat = false,
     uint32_t Hk = 0,
+    bool g_flat = false,
     bool vector_gate = false);
 
 // ---------------------------------------------------------------------------

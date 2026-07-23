@@ -33,13 +33,13 @@ def _assert_pcc(name: str, golden: torch.Tensor, actual: torch.Tensor, threshold
 
 
 @pytest.mark.parametrize(
-    "sequence,heads,key_dim,value_dim,flat_v,flat_qk",
+    "sequence,heads,key_dim,value_dim,flat_v,flat_qk,flat_g",
     [
-        (32, 2, 32, 32, False, False),
-        (32, 2, 32, 32, True, True),
-        (64, 32, 128, 128, False, False),
-        (64, 32, 128, 128, True, False),
-        (64, 32, 128, 128, True, True),
+        (32, 2, 32, 32, False, False, False),
+        (32, 2, 32, 32, True, True, True),
+        (64, 32, 128, 128, False, False, False),
+        (64, 32, 128, 128, True, False, True),
+        (64, 32, 128, 128, True, True, True),
     ],
 )
 def test_chunk_kda_pcc(
@@ -50,6 +50,7 @@ def test_chunk_kda_pcc(
     value_dim: int,
     flat_v: bool,
     flat_qk: bool,
+    flat_g: bool,
 ) -> None:
     generator = torch.Generator().manual_seed(401 + sequence + heads)
     shape = (1, sequence, heads)
@@ -67,7 +68,8 @@ def test_chunk_kda_pcc(
     k_tt = _to_device(k_input, device, ttnn.bfloat16)
     v_input = v.reshape(1, sequence, heads * value_dim) if flat_v else v
     v_tt = _to_device(v_input, device, ttnn.bfloat16)
-    gate_tt = _to_device(gate, device, ttnn.float32)
+    gate_input = gate.reshape(1, sequence, heads * key_dim) if flat_g else gate
+    gate_tt = _to_device(gate_input, device, ttnn.float32)
     beta_tt = _to_device(beta, device, ttnn.float32)
     state_tt = _to_device(state, device, ttnn.float32)
     with ttnn.manage_config("throw_exception_on_fallback", True):
@@ -88,6 +90,6 @@ def test_chunk_kda_pcc(
     if flat_qk:
         actual_output = actual_output.reshape(1, heads, sequence, value_dim).permute(0, 2, 1, 3)
     actual_state = ttnn.to_torch(final_state_tt)
-    label = f"H={heads},K={key_dim},V={value_dim},T={sequence},flat_v={flat_v},flat_qk={flat_qk}"
+    label = f"H={heads},K={key_dim},V={value_dim},T={sequence},flat_v={flat_v},flat_qk={flat_qk},flat_g={flat_g}"
     _assert_pcc(f"{label} output", golden_output, actual_output)
     _assert_pcc(f"{label} state", golden_state, actual_state)

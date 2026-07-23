@@ -410,10 +410,15 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     const auto& qs = q_in.logical_shape();
     const auto& vs = v_in.logical_shape();
     const auto& gs = g_in.logical_shape();
+    const auto& bs = beta_in.logical_shape();
     const bool flat_v = vs.rank() == 3;
     const bool flat_qk = qs.rank() == 3;
-    TT_FATAL(gs.rank() == 4, "chunk_kda expects rank-4 g");
-    const uint32_t B = gs[0], T = gs[1], H = gs[2], K = gs[3];
+    const bool flat_g = gs.rank() == 3;
+    TT_FATAL(flat_g || gs.rank() == 4, "chunk_kda expects rank-3 or rank-4 g");
+    TT_FATAL(bs.rank() == 3, "chunk_kda beta must be [B,T,H]");
+    const uint32_t B = bs[0], T = bs[1], H = bs[2];
+    TT_FATAL(!flat_g || gs[2] % H == 0, "chunk_kda flat g width {} must be divisible by H={}", gs[2], H);
+    const uint32_t K = flat_g ? (gs[2] / H) : gs[3];
     TT_FATAL(flat_qk || qs.rank() == 4, "chunk_kda expects rank-3 or rank-4 q/k");
     TT_FATAL(flat_v || vs.rank() == 4, "chunk_kda expects rank-3 or rank-4 v");
     TT_FATAL(!flat_qk || qs[2] == H * K, "chunk_kda flat q/k width {} must equal H*K={}*{}", qs[2], H, K);
@@ -425,11 +430,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
             (flat_qk ? qs[2] == H * K : (qs[2] == H && qs[3] == K)) && vs[0] == B && vs[1] == T &&
             (flat_v ? vs[2] == H * V : (vs[2] == H && vs[3] == V)),
         "chunk_kda q/k/v shapes are inconsistent");
-    TT_FATAL(gs[0] == B && gs[1] == T && gs[2] == H && gs[3] == K, "chunk_kda g must be [B,T,H,K]");
     TT_FATAL(
-        beta_in.logical_shape().rank() == 3 && beta_in.logical_shape()[0] == B && beta_in.logical_shape()[1] == T &&
-            beta_in.logical_shape()[2] == H,
-        "chunk_kda beta must be [B,T,H]");
+        gs[0] == B && gs[1] == T && (flat_g ? gs[2] == H * K : (gs[2] == H && gs[3] == K)),
+        "chunk_kda g must be [B,T,H,K] or flat [B,T,H*K]");
+    TT_FATAL(bs[0] == B && bs[1] == T && bs[2] == H, "chunk_kda beta must be [B,T,H]");
 
     auto* dev = q_in.device();
     const uint32_t BH = B * H;
@@ -446,10 +450,12 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     ttnn::Tensor k = flat_qk ? as_bf16(k_in) : head_split_tile(k_in, B, T, H, K);
     ttnn::Tensor v = flat_v ? (v_in.dtype() == DataType::BFLOAT16 ? v_in : ttnn::typecast(v_in, DataType::BFLOAT16))
                             : head_split_tile(v_in, B, T, H, V);
-    ttnn::Tensor g = head_split_float_tile(g_in, B, T, H, K);
+    ttnn::Tensor g = flat_g ? (g_in.dtype() == DataType::FLOAT32 ? g_in : ttnn::typecast(g_in, DataType::FLOAT32))
+                            : head_split_float_tile(g_in, B, T, H, K);
     ttnn::Tensor beta = headvec_split_tile(beta_in, B, T, H);
     TT_FATAL(!flat_qk || pad == 0, "chunk_kda flat q/k requires T to be divisible by chunk_size");
     TT_FATAL(!flat_v || pad == 0, "chunk_kda flat v requires T to be divisible by chunk_size");
+    TT_FATAL(!flat_g || pad == 0, "chunk_kda flat g requires T to be divisible by chunk_size");
     if (!flat_qk) {
         q = pad_time_tile(q, BH, K, pad, dev);
         k = pad_time_tile(k, BH, K, pad, dev);
@@ -457,7 +463,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     if (!flat_v) {
         v = pad_time_tile(v, BH, V, pad, dev);
     }
-    g = pad_time_tile(g, BH, K, pad, dev);
+    if (!flat_g) {
+        g = pad_time_tile(g, BH, K, pad, dev);
+    }
     if (pad > 0) {
         auto zeros = ttnn::zeros(
             ttnn::Shape({BH, pad}), DataType::FLOAT32, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
@@ -470,7 +478,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     if (!flat_v) {
         v = ttnn::reshape(v, ttnn::Shape({BH, NC, C, V}));
     }
-    g = ttnn::reshape(g, ttnn::Shape({BH, NC, C, K}));
+    if (!flat_g) {
+        g = ttnn::reshape(g, ttnn::Shape({BH, NC, C, K}));
+    }
     beta = ttnn::reshape(beta, ttnn::Shape({BH, NC, C, 1}));
 
     const bool has_const_tiles = eye.has_value() && tril.has_value() && ones.has_value() && masks.has_value();
@@ -519,6 +529,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         scale,
         flat_qk,
         H,
+        flat_g,
         true);
     auto scan = ttnn::prim::chunk_gdn_scan(
         prep[0], prep[1], prep[2], prep[3], prep[4], prep[5], prep[6], s0, C, true, out_mem, kernel_cfg, true);

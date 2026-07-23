@@ -440,3 +440,11 @@
 - T=640 smoke: `PERF_REPS=2 scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/perf/test_chunk_kda_perf.py -q -s`. Result: `SAFE_PYTEST_RESULT: PASS`; one case passed in 4.21 s after the CB-race correction.
 - Tracy report: `/tmp/kda_chunk_stable_headmajor_profile/reports/2026_07_23_08_30_02/ops_perf_results_2026_07_23_08_30_02.csv`. Ten warm calls averaged `0.825989 ms`, down `96.873 us` or `10.50%` from flat q/k/v token-major and `469.181 us` or `36.23%` from the original baseline.
 - Stable prep/scan averaged `379.582 us` / `284.180 us`; the two remaining gate/beta transposes totaled `136.576 us`, and output untilize/permute were eliminated. Numerical stabilization adds about `38.6 us` to prep while the head-major boundary removes about `136.3 us` of output layout work.
+
+### 2026-07-23 08:38:17 UTC — Flat vector-gate input
+
+- Hypothesis: the remaining large wrapper transpose was the `[B,T,H,K]` vector gate; the prep reader can gather `[C,K]` directly from flat `[B,T,H*K]` without changing compute or scan tensors.
+- Direct Blackhole matrix: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s` -> PASS, 5/5. Flat-gate output/state PCC was 0.999993/0.999994 at H=2,K=32,T=32 and 0.999994/0.999995 at H=32,K=128,T=64.
+- Full regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> PASS, 12/12 in 11.73 s. Realistic T=32 layer output/state/conv PCC remained 0.999933/0.999870/0.999993.
+- Tracy report: `/tmp/kda_chunk_flat_gate_profile/reports/2026_07_23_08_38_17/ops_perf_results_2026_07_23_08_38_17.csv`. Ten warm T=640 iterations total 688.8416 us/iteration: beta transpose 2.1607 us, reshape 25.6073 us, prep 376.6100 us, scan 284.4636 us. The gate transpose disappeared.
+- Result: 137.1473 us (16.60%) faster than stabilized head-major 825.9889 us, and 606.3284 us (46.81%) faster than the original 1295.1700 us baseline.
