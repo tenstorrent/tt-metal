@@ -509,3 +509,12 @@
 - Full Blackhole regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 12/12; reconfirmed immediately before commit in 12.55 s.
 - Tracy report: `/tmp/kda_layer_flat_decay_profile/reports/2026_07_23_09_29_14/ops_perf_results_2026_07_23_09_29_14.csv`. Three warm T=640 iterations averaged `4641.3253 us`, down `1229.1847 us` or `20.94%` from the full-layer baseline.
 - Profiler-model aggregate utilization increased from `18.69%` to `23.64%`. Reshape/view fell from `1835.592 us` to `627.498 us`; the remaining approximately `602 us` reshape is the output-gate flat-to-head boundary.
+
+
+### 2026-07-23 09:51:10 UTC — Compute, DRAM, and CCL rooflines
+
+- Committed analysis source is `ROOFLINE.md`; it uses the repository HiFi4 matrix ceiling (`152.064 TFLOP/s` at 110 cores, 1.35 GHz) and Blackhole DRAM ceiling (`512 GB/s`).
+- Optimized B=1,T=640 full layer: `53.920 GFLOP` in `4641.325 us`, or `11.617 TFLOP/s` and `7.64%` whole-chip compute utilization. The five projections alone reach `47.86%`; QKV reaches `60.33%`.
+- KDA prep moves `89.211 MB` and reaches `277.75 GB/s` (`54.25%` DRAM roofline); scan moves `72.352 MB` and reaches `398.00 GB/s` (`77.73%`). Both are below the `297 FLOP/byte` ridge and are data-movement dominated; scan is closest to its bandwidth ceiling.
+- Added a real-time-profiler CCL benchmark mirroring sparse-MLA critical-path accounting. Command: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/perf/test_kda_ccl_perf.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 1/1.
+- TP=8 BF16 `[1,1,640,2304]` all-reduce: payload `2.949 MB`, critical path `5.161 MB`, two-link LoudBox roofline `100 GB/s`, theoretical `51.610 us`, measured slowest-chip `219.169 us`, utilization `23.5%`. The standalone collective misses the `40%` aspiration; fused output-matmul + reduce-scatter is the next distributed path.
