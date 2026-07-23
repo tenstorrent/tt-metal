@@ -108,7 +108,15 @@ SUPPORTED = {
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, "none"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        # Cross-core W-split (Refinement 4): the hidden dim is pre-placed across a
+        # group of cores; each reduces its local W-slice to a partial Σx², then one
+        # cross-core round (gather -> fold -> broadcast 1/RMS) precedes normalize.
+        # Slices consumed locally via zero-copy sharded CBs (op_design.md §1 lamp 2).
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
 }
 
 
@@ -123,6 +131,15 @@ SUPPORTED = {
 
 EXCLUSIONS = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+    # Refinement 4 cross-core W-split lands the NATIVE TILE-input path (zero-copy
+    # sharded slice + TILE/no gamma). The RM-input-sharded and RM-gamma-sharded
+    # corners need the resident-shard tilize / gamma-stick tilize on the cross-core
+    # kernels — deferred (Refinement 4b). Refuse them cell-level so they stay
+    # xfail-strict instead of hitting the TILE-only xcore path.
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED},
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED},
+    {"gamma_layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED},
+    {"gamma_layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED},
 ]
 
 

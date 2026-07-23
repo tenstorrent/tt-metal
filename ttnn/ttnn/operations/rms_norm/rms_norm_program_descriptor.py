@@ -91,6 +91,21 @@ def create_program_descriptor(
     compute_kernel_config: "ttnn.ComputeConfigDescriptor | None" = None,
 ) -> ttnn.ProgramDescriptor:
     device = input_tensor.device()
+
+    # Cross-core W-split scheme (op_design.md §1 lamp 2, §5): WIDTH/BLOCK-sharded
+    # inputs pre-place the hidden dim across cores, so the RMS reduce is cross-core.
+    # Dispatched to a separate builder + kernel set; the interleaved row-parallel
+    # path below is untouched (Refinement 4).
+    _ml = input_tensor.memory_config().memory_layout
+    if _ml in (ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.TensorMemoryLayout.BLOCK_SHARDED):
+        return _create_sharded_xcore_descriptor(
+            input_tensor,
+            output_tensor,
+            gamma=gamma,
+            epsilon=epsilon,
+            compute_kernel_config=compute_kernel_config,
+        )
+
     shape = list(input_tensor.shape)
 
     origin_W = int(shape[-1])
@@ -353,5 +368,228 @@ def create_program_descriptor(
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
         semaphores=[],
+        cbs=cbs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cross-core W-split builder (op_design.md §1 lamp 2, §5) — WIDTH/BLOCK sharded
+# ---------------------------------------------------------------------------
+# The hidden dim W is pre-placed across a group of K cores. Each core reduces its
+# local W-slice to a partial Σx²·(1/W); one cross-core round per tile-row (gather
+# to the group master -> master folds K partials + finalize (+eps, rsqrt) -> the
+# 1/RMS is broadcast back) precedes the per-core normalize. Slices are consumed
+# LOCALLY via zero-copy sharded CBs (never re-read through a TensorAccessor). The
+# reduction group is:
+#   WIDTH_SHARDED : ALL cores (every core owns a W-slice of the SAME full-height
+#                   rows) -> one group, master = shard core 0.
+#   BLOCK_SHARDED : the cores of one grid ROW (same tile-rows, disjoint W-slices)
+#                   -> one group per grid row, master = the row's x=0 core.
+# All-unicast transport (topology-agnostic; NoC-mcast/two-stage is the R6 lever).
+
+# Semaphore ids (monotone counters; reused across disjoint BLOCK groups — a sem id
+# resolves to a per-(core,id) L1 cell, so disjoint groups never interfere, §5).
+_SEM_GATHER = 0
+_SEM_BCAST = 1
+_SEM_DONE = 2
+
+
+def _create_sharded_xcore_descriptor(
+    input_tensor,
+    output_tensor,
+    *,
+    gamma=None,
+    epsilon=1e-6,
+    compute_kernel_config=None,
+):
+    device = input_tensor.device()
+    shape = list(input_tensor.shape)
+    origin_W = int(shape[-1])
+    origin_H = int(shape[-2])
+    NC = 1
+    for d in shape[:-2]:
+        NC *= int(d)
+
+    Ht_img = (origin_H + TILE_DIM - 1) // TILE_DIM
+    Wt = (origin_W + TILE_DIM - 1) // TILE_DIM
+    partial_w = origin_W % TILE_DIM
+    has_partial_w = partial_w != 0
+
+    has_gamma = gamma is not None
+    in_dtype = input_tensor.dtype
+    out_dtype = output_tensor.dtype
+
+    mem = input_tensor.memory_config()
+    ml = mem.memory_layout
+    ss = mem.shard_spec
+    sh, sw = int(ss.shape[0]), int(ss.shape[1])
+    per_h_t = sh // TILE_DIM  # tile-rows this core holds
+    per_w_t = sw // TILE_DIM  # W-tiles this core holds
+    grid = ss.grid
+    cores = ttnn.corerange_to_cores(grid, None, True)  # row-major shard order
+
+    def _v(core):
+        vc = device.worker_core_from_logical_core(ttnn.CoreCoord(core.x, core.y))
+        return int(vc.x), int(vc.y)
+
+    # ---- Per-core group assignment (single source of truth for the topology) ----
+    # entry: (core, slice_index, master_core, is_partial_holder, w_tile_start, vwt)
+    Ht_local = per_h_t
+    entries = []
+    if ml == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        # One group; every core owns a W-slice of the full-height rows.
+        K = len(cores)
+        master = cores[0]
+        for i, c in enumerate(cores):
+            w_tile_start = i * per_w_t
+            vwt = max(0, min(per_w_t, Wt - w_tile_start))
+            entries.append((c, i, master, i == len(cores) - 1, w_tile_start, vwt))
+    else:  # BLOCK_SHARDED — one group per grid row
+        bb = grid.bounding_box()
+        x0, y0 = int(bb.start.x), int(bb.start.y)
+        x1 = int(bb.end.x)
+        nx = x1 - x0 + 1
+        K = nx
+        for c in cores:
+            xrel = int(c.x) - x0
+            master = ttnn.CoreCoord(x0, int(c.y))
+            w_tile_start = xrel * per_w_t
+            vwt = max(0, min(per_w_t, Wt - w_tile_start))
+            entries.append((c, xrel, master, xrel == nx - 1, w_tile_start, vwt))
+
+    # workers per master (for the master's broadcast list), keyed by (mx, my)
+    workers_of = {}
+    for c, slice_index, master, _iph, _wts, _vwt in entries:
+        key = (int(master.x), int(master.y))
+        if slice_index != 0:
+            workers_of.setdefault(key, []).append(c)
+
+    inv_N_bits = _f32_bits(1.0 / float(origin_W))
+    eps_bits = _f32_bits(epsilon)
+
+    tile_in = ttnn.tile_size(in_dtype)
+    tile_out = ttnn.tile_size(out_dtype)
+    tile_bf16 = ttnn.tile_size(ttnn.bfloat16)
+    tile_fp32 = ttnn.tile_size(ttnn.float32)
+
+    if has_gamma:
+        gamma_dtype = gamma.dtype
+        gamma_page = gamma.buffer_aligned_page_size()
+        tile_gamma = ttnn.tile_size(gamma_dtype)
+    else:
+        gamma_dtype = in_dtype
+        gamma_page = input_tensor.buffer_aligned_page_size()
+        tile_gamma = tile_in
+
+    all_cores = grid
+
+    # ---- Circular buffers (all bounded; no CB grows with the tile-row count) ----
+    CB_X_IN = 1
+    CB_SCALER = 2
+    CB_GAMMA = 3
+    CB_GATHER = 5
+    CB_STAT_HANDOFF = 6
+    CB_STAT_GLOBAL = 7
+    CB_OUT = 16
+    CB_XSQ = 24
+    CB_STAT_LOCAL = 25
+    CB_NORM = 26
+
+    cbs = [
+        # zero-copy sharded input W-slice + output W-slice (consumed/produced locally)
+        ttnn.cb_descriptor_from_sharded_tensor(CB_X_IN, input_tensor),
+        ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor),
+    ]
+
+    def add_cb(idx, page_size, num_pages, fmt):
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=num_pages * page_size,
+                core_ranges=all_cores,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=page_size)],
+            )
+        )
+
+    add_cb(CB_SCALER, tile_bf16, 2 if has_partial_w else 1, ttnn.bfloat16)
+    add_cb(CB_XSQ, tile_in, 2, in_dtype)
+    add_cb(CB_STAT_LOCAL, tile_fp32, 2, ttnn.float32)
+    add_cb(CB_GATHER, tile_fp32, K, ttnn.float32)  # fixed-base fan-in (K partials/round)
+    add_cb(CB_STAT_HANDOFF, tile_fp32, 2, ttnn.float32)
+    add_cb(CB_STAT_GLOBAL, tile_fp32, 1, ttnn.float32)  # depth 1 -> fixed base for the mcast-back
+    add_cb(CB_NORM, tile_in, 2, in_dtype)
+    if has_gamma:
+        add_cb(CB_GAMMA, tile_gamma, per_w_t, gamma_dtype)
+
+    # ---- Reader (scaler + gamma W-slice) ----
+    reader_ct = [
+        1 if has_gamma else 0,
+        inv_N_bits,
+        1 if has_partial_w else 0,
+        partial_w if has_partial_w else TILE_DIM,
+        gamma_page,
+    ]
+    reader_ct.extend(
+        ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
+        if has_gamma
+        else ttnn.TensorAccessorArgs().get_compile_time_args()
+    )
+    reader_rt = ttnn.RuntimeArgs()
+    gamma_addr = gamma.buffer_address() if has_gamma else 0
+    for c, _si, _m, _iph, w_tile_start, vwt in entries:
+        reader_rt[c.x][c.y] = [gamma_addr, w_tile_start, vwt]
+    reader_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "rms_norm_xcore_reader.cpp"),
+        core_ranges=all_cores,
+        compile_time_args=reader_ct,
+        runtime_args=reader_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    # ---- Writer (cross-core transport) ----
+    writer_ct = [_SEM_GATHER, _SEM_BCAST, _SEM_DONE, Ht_local, K, tile_fp32]
+    writer_rt = ttnn.RuntimeArgs()
+    for c, slice_index, master, _iph, _wts, _vwt in entries:
+        mvx, mvy = _v(master)
+        is_master = 1 if slice_index == 0 else 0
+        row = [is_master, slice_index, mvx, mvy]
+        if is_master:
+            wl = workers_of.get((int(master.x), int(master.y)), [])
+            row.append(len(wl))
+            for w in wl:
+                wvx, wvy = _v(w)
+                row.extend([wvx, wvy])
+        else:
+            row.append(0)
+        writer_rt[c.x][c.y] = row
+    writer_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "rms_norm_xcore_writer.cpp"),
+        core_ranges=all_cores,
+        compile_time_args=writer_ct,
+        runtime_args=writer_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    # ---- Compute (local reduce + master combine + normalize) ----
+    compute_ct = [per_w_t, Ht_local, K, 1 if has_gamma else 0, 1 if has_partial_w else 0, eps_bits]
+    compute_rt = ttnn.RuntimeArgs()
+    for c, slice_index, _m, is_partial_holder, _wts, vwt in entries:
+        compute_rt[c.x][c.y] = [vwt, 1 if is_partial_holder else 0, 1 if slice_index == 0 else 0]
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "rms_norm_xcore_compute.cpp"),
+        core_ranges=all_cores,
+        compile_time_args=compute_ct,
+        runtime_args=compute_rt,
+        config=compute_kernel_config if compute_kernel_config is not None else ttnn.ComputeConfigDescriptor(),
+    )
+
+    semaphores = [
+        ttnn.SemaphoreDescriptor(id=_SEM_GATHER, core_ranges=all_cores, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=_SEM_BCAST, core_ranges=all_cores, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=_SEM_DONE, core_ranges=all_cores, initial_value=0),
+    ]
+
+    return ttnn.ProgramDescriptor(
+        kernels=[reader_kernel, writer_kernel, compute_kernel],
+        semaphores=semaphores,
         cbs=cbs,
     )

@@ -1,0 +1,109 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// Cross-core W-split transport kernel for rms_norm (op_design.md §5).
+//
+// This dataflow kernel owns the cross-core stat traffic (the output shard itself
+// is a zero-copy CB, so there is no DRAM write). One fully-synchronous round per
+// tile-row, Pattern A (gather -> master combine -> broadcast), all-unicast so it
+// is topology-agnostic (WIDTH auto-shard groups can be non-rectangular on the
+// 11-wide grid; NoC-mcast/two-stage topology is the R6 perf lever). Three
+// MONOTONE counter semaphores (no reset -> no clobber race, §9):
+//   SEM_GATHER : worker -> master, "my partial for this row landed".
+//   SEM_BCAST  : master -> worker, "the finalized 1/RMS for this row landed".
+//   SEM_DONE   : worker -> master, "I reserved my broadcast slot (prev row
+//                consumed via CB back-pressure) -> master may overwrite it".
+//
+// Cross-core-written CBs use FIXED base addresses (same L1 offset on every core):
+//   cb_gather   depth K -> master pops K each round, wrapping the fifo to base.
+//   cb_stat_global depth 1 -> always base.
+// so a remote writer targets `get_write_ptr(cb) [+ slot]` computed locally.
+
+#include <stdint.h>
+
+#include "api/dataflow/dataflow_api.h"
+
+namespace {
+constexpr uint32_t cb_gather = 5;
+constexpr uint32_t cb_stat_handoff = 6;
+constexpr uint32_t cb_stat_global = 7;
+constexpr uint32_t cb_stat_local = 25;
+}  // namespace
+
+void kernel_main() {
+    constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(0);
+    constexpr uint32_t SEM_BCAST = get_compile_time_arg_val(1);
+    constexpr uint32_t SEM_DONE = get_compile_time_arg_val(2);
+    constexpr uint32_t HT_LOCAL = get_compile_time_arg_val(3);
+    constexpr uint32_t K = get_compile_time_arg_val(4);
+    constexpr uint32_t stat_bytes = get_compile_time_arg_val(5);  // fp32 tile bytes
+
+    const uint32_t is_master = get_arg_val<uint32_t>(0);
+    const uint32_t slice_index = get_arg_val<uint32_t>(1);
+    const uint32_t master_vx = get_arg_val<uint32_t>(2);
+    const uint32_t master_vy = get_arg_val<uint32_t>(3);
+    const uint32_t num_workers = get_arg_val<uint32_t>(4);  // master: K-1, worker: 0
+    // master only: worker virtual coords follow as [vx, vy] * num_workers.
+    constexpr uint32_t WORKER_COORDS_BASE = 5;
+
+    volatile tt_l1_ptr uint32_t* sem_gather = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER));
+    volatile tt_l1_ptr uint32_t* sem_bcast = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_BCAST));
+    volatile tt_l1_ptr uint32_t* sem_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_DONE));
+
+    for (uint32_t t = 0; t < HT_LOCAL; ++t) {
+        cb_wait_front(cb_stat_local, 1);  // compute produced this tile-row's local partial
+        const uint32_t local_src = get_read_ptr(cb_stat_local);
+
+        if (is_master) {
+            // ---- gather: own partial into slot 0, wait workers' slots ----
+            cb_reserve_back(cb_gather, K);  // blocks until compute popped last round's gather
+            const uint32_t gather_base = get_write_ptr(cb_gather);
+            noc_async_read(get_noc_addr(master_vx, master_vy, local_src), gather_base, stat_bytes);  // loopback own
+            noc_async_read_barrier();
+            cb_pop_front(cb_stat_local, 1);
+            noc_semaphore_wait_min(sem_gather, (t + 1) * (K - 1));  // all worker partials landed
+            cb_push_back(cb_gather, K);                             // -> master compute combine
+
+            // ---- broadcast: wait combined 1/RMS, push to every group member ----
+            cb_wait_front(cb_stat_handoff, 1);
+            const uint32_t handoff_src = get_read_ptr(cb_stat_handoff);
+            cb_reserve_back(cb_stat_global, 1);  // blocks until compute popped last round's rstd
+            const uint32_t global_dst = get_write_ptr(cb_stat_global);
+            noc_semaphore_wait_min(sem_done, (t + 1) * (K - 1));  // all workers ready to receive
+            noc_async_read(get_noc_addr(master_vx, master_vy, handoff_src), global_dst, stat_bytes);  // loopback own
+            for (uint32_t w = 0; w < num_workers; ++w) {
+                const uint32_t wx = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w);
+                const uint32_t wy = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w + 1);
+                noc_async_write(handoff_src, get_noc_addr(wx, wy, global_dst), stat_bytes);
+            }
+            noc_async_write_barrier();
+            noc_async_read_barrier();
+            cb_push_back(cb_stat_global, 1);  // -> master compute pass 2
+            cb_pop_front(cb_stat_handoff, 1);
+            for (uint32_t w = 0; w < num_workers; ++w) {
+                const uint32_t wx = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w);
+                const uint32_t wy = get_arg_val<uint32_t>(WORKER_COORDS_BASE + 2 * w + 1);
+                noc_semaphore_inc(get_noc_addr(wx, wy, get_semaphore(SEM_BCAST)), 1);
+            }
+        } else {
+            // ---- worker: reserve receive slot (prev consumed), signal ready, gather ----
+            cb_reserve_back(cb_stat_global, 1);  // blocks until compute popped last round's rstd
+            noc_semaphore_inc(get_noc_addr(master_vx, master_vy, get_semaphore(SEM_DONE)), 1);  // ready to receive
+            // master's cb_gather base == this core's cb_gather base (uniform CB offset, empty->base).
+            const uint32_t master_gather_base = get_write_ptr(cb_gather);
+            noc_async_write(
+                local_src,
+                get_noc_addr(master_vx, master_vy, master_gather_base + slice_index * stat_bytes),
+                stat_bytes);
+            noc_async_write_barrier();
+            noc_semaphore_inc(get_noc_addr(master_vx, master_vy, get_semaphore(SEM_GATHER)), 1);  // partial landed
+            cb_pop_front(cb_stat_local, 1);
+            noc_semaphore_wait_min(sem_bcast, t + 1);  // master broadcast my 1/RMS
+            cb_push_back(cb_stat_global, 1);           // -> worker compute pass 2 (data already at the slot)
+        }
+    }
+    // Flush the semaphore-inc atomics (SEM_GATHER/SEM_DONE from workers, SEM_BCAST
+    // from the master) before the kernel exits — else the target may not observe
+    // the final round's signal and the exit "atomics flushed" assert trips.
+    noc_async_atomic_barrier();
+}
