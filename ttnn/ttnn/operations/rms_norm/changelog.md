@@ -743,3 +743,62 @@
 - Tests added: `test_rms_norm_perf_r6c.py` (two-stage correctness across 2D WIDTH geometries: aligned,
   NON-aligned-W partial-holder through both stages, per_w_t>1, no-gamma; plus 1-D + small-saving
   flat-fallback cases; soft PCC gate).
+
+## Refinement 6d — Sharded cross-core: allgather (Pattern B) for the 1-D master-bottleneck residual
+- Date: 2026-07-23
+- Type: perf (partial — `[~]`); no SUPPORTED change, no kernel change.
+- What was done: evaluated R6d's named lever — the **allgather (Pattern B)** for the 1-D
+  BLOCK/WIDTH master-bottleneck residual — AT DEPTH on device (try-cheap-first, per the perf
+  methodology) before committing a ~600-line restructure of the shared xcore transport. The
+  authoritative measurement is the in-tree `tensix_all_reduce` collective bake-off run at the
+  EXACT BLOCK 8x8 per-group topology (1x8 line, K=8, num_tiles=8 ~ the C=8 batched stat
+  tiles/round), on THIS blackhole_p150b box, isolated AND grid-filling. It compares the current
+  Pattern A (`reduce_root_mcast`), the R6d lever (Pattern B `mcast_all_gather` + `unicast_all_gather`),
+  and the sibling `two_phase_reduce_mcast`.
+- Measured baseline (blackhole_p150b, median of 8 fresh trials; `test_rms_norm_perf_r6.py`,
+  UNCHANGED — R6d ships no kernel change): BLOCK 8x8 **108162 ns (4.22x)** — the dominant target;
+  WIDTH 8x1 5628 (1.37x), 9x1 7759 (1.68x), 8x4 7613 (1.45x), 7x4 9148 (1.67x).
+- Measured collective bake-off (median of 5 trials x 10 in-kernel collectives, num_tiles=8;
+  `AR_GROUP_SHAPE=1,8 AR_NUM_TILES=8 AR_KERNEL_ITERS=10 ... test_tensix_all_reduce_device_perf`):
+  | topology | 1x8 grid-filling (8 grp, 64 cores) | 1x8 isolated (1 grp) | vs Pattern A |
+  |---|---|---|---|
+  | `reduce_root_mcast` (Pattern A, CURRENT) | 3189.6 ns | 3182.2 ns | 1.00x |
+  | `mcast_all_gather` (Pattern B — R6d LEVER) | 6134.5 ns | 6135.5 ns | **0.52x (~2x SLOWER)** |
+  | `unicast_all_gather` (Pattern B all-to-all) | 11140.3 ns | — | 0.29x |
+  | `two_phase_reduce_mcast` | 2291.3 ns | 2272.7 ns | **1.39-1.40x (WINNER)** |
+- FINDING (characterized at depth): on a **1-D line the allgather is decisively inferior to the
+  current Pattern A, isolated OR grid-filling (0.52x, regime-independent)**. The penalty is
+  INTRINSIC and unfixable by any complementary step: the rotating mcast allgather is K serial
+  mcast sub-rounds, and the all-to-all form multiplies the per-core receive traffic by K (every
+  core receives all K partials instead of only the master). Eliminating the broadcast leg (~14%
+  of a round, R6b) does not pay for doubling the gather. So — unlike a "batched reader needs its
+  writer twin" incomplete lever — the allgather is a **topological dead-end for 1-D groups**;
+  engaging it would REGRESS BLOCK 8x8 by ~11% (0.52x collective x 4 rounds). It is therefore NOT
+  shipped (parked; shipping a measured-2x-slower scheme as gated dead code on the shared xcore
+  kernels would only add regression surface for zero benefit).
+- The measured winner is **`two_phase_reduce_mcast`** (tile-index workers gather+fold disjoint
+  tile-rows -> root assembles + mcasts): reduced communication volume WITHOUT the allgather's
+  traffic multiplication. It engages only when C>1 (BLOCK's batched tile-rows); WIDTH n x 1 are
+  single-round (C=1) so it degenerates to root. Filed as **Refinement 6e** with the exact lever
+  + numbers. NOTE (honest ceiling): the pure collective is only PART of BLOCK 8x8's in-context
+  round (R6b: round ~68us dominated by per-tile-row stat data-movement + the ~47us compute
+  floor), so even the 1.40x collective win projects to a modest op-level gain — R6e must confirm
+  the in-op yield by ablation, and the deeper residual (per-tile-row stat movement + compute
+  floor) may need a separate lever.
+- Accuracy achieved: all three collective topologies are NUMERICALLY correct at the BLOCK 8x8
+  1-D topology (the R6d verdict is perf, not correctness). Shipped op (Pattern A) unregressed on
+  BLOCK 8x8: PCC=1.001005 (== the R6b/R6c byte-identical baseline). Golden `TOLERANCES` unchanged.
+- Golden test progress: green — no change (no kernel/op change). `test_op_loose` **19/19**
+  (incl. BLOCK 8x8 + WIDTH 8x4/7x4). No supported_fail, no xpass drift.
+- No regression: unit dir unchanged (no kernel/op edit); `test_rms_norm_perf_r6.py` sharded 5/5;
+  golden loose 19/19; the new ablation 7/7 (`--run-all`).
+- Levers: allgather (Pattern B) — measured decisively inferior on the target 1-D topology
+  (0.52x, regime-independent, intrinsic) -> NOT shipped/parked (a topological dead-end, not a
+  correct-but-incomplete lever). Real next lever `two_phase_reduce_mcast` (1.40x collective) filed
+  as R6e.
+- Issues encountered: None (the finding is the deliverable — R6d's named lever is disproven on
+  device, and the queue is redirected to the measured-winning sibling).
+- Tests added: `test_rms_norm_r6d_ablation.py` (reproduces the collective-topology bake-off at the
+  exact BLOCK 8x8 1-D topology via the `tensix_all_reduce` example API — correctness of Pattern A /
+  Pattern B allgather / two_phase at isolated + grid-filling; + a BLOCK 8x8 Pattern-A regression
+  guard; measured ns table + repro command in the docstring). 7/7 pass.

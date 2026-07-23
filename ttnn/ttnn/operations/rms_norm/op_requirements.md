@@ -701,7 +701,7 @@ for the 1-D BLOCK/WIDTH groups + the large-per_w_t WIDTH headroom.
 
 ---
 
-### [ ] Refinement 6d — Sharded cross-core: allgather (Pattern B) for the 1-D master-bottleneck residual
+### [~] Refinement 6d — Sharded cross-core: allgather (Pattern B) for the 1-D master-bottleneck residual
 
 **Type**: perf
 
@@ -727,3 +727,62 @@ on soft `pcc_threshold` 0.9995.
 
 **Done when**: measured median device-ns improves further on the BLOCK/large-K WIDTH sharded perf shapes
 (fresh-cache trial loop) toward achievable, soft PCC holding, golden green, no regression.
+
+**Landed (partial `[~]`)** — the named lever (allgather Pattern B) was evaluated AT DEPTH on device
+(try-cheap-first) and found **measured decisively inferior on the target 1-D topology**, so it is NOT
+shipped (a topological dead-end, not a correct-but-incomplete lever); the measured-winning sibling is
+filed as R6e. Baseline (blackhole_p150b, median of 8 fresh trials): BLOCK 8×8 **108162 ns (4.22×)** —
+dominant target; WIDTH 8×1/9×1/8×4/7×4 = 1.37/1.68/1.45/1.67×.
+- **Cheap-first measurement** (the in-tree `tensix_all_reduce` collective bake-off at the EXACT BLOCK
+  8×8 per-group topology — 1×8 line, K=8, num_tiles=8 ≈ the C=8 batched stat tiles/round; this box;
+  isolated AND grid-filling): `reduce_root_mcast` (Pattern A, CURRENT) **3189.6 ns / 1.00×**;
+  `mcast_all_gather` (Pattern B — R6d's lever) **6134.5 ns / 0.52× (~2× SLOWER)**; `unicast_all_gather`
+  (Pattern B all-to-all) 11140 ns / 0.29×; `two_phase_reduce_mcast` **2291.3 ns / 1.39× (WINNER)**.
+  Isolated (num_groups=1) is identical (0.52× / 1.40×) — the verdict is regime-independent.
+- **Why allgather cannot win (characterized)**: on a 1-D line the penalty is INTRINSIC and unfixable by
+  any complementary step — the rotating mcast allgather is K serial mcast sub-rounds, and the all-to-all
+  form multiplies the per-core receive traffic by K (every core receives all K partials vs only the
+  master). Eliminating the broadcast leg (~14% of a round) does not pay for doubling the gather. So
+  engaging it would REGRESS BLOCK 8×8 (~11%). Not shipped/parked (shipping a measured-2×-slower scheme
+  as gated dead code on the shared xcore kernels only adds regression surface for zero benefit).
+- **Guard**: all three collective topologies are numerically correct at the 1-D topology (R6d is a perf
+  verdict, not a correctness gap); shipped op (Pattern A) unregressed on BLOCK 8×8 (PCC=1.001005 ==
+  R6b/R6c byte-identical); golden `test_op_loose` 19/19; sharded perf 5/5. Test:
+  `test_rms_norm_r6d_ablation.py` (7/7) reproduces the bake-off + repro command.
+
+**Deferred to R6e** (the measured-winning lever): **two-phase (tile-index) reduce-mcast** — see below.
+
+---
+
+### [ ] Refinement 6e — Sharded cross-core: two-phase (tile-index) reduce-mcast for the 1-D master bottleneck
+
+**Type**: perf
+
+**Goal**: close the residual R6d's allgather could not (allgather measured 0.52× on the 1-D line — a
+topological dead-end). R6d's on-device bake-off (this box, exact 1×8/K=8/C=8 topology, isolated +
+grid-filling) identified the measured winner for the 1-D master bottleneck: **`two_phase_reduce_mcast`
+at 1.39–1.40× vs the current Pattern A** (`reduce_root_mcast`) — 2291 vs 3189 ns/collective. One lever:
+
+1. **Two-phase (tile-index) reduce-mcast.** Instead of one master gathering+folding all K×C stat tiles
+   (Pattern A) or every core folding all K (allgather, R6d — 2× the traffic), assign up to
+   `min(C, K−1)` workers to gather+fold DISJOINT tile-rows' partials (each worker pulls its rows'
+   K partials from all K cores, folds them → its rows' rstds, writes them to the root), then the root
+   assembles the C rstds and mcasts them back (reuse the R6/R6a segmented mcast). This distributes the
+   gather AND the fold off the single master WITHOUT the allgather's K× receive-traffic multiplication —
+   the `tensix_all_reduce` `two_phase_reduce_mcast` pattern (`examples/master.md`: "tile-index two-phase
+   wins for an isolated, well-fed group"). Engages ONLY when C>1 (BLOCK's batched tile-rows); WIDTH n×1
+   groups are single-round (C=1) so it degenerates to root byte-identically. Reuse the R4/R6/R6a/R6b/R6c
+   xcore kernels + segmented mcast + 3-monotone-counter protocol + stat compaction; do not fork.
+
+**Verifier notes**: R6d landed the on-device bake-off that disproved the allgather and named this lever.
+This is a T3 collective-topology change (workers gather cross-core, so verify `--dev`-clean across
+HT_LOCAL and ragged groups). **Honest ceiling (measure first)**: the pure collective is only PART of
+BLOCK 8×8's in-context round (R6b: round ~68 µs dominated by per-tile-row stat data-movement + the ~47 µs
+compute floor), so the 1.40× collective win projects to a MODEST op-level gain — ablate the in-op yield
+before committing, and if the residual is dominated by per-tile-row stat movement / the compute floor
+(not the fold topology), that is a different lever (file R6f). Gate on soft `pcc_threshold` 0.9995.
+
+**Done when**: measured median device-ns improves on the BLOCK (C>1) sharded perf shapes (fresh-cache
+trial loop) toward achievable, soft PCC holding, golden green, no regression — OR the in-op ablation
+shows the collective is off the critical path and R6f (per-tile-row stat movement / compute floor) is
+filed with the exact next lever.
