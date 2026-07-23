@@ -35,8 +35,7 @@ constexpr uint32_t cb_kdec_t = 24, cb_supd = 25, cb_stmp = 26, cb_final = 27;
 constexpr uint32_t cb_scr1 = 28, cb_scr2 = 29, cb_scr3 = 30, cb_s3 = 31;
 // PHASE A output for the scan step's state decay (reuses a scan-only index, unused in prep).
 constexpr uint32_t cb_dl = cb_vnew;
-// WY-inverse quadrant masks (3 tiles: 0=Qtl, 1=Qbr, 2=Q10). Reuses the cb_u slot (unused in
-// the stable-form prep); the reader loads them once. Used only by invert_block.
+// Startup pacing tiles: this three-tile read staggers 110 readers before their bulk q/k/v/g burst.
 constexpr uint32_t cb_mask = cb_u;
 
 inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
@@ -185,123 +184,51 @@ void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o) {
     cb_push_back(o, 1);
 }
 
-// out[0] = a[ai] (op) b[bi], single tile. op: 0 add, 2 mul. (Like ew but with free tile indices.)
-void ewt(uint32_t a, uint32_t ai, uint32_t b, uint32_t bi, uint32_t o, int op) {
-    cb_reserve_back(o, 1);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(a, b);
-    if (op == 0) {
-        add_tiles_init(a, b);
-    } else {
-        mul_tiles_init(a, b);
-    }
-    tile_regs_acquire();
-    if (op == 0) {
-        add_tiles(a, b, ai, bi, 0);
-    } else {
-        mul_tiles(a, b, ai, bi, 0);
-    }
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, o, 0);
-    tile_regs_release();
-    cb_push_back(o, 1);
-}
+// Invert (I-N) for a strictly-lower 32x32 N using the exact nilpotent product
+// (I-N)^-1 = (I+N)(I+N^2)(I+N^4)(I+N^8)(I+N^16). Eight tile matmuls replace
+// the masked 16x16 Horner path's thirty full-tile matmuls; the shorter dependency chain is also
+// expected to improve fp32 stability, but that must be validated empirically.
+void invert_doubling(uint32_t src, uint32_t tile, uint32_t out) {
+    uint32_t power = cb_S;
+    uint32_t sum = cb_final;
+    uint32_t next_power = cb_s2;
+    constexpr uint32_t product = cb_s3;
 
-// (I32 - Nq)^-1 for a strictly-lower 16-block Nq isolated in one 16-quadrant (rest zero),
-// nilpotent at 16. Horner in 15 terms -> out (single tile); the other diagonal quadrant is I.
-// Small block + short chain keeps fp32 bounded where a 32x32/31-term Horner cancels.
-void invert16(uint32_t nq, uint32_t out, uint32_t tmp) {
-    ew(cb_eye, nq, out, 1, 0);  // out = I + Nq
+    cpy_t(src, tile, power);
+    CircularBuffer(power).wait_front(1);
+    ew(cb_eye, power, sum, 1, 0);  // I + N
+    CircularBuffer(sum).wait_front(1);
+    mm(power, power, next_power, 1, 1, 1, false);  // N^2
+    CircularBuffer(next_power).wait_front(1);
+    CircularBuffer(power).pop_front(1);
+    power = next_power;
+    next_power = cb_S;
+
+    for (uint32_t step = 0; step < 4; step++) {
+        mm(power, sum, product, 1, 1, 1, false);
+        CircularBuffer(product).wait_front(1);
+        if (step < 3) {
+            mm(power, power, next_power, 1, 1, 1, false);
+            CircularBuffer(next_power).wait_front(1);
+        }
+        CircularBuffer(power).pop_front(1);
+        ew(sum, product, power, 1, 0);
+        CircularBuffer(power).wait_front(1);
+        CircularBuffer(sum).pop_front(1);
+        CircularBuffer(product).pop_front(1);
+        if (step < 3) {
+            const uint32_t old_sum = sum;
+            sum = power;
+            power = next_power;
+            next_power = old_sum;
+        } else {
+            sum = power;
+        }
+    }
+
+    cpy_t(sum, 0, out);
     CircularBuffer(out).wait_front(1);
-    for (uint32_t m = 2; m < 16; m++) {  // sum_{k<16} Nq^k
-        mm(nq, out, tmp, 1, 1, 1, false);
-        CircularBuffer(tmp).wait_front(1);
-        CircularBuffer(out).pop_front(1);
-        ew(cb_eye, tmp, out, 1, 0);  // out = I + Nq @ out
-        CircularBuffer(out).wait_front(1);
-        CircularBuffer(tmp).pop_front(1);
-    }
-}
-
-// Assemble the 2x2 tile-block matrix [[s0[t0], s1[t1]], [s2[t2], s3[t3]]] into o (4 tiles).
-void asm4(
-    uint32_t s0,
-    uint32_t t0,
-    uint32_t s1,
-    uint32_t t1,
-    uint32_t s2,
-    uint32_t t2,
-    uint32_t s3,
-    uint32_t t3,
-    uint32_t o) {
-    const uint32_t src[4] = {s0, s1, s2, s3};
-    const uint32_t tl[4] = {t0, t1, t2, t3};
-    cb_reserve_back(o, 4);
-    pack_reconfig_data_format(o);
-    for (uint32_t i = 0; i < 4; i++) {
-        reconfig_data_format_srca(src[i]);
-        copy_tile_to_dst_init_short(src[i]);
-        tile_regs_acquire();
-        copy_tile(src[i], tl[i], 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, o, i);
-        tile_regs_release();
-    }
-    cb_push_back(o, 4);
-}
-
-// Invert one 32x32 diagonal tile-block: out[0] = (I32 - negN)^-1, negN = src[tile] (strictly-lower
-// 32x32). Mirrors FLA solve_tril: split into 16-quadrants negN = [[N00,0],[N10,N11]], invert the two
-// diagonal 16-blocks (short, bounded Horners), and form the off-diagonal EXACTLY (one matmul chain,
-// no power series). A single 32x32 Horner instead loses fp32 precision on harder blocks.
-//   Bi00=(I-N00)^-1 (top-left), Bi11=(I-N11)^-1 (bottom-right), off=Bi11@N10@Bi00 (bottom-left).
-//   out = [[Bi00,0],[off,Bi11]].
-// Masks (single tiles): cb_mask[0]=Qtl, [1]=Qbr, [2]=Q10 (bottom-left). tmpN/tmpT = scratch.
-// Private scratch A..D use cb_ointer/cb_final/cb_s2/cb_s3 — all fp32 and NOT drained by the prep
-// writer (unlike the output CBs cb_w/cb_qdecay/cb_intra, whose scratch pushes the writer would
-// wrongly consume). None alias src (cb_scr3), out, or the Ct==2 persistents (cb_supd/cb_stmp).
-void invert_block(uint32_t src, uint32_t tile, uint32_t out, uint32_t tmpN, uint32_t tmpT) {
-    const uint32_t A = cb_S, B = cb_final, C = cb_s2, D = cb_s3;
-    cpy_t(src, tile, tmpN);
-    CircularBuffer(tmpN).wait_front(1);  // negN -> tmpN[0]
-    // Bi00 = (I-N00)^-1  (N00 = top-left quadrant of negN; top-right is already 0)
-    ewt(tmpN, 0, cb_mask, 0, A, 2);
-    CircularBuffer(A).wait_front(1);  // N00
-    invert16(A, B, tmpT);
-    CircularBuffer(B).wait_front(1);
-    CircularBuffer(A).pop_front(1);  // Bi00 -> B
-    // Bi11 = (I-N11)^-1  (N11 = bottom-right quadrant)
-    ewt(tmpN, 0, cb_mask, 1, A, 2);
-    CircularBuffer(A).wait_front(1);  // N11
-    invert16(A, C, tmpT);
-    CircularBuffer(C).wait_front(1);
-    CircularBuffer(A).pop_front(1);  // Bi11 -> C
-    // off = Bi11 @ N10 @ Bi00  (N10 = bottom-left quadrant; result lives only there)
-    ewt(tmpN, 0, cb_mask, 2, A, 2);
-    CircularBuffer(A).wait_front(1);  // N10
-    CircularBuffer(tmpN).pop_front(1);
-    mm(C, A, tmpT, 1, 1, 1, false);
-    CircularBuffer(tmpT).wait_front(1);
-    CircularBuffer(A).pop_front(1);  // Bi11@N10
-    mm(tmpT, B, A, 1, 1, 1, false);
-    CircularBuffer(A).wait_front(1);
-    CircularBuffer(tmpT).pop_front(1);  // @Bi00 -> A(off)
-    // out = Qtl*Bi00 + Qbr*Bi11 + off
-    ewt(B, 0, cb_mask, 0, D, 2);
-    CircularBuffer(D).wait_front(1);
-    CircularBuffer(B).pop_front(1);  // Bi00_tl -> D
-    ewt(C, 0, cb_mask, 1, B, 2);
-    CircularBuffer(B).wait_front(1);
-    CircularBuffer(C).pop_front(1);  // Bi11_br -> B
-    ewt(D, 0, B, 0, C, 0);
-    CircularBuffer(C).wait_front(1);
-    CircularBuffer(D).pop_front(1);
-    CircularBuffer(B).pop_front(1);
-    ewt(C, 0, A, 0, out, 0);
-    CircularBuffer(C).pop_front(1);
-    CircularBuffer(A).pop_front(1);  // + off -> out
+    CircularBuffer(sum).pop_front(1);
 }
 
 // out[1,Ct] row-form = transpose of col[Ct,1]; produces Ct tiles (each row0 = a 32-chunk of col).
@@ -502,7 +429,7 @@ void kernel_main() {
         POP(cb_decayfac, ck);
 
         // Materialize both anchored pairwise products, then release cb_s2/cb_s3 before
-        // invert_block reuses those CBs as private scratch. Only the masked Aqk is published to
+        // the doubling inverse reuses those CBs as private scratch. Only the masked Aqk is published to
         // writer-facing cb_intra; publishing the raw matrix creates a second consumer race.
         mm(cb_s2, cb_scr1, cb_lmask, Ct, Kt, Ct, true);
         WAIT(cb_lmask, cc);  // raw beta*k_i*k_j*exp(G_i-G_j)
@@ -524,7 +451,7 @@ void kernel_main() {
         WAIT(cb_lmask, cc);
         POP(cb_scr3, cc);
         POP(cb_scr2, cc);
-        invert_block(cb_lmask, 0, cb_Tinv, cb_scr2, cb_scr3);
+        invert_doubling(cb_lmask, 0, cb_Tinv);
         WAIT(cb_Tinv, cc);
         POP(cb_lmask, cc);
 
