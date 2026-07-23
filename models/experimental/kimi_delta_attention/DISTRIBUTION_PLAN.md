@@ -132,6 +132,12 @@ falls from 1.263 ms to 0.987 ms and active kernels from about 1.215 ms to
 that this is a local layout win, not a work-redistribution effect. Continue
 with output-gate head-layout fusion before reconsidering core allocation.
 
+Output-gate head-layout fusion is now measured: batched head weights emit
+`[local_heads,T,V]` directly and reduce traced target-shape latency from
+0.987 ms to 0.890 ms. The unchanged recurrence and collective medians again
+retain the same 80-core/16-core/8x8 map. Further work should target program
+fusion and the 148 us output collective, not redistribute KDA heads.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence

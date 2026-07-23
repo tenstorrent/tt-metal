@@ -603,3 +603,11 @@
 - Matched Tracy report: `/tmp/kda_tp_layer_t640_native_conv_r10/reports/2026_07_23_11_02_40/ops_perf_results_2026_07_23_11_02_40.csv`. Ten replays reduced device span 1.263 -> 0.987 ms, host time 1.300 -> 1.023 ms/layer, and active kernels 1.213-1.216 -> 0.940-0.942 ms/device.
 - Native conv measured 26.081 us. Removed shifted-window relayouts saved about 274 us active time/device; mesh throughput rose to 59.99 TFLOP/s or 4.93% of eight-chip peak.
 - Full hardware regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 9/9 in 13.05 s.
+
+### 2026-07-23 11:08:44 UTC — Emit output gate head-major
+
+- Hypothesis: a batched `[local_heads,128,128]` gate weight can broadcast the rank activation and emit `[local_heads,T,128]` directly, avoiding the measured head-alignment reshape/transpose.
+- Single-device T=32 passed at output/recurrent/convolution PCC 0.999965/0.999884/0.999997. TP=8 T=64 trace smoke passed 1/1.
+- Report: `/tmp/kda_tp_layer_t640_batched_gate_r10/reports/2026_07_23_11_08_44/ops_perf_results_2026_07_23_11_08_44.csv`. Ten replays reduced device span 0.987 -> 0.890 ms (9.8%), host time 1.023 -> 0.924 ms/layer, and active kernels to 0.844-0.845 ms/device.
+- The batched matmul adds about 13 us but removes an 84.7 us reshape and about 22 us transpose. Mesh throughput is 66.50 TFLOP/s or 5.47% of peak.
+- Full hardware regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 9/9 in 9.36 s.

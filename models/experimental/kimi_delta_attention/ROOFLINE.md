@@ -182,3 +182,17 @@ reshape/view (89.783 us), prep (84.274 us), untilize-with-unpadding
 (81.276 us), tilize-with-padding (56.508 us), and untilize (39.035 us).
 The fused output slowest-device median is 147.859 us, or 34.9% effective CCL
 roofline; convolution does not change the collective distribution decision.
+
+## Head-major output-gate result
+
+Profile: `/tmp/kda_tp_layer_t640_batched_gate_r10/reports/2026_07_23_11_08_44/ops_perf_results_2026_07_23_11_08_44.csv`.
+A batched `[H,128,128]` projection now emits recurrence native `[H,T,128]`
+layout. It removes the prior 84.7 us reshape and about 22 us transpose while
+adding about 13 us matmul time. Median device latency falls 0.987 -> 0.890 ms
+(9.8%); host latency is 0.924 ms/layer and active kernels are
+0.844-0.845 ms/device.
+
+The mesh sustains 66.50 TFLOP/s or 5.47% of eight-chip peak by device span;
+host-observed throughput is 64.06 TFLOP/s or 5.27%. Prep, scan, and fused
+output slowest-device medians remain 84.659, 96.535, and 148.238 us. Effective
+CCL utilization remains 34.8%.

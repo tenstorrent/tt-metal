@@ -21,6 +21,7 @@ class KDAWeights:
     auxiliary_projection: ttnn.Tensor
     decay_output_projection: ttnn.Tensor
     output_gate_projection: ttnn.Tensor
+    output_gate_projection_batched: ttnn.Tensor
     output_projection: ttnn.Tensor
     decay_scale: ttnn.Tensor
     decay_bias: ttnn.Tensor
@@ -136,6 +137,13 @@ def load_kda_weights(
             state_dict["g_b_proj.weight"].T,
             "output_gate_projection",
             shard_dim=-1,
+        ),
+        output_gate_projection_batched=device_tensor(
+            state_dict["g_b_proj.weight"]
+            .reshape(config.num_heads, config.head_v_dim, config.head_v_dim)
+            .transpose(1, 2),
+            "output_gate_projection_batched",
+            shard_dim=0,
         ),
         output_projection=device_tensor(
             state_dict["o_proj.weight"].T,

@@ -328,18 +328,21 @@ class KimiDeltaAttention:
             )
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
             new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)
-        output_gate = ttnn.linear(
-            output_gate_rank,
-            weights.output_gate_projection,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_config,
-        )
-        output_gate = ttnn.reshape(output_gate, (batch, sequence, config.num_heads, config.head_v_dim))
         if head_major:
-            output_gate = ttnn.reshape(
-                ttnn.permute(output_gate, (0, 2, 1, 3)),
-                (batch * config.num_heads, sequence, config.head_v_dim),
+            output_gate = ttnn.matmul(
+                output_gate_rank,
+                weights.output_gate_projection_batched,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
             )
+        else:
+            output_gate = ttnn.linear(
+                output_gate_rank,
+                weights.output_gate_projection,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
+            output_gate = ttnn.reshape(output_gate, (batch, sequence, config.num_heads, config.head_v_dim))
         output = ttnn.rms_norm(
             output,
             weight=weights.norm,
