@@ -192,22 +192,22 @@ Check memory for already-submitted ideas; do not re-propose them. Create a fresh
 
 ### Task 6: Stale PR Nudges
 
-1. List open non-Repo-Assist PRs not updated in 14+ days. Skip draft/WIP PRs and any PR already nudged in memory.
-2. For each stale PR, classify the blocker and act **once per PR**:
+1. List open non-Repo-Assist PRs not updated in **3+ days**. Skip draft/WIP PRs. A PR is eligible for a repeat action only if **3 or more days have passed since the last repo-assist nudge/ping** on that PR (check memory for the last action timestamp).
+2. For each stale PR, classify the blocker and act:
    - **Author-blocked** — nudge the author. This includes:
      - Merge conflicts or the branch being behind `main`.
      - A `CHANGES_REQUESTED` review or unresolved review threads.
      - Required CI failing (the author needs to fix it).
      - Approved but not merged for an obvious author-side reason.
      - Any other state where the next required action is clearly the author's.
-     - Post a single polite comment on the PR asking if they need help or want to hand off. Do not re-nudge the same PR.
+     - Post a single polite comment on the PR asking if they need help or want to hand off.
    - **Reviewer-blocked** — ping the existing codeowners ping bot. This is a non-draft, review-ready PR with:
      - No author-side blockers (no conflicts, no failing required CI, no `CHANGES_REQUESTED`, no unresolved review threads).
      - Pending required reviewers or pending CODEOWNERS approval.
      - The author has already acted or the PR is simply waiting for review.
      - Post the **exact** comment `/codeowners ping` on the PR. Do not add any other text. This reuses the team's canonical routing to Slack (`#tt-metal-pr-review-requests`) and avoids duplicating the notification logic.
-     - Do **not** post `/codeowners ping` if the PR already has a CodeOwners Group Analysis bot comment (i.e. it has already been pinged).
-3. **Maximum 3 actions per run** (any mix of author nudges and `/codeowners ping`). Update memory with which PRs were nudged/pinged so neither is repeated.
+     - **Re-ping every 3 days:** if the PR was already pinged by repo-assist but 3+ days have passed and it is still reviewer-blocked, post `/codeowners ping` again. Do not skip based on a prior CodeOwners Group Analysis bot comment alone — that comment may be stale; use the repo-assist memory timestamp to enforce the 3-day cadence.
+3. **Maximum 3 actions per run** (any mix of author nudges and `/codeowners ping`). Update memory with which PRs were nudged/pinged and the timestamp of each action.
 
 ### Task 7: Welcome New Contributors
 
