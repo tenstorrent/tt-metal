@@ -9,7 +9,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -22,11 +22,11 @@ void kernel_main() {
 
     constexpr auto cb_ydy = tt::CBIndex::c_24;  // y * dy
     constexpr auto cb_sum = tt::CBIndex::c_25;
-    CircularBuffer cb_sum_obj(cb_sum);
+    DataflowBuffer cb_sum_obj(cb_sum);
     constexpr auto cb_dy_m_sum = tt::CBIndex::c_26;  // dy - sum
 
-    uint32_t N = get_compile_time_arg_val(0);
-    uint32_t dim_size = get_compile_time_arg_val(1);
+    constexpr uint32_t N = get_compile_time_arg_val(0);
+    constexpr uint32_t dim_size = get_compile_time_arg_val(1);
 
     binary_op_init_common(cb_dy, cb_y, cb_dx);
 
@@ -34,55 +34,48 @@ void kernel_main() {
 #ifdef LOG
         for (uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
-                ckl::copy<ckl::input(cb_dy), ckl::output(cb_sum)>(ckl::EltwiseShape::tiles(onetile));
+                copy_tile_to_cb<cb_dy, cb_sum>();
             } else {
-                ckl::add<ckl::input(cb_sum), ckl::input(cb_dy), ckl::output(cb_sum)>(ckl::EltwiseShape::tiles(onetile));
+                add_tiles_to_cb<cb_sum, cb_dy, cb_sum>();
             }
         }
 
         for (uint32_t i = 0; i < dim_size; ++i) {
             constexpr auto cb_exp = tt::CBIndex::c_24;
-            ckl::unary<
-                ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>,
-                ckl::input(cb_y),
-                ckl::output(cb_exp)>(ckl::EltwiseShape::tiles(onetile));
+            exp_tile_to_cb<cb_y, cb_exp>();
 
             constexpr auto cb_inter2 = tt::CBIndex::c_26;
-            ckl::mul<
-                ckl::input(cb_sum, ckl::InputLifecycle::HeldStream),
-                ckl::input(cb_exp),
-                ckl::output(cb_inter2),
-                ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
+            mul_tiles_to_cb<cb_sum, cb_exp, cb_inter2>(0, 0, /*pop0=*/0, /*pop1=*/1);
 
-            ckl::sub<ckl::input(cb_dy), ckl::input(cb_inter2), ckl::output(cb_dx)>(ckl::EltwiseShape::tiles(onetile));
+            // dy - sum * exp(y)
+            sub_tiles_to_cb<cb_dy, cb_inter2, cb_dx>();
         }
         cb_sum_obj.pop_front(onetile);
 #else
         for (uint32_t i = 0; i < dim_size; ++i) {
-            ckl::mul<ckl::input(cb_y), ckl::input(cb_dy), ckl::output(cb_ydy)>(ckl::EltwiseShape::tiles(onetile));
+            mul_tiles_to_cb<cb_y, cb_dy, cb_ydy>();
 
             if (i == 0) {
-                ckl::copy<ckl::input(cb_ydy), ckl::output(cb_sum)>(ckl::EltwiseShape::tiles(onetile));
+                copy_tile_to_cb<cb_ydy, cb_sum>();
             } else {
-                ckl::add<ckl::input(cb_sum), ckl::input(cb_ydy), ckl::output(cb_sum)>(
-                    ckl::EltwiseShape::tiles(onetile));
+                add_tiles_to_cb<cb_sum, cb_ydy, cb_sum>();
             }
         }
 
         for (uint32_t i = 0; i < dim_size; ++i) {
-            ckl::sub<
-                ckl::input(cb_dy),
-                ckl::input(cb_sum, ckl::InputLifecycle::HeldStream),
-                ckl::output(cb_dy_m_sum),
-                ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
+            // dy - sum
+            sub_tiles_to_cb<cb_dy, cb_sum, cb_dy_m_sum>(
+                /*itile0=*/0,
+                /*itile1=*/0,
+                /*pop0=*/1,
+                /*pop1=*/0);
+
 #ifdef SOFTMAX
-            ckl::mul<ckl::input(cb_dy_m_sum), ckl::input(cb_y), ckl::output(cb_dx)>(ckl::EltwiseShape::tiles(onetile));
+            // (dy - sum) * y
+            mul_tiles_to_cb<cb_dy_m_sum, cb_y, cb_dx>();
 #else
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(onetile),
-                ckl::BinaryFpu<ckl::input(cb_dy_m_sum), ckl::input(cb_y), ckl::BinaryFpuOp::Mul>{},
-                ckl::Negative<ckl::Dst::D0>{},
-                ckl::PackTile<ckl::output(cb_dx)>{});
+            // -(dy - sum) * y
+            mul_tiles_and_negative_to_cb<cb_dy_m_sum, cb_y, cb_dx>();
 #endif
         }
         cb_sum_obj.pop_front(onetile);

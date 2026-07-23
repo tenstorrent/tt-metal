@@ -11,40 +11,38 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Mask, Negative
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 namespace ckl = compute_kernel_lib;
 
+#if defined(FP32_DEST_ACC_EN)
+constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Enabled;
+#else
+constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
+#endif
+
 void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
-    CircularBuffer cb_in0_obj(cb_in0);
     constexpr auto cb_mask = tt::CBIndex::c_1;
-    CircularBuffer cb_mask_obj(cb_mask);
+    DataflowBuffer cb_mask_obj(cb_mask);
     constexpr auto cb_max_scaler = tt::CBIndex::c_2;
-    CircularBuffer cb_max_scaler_obj(cb_max_scaler);
+    DataflowBuffer cb_max_scaler_obj(cb_max_scaler);
     constexpr auto cb_sum_scaler = tt::CBIndex::c_3;
-    CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
+    DataflowBuffer cb_sum_scaler_obj(cb_sum_scaler);
     constexpr auto cb_out0 = tt::CBIndex::c_16;
-    CircularBuffer cb_out0_obj(cb_out0);
     constexpr auto cb_exps = tt::CBIndex::c_24;
-    CircularBuffer cb_exps_obj(cb_exps);
     constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
-    CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
     constexpr auto cb_max = tt::CBIndex::c_26;
-    CircularBuffer cb_max_obj(cb_max);
     constexpr auto cb_x_m_max = tt::CBIndex::c_27;
-    CircularBuffer cb_x_m_max_obj(cb_x_m_max);
+    DataflowBuffer cb_x_m_max_obj(cb_x_m_max);
     constexpr auto cb_tmp = tt::CBIndex::c_28;
-    CircularBuffer cb_tmp_obj(cb_tmp);
 
     binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
 
-    constexpr int dst0 = 0;
-    constexpr int dst1 = 1;
     constexpr uint32_t onetile = 1;
 
-    uint32_t N = get_compile_time_arg_val(0);
-    uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t N = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
     cb_mask_obj.wait_front(onetile);
     cb_max_scaler_obj.wait_front(onetile);
@@ -52,16 +50,11 @@ void kernel_main() {
 
     for (uint32_t n = 0; n < N; ++n) {
         // find max value
-        if (Wt == 1) {
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<ckl::input(cb_in0, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
-                ckl::CopyTile<ckl::input(cb_mask, ckl::InputLifecycle::CallerManaged), ckl::Dst::D1>{},
-                ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-                ckl::PackTile<ckl::output(cb_tmp)>{});
+        if constexpr (Wt == 1) {
+            mask_tile_to_cb<cb_in0, cb_mask, cb_tmp>(0, 0, /*pop0=*/0, /*popm=*/0);
 
-            ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
-                ckl::ReduceInputBlockShape::single());
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
+                compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             // Phase 1: reduce Wt-1 full tiles into cb_max via the helper.
             // cb_in0 holds all Wt tiles persistently for later steps, so use
@@ -77,29 +70,17 @@ void kernel_main() {
             // Phase 2: mask the last tile (index Wt-1, no pop) and continue reducing
             // into cb_max via Accumulate. The accumulator and output are both cb_max:
             // the helper waits+pops the previous tile, then packs+pushes the new one.
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<
-                    ckl::input(
-                        cb_in0,
-                        ckl::InputLifecycle::HeldBulk,
-                        ckl::OperandKind::Scalar,
-                        ckl::DataFormatReconfig::Enabled,
-                        ckl::TileOffset::Set),
-                    ckl::Dst::D0>{Wt - 1},
-                ckl::CopyTile<ckl::input(cb_mask, ckl::InputLifecycle::CallerManaged), ckl::Dst::D1>{},
-                ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-                ckl::PackTile<ckl::output(cb_tmp)>{});
-            ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
-                ckl::ReduceInputBlockShape::row(1),
-                ckl::ReduceInputMemoryLayout::contiguous(),
-                ckl::Accumulate::at(cb_max, /*iter=*/1));
+            mask_tile_to_cb<cb_in0, cb_mask, cb_tmp>(Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
+                compute_kernel_lib::ReduceInputBlockShape::row(1),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::Accumulate::at(cb_max, /*iter=*/1));
         }
 
         ckl::sub<
-            ckl::input(cb_in0, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-            ckl::input(cb_max, ckl::InputLifecycle::Bulk),
-            ckl::output(cb_x_m_max, ckl::OutputLifecycle::Bulk),
+            ckl::input(cb_in0, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, kDataFormatReconfig),
+            ckl::input(cb_max, ckl::InputLifecycle::Bulk, kDataFormatReconfig),
+            ckl::output(cb_x_m_max, ckl::OutputLifecycle::Bulk, kDataFormatReconfig),
             ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt));
 
         cb_x_m_max_obj.wait_front(Wt);
@@ -111,11 +92,12 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(Wt - 1),
             ckl::CopyTile<
-                ckl::input(cb_x_m_max, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
+                ckl::input(
+                    cb_x_m_max, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block, kDataFormatReconfig),
                 ckl::Dst::D0>{},
             ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(cb_exps)>{});
+            ckl::PackTile<ckl::output(cb_exps, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
 
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
@@ -124,14 +106,14 @@ void kernel_main() {
                     cb_x_m_max,
                     ckl::InputLifecycle::CallerManaged,
                     ckl::OperandKind::Block,
-                    ckl::DataFormatReconfig::Enabled,
+                    kDataFormatReconfig,
                     ckl::TileOffset::Set),
                 ckl::Dst::D0>{Wt - 1},
             ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::CopyTile<ckl::input(cb_mask, ckl::InputLifecycle::CallerManaged), ckl::Dst::D1>{},
+            ckl::CopyTile<ckl::input(cb_mask, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig), ckl::Dst::D1>{},
             ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(cb_exps)>{});
+            ckl::PackTile<ckl::output(cb_exps, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
@@ -170,15 +152,15 @@ void kernel_main() {
         cb_x_m_max_obj.wait_front(Wt);
 #ifdef LOG
         ckl::sub<
-            ckl::input(cb_x_m_max, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
-            ckl::input(cb_recipsumexps, ckl::InputLifecycle::Bulk),
-            ckl::output(cb_out0, ckl::OutputLifecycle::Bulk),
+            ckl::input(cb_x_m_max, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block, kDataFormatReconfig),
+            ckl::input(cb_recipsumexps, ckl::InputLifecycle::Bulk, kDataFormatReconfig),
+            ckl::output(cb_out0, ckl::OutputLifecycle::Bulk, kDataFormatReconfig),
             ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt));
 #else
         ckl::mul<
-            ckl::input(cb_exps, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-            ckl::input(cb_recipsumexps, ckl::InputLifecycle::Bulk),
-            ckl::output(cb_out0, ckl::OutputLifecycle::Bulk),
+            ckl::input(cb_exps, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, kDataFormatReconfig),
+            ckl::input(cb_recipsumexps, ckl::InputLifecycle::Bulk, kDataFormatReconfig),
+            ckl::output(cb_out0, ckl::OutputLifecycle::Bulk, kDataFormatReconfig),
             ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt));
 #endif
         cb_x_m_max_obj.pop_front(Wt);

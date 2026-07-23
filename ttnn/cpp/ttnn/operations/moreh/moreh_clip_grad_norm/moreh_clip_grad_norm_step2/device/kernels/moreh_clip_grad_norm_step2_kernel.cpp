@@ -7,7 +7,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // PowerIterative, Recip, Log, Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -29,7 +29,6 @@ void kernel_main() {
     constexpr uint32_t cb_exp_lxmd = 27;
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
 
     if (num_tiles > 1) {
         binary_op_init_common(cb_input, cb_x, cb_y);
@@ -42,39 +41,11 @@ void kernel_main() {
     // Compute cb_x
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         if (tile_idx == 0) {
-            ckl::copy<
-                ckl::input(cb_input),
-                ckl::output(cb_x, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
-                ckl::EltwiseShape::tiles(onetile));
+            copy_tile_to_cb<cb_input, cb_x>();
         } else {
-            ckl::add<
-                ckl::input(cb_input),
-                ckl::input(cb_x),
-                ckl::output(cb_x, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
-                ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
+            add_tiles_to_cb<cb_input, cb_x, cb_x>();
         }
     }
-    ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(onetile),
-        ckl::CopyTile<ckl::input(cb_x, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
-        ckl::PowerIterative<ckl::Dst::D0>{p},
-        ckl::runtime_if(p_is_negative, ckl::Recip<ckl::Dst::D0>{}),
-        ckl::PackTile<ckl::output(cb_xpow)>{});
-
-    ckl::unary<
-        ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>,
-        ckl::input(cb_x, ckl::InputLifecycle::NoWaitPop),
-        ckl::output(cb_logx)>(ckl::EltwiseShape::tiles(onetile));
-
-    ckl::eltwise_chain(
-        ckl::EltwiseShape::tiles(onetile),
-        ckl::BinaryFpu<
-            ckl::input(cb_logx),
-            ckl::input(cb_decimal, ckl::InputLifecycle::CallerManaged),
-            ckl::BinaryFpuOp::Mul,
-            ckl::BroadcastDim::None>{},
-        ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-        ckl::PackTile<ckl::output(cb_exp_lxmd)>{});
-
-    ckl::mul<ckl::input(cb_xpow), ckl::input(cb_exp_lxmd), ckl::output(cb_y)>(ckl::EltwiseShape::tiles(onetile));
+    // x^p
+    power_tile_to_cb<cb_x, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y>(p, p_is_negative);
 }

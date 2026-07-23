@@ -5,6 +5,14 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
+#if defined(FP32_DEST_ACC_EN)
+constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Enabled;
+#else
+constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
+#endif
+
 void kernel_main() {
     int i{0};
     const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
@@ -13,41 +21,30 @@ void kernel_main() {
     const auto p = get_arg_val<uint32_t>(i++);
     const bool p_is_negative = get_arg_val<uint32_t>(i++) == 1;
 
-    std::uint8_t input_id{tt::CB::c_in0};
-    const auto cb_x = input_id++;        // input
-    const auto cb_one = input_id++;      // one
-    const auto cb_decimal = input_id++;  // decimal
-    const auto cb_mask_w = input_id++;   // mask_w
+    constexpr auto cb_x = tt::CB::c_in0;
+    constexpr auto cb_one = tt::CB::c_in1;
+    constexpr auto cb_decimal = tt::CB::c_in2;
+    constexpr auto cb_mask_w = tt::CB::c_in3;
 
-    std::uint8_t output_id{tt::CB::c_out0};
-    const auto cb_y = output_id++;  // output
+    constexpr auto cb_y = tt::CB::c_out0;
 
-    std::uint8_t intermed_id{tt::CB::c_intermed0};
-    const auto cb_tmp0 = intermed_id++;
-    const auto cb_tmp1 = intermed_id++;
-    const auto cb_tmp2 = intermed_id++;
-    const auto cb_tmp3 = intermed_id++;
+    constexpr auto cb_tmp0 = tt::CB::c_intermed0;
+    constexpr auto cb_tmp1 = tt::CB::c_intermed1;
+    constexpr auto cb_tmp2 = tt::CB::c_intermed2;
+    constexpr auto cb_tmp3 = tt::CB::c_intermed3;
 
-    const auto cb_xabs = cb_tmp0;      // |x|
-    const auto cb_xpow = cb_tmp1;      // |x|^p
-    const auto cb_logx = cb_tmp2;      // log(|x|)
-    const auto cb_exp_lxmd = cb_tmp3;  // exp(log(|x|) * decimal)
+    constexpr auto cb_xabs = cb_tmp0;      // |x|
+    constexpr auto cb_xpow = cb_tmp1;      // |x|^p
+    constexpr auto cb_logx = cb_tmp2;      // log(|x|)
+    constexpr auto cb_exp_lxmd = cb_tmp3;  // exp(log(|x|) * decimal)
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
 
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
 
-    DataflowBuffer dfb_x_obj(cb_x);
     DataflowBuffer dfb_one_obj(cb_one);
     DataflowBuffer dfb_decimal_obj(cb_decimal);
     DataflowBuffer dfb_mask_w_obj(cb_mask_w);
-    DataflowBuffer dfb_y_obj(cb_y);
-    DataflowBuffer dfb_xabs_obj(cb_xabs);
-    DataflowBuffer dfb_xpow_obj(cb_xpow);
-    DataflowBuffer dfb_logx_obj(cb_logx);
-    DataflowBuffer dfb_exp_lxmd_obj(cb_exp_lxmd);
 
     dfb_one_obj.wait_front(onetile);
     dfb_decimal_obj.wait_front(onetile);
@@ -61,41 +58,24 @@ void kernel_main() {
     }
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; ++row_idx) {
         for (uint32_t col_idx = 0; col_idx < Wt; ++col_idx) {
-            tile_regs_acquire();
-            dfb_x_obj.wait_front(onetile);
-            dfb_xabs_obj.reserve_back(onetile);
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::single(),
+                ckl::CopyTile<ckl::input(cb_x, ckl::InputLifecycle::Streaming, kDataFormatReconfig)>{},
+                ckl::runtime_if(
+                    do_mask_w && (col_idx == Wt - 1),
+                    ckl::CopyTile<
+                        ckl::input(
+                            cb_mask_w,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::OperandKind::Scalar,
+                            kDataFormatReconfig,
+                            ckl::TileOffset::Set),
+                        ckl::Dst::D1>{},
+                    ckl::Mask<>{}),
+                ckl::Abs<>{},
+                ckl::PackTile<ckl::output(cb_xabs, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
 
-            copy_tile_init_with_dt(dfb_x_obj);
-            copy_tile(cb_x, 0, dst0);
-
-            if (do_mask_w && (col_idx == Wt - 1)) {
-                copy_tile_init_with_dt(dfb_mask_w_obj);
-                copy_tile(cb_mask_w, 0, dst1);
-
-                mask_tile_init();
-                mask_tile(dst0, dst1);
-            }
-
-            abs_tile_init();
-            abs_tile(dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, dfb_xabs_obj);
-            tile_regs_release();
-
-            dfb_x_obj.pop_front(onetile);
-            dfb_xabs_obj.push_back(onetile);
-
-            power_tile_to_cb(
-                dfb_xabs_obj,
-                dfb_xpow_obj,
-                dfb_logx_obj,
-                dfb_decimal_obj,
-                dfb_exp_lxmd_obj,
-                dfb_y_obj,
-                p,
-                p_is_negative);
+            power_tile_to_cb<cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y>(p, p_is_negative);
         }
     }
 

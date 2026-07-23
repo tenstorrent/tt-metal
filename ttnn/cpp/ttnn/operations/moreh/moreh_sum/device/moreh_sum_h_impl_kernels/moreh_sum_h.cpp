@@ -6,25 +6,29 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 namespace ckl = compute_kernel_lib;
 
+#if defined(FP32_DEST_ACC_EN)
+constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Enabled;
+#else
+constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
+#endif
+
 void kernel_main() {
-    uint32_t Ht = get_compile_time_arg_val(0);
-    uint32_t Wt = get_compile_time_arg_val(1);
-    uint32_t NC = get_compile_time_arg_val(2);
+    constexpr uint32_t Ht = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t NC = get_compile_time_arg_val(2);
     constexpr uint32_t origin_H = get_compile_time_arg_val(3);
 
     constexpr auto cb_input = tt::CBIndex::c_0;
-    CircularBuffer cb_input_obj(cb_input);
     constexpr auto cb_scaler = tt::CBIndex::c_2;
-    CircularBuffer cb_scaler_obj(cb_scaler);
+    DataflowBuffer cb_scaler_obj(cb_scaler);
     constexpr auto cb_mask_h = tt::CBIndex::c_3;
-    CircularBuffer cb_mask_h_obj(cb_mask_h);
+    DataflowBuffer cb_mask_h_obj(cb_mask_h);
     constexpr auto cb_accum_dst = tt::CBIndex::c_24;
     constexpr auto cb_masked_input = tt::CBIndex::c_25;
-    CircularBuffer cb_masked_input_obj(cb_masked_input);
     constexpr auto cb_out = tt::CBIndex::c_16;
     constexpr uint32_t TILE_H = 32;
     constexpr bool do_mask_h = (origin_H % TILE_H) != 0;
@@ -37,7 +41,7 @@ void kernel_main() {
     int reduce_dst_idx = 0;
     const uint32_t mask_dst_idx = reduce_dst_idx + 1;
 
-    if (do_mask_h) {
+    if constexpr (do_mask_h) {
         cb_mask_h_obj.wait_front(onetile);
     }
 
@@ -46,33 +50,25 @@ void kernel_main() {
             // tiles are expected to be coming in in NCWH order (H-contiguous)
             // reducing in W means out[0][w] = sum(h=0..H-1, in[h][w])
             // in this case we just sequentially add to accumulator all the H-tiles in a column
-            bool is_h_single_tile = (Ht == 1);
+            constexpr bool is_h_single_tile = Ht == 1;
 
             // Phase 1: Reduce Ht-1 tiles into accumulator (if Ht > 1)
-            if (!is_h_single_tile) {
+            if constexpr (!is_h_single_tile) {
                 ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, cb_accum_dst>(
                     ckl::ReduceInputBlockShape::col(Ht - 1));
             }
 
             // Optional masking of last H tile.
             if constexpr (do_mask_h) {
-                // CopyTile<input(cb_input)> + CopyTile<input(cb_mask_h), D1> + Mask + PackTile.
-                // Reconfig: original uses `copy_tile_to_dst_init_short` (no _with_dt)
-                // and plain pack_tile, with a single FP32_DEST_ACC_EN-guarded
-                // reconfig_data_format_srca(cb_input) on entry. The chain's
-                // per-element fold emits reconfig per CopyTile (Input mode) which
-                // matches the FP32 path and is a no-op transition for bf16.
-                // pack_reconfig is also FP32-only in original; enabling output reconfig
-                // emits unconditional pack reconfig — same effective behavior since
-                // chain's prev-CB elision handles the no-op case at compile time.
-                // cb_input InputLifecycle::Streaming; cb_mask_h InputLifecycle::CallerManaged + Scalar (held outside);
-                // cb_masked_input OutputLifecycle::Streaming.
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<ckl::input(cb_input)>{},
-                    ckl::CopyTile<ckl::input(cb_mask_h, ckl::InputLifecycle::CallerManaged), ckl::Dst::D1>{},
+                    ckl::CopyTile<ckl::input(cb_input, ckl::InputLifecycle::Streaming, kDataFormatReconfig)>{},
+                    ckl::CopyTile<
+                        ckl::input(cb_mask_h, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                        ckl::Dst::D1>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-                    ckl::PackTile<ckl::output(cb_masked_input)>{});
+                    ckl::PackTile<ckl::output(
+                        cb_masked_input, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation
                 ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_masked_input, cb_scaler, cb_out>(
@@ -91,7 +87,7 @@ void kernel_main() {
         }
     }
 
-    if (do_mask_h) {
+    if constexpr (do_mask_h) {
         cb_mask_h_obj.pop_front(onetile);
     }
     cb_scaler_obj.pop_front(onetile);

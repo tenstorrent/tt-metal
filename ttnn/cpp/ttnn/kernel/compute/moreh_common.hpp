@@ -22,8 +22,27 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
 
 namespace ckernel {
+
+namespace ckl = ::compute_kernel_lib;
+
+#if defined(FP32_DEST_ACC_EN)
+inline constexpr auto moreh_data_format_reconfig = ckl::DataFormatReconfig::Enabled;
+#else
+inline constexpr auto moreh_data_format_reconfig = ckl::DataFormatReconfig::Disabled;
+#endif
+
+template <uint32_t Cb>
+inline constexpr auto moreh_input = ckl::input(
+    Cb, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Scalar, moreh_data_format_reconfig, ckl::TileOffset::Set);
+
+template <uint32_t Cb>
+inline constexpr auto moreh_output = ckl::output(Cb, ckl::OutputLifecycle::Streaming, moreh_data_format_reconfig);
 
 ALWI void pack_tile_with_dt(uint32_t ifrom_dst, DataflowBuffer icb) {
 #if defined FP32_DEST_ACC_EN
@@ -135,6 +154,464 @@ public:
         return get_arg_val<T>(arg_idx++);
     }
 };
+
+template <uint32_t Cb0, uint32_t Cb1, uint32_t CbOut>
+ALWI void mul_tiles_to_cb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(Cb0, itile0 + 1);
+    cb_wait_front(Cb1, itile1 + 1);
+
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::BinaryFpu<moreh_input<Cb0>, moreh_input<Cb1>, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::None>{
+            itile0, itile1},
+        ckl::PackTile<moreh_output<CbOut>>{});
+
+    if (pop0) {
+        cb_pop_front(Cb0, pop0);
+    }
+    if (pop1) {
+        cb_pop_front(Cb1, pop1);
+    }
+}
+
+template <uint32_t Cb0, uint32_t Cb1, uint32_t CbOut>
+ALWI void mul_tiles_and_negative_to_cb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(Cb0, itile0 + 1);
+    cb_wait_front(Cb1, itile1 + 1);
+
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::BinaryFpu<moreh_input<Cb0>, moreh_input<Cb1>, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::None>{
+            itile0, itile1},
+        ckl::Negative<>{},
+        ckl::PackTile<moreh_output<CbOut>>{});
+
+    if (pop0) {
+        cb_pop_front(Cb0, pop0);
+    }
+    if (pop1) {
+        cb_pop_front(Cb1, pop1);
+    }
+}
+
+template <uint32_t Cb0, uint32_t Cb1, uint32_t CbMask, uint32_t CbOut>
+ALWI void mul_tiles_and_mask_tile_to_cb(
+    uint32_t itile0 = 0,
+    uint32_t itile1 = 0,
+    uint32_t mtile = 0,
+    uint32_t pop0 = 1,
+    uint32_t pop1 = 1,
+    uint32_t popm = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(Cb0, itile0 + 1);
+    cb_wait_front(Cb1, itile1 + 1);
+    cb_wait_front(CbMask, mtile + 1);
+
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::BinaryFpu<moreh_input<Cb0>, moreh_input<Cb1>, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::None>{
+            itile0, itile1},
+        ckl::CopyTile<moreh_input<CbMask>, ckl::Dst::D1>{mtile},
+        ckl::Mask<>{},
+        ckl::PackTile<moreh_output<CbOut>>{});
+
+    if (pop0) {
+        cb_pop_front(Cb0, pop0);
+    }
+    if (pop1) {
+        cb_pop_front(Cb1, pop1);
+    }
+    if (popm) {
+        cb_pop_front(CbMask, popm);
+    }
+}
+
+template <uint32_t Cb0, uint32_t Cb1, uint32_t CbOut>
+ALWI void mul_tiles_log_to_cb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(Cb0, itile0 + 1);
+    cb_wait_front(Cb1, itile1 + 1);
+
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::BinaryFpu<moreh_input<Cb0>, moreh_input<Cb1>, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::None>{
+            itile0, itile1},
+        ckl::Log<>{},
+        ckl::PackTile<moreh_output<CbOut>>{});
+
+    if (pop0) {
+        cb_pop_front(Cb0, pop0);
+    }
+    if (pop1) {
+        cb_pop_front(Cb1, pop1);
+    }
+}
+
+template <ckl::BroadcastDim Bcast, uint32_t Cb0, uint32_t Cb1, uint32_t CbOut, bool ApplyLog = false>
+ALWI void mul_tiles_bcast_to_cb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(Cb0, itile0 + 1);
+    cb_wait_front(Cb1, itile1 + 1);
+
+    if constexpr (ApplyLog) {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::BinaryFpu<moreh_input<Cb0>, moreh_input<Cb1>, ckl::BinaryFpuOp::Mul, Bcast>{itile0, itile1},
+            ckl::Log<>{},
+            ckl::PackTile<moreh_output<CbOut>>{});
+    } else {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::BinaryFpu<moreh_input<Cb0>, moreh_input<Cb1>, ckl::BinaryFpuOp::Mul, Bcast>{itile0, itile1},
+            ckl::PackTile<moreh_output<CbOut>>{});
+    }
+
+    if (pop0) {
+        cb_pop_front(Cb0, pop0);
+    }
+    if (pop1) {
+        cb_pop_front(Cb1, pop1);
+    }
+}
+
+template <uint32_t Cb0, uint32_t Cb1, uint32_t CbOut>
+ALWI void mul_tiles_bcast_rows_to_cb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    mul_tiles_bcast_to_cb<ckl::BroadcastDim::Row, Cb0, Cb1, CbOut>(itile0, itile1, pop0, pop1);
+}
+
+template <uint32_t Cb0, uint32_t Cb1, uint32_t CbOut>
+ALWI void mul_tiles_bcast_rows_log_to_cb(
+    uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    mul_tiles_bcast_to_cb<ckl::BroadcastDim::Row, Cb0, Cb1, CbOut, true>(itile0, itile1, pop0, pop1);
+}
+
+template <uint32_t Cb0, uint32_t Cb1, uint32_t CbOut>
+ALWI void mul_tiles_bcast_cols_to_cb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    mul_tiles_bcast_to_cb<ckl::BroadcastDim::Col, Cb0, Cb1, CbOut>(itile0, itile1, pop0, pop1);
+}
+
+template <uint32_t Cb0, uint32_t Cb1, uint32_t CbOut>
+ALWI void mul_tiles_bcast_cols_log_to_cb(
+    uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    mul_tiles_bcast_to_cb<ckl::BroadcastDim::Col, Cb0, Cb1, CbOut, true>(itile0, itile1, pop0, pop1);
+}
+
+template <uint32_t CbIn, uint32_t CbOut>
+ALWI void copy_tile_to_cb(uint32_t itile = 0, uint32_t pop = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(CbIn, itile + 1);
+
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(), ckl::CopyTile<moreh_input<CbIn>>{itile}, ckl::PackTile<moreh_output<CbOut>>{});
+
+    if (pop) {
+        cb_pop_front(CbIn, pop);
+    }
+}
+
+template <uint32_t CbIn, uint32_t CbOut>
+ALWI void sign_tile_to_cb(uint32_t itile = 0, uint32_t pop = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(CbIn, itile + 1);
+
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::CopyTile<moreh_input<CbIn>>{itile},
+        ckl::Sign<>{},
+        ckl::PackTile<moreh_output<CbOut>>{});
+
+    if (pop) {
+        cb_pop_front(CbIn, pop);
+    }
+}
+
+template <uint32_t Cb0, uint32_t Cb1, uint32_t CbOut>
+ALWI void add_tiles_to_cb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(Cb0, itile0 + 1);
+    cb_wait_front(Cb1, itile1 + 1);
+
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::BinaryFpu<moreh_input<Cb0>, moreh_input<Cb1>, ckl::BinaryFpuOp::Add, ckl::BroadcastDim::None>{
+            itile0, itile1},
+        ckl::PackTile<moreh_output<CbOut>>{});
+
+    if (pop0) {
+        cb_pop_front(Cb0, pop0);
+    }
+    if (pop1) {
+        cb_pop_front(Cb1, pop1);
+    }
+}
+
+template <uint32_t CbIn, uint32_t CbMask, uint32_t CbOut>
+ALWI void mask_tile_to_cb(uint32_t itile = 0, uint32_t mtile = 0, uint32_t pop = 1, uint32_t popm = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(CbIn, itile + 1);
+    cb_wait_front(CbMask, mtile + 1);
+
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::CopyTile<moreh_input<CbIn>>{itile},
+        ckl::CopyTile<moreh_input<CbMask>, ckl::Dst::D1>{mtile},
+        ckl::Mask<>{},
+        ckl::PackTile<moreh_output<CbOut>>{});
+
+    if (pop) {
+        cb_pop_front(CbIn, pop);
+    }
+    if (popm) {
+        cb_pop_front(CbMask, popm);
+    }
+}
+
+template <ckl::BroadcastDim Bcast, uint32_t Cb0, uint32_t Cb1, uint32_t CbOut>
+ALWI void sub_tiles_bcast_to_cb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(Cb0, itile0 + 1);
+    cb_wait_front(Cb1, itile1 + 1);
+
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::BinaryFpu<moreh_input<Cb0>, moreh_input<Cb1>, ckl::BinaryFpuOp::Sub, Bcast>{itile0, itile1},
+        ckl::PackTile<moreh_output<CbOut>>{});
+
+    if (pop0) {
+        cb_pop_front(Cb0, pop0);
+    }
+    if (pop1) {
+        cb_pop_front(Cb1, pop1);
+    }
+}
+
+template <uint32_t Cb0, uint32_t Cb1, uint32_t CbOut>
+ALWI void sub_tiles_bcast_cols_to_cb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    sub_tiles_bcast_to_cb<ckl::BroadcastDim::Col, Cb0, Cb1, CbOut>(itile0, itile1, pop0, pop1);
+}
+
+template <uint32_t Cb0, uint32_t Cb1, uint32_t CbOut>
+ALWI void sub_tiles_bcast_rows_to_cb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    sub_tiles_bcast_to_cb<ckl::BroadcastDim::Row, Cb0, Cb1, CbOut>(itile0, itile1, pop0, pop1);
+}
+
+template <uint32_t Cb0, uint32_t Cb1, uint32_t CbOut>
+ALWI void sub_tiles_to_cb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    sub_tiles_bcast_to_cb<ckl::BroadcastDim::None, Cb0, Cb1, CbOut>(itile0, itile1, pop0, pop1);
+}
+
+template <bool Negative, uint32_t CbIn, uint32_t CbOut>
+ALWI void exp_tile_to_cb_impl(uint32_t itile = 0, uint32_t pop = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(CbIn, itile + 1);
+
+    if constexpr (Negative) {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::CopyTile<moreh_input<CbIn>>{itile},
+            ckl::Negative<>{},
+            ckl::Exp<>{},
+            ckl::PackTile<moreh_output<CbOut>>{});
+    } else {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::CopyTile<moreh_input<CbIn>>{itile},
+            ckl::Exp<>{},
+            ckl::PackTile<moreh_output<CbOut>>{});
+    }
+
+    if (pop) {
+        cb_pop_front(CbIn, pop);
+    }
+}
+
+template <uint32_t CbIn, uint32_t CbOut>
+ALWI void exp_tile_to_cb(uint32_t itile = 0, uint32_t pop = 1) {
+    exp_tile_to_cb_impl<false, CbIn, CbOut>(itile, pop);
+}
+
+template <uint32_t CbIn, uint32_t CbOut>
+ALWI void rexp_tile_to_cb(uint32_t itile = 0, uint32_t pop = 1) {
+    exp_tile_to_cb_impl<true, CbIn, CbOut>(itile, pop);
+}
+
+template <bool Negative, uint32_t CbIn, uint32_t CbMask, uint32_t CbOut>
+ALWI void exp_tile_and_mask_tile_to_cb_impl(
+    uint32_t itile = 0, uint32_t mtile = 0, uint32_t pop = 1, uint32_t popm = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(CbIn, itile + 1);
+    cb_wait_front(CbMask, mtile + 1);
+
+    if constexpr (Negative) {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::CopyTile<moreh_input<CbIn>>{itile},
+            ckl::Negative<>{},
+            ckl::Exp<>{},
+            ckl::CopyTile<moreh_input<CbMask>, ckl::Dst::D1>{mtile},
+            ckl::Mask<>{},
+            ckl::PackTile<moreh_output<CbOut>>{});
+    } else {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::CopyTile<moreh_input<CbIn>>{itile},
+            ckl::Exp<>{},
+            ckl::CopyTile<moreh_input<CbMask>, ckl::Dst::D1>{mtile},
+            ckl::Mask<>{},
+            ckl::PackTile<moreh_output<CbOut>>{});
+    }
+
+    if (pop) {
+        cb_pop_front(CbIn, pop);
+    }
+    if (popm) {
+        cb_pop_front(CbMask, popm);
+    }
+}
+
+template <uint32_t CbIn, uint32_t CbMask, uint32_t CbOut>
+ALWI void exp_tile_and_mask_tile_to_cb(uint32_t itile = 0, uint32_t mtile = 0, uint32_t pop = 1, uint32_t popm = 1) {
+    exp_tile_and_mask_tile_to_cb_impl<false, CbIn, CbMask, CbOut>(itile, mtile, pop, popm);
+}
+
+template <uint32_t CbIn, uint32_t CbMask, uint32_t CbOut>
+ALWI void rexp_tile_and_mask_tile_to_cb(uint32_t itile = 0, uint32_t mtile = 0, uint32_t pop = 1, uint32_t popm = 1) {
+    exp_tile_and_mask_tile_to_cb_impl<true, CbIn, CbMask, CbOut>(itile, mtile, pop, popm);
+}
+
+template <uint32_t CbIn, uint32_t CbOut>
+ALWI void recip_tile_to_cb(uint32_t itile = 0, uint32_t pop = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(CbIn, itile + 1);
+
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::CopyTile<moreh_input<CbIn>>{itile},
+        ckl::Recip<>{},
+        ckl::PackTile<moreh_output<CbOut>>{});
+
+    if (pop) {
+        cb_pop_front(CbIn, pop);
+    }
+}
+
+template <uint32_t CbIn, uint32_t CbOut>
+ALWI void log_tile_to_cb(uint32_t itile = 0, uint32_t pop = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_wait_front(CbIn, itile + 1);
+
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::CopyTile<moreh_input<CbIn>>{itile},
+        ckl::Log<>{},
+        ckl::PackTile<moreh_output<CbOut>>{});
+
+    if (pop) {
+        cb_pop_front(CbIn, pop);
+    }
+}
+
+template <
+    bool AbsX,
+    bool RecipFinal,
+    uint32_t CbX,
+    uint32_t CbXpow,
+    uint32_t CbLogX,
+    uint32_t CbDecimal,
+    uint32_t CbExpLogXMulDecimal,
+    uint32_t CbOut>
+ALWI void power_tile_to_cb_impl(uint32_t p, bool p_is_negative) {
+    // x^p
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::CopyTile<ckl::input(CbX, ckl::InputLifecycle::HeldStream, moreh_data_format_reconfig)>{},
+        ckl::OptionalChainElement<AbsX, ckl::Abs<>>{},
+        ckl::PowerIterative<>{p},
+        ckl::runtime_if(p_is_negative, ckl::Recip<>{}),
+        ckl::PackTile<moreh_output<CbXpow>>{});
+
+    // log(x)
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::CopyTile<ckl::input(CbX, ckl::InputLifecycle::Streaming, moreh_data_format_reconfig)>{},
+        ckl::OptionalChainElement<AbsX, ckl::Abs<>>{},
+        ckl::Log<>{},
+        ckl::PackTile<moreh_output<CbLogX>>{});
+
+    // exp(log(x) * decimal)
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::BinaryFpu<
+            ckl::input(CbLogX, ckl::InputLifecycle::Streaming, moreh_data_format_reconfig),
+            ckl::input(CbDecimal, ckl::InputLifecycle::CallerManaged, moreh_data_format_reconfig),
+            ckl::BinaryFpuOp::Mul,
+            ckl::BroadcastDim::None>{},
+        ckl::Exp<>{},
+        ckl::PackTile<moreh_output<CbExpLogXMulDecimal>>{});
+
+    // x^p * exp(log(x) * decimal), optionally followed by reciprocal.
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::BinaryFpu<
+            ckl::input(CbXpow, ckl::InputLifecycle::Streaming, moreh_data_format_reconfig),
+            ckl::input(CbExpLogXMulDecimal, ckl::InputLifecycle::Streaming, moreh_data_format_reconfig),
+            ckl::BinaryFpuOp::Mul,
+            ckl::BroadcastDim::None>{},
+        ckl::OptionalChainElement<RecipFinal, ckl::Recip<>>{},
+        ckl::PackTile<moreh_output<CbOut>>{});
+}
+
+template <
+    uint32_t CbX,
+    uint32_t CbXpow,
+    uint32_t CbLogX,
+    uint32_t CbDecimal,
+    uint32_t CbExpLogXMulDecimal,
+    uint32_t CbCorrectXpow>
+ALWI void power_tile_to_cb(uint32_t p, bool p_is_negative) {
+    power_tile_to_cb_impl<false, false, CbX, CbXpow, CbLogX, CbDecimal, CbExpLogXMulDecimal, CbCorrectXpow>(
+        p, p_is_negative);
+}
+
+template <
+    uint32_t CbX,
+    uint32_t CbXpow,
+    uint32_t CbLogX,
+    uint32_t CbDecimal,
+    uint32_t CbExpLogXMulDecimal,
+    uint32_t CbCorrectXpow>
+ALWI void power_tile_with_abs_x_to_cb(uint32_t p, bool p_is_negative) {
+    power_tile_to_cb_impl<true, false, CbX, CbXpow, CbLogX, CbDecimal, CbExpLogXMulDecimal, CbCorrectXpow>(
+        p, p_is_negative);
+}
+
+template <
+    uint32_t CbX,
+    uint32_t CbXpow,
+    uint32_t CbLogX,
+    uint32_t CbDecimal,
+    uint32_t CbExpLogXMulDecimal,
+    uint32_t CbRecipXpow>
+ALWI void power_and_recip_tile_to_cb(uint32_t p, bool p_is_negative) {
+    power_tile_to_cb_impl<false, true, CbX, CbXpow, CbLogX, CbDecimal, CbExpLogXMulDecimal, CbRecipXpow>(
+        p, p_is_negative);
+}
 
 ALWI void mul_tiles_to_cb(
     DataflowBuffer icb0,

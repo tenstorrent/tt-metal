@@ -6,7 +6,7 @@ Raw LLK baseline: `d59e06f1c51211089bd34705099745b0b6b05833`
 
 Migration HEAD: `d1922c23aa55ecab4c0c6b591ea76799d39028e1`
 
-Fixed state: local worktree after this audit
+Fixed state: local worktree after the branching audit and Moreh helper migration
 
 ## Result
 
@@ -42,6 +42,37 @@ statistics) were investigated separately. A slot-independent init-dedup experime
 produced no `.text` or conditional-branch reduction for the integer addcmul kernel
 (HEAD and experiment were both 5,376 bytes and 37 branches), so that generalized
 planner change was discarded rather than included without emitted-code evidence.
+
+## Moreh helper migration follow-up
+
+The affected Moreh kernels were revisited as a separate pass. The `_to_cb` helpers
+now express their one-tile operations with eltwise chains while preserving the
+existing Moreh API and concise call sites:
+
+- CB IDs are compile-time template arguments.
+- The helpers own their one-tile output reserve/push lifecycle.
+- The existing wait/pop knobs remain helper-owned; callers retain only genuinely
+  external or multi-operation input lifetimes.
+- `power_tile_to_cb_impl` uses optional chain elements for absolute value and final
+  reciprocal, with chain-owned intermediate CB lifetimes.
+- FP32 data-format reconfiguration remains conditional on `FP32_DEST_ACC_EN`.
+- `moreh_input` and `moreh_output` are implementation details of
+  `moreh_common.hpp`; kernel files describe their actual lifetimes directly.
+
+Raw LLK call sites were migrated only where the operation mapped cleanly to the
+eltwise helpers. Moreh mean-W deliberately retains its raw matmul sequence: it is
+an accumulation into a retained destination register, and the existing
+`mm_init_short_with_dt` helper only reconfigures SrcA rather than the two-input
+format transition needed there. Adding a broad convenience helper for this one
+case would hide more lifecycle than it clarifies.
+
+The follow-up audit also established two invariants for subsequent migrations:
+
+1. A kernel that used `DataflowBuffer` before chain migration must not regress to
+   `CircularBuffer`. All affected Moreh kernels were checked against the raw
+   baseline; none introduces `CircularBuffer`.
+2. Conditions sourced from compile-time arguments use `if constexpr`. Remaining
+   ordinary `if` statements depend on runtime arguments or loop indices.
 
 ## Three-state measurements
 
@@ -92,18 +123,22 @@ HEAD; compile time is not claimed as an improvement.
 
 This table is retained for the other confirmed branch family. Its workload is one
 BF16 tiled `[1, 1, 1023, 1023]` tensor with `max_norm=2.0` and `norm_type=2.2`, which
-exercises H-only, W-only, H+W, and unmasked tiles.
+exercises H-only, W-only, H+W, and unmasked tiles. Compile results are medians of
+five direct, ccache-disabled TRISC1 compile commands, using each state's own source
+tree and headers.
 
-| State | TRISC0 ELF | TRISC1 ELF | TRISC2 ELF | Total ELF | Cold JIT compile/link | Device time |
-|---|---:|---:|---:|---:|---:|---:|
-| Raw LLK baseline | 659,620 | 1,508,572 | 566,776 | 2,734,968 | 984.7 ms | 4,223.463 us |
-| Migration HEAD | 1,116,232 | 2,037,900 | 1,011,540 | 4,165,672 | 1,318.9 ms | 4,144.716 us |
-| HEAD plus fix | 885,276 | 1,822,784 | 874,468 | 3,582,528 | 1,331.3 ms | 4,181.149 us |
+| State | TRISC0 ELF | TRISC1 ELF | TRISC1 `.text` | TRISC2 ELF | Total ELF | TRISC1 compile | Device time |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Raw LLK baseline | 659,620 | 1,508,572 | 7,012 | 566,776 | 2,734,968 | 488 ms | 4,223.463 us |
+| Migration HEAD | 1,116,232 | 2,037,900 | 7,328 | 1,011,540 | 4,165,672 | 756 ms | 4,144.716 us |
+| Post-Moreh helper fix | 901,540 | 1,873,408 | 7,064 | 896,428 | 3,671,376 | 718 ms | 4,287.6 us |
 
-The clip fix reduces total ELF size by 14.0% versus HEAD. Cold JIT latency is within
-1% of HEAD and is not claimed as an improvement. Device time is 0.9% slower than
-HEAD and 1.0% faster than raw; this fix is for control-flow fidelity and code size,
-not a claimed device-time improvement.
+The post-Moreh state reduces total ELF size by 11.9% and TRISC1 `.text` by 3.6%
+versus migration HEAD. Its emitted code is within 0.7% of the raw LLK `.text`;
+the 34.2% full-ELF gap to raw is predominantly template-heavy debug information.
+Direct compile time improves 5.0% versus HEAD but remains 47.1% above raw. Device
+time is 3.4% slower than HEAD and 1.5% slower than raw, so no device-time
+improvement is claimed.
 
 ## Method
 
@@ -119,8 +154,9 @@ not a claimed device-time improvement.
   is excluded.
 - Rotary device time: maximum `*-KERNEL` duration across participating cores for the
   target run-host ID, converted at 1,000 MHz.
-- Clip compile/device methodology: incremental cold JIT minus an immediate cached
-  process run, median of four pairs; device mean of ten launches after two warmups.
+- Clip compile time: the exact successful TRISC1 compiler command was replayed five
+  times with ccache disabled and state-local headers; the median is reported.
+- Clip device time: mean of ten launches after two warmups.
 
 ## Validation
 
@@ -131,6 +167,14 @@ not a claimed device-time improvement.
 - Llama sharded and HF sharded compute sources also passed direct TRISC1 compilation.
 - Integer addcmul validation: four int32 shape cases passed during candidate analysis.
 - Clip-grad-norm suite: 20 tests passed.
+- Moreh softmax/log-softmax BF16 matrix: 185 tests passed, 64 deselected.
+- Moreh layer norm BF16 forward/backward matrix: 48 tests passed, 51 deselected.
+- Moreh Adam/AdamW, SGD, norm, mean-W, and sum-H focused configurations passed,
+  including FP32 destination accumulation, AMSGrad, momentum/Nesterov, masks, and
+  forward/backward paths; one unsupported SGD case was skipped by the test.
+- Source audit: affected raw kernels that used `DataflowBuffer` still use it (or
+  delegate that lifecycle to a Moreh helper); no affected kernel includes or uses
+  `CircularBuffer`. Compile-time conditionals use `if constexpr`.
 
 The Llama decode integration test currently fails before reaching the patched
 sharded compute kernel because an unrelated `eltwise_typecast` invocation is missing

@@ -4,11 +4,17 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // add/sub/mul
 
 namespace ckl = compute_kernel_lib;
+
+#if defined(FP32_DEST_ACC_EN)
+constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Enabled;
+#else
+constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
+#endif
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
@@ -26,35 +32,29 @@ void kernel_main() {
     binary_op_init_common(tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_16);
 
     constexpr auto cb_dy = tt::CBIndex::c_0;
-    CircularBuffer cb_dy_obj(cb_dy);  // output_grad(==dy)
     constexpr auto cb_x = tt::CBIndex::c_1;
-    CircularBuffer cb_x_obj(cb_x);  // input(==x)
     constexpr auto cb_mean = tt::CBIndex::c_2;
-    CircularBuffer cb_mean_obj(cb_mean);  // mean
+    DataflowBuffer cb_mean_obj(cb_mean);  // mean
     constexpr auto cb_rstd = tt::CBIndex::c_3;
-    CircularBuffer cb_rstd_obj(cb_rstd);  // rstd
+    DataflowBuffer cb_rstd_obj(cb_rstd);  // rstd
     constexpr auto cb_scaler = tt::CBIndex::c_4;
-    CircularBuffer cb_scaler_obj(cb_scaler);  // scaler
+    DataflowBuffer cb_scaler_obj(cb_scaler);  // scaler
     constexpr auto cb_n_recip_n = tt::CBIndex::c_5;
-    CircularBuffer cb_n_recip_n_obj(cb_n_recip_n);  // n_recip_n
+    DataflowBuffer cb_n_recip_n_obj(cb_n_recip_n);  // n_recip_n
     constexpr auto cb_gamma = tt::CBIndex::c_6;
-    CircularBuffer cb_gamma_obj(cb_gamma);  // gamma
     constexpr auto cb_mask_h_w = tt::CBIndex::c_7;
-    CircularBuffer cb_mask_h_w_obj(cb_mask_h_w);  // mask_h_w
+    DataflowBuffer cb_mask_h_w_obj(cb_mask_h_w);  // mask_h_w
 
     // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
     constexpr auto cb_dx = tt::CBIndex::c_16;
-    CircularBuffer cb_dx_obj(cb_dx);  // input_grad(==dx)
 
     // y = (x - mean) * rstd
     constexpr auto cb_dycopy = tt::CBIndex::c_24;
-    CircularBuffer cb_dycopy_obj(cb_dycopy);  // copy output_grad(==dycopy)
     constexpr auto cb_y = tt::CBIndex::c_25;
-    CircularBuffer cb_y_obj(cb_y);  // output(==y)
     constexpr auto cb_dysum = tt::CBIndex::c_26;
-    CircularBuffer cb_dysum_obj(cb_dysum);  // Sum[dy]
+    DataflowBuffer cb_dysum_obj(cb_dysum);  // Sum[dy]
     constexpr auto cb_ydysum = tt::CBIndex::c_27;
-    CircularBuffer cb_ydysum_obj(cb_ydysum);  // Sum[y * dy]
+    DataflowBuffer cb_ydysum_obj(cb_ydysum);  // Sum[y * dy]
 
     constexpr auto cb_tmp1 = tt::CBIndex::c_28;  // tmp1
     constexpr auto cb_tmp2 = tt::CBIndex::c_29;  // tmp2
@@ -73,14 +73,15 @@ void kernel_main() {
 
     constexpr bool do_mask_w = (origin_W % TILE_W) != 0;
     constexpr uint32_t origin_Wt = (origin_W + TILE_W - 1) / TILE_W;
+    constexpr auto gamma_bcast = is_groupnorm           ? ckl::BroadcastDim::Scalar
+                                 : is_lastdim_layernorm ? ckl::BroadcastDim::Row
+                                                        : ckl::BroadcastDim::None;
 
-    if (do_mask_h || do_mask_w) {
+    if constexpr (do_mask_h || do_mask_w) {
         cb_mask_h_w_obj.wait_front(2);  // comes from the reader
     }
 
     constexpr uint32_t NCHt = num_rows_per_core;
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         cb_mean_obj.wait_front(onetile);  // comes from the reader
@@ -89,214 +90,124 @@ void kernel_main() {
         // Compute cb_y
         // y = (x - mean) * rstd
         constexpr auto cb_dyadd = cb_tmp1;
-        CircularBuffer cb_dyadd_obj(cb_dyadd);
         constexpr auto cb_ydyadd = cb_tmp2;
-        CircularBuffer cb_ydyadd_obj(cb_ydyadd);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             // Compute cb_xmm
             // x - mean
             constexpr auto cb_xmm = cb_tmp3;
-            CircularBuffer cb_xmm_obj(cb_xmm);
+            DataflowBuffer cb_xmm_obj(cb_xmm);
             ckl::sub<
-                ckl::input(cb_x),
-                ckl::input(cb_mean, ckl::InputLifecycle::CallerManaged),
-                ckl::output(cb_xmm),
+                ckl::input(cb_x, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::input(cb_mean, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                ckl::output(cb_xmm, ckl::OutputLifecycle::Streaming, kDataFormatReconfig),
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>(
                 ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_y
             // (x - mean) * rstd and mask(optional)
-            tile_regs_acquire();
-            cb_xmm_obj.wait_front(onetile);
-            cb_y_obj.reserve_back(onetile);
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::single(),
+                ckl::BinaryFpu<
+                    ckl::input(cb_xmm, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                    ckl::input(cb_rstd, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                    ckl::BinaryFpuOp::Mul,
+                    is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>{},
+                ckl::runtime_if(
+                    do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt),
+                    ckl::CopyTile<
+                        ckl::input(
+                            cb_mask_h_w,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::OperandKind::Scalar,
+                            kDataFormatReconfig,
+                            ckl::TileOffset::Set),
+                        ckl::Dst::D1>{0},
+                    ckl::Mask<>{}),
+                ckl::runtime_if(
+                    do_mask_w && ((wt + 1) % origin_Wt == 0),
+                    ckl::CopyTile<
+                        ckl::input(
+                            cb_mask_h_w,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::OperandKind::Scalar,
+                            kDataFormatReconfig,
+                            ckl::TileOffset::Set),
+                        ckl::Dst::D1>{1},
+                    ckl::Mask<>{}),
+                ckl::PackTile<ckl::output(cb_y, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
 
-            if (is_lastdim_layernorm) {
-                mul_bcast_cols_init_short_with_dt(DataflowBuffer(cb_xmm), DataflowBuffer(cb_rstd));
-                mul_tiles_bcast_cols(cb_xmm, cb_rstd, 0, 0, dst0);
-            } else {
-                mul_tiles_bcast_scalar_init_short_with_dt(DataflowBuffer(cb_xmm), DataflowBuffer(cb_rstd));
-                mul_tiles_bcast_scalar(cb_xmm, cb_rstd, 0, 0, dst0);
-            }
-
-            if (do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt)) {
-                copy_tile_init_with_dt(DataflowBuffer(cb_mask_h_w));
-                copy_tile(cb_mask_h_w, 0, dst1);
-
-                mask_tile_init();
-                mask_tile(dst0, dst1);
-            }
-
-            if (do_mask_w && ((wt + 1) % origin_Wt == 0)) {
-                copy_tile_init_with_dt(DataflowBuffer(cb_mask_h_w));
-                copy_tile(cb_mask_h_w, 1, dst1);
-
-                mask_tile_init();
-                mask_tile(dst0, dst1);
-            }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, DataflowBuffer(cb_y));
-
-            cb_xmm_obj.pop_front(onetile);
-            cb_y_obj.push_back(onetile);
-            tile_regs_release();
-
-            // Copy cb_dy to cb_dycopy
-            cb_dycopy_obj.reserve_back(onetile);
-            if (gamma_has_value) {
-                // Compute cb_dycopy
-                // dycopy = dy * gamma and mask(optional)
-                tile_regs_acquire();
-                cb_dy_obj.wait_front(onetile);     // comes from the reader
-                cb_gamma_obj.wait_front(onetile);  // comes from the reader
-
-                if (is_groupnorm) {
-                    mul_tiles_bcast_scalar_init_short_with_dt(DataflowBuffer(cb_dy), DataflowBuffer(cb_gamma));
-                    mul_tiles_bcast_scalar(cb_dy, cb_gamma, 0, 0, dst0);
-                } else {
-                    if (is_lastdim_layernorm) {
-                        mul_bcast_rows_init_short_with_dt(DataflowBuffer(cb_dy), DataflowBuffer(cb_gamma));
-                        mul_tiles_bcast_rows(cb_dy, cb_gamma, 0, 0, dst0);
-                    } else {
-                        mul_tiles_init_with_dt(DataflowBuffer(cb_dy), DataflowBuffer(cb_gamma));
-                        mul_tiles(cb_dy, cb_gamma, 0, 0, dst0);
-                    }
-                }
-
-                if (do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt)) {
-                    copy_tile_init_with_dt(DataflowBuffer(cb_mask_h_w));
-                    copy_tile(cb_mask_h_w, 0, dst1);
-
-                    mask_tile_init();
-                    mask_tile(dst0, dst1);
-                }
-
-                if (do_mask_w && ((wt + 1) % origin_Wt == 0)) {
-                    copy_tile_init_with_dt(DataflowBuffer(cb_mask_h_w));
-                    copy_tile(cb_mask_h_w, 1, dst1);
-
-                    mask_tile_init();
-                    mask_tile(dst0, dst1);
-                }
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, DataflowBuffer(cb_dycopy));
-
-                cb_dy_obj.pop_front(onetile);
-                cb_gamma_obj.pop_front(onetile);
-                cb_dycopy_obj.push_back(onetile);
-                tile_regs_release();
-            } else {
-                // Compute cb_dycopy
-                // dycopy = dy and mask(optional)
-                tile_regs_acquire();
-                cb_dy_obj.wait_front(onetile);  // comes from the reader
-
-                copy_tile_init_with_dt(DataflowBuffer(cb_dy));
-                copy_tile(cb_dy, 0, dst0);
-
-                if (do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt)) {
-                    copy_tile_init_with_dt(DataflowBuffer(cb_mask_h_w));
-                    copy_tile(cb_mask_h_w, 0, dst1);
-
-                    mask_tile_init();
-                    mask_tile(dst0, dst1);
-                }
-
-                if (do_mask_w && ((wt + 1) % origin_Wt == 0)) {
-                    copy_tile_init_with_dt(DataflowBuffer(cb_mask_h_w));
-                    copy_tile(cb_mask_h_w, 1, dst1);
-
-                    mask_tile_init();
-                    mask_tile(dst0, dst1);
-                }
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, DataflowBuffer(cb_dycopy));
-
-                cb_dy_obj.pop_front(onetile);
-                cb_dycopy_obj.push_back(onetile);
-                tile_regs_release();
-            }
+            // dycopy = dy * gamma and mask(optional)
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::single(),
+                ckl::OptionalChainElement<
+                    gamma_has_value,
+                    ckl::BinaryFpu<
+                        ckl::input(cb_dy, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                        ckl::input(cb_gamma, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                        ckl::BinaryFpuOp::Mul,
+                        gamma_bcast>>{},
+                ckl::OptionalChainElement<
+                    !gamma_has_value,
+                    ckl::CopyTile<ckl::input(cb_dy, ckl::InputLifecycle::Streaming, kDataFormatReconfig)>>{},
+                ckl::runtime_if(
+                    do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt),
+                    ckl::CopyTile<
+                        ckl::input(
+                            cb_mask_h_w,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::OperandKind::Scalar,
+                            kDataFormatReconfig,
+                            ckl::TileOffset::Set),
+                        ckl::Dst::D1>{0},
+                    ckl::Mask<>{}),
+                ckl::runtime_if(
+                    do_mask_w && ((wt + 1) % origin_Wt == 0),
+                    ckl::CopyTile<
+                        ckl::input(
+                            cb_mask_h_w,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::OperandKind::Scalar,
+                            kDataFormatReconfig,
+                            ckl::TileOffset::Set),
+                        ckl::Dst::D1>{1},
+                    ckl::Mask<>{}),
+                ckl::PackTile<ckl::output(cb_dycopy, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
 
             // Compute cb_dyadd
-            cb_dycopy_obj.wait_front(onetile);
             if (wt == 0) {
-                tile_regs_acquire();
-                cb_dyadd_obj.reserve_back(onetile);
-
-                copy_tile_init_with_dt(DataflowBuffer(cb_dycopy));
-                copy_tile(cb_dycopy, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, DataflowBuffer(cb_dyadd));
-
-                cb_dyadd_obj.push_back(onetile);
-                tile_regs_release();
+                ckl::copy<
+                    ckl::input(cb_dycopy, ckl::InputLifecycle::HeldStream, kDataFormatReconfig),
+                    ckl::output(cb_dyadd, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>(
+                    ckl::EltwiseShape::single());
             } else {
-                tile_regs_acquire();
-                cb_dyadd_obj.wait_front(onetile);
-                cb_dyadd_obj.reserve_back(onetile);
-
-                add_tiles_init_with_dt(DataflowBuffer(cb_dyadd), DataflowBuffer(cb_dycopy));
-                add_tiles(cb_dyadd, cb_dycopy, 0, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, DataflowBuffer(cb_dyadd));
-
-                cb_dyadd_obj.pop_front(onetile);
-                cb_dyadd_obj.push_back(onetile);
-                tile_regs_release();
+                ckl::add<
+                    ckl::input(cb_dyadd, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                    ckl::input(cb_dycopy, ckl::InputLifecycle::HeldStream, kDataFormatReconfig),
+                    ckl::output(cb_dyadd, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>(
+                    ckl::EltwiseShape::single());
             }
             // We don't pop cb_dycopy here.
 
             // Compute cb_ydy and cb_ydyadd
             constexpr auto cb_ydy = cb_tmp3;
-            CircularBuffer cb_ydy_obj(cb_ydy);
             ckl::mul<
-                ckl::input(cb_y),
-                ckl::input(cb_dycopy, ckl::InputLifecycle::NoWaitPop),
-                ckl::output(cb_ydy),
+                ckl::input(cb_y, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::input(cb_dycopy, ckl::InputLifecycle::NoWaitPop, kDataFormatReconfig),
+                ckl::output(cb_ydy, ckl::OutputLifecycle::Streaming, kDataFormatReconfig),
                 ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_ydyadd
             if (wt == 0) {
-                tile_regs_acquire();
-                cb_ydy_obj.wait_front(onetile);
-                cb_ydyadd_obj.reserve_back(onetile);
-
-                copy_tile_init_with_dt(DataflowBuffer(cb_ydy));
-                copy_tile(cb_ydy, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, DataflowBuffer(cb_ydyadd));
-
-                cb_ydy_obj.pop_front(onetile);
-                cb_ydyadd_obj.push_back(onetile);
-                tile_regs_release();
+                ckl::copy<
+                    ckl::input(cb_ydy, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                    ckl::output(cb_ydyadd, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>(
+                    ckl::EltwiseShape::single());
             } else {
-                tile_regs_acquire();
-                cb_ydy_obj.wait_front(onetile);
-                cb_ydyadd_obj.wait_front(onetile);
-                cb_ydyadd_obj.reserve_back(onetile);
-
-                add_tiles_init_with_dt(DataflowBuffer(cb_ydyadd), DataflowBuffer(cb_ydy));
-                add_tiles(cb_ydyadd, cb_ydy, 0, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, DataflowBuffer(cb_ydyadd));
-
-                cb_ydy_obj.pop_front(onetile);
-                cb_ydyadd_obj.pop_front(onetile);
-                cb_ydyadd_obj.push_back(onetile);
-                tile_regs_release();
+                ckl::add<
+                    ckl::input(cb_ydyadd, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                    ckl::input(cb_ydy, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                    ckl::output(cb_ydyadd, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>(
+                    ckl::EltwiseShape::single());
             }
         }  // Wt loop
 
@@ -311,7 +222,7 @@ void kernel_main() {
         // Compute cb_recip_nrstd
         // rstd / n -> cb_tmp3
         constexpr auto cb_recip_nrstd = cb_tmp3;
-        CircularBuffer cb_recip_nrstd_obj(cb_recip_nrstd);
+        DataflowBuffer cb_recip_nrstd_obj(cb_recip_nrstd);
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
@@ -319,12 +230,12 @@ void kernel_main() {
                     cb_n_recip_n,
                     ckl::InputLifecycle::CallerManaged,
                     ckl::OperandKind::Scalar,
-                    ckl::DataFormatReconfig::Enabled,
+                    kDataFormatReconfig,
                     ckl::TileOffset::Set),
-                ckl::input(cb_rstd, ckl::InputLifecycle::CallerManaged),
+                ckl::input(cb_rstd, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
                 ckl::BinaryFpuOp::Mul,
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>{1u, 0u},
-            ckl::PackTile<ckl::output(cb_recip_nrstd)>{});
+            ckl::PackTile<ckl::output(cb_recip_nrstd, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
 
         // Compute cb_dx
         // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
@@ -332,178 +243,129 @@ void kernel_main() {
         cb_ydysum_obj.wait_front(onetile);
         cb_recip_nrstd_obj.wait_front(onetile);
         for (uint32_t wt = 0; wt < Wt; wt++) {
-            // Copy cb_dy to cb_dycopy
-            cb_dycopy_obj.reserve_back(onetile);
-            if (gamma_has_value) {
-                // Compute cb_dycopy
-                // dycopy = dy * gamma and mask(optional)
-                tile_regs_acquire();
-                cb_dy_obj.wait_front(onetile);     // comes from the reader
-                cb_gamma_obj.wait_front(onetile);  // comes from the reader
-
-                if (is_groupnorm) {
-                    mul_tiles_bcast_scalar_init_short_with_dt(DataflowBuffer(cb_dy), DataflowBuffer(cb_gamma));
-                    mul_tiles_bcast_scalar(cb_dy, cb_gamma, 0, 0, dst0);
-                } else {
-                    if (is_lastdim_layernorm) {
-                        mul_bcast_rows_init_short_with_dt(DataflowBuffer(cb_dy), DataflowBuffer(cb_gamma));
-                        mul_tiles_bcast_rows(cb_dy, cb_gamma, 0, 0, dst0);
-                    } else {
-                        mul_tiles_init_with_dt(DataflowBuffer(cb_dy), DataflowBuffer(cb_gamma));
-                        mul_tiles(cb_dy, cb_gamma, 0, 0, dst0);
-                    }
-                }
-
-                if (do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt)) {
-                    copy_tile_init_with_dt(DataflowBuffer(cb_mask_h_w));
-                    copy_tile(cb_mask_h_w, 0, dst1);
-
-                    mask_tile_init();
-                    mask_tile(dst0, dst1);
-                }
-
-                if (do_mask_w && ((wt + 1) % origin_Wt == 0)) {
-                    copy_tile_init_with_dt(DataflowBuffer(cb_mask_h_w));
-                    copy_tile(cb_mask_h_w, 1, dst1);
-
-                    mask_tile_init();
-                    mask_tile(dst0, dst1);
-                }
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, DataflowBuffer(cb_dycopy));
-
-                cb_dy_obj.pop_front(onetile);
-                cb_gamma_obj.pop_front(onetile);
-                cb_dycopy_obj.push_back(onetile);
-                tile_regs_release();
-            } else {
-                // Compute cb_dycopy
-                // dycopy = dy and mask(optional)
-                tile_regs_acquire();
-                cb_dy_obj.wait_front(onetile);  // comes from the reader
-
-                copy_tile_init_with_dt(DataflowBuffer(cb_dy));
-                copy_tile(cb_dy, 0, dst0);
-
-                if (do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt)) {
-                    copy_tile_init_with_dt(DataflowBuffer(cb_mask_h_w));
-                    copy_tile(cb_mask_h_w, 0, dst1);
-
-                    mask_tile_init();
-                    mask_tile(dst0, dst1);
-                }
-
-                if (do_mask_w && ((wt + 1) % origin_Wt == 0)) {
-                    copy_tile_init_with_dt(DataflowBuffer(cb_mask_h_w));
-                    copy_tile(cb_mask_h_w, 1, dst1);
-
-                    mask_tile_init();
-                    mask_tile(dst0, dst1);
-                }
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, DataflowBuffer(cb_dycopy));
-
-                cb_dy_obj.pop_front(onetile);
-                cb_dycopy_obj.push_back(onetile);
-                tile_regs_release();
-            }
+            // dycopy = dy * gamma and mask(optional)
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::single(),
+                ckl::OptionalChainElement<
+                    gamma_has_value,
+                    ckl::BinaryFpu<
+                        ckl::input(cb_dy, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                        ckl::input(cb_gamma, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                        ckl::BinaryFpuOp::Mul,
+                        gamma_bcast>>{},
+                ckl::OptionalChainElement<
+                    !gamma_has_value,
+                    ckl::CopyTile<ckl::input(cb_dy, ckl::InputLifecycle::Streaming, kDataFormatReconfig)>>{},
+                ckl::runtime_if(
+                    do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt),
+                    ckl::CopyTile<
+                        ckl::input(
+                            cb_mask_h_w,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::OperandKind::Scalar,
+                            kDataFormatReconfig,
+                            ckl::TileOffset::Set),
+                        ckl::Dst::D1>{0},
+                    ckl::Mask<>{}),
+                ckl::runtime_if(
+                    do_mask_w && ((wt + 1) % origin_Wt == 0),
+                    ckl::CopyTile<
+                        ckl::input(
+                            cb_mask_h_w,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::OperandKind::Scalar,
+                            kDataFormatReconfig,
+                            ckl::TileOffset::Set),
+                        ckl::Dst::D1>{1},
+                    ckl::Mask<>{}),
+                ckl::PackTile<ckl::output(cb_dycopy, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
 
             // Compute cb_ndy
             // n * dy
             constexpr auto cb_ndy = cb_tmp1;
-            CircularBuffer cb_ndy_obj(cb_ndy);
             ckl::mul<
-                ckl::input(cb_n_recip_n, ckl::InputLifecycle::CallerManaged),
-                ckl::input(cb_dycopy),
-                ckl::output(cb_ndy),
+                ckl::input(cb_n_recip_n, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                ckl::input(cb_dycopy, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::output(cb_ndy, ckl::OutputLifecycle::Streaming, kDataFormatReconfig),
                 ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_ndymdysum
             // n * dy - Sum[dy]
             constexpr auto cb_ndymdysum = cb_tmp2;
-            CircularBuffer cb_ndymdysum_obj(cb_ndymdysum);
             ckl::sub<
-                ckl::input(cb_ndy),
-                ckl::input(cb_dysum, ckl::InputLifecycle::CallerManaged),
-                ckl::output(cb_ndymdysum),
+                ckl::input(cb_ndy, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::input(cb_dysum, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                ckl::output(cb_ndymdysum, ckl::OutputLifecycle::Streaming, kDataFormatReconfig),
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>(
                 ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_xmm
             // x - mean and mask(optional)
             constexpr auto cb_xmm = cb_tmp1;
-            CircularBuffer cb_xmm_obj(cb_xmm);
-            tile_regs_acquire();
-            cb_x_obj.wait_front(onetile);  // comes from the reader
-            cb_xmm_obj.reserve_back(onetile);
-
-            if (is_lastdim_layernorm) {
-                sub_bcast_cols_init_short_with_dt(DataflowBuffer(cb_x), DataflowBuffer(cb_mean));
-                sub_tiles_bcast_cols(cb_x, cb_mean, 0, 0, dst0);
-            } else {
-                sub_tiles_bcast_scalar_init_short_with_dt(DataflowBuffer(cb_x), DataflowBuffer(cb_mean));
-                sub_tiles_bcast_scalar(cb_x, cb_mean, 0, 0, dst0);
-            }
-
-            if (do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt)) {
-                copy_tile_init_with_dt(DataflowBuffer(cb_mask_h_w));
-                copy_tile(cb_mask_h_w, 0, dst1);
-
-                mask_tile_init();
-                mask_tile(dst0, dst1);
-            }
-
-            if (do_mask_w && ((wt + 1) % origin_Wt == 0)) {
-                copy_tile_init_with_dt(DataflowBuffer(cb_mask_h_w));
-                copy_tile(cb_mask_h_w, 1, dst1);
-
-                mask_tile_init();
-                mask_tile(dst0, dst1);
-            }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, DataflowBuffer(cb_xmm));
-
-            cb_x_obj.pop_front(onetile);
-            cb_xmm_obj.push_back(onetile);
-            tile_regs_release();
+            DataflowBuffer cb_xmm_obj(cb_xmm);
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::single(),
+                ckl::BinaryFpu<
+                    ckl::input(cb_x, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                    ckl::input(cb_mean, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                    ckl::BinaryFpuOp::Sub,
+                    is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>{},
+                ckl::runtime_if(
+                    do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt),
+                    ckl::CopyTile<
+                        ckl::input(
+                            cb_mask_h_w,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::OperandKind::Scalar,
+                            kDataFormatReconfig,
+                            ckl::TileOffset::Set),
+                        ckl::Dst::D1>{0},
+                    ckl::Mask<>{}),
+                ckl::runtime_if(
+                    do_mask_w && ((wt + 1) % origin_Wt == 0),
+                    ckl::CopyTile<
+                        ckl::input(
+                            cb_mask_h_w,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::OperandKind::Scalar,
+                            kDataFormatReconfig,
+                            ckl::TileOffset::Set),
+                        ckl::Dst::D1>{1},
+                    ckl::Mask<>{}),
+                ckl::PackTile<ckl::output(cb_xmm, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
 
             // Compute cb_y
             ckl::mul<
-                ckl::input(cb_xmm),
-                ckl::input(cb_rstd, ckl::InputLifecycle::CallerManaged),
-                ckl::output(cb_y),
+                ckl::input(cb_xmm, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::input(cb_rstd, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                ckl::output(cb_y, ckl::OutputLifecycle::Streaming, kDataFormatReconfig),
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>(
                 ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_yydysum
             // y * Sum[y * dy]
             constexpr auto cb_yydysum = cb_tmp1;
-            CircularBuffer cb_yydysum_obj(cb_yydysum);
             ckl::mul<
-                ckl::input(cb_y),
-                ckl::input(cb_ydysum, ckl::InputLifecycle::CallerManaged),
-                ckl::output(cb_yydysum),
+                ckl::input(cb_y, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::input(cb_ydysum, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                ckl::output(cb_yydysum, ckl::OutputLifecycle::Streaming, kDataFormatReconfig),
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>(
                 ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_tmp4
             // (n * dy - Sum[dy]) - (y * Sum[y * dy])
             constexpr auto cb_tmp4 = cb_y;
-            CircularBuffer cb_tmp4_obj(cb_tmp4);
-            ckl::sub<ckl::input(cb_ndymdysum), ckl::input(cb_yydysum), ckl::output(cb_tmp4)>(
+            ckl::sub<
+                ckl::input(cb_ndymdysum, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::input(cb_yydysum, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::output(cb_tmp4, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>(
                 ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_dx
             ckl::mul<
-                ckl::input(cb_tmp4),
-                ckl::input(cb_recip_nrstd, ckl::InputLifecycle::CallerManaged),
-                ckl::output(cb_dx),
+                ckl::input(cb_tmp4, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::input(cb_recip_nrstd, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                ckl::output(cb_dx, ckl::OutputLifecycle::Streaming, kDataFormatReconfig),
                 ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
         }  // Wt loop
         cb_recip_nrstd_obj.pop_front(onetile);
@@ -516,7 +378,7 @@ void kernel_main() {
     cb_scaler_obj.pop_front(onetile);
     cb_n_recip_n_obj.pop_front(2);
 
-    if (do_mask_h || do_mask_w) {
+    if constexpr (do_mask_h || do_mask_w) {
         cb_mask_h_w_obj.pop_front(2);
     }
 }
