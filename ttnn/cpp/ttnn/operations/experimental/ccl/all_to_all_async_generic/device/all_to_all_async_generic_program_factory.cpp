@@ -108,8 +108,6 @@ AllToAllAsyncGenericProgram::create_at(
 
     const bool is_ring = operation_attributes.topology == ttnn::ccl::Topology::Ring;
     const size_t num_senders_per_link = (is_ring && operation_attributes.num_devices % 2 == 0) ? 2 : 1;
-    const auto* topology_type = is_ring ? "RING" : "LINEAR";
-
     const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
         operation_attributes.num_links, num_senders_per_link, device, operation_attributes.sub_device_id);
 
@@ -241,25 +239,27 @@ AllToAllAsyncGenericProgram::create_at(
         }
     }
 
-    auto sender_writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
-    sender_writer_kernel_config.defines.emplace("TOPOLOGY", topology_type);
-    if (is_fabric_2d) {
-        sender_writer_kernel_config.defines.emplace("FABRIC_2D", "1");
-        sender_writer_kernel_config.defines.emplace(
-            "DIRECTIONS", ttnn::operations::ccl::common::stringify(fabric_directions));
+    uint32_t fabric_direction_mask = 0;
+    for (uint32_t direction = 0; direction < fabric_directions.size(); ++direction) {
+        fabric_direction_mask |= static_cast<uint32_t>(fabric_directions[direction]) << direction;
     }
+
+    auto sender_writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     sender_writer_kernel_config.compile_args = {
-        tt::CB::c_in0,                              // cb0_id
-        device_index,                               // device_index
-        operation_attributes.num_devices,           // num_devices
-        output_shape[operation_attributes.in_dim],  // concat_dim_size
-        dst_in_dims,                                // inner_dims_size
-        writer_has_extra_half_tile,                 // has_writer_tail
-        page_size,                                  // intermediate_page_size
-        reserved_packet_header_CB_index,            // reserved_packet_header_cb_id
-        semaphore_sent,                             // semaphore_expected_value
-        concat_num_tiles,                           // concat_num_tiles
-        (concat_num_half_tiles * device_index) / 2  // full_block_offset
+        tt::CB::c_in0,                                         // cb0_id
+        device_index,                                          // device_index
+        operation_attributes.num_devices,                      // num_devices
+        output_shape[operation_attributes.in_dim],             // concat_dim_size
+        dst_in_dims,                                           // inner_dims_size
+        writer_has_extra_half_tile,                            // has_writer_tail
+        page_size,                                             // intermediate_page_size
+        reserved_packet_header_CB_index,                       // reserved_packet_header_cb_id
+        semaphore_sent,                                        // semaphore_expected_value
+        concat_num_tiles,                                      // concat_num_tiles
+        (concat_num_half_tiles * device_index) / 2,            // full_block_offset
+        static_cast<uint32_t>(operation_attributes.topology),  // topology
+        is_fabric_2d,                                          // is_fabric_2d
+        fabric_direction_mask                                  // fabric_direction_mask
     };
 
     tt::tt_metal::TensorAccessorArgs(tensor_return_value.buffer()).append_to(sender_writer_kernel_config.compile_args);
@@ -338,7 +338,7 @@ AllToAllAsyncGenericProgram::create_at(
         }
         const auto sender_device_fabric_node_id = device->get_fabric_node_id(mesh_coordinate);
         if (is_fabric_2d) {
-            // Append connections in the same {E, W, N, S} order as DIRECTIONS.
+            // Append connections in the same {E, W, N, S} order as the compile-time direction mask.
             for (const auto& neighbor_coord : fabric_neighbors) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     sender_device_fabric_node_id,
