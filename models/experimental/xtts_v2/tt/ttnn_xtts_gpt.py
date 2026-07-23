@@ -147,8 +147,12 @@ class TracedGPTDecoder:
             subblock_w=wsh // 32, block_h=SH // 32, block_w=wsh // 32, inplace=False,
         )
         # The sharded kernel wants gamma/beta as [1, SH, dim]; re-expand the loaded [dim] vectors.
+        # Keep the plain [dim] weights too (ln_*_wp/bp): the batched prefill pass runs over [1, P, 1024],
+        # for which the single-token width-sharded config doesn't apply — it uses plain interleaved LN.
         _sh = lambda t: _to_dev(ttnn.to_torch(t).float().view(1, 1, N_EMBD).expand(1, SH, N_EMBD).contiguous(), device, ttnn.bfloat16)
         for w in self.layers:
+            w["ln_1_wp"], w["ln_1_bp"] = w["ln_1_w"], w["ln_1_b"]
+            w["ln_2_wp"], w["ln_2_bp"] = w["ln_2_w"], w["ln_2_b"]
             w["ln_1_w"], w["ln_1_b"] = _sh(w["ln_1_w"]), _sh(w["ln_1_b"])
             w["ln_2_w"], w["ln_2_b"] = _sh(w["ln_2_w"]), _sh(w["ln_2_b"])
         for kk in ("ln_f_w", "ln_f_b", "fn_w", "fn_b"):
@@ -164,6 +168,30 @@ class TracedGPTDecoder:
             memory_config=self._ln_cfg, compute_kernel_config=COMPUTE_KERNEL_CONFIG,
         )
         return ttnn.sharded_to_interleaved(y)
+
+    def prefill(self, prefix_emb):
+        """Fill the KV-cache for prompt positions 0..P-1 in ONE batched pass over the P prompt tokens,
+        instead of P single-token decode steps. Each layer's K/V weights are read once (not P times),
+        so this is weight-bandwidth-amortized. Latents are discarded — only the caches seed decode.
+        Eager (not traced); run after reset() and before the first decode step. prefix_emb: torch [1,P,1024]."""
+        P = prefix_emb.shape[1]
+        x = _to_dev(prefix_emb, self.device, ttnn.bfloat16)  # [1, P, 1024]
+        for li in range(N_LAYER):
+            w = self.layers[li]
+            h = ttnn.layer_norm(x, weight=w["ln_1_wp"], bias=w["ln_1_bp"], epsilon=LN_EPS, compute_kernel_config=COMPUTE_KERNEL_CONFIG)
+            qkv = ttnn.linear(h, w["attn_w"], bias=w["attn_b"], compute_kernel_config=COMPUTE_KERNEL_CONFIG)  # [1,P,3072]
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                ttnn.reshape(qkv, [1, 1, P, 3 * N_EMBD]), num_heads=N_HEAD, num_kv_heads=N_HEAD,
+                transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # each [1, N_HEAD, P, HEAD_DIM]
+            ttnn.fill_cache(self.k_cache[li], k, 0)  # write positions 0..P-1 in one shot
+            ttnn.fill_cache(self.v_cache[li], v, 0)
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q, k, v, is_causal=True, scale=SCALE, compute_kernel_config=COMPUTE_KERNEL_CONFIG
+            )  # [1, N_HEAD, P, HEAD_DIM]
+            attn = ttnn.reshape(ttnn.permute(attn, [0, 2, 1, 3]), [1, P, N_EMBD])  # concat heads
+            x = ttnn.add(x, ttnn.linear(attn, w["proj_w"], bias=w["proj_b"], compute_kernel_config=COMPUTE_KERNEL_CONFIG))
+            x = ttnn.add(x, _mlp(ttnn.layer_norm(x, weight=w["ln_2_wp"], bias=w["ln_2_bp"], epsilon=LN_EPS, compute_kernel_config=COMPUTE_KERNEL_CONFIG), w))
 
     def _decode_step(self, x):  # x [1,1,1024] -> latent [1,1,1024]
         for li in range(N_LAYER):
@@ -199,16 +227,17 @@ class TracedGPTDecoder:
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(emb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._in)
 
     def capture(self):
-        """Warm up (compile kernels; trace can't compile) then capture the step into a trace."""
-        self.reset()
-        self._set_pos(0)
+        """Warm up (compile kernels; trace can't compile) then capture the step into a trace.
+        Warms up at a scratch cache slot (max_seq-1, never a real decode position) and does NOT
+        zero the cache, so it can run AFTER prefill without clobbering the prompt's K/V. Allocating
+        buffers is only safe while no trace exists, so prefill must run before this."""
+        self._set_pos(self.max_seq - 1)
         self._decode_step(self._in)
         ttnn.synchronize_device(self.device)
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         self._out = self._decode_step(self._in)
         ttnn.end_trace_capture(self.device, self.trace_id, cq_id=0)
         ttnn.synchronize_device(self.device)
-        self.reset()
 
     def step(self, emb, pos):  # emb torch [1,1,1024]; pos int -> latent torch [1,1,1024]
         self._set_input(emb)
@@ -222,21 +251,20 @@ class TracedGPTDecoder:
 
 
 def generate_traced(device, prefix_emb, heads, max_new=24, max_seq=128, use_trace=True):
-    """Greedy generation with the traced decoder. Feeds the prompt token-by-token to fill the cache,
-    then decodes; mel_head + argmax + embedding run on host. Returns dict(codes [T], latents [1,T,1024])."""
+    """Greedy generation with the traced decoder. Fills the cache with a single batched prefill pass
+    over the prompt, then decodes token by token; mel_head + argmax + embedding run on host.
+    Returns dict(codes [T], latents [1,T,1024])."""
     dec = TracedGPTDecoder(device, max_seq=max_seq)
-    if use_trace:
-        dec.capture()
     mel_emb, mel_pos = heads["mel_emb"], heads["mel_pos"]
     mh_w, mh_b = heads["mel_head_w"], heads["mel_head_b"]
     head = lambda latent: latent @ mh_w.t() + mh_b
 
     dec.reset()
-    pos = 0
-    for t in range(prefix_emb.shape[1]):  # prompt prefill (fill cache, discard latents)
-        dec.step(prefix_emb[:, t : t + 1, :].contiguous(), pos)
-        pos += 1
-    lat = dec.step((mel_emb[START_AUDIO_TOKEN] + mel_pos[0]).view(1, 1, -1), pos)  # start token
+    dec.prefill(prefix_emb)  # fill cache positions 0..P-1 in one batched pass (before any trace exists)
+    if use_trace:
+        dec.capture()  # capture the single-token decode step; leaves the prefilled cache intact
+    pos = prefix_emb.shape[1]
+    lat = dec.step((mel_emb[START_AUDIO_TOKEN] + mel_pos[0]).view(1, 1, -1), pos)  # start token at pos P
     pos += 1
     code = int(head(lat).argmax(-1))
     codes, lats = [code], [lat]
