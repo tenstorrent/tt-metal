@@ -633,3 +633,11 @@
 - Program counts partially reject the hypothesis: binary programs fell 24 -> 16 per layer across the mesh, while unary programs remained 32. The bias add is absorbed; softplus remains a device program.
 - Mesh throughput is 69.27 TFLOP/s or 5.69% of peak by device span; host-observed throughput is 66.36 TFLOP/s or 5.45%.
 - Full Blackhole regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 9/9 in 10.88 s. TP output/recurrent/convolution PCC was 0.999953/0.999910/0.999997.
+
+### 2026-07-23 11:39:49 UTC — Reject scan common-input sharing
+
+- Hypothesis: one V worker/head can read the six V-independent FP32 inputs once per chunk and distribute them from L1 to its three sibling V workers faster than four independent DRAM reads.
+- The implementation used ProgramDescriptor semaphores and one bundled readiness/valid handshake per chunk. Full build passed; isolated custom-kernel tests passed 5/5. The exact TP=8 sharing branch passed at output/recurrent/convolution PCC 0.999953/0.999910/0.999997.
+- Matched reports: sharing `/tmp/kda_tp_layer_t640_scan_share_r10/reports/2026_07_23_11_38_34/ops_perf_results_2026_07_23_11_38_34.csv`; control `/tmp/kda_tp_layer_t640_scan_noshare_r10/reports/2026_07_23_11_39_49/ops_perf_results_2026_07_23_11_39_49.csv`.
+- Sharing regressed slowest-device scan time 97.387 -> 145.942 us (+49.9%), median layer critical path 0.85484 -> 0.90400 ms (+5.75%), and active kernels from 0.800-0.801 to 0.847-0.850 ms/device. Synchronization and L1 fan-out cost more than the removed DRAM reads.
+- Reverted the implementation and retained the 16-core, four-V-worker/head scan with independent reads.
