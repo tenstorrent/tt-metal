@@ -35,6 +35,13 @@ void kernel_main() {
     for (uint32_t i = 0; i < increment_times; i++) {
         s.up(1);
     }
+#if defined(SEM_SCOPE_UPDOWN)
+    // Exercise down() per scope (EXTERNAL uses the atomic NoC decrement). Single
+    // writer: up(N) then down(N) must leave the semaphore at 0.
+    for (uint32_t i = 0; i < increment_times; i++) {
+        s.down(1);
+    }
+#endif
     const uint32_t observed = s.value();
 
     // Report the observed value to a scratch word for the host to verify.

@@ -34,9 +34,10 @@
  *      atomic (NOC_AT_INS_INCR_GET) so local and remote writers serialize at one NIU
  *      atomicity point; local reads use the uncached alias. Correct + atomic; pays a
  *      NoC round-trip. (HW validated: TestSelfTargetedNocAtomicIncrement /
- *      TestSelfVsRemoteNodeNocAtomic.) Cross-domain atomic is increment-first today;
- *      atomic cross-domain decrement/CAS is reachable via the NoC RISCV_AMO/CAS
- *      opcodes (defined in noc_parameters.h, pending emu verification on Quasar).
+ *      TestSelfVsRemoteNodeNocAtomic.) Cross-domain atomic DECREMENT is also supported
+ *      (INCR_GET of a negative value, wrap=31; HW/emu-verified TestAtomicDecrementIncrGet),
+ *      so EXTERNAL up()/down() are both atomic. CAS/swap are available via the NoC
+ *      RISCV_AMO/CAS opcodes too (TestAtomicCas) for future non-counting semantics.
  */
 enum class SemScope : uint8_t {
     LOCAL_NONATOMIC = 0,
