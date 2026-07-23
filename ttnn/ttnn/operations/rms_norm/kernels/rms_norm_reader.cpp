@@ -55,8 +55,12 @@ void kernel_main() {
     constexpr uint32_t in_page = get_compile_time_arg_val(13);
     constexpr uint32_t gamma_page = get_compile_time_arg_val(14);
     constexpr bool GAMMA_IS_RM = get_compile_time_arg_val(15) != 0;
+    // Resident single-read fast-path (op_design.md §1 lamp 1, Refinement 3): TILE
+    // input (+ TILE / no gamma) that fits L1. x is read ONCE per tile-row (compute
+    // does both passes over L1) and gamma is read ONCE per core (held resident).
+    constexpr bool USE_RESIDENT = get_compile_time_arg_val(16) != 0;
 
-    constexpr auto in_args = TensorAccessorArgs<16>();
+    constexpr auto in_args = TensorAccessorArgs<17>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -95,6 +99,37 @@ void kernel_main() {
         for (uint32_t k = 0; k < (nbytes >> 2); ++k) {
             p[k] = 0;
         }
+    }
+
+    // ---- Resident single-read fast-path (TILE input, TILE/no gamma) ----
+    // gamma read ONCE (held resident across all rows); x read ONCE per tile-row
+    // (compute does BOTH passes over L1). One coalesced barrier per read.
+    if constexpr (USE_RESIDENT) {
+        if constexpr (HAS_GAMMA) {
+            // gamma (1,1,1,W) -> Wt tiles in one tile-row; read all Wt once.
+            const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
+            cb_reserve_back(cb_gamma, Wt);
+            uint32_t gl1 = get_write_ptr(cb_gamma);
+            for (uint32_t wt = 0; wt < Wt; ++wt) {
+                noc_async_read_tile(wt, gamma_accessor, gl1);
+                gl1 += gamma_tile_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_gamma, Wt);
+        }
+        const uint32_t tile_bytes = get_tile_size(cb_x_in);
+        for (uint32_t i = 0; i < num_rows; ++i) {
+            const uint32_t row_tile_base = (row_start + i) * Wt;
+            cb_reserve_back(cb_x_in, Wt);
+            uint32_t l1 = get_write_ptr(cb_x_in);
+            for (uint32_t wt = 0; wt < Wt; ++wt) {
+                noc_async_read_tile(row_tile_base + wt, in_accessor, l1);
+                l1 += tile_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_x_in, Wt);
+        }
+        return;
     }
 
     for (uint32_t i = 0; i < num_rows; ++i) {

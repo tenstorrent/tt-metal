@@ -143,3 +143,67 @@
   = 64 cases; + mixed-precision (bf16 act + f32 TILE gamma, 16 cases) + bf8b TILE
   gamma (6 cases). 86 passed (--dev + non-dev). Full rms_norm unit dir: 341 passed,
   32 skipped ({f32,False} EXCLUSION), 0 failed — no regression.
+
+## Refinement 3 — Speed up the interleaved prefill perf profile
+- **Date**: 2026-07-23
+- **Type**: perf (no SUPPORTED change).
+- **What was done**: implemented the **resident single-read fast-path** (op_design.md
+  §1 lamp 1) as a dual-path on the TILE-input regime, plus its double_buffer co-tune.
+  Roofline/ablation first: baseline was ~1.56× above `achievable_ns` on the small
+  prefill widths and at-target on the large ones; a 2nd-read ablation (stub pass-2 x
+  read, keep CB sync) proved ALL four widths are read-bound (removing the 2nd x read
+  = ~1.30–1.33×), so the lever is single-read + gamma-resident.
+  - **Kernels** (shared, CT-arg dispatch — no forked files): a `USE_RESIDENT` CT flag
+    (reader idx 16 / accessor bumped to `<17>`, compute idx 7) selects the resident
+    path when the host predicate holds. Reader: reads gamma ONCE per core (held) and
+    each tile-row's `Wt` x-tiles ONCE (single coalesced read), no 2nd pass. Compute:
+    holds the whole tile-row in `cb_x_in` (waited once / popped once per row) and reads
+    block `b` at absolute front offset `b*BLOCK_SIZE` via `OperandKind::Block +
+    TileOffset::Set + InputLifecycle::CallerManaged`, so BOTH passes read x from L1 —
+    no 2nd DRAM read. gamma held resident the same way (read once, offset per block,
+    popped at core exit). Intermediates (`cb_xsq`/`cb_norm`) stay `2*BLOCK_SIZE`, so
+    every prefill width fits — only `cb_x_in`/`cb_gamma` scale with `Wt`. The resident
+    steps use `eltwise_chain` directly (BinaryFpu+PackTile) because the `square<>`/
+    `mul<>` convenience wrappers don't expose `TileOffset` — same helper, lower-level
+    form, NOT raw LLK. The streaming two-pass path is unchanged as the fallback.
+  - **Host** (`rms_norm_program_descriptor.py`): `L1_RESIDENT_BUDGET` (1.1 MB, the
+    dual-path L1 gate — design's sanctioned exception to "no CB sized by an op dim",
+    only `cb_x_in`/`cb_gamma` scale with Wt) and `RESIDENT_X_DEPTH` (max input-CB depth;
+    host picks the largest depth in [1, 2] that fits → prefetch where L1 allows,
+    single-buffer the widest rows). `use_resident = TILE input AND (TILE/no gamma) AND
+    fits budget`. RM input, RM gamma, and rows too wide for L1 keep the streaming path.
+- **Accuracy achieved**: soft PCC gate 0.9995 holds on all prefill shapes (PCC≈1.00 at
+  the exact perf config bf16 / fp32_dest_acc_en=False / TILE / TILE gamma / HiFi2).
+  Golden tolerances unchanged.
+- **Measured perf** (blackhole, device FW duration, median of 6 fresh trials; exact
+  perf config; `test_rms_norm_perf.py`):
+  | shape (1,1,8192,W) | baseline ns | resident ns | vs baseline | achievable_ns | vs achievable |
+  |---|---|---|---|---|---|
+  | W=1024 | 150544 | 105967 | **1.42×** | 96744  | 1.095 |
+  | W=2304 | 333159 | 232407 | **1.43×** | 211345 | 1.100 |
+  | W=5120 | 734322 | 515147 | **1.42×** | 738307 | **0.698 (beats)** |
+  | W=7168 | 1029117| 679422 | **1.52×** | 1032281| **0.658 (beats)** |
+  All four prefill widths improve 1.42–1.52×; the two large (most expensive) widths
+  beat their `achievable_ns` targets by 1.43–1.52×; the two small widths land within
+  ~10% of achievable (a further compute-block-granularity co-tune could close that
+  residual, but the goal is met/exceeded — not filed as a blocking follow-up).
+- **Levers**: resident single-read (primary) — WINNING, kept. double_buffer — applied
+  as adaptive `RESIDENT_X_DEPTH` (2 for W≤5120, 1 for W=7168) + coalesced whole-row
+  reads on both reader halves (x + gamma), kept. compute_block_size — reader-side block
+  maximized (whole-row single read); compute-side `ROWS_PER_CALL` left at the design's
+  trivial 1 (raising it needs width-aware block sizing to keep the large widths' L1
+  fit, for only the ~10% small-width residual).
+- **Golden test progress**: green — no regression. `test_translated.py` 72 passed /
+  12 failed (the SAME pre-existing R1/R2 RM W=4096 Frobenius near-misses — proven
+  identical by stashing R3 and re-running on the R2 baseline; RM path is untouched,
+  resident is TILE-only). `test_op_loose` 11 passed / 8 xfail (sharded, expected).
+  `test_op` cartesian slices (small aligned/non-aligned resident, large W=4096
+  resident, multi-row resident, wide W=8192 streaming): 348 passed, 0 failed, 0 xpassed.
+- **No regression across the guard set**: TILE interleaved (resident + streaming),
+  RM interleaved (unchanged streaming), no-gamma — unit dir 345 passed / 32 skipped in
+  BOTH `--dev` and non-dev (race-clean).
+- **Issues encountered**: None for the resident work. (The 12 pre-existing RM W=4096
+  Frobenius near-misses remain, out of scope — R1 precision territory.)
+- **Tests added**: `test_rms_norm_perf.py` (prefill perf harness — 4 interleaved
+  prefill shapes at the exact perf config, N-trial loop + soft PCC gate, for reading
+  device-ns off the Tracy CSV).

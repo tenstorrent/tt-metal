@@ -36,6 +36,19 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
 DEPTH = 2  # per-streaming-CB double-buffer depth (op_design.md §1)
 
+# ---- Resident single-read fast-path knobs (op_design.md §1 lamp 1; Refinement 3) ----
+# RESIDENT_X_DEPTH is the MAX resident input-CB depth (whole tile-rows) the host will
+# use: at depth d the reader prefetches d-1 tile-rows ahead while compute reads the
+# current one from L1. The host picks the largest depth in [1, RESIDENT_X_DEPTH] that
+# fits L1_RESIDENT_BUDGET, so wide rows single-buffer and narrow rows double-buffer.
+# L1_RESIDENT_BUDGET is the per-core CB budget the resident footprint must fit under —
+# the explicit predicate that keeps the resident path from overflowing L1 (Blackhole
+# L1 ~1.5 MB; a conservative 1.1 MB CB budget). Because the intermediates stay
+# per-block, only cb_x_in + cb_gamma scale with Wt, so every prefill width fits. Both
+# are live tunables with a single source of truth — no CB literal derives independently.
+RESIDENT_X_DEPTH = 2
+L1_RESIDENT_BUDGET = 1_100_000
+
 
 def _pick_block_size(Wt: int) -> int:
     """Largest divisor of Wt that is <= 8 (the double_buffer sweet spot; not 1).
@@ -130,6 +143,48 @@ def create_program_descriptor(
         gamma_page = in_page
         tile_gamma = tile_in
 
+    # ---- Resident single-read fast-path predicate (op_design.md §1 lamp 1) ----
+    # When the tile-row's x (Wt tiles) + resident gamma fit one core's L1, load x
+    # ONCE and read it from L1 in BOTH passes — eliminating the 2nd DRAM read of x —
+    # and hold gamma resident (read once per core instead of re-read per tile-row).
+    # The compute reads each block at the absolute front offset b*BLOCK_SIZE, so the
+    # intermediates (cb_xsq / cb_norm) stay 2*BLOCK_SIZE (NOT sized by Wt) and every
+    # prefill width fits. Only cb_x_in and cb_gamma are sized by Wt — the design's
+    # sanctioned dual-path exception, gated by the explicit L1 budget. The streaming
+    # two-pass path (below) is the fallback. TILE input only (+ TILE / no gamma —
+    # RM gamma keeps its tilize path); the perf config is TILE input + TILE gamma.
+    is_tile_input = (not is_rm) and (not gamma_is_rm)
+
+    def _resident_l1(x_depth):
+        # cb_x_in (x_depth whole rows) + cb_gamma (1 row) + small streaming CBs.
+        return (
+            x_depth * Wt * tile_in
+            + (Wt * tile_gamma if has_gamma else 0)
+            + 2 * BLOCK_SIZE * tile_in  # cb_xsq  (per-block)
+            + 2 * BLOCK_SIZE * tile_in  # cb_norm (per-block)
+            + DEPTH * BLOCK_SIZE * tile_out  # cb_out  (per-block, streamed)
+            + max(DEPTH, 2) * tile_fp32  # cb_rstd
+            + (2 if has_partial_w else 1) * tile_bf16  # cb_scaler
+        )
+
+    # Pick the largest input-CB depth that fits the budget (RESIDENT_X_DEPTH..1) so
+    # the reader prefetches the next tile-row where L1 allows, and single-buffers the
+    # widest rows that only fit at depth 1. Single source of truth for the depth.
+    resident_x_depth = 0
+    for d in range(RESIDENT_X_DEPTH, 0, -1):
+        if _resident_l1(d) <= L1_RESIDENT_BUDGET:
+            resident_x_depth = d
+            break
+    use_resident = is_tile_input and (resident_x_depth > 0)
+
+    # CB page counts branch on the path (single source of truth for each CB). Only
+    # cb_x_in and cb_gamma are resident-sized; the intermediates stay per-block.
+    x_in_pages = resident_x_depth * Wt if use_resident else DEPTH * BLOCK_SIZE
+    xsq_pages = 2 * BLOCK_SIZE
+    norm_pages = 2 * BLOCK_SIZE
+    gamma_cb_pages = Wt if use_resident else DEPTH * BLOCK_SIZE
+    out_pages = DEPTH * BLOCK_SIZE
+
     # ---- Work distribution: split R tile-rows across the whole grid ----
     grid_size = device.compute_with_storage_grid_size()
     (
@@ -173,18 +228,19 @@ def create_program_descriptor(
             )
         )
 
-    # streaming input tiles (both passes)
-    add_cb(CB_X_IN, tile_in, DEPTH * BLOCK_SIZE, in_dtype)
+    # input tiles. streaming: DEPTH*BLOCK_SIZE (both passes re-read from DRAM).
+    # resident: resident_x_depth*Wt — whole tile-row(s) held so pass 2 reads L1, not DRAM.
+    add_cb(CB_X_IN, tile_in, x_in_pages, in_dtype)
     # reduce scaler: 1/W (+ partial tile), bf16, wait-not-pop across all rows
     add_cb(CB_SCALER, tile_bf16, 2 if has_partial_w else 1, ttnn.bfloat16)
-    # pass-1 intermediate x^2 (square -> reduce), sequential -> holds a full block
-    add_cb(CB_XSQ, tile_in, 2 * BLOCK_SIZE, in_dtype)
+    # pass-1 intermediate x^2 (square -> reduce), per-block (2*BLOCK_SIZE) both paths
+    add_cb(CB_XSQ, tile_in, xsq_pages, in_dtype)
     # 1/RMS (1 tile/row), fp32 accumulate, held across pass 2
     add_cb(CB_RSTD, tile_fp32, max(DEPTH, 2), ttnn.float32)
-    # pass-2 intermediate x*rstd (mul<Col> -> mul<Row>), sequential -> full block
-    add_cb(CB_NORM, tile_in, 2 * BLOCK_SIZE, in_dtype)
-    # output tiles (TILE: -> writer; RM: -> untilize)
-    add_cb(CB_OUT, tile_out, DEPTH * BLOCK_SIZE, out_dtype)
+    # pass-2 intermediate x*rstd (mul<Col> -> mul<Row>), per-block (2*BLOCK_SIZE) both paths
+    add_cb(CB_NORM, tile_in, norm_pages, in_dtype)
+    # output tiles (TILE: -> writer; RM: -> untilize), per-block streamed (DEPTH*BLOCK_SIZE)
+    add_cb(CB_OUT, tile_out, out_pages, out_dtype)
 
     if is_rm:
         # RM x: raw sticks packed for compute-side tilize (tile-paged, TILE granularity)
@@ -197,7 +253,7 @@ def create_program_descriptor(
         # producer (direct tile read); RM gamma -> compute-tilize is the producer.
         # Single producer per compiled program (CT-arg dispatch), same pattern as
         # cb_x_in for the input layout.
-        add_cb(CB_GAMMA, tile_gamma, DEPTH * BLOCK_SIZE, gamma_dtype)
+        add_cb(CB_GAMMA, tile_gamma, gamma_cb_pages, gamma_dtype)
         # cb_gamma_sticks is the RM-gamma-only tilize input; not needed for TILE gamma.
         if gamma_is_rm:
             add_cb(CB_GAMMA_STICKS, tile_gamma, DEPTH * BLOCK_SIZE, gamma_dtype)
@@ -220,6 +276,7 @@ def create_program_descriptor(
         in_page,
         gamma_page,
         1 if gamma_is_rm else 0,
+        1 if use_resident else 0,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
@@ -278,6 +335,7 @@ def create_program_descriptor(
         1 if has_partial_w else 0,
         eps_bits,
         1 if gamma_is_rm else 0,
+        1 if use_resident else 0,
     ]
 
     compute_rt_args = ttnn.RuntimeArgs()

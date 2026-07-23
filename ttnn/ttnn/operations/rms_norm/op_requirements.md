@@ -115,7 +115,7 @@ cells unregressed.
 
 ---
 
-### [ ] Refinement 3 — Speed up the interleaved prefill perf profile
+### [x] Refinement 3 — Speed up the interleaved prefill perf profile
 
 **Type**: perf
 

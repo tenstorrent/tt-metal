@@ -19,6 +19,16 @@
 // 1-tile in-DST finalize transform_in_place exists for (streaming_reduce_helpers
 // .hpp:104-105) — its inner ops are raw SFPU calls by that helper's design.
 //
+// Refinement 3 (resident single-read fast-path, op_design.md §1 lamp 1): a TILE
+// input that fits L1 holds its whole tile-row (and gamma) resident so BOTH passes
+// read x from L1 — no 2nd DRAM read. The resident square / x*rstd / *gamma steps
+// use `eltwise_chain` DIRECTLY (BinaryFpu + PackTile) rather than the square<>/mul<>
+// convenience wrappers, ONLY because those wrappers do not expose the TileOffset
+// template parameter this path needs to index block b of the held row at absolute
+// front offset b*BLOCK_SIZE. This is the SAME eltwise helper, just its lower-level
+// composable form — not a raw-LLK substitution. The streaming path (fallback) keeps
+// the square<>/mul<>/copy<> convenience wrappers unchanged.
+//
 // Deviation (forced, advisory): the streaming-reduce wrapper
 // accumulate_reduce_block is stale in this kernel_lib checkout — it calls
 // reduce<>() with the CBs as RUNTIME args, but reduce<>()'s current signature
@@ -67,6 +77,13 @@ void kernel_main() {
     // the reader already filled cb_gamma with tiles, so the tilize is skipped
     // (op_design.md §5 tiled-gamma knob-turn, Refinement 2).
     constexpr bool GAMMA_IS_RM = get_compile_time_arg_val(6) != 0;
+    // Resident single-read fast-path (op_design.md §1 lamp 1, Refinement 3): the
+    // whole tile-row (Wt tiles) is held in cb_x_in so BOTH passes read it from L1
+    // (no 2nd DRAM read), and gamma is held resident across the core's rows. Only
+    // the input CB policy + CB sizing change vs the streaming path — the compute
+    // phase sequence is identical (square -> reduce -> rsqrt -> x*rstd -> *gamma).
+    constexpr bool USE_RESIDENT = get_compile_time_arg_val(7) != 0;
+    constexpr uint32_t Wt = BLOCK_SIZE * NUM_BLOCKS;  // whole tile-row width
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
 
@@ -79,6 +96,116 @@ void kernel_main() {
     // Partial scaler tile (idx 1) on the last W-tile of the last block.
     constexpr auto partial_scaler =
         HAS_PARTIAL_W ? ckl::ReducePartialScaler::last_tile_at(1) : ckl::ReducePartialScaler::none();
+
+    // ---- Resident single-read fast-path (TILE input, TILE/no gamma) ----
+    // Block-offset resident: the whole tile-row (Wt tiles) is held in cb_x_in —
+    // waited ONCE per row and popped ONCE per row — and each of the NUM_BLOCKS
+    // blocks reads its slice at the absolute front offset b*BLOCK_SIZE via
+    // OperandKind::Block + TileOffset::Set + InputLifecycle::CallerManaged (the
+    // chain neither waits nor pops; the row-level wait/pop bracket own that). So
+    // BOTH passes read the same L1 tiles — no 2nd DRAM read — while cb_xsq/cb_norm
+    // stay 2*BLOCK_SIZE, so this fits EVERY prefill width (unlike a whole-row
+    // block). gamma is likewise held resident: waited once at core entry, read per
+    // block at offset b*BLOCK_SIZE (CallerManaged), popped once at core exit. The
+    // compute phase sequence is otherwise identical to the streaming path below.
+    if constexpr (USE_RESIDENT) {
+        if constexpr (HAS_GAMMA) {
+            cb_wait_front(cb_gamma, Wt);  // resident gamma: read once by the reader, held
+        }
+        for (uint32_t row = 0; row < num_rows; ++row) {
+            cb_wait_front(cb_x_in, Wt);  // whole tile-row resident (read once from DRAM)
+
+            // ---------- Pass 1: mean(x^2) ----------
+            for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
+                // x^2 for block b: read cb_x_in tiles [b*BS, b*BS+BS) (no wait/pop).
+                ckl::eltwise_chain(
+                    block_shape,
+                    ckl::BinaryFpu<
+                        cb_x_in,
+                        cb_x_in,
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None,
+                        ckl::InputLifecycle::CallerManaged,
+                        ckl::InputLifecycle::CallerManaged,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::Dst::D0,
+                        ckl::OperandKind::Block,
+                        ckl::OperandKind::Block,
+                        ckl::TileOffset::Set,
+                        ckl::TileOffset::Set>{b * BLOCK_SIZE, b * BLOCK_SIZE},
+                    ckl::PackTile<cb_xsq, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                // Cross-block accumulating reduce: partial scaler only on the last block.
+                const ckl::ReducePartialScaler ps =
+                    (b + 1 == NUM_BLOCKS) ? partial_scaler : ckl::ReducePartialScaler::none();
+                ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_rstd>(
+                    reduce_shape,
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::Accumulate::at(cb_rstd, b),
+                    ckl::NoOp{},
+                    ps);
+            }
+
+            // +eps, rsqrt -> 1/RMS (held across pass 2).
+            ckl::transform_in_place(cb_rstd, [](uint32_t dst) {
+                binop_with_scalar_tile_init();
+                add_unary_tile(dst, eps_bits);
+                rsqrt_tile_init();
+                rsqrt_tile(dst);
+            });
+
+            // ---------- Pass 2: x * rstd * gamma (same resident tiles) ----------
+            for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
+                // x * rstd for block b: read cb_x_in at offset b*BS (no wait/pop);
+                // rstd held (1 tile), popped at row end.
+                ckl::eltwise_chain(
+                    block_shape,
+                    ckl::BinaryFpu<
+                        cb_x_in,
+                        cb_rstd,
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::Col,
+                        ckl::InputLifecycle::CallerManaged,
+                        ckl::InputLifecycle::HeldBulk,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::Dst::D0,
+                        ckl::OperandKind::Block,
+                        ckl::OperandKind::Col,
+                        ckl::TileOffset::Set,
+                        ckl::TileOffset::Unset>{b * BLOCK_SIZE, 0},
+                    ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+
+                if constexpr (HAS_GAMMA) {
+                    // norm * gamma for block b: gamma held resident, read at offset b*BS.
+                    ckl::eltwise_chain(
+                        block_shape,
+                        ckl::BinaryFpu<
+                            cb_norm,
+                            cb_gamma,
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::Row,
+                            ckl::InputLifecycle::Streaming,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Scalar,
+                            ckl::OperandKind::Row,
+                            ckl::TileOffset::Unset,
+                            ckl::TileOffset::Set>{0, b * BLOCK_SIZE},
+                        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                } else {
+                    ckl::copy<cb_norm, cb_out>(block_shape);
+                }
+            }
+
+            cb_pop_front(cb_x_in, Wt);  // release the resident tile-row
+            cb_pop_front(cb_rstd, 1);   // release the held 1/RMS tile
+        }
+        if constexpr (HAS_GAMMA) {
+            cb_pop_front(cb_gamma, Wt);  // release the resident gamma row
+        }
+        cb_pop_front(cb_scaler, HAS_PARTIAL_W ? 2 : 1);
+        return;
+    }
 
     for (uint32_t row = 0; row < num_rows; ++row) {
         // ---------- Pass 1: mean(x^2) ----------
