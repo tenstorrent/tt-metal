@@ -81,6 +81,21 @@ def _f32_bits(x):
     return struct.unpack("<I", struct.pack("<f", float(x)))[0]
 
 
+def _resolve_math_fidelity(dtype, requested):
+    """Correct fidelity per input dtype (single source of truth).
+
+    bf16 / bf8b carry a 7-bit mantissa that fits losslessly in the FPU's TF32
+    src registers, so HiFi3/HiFi4's extra passes buy nothing — and HiFi4 +
+    fp32-DEST with bf16 inputs *silently corrupts* the matmul (issue #38306).
+    Clamp those inputs to HiFi2. float32 keeps the requested fidelity (HiFi4
+    recovers the mantissa bits TF32 truncation drops).
+    """
+    if dtype in (ttnn.bfloat16, ttnn.bfloat8_b):
+        if requested in (ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.HiFi3):
+            return ttnn.MathFidelity.HiFi2
+    return requested
+
+
 def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, scale, compute_kernel_config):
     b, h_q, s_q, d = tuple(query.shape)
     _, h_kv, s_kv, _ = tuple(key.shape)
@@ -126,15 +141,29 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
             assignment.append((core, start, per_core))
             start += per_core
 
-    # ---- Circular buffers ----
-    tile = ttnn.tile_size(ttnn.bfloat16)
-    bf16 = ttnn.bfloat16
+    # ---- Circular-buffer formats (dtype-derived; single source per role) ----
+    #   * input CBs (Q/K/V/mask) carry the user input dtype — the reader byte-
+    #     copies DRAM tiles into them, so the CB tile size must match.
+    #   * cb_out carries the bf16 output (op contract; writer byte-copies out).
+    #   * intermediates: fp32 whenever fp32_dest_acc_en=True. The online-softmax
+    #     running (m,l,O) is parked in a CB and reloaded every KV-block, so the
+    #     accumulation crosses the CB — a bf16 park truncates back to 7 mantissa
+    #     bits each step and erases the fp32-DEST gain (skill §4). fp32 here is
+    #     the lever that clears the adversarial-distribution regressions
+    #     (large-magnitude / uniform / negative). When acc is off (16-bit-DEST
+    #     path, e.g. the bf16 perf profile) the CB matches the streaming width.
+    #   * scalers stay bf16 (reader packs them via prepare_reduce_scaler).
+    in_df = query.dtype
+    out_df = output_tensor.dtype  # follows the input dtype (see entry point)
+    interm_df = ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+    scaler_df = ttnn.bfloat16
 
-    def cb(index, num_pages):
+    def cb(index, num_pages, data_format):
+        t = ttnn.tile_size(data_format)
         return ttnn.CBDescriptor(
-            total_size=num_pages * tile,
+            total_size=num_pages * t,
             core_ranges=all_cores,
-            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=bf16, page_size=tile)],
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=data_format, page_size=t)],
         )
 
     q_tiles = sq_chunk_t * dht
@@ -143,26 +172,26 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     o_tiles = sq_chunk_t * dht
 
     cbs = [
-        cb(CB_Q_IN, q_tiles * Q_BUFFER_FACTOR),
-        cb(CB_K_IN, k_tiles * KV_BUFFER_FACTOR),
-        cb(CB_V_IN, k_tiles * KV_BUFFER_FACTOR),
-        cb(CB_SCALER_MAX, 1),
-        cb(CB_SCALER_SUM, 1),
-        cb(CB_OUT, o_tiles * 2),
-        cb(CB_QK_SCORES, qk_tiles),
-        cb(CB_MAX_A, sq_chunk_t),  # running max (cb_m)
-        cb(CB_MAX_B, sq_chunk_t),  # m_cur scratch (cb_max_cur)
-        cb(CB_MAX_NEW, sq_chunk_t),
-        cb(CB_SUM_A, sq_chunk_t),  # running sum (cb_l)
-        cb(CB_SUM_NEW, sq_chunk_t),
-        cb(CB_SUM_SCALED, sq_chunk_t),
-        cb(CB_EXP_MAX_DIFF, sq_chunk_t),
-        cb(CB_OUT_A, o_tiles),  # running output accumulator (cb_o)
-        cb(CB_OUT_NEW, o_tiles),
-        cb(CB_OUT_SCALED, o_tiles),
+        cb(CB_Q_IN, q_tiles * Q_BUFFER_FACTOR, in_df),
+        cb(CB_K_IN, k_tiles * KV_BUFFER_FACTOR, in_df),
+        cb(CB_V_IN, k_tiles * KV_BUFFER_FACTOR, in_df),
+        cb(CB_SCALER_MAX, 1, scaler_df),
+        cb(CB_SCALER_SUM, 1, scaler_df),
+        cb(CB_OUT, o_tiles * 2, out_df),
+        cb(CB_QK_SCORES, qk_tiles, interm_df),
+        cb(CB_MAX_A, sq_chunk_t, interm_df),  # running max (cb_m)
+        cb(CB_MAX_B, sq_chunk_t, interm_df),  # m_cur scratch (cb_max_cur)
+        cb(CB_MAX_NEW, sq_chunk_t, interm_df),
+        cb(CB_SUM_A, sq_chunk_t, interm_df),  # running sum (cb_l)
+        cb(CB_SUM_NEW, sq_chunk_t, interm_df),
+        cb(CB_SUM_SCALED, sq_chunk_t, interm_df),
+        cb(CB_EXP_MAX_DIFF, sq_chunk_t, interm_df),
+        cb(CB_OUT_A, o_tiles, interm_df),  # running output accumulator (cb_o)
+        cb(CB_OUT_NEW, o_tiles, interm_df),
+        cb(CB_OUT_SCALED, o_tiles, interm_df),
     ]
     if has_mask:
-        cbs.append(cb(CB_MASK_IN, qk_tiles * KV_BUFFER_FACTOR))
+        cbs.append(cb(CB_MASK_IN, qk_tiles * KV_BUFFER_FACTOR, in_df))
 
     # ---- Reader kernel ----
     reader_ct = [
@@ -229,12 +258,22 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
         pv_sb_h,
         pv_sb_w,
     ]
+    # Rebuild the compute config with the dtype-correct fidelity (never pass a
+    # HiFi4 + fp32-DEST + bf16 combo through — issue #38306). fp32_dest_acc_en
+    # and math_approx_mode are honored as-passed.
+    resolved_compute_config = ttnn.ComputeConfigDescriptor(
+        math_fidelity=_resolve_math_fidelity(
+            query.dtype, getattr(compute_kernel_config, "math_fidelity", ttnn.MathFidelity.HiFi2)
+        ),
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        math_approx_mode=bool(getattr(compute_kernel_config, "math_approx_mode", False)),
+    )
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct,
         runtime_args=compute_rt,
-        config=compute_kernel_config,
+        config=resolved_compute_config,
     )
 
     # ---- Writer kernel ----

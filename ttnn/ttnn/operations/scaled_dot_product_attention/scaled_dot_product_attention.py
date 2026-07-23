@@ -72,8 +72,8 @@ INPUT_TAGGERS = {
 # aligned, self/cross, mha/gqa/mqa, mask none/custom, scale auto/explicit.
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
-    "fp32_dest_acc_en": [True],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "attention_kind": ["self", "cross"],
@@ -88,9 +88,19 @@ SUPPORTED = {
 # ---------------------------------------------------------------------------
 #
 # causal is not in SUPPORTED[mask_mode], so {causal, cross} is already refused
-# at the axis level; no cell-level EXCLUSION is required in Phase-1.
+# at the axis level; no cell-level EXCLUSION is required for it.
+#
+# Refinement 1 (numerical configurability):
+#   * {float32, fp32_dest_acc_en=False} — the maxed input dtype paired with the
+#     16-bit-DEST accumulator is legal-but-lossy (fp32 precision is thrown away
+#     mid-reduce). Refused, mirroring softmax.
+#   * {bfloat8_b, fp32_dest_acc_en=False} — kept SUPPORTED: it clears the golden
+#     (bf8b, False) tolerance (0.99 / 0.12); block-float already dominates the
+#     error budget, so the DEST width is second-order.
 
-EXCLUSIONS = []
+EXCLUSIONS = [
+    {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+]
 
 
 PROPERTIES = {
@@ -240,9 +250,12 @@ def scaled_dot_product_attention(
         scale = 1.0 / math.sqrt(d)
 
     device = query.device()
+    # Output dtype follows the input dtype (fp32→fp32, bf16→bf16, bf8b→bf8b) —
+    # the golden contract checks got.dtype == input dtype, and a downstream fp32
+    # consumer must not be silently narrowed to bf16.
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(query.shape)),
-        ttnn.bfloat16,
+        query.dtype,
         ttnn.TILE_LAYOUT,
         device,
         ttnn.DRAM_MEMORY_CONFIG,

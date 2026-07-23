@@ -51,7 +51,7 @@
 - **Compute config**: HiFi2 + fp32_dest_acc_en=True (single source via `default_compute_kernel_config()`)
 - **Golden baseline**: 206 supported_pass / 6 supported_fail (all OOM, D∈{512,1024}) / 2113 xfail_expected; xpass_drift=0, xfail_wrong_mode=0 (per `verifier_report.json`)
 
-### [ ] Refinement 1 — Numerical configurability expansion
+### [x] Refinement 1 — Numerical configurability expansion
 
 **Goal**: add `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` and add
 `False` to `SUPPORTED["fp32_dest_acc_en"]`; the entry point already exposes
