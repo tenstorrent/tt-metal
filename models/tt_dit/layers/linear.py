@@ -52,14 +52,12 @@ def maybe_cast_activation(x: ttnn.Tensor, activation_dtype) -> ttnn.Tensor:
 def resolve_output_dtype(dtype, x: ttnn.Tensor):
     """Pin a block-float-fed matmul's output back to bf16 unless the caller asked for something else.
 
-    The matmuls default their output dtype to the input's (``output_dtype.value_or(in0.dtype())``), so a
-    quantized activation would otherwise push bf8 downstream — into the residual stream, and into
-    ``DistributedRMSNorm``, which rejects anything but bf16. The lever is input-side (fewer bytes over
-    the fabric and into the matmul) and must stop at the output.
-
-    Keyed on the input's dtype rather than on the configured ``activation_dtype`` so it also covers an
-    input that arrived block-float from upstream (e.g. an SDPA output under an SDPA-input quant). bf16
-    and fp32 inputs keep their existing default.
+    Called only by a linear whose quant config opted in (``pin_blockfloat_output``), so no other
+    model's default output dtype (``output_dtype.value_or(in0.dtype())``) changes. Keyed on the input's
+    dtype so it covers an input that arrived block-float from upstream (e.g. the gate projection fed
+    the shared bf8 activation), not just one this linear cast itself; without the pin a bf8 activation
+    would push downstream into the residual stream and ``DistributedRMSNorm``, which rejects anything
+    but bf16.
     """
     if dtype is None and x.get_dtype() in (ttnn.bfloat8_b, ttnn.bfloat4_b):
         return ttnn.bfloat16
@@ -207,6 +205,9 @@ class ColParallelLinear(Module):
         # buy matmul-internal precision only while paying a full typecast pass — and RowParallel's
         # input is the 4x-wide FFN intermediate, so that trade is strictly negative.
         self.activation_dtype = None
+        # Pin a bf8/bf4-fed output back to bf16 (see resolve_output_dtype). Set by the quant config on
+        # the linears on its path; off elsewhere so no other model's default output dtype changes.
+        self.pin_blockfloat_output = False
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -267,7 +268,8 @@ class ColParallelLinear(Module):
         If chunks is set, returns a list of tensors split along the output dimension.
         """
         x = maybe_cast_activation(x, self.activation_dtype)
-        dtype = resolve_output_dtype(dtype, x)
+        if self.pin_blockfloat_output:
+            dtype = resolve_output_dtype(dtype, x)
 
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)

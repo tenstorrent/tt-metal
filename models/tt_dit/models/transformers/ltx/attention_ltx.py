@@ -322,7 +322,8 @@ class LTXAttention(Module):
         # their tile size to the weight's, not the activation's — and the output is the residual
         # stream, so it must be pinned back to bf16 rather than inheriting the bf8 activation.
         x = maybe_cast_activation(x, to_out.activation_dtype)
-        dtype = resolve_output_dtype(dtype, x)
+        if to_out.pin_blockfloat_output:
+            dtype = resolve_output_dtype(dtype, x)
 
         if to_out.fsdp_mesh_axis is not None and to_out.mesh_device.shape[to_out.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(to_out.weight.data)

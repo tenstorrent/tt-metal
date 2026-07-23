@@ -171,6 +171,7 @@ def _apply_linear_quant(linear, lc: LinearQuantConfig) -> None:
         return
     if LTX_QUANT_ACTIVATIONS and hasattr(linear, "activation_dtype"):
         linear.activation_dtype = lc.activation_dtype
+        linear.pin_blockfloat_output = True
     if lc.weight_dtype == ttnn.bfloat16:
         return
     _quantize_weight(linear.weight, lc.weight_dtype)
@@ -206,11 +207,19 @@ def apply_quant_config_to_block(block, config: QuantConfig, arch, has_audio: boo
 
     sdpa_input_dtype = ttnn.bfloat8_b if LTX_QUANT_SDPA_BF8 else config.ring_sdpa.input_dtype
 
+    def _pin_gate_output(attn):
+        # to_gate_logits shares the gathered (bf8) activation with to_q/to_qkv but is not itself
+        # quantized, so — like the quantized linears — its output must be pinned back to bf16.
+        gate = getattr(attn, "to_gate_logits", None)
+        if LTX_QUANT_ACTIVATIONS and gate is not None and hasattr(gate, "pin_blockfloat_output"):
+            gate.pin_blockfloat_output = True
+
     def _quant_self_attn(attn):
         if attn is None:
             return
         _apply_linear_quant(attn.to_qkv, config.self_attn_qkv)
         _apply_linear_quant(attn.to_out, config.self_attn_out)
+        _pin_gate_output(attn)
         attn.mm_compute_kernel_config = qkv_compute
         attn.sdpa_compute_kernel_config = sdpa_compute
         # Assign unconditionally (incl. None) so re-applying a preset that requests no SDPA cast
@@ -223,6 +232,7 @@ def apply_quant_config_to_block(block, config: QuantConfig, arch, has_audio: boo
         _apply_linear_quant(attn.to_q, config.cross_attn_q)
         _apply_linear_quant(attn.to_kv, config.cross_attn_kv)
         _apply_linear_quant(attn.to_out, config.cross_attn_out)
+        _pin_gate_output(attn)
         attn.mm_compute_kernel_config = cross_compute
 
     _quant_self_attn(block.attn1)
