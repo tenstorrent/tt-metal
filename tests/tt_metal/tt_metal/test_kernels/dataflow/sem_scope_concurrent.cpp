@@ -6,7 +6,11 @@
 // the ATOMIC mechanism under real multi-DM contention (single-writer tests can't tell an
 // atomic path from a non-atomic one). Quasar-only (roles gated by mhartid).
 //
-// Modes (via -D), scope via SEM_SCOPE_EXTERNAL / SEM_SCOPE_DM_LOCAL_CACHED:
+// The physical scope is baked host-side (SemaphoreSpec.scope) and picked up here via CTAD, so
+// this kernel is scope-agnostic — the same source runs under EXTERNAL / DM_LOCAL_CACHED /
+// LOCAL_NONATOMIC depending on how the host built the SemaphoreSpec.
+//
+// Modes (via -D):
 //   MODE_CONCURRENT_UP     : all user DMs up(1)*iters a shared Semaphore, then signal a
 //                            'done' semaphore; the lowest DM waits for all, reports value().
 //                            Expect num_threads*iters. A non-atomic up() loses updates -> less.
@@ -18,14 +22,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "experimental/kernel_args.h"
-
-#if defined(SEM_SCOPE_EXTERNAL)
-constexpr SemScope kScope = SemScope::EXTERNAL;
-#elif defined(SEM_SCOPE_DM_LOCAL_CACHED)
-constexpr SemScope kScope = SemScope::DM_LOCAL_CACHED;
-#else
-constexpr SemScope kScope = SemScope::LOCAL_NONATOMIC;
-#endif
 
 static inline void report_value(uint32_t report_addr, uint32_t v) {
     volatile tt_l1_ptr uint32_t* r = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
@@ -45,7 +41,7 @@ void kernel_main() {
     asm volatile("csrr %0, mhartid" : "=r"(hart));
     const bool is_lowest = (hart == 2);
 
-    Semaphore<ProgrammableCoreType::TENSIX, kScope> work(sem::counter);
+    Semaphore work(sem::counter);  // CTAD deduces the host-baked scope
 
 #if defined(MODE_PRODUCER_CONSUMER)
     if (is_lowest) {
@@ -62,7 +58,7 @@ void kernel_main() {
         }
     }
 #else  // MODE_CONCURRENT_UP
-    Semaphore<ProgrammableCoreType::TENSIX, kScope> done(sem::done);
+    Semaphore done(sem::done);  // CTAD deduces the host-baked scope
     for (uint32_t i = 0; i < increment_times; i++) {
         work.up(1);
     }
