@@ -11,7 +11,6 @@
 #include <tracy/TracyTTDevice.hpp>
 #include "context/context_types.hpp"
 #include "realtime_profiler_consumer.hpp"
-#include "tt_metal/impl/dispatch/data_collection.hpp"
 
 namespace tt::tt_metal {
 
@@ -25,16 +24,15 @@ public:
     RealtimeProfilerTracyConsumer(const RealtimeProfilerTracyConsumer&) = delete;
     RealtimeProfilerTracyConsumer& operator=(const RealtimeProfilerTracyConsumer&) = delete;
 
-    void on_records(const tt::ProgramRealtimeRecordBatch& batch) override;
+    void on_records(const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) override;
 
 private:
     // Establish a chip's Tracy context on its first record, then recalibrate whenever the record's device_cycle_offset
     // moves (i.e. a host<->device re-anchor happened).
-    void CalibrateFromRecord(const tt::ProgramRealtimeRecord& record);
+    void CalibrateFromRecord(const tt::tt_metal::experimental::ProgramRealtimeRecord& record);
     // Create and calibrate a Tracy context for the given device; returns it (caller stores it in chips_).
     TracyTTCtx AddDevice(uint32_t chip_id, int64_t host_anchor, double device_anchor, double frequency);
-    // Handle a single program record.
-    void HandleRecord(const tt::ProgramRealtimeRecord& record);
+    void HandleRecord(const tt::tt_metal::experimental::ProgramRealtimeRecord& record);
     // Send a GpuCalibration event to Tracy, updating the host-device clock mapping.
     void CalibrateDevice(uint32_t chip_id, int64_t host_anchor, uint64_t device_anchor, double frequency);
     TracyTTCtx GetContext(uint32_t chip_id);
@@ -45,7 +43,8 @@ private:
     void PublishDeviceProfilerSyncAnchor(
         uint32_t chip_id, int64_t host_anchor, uint64_t device_anchor, double frequency);
 
-    void RecordSkippedZoneWithEndBeforeStart(const tt::ProgramRealtimeRecord& record, int64_t delta);
+    void RecordSkippedZoneWithEndBeforeStart(
+        const tt::tt_metal::experimental::ProgramRealtimeRecord& record, int64_t delta);
     void MaybeEmitSkippedZoneSummary();
 
     struct SkippedEndBeforeStartStats {
@@ -59,14 +58,12 @@ private:
     };
 
     ContextId context_id_;
-#if defined(TRACY_ENABLE)
     bool host_clock_checked_ = false;
     bool host_clock_valid_ = false;
-#endif
     // Per-chip Tracy state, indexed by chip_id. chip_ids are small and dense, so a flat vector keeps the per-record
     // path hash-free (a vector index + an offset compare) — see CalibrateFromRecord / GetContext.
     struct PerChip {
-        TracyTTCtx ctx = nullptr;  // null until this chip's first record creates its Tracy context
+        TracyTTCtx ctx = nullptr;
         int64_t last_seen_offset =
             0;  // last clock_sync.device_cycle_offset seen; a change signals a host<->device re-anchor
     };

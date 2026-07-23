@@ -4,8 +4,8 @@
 
 #include "realtime_profiler_service.hpp"
 
-#include <algorithm>
 #include <exception>
+#include <ranges>
 #include <span>
 #include <string>
 #include <utility>
@@ -64,10 +64,9 @@ tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle RealtimeProfil
     auto& registration = it->second;
 
     for (const auto& [ring, max_batch_records] : max_batch_records_by_ring_) {
-        auto [reader_it, reader_inserted] =
-            registration.readers.try_emplace(ring, ring->make_reader(), max_batch_records);
+        const bool reader_inserted =
+            registration.readers.try_emplace(ring, ring->make_reader(), max_batch_records).second;
         TT_FATAL(reader_inserted, "Duplicate real-time profiler ring during consumer registration");
-        (void)reader_it;
     }
 
     try {
@@ -104,17 +103,14 @@ void RealtimeProfilerService::attach_ring(RealtimeProfilerRecordRing& ring, size
 
     {
         std::lock_guard topology_lock(topology_mutex_);
-        auto [ring_it, inserted] = max_batch_records_by_ring_.emplace(&ring, max_batch_records);
+        const bool inserted = max_batch_records_by_ring_.emplace(&ring, max_batch_records).second;
         TT_FATAL(inserted, "Real-time profiler ring is already attached");
-        (void)ring_it;
 
-        for (auto& [handle, registration] : consumers_) {
-            (void)handle;
+        for (auto& registration : consumers_ | std::views::values) {
             std::lock_guard control_lock(registration.control_mutex);
-            auto [reader_it, reader_inserted] =
-                registration.readers_to_add.try_emplace(&ring, ring.make_reader(), max_batch_records);
+            const bool reader_inserted =
+                registration.readers_to_add.try_emplace(&ring, ring.make_reader(), max_batch_records).second;
             TT_FATAL(reader_inserted, "Real-time profiler ring reader is already pending attachment");
-            (void)reader_it;
             registration.control_pending.store(true, std::memory_order_release);
         }
     }
@@ -127,8 +123,7 @@ void RealtimeProfilerService::detach_ring(RealtimeProfilerRecordRing& ring) {
         const size_t erased = max_batch_records_by_ring_.erase(&ring);
         TT_FATAL(erased == 1, "Cannot detach an unknown real-time profiler ring");
 
-        for (auto& [handle, registration] : consumers_) {
-            (void)handle;
+        for (auto& registration : consumers_ | std::views::values) {
             std::lock_guard control_lock(registration.control_mutex);
             registration.rings_to_drain.push_back(&ring);
             registration.control_pending.store(true, std::memory_order_release);
@@ -288,12 +283,10 @@ void RealtimeProfilerService::stop_registration(ConsumerMap::node_type registrat
     }
 
     uint64_t dropped = 0;
-    for (const auto& [ring, reader] : value.readers) {
-        (void)ring;
+    for (const auto& reader : value.readers | std::views::values) {
         dropped += reader.reader.dropped();
     }
-    for (const auto& [ring, reader] : value.readers_to_add) {
-        (void)ring;
+    for (const auto& reader : value.readers_to_add | std::views::values) {
         dropped += reader.reader.dropped();
     }
     if (dropped != 0) {

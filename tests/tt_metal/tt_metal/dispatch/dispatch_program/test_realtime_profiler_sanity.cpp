@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <map>
@@ -67,6 +68,14 @@ constexpr uint32_t kNumPrograms = 5;
 // range, so 1s is a sanity cap only intended to catch a broken clock /
 // mis-decoded timestamp.
 constexpr double kMaxDurationNs = 1'000'000'000.0;
+
+// clock_sync.sync_error_ns is half the sync-handshake RTT — the minimax bound on the offset anchor, and what each
+// record self-reports as its sync accuracy. Healthy is ~1-2µs; the servo rejects re-anchors whose half-RTT exceeds
+// ~25µs, so the accepted distribution stays well under that. SyncAccuracy asserts the p50/p90/p99 across a session
+// rather than a single loose per-record ceiling (which said nothing about the actual distribution).
+constexpr uint64_t kSyncErrorP50Ns = 6'000;
+constexpr uint64_t kSyncErrorP90Ns = 10'000;
+constexpr uint64_t kSyncErrorP99Ns = 15'000;
 
 // Per-program marker embedded in the kernel source so the source-correlation
 // assertion can verify each record carries the correct source.
@@ -185,6 +194,9 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
         EXPECT_GT(rec.frequency, 0.0) << "RT record frequency must be positive (runtime_id=" << rec.runtime_id
                                       << ", chip=" << rec.chip_id << ")";
 
+        EXPECT_GT(rec.clock_sync.sync_error_ns, 0u)
+            << "RT record sync_error_ns should be set by the init sync handshake (runtime_id=" << rec.runtime_id << ")";
+
         if (rec.frequency > 0.0 && rec.end_timestamp > rec.start_timestamp) {
             uint64_t duration_cycles = rec.end_timestamp - rec.start_timestamp;
             double duration_ns = static_cast<double>(duration_cycles) / rec.frequency;
@@ -214,6 +226,67 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     }
     EXPECT_EQ(programs_with_correct_sources.size(), kNumPrograms)
         << "Not every program's source was correctly correlated by runtime ID";
+}
+
+// Sync accuracy is what each record self-reports as clock_sync.sync_error_ns. Spread programs across many servo
+// re-anchor intervals so the records sample that value over the session, then assert its distribution stays tight.
+// A degraded handshake (slow/contended PCIe) lifts the median; a servo that stops rejecting bad re-anchors fattens the
+// tail — p50/p90/p99 catch each, unlike a single per-record ceiling.
+TEST(RealtimeProfilerSanity, SyncAccuracy) {
+    constexpr int kDeviceId = 0;
+
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    std::mutex records_mu;
+    std::vector<uint64_t> sync_errors_ns;
+    ProgramRealtimeProfilerCallbackHandle handle =
+        RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
+            std::lock_guard<std::mutex> lk(records_mu);
+            for (const auto& rec : batch.records) {
+                sync_errors_ns.push_back(rec.clock_sync.sync_error_ns);
+            }
+        });
+
+    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
+    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
+    // A fixed runtime_id keeps the kernel source (and its JIT compile) shared across iterations; the 50ms spacing
+    // straddles kServoInterval so successive records fall in different re-anchor epochs.
+    constexpr uint32_t kIterations = 40;
+    for (uint32_t i = 0; i < kIterations; ++i) {
+        enqueue_sanity_program(mesh_device, /*runtime_id=*/1, all_cores);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    mesh_device->quiesce_devices();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    UnregisterProgramRealtimeProfilerCallback(handle);
+
+    std::lock_guard<std::mutex> lk(records_mu);
+    ASSERT_GE(sync_errors_ns.size(), kIterations / 2)
+        << "too few records (" << sync_errors_ns.size() << ") to characterize the sync-error distribution";
+    std::sort(sync_errors_ns.begin(), sync_errors_ns.end());
+    const auto pct = [&](double p) {
+        const size_t idx = static_cast<size_t>(std::lround(p * static_cast<double>(sync_errors_ns.size() - 1)));
+        return sync_errors_ns[std::min(sync_errors_ns.size() - 1, idx)];
+    };
+    const uint64_t p50 = pct(0.50);
+    const uint64_t p90 = pct(0.90);
+    const uint64_t p99 = pct(0.99);
+    std::cout << "[ SYNC ] sync_error_ns p50=" << p50 << " p90=" << p90 << " p99=" << p99
+              << " ns (n=" << sync_errors_ns.size() << ")" << std::endl;
+
+    EXPECT_GT(p50, 0u) << "sync_error_ns should be populated by the sync handshake";
+    EXPECT_LT(p50, kSyncErrorP50Ns) << "median sync error too high; the handshake is systematically degraded";
+    EXPECT_LT(p90, kSyncErrorP90Ns) << "p90 sync error too high";
+    EXPECT_LT(p99, kSyncErrorP99Ns) << "tail sync error too high; a bad re-anchor is not being rejected";
+
+    EXPECT_TRUE(mesh_device->close());
 }
 
 TEST(RealtimeProfilerSanity, CloseDrainsRegisteredCallback) {

@@ -55,7 +55,7 @@ std::string FormatTopCounts(const std::unordered_map<Key, uint64_t>& counts) {
 }
 
 tracy::TTDeviceMarker make_marker(
-    const tt::ProgramRealtimeRecord& record,
+    const tt::tt_metal::experimental::ProgramRealtimeRecord& record,
     uint64_t timestamp,
     tracy::TTDeviceMarkerType marker_type,
     const std::string& file) {
@@ -76,7 +76,7 @@ tracy::TTDeviceMarker make_marker(
 
 }  // namespace
 
-void RealtimeProfilerTracyConsumer::on_records(const tt::ProgramRealtimeRecordBatch& batch) {
+void RealtimeProfilerTracyConsumer::on_records(const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
     // Nothing consumes the markers with no server attached, and emitting one per record (millions/s under load) makes
     // Tracy buffer unboundedly, starving every other Tracy-emitting thread (see TTTracyConnected).
     if (!TTTracyConnected()) {
@@ -96,7 +96,8 @@ void RealtimeProfilerTracyConsumer::on_records(const tt::ProgramRealtimeRecordBa
     }
 }
 
-void RealtimeProfilerTracyConsumer::CalibrateFromRecord(const tt::ProgramRealtimeRecord& record) {
+void RealtimeProfilerTracyConsumer::CalibrateFromRecord(
+    const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
     if (record.chip_id >= chips_.size()) {
         chips_.resize(record.chip_id + 1);
     }
@@ -225,7 +226,7 @@ void RealtimeProfilerTracyConsumer::PublishDeviceProfilerSyncAnchor(
 }
 
 void RealtimeProfilerTracyConsumer::RecordSkippedZoneWithEndBeforeStart(
-    const tt::ProgramRealtimeRecord& record, int64_t delta) {
+    const tt::tt_metal::experimental::ProgramRealtimeRecord& record, int64_t delta) {
     auto& stats = skipped_end_before_start_stats_;
     stats.total_skipped++;
 
@@ -276,7 +277,7 @@ void RealtimeProfilerTracyConsumer::MaybeEmitSkippedZoneSummary() {
     stats.last_summary_time = std::chrono::steady_clock::now();
 }
 
-void RealtimeProfilerTracyConsumer::HandleRecord(const tt::ProgramRealtimeRecord& record) {
+void RealtimeProfilerTracyConsumer::HandleRecord(const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
     if (record.end_timestamp < record.start_timestamp) {
         auto delta = static_cast<int64_t>(record.end_timestamp) - static_cast<int64_t>(record.start_timestamp);
         constexpr int64_t kStartupRaceThreshold = -100000;

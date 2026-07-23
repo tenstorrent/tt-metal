@@ -43,7 +43,6 @@ class MeshDevice;
 // L1 carve-out addresses (ring buffer + D2H socket config) for the reserved RT-profiler tensix, anchored past
 // UNRESERVED to bypass the user-space allocator.
 struct RealtimeProfilerCoreL1Addrs {
-    uint32_t base = 0;
     uint32_t ring_buffer = 0;
     uint32_t socket_config = 0;
 };
@@ -84,8 +83,6 @@ private:
         std::unique_ptr<Program> realtime_profiler_program;
         RealtimeProfilerCoreL1Addrs core_l1;
         bool fifo_reached_capacity = false;
-        uint64_t first_timestamp = 0;
-        int64_t sync_host_start = 0;
         double sync_frequency = 0.0;
         // Device cycle at host time 0: device_cycle = sync_frequency * host_ns + device_cycle_offset. Set from the fit
         // in run_sync and re-anchored (slope held fixed) by the servo every kServoInterval so its motion tracks drift.
@@ -101,17 +98,13 @@ private:
         std::shared_ptr<uint32_t[]> ack_host_backing;
         std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> ack_pinned;
         volatile uint32_t* ack_host_ptr = nullptr;
-        // True when ack_host_ptr is a CQ-sysmem (hugepage-fallback) word rather than a coherent host-pinned buffer;
-        // device PCIe writes to it may be non-snooped, so the poll in measure_sync_rtt_ticks must evict the line first.
-        bool ack_host_is_hugepage = false;
-        int64_t sync_host_time_before = 0;
         // Cached UMD TLB window to this device's profiler core, resolved once at init on architectures that map L1
         // statically (Blackhole). When set, the sync timestamp is written with a single MMIO store instead of
         // WriteToDeviceL1; null elsewhere (see write_sync_timestamp). Owned by UMD's TLBManager, not us.
         tt::umd::TlbWindow* sync_tlb = nullptr;
-        // Updated after each successful re-anchor or init SYNC_CHECK handshake; used to pace the servo to at most one
-        // re-anchor per kServoInterval per device.
-        std::optional<std::chrono::steady_clock::time_point> last_finish_sync_at;
+        // Updated after each successful re-anchor; paces the servo to at most one re-anchor per kServoInterval per
+        // device.
+        std::optional<std::chrono::steady_clock::time_point> last_reanchor_at;
 
         DeviceState();
         ~DeviceState();
@@ -124,7 +117,7 @@ private:
     // Set up the D2H socket and launch the BRISC/NCRISC kernels on each eligible local device. Devices failing the
     // eligibility gate or socket creation are skipped.
     void initialize_devices(const std::shared_ptr<MeshDevice>& mesh_device);
-    void run_sync(DeviceState& dev_state, uint32_t num_samples);
+    bool run_sync(DeviceState& dev_state, uint32_t num_samples);
     void run_init_sync();
 
     // Re-anchor dev_state.device_cycle_offset from a fresh (host_anchor, device_anchor) sync point, holding the fitted
@@ -165,9 +158,8 @@ private:
     // available (one MMIO store) or WriteToDeviceL1 otherwise. The host->device latency of this write is the
     // sync-error floor, so the fast path measurably tightens it (~3x lower jitter on Blackhole).
     void write_sync_timestamp(DeviceState& dev_state, uint32_t value);
-    // Arch/IOMMU-specific host<->device sync transport, established at init and used per handshake. Grouped so
-    // every "differs by arch/IOMMU" branch lives in one place, keyed off dev_state.sync_tlb and
-    // dev_state.ack_host_is_hugepage.
+    // Arch/IOMMU-specific host<->device sync transport, established at init and used per handshake; the per-handshake
+    // paths branch on dev_state.sync_tlb and d2h_hugepage_fallback_.
     void configure_sync_write_path(DeviceState& dev_state, IDevice* device);
     void configure_sync_ack_word(
         DeviceState& dev_state,
@@ -180,11 +172,15 @@ private:
     // Device WALL_CLOCK the servicing kernel pushed into the ACK buffer alongside the token; valid only once
     // read_sync_ack has observed the current handshake's token.
     uint64_t read_sync_device_time(const DeviceState& dev_state) const;
-    void start_finish_syncs(std::chrono::steady_clock::time_point now);
+    void service_offset_servo(std::chrono::steady_clock::time_point now);
 
     // Owning MeshDevice's ContextId; all MetalContext access must go through instance(context_id_) so a non-default
     // context doesn't leak to silicon DEFAULT_CONTEXT_ID. See #38445 / #39849.
     ContextId context_id_;
+    // Host without IOMMU + 64-bit PCIe: the D2H socket and the sync-ACK word both fall back to a CQ-sysmem slot whose
+    // device PCIe writes may be non-snooped, so reads must evict the cache line first. Arch+host-wide (not per device),
+    // set once at construction. Mirrors d2h_uses_hugepage_fallback().
+    bool d2h_hugepage_fallback_ = false;
     const DataCollector* data_collector_ = nullptr;
     RealtimeProfilerService* realtime_profiler_service_ = nullptr;
     std::vector<DeviceState> devices_;
@@ -192,7 +188,7 @@ private:
     std::atomic<bool> stop_{false};
 
     // Receiver diagnostics
-    std::atomic<uint32_t> peak_fifo_pages_{0};  // all-time peak D2H FIFO usage (diagnostics getter)
+    std::atomic<uint32_t> peak_fifo_pages_{0};  // all-time peak D2H FIFO usage
     // Max D2H FIFO occupancy observed since the last diagnostics-plot sample; reset each plot tick so the plot shows
     // per-window backlog peaks instead of a monotonic high-water mark. Receiver-thread only (updated on drain,
     // read+reset in the plot block), so no atomic needed.
