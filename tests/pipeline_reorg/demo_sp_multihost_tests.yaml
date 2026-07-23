@@ -106,6 +106,11 @@
 # (built tree is unpacked there per node). Do not pass --rank-binding, --map-by
 # rankfile, or --host in --mpi-args. Use --bind-to none (not hwt): Phase 1 has no
 # rankfile, and hwt mapping fails on worker cpusets.
+#
+# Log control (runner OOM): multihost-with-nfs runners are capped at 4Gi. Streaming
+# 64 ranks of --tag-output into the Actions agent OOMKills the runner (exit 137).
+# Redirect rank stdout/stderr to NFS via --output-filename; keep TT_LOGGER_LEVEL /
+# LOGURU quiet. Per-rank files land at /ci/tt-metal/ranklogs.* for artifact upload.
 
 - name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
@@ -114,16 +119,19 @@
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
+    RANKLOG_PREFIX=/ci/tt-metal/ranklogs
 
     # Automapper Phase 1 outputs must land on NFS (same pattern as kimi-decode-ladder).
     cd /ci/tt-metal
+    rm -f "${RANKLOG_PREFIX}".*
 
-    # Keep GH logs readable: 64 ranks x default INFO saturates the Actions log viewer.
+    # Quiet C++/Python logs + redirect 64-rank MPI stdout off the runner console
+    # (4Gi runner OOMKilled buffering tagged output -- confirmed on s76vr).
     TT_LOGGER_LEVEL=warn TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "$MGD" \
       --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} -x LOGURU_LEVEL=WARNING" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${RANKLOG_PREFIX} -x LOGURU_LEVEL=WARNING" \
       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
@@ -146,14 +154,16 @@
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
+    RANKLOG_PREFIX=/ci/tt-metal/ranklogs
 
     cd /ci/tt-metal
+    rm -f "${RANKLOG_PREFIX}".*
 
     TT_LOGGER_LEVEL=warn TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "$MGD" \
       --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} -x LOGURU_LEVEL=WARNING" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${RANKLOG_PREFIX} -x LOGURU_LEVEL=WARNING" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -175,14 +185,16 @@
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
+    RANKLOG_PREFIX=/ci/tt-metal/ranklogs
 
     cd /ci/tt-metal
+    rm -f "${RANKLOG_PREFIX}".*
 
     TT_LOGGER_LEVEL=warn TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "$MGD" \
       --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} -x LOGURU_LEVEL=WARNING" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${RANKLOG_PREFIX} -x LOGURU_LEVEL=WARNING" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --repeat-generations 2 \

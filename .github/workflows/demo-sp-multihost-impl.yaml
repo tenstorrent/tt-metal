@@ -362,6 +362,18 @@ jobs:
           echo "$CMD"
           eval "$CMD"
 
+      # SC16 automapper redirects MPI rank stdout to /ci/tt-metal/ranklogs.* so the
+      # 4Gi multihost-with-nfs runner is not OOMKilled buffering 64x --tag-output.
+      # Upload before teardown: the runner's /ci PVC is reclaimed with the pod.
+      - name: Upload rank logs
+        if: always() && inputs.sp-config == 'sc16'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sc16-ranklogs-${{ github.run_id }}-${{ strategy.job-index }}
+          path: /ci/tt-metal/ranklogs.*
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Delete test environment
         if: always()
         uses: ./.github/actions/ttop-delete-environment
