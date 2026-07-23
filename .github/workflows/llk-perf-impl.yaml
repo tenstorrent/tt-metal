@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       architecture:
-        description: "Architecture to run: all, wormhole, or blackhole"
+        description: "Architecture to run: all, wormhole, blackhole, or quasar"
         required: false
         default: all
         type: string
@@ -25,6 +25,7 @@ jobs:
     secrets: inherit
 
   load-test-matrix:
+    if: ${{ inputs.architecture != 'quasar' }}
     runs-on: ubuntu-slim
     needs: [build-images]
     outputs:
@@ -76,9 +77,16 @@ jobs:
             ./.github/sku_config.yaml \
             "${SKU_ALLOWLIST_ARGS[@]}"
 
+  compile-quasar-perf:
+    if: ${{ inputs.architecture == 'all' || inputs.architecture == 'quasar' }}
+    needs: [build-images]
+    uses: ./.github/workflows/build-quasar-perf.yml
+    with:
+      docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
+
   llk-perf-exec:
     needs: [load-test-matrix, build-images]
-    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    if: ${{ inputs.architecture != 'quasar' && needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:
