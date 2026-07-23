@@ -54,9 +54,9 @@ class Plotter:
             config["nrows_per_figure"] = 1
             config["ncols_per_figure"] = 1
         if "Quasar Cache Write" in test_name:
-            # Single duration-vs-size plot (two path series); avoid a blank second panel
+            # Two panels: duration vs size and bandwidth vs size (one line per write mode)
             config["nrows_per_figure"] = 1
-            config["ncols_per_figure"] = 1
+            config["ncols_per_figure"] = 2
         return config
 
     def get_bandwidth_mode(self, test_id):
@@ -167,6 +167,7 @@ class Plotter:
                 self.plot_num_transactions_vs_total_cycles(axes[1], plot_data[test_id])
             elif "Quasar Cache Write" in test_name:
                 self.plot_quasar_cache_write_duration(axes[0], plot_data[test_id])
+                self.plot_quasar_cache_write_bandwidth(axes[1], plot_data[test_id])
             else:  # Packet Sizes
                 self.plot_durations(axes[0], plot_data[test_id])
                 self.plot_data_size_vs_bandwidth(
@@ -301,6 +302,22 @@ class Plotter:
             title="Data Size vs Write Duration",
             xlabel="Total Data Size (bytes)",
             ylabel="Duration (cycles)",
+            xscale="log",
+            xbase=2,
+        )
+
+    # Quasar Cache Write: Total Data Size vs Bandwidth (bytes/cycle, one line per write mode)
+    def plot_quasar_cache_write_bandwidth(self, ax, data):
+        self._plot_series(
+            ax=ax,
+            data=data,
+            x_key="transaction_size",  # holds total bytes written (N)
+            y_key="bandwidth",  # num_transactions(=1) * size / duration = bytes/cycle
+            series_keys=["write_path"],
+            label_format=lambda combo, keys: f"{combo[0]}",
+            title="Data Size vs Bandwidth",
+            xlabel="Total Data Size (bytes)",
+            ylabel="Bandwidth (bytes/cycle)",
             xscale="log",
             xbase=2,
         )

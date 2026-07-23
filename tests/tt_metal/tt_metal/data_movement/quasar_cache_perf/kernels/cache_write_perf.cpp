@@ -3,8 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Quasar DM-core cache-write performance kernel.
-// Writes `size_bytes` to Tensix L1 either via the uncached port (+4MB alias)
-// or via cacheable memory followed by flush_l2_cache_range, timing the region.
+// Writes `size_bytes` to Tensix L1 and times the region, in one of three modes
+// (the "Write path" arg):
+//   0 = Uncached, 1-byte stores   -> uncached port (+4MB alias), byte-at-a-time
+//   1 = Uncached, 8-byte stores   -> uncached port, 64-bit stores + byte tail
+//   2 = Cached+Flush, 8-byte      -> cacheable write (64-bit) then flush_l2_cache_range
+// Modes 1 and 2 use the natural 64-bit DM-core store width (8B) for the bulk with
+// a byte tail for any sub-8B remainder (sizes 1/2/4). Stores are volatile so the
+// compiler cannot coalesce/reorder them.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"  // pulls in DeviceZoneScopedN / DeviceTimestampedData
@@ -15,18 +21,35 @@
 void kernel_main() {
     std::uint32_t base_addr = get_arg(args::base_addr);
     std::uint32_t size_bytes = get_arg(args::size_bytes);
-    std::uint32_t write_path = get_arg(args::write_path);  // 0=uncached, 1=cached+flush
+    std::uint32_t mode = get_arg(args::write_path);  // 0=uncached 1B, 1=uncached 8B, 2=cached+flush 8B
     std::uint32_t test_id = get_arg(args::test_id);
 
-    std::uint32_t dst_addr = (write_path == 0) ? (base_addr + MEM_L1_UNCACHED_BASE) : base_addr;
-    volatile std::uint8_t* dst = (volatile std::uint8_t*)(uintptr_t)dst_addr;
+    bool cached = (mode == 2);
+    bool wide = (mode != 0);  // 8-byte stores for modes 1 and 2
+    std::uint32_t dst_addr = cached ? base_addr : (base_addr + MEM_L1_UNCACHED_BASE);
+
+    volatile std::uint64_t* dst64 = (volatile std::uint64_t*)(uintptr_t)dst_addr;
+    volatile std::uint8_t* dst8 = (volatile std::uint8_t*)(uintptr_t)dst_addr;
+    const std::uint64_t fill_word = 0x5A5A5A5A5A5A5A5AULL;
+    const std::uint8_t fill_byte = 0x5A;
 
     {
         DeviceZoneScopedN("RISCV1");
-        for (std::uint32_t i = 0; i < size_bytes; i++) {
-            dst[i] = (std::uint8_t)(i & 0xFF);
+        if (wide) {
+            std::uint32_t num_words = size_bytes >> 3;  // 8-byte stores
+            std::uint32_t tail_start = num_words << 3;
+            for (std::uint32_t i = 0; i < num_words; i++) {
+                dst64[i] = fill_word;
+            }
+            for (std::uint32_t i = tail_start; i < size_bytes; i++) {
+                dst8[i] = fill_byte;
+            }
+        } else {
+            for (std::uint32_t i = 0; i < size_bytes; i++) {
+                dst8[i] = fill_byte;
+            }
         }
-        if (write_path == 1) {
+        if (cached) {
             flush_l2_cache_range(base_addr, size_bytes);
         }
     }
@@ -34,5 +57,5 @@ void kernel_main() {
     DeviceTimestampedData("Test id", test_id);
     DeviceTimestampedData("Number of transactions", 1);
     DeviceTimestampedData("Transaction size in bytes", size_bytes);
-    DeviceTimestampedData("Write path", write_path);
+    DeviceTimestampedData("Write path", mode);
 }

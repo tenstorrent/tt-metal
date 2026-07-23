@@ -1,16 +1,23 @@
 # Quasar Cache-Write Performance Test (test id 912)
 
-Measures single-DM-core write performance to Tensix L1 on Quasar via two paths,
-swept over total data size (1B .. 2KB, powers of two):
+Measures single-DM-core write performance to Tensix L1 on Quasar, swept over
+total data size (1B .. 2KB, powers of two), for three write modes:
 
-- **Uncached** — stores to `base + MEM_L1_UNCACHED_BASE` (+4MB alias); straight
-  to TL1, no flush.
-- **Cached+Flush** — stores to the cacheable window (`0..4MB`), then
+- **Uncached (1B)** — `base + MEM_L1_UNCACHED_BASE` (+4MB alias), byte-at-a-time
+  stores; straight to TL1, no flush.
+- **Uncached (8B)** — same uncached port, but 64-bit stores (the natural DM-core
+  store width) with a byte tail for sub-8B sizes.
+- **Cached+Flush (8B)** — 64-bit stores to the cacheable window (`0..4MB`), then
   `flush_l2_cache_range(base, N)` (flushes `ceil(N/64)` 64B lines).
+
+Comparing Uncached (1B) vs Uncached (8B) isolates the effect of store width on the
+uncached port; comparing Uncached (8B) vs Cached+Flush (8B) isolates the cache +
+flush effect at a fixed store width.
 
 The kernel times each `write(+flush)` region with `DeviceZoneScopedN` and stamps
 `Test id`, `Number of transactions` (=1), `Transaction size in bytes` (=N), and
-`Write path` (0=uncached, 1=cached+flush).
+`Write path` (the mode: 0=Uncached 1B, 1=Uncached 8B, 2=Cached+Flush 8B). Results
+are plotted as both duration (cycles) and bandwidth (bytes/cycle) vs data size.
 
 ## Requirements
 

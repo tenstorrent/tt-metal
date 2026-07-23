@@ -71,8 +71,8 @@ bool run_cache_write(
     tt_metal::detail::ReadFromDeviceL1(device, core, BASE_ADDR, ((size_bytes + 3) / 4) * 4, out);
     const std::uint8_t* bytes = reinterpret_cast<const std::uint8_t*>(out.data());
     for (std::uint32_t i = 0; i < size_bytes; i++) {
-        if (bytes[i] != static_cast<std::uint8_t>(i & 0xFF)) {
-            log_error(tt::LogTest, "path {} size {} mismatch at {}: got 0x{:02x}", write_path, size_bytes, i, bytes[i]);
+        if (bytes[i] != 0x5A) {
+            log_error(tt::LogTest, "mode {} size {} mismatch at {}: got 0x{:02x}", write_path, size_bytes, i, bytes[i]);
             return false;
         }
     }
@@ -92,9 +92,10 @@ TEST_F(QuasarCacheWrite, SizeSweep) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     bool pass = true;
-    for (std::uint32_t write_path : {0u, 1u}) {  // 0=uncached, 1=cached+flush
+    // mode: 0=uncached 1B stores, 1=uncached 8B stores, 2=cached+flush 8B stores
+    for (std::uint32_t mode : {0u, 1u, 2u}) {
         for (std::uint32_t size_bytes : unit_tests::dm::quasar_cache_perf::kSizesBytes) {
-            pass &= unit_tests::dm::quasar_cache_perf::run_cache_write(devices_[0], size_bytes, write_path);
+            pass &= unit_tests::dm::quasar_cache_perf::run_cache_write(devices_[0], size_bytes, mode);
         }
     }
     EXPECT_TRUE(pass);
