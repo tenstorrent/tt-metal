@@ -70,7 +70,7 @@ protected:
 
     // Runs the smoke kernel with the given scope define and returns the value the
     // kernel read back from the semaphore after `iterations` increments.
-    uint32_t run_scope(const std::string& scope_define, bool with_down = false) {
+    uint32_t run_scope(const std::string& scope_define, bool with_down = false, bool via_token = false) {
         // Zero the report scratch word.
         std::vector<uint32_t> zero(1, 0);
         tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, zero);
@@ -88,6 +88,9 @@ protected:
         std::map<std::string, std::string> defs{{scope_define, "1"}};
         if (with_down) {
             defs.emplace("SEM_SCOPE_UPDOWN", "1");  // kernel also does down(N) after up(N)
+        }
+        if (via_token) {
+            defs.emplace("SEM_TOKEN_CTAD", "1");  // construct via SemAccessor token + CTAD (Phase-2 S1)
         }
         experimental::KernelSpec::CompilerOptions::Defines defines_obj(defs);
 
@@ -245,6 +248,17 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeUpDown) {
     const uint32_t observed = run_scope("SEM_SCOPE_LEGACY", /*with_down=*/true);
     log_info(LogTest, "LOCAL_NONATOMIC up/down value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "Semaphore<LOCAL_NONATOMIC>::down() (legacy) did not return to 0.";
+}
+
+// Phase-2 S1: construct the Semaphore from a baked SemAccessor token so CTAD deduces the
+// scope (no explicit <>). Proves the token ctor + CTAD guide compile and route to the
+// deduced scope's up(). (Real bindings become tokens in S2; here the token is hand-built
+// over the bare sem:: id.)
+TEST_F(SemScopeFixture, TestTokenCtadDeduction) {
+    const uint32_t observed = run_scope("SEM_SCOPE_EXTERNAL", /*with_down=*/false, /*via_token=*/true);
+    log_info(LogTest, "token CTAD (EXTERNAL) value(): {} (expected {})", observed, iterations);
+    EXPECT_EQ(observed, iterations)
+        << "Semaphore built via SemAccessor token + CTAD did not deduce the baked scope / route to up().";
 }
 
 // ---- Concurrency proofs (Quasar-only): the single-writer tests above cannot tell an
