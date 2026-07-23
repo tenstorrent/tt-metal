@@ -26,7 +26,7 @@ void populate_runtime_arguments(
     tt::tt_metal::KernelDescriptor& reader_desc,
     tt::tt_metal::KernelDescriptor& writer_desc,
     tt::tt_metal::KernelDescriptor& compute_desc,
-    CoreCoord compute_with_storage_grid_size,
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size,
     bool any_float32,
     const RunningStatistics::operation_attributes_t& operation_attributes,
     const RunningStatistics::tensor_args_t& tensor_args,
