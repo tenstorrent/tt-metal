@@ -171,3 +171,24 @@
 - Hardest-to-change decision: partition whole heads and complete `[K,V]`
   states across devices, keeping recurrence free of collectives.
 - Phase 3 production reference/config implementation starting.
+
+### 2026-07-23 06:39:10 UTC — Independent specification
+
+- Added immutable `KDAConfig` with authoritative model-config mapping and
+  derived q/k/v widths.
+- Added a pure-torch full-layer specification covering independent causal
+  q/k/v convolution caches, vector gate, beta, recurrence, sigmoid-gated
+  RMSNorm, output projection, and final state.
+- The reference requires canonical Hugging Face weight names and exact shapes,
+  including `A_log` shape `[1,1,H,1]`.
+- Command:
+  `python -m pytest -q
+  models/experimental/kimi_delta_attention/tests/test_reference.py`.
+- Result: 11 passed in 2.09 s.
+- Covered target config mapping, invalid dimensions, causal-conv split
+  equivalence, authoritative gate formula, scalar-GDN degeneration, sigmoid
+  output gating, full-layer prefill/decode split equivalence, and exact weight
+  validation errors.
+- Command: `pre-commit run --files` over all four new Python files.
+- Result: all applicable hooks passed.
+- Phase 3 reference/config gate complete; composed full-device layer starting.
