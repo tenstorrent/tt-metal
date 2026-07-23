@@ -282,13 +282,10 @@ def ccl_mesh_param(collective_axis: int):
     )
 
 
-def resolve_runtime_system(mesh_device, path: CollectivePath) -> RuntimeSystem:
+def resolve_runtime_system(mesh_device, path: CollectivePath, topology=ttnn.Topology.Linear) -> RuntimeSystem:
     """Fabric roofline inputs for the live mesh: topology, link count, per-direction bandwidth."""
     mesh_shape = tuple(mesh_device.shape)
-    # Every path — Galaxy 8x4 and both LoudBox proxies — runs the all-gather on a line, matching
-    # production (mla.py:259). The roofline models this topology; a ring path would double the sustained
-    # bandwidth (see CCLTraffic.sustained_directions).
-    topology = ttnn.Topology.Linear
+    # Production uses Linear; perf tests may override this to compare the same workload on Ring.
     default_gbps = _GALAXY_LINK_GBPS_PER_DIRECTION if math.prod(mesh_shape) == 32 else _LOUDBOX_LINK_GBPS_PER_DIRECTION
     link_gbps = float(os.environ.get("MLA_CCL_LINK_GBPS_PER_DIRECTION", default_gbps))
     return RuntimeSystem(mesh_shape, topology, NUM_LINKS, link_gbps)
@@ -480,7 +477,7 @@ def _run_reshard(mesh_device, path, workload, system) -> Measurement:
 # Roofline + reporting
 # --------------------------------------------------------------------------------------------------
 def collective_roofline(path: CollectivePath, workload: Workload, mesh_device, system: RuntimeSystem) -> CCLTraffic:
-    """Independent line-fabric roofline for the production collective."""
+    """Independent Linear/Ring fabric roofline for the production collective."""
     mesh_shape = tuple(mesh_device.shape)
     local_input_bytes = math.prod(path.local_input_shape(workload, mesh_shape)) * torch.bfloat16.itemsize
     participants = mesh_shape[path.collective_axis]
@@ -490,11 +487,10 @@ def collective_roofline(path: CollectivePath, workload: Workload, mesh_device, s
         total_network_bytes = critical_path_bytes * num_devices
         sustained_directions = 2 if system.topology == ttnn.Topology.Ring else 1
     else:
-        assert system.topology == ttnn.Topology.Linear, "all-to-all roofline currently models a line"
-        # Each source sends one participants-sized chunk to each destination. On the busiest midpoint link,
-        # left_sources * right_destinations chunks cross in each direction. Summing every source/destination
-        # distance gives participants * (participants**2 - 1) / 3 chunk-hops per independent mesh line.
-        midpoint = participants // 2
+        assert system.topology in (ttnn.Topology.Linear, ttnn.Topology.Ring)
+        # Both logical schedules use destination-based routing over the same physical FABRIC_2D mesh.
+        # On the busiest midpoint link, left_sources * right_destinations chunks cross in each direction.
+        midpoint = participants / 2
         critical_path_bytes = local_input_bytes * midpoint * (participants - midpoint) / participants
         total_network_bytes = local_input_bytes * num_devices * (participants**2 - 1) / (3 * participants)
         sustained_directions = 1
@@ -516,7 +512,7 @@ def report(path: CollectivePath, scenario: str, mesh_device, measurement: Measur
     sp, tp = mesh_device.shape
 
     logger.info(
-        f"{path.name}/{scenario} [SP{sp}xTP{tp}]: {measurement.input_description} -> {measurement.output_description}"
+        f"{path.name}/{scenario} [{traffic.topology}, SP{sp}xTP{tp}]: {measurement.input_description} -> {measurement.output_description}"
     )
     logger.info(
         f"theoretical fabric roofline: {traffic.link_gigabits_per_second_per_direction:.1f} "
@@ -575,10 +571,10 @@ def _workload(scenario):
     )
 
 
-def _run(mesh_device, path, scenario):
+def _run(mesh_device, path, scenario, topology=ttnn.Topology.Linear):
     assert mesh_device.arch() == ttnn.Arch.BLACKHOLE, "bandwidth assumptions apply to Blackhole only"
     workload = _workload(scenario)
-    system = resolve_runtime_system(mesh_device, path)
+    system = resolve_runtime_system(mesh_device, path, topology)
     measurement = run_collective(mesh_device, path, workload, system)
     traffic = collective_roofline(path, workload, mesh_device, system)
     report(path, scenario, mesh_device, measurement, traffic)
@@ -595,23 +591,28 @@ def test_kvpe_all_gather_perf(mesh_device, scenario):
     _run(mesh_device, KVPE_ALL_GATHER, scenario)
 
 
+RESHARD_TOPOLOGIES = (ttnn.Topology.Linear, ttnn.Topology.Ring)
+
+
 @pytest.mark.parametrize("scenario", _NON_LOOP_SCENARIOS, ids=_scenario_id)
+@pytest.mark.parametrize("topology", RESHARD_TOPOLOGIES, ids=["linear", "ring"])
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [ccl_mesh_param(TP_AXIS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_glm_head_to_sequence_reshard_perf(mesh_device, scenario):
+def test_glm_head_to_sequence_reshard_perf(mesh_device, scenario, topology):
     """Profile GLM's head-sharded to sequence-sharded TP redistribution."""
-    _run(mesh_device, GLM_HEAD_TO_SEQUENCE, scenario)
+    _run(mesh_device, GLM_HEAD_TO_SEQUENCE, scenario, topology)
 
 
 @pytest.mark.parametrize("scenario", _NON_LOOP_SCENARIOS, ids=_scenario_id)
+@pytest.mark.parametrize("topology", RESHARD_TOPOLOGIES, ids=["linear", "ring"])
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [ccl_mesh_param(TP_AXIS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_glm_sequence_to_head_reshard_perf(mesh_device, scenario):
+def test_glm_sequence_to_head_reshard_perf(mesh_device, scenario, topology):
     """Profile GLM's sequence-sharded to head-sharded TP redistribution."""
-    _run(mesh_device, GLM_SEQUENCE_TO_HEAD, scenario)
+    _run(mesh_device, GLM_SEQUENCE_TO_HEAD, scenario, topology)

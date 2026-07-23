@@ -7,6 +7,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/fabric_directions.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ckernel.h"
@@ -35,12 +36,9 @@ constexpr uint16_t source_chip_id = get_compile_time_arg_val(13);
 constexpr uint16_t source_mesh_id = get_compile_time_arg_val(14);
 constexpr bool is_fabric_2d = get_compile_time_arg_val(15);
 constexpr uint32_t fabric_direction_mask = get_compile_time_arg_val(16);
-constexpr uint32_t num_fabric_directions = 4;
-constexpr std::array<bool, num_fabric_directions> fabric_directions = {
-    (fabric_direction_mask & (1 << 0)) != 0,
-    (fabric_direction_mask & (1 << 1)) != 0,
-    (fabric_direction_mask & (1 << 2)) != 0,
-    (fabric_direction_mask & (1 << 3)) != 0};
+constexpr auto fabric_directions =
+    ttnn::operations::ccl::common::fabric_direction_mask_to_directions(fabric_direction_mask);
+constexpr auto num_fabric_directions = ttnn::operations::ccl::common::num_fabric_directions;
 using Fabric2DConnections = std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_fabric_directions>;
 using FabricConnections = std::conditional_t<is_fabric_2d, Fabric2DConnections, FabricConnectionManager>;
 
@@ -107,7 +105,9 @@ void send_initialization(
     uint32_t packet_header_buffer_addr_sema_forward,
     uint32_t packet_header_buffer_addr_sema_backward) {
     using ttnn::operations::ccl::common::ReplicateGroup;
-    static_assert(Topology == tt::tt_fabric::Topology::Linear, "FABRIC_2D all-to-all requires Linear topology");
+    static_assert(
+        Topology == tt::tt_fabric::Topology::Linear || Topology == tt::tt_fabric::Topology::Ring,
+        "FABRIC_2D all-to-all supports only Linear or Ring topology");
     static_assert(
         replicate_axis == ReplicateGroup::COLS || replicate_axis == ReplicateGroup::ROWS,
         "FABRIC_2D all-to-all requires a concrete cluster axis");
@@ -115,7 +115,6 @@ void send_initialization(
     if (core_id != 0 || link_id != 0) {
         return;
     }
-
     constexpr uint32_t positive_range = num_devices - current_device_id - 1;
     constexpr uint32_t negative_range = current_device_id;
     constexpr uint32_t positive_direction =

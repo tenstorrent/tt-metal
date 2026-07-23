@@ -5,6 +5,7 @@
 #include "all_to_all_async_generic_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/ccl/common/types/fabric_directions.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -109,7 +110,7 @@ AllToAllAsyncGenericProgram::create_at(
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, operation_attributes.topology);
 
     const bool is_ring = operation_attributes.topology == ttnn::ccl::Topology::Ring;
-    const size_t num_senders_per_link = (is_ring && operation_attributes.num_devices % 2 == 0) ? 2 : 1;
+    const size_t num_senders_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
         operation_attributes.num_links, num_senders_per_link, device, operation_attributes.sub_device_id);
 
@@ -200,17 +201,18 @@ AllToAllAsyncGenericProgram::create_at(
         block_starts[i].resize(operation_attributes.num_links);
         block_ends[i].resize(operation_attributes.num_links);
     }
-    // splitting device blocks for Ring topology, starting from the farthest device to ensure better load balance
-    const uint32_t num_splitted_devices = 1;
     if (is_ring) {
-        for (int d = operation_attributes.num_devices - 1 + num_splitted_devices; d >= 0; --d) {
-            int distance = (d + 1) / 2;
-            int device_offset = (d % 2 == 0) ? distance : -distance;
-            if (num_senders_per_link == 1) {
-                device_offsets[0].push_back(device_offset);
-            } else {
-                device_offsets[d % 2].push_back(device_offset);
+        // Visit global destinations in the same order on every source to avoid a cyclic fabric schedule.
+        // Use the shortest signed Ring offset; choose the positive arc for an even-size antipode.
+        for (uint32_t target_device = 0; target_device < operation_attributes.num_devices; ++target_device) {
+            int32_t device_offset = static_cast<int32_t>(target_device) - static_cast<int32_t>(device_index);
+            const int32_t half_ring = static_cast<int32_t>(operation_attributes.num_devices / 2);
+            if (device_offset < -half_ring) {
+                device_offset += operation_attributes.num_devices;
+            } else if (device_offset > half_ring) {
+                device_offset -= operation_attributes.num_devices;
             }
+            device_offsets[0].push_back(device_offset);
         }
     } else {
         // Linear topology
@@ -232,19 +234,9 @@ AllToAllAsyncGenericProgram::create_at(
                 block_ends[c][l].push_back(current_end_block);
             }
         }
-        if (is_ring) {
-            for (int i = 0; i < num_splitted_devices; ++i) {
-                uint32_t split = (block_ends[0][l][i] + block_starts[0][l][i]) / 2;
-                block_ends[0][l][i] = split;
-                block_starts[1][l][num_splitted_devices - 1 - i] = split;
-            }
-        }
     }
 
-    uint32_t fabric_direction_mask = 0;
-    for (uint32_t direction = 0; direction < fabric_directions.size(); ++direction) {
-        fabric_direction_mask |= static_cast<uint32_t>(fabric_directions[direction]) << direction;
-    }
+    const uint32_t fabric_direction_mask = ttnn::operations::ccl::common::fabric_directions_to_mask(fabric_directions);
 
     auto sender_writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     sender_writer_kernel_config.compile_args = {
