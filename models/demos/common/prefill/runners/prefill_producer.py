@@ -1050,6 +1050,8 @@ def _write_migration_done_sentinel(triples: list) -> list:
     dst==src (PREFILL_MIGRATE_PAIRWISE=1). Takes the SAME triples list `_issue_migrations` consumed, so
     the sentinel matches exactly what was migrated. Returns the (src, dst) pairs written."""
     done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
+    if not triples:
+        raise ValueError("no migrations completed; refusing to publish an empty DONE sentinel")
     pairs = [(src, dst) for (src, dst, _) in triples]
     with open(done_file, "w") as f:
         for s, d in pairs:
