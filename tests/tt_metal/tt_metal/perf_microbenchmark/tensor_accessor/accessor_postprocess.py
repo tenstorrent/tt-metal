@@ -7,24 +7,24 @@
 """Run + post-process the TensorAccessor on-device microbenchmark for CI.
 
 This is the CI/regression packaging of the existing accessor benchmark gtests
-(tests/ttnn/unit_tests/gtests/accessor/test_accessor_benchmarks.cpp), part of
-extending the runtime microbenchmark suite (issue #46305).
+(built as unit_tests_ttnn_accessor), part of extending the runtime microbenchmark
+suite (issue #46305).
 
-The gtest suite already sweeps the accessor cost across "different tensor
-topologies": shape rank (2..7), sharded vs interleaved, and the 15 static/dynamic
-argument configurations (bank coords / tensor shape / shard shape / num banks /
-rank). Each benchmark kernel wraps the measured op (constructor, get_noc_addr, ...)
-in a DeviceZoneScopedN("SHARDED_ACCESSOR_<bits>") loop, and the device profiler
-records the per-iteration cycle cost.
+It runs exactly one gtest case — AccessorTests/AccessorFullChipBenchmarks.GetNocAddr —
+which measures the accessor address-calculation hot path (get_noc_addr) on the full
+Tensix grid for one pinned all-static config per supported tensor topology (interleaved
+L1/DRAM, 1D/2D/ND sharded L1, sharded DRAM). Each topology case wraps the measured call
+in a DeviceZoneScopedN("SHARDED_ACCESSOR_<bits>") zone and writes its own profiler dir,
+so the standard device profiler records the per-core cycle cost per topology.
 
 This module:
-  1. runs a pinned set of benchmark suites with the device profiler enabled
+  1. runs the full-chip benchmark suite once with the device profiler enabled
      (unless --no-run, in which case it just parses whatever result dirs exist),
-  2. parses each per-(suite, rank) profiler CSV through the official parser
+  2. parses each per-topology profiler CSV through the official parser
      (tracy.process_device_log / device_post_proc_config), reproducing the parse
-     used by tests/ttnn/benchmark/python/test_accessor_benchmarks.py, and
-  3. reduces the runs to one scalar metric per (suite, rank, config) = average
-     cycles, then gates a small pinned subset against a per-arch golden.
+     used by the pre-existing accessor benchmark Python wrapper, and
+  3. reduces each topology to one scalar metric = whole-chip average cycles, then
+     gates it against a per-arch golden.
 
 The device-profiler cycle metric behaves identically on Wormhole and Blackhole
 (no realtime profiler dependency). Goldens ship in record mode (null) until
@@ -81,34 +81,30 @@ def _natural_key(name: str):
     return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name)]
 
 
+# gtest filters are built only from the fixed, in-source SUITES table below (never from
+# external input or another process' output), and must match this conservative allowlist
+# before use. Combined with the list argument form (never shell=True), the accessor
+# binary is invoked with fully controlled, non-injectable arguments.
+_VALID_GTEST_ID = re.compile(r"\A[A-Za-z0-9_./*-]+\Z")
+
+
+def _validate_gtest_id(value: str) -> str:
+    if not _VALID_GTEST_ID.match(value):
+        raise SystemExit(f"ERROR: refusing to run unexpected gtest filter: {value!r}")
+    return value
+
+
 # --------------------------------------------------------------------------- #
 # Running the gtest benchmark suites
 # --------------------------------------------------------------------------- #
-def _list_individual_tests(binary: Path, gtest_filter: str, env: dict) -> list[str]:
-    """Expand a star filter (e.g. .../Constructor/*) into individual test ids."""
-    result = subprocess.run(
-        [str(binary), f"--gtest_filter={gtest_filter}", "--gtest_list_tests"],
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        print(f"WARNING: --gtest_list_tests failed for {gtest_filter}: {result.stderr}", file=sys.stderr)
-        return []
-    tests, case = [], None
-    for line in result.stdout.splitlines():
-        if not line.strip() or "Running main() from" in line:
-            continue
-        if not line.startswith(" ") and line.endswith("."):
-            case = line.rstrip(".")
-        elif line.startswith(" ") and case:
-            name = line.strip().split()[0]
-            if name:
-                tests.append(f"{case}.{name}")
-    return tests
-
-
 def run_suites(home: Path, suites: list[str]) -> None:
+    """Run each full-chip benchmark suite once under the device profiler.
+
+    Each suite is a single parametrized gtest case (…/GetNocAddr). Its per-topology
+    instances each call SetDeviceProfilerDir()/FreshProfilerDeviceLog() internally, so a
+    single process run emits one profiler dir per topology — no per-test fan-out (and no
+    parsing of the binary's own output back into a command) is needed.
+    """
     binary = _binary_path(home)
     if not binary.exists():
         raise SystemExit(
@@ -117,30 +113,23 @@ def run_suites(home: Path, suites: list[str]) -> None:
         )
     env = os.environ.copy()
     env["TT_METAL_DEVICE_PROFILER"] = "1"
-    # Accessor benchmarks read one CSV per rank; MID_RUN_DUMP flushes the per-test
-    # profiler dir the same way the existing ttnn benchmark wrapper does.
+    # Each topology case flushes its own profiler dir; MID_RUN_DUMP dumps between them.
     env["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
 
     for suite in suites:
-        gtest_suite = SUITES[suite]["gtest_suite"]
-        star = f"{gtest_suite}/*"
-        individual = _list_individual_tests(binary, star, env)
-        if not individual:
-            # Fall back to running the whole star filter in one process.
-            print(f"Running {star} (unexpanded)")
-            subprocess.run([str(binary), f"--gtest_filter={star}"], env=env)
-            continue
-        print(f"Running {len(individual)} tests for {star}")
-        for test_name in individual:
-            subprocess.run([str(binary), f"--gtest_filter={test_name}"], env=env)
+        # Fixed constant from SUITES (not external input), validated before use and passed
+        # via the list form (no shell), so no argument can be shell-interpreted or injected.
+        gtest_filter = _validate_gtest_id(f"{SUITES[suite]['gtest_suite']}/*")
+        print(f"Running {gtest_filter}")
+        subprocess.run([str(binary), f"--gtest_filter={gtest_filter}"], env=env)
 
 
 # --------------------------------------------------------------------------- #
-# Parsing profiler CSVs -> per-(suite, rank, config) average cycles
+# Parsing profiler CSVs -> per-(suite, topology) whole-chip average cycles
 # --------------------------------------------------------------------------- #
 def _load_setup(zone_names: list[str]):
     """Build a device_post_proc_config setup that measures each zone's average
-    cycle cost, identical to tests/ttnn/benchmark/python/test_accessor_benchmarks.py."""
+    cycle cost, identical to the pre-existing accessor benchmark Python wrapper."""
     try:
         import tracy.device_post_proc_config as device_post_proc_config
     except ImportError as exc:  # pragma: no cover - env guard

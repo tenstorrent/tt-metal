@@ -28,9 +28,9 @@
       GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/tensor_accessor/accessor_blackhole_golden.json
     fi
     # The post-proc imports the profiler team's parser (tracy.process_device_log /
-    # device_post_proc_config), which lives under tools/. Put tools/ (plus repo root
-    # and ttnn) on PYTHONPATH so it resolves.
-    export PYTHONPATH="${TT_METAL_HOME}/tools:${TT_METAL_HOME}:${TT_METAL_HOME}/ttnn${PYTHONPATH:+:${PYTHONPATH}}"
+    # device_post_proc_config), which lives under tools/. Put tools/ (plus repo root)
+    # on PYTHONPATH so it resolves.
+    export PYTHONPATH="${TT_METAL_HOME}/tools:${TT_METAL_HOME}${PYTHONPATH:+:${PYTHONPATH}}"
     python3 tests/tt_metal/tt_metal/perf_microbenchmark/tensor_accessor/accessor_postprocess.py \
       --golden "$GOLDEN"
   skus:

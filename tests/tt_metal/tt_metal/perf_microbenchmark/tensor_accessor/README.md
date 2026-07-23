@@ -9,8 +9,7 @@ Goal: capture the perf of address calculation (`get_noc_addr`) for every support
 sharded DRAM** — as **full-chip** tests (the kernel runs on every Tensix core).
 
 This is the CI/regression packaging of the accessor benchmark gtests
-(`tests/ttnn/unit_tests/gtests/accessor/test_accessor_benchmarks.cpp`, built as
-`unit_tests_ttnn_accessor`). It runs the benchmarks with the device profiler,
+(built as `unit_tests_ttnn_accessor`). It runs the benchmarks with the device profiler,
 post-processes the profiler output in Python, and gates one metric per topology
 against a per-arch golden.
 
@@ -60,11 +59,10 @@ accessor_golden.json             Wormhole golden (record mode until populated)
 accessor_blackhole_golden.json   Blackhole golden (record mode until populated)
 ```
 
-The benchmark sources live under `tests/ttnn/unit_tests/gtests/accessor/`. The parse
-reuses the same official tracy parser (`tracy.process_device_log` /
-`tracy.device_post_proc_config`) as the pre-existing
-`tests/ttnn/benchmark/python/test_accessor_benchmarks.py` wrapper, so it stays robust to
-profiler CSV schema changes.
+The benchmark sources are the accessor gtests (built as `unit_tests_ttnn_accessor`). The
+parse reuses the same official tracy parser (`tracy.process_device_log` /
+`tracy.device_post_proc_config`) as the pre-existing accessor benchmark Python wrapper, so
+it stays robust to profiler CSV schema changes.
 
 ## Gating
 
@@ -96,7 +94,7 @@ export TT_METAL_HOME=$(pwd)
 cmake --build build --target unit_tests_ttnn_accessor -j
 
 # tools/ must be on PYTHONPATH so the profiler parser resolves
-export PYTHONPATH="${TT_METAL_HOME}/tools:${TT_METAL_HOME}:${TT_METAL_HOME}/ttnn:${PYTHONPATH}"
+export PYTHONPATH="${TT_METAL_HOME}/tools:${TT_METAL_HOME}:${PYTHONPATH}"
 
 # run the full-chip suite + print per-topology metrics (no gate)
 TT_METAL_DEVICE_PROFILER=1 \
