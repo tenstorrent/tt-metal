@@ -792,18 +792,24 @@ def main() -> None:
         training_cfg.clip_grad_norm_max_norm = args.max_grad_norm
     if args.sequence_length is not None:
         model_cfg.max_sequence_length = args.sequence_length
+    device_cfg = DeviceConfig(yaml_config)
+
     if args.embedding_placement is not None:
         if not isinstance(model_cfg.spec, _LlamaSpec):
             raise SystemExit("error: --embedding-placement is only supported for model_type=llama")
         try:
-            model_cfg.spec.embedding_placement = ttml.models.EmbeddingPlacement.from_string(args.embedding_placement)
+            placement = ttml.models.EmbeddingPlacement.from_string(args.embedding_placement)
         except ValueError as e:
             raise SystemExit(f"error: {e}")
+        if placement != ttml.models.EmbeddingPlacement.Replicated and not device_cfg.enable_tp:
+            raise SystemExit(
+                f"error: --embedding-placement {args.embedding_placement} requires tensor parallelism "
+                "(enable_tp); the embedding table is only sharded under TP."
+            )
+        model_cfg.spec.embedding_placement = placement
 
     if args.checkpoint_dir:
         os.makedirs(args.checkpoint_dir, exist_ok=True)
-
-    device_cfg = DeviceConfig(yaml_config)
 
     mesh = build_mesh(device_cfg)
     ttml.open_device_mesh(mesh, tuple(device_cfg.device_ids) if device_cfg.device_ids else None)
