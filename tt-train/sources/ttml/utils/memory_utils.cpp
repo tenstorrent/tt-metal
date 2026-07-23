@@ -26,12 +26,28 @@ tt::tt_metal::IGraphProcessor::RunMode capture_mode = tt::tt_metal::IGraphProces
 
 std::vector<NamedTrace> traces;
 
-// Returns the first segment recorded under `name`, or throws if there is none.
+// Returns the single segment recorded under `name`. Throws if no segment has that name,
+// or if more than one does (an ambiguous lookup - use the *_all() variants for duplicates).
 const nlohmann::json& find_trace(std::string_view name) {
-    if (auto it = std::ranges::find(traces, name, &NamedTrace::first); it != traces.end()) {
-        return it->second;
+    const nlohmann::json* match = nullptr;
+    std::size_t count = 0;
+    for (const auto& [trace_name, trace] : traces) {
+        if (trace_name == name) {
+            match = &trace;
+            ++count;
+        }
     }
-    throw std::runtime_error(fmt::format("MemoryUsageTracker: Trace '{}' not found", name));
+    if (count == 0) {
+        throw std::runtime_error(fmt::format("MemoryUsageTracker: Trace '{}' not found", name));
+    }
+    if (count > 1) {
+        throw std::runtime_error(fmt::format(
+            "MemoryUsageTracker: Trace '{}' is ambiguous ({} segments share this name); "
+            "use get_dram_usage_all()/get_l1_usage_all() instead",
+            name,
+            count));
+    }
+    return *match;
 }
 
 }  // namespace
