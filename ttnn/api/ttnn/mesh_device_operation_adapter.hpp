@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -256,6 +256,39 @@ public:
         }
     }
 
+    // Compile-time detection of cache-hit runtime-arg hooks on a factory or DeviceOperation.
+    template <typename Target>
+    static consteval bool target_has_override_runtime_arguments() {
+        return requires(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& coord) {
+            Target::override_runtime_arguments(program, attrs, tensor_args, tensor_return_value, coord);
+        };
+    }
+
+    template <typename Target>
+    static consteval bool target_has_get_dynamic_runtime_args() {
+        return requires(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& coord) {
+            Target::get_dynamic_runtime_args(attrs, tensor_args, tensor_return_value, coord);
+        };
+    }
+
+    template <bool HasOverride, bool HasDynamic>
+    struct OverrideAndDynamicMutuallyExclusive {
+        static_assert(
+            !(HasOverride && HasDynamic),
+            "A DeviceOperation must not declare BOTH override_runtime_arguments() and "
+            "get_dynamic_runtime_args(): override_runtime_arguments supersedes the legacy hook. "
+            "Delete get_dynamic_runtime_args() from this op.");
+    };
+
     // An adapter for creating a factory that abides to `MeshWorkloadFactoryConcept` out of `ProgramFactoryConcept`
     // types.
     template <ProgramFactoryConcept ProgramFactory>
@@ -457,47 +490,24 @@ public:
         // no override, so we also accept it on the DeviceOperation itself, preserving direct ops that
         // predate the factory-struct shape.
         static consteval bool factory_has_override_runtime_arguments() {
-            return requires(
-                tt::tt_metal::Program& program,
-                const operation_attributes_t& attrs,
-                const tensor_args_t& tensor_args,
-                tensor_return_value_t& tensor_return_value,
-                const std::optional<ttnn::MeshCoordinate>& coord) {
-                DescriptorFactory::override_runtime_arguments(program, attrs, tensor_args, tensor_return_value, coord);
-            };
+            return target_has_override_runtime_arguments<DescriptorFactory>();
         }
         static consteval bool device_op_has_override_runtime_arguments() {
-            return requires(
-                tt::tt_metal::Program& program,
-                const operation_attributes_t& attrs,
-                const tensor_args_t& tensor_args,
-                tensor_return_value_t& tensor_return_value,
-                const std::optional<ttnn::MeshCoordinate>& coord) {
-                DeviceOperation::override_runtime_arguments(program, attrs, tensor_args, tensor_return_value, coord);
-            };
+            return target_has_override_runtime_arguments<DeviceOperation>();
         }
         static consteval bool has_override_runtime_arguments() {
             return factory_has_override_runtime_arguments() || device_op_has_override_runtime_arguments();
         }
 
         static consteval bool has_get_dynamic_runtime_args() {
-            return requires(
-                const operation_attributes_t& attrs,
-                const tensor_args_t& tensor_args,
-                tensor_return_value_t& tensor_return_value,
-                const std::optional<ttnn::MeshCoordinate>& coord) {
-                DeviceOperation::get_dynamic_runtime_args(attrs, tensor_args, tensor_return_value, coord);
-            };
+            return target_has_get_dynamic_runtime_args<DeviceOperation>();
         }
 
         // An op that owns its cache-hit re-derivation via override_runtime_arguments() must NOT also
         // declare the legacy get_dynamic_runtime_args() — override supersedes it, and having both is
         // ambiguous (which one re-applies?).  This assert forces porting an op to DROP get_dynamic.
-        static_assert(
-            !(has_override_runtime_arguments() && has_get_dynamic_runtime_args()),
-            "A DeviceOperation must not declare BOTH override_runtime_arguments() and "
-            "get_dynamic_runtime_args(): override_runtime_arguments supersedes the legacy hook. "
-            "Delete get_dynamic_runtime_args() from this op.");
+        using override_and_dynamic_check =
+            OverrideAndDynamicMutuallyExclusive<has_override_runtime_arguments(), has_get_dynamic_runtime_args()>;
 
         // Build a ProgramDescriptor for one mesh coordinate (the ProgramDescriptor variant).
         // The declarative WorkloadDescriptor path (the WorkloadDescriptor variant) does NOT go through
@@ -774,12 +784,14 @@ public:
     // parked in shared_variables so their device allocation outlives the miss and
     // stays at a stable address across dispatches.
     //
-    // On cache hit: the adapter enumerates fresh io tensors, appends the parked
-    // op-owned tensors, rebuilds a TensorArgument for every binding using the
-    // stored indices, and applies via experimental::UpdateTensorArgs — no Program
-    // rebuild. Op-owned tensors are re-patched even though their address is
-    // unchanged, because UpdateTensorArgs is currently all-or-nothing; this
-    // stepping-stone concept accepts that redundancy.
+    // On cache hit: if the factory declares override_runtime_arguments, it owns
+    // re-applying all per-dispatch state. Otherwise, the adapter enumerates fresh
+    // io tensors, appends the parked op-owned tensors, rebuilds a TensorArgument
+    // for every binding using the stored indices, and applies via
+    // experimental::UpdateTensorArgs — no Program rebuild. Op-owned tensors are
+    // re-patched even though their address is unchanged, because UpdateTensorArgs
+    // is currently all-or-nothing; this stepping-stone concept accepts that
+    // redundancy.
     //
     // Contract: every TensorArgument returned by the factory must reference a
     // MeshTensor reachable from tensor_args / tensor_return_value, or one of the
@@ -812,6 +824,17 @@ public:
             std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors;
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
+
+        static consteval bool has_override_runtime_arguments() {
+            return target_has_override_runtime_arguments<MetalV2Factory>();
+        }
+
+        static consteval bool has_get_dynamic_runtime_args() {
+            return target_has_get_dynamic_runtime_args<MetalV2Factory>();
+        }
+
+        using override_and_dynamic_check =
+            OverrideAndDynamicMutuallyExclusive<has_override_runtime_arguments(), has_get_dynamic_runtime_args()>;
 
         // Walk tensor_args and tensor_return_value via reflection, collecting
         // the MeshTensor of every Tensor leaf. The walk order is deterministic
@@ -918,27 +941,38 @@ public:
         // dispatcher's historical naming, not a reference to ProgramDescriptor.
         static void apply_descriptor(
             cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& /*attrs*/,
+            const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
-            for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                const auto& sv = cached_workload.shared_variables.at(coordinate_range);
+            if constexpr (has_override_runtime_arguments()) {
+                for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                    MetalV2Factory::override_runtime_arguments(
+                        program,
+                        attrs,
+                        tensor_args,
+                        tensor_return_value,
+                        std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                }
+            } else {
+                auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
+                for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                    const auto& sv = cached_workload.shared_variables.at(coordinate_range);
 
-                // Reproduce the cache-miss enumeration: fresh io tensors, then the
-                // parked op-owned tensors (stable addresses, retrieved from the cache).
-                auto mesh_tensors = io_mesh_tensors;
-                if (sv.op_owned_tensors) {
-                    for (const auto& op_owned_tensor : *sv.op_owned_tensors) {
-                        mesh_tensors.push_back(std::cref(op_owned_tensor));
+                    // Reproduce the cache-miss enumeration: fresh io tensors, then the
+                    // parked op-owned tensors (stable addresses, retrieved from the cache).
+                    auto mesh_tensors = io_mesh_tensors;
+                    if (sv.op_owned_tensors) {
+                        for (const auto& op_owned_tensor : *sv.op_owned_tensors) {
+                            mesh_tensors.push_back(std::cref(op_owned_tensor));
+                        }
                     }
-                }
 
-                tt::tt_metal::experimental::Table<TensorParamName, TensorArgument> fresh_tensor_args;
-                for (const auto& b : sv.bindings) {
-                    fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
+                    tt::tt_metal::experimental::Table<TensorParamName, TensorArgument> fresh_tensor_args;
+                    for (const auto& b : sv.bindings) {
+                        fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
+                    }
+                    tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args);
                 }
-                tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args);
             }
         }
     };

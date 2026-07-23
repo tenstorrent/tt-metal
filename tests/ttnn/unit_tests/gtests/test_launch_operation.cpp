@@ -129,6 +129,24 @@ struct MetalV2Factory {
     }
 };
 
+struct MetalV2OverrideFactory {
+    inline static int override_calls = 0;
+
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
+        return ttnn::device_operation::ProgramArtifacts{};
+    }
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program&,
+        const OperationAttributes&,
+        const Tensor&,
+        Tensor&,
+        const std::optional<ttnn::MeshCoordinate>&) {
+        ++override_calls;
+    }
+};
+
 // Minimal device operation supplying just the typedefs the adapter inherits.
 struct MetalV2MinimalOp {
     using operation_attributes_t = OperationAttributes;
@@ -138,6 +156,7 @@ struct MetalV2MinimalOp {
 };
 
 static_assert(ttnn::device_operation::MetalV2FactoryConcept<MetalV2Factory>);
+static_assert(ttnn::device_operation::MetalV2FactoryConcept<MetalV2OverrideFactory>);
 static_assert(!ttnn::device_operation::ProgramFactoryConcept<MetalV2Factory>);
 static_assert(!ttnn::device_operation::MeshWorkloadFactoryConcept<MetalV2Factory>);
 static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<MetalV2Factory>);
@@ -151,6 +170,26 @@ TEST(LaunchOperationTest, MetalV2AdapterCompiles) {
     [[maybe_unused]] auto apply = &Adapter::apply_descriptor;
     [[maybe_unused]] auto resolve = &Adapter::resolve_bindings;
     SUCCEED();
+}
+
+TEST(LaunchOperationTest, MetalV2OverrideIsAppliedOnCacheHit) {
+    using Adapter = device_operation::MeshDeviceOperationAdapter<MetalV2MinimalOp>::MetalV2MeshWorkloadFactoryAdapter<
+        MetalV2OverrideFactory>;
+    static_assert(Adapter::has_override_runtime_arguments());
+
+    const ttnn::MeshCoordinateRange range(ttnn::MeshCoordinate{0, 0});
+    tt::tt_metal::distributed::MeshWorkload workload;
+    workload.add_program(range, tt::tt_metal::Program{});
+    std::unordered_map<ttnn::MeshCoordinateRange, Adapter::shared_variables_t> shared_variables;
+    shared_variables.emplace(range, Adapter::shared_variables_t{});
+    Adapter::cached_mesh_workload_t cached_workload(std::move(workload), std::move(shared_variables));
+
+    OperationAttributes attrs;
+    Tensor input;
+    Tensor output;
+    MetalV2OverrideFactory::override_calls = 0;
+    Adapter::apply_descriptor(cached_workload, attrs, input, output);
+    EXPECT_EQ(MetalV2OverrideFactory::override_calls, 1);
 }
 
 TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {

@@ -605,7 +605,7 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
 
 A program-cache hit does not rebuild the program, so anything excluded from `compute_program_hash` — a dynamic scalar (RNG seed, `from`/`to`, `lr`/`step`) or a buffer address — must be re-applied to the cached program. Use **`override_runtime_arguments`**. **Never `get_dynamic_runtime_args`**: it is deprecated, and the adapter `static_assert`s if an op declares both.
 
-> **Scope.** This applies to `ProgramFactory` and `ProgramDescriptor` factories. The `WorkloadDescriptor` variant has no `override_runtime_arguments` path yet — the adapter re-applies its hash-excluded values via `get_dynamic_runtime_args` on a cache hit, so a WorkloadDescriptor factory must keep that hook until override support is added there.
+> **Scope.** This applies to `ProgramFactory`, `ProgramDescriptor`, and `MetalV2Factory` factories. For descriptor and MetalV2 factories, place the hook on the program factory. The `WorkloadDescriptor` variant has no `override_runtime_arguments` path yet — the adapter re-applies its hash-excluded values via `get_dynamic_runtime_args` on a cache hit, so a WorkloadDescriptor factory must keep that hook until override support is added there.
 
 ```cpp
 static void override_runtime_arguments(
