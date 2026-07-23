@@ -981,6 +981,30 @@ def _resolve_migration_pairs(stats: "RunStats", *, dst_slot_offset: int, num_slo
             dst = src + dst_slot_offset
             check_dst(src, dst)
             triples.append((src, dst, real_len))
+
+    # Reject mappings that sequential single-shot migration cannot execute correctly. Each migrate() reads
+    # its SRC slot from device DRAM at migrate time and there is no staging buffer, so:
+    #   * a dst that is ALSO a src (overlap) -> an earlier migration overwrites a slot a later pair still
+    #     reads (swaps 0:1,1:0, chains 0:1,1:2), migrating wrong KV;
+    #   * a duplicate dst -> only the last write survives, yet the DONE sentinel asks the runner to validate
+    #     EVERY pair.
+    # Disjoint src/dst sets — the intended case, e.g. 0:3,1:2 or src [0,N) -> dst [N,2N) — are unaffected.
+    srcs = [s for (s, _, _) in triples]
+    dsts = [d for (_, d, _) in triples]
+    dup_dsts = sorted({d for d in dsts if dsts.count(d) > 1})
+    if dup_dsts:
+        raise ValueError(
+            f"migration has duplicate dst slot(s) {dup_dsts}: multiple pairs target the same slot, so only "
+            f"the last survives while every pair would be validated. Give each migration a distinct dst."
+        )
+    overlap = sorted(set(srcs) & set(dsts))
+    if overlap:
+        raise ValueError(
+            f"migration src/dst overlap on slot(s) {overlap}: a slot is both a source and a destination, so "
+            f"sequential migration would overwrite a slot a later pair still reads (e.g. swap 0:1,1:0 or "
+            f"chain 0:1,1:2 corrupt KV). Use disjoint src/dst slots (e.g. src [0,N) -> dst [N,2N)); a mapping "
+            f"that needs staging through a free slot is not supported by this single-shot driver."
+        )
     return triples
 
 
