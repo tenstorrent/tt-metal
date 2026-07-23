@@ -169,7 +169,7 @@ public:
         const FabricNodeId& dst_fabric_node_id,
         uint32_t link_idx,
         tt::tt_metal::Program& program,
-        const CoreCoord& logical_core) const;
+        const tt::tt_metal::CoreCoord& logical_core) const;
 
 protected:
     static constexpr size_t default_num_buffers = 8;
@@ -419,7 +419,7 @@ class FabricTensixDatamoverMuxBuilder : public FabricDatamoverBuilderBase {
 
 public:
     FabricTensixDatamoverMuxBuilder(
-        const CoreCoord& my_core_logical,
+        const tt::tt_metal::CoreCoord& my_core_logical,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
         uint32_t ethernet_channel_id,
@@ -437,7 +437,7 @@ public:
     tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
 
     // Getters
-    const CoreCoord& get_logical_core() const { return my_core_logical_; }
+    const tt::tt_metal::CoreCoord& get_logical_core() const { return my_core_logical_; }
     tt::tt_fabric::FabricNodeId get_local_fabric_node_id() const { return local_fabric_node_id_; }
     tt::tt_fabric::FabricNodeId get_remote_fabric_node_id() const { return remote_fabric_node_id_; }
     uint32_t get_ethernet_channel_id() const { return ethernet_channel_id_; }
@@ -455,7 +455,7 @@ private:
     std::vector<uint32_t> get_persistent_channels_flags(ChannelTypes channel_type) const;
 
     // Core and fabric configuration
-    CoreCoord my_core_logical_;
+    tt::tt_metal::CoreCoord my_core_logical_;
     tt::tt_fabric::FabricNodeId local_fabric_node_id_;
     tt::tt_fabric::FabricNodeId remote_fabric_node_id_;
     uint32_t ethernet_channel_id_;
@@ -488,7 +488,7 @@ class FabricTensixDatamoverRelayBuilder : public FabricDatamoverBuilderBase {
 
 public:
     FabricTensixDatamoverRelayBuilder(
-        const CoreCoord& my_core_logical,
+        const tt::tt_metal::CoreCoord& my_core_logical,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
         uint32_t ethernet_channel_id,
@@ -506,7 +506,7 @@ public:
     tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
 
     // Getters
-    const CoreCoord& get_logical_core() const { return my_core_logical_; }
+    const tt::tt_metal::CoreCoord& get_logical_core() const { return my_core_logical_; }
     tt::tt_fabric::FabricNodeId get_local_fabric_node_id() const { return local_fabric_node_id_; }
     tt::tt_fabric::FabricNodeId get_remote_fabric_node_id() const { return remote_fabric_node_id_; }
     uint32_t get_ethernet_channel_id() const { return ethernet_channel_id_; }
@@ -520,7 +520,7 @@ private:
     std::vector<uint32_t> get_runtime_args(tt::tt_metal::Program&) const;
 
     // Core and fabric configuration
-    CoreCoord my_core_logical_;
+    tt::tt_metal::CoreCoord my_core_logical_;
     tt::tt_fabric::FabricNodeId local_fabric_node_id_;
     tt::tt_fabric::FabricNodeId remote_fabric_node_id_;
     uint32_t ethernet_channel_id_;

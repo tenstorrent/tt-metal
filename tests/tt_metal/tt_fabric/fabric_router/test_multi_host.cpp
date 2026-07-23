@@ -6,12 +6,15 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include <algorithm>
 #include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 #include <tt_stl/span.hpp>
 #include <cstring>
@@ -28,6 +31,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 using tt::tt_fabric::fabric_router_tests::check_asic_mapping_against_golden;
+using tt::tt_fabric::fabric_router_tests::check_intermesh_port_assignment_against_golden;
 using tt::tt_fabric::fabric_router_tests::expect_galaxy_corner_folding_check;
 using tt::tt_fabric::fabric_router_tests::expect_mesh_graph_host_topology_matches_runtime;
 
@@ -88,6 +92,178 @@ std::unique_ptr<ControlPlane> make_control_plane(
     }
     return std::make_unique<ControlPlane>(
         cluster, rtoptions, hal, distributed_context, graph_desc.string(), fabric_config, fabric_reliability_mode);
+}
+
+// Deterministic, rank-independent list of requested inter-mesh boundaries. requested_intermesh_connections
+// is an unordered_map, so its native iteration order is unsafe to drive a collective (all ranks must walk
+// the boundaries in the same order and count); sort into a stable vector first.
+std::vector<std::pair<uint32_t, uint32_t>> requested_intermesh_boundaries(const ControlPlane& control_plane) {
+    std::vector<std::pair<uint32_t, uint32_t>> boundaries;
+    for (const auto& [src_mesh, dst_to_count] : control_plane.get_mesh_graph().get_requested_intermesh_connections()) {
+        for (const auto& [dst_mesh, _count] : dst_to_count) {
+            boundaries.emplace_back(src_mesh, dst_mesh);
+        }
+    }
+    std::sort(boundaries.begin(), boundaries.end());
+    return boundaries;
+}
+
+// Cross-rank audit of the resolved inter-mesh exit/peer pairs, via the control-plane placement API
+// (get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes). This is COLLECTIVE and MUST be called on
+// every rank before any rank-0-only early return. It guards the deadlock-class bugs surfaced by the
+// dual_4x16 investigation (see tt_metal/fabric/intermesh_dual_galaxy_asymmetry_findings.md):
+//   * Finding A -- num_resolved_between must be identical on every rank. The apply path pushes one exit/peer
+//     pair per channel and the cross-host merge dedups only remote contributions, so a boundary whose meshes
+//     are split across hosts can resolve e.g. 3 on some ranks and 4 on others -> strict validation throws on
+//     a subset of ranks -> MPI deadlock. Here we all-reduce MIN/MAX of each boundary's resolved count and of
+//     an order-sensitive content checksum, and require agreement.
+//   * Finding E -- the pair list must be deterministically ordered (sorted on the FULL (exit, peer) pair, not
+//     just the exit chip), else downstream pipeline generation inherits host-dependent peer assignments.
+void expect_intermesh_resolved_pairs_consistent_across_ranks(const ControlPlane& control_plane) {
+    using tt::tt_metal::distributed::multihost::ReduceOp;
+    const auto& ctx = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    const int world = static_cast<int>(*ctx.size());
+
+    const auto boundaries = requested_intermesh_boundaries(control_plane);
+    if (boundaries.empty()) {
+        return;  // nothing requested; the callers separately assert boundaries > 0
+    }
+
+    // FNV-1a fold so the checksum is order-sensitive: two ranks with the same pairs in a different order
+    // (Finding E) produce different checksums and fail the agreement check below.
+    auto fold = [](uint64_t h, uint64_t v) {
+        h ^= v;
+        h *= 1099511628211ull;
+        return h;
+    };
+
+    std::vector<int64_t> local_count(boundaries.size());
+    std::vector<int64_t> local_chan_count(boundaries.size());  // total forwarding eth channels backing the boundary
+    std::vector<uint64_t> local_cksum(boundaries.size());
+    std::vector<uint64_t> local_chan_cksum(boundaries.size());  // per-connection channel/direction signature
+    for (std::size_t i = 0; i < boundaries.size(); ++i) {
+        const auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
+            MeshId{boundaries[i].first}, MeshId{boundaries[i].second});
+        local_count[i] = static_cast<int64_t>(pairs.size());
+
+        uint64_t cks = 1469598103934665603ull;
+        uint64_t chan_cks = 1469598103934665603ull;
+        int64_t chan_count = 0;
+        for (const auto& pr : pairs) {
+            cks = fold(cks, static_cast<uint64_t>(*pr.first.mesh_id));
+            cks = fold(cks, static_cast<uint64_t>(pr.first.chip_id));
+            cks = fold(cks, static_cast<uint64_t>(*pr.second.mesh_id));
+            cks = fold(cks, static_cast<uint64_t>(pr.second.chip_id));
+
+            // Channel-level consistency: it is not enough for the exit/peer CHIP pairs to line up -- the
+            // channels backing each connection must line up too. Fold, per connection, the routing-table
+            // forwarding direction (channel class) plus the SET of active eth channels the exit node exposes
+            // in that direction. Both sources are globally consistent on every rank:
+            //   * get_forwarding_direction reads the inter-mesh routing table, built from the rank-0 broadcast
+            //     intermesh_connections (identical on every rank);
+            //   * get_active_fabric_eth_channels_in_direction reads router_port_directions_to_physical_eth_chan_map_,
+            //     which is all-gathered/merged across every host
+            //     (collect_and_merge_router_port_directions_from_all_hosts), so each rank holds the same union set for
+            //     every node.
+            // The eth channels are sorted into an order-independent signature (the merge appends in
+            // broadcast-root order, so the raw order is rank-dependent even though the set is not). A
+            // divergence means a connection resolved to a different channel/direction on some rank even though
+            // the chip pair matched.
+            const auto fwd_dir = control_plane.get_forwarding_direction(pr.first, pr.second);
+            chan_cks = fold(chan_cks, static_cast<uint64_t>(*pr.first.mesh_id));
+            chan_cks = fold(chan_cks, static_cast<uint64_t>(pr.first.chip_id));
+            chan_cks = fold(chan_cks, static_cast<uint64_t>(*pr.second.mesh_id));
+            chan_cks = fold(chan_cks, static_cast<uint64_t>(pr.second.chip_id));
+            chan_cks = fold(chan_cks, fwd_dir.has_value() ? static_cast<uint64_t>(*fwd_dir) : ~0ull);
+            if (fwd_dir.has_value()) {
+                auto dir_chans = control_plane.get_active_fabric_eth_channels_in_direction(pr.first, *fwd_dir);
+                std::sort(dir_chans.begin(), dir_chans.end());
+                chan_count += static_cast<int64_t>(dir_chans.size());
+                chan_cks = fold(chan_cks, static_cast<uint64_t>(dir_chans.size()));
+                for (const auto ch : dir_chans) {
+                    chan_cks = fold(chan_cks, static_cast<uint64_t>(ch));
+                }
+            }
+        }
+        local_cksum[i] = cks;
+        local_chan_cksum[i] = chan_cks;
+        local_chan_count[i] = chan_count;
+
+        // Finding E: full-pair ordering must be deterministic (a .first-only sort leaves peer order
+        // unspecified for any exit chip that reaches multiple peers).
+        EXPECT_TRUE(std::is_sorted(pairs.begin(), pairs.end()))
+            << "Inter-mesh exit/peer pairs for M" << boundaries[i].first << "->M" << boundaries[i].second
+            << " are not fully (exit,peer)-sorted (Finding E: nondeterministic peer order).";
+    }
+
+    if (world <= 1) {
+        return;  // cross-rank agreement is only meaningful with multiple ranks
+    }
+
+    std::vector<int64_t> count_min(boundaries.size()), count_max(boundaries.size());
+    std::vector<int64_t> chan_count_min(boundaries.size()), chan_count_max(boundaries.size());
+    std::vector<uint64_t> cksum_min(boundaries.size()), cksum_max(boundaries.size());
+    std::vector<uint64_t> chan_cksum_min(boundaries.size()), chan_cksum_max(boundaries.size());
+    ctx.all_reduce(
+        ttsl::Span<int64_t>(local_count.data(), local_count.size()),
+        ttsl::Span<int64_t>(count_min.data(), count_min.size()),
+        ReduceOp::MIN);
+    ctx.all_reduce(
+        ttsl::Span<int64_t>(local_count.data(), local_count.size()),
+        ttsl::Span<int64_t>(count_max.data(), count_max.size()),
+        ReduceOp::MAX);
+    ctx.all_reduce(
+        ttsl::Span<int64_t>(local_chan_count.data(), local_chan_count.size()),
+        ttsl::Span<int64_t>(chan_count_min.data(), chan_count_min.size()),
+        ReduceOp::MIN);
+    ctx.all_reduce(
+        ttsl::Span<int64_t>(local_chan_count.data(), local_chan_count.size()),
+        ttsl::Span<int64_t>(chan_count_max.data(), chan_count_max.size()),
+        ReduceOp::MAX);
+    ctx.all_reduce(
+        ttsl::Span<uint64_t>(local_cksum.data(), local_cksum.size()),
+        ttsl::Span<uint64_t>(cksum_min.data(), cksum_min.size()),
+        ReduceOp::MIN);
+    ctx.all_reduce(
+        ttsl::Span<uint64_t>(local_cksum.data(), local_cksum.size()),
+        ttsl::Span<uint64_t>(cksum_max.data(), cksum_max.size()),
+        ReduceOp::MAX);
+    ctx.all_reduce(
+        ttsl::Span<uint64_t>(local_chan_cksum.data(), local_chan_cksum.size()),
+        ttsl::Span<uint64_t>(chan_cksum_min.data(), chan_cksum_min.size()),
+        ReduceOp::MIN);
+    ctx.all_reduce(
+        ttsl::Span<uint64_t>(local_chan_cksum.data(), local_chan_cksum.size()),
+        ttsl::Span<uint64_t>(chan_cksum_max.data(), chan_cksum_max.size()),
+        ReduceOp::MAX);
+
+    for (std::size_t i = 0; i < boundaries.size(); ++i) {
+        EXPECT_EQ(count_min[i], count_max[i])
+            << "Rank-divergent resolved count for boundary M" << boundaries[i].first << "->M" << boundaries[i].second
+            << ": ranks disagree (min=" << count_min[i] << ", max=" << count_max[i] << ", this rank=" << local_count[i]
+            << "). num_resolved_between must be identical on every rank (Finding A: per-channel duplicate "
+               "exit/peer pairs + inconsistent cross-host merge dedup -> subset-of-ranks validation throw -> "
+               "MPI deadlock).";
+        EXPECT_EQ(cksum_min[i], cksum_max[i])
+            << "Rank-divergent resolved exit/peer pair SET for boundary M" << boundaries[i].first << "->M"
+            << boundaries[i].second
+            << ": the merged pairs differ in content or order across ranks (Finding A/E). The cross-host merge "
+               "must be order-independent and every rank must arrive at the same, deterministically ordered set.";
+        // Channel-level agreement: the chip pairs matching is not sufficient -- the channels (forwarding
+        // direction + forwarding eth channel ids) that actually carry each connection must also line up.
+        EXPECT_EQ(chan_count_min[i], chan_count_max[i])
+            << "Rank-divergent forwarding-CHANNEL count for boundary M" << boundaries[i].first << "->M"
+            << boundaries[i].second << ": ranks disagree (min=" << chan_count_min[i] << ", max=" << chan_count_max[i]
+            << ", this rank=" << local_chan_count[i]
+            << "). The number of eth channels backing the resolved connections must be identical on every rank; "
+               "a mismatch means the channels of the connections do not line up (Finding A at channel "
+               "granularity).";
+        EXPECT_EQ(chan_cksum_min[i], chan_cksum_max[i])
+            << "Rank-divergent forwarding-CHANNEL SET for boundary M" << boundaries[i].first << "->M"
+            << boundaries[i].second
+            << ": the per-connection channel signature (forwarding direction + eth channel ids) differs across "
+               "ranks. Every connection must resolve to the same channels/direction on every rank.";
+    }
 }
 
 TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
@@ -991,6 +1167,169 @@ TEST(MultiHost, BHDualGalaxyControlPlaneInit) {
     check_asic_mapping_against_golden("BHDualGalaxyControlPlaneInit");
 }
 
+// Golden check for the inter-mesh port-determination result on the SC16 Blitz decode superpod (16-host /
+// 64-mesh ring). Unlike the SC36 Aisle D subtorus slices (which cut torus edges and leave one-sided
+// boundaries that fatal), this ring closes, so every requested boundary resolves and the golden comparison
+// actually runs. Guards against the port assignment changing or becoming host-dependent (see the
+// deterministic neighbor/exit-node ordering in ControlPlane).
+TEST(MultiHost, SC16BlitzSuperpodIntermeshPortAssignment) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
+        "fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(
+        mesh_graph_desc_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    check_intermesh_port_assignment_against_golden("SC16BlitzSuperpod_intermesh");
+}
+
+// CPU-only channel-rule check on the SC20 80-mesh Blitz decode ring (relaxed policy). Verifies the relaxed
+// rule -- every requested inter-mesh boundary resolves at least one channel -- and reports the fulfilled-vs-
+// dropped channel tally produced by the round-robin allocator (dropped channels are the expected torus-wrap
+// shortfall, which is non-fatal in relaxed mode).
+TEST(MultiHost, SC20RelaxedChannelRules) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_supercluster_20.textproto";
+    auto control_plane = make_control_plane(
+        mesh_graph_desc_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    // Collective (runs on every rank, before the rank-0-only tally below): every rank must agree on the
+    // resolved count and pair set for each boundary. Catches the rank-divergent-count deadlock class
+    // (Finding A) and nondeterministic peer ordering (Finding E) even on this "clean" ring topology, so it
+    // fails fast on regression instead of hanging.
+    expect_intermesh_resolved_pairs_consistent_across_ranks(*control_plane);
+
+    // Assert/report on rank 0 (it holds the merged all-mesh exit/peer pairs).
+    if (*tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank() != 0) {
+        return;
+    }
+    const auto& mesh_graph = control_plane->get_mesh_graph();
+    std::size_t boundaries = 0, fully_fulfilled = 0, total_requested = 0, total_resolved = 0;
+    for (const auto& [src_mesh, dst_to_count] : mesh_graph.get_requested_intermesh_connections()) {
+        for (const auto& [dst_mesh, requested] : dst_to_count) {
+            const std::size_t resolved = control_plane
+                                             ->get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
+                                                 tt::tt_fabric::MeshId{src_mesh}, tt::tt_fabric::MeshId{dst_mesh})
+                                             .size();
+            EXPECT_GE(resolved, 1u) << "Relaxed rule violated: boundary M" << src_mesh << "->M" << dst_mesh
+                                    << " resolved 0 channels (every requested connection must resolve >= 1).";
+            ++boundaries;
+            total_requested += requested;
+            total_resolved += resolved;
+            if (resolved >= requested) {
+                ++fully_fulfilled;
+            }
+        }
+    }
+    const std::size_t dropped = total_requested > total_resolved ? total_requested - total_resolved : 0;
+    log_info(
+        tt::LogTest,
+        "SC20 relaxed channel tally: {} boundaries ({} fully fulfilled), {} channels requested, {} resolved, "
+        "{} dropped.",
+        boundaries,
+        fully_fulfilled,
+        total_requested,
+        total_resolved,
+        dropped);
+    EXPECT_GT(boundaries, 0u) << "No requested inter-mesh connections found (MGD not loaded?).";
+}
+
+// CPU-only strict-count check on the SC20 ring: every boundary requests exactly 2 channels with STRICT
+// policy. Control-plane init hard-fails if any strict boundary cannot resolve its full requested count, so a
+// clean build already means strict passed; we additionally assert each boundary resolved its 2 channels.
+TEST(MultiHost, SC20Strict2Connections) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/blitz_decode_supercluster_20_count2_strict.textproto";
+    // Strict validation throws during init if any boundary under-resolves; reaching the asserts means it held.
+    auto control_plane = make_control_plane(
+        mesh_graph_desc_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    // Collective (every rank): strict init throwing on only a subset of ranks is exactly the dual_4x16
+    // deadlock. Assert all ranks agree on each boundary's resolved count/pair set before the rank-0 tally
+    // below, so a rank-divergent miscount (Finding A) or nondeterministic order (Finding E) fails fast.
+    expect_intermesh_resolved_pairs_consistent_across_ranks(*control_plane);
+
+    if (*tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank() != 0) {
+        return;
+    }
+    const auto& mesh_graph = control_plane->get_mesh_graph();
+    std::size_t boundaries = 0;
+    for (const auto& [src_mesh, dst_to_count] : mesh_graph.get_requested_intermesh_connections()) {
+        for (const auto& [dst_mesh, requested] : dst_to_count) {
+            const std::size_t resolved = control_plane
+                                             ->get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
+                                                 tt::tt_fabric::MeshId{src_mesh}, tt::tt_fabric::MeshId{dst_mesh})
+                                             .size();
+            EXPECT_EQ(resolved, static_cast<std::size_t>(requested))
+                << "Strict boundary M" << src_mesh << "->M" << dst_mesh << " resolved " << resolved << " of "
+                << requested << " requested.";
+            ++boundaries;
+        }
+    }
+    log_info(
+        tt::LogTest, "SC20 strict(count=2) passed: {} boundaries each resolved their requested channels.", boundaries);
+    EXPECT_GT(boundaries, 0u) << "No requested inter-mesh connections found (MGD not loaded?).";
+}
+
+// Dedicated Finding-A reproducer on the dual_4x16 pod boundary (M0<->M1: 2 cables x 2 channels, meshes
+// split across hosts) -- see tt_metal/fabric/intermesh_dual_galaxy_asymmetry_findings.md, "Test cases to
+// guard this" #2. This is the SAME failing boundary as the strict dual_4x16_blitz_test, but loaded from a
+// RELAXED copy of the MGD so control-plane init only WARNS on the miscount instead of TT_THROW-ing on a
+// subset of ranks. That distinction is the whole point: under the STRICT policy the per-mesh-pair validation
+// throws on the M1-owning ranks DURING init (before any test body runs) and the surviving ranks block at the
+// next MPI collective -> the process deadlocks, so no assertion can ever observe the bug. With RELAXED, init
+// completes on every rank and the collective helper below runs, so Finding A surfaces as a clean, uniform
+// test failure (all ranks agree min=3, max=4 after the all_reduce) rather than a hang.
+//
+// Run on the SC4 single-pod BH galaxy mock (4 MPI ranks: M0 and M1 split across hosts). Once Finding A is
+// fixed (rank-consistent resolved count), this test PASSES and becomes the regression guard.
+TEST(MultiHost, TestDual4x16RelaxedFindingAConsistency) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy (SC4 single-pod dual_4x16 mock)");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_4x16_blitz_test_relaxed.textproto";
+    // RELAXED policy: an under-resolve only warns, so init does not throw and every rank reaches the helper.
+    auto control_plane = make_control_plane(
+        mesh_graph_desc_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    // The direct Finding-A capture: every rank must agree on the M0<->M1 resolved count and pair set.
+    // Pre-fix this fails with min=3 (M1 ranks) vs max=4 (rank 0); post-fix all ranks agree.
+    expect_intermesh_resolved_pairs_consistent_across_ranks(*control_plane);
+}
+
 TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
         tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
@@ -1058,6 +1397,23 @@ TEST(MultiHost, T3K2x2AssignZDirectionControlPlaneInit) {
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
     check_asic_mapping_against_golden("T3K2x2AssignZDirectionControlPlaneInit");
+}
+
+// Negative test: mesh 2 is a single (1x1) exit chip cabled to BOTH mesh 0 and mesh 1, and both boundaries are
+// marked assign_z_direction. They both try to claim mesh 2's one Z lane; the losing boundary is Z-only (never
+// falls back to NESW), so it resolves zero routers -> control-plane initialization must fail. This exercises
+// the assign_z conflict path. See t3k_assign_z_conflict_mesh_graph_descriptor.textproto.
+TEST(MultiHost, T3KAssignZConflictFatal) {
+    const std::filesystem::path conflict_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_assign_z_conflict_mesh_graph_descriptor.textproto";
+    EXPECT_ANY_THROW({
+        auto control_plane = make_control_plane(
+            conflict_mesh_graph_desc_path.string(),
+            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    });
 }
 
 TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {

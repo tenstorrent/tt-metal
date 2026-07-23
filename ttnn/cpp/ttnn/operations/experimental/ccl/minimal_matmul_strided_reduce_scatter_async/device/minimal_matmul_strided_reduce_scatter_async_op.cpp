@@ -148,7 +148,7 @@ MinimalMatmulStridedReduceScatterAsync::spec_return_value_t
 MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Output tensor[0]: MM output spec (= RS input)
-    ttnn::TensorSpec mm_output_spec = matmul_device_operation_t::compute_output_specs(
+    tt::tt_metal::TensorSpec mm_output_spec = matmul_device_operation_t::compute_output_specs(
         attributes.matmul_struct, {tensor_args.input_tensor, tensor_args.weight_tensor})[0];
 
     // Derive RS intermediate and output specs from the MM output shape
@@ -158,7 +158,7 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     MemoryConfig rs_intermediate_mem_config =
         attributes.rs_intermediate_mem_config.value_or(mm_output_spec.memory_config());
 
-    ttnn::TensorSpec rs_intermediate_spec(
+    tt::tt_metal::TensorSpec rs_intermediate_spec(
         mm_output_shape,
         tt::tt_metal::TensorLayout(
             mm_output_spec.data_type(), mm_output_spec.page_config(), rs_intermediate_mem_config));
@@ -167,7 +167,7 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     auto rs_output_shape = mm_output_shape;
     rs_output_shape[attributes.dim] /= attributes.ring_size;
 
-    ttnn::TensorSpec rs_output_spec(
+    tt::tt_metal::TensorSpec rs_output_spec(
         rs_output_shape,
         tt::tt_metal::TensorLayout(
             mm_output_spec.data_type(), mm_output_spec.page_config(), attributes.rs_output_mem_config));

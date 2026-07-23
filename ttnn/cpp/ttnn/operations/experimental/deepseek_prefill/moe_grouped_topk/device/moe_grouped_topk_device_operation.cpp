@@ -14,22 +14,27 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     const auto& bias = tensor_args.bias;
     const auto& padding_config = tensor_args.padding_config;
 
-    TT_FATAL(scores.storage_type() == tt::tt_metal::StorageType::DEVICE, "Scores tensor must be on device");
-    TT_FATAL(bias.storage_type() == tt::tt_metal::StorageType::DEVICE, "Bias tensor must be on device");
+    TT_FATAL(scores.storage_type() == ttnn::StorageType::DEVICE, "Scores tensor must be on device");
+    TT_FATAL(bias.storage_type() == ttnn::StorageType::DEVICE, "Bias tensor must be on device");
     TT_FATAL(scores.buffer() != nullptr, "Scores tensor must be allocated");
     TT_FATAL(bias.buffer() != nullptr, "Bias tensor must be allocated");
 
-    TT_FATAL(scores.dtype() == tt::tt_metal::DataType::FLOAT32, "Scores tensor must be FLOAT32");
+    // Inputs may be FLOAT32 or BFLOAT16: the op computes internally in fp32 for precision and the
+    // unpacker upcasts bf16 tiles for free.
+    TT_FATAL(
+        scores.dtype() == tt::tt_metal::DataType::FLOAT32 || scores.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "Scores tensor must be FLOAT32 or BFLOAT16");
     TT_FATAL(scores.layout() == tt::tt_metal::Layout::TILE, "Scores tensor must be TILE layout");
-    TT_FATAL(bias.dtype() == tt::tt_metal::DataType::FLOAT32, "Bias tensor must be FLOAT32");
+    TT_FATAL(
+        bias.dtype() == tt::tt_metal::DataType::FLOAT32 || bias.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "Bias tensor must be FLOAT32 or BFLOAT16");
     TT_FATAL(bias.layout() == tt::tt_metal::Layout::TILE, "Bias tensor must be TILE layout");
     TT_FATAL(scores.logical_shape() == bias.logical_shape(), "Scores and bias must have the same shape");
 
     // Optional per-device [num_real_tokens, pad_side] config used to sentinel-mark padded token rows.
     if (padding_config.has_value()) {
         TT_FATAL(
-            padding_config->storage_type() == tt::tt_metal::StorageType::DEVICE,
-            "Padding config tensor must be on device");
+            padding_config->storage_type() == ttnn::StorageType::DEVICE, "Padding config tensor must be on device");
         TT_FATAL(padding_config->buffer() != nullptr, "Padding config tensor must be allocated");
         TT_FATAL(
             padding_config->dtype() == tt::tt_metal::DataType::UINT32, "Padding config tensor must be UINT32");
@@ -86,14 +91,14 @@ MoeGroupedTopkDeviceOperation::spec_return_value_t MoeGroupedTopkDeviceOperation
     auto output_shape = shape;
     output_shape[-1] = attributes.n_activated_experts;
 
-    return std::array<TensorSpec, 2>{
-        TensorSpec(
+    return std::array<tt::tt_metal::TensorSpec, 2>{
+        tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(scores.layout()),
                 attributes.output_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::UINT16,
