@@ -219,20 +219,27 @@ void kernel_main() {
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
 
-    // Sparse-frames per-Q-frame accounting for correct is_first / is_last across ring iters.
+    // Sparse-frames per-work-item accounting for correct is_first / is_last across ring iters.
     // The host-computed active_ring_iter_mask is OOB-only and does not consider sparse-frames,
-    // so its "first active" and "last active" iters can be entirely drained for some Q frames.
-    // Compute must instead drive is_first / is_last_k_of_last_ring_iter off per-Q-frame counts
-    // of actually-processed K chunks. Precompute the expected total per Q frame here; track the
-    // running processed count across ring-iter calls (persist in this outer scope).
+    // so its "first active" and "last active" iters can be entirely drained for some Q chunks.
+    // Compute must instead drive is_first / is_last_k_of_last_ring_iter off per-WORK-ITEM counts
+    // of actually-processed K chunks (a "work item" is a (batch, head, q_chunk) tuple — the unit
+    // that produces one attention output tile). Per-Q-frame counters would conflate multiple
+    // work items that share a Q frame (different heads, or multiple Q chunks per Q frame at
+    // sub-frame Sq_chunk_t), so the counter is indexed by q (the sdpa_ring_v2 Q-loop variable,
+    // which enumerates work items) and the total is looked up from a small per-Q-frame table.
     //
     // Q is SP-sharded across `ring_size` devices, and `frame_allow` is a broadcast global table
     // indexed by GLOBAL Q frame. `q_frame_offset` maps this device's local Q chunks to their
-    // global Q-frame indices — without it, every device would look up frame_allow row 0 and
-    // produce garbage. Arrays are sized to num_frames_padded_compile (max 32) and indexed by
-    // global Q frame; each device only reads/writes the slots for its own Q shard.
-    uint32_t q_frame_total_processed[num_frames_padded_compile > 0 ? num_frames_padded_compile : 1] = {};
-    uint32_t q_frame_processed[num_frames_padded_compile > 0 ? num_frames_padded_compile : 1] = {};
+    // global Q-frame indices — without it, every device would look up frame_allow row 0.
+    //
+    // Array sizes: q_frame_total_processed is indexed by GLOBAL Q frame (max 32 by TT_FATAL);
+    // q_work_item_processed is indexed by work-item id (bounded by B * NH * num_q_chunks; all
+    // three are compile-time constants above).
+    constexpr uint32_t nf_pad_arr = num_frames_padded_compile > 0 ? num_frames_padded_compile : 1;
+    constexpr uint32_t work_items_arr = B * NH * num_q_chunks;
+    uint32_t q_frame_total_processed[nf_pad_arr] = {};
+    uint32_t q_work_item_processed[work_items_arr] = {};
     uint32_t q_frame_offset = 0;
     if constexpr (sparse_frames_enabled) {
         // Both divisions are guaranteed non-zero here: sparse_frames_enabled implies frame_seqlen
@@ -402,7 +409,7 @@ void kernel_main() {
                 is_first_active_iter,
                 frame_allow_words,
                 q_frame_total_processed,
-                q_frame_processed,
+                q_work_item_processed,
                 q_frame_offset);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();

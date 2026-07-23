@@ -2285,17 +2285,19 @@ void sdpa_ring_v2(
     const ChunkedContext& chunked = {},
     const bool is_first_active_iter = true,
     const uint32_t* frame_allow_words = nullptr,
-    // Sparse-frames per-Q-frame accounting. When sparse_frames_enabled, the caller-supplied
+    // Sparse-frames per-work-item accounting. When sparse_frames_enabled, the caller-supplied
     // active_ring_iter_mask reflects OOB-only work and can mark iters "active" that are
     // fully drained for some Q chunks (sparse-frames unknown to the host mask). Compute-
-    // side is_first / is_last logic must therefore track ACTUAL processing history per Q
-    // frame. `q_frame_total_processed` is the precomputed count of processed K chunks
-    // expected for each Q frame across all ring iters (indexed by GLOBAL Q frame);
-    // `q_frame_processed` is a running counter maintained by this function across ring-iter
-    // calls (persist in caller scope; also GLOBAL-indexed). Ignored when
-    // !sparse_frames_enabled; may be nullptr in that case.
+    // side is_first / is_last logic must therefore track ACTUAL processing history per
+    // WORK ITEM (a (batch, head, q_chunk) tuple — the unit that produces one attention
+    // output tile). `q_frame_total_processed` is the precomputed count of processed K chunks
+    // expected for each GLOBAL Q frame across all ring iters (indexed by q_frame; the total
+    // is the same for every work item mapping to that frame). `q_work_item_processed` is
+    // a running counter maintained across ring-iter calls, indexed by the Q-loop variable
+    // `q` — different heads / different q_chunks that map to the same Q frame get separate
+    // slots. Ignored when !sparse_frames_enabled; may be nullptr in that case.
     const uint32_t* q_frame_total_processed = nullptr,
-    uint32_t* q_frame_processed = nullptr,
+    uint32_t* q_work_item_processed = nullptr,
     // Sparse-frames global Q frame offset. Q is SP-sharded, so this device's local Q chunk
     // 0 maps to GLOBAL Q frame `q_frame_offset`. Compute must use the GLOBAL index when
     // looking up `frame_allow_words` (which is a broadcast global table) and when indexing
@@ -2553,19 +2555,22 @@ void sdpa_ring_v2(
 
             const bool is_last_k = (KV_chunks_processed == per_q_valid_kv);
 
-            // Sparse-frames: is_first / is_last_k_of_last_ring_iter must be based on per-Q-frame
-            // ACTUAL processing history, not on the host's active_ring_iter_mask (which is
-            // OOB-only and does not know sparse-frames). Otherwise a Q chunk whose first-
+            // Sparse-frames: is_first / is_last_k_of_last_ring_iter must be based on per-work-
+            // item ACTUAL processing history, not on the host's active_ring_iter_mask (which is
+            // OOB-only and does not know sparse-frames). Otherwise a work item whose first-
             // processed iter is not the mask's first-active iter waits for a non-existent prev
-            // accumulator, and a Q chunk whose last-processed iter isn't the mask's last-active
-            // iter never triggers final normalization.
+            // accumulator, and a work item whose last-processed iter isn't the mask's last-
+            // active iter never triggers final normalization. Indexed by `q` (the outer Q-loop
+            // variable identifying this work item) so different heads / q_chunks that map to
+            // the same Q frame track independently. Total lookup uses q_frame_for_this_chunk
+            // (same total for every work item mapping to that frame).
             bool is_first;
             bool is_last_k_of_last_ring_iter;
             if constexpr (sparse_frames_enabled) {
-                q_frame_processed[q_frame_for_this_chunk]++;
-                is_first = (q_frame_processed[q_frame_for_this_chunk] == 1);
+                q_work_item_processed[q]++;
+                is_first = (q_work_item_processed[q] == 1);
                 is_last_k_of_last_ring_iter =
-                    (q_frame_processed[q_frame_for_this_chunk] == q_frame_total_processed[q_frame_for_this_chunk]);
+                    (q_work_item_processed[q] == q_frame_total_processed[q_frame_for_this_chunk]);
             } else {
                 is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
                 is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;

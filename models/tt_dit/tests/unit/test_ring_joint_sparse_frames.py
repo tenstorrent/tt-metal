@@ -484,7 +484,7 @@ class TestSparseFramesRing:
         )
 
     @_MESH_TOPOLOGY
-    def test_sr_720p_shape(
+    def test_720p_shape(
         self,
         mesh_device,
         num_links,
