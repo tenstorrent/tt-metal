@@ -62,5 +62,4 @@ def test_all_gather_2d_fabric(
         mem_config_ag,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        allowed_pcc=1.0,
     )
