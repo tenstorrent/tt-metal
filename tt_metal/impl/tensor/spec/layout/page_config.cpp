@@ -153,7 +153,7 @@ Alignment get_recommended_shard_shape_alignment_rm(const RowMajorPageConfig&, Da
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-PageConfig::PageConfig(Config config) : config_(std::move(config)) {}
+PageConfig::PageConfig(Config config) : config_(config) {}
 
 PageConfig::PageConfig(Layout layout) : PageConfig(layout, std::nullopt) {}
 
