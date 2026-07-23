@@ -362,7 +362,11 @@ class _TtMoE:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # VERIFY: per-device zero on mesh (matches dense per-device partial)
-        combined = ttnn.scatter(combined, dim=1, index=idx_h, src=comb_g)  # VERIFY scatter API
+        # uint16 index clears the scatter 256-cap TILE guard (scatter.cpp is_i32=uint32+int32;
+        # uint16 exempt+supported). idx are token positions < S < 65535 -> lossless. micro-repro PCC 1.0
+        idx_h16 = ttnn.typecast(idx_h, ttnn.uint16)
+        combined = ttnn.scatter(combined, dim=1, index=idx_h16, src=comb_g)  # VERIFY scatter API
+        ttnn.deallocate(idx_h16)
         ttnn.deallocate(comb_g)
         ttnn.deallocate(idx_h)
 
