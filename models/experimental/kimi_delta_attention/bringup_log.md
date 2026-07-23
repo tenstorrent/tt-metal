@@ -457,3 +457,12 @@
 - Tracy report: `/tmp/kda_chunk_doubling_paced_profile/reports/2026_07_23_08_47_05/ops_perf_results_2026_07_23_08_47_05.csv`. Ten warm T=640 calls averaged 640.8891 us: transpose 2.1554 us, reshape 25.7025 us, prep 328.8295 us, scan 284.2017 us.
 - Result: 47.9525 us (6.96%) faster than flat-gate 688.8416 us, and 654.2809 us (50.52%) faster than the original 1295.1700 us baseline.
 - A/B: removing the legacy three-tile startup read unexpectedly regressed prep to 359.6244 us (`/tmp/kda_chunk_doubling_clean_profile/reports/2026_07_23_08_46_09/ops_perf_results_2026_07_23_08_46_09.csv`). Restoring it recovered 328.8295 us, so it remains local and labeled as reader-burst pacing.
+
+
+### 2026-07-23 09:04:04 UTC — Honor KDA compute fidelity
+
+- Root cause: the phased prep/scan program factory hard-coded `HiFi4`, so the public `compute_kernel_config` and the layer's intended fidelity were silently ignored. The factory now maps the resolved config into both compute descriptors.
+- Full build: `./build_metal.sh --build-ttnn` passed after correcting the architecture type to `tt::ARCH`.
+- Hardware suite: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` passed 12/12 in 16.09 s. HiFi2 direct T=64 output/state PCC was 0.999928/0.999932.
+- Controlled T=640 fidelity A/B: HiFi4 report `/tmp/kda_chunk_hifi4_control_profile/reports/2026_07_23_09_02_22/ops_perf_results_2026_07_23_09_02_22.csv` averaged 647.9074 us total (prep 335.1173 us, scan 285.0497 us); HiFi2 report `/tmp/kda_chunk_hifi2_profile/reports/2026_07_23_09_00_37/ops_perf_results_2026_07_23_09_00_37.csv` averaged 663.6048 us (prep 351.6653 us, scan 283.8808 us). HiFi4 is retained as the layer/perf default because it is 15.6974 us faster and more accurate.
+- LoFi was rejected before profiling: T=64 output PCC was 0.998563, below the 0.999 acceptance floor.

@@ -47,6 +47,10 @@ def test_chunk_kda_device_perf(device: ttnn.Device) -> None:
     )
     beta = to_device(torch.rand(*shape, generator=generator), ttnn.float32)
     state = to_device(0.02 * torch.randn(batch, heads, key_dim, value_dim, generator=generator), ttnn.float32)
+    fidelity_name = os.getenv("KDA_MATH_FIDELITY", "HiFi4")
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=getattr(ttnn.MathFidelity, fidelity_name), fp32_dest_acc_en=True
+    )
 
     def step() -> tuple[ttnn.Tensor, ttnn.Tensor]:
         output, final_state = ttnn.transformer.chunk_kda(
@@ -60,6 +64,7 @@ def test_chunk_kda_device_perf(device: ttnn.Device) -> None:
             output_head_major=True,
             chunk_size=32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=compute_kernel_config,
         )
         assert final_state is not None
         return output, final_state

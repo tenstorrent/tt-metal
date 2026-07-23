@@ -33,13 +33,13 @@ def _assert_pcc(name: str, golden: torch.Tensor, actual: torch.Tensor, threshold
 
 
 @pytest.mark.parametrize(
-    "sequence,heads,key_dim,value_dim,flat_v,flat_qk,flat_g",
+    "sequence,heads,key_dim,value_dim,flat_v,flat_qk,flat_g,math_fidelity",
     [
-        (32, 2, 32, 32, False, False, False),
-        (32, 2, 32, 32, True, True, True),
-        (64, 32, 128, 128, False, False, False),
-        (64, 32, 128, 128, True, False, True),
-        (64, 32, 128, 128, True, True, True),
+        (32, 2, 32, 32, False, False, False, None),
+        (32, 2, 32, 32, True, True, True, None),
+        (64, 32, 128, 128, False, False, False, None),
+        (64, 32, 128, 128, True, False, True, None),
+        (64, 32, 128, 128, True, True, True, "HiFi2"),
     ],
 )
 def test_chunk_kda_pcc(
@@ -51,6 +51,7 @@ def test_chunk_kda_pcc(
     flat_v: bool,
     flat_qk: bool,
     flat_g: bool,
+    math_fidelity: str | None,
 ) -> None:
     generator = torch.Generator().manual_seed(401 + sequence + heads)
     shape = (1, sequence, heads)
@@ -72,6 +73,13 @@ def test_chunk_kda_pcc(
     gate_tt = _to_device(gate_input, device, ttnn.float32)
     beta_tt = _to_device(beta, device, ttnn.float32)
     state_tt = _to_device(state, device, ttnn.float32)
+    compute_kernel_config = (
+        ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=getattr(ttnn.MathFidelity, math_fidelity), fp32_dest_acc_en=True
+        )
+        if math_fidelity is not None
+        else None
+    )
     with ttnn.manage_config("throw_exception_on_fallback", True):
         output_tt, final_state_tt = ttnn.transformer.chunk_kda(
             q_tt,
@@ -84,12 +92,13 @@ def test_chunk_kda_pcc(
             output_head_major=flat_qk,
             chunk_size=32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=compute_kernel_config,
         )
 
     actual_output = ttnn.to_torch(output_tt)
     if flat_qk:
         actual_output = actual_output.reshape(1, heads, sequence, value_dim).permute(0, 2, 1, 3)
     actual_state = ttnn.to_torch(final_state_tt)
-    label = f"H={heads},K={key_dim},V={value_dim},T={sequence},flat_v={flat_v},flat_qk={flat_qk},flat_g={flat_g}"
+    label = f"H={heads},K={key_dim},V={value_dim},T={sequence},flat_v={flat_v},flat_qk={flat_qk},flat_g={flat_g},math_fidelity={math_fidelity}"
     _assert_pcc(f"{label} output", golden_output, actual_output)
     _assert_pcc(f"{label} state", golden_state, actual_state)
