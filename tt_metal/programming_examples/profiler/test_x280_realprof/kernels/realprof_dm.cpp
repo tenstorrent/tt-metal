@@ -26,8 +26,17 @@ void kernel_main() {
     // Runtime program id, pushed by the host (SetRuntimeArgs). Emitted once, at kernel start, as the
     // STICKY_PROG packet -- the host forward-fills it onto every following marker of this launch.
     uint32_t prog_id = get_arg_val<uint32_t>(0);
+    uint32_t stagger = get_arg_val<uint32_t>(1);  // per-core start-stagger cycles (0 = none)
     DeviceZoneSetCounter(prog_id);
+#else
+    uint32_t stagger = get_arg_val<uint32_t>(0);  // NCRISC: stagger is arg0
 #endif
+    // Per-core start stagger: delay this core's first marker so cores fill (and thus demand draining) at
+    // spread-out times instead of in lockstep -- tests whether the multi-node knee is a synchronized-burst
+    // artifact of the uniform benchmark workload. Same total work, just desynchronized.
+    for (volatile uint32_t s = 0; s < stagger; s++) {
+        asm volatile("nop");
+    }
     for (uint32_t i = 0; i < (uint32_t)MARKER_COUNT; i++) {
         DeviceZoneScopedN("REALPROF-DM");
         for (volatile uint32_t j = 0; j < (uint32_t)WORK_SIZE; j++) {

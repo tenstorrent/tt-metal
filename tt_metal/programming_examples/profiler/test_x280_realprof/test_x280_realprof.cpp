@@ -208,6 +208,9 @@ int main(int argc, char** argv) {
     std::vector<int> l2cpus_list;  // --l2cpus a,b[,c,d]: explicit per-node L2CPU cluster idx (overrides the
                                    // default y-sorted pick). e.g. --colsplit --l2cpus 2,0 = left band on
                                    // idx2 (tile 8,5 / "CPU 4-7"), right band on idx0 (tile 8,3 / "CPU 0-3").
+    uint32_t stagger = 0;          // --stagger N: per-core start-stagger step (cycles). Core at linear index i
+                                   // delays its first marker by i*N cycles, desynchronizing the per-core fills
+                                   // (0 = all cores identical/lockstep = old behavior).
     bool producer_full = false;    // --producer-full: run the producer kernel on the WHOLE compute grid even
                                    // when the drain covers only a subrange. Decouple test for the multi-node
                                    // knee: full producer load, but only one cluster's half drained. WARNING:
@@ -291,6 +294,8 @@ int main(int argc, char** argv) {
             flip_noc = true;  // XOR the per-node read NoC plane
         } else if (a == "--producer-full") {
             producer_full = true;  // producer on the whole grid regardless of the drained subrange
+        } else if (a == "--stagger") {
+            stagger = (uint32_t)std::stoul(next());  // per-core start-stagger step (cycles)
         } else if (a == "--l2cpus") {
             std::string s = next();
             for (size_t p = 0; p < s.size();) {
@@ -1364,17 +1369,38 @@ int main(int argc, char** argv) {
         kdir + "realprof_dm.cpp",
         all_cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defs});
-    SetRuntimeArgs(program, brisc, all_cores, {prog_id});  // host pushes the runtime host-id -> BRISC STICKY_PROG
-    if (active_riscs >= 2) {
-        CreateKernel(
+    tt::tt_metal::KernelHandle ncrisc = 0, trisc = 0;
+    const bool have_ncrisc = active_riscs >= 2, have_trisc = active_riscs >= NRISC;
+    if (have_ncrisc) {
+        ncrisc = CreateKernel(
             program,
             kdir + "realprof_dm.cpp",
             all_cores,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines = defs});
     }
-    if (active_riscs >= NRISC) {
-        CreateKernel(program, kdir + "realprof_compute.cpp", all_cores, ComputeConfig{.defines = defs});
+    if (have_trisc) {
+        trisc = CreateKernel(program, kdir + "realprof_compute.cpp", all_cores, ComputeConfig{.defines = defs});
+    }
+    // Per-core runtime args: BRISC gets {prog_id, stagger}, NCRISC/TRISC get {stagger}. stagger = linear
+    // core index * --stagger cycles, so cores start (and fill) at spread-out times. stagger==0 -> all cores
+    // get 0 == old lockstep behavior (BRISC still gets prog_id as arg0).
+    {
+        uint32_t ci = 0;
+        for (uint32_t ly = all_cores.start_coord.y; ly <= all_cores.end_coord.y; ly++) {
+            for (uint32_t lx = all_cores.start_coord.x; lx <= all_cores.end_coord.x; lx++) {
+                CoreCoord cc{lx, ly};
+                uint32_t stg = stagger * ci;
+                SetRuntimeArgs(program, brisc, cc, {prog_id, stg});
+                if (have_ncrisc) {
+                    SetRuntimeArgs(program, ncrisc, cc, {stg});
+                }
+                if (have_trisc) {
+                    SetRuntimeArgs(program, trisc, cc, {stg});
+                }
+                ci++;
+            }
+        }
     }
     distributed::MeshWorkload wl;
     wl.add_program(distributed::MeshCoordinateRange(mesh->shape()), std::move(program));
