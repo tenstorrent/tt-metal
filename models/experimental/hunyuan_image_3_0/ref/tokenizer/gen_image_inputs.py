@@ -596,8 +596,14 @@ def prepare_recaption_ar_bundle(
     model_dir: Path | None = None,
     generator: torch.Generator | None = None,
     dtype: torch.dtype = torch.float32,
+    embed_prefix: bool = True,
 ) -> GenImageHostInputs:
-    """Recaption AR prefix: template + optional cond encode + attention mask."""
+    """Recaption AR prefix: template + optional cond encode + attention mask.
+
+    ``embed_prefix=False`` skips host ``F.embedding`` for text-only bundles so the
+    TT path can embed prefix ids on device (no host embeds H2D). I2I / cond paths
+    still build ``inputs_embeds`` (VAE/ViT scatter) regardless.
+    """
     bundle = prepare_recaption_inputs(
         tok,
         prompt,
@@ -622,8 +628,10 @@ def prepare_recaption_ar_bundle(
             generator=generator,
             dtype=dtype,
         )
-    else:
+    elif embed_prefix:
         bundle.inputs_embeds = F.embedding(bundle.input_ids, wte_weight.to(dtype=dtype))
+    else:
+        bundle.inputs_embeds = None
     bundle.bot_task = bot_task
     return enrich_bundle_attention(bundle, processor)
 

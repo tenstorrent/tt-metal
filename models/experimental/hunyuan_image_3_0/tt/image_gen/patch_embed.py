@@ -556,9 +556,11 @@ def _to_flat_nhwc(device, x, in_channels):
                 x = ttnn.slice(x, [0, 0, 0, 0, 0], [B, 1, H, W, C])
             xf = ttnn.reshape(x, [1, 1, B * H * W, C])
             return xf, B, H, W
-        if len(x.shape) == 4 and int(x.shape[0]) == 1:
-            B = 1
-            _, n, C = (int(x.shape[i]) for i in range(3))
-            H = W = int(n**0.5)
-            return x, B, H, W
+        if len(x.shape) == 4 and int(x.shape[0]) == 1 and int(x.shape[1]) == 1:
+            # Flat NHWC [1,1,B*H*W,C] — square grid, B=1 (caller should prefer forward_latent).
+            n, C = int(x.shape[2]), int(x.shape[3])
+            assert C == in_channels
+            side = int(n**0.5)
+            assert side * side == n, f"non-square flat latent length {n}; pass B,H,W to forward_latent"
+            return x, 1, side, side
     raise TypeError("UNetDown entry: pass torch NCHW or ttnn BTHWC / flat NHWC")

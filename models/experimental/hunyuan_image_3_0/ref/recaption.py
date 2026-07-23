@@ -150,6 +150,10 @@ def _recaption_tail_looks_like_garbage(text: str) -> bool:
     cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
     if cjk >= 8:
         return True
+    # Long English rewrites are valid Instruct cot — do not treat length alone as junk.
+    prose = "".join(ch for ch in text if ch.isalnum() or ch.isspace()).strip()
+    if len(prose) >= 20:
+        return False
     return len(text) > 300
 
 

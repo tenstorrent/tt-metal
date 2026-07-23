@@ -36,10 +36,14 @@ def _zero_timestep(batch: int) -> torch.Tensor:
     return torch.zeros(batch, dtype=torch.float32)
 
 
-def _timestep_for_embed(t) -> torch.Tensor:
+def _timestep_for_embed(t):
+    """Normalize timesteps for ``HunyuanTtTimestepEmbedder.forward`` (host or device).
+
+    Device tensors stay on device — no D2H. Host torch vectors are reshaped to 1-D.
+    """
     if isinstance(t, torch.Tensor):
         return t.reshape(-1).float()
-    return ttnn.to_torch(t).reshape(-1).float()
+    return t
 
 
 def _tokens_from_latents_one(
@@ -214,8 +218,64 @@ def instantiate_continuous_tokens_tt(
         if isinstance(timesteps_tt, torch.Tensor):
             t_row = timesteps_tt[row : row + 1] if int(timesteps_tt.shape[0]) == bsz else timesteps_tt
         else:
-            t_row = ttnn.slice(timesteps_tt, [row], [row + 1]) if int(timesteps_tt.shape[0]) == bsz else timesteps_tt
+            # Prefer [1,1,N,1] / [N] device tensors; slice only when batched 1-D.
+            if len(timesteps_tt.shape) == 1 and int(timesteps_tt.shape[0]) == bsz:
+                t_row = ttnn.slice(timesteps_tt, [row], [row + 1])
+            else:
+                t_row = timesteps_tt
         _scatter_row(row, t_row)
         if not isinstance(timesteps_tt, torch.Tensor) and t_row is not timesteps_tt:
             ttnn.deallocate(t_row, force=False)
+    return out
+
+
+def scatter_distill_step_embeds_tt(
+    base_embeds_tt: ttnn.Tensor,
+    *,
+    t_scalar: float,
+    gen_timestep_scatter_index,
+    timestep_emb: HunyuanTtTimestepEmbedder,
+    mesh_device,
+    guidance_scalar: float | None = None,
+    guidance_scatter_index=None,
+    guidance_emb: HunyuanTtTimestepEmbedder | None = None,
+    t_r_scalar: float | None = None,
+    gen_timestep_r_scatter_index=None,
+    timestep_r_emb: HunyuanTtTimestepEmbedder | None = None,
+) -> ttnn.Tensor:
+    """Device-side ``scatter_distill_step_embeds`` (no host TimestepEmbedder / H2D of embeds).
+
+    ``base_embeds_tt`` is consumed (may be deallocated); caller owns the returned tensor.
+    Timestep scalars are created on device via ``ttnn.full`` (no ``torch.tensor``).
+    """
+    bsz = int(base_embeds_tt.shape[0])
+    out = base_embeds_tt
+    device = mesh_device if mesh_device is not None else timestep_emb.device
+
+    def _tvec(scalar: float) -> ttnn.Tensor:
+        # ttnn.full has no mesh_mapper kwarg; MeshDevice already replicates the fill.
+        return ttnn.full(
+            (1, 1, bsz, 1),
+            fill_value=float(scalar),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    if gen_timestep_scatter_index is not None and timestep_emb is not None:
+        t_tt = _tvec(t_scalar)
+        out = instantiate_continuous_tokens_tt(out, t_tt, gen_timestep_scatter_index, timestep_emb, mesh_device)
+        ttnn.deallocate(t_tt, force=False)
+
+    if guidance_scalar is not None and guidance_scatter_index is not None and guidance_emb is not None:
+        g_tt = _tvec(guidance_scalar)
+        out = instantiate_continuous_tokens_tt(out, g_tt, guidance_scatter_index, guidance_emb, mesh_device)
+        ttnn.deallocate(g_tt, force=False)
+
+    if t_r_scalar is not None and gen_timestep_r_scatter_index is not None and timestep_r_emb is not None:
+        r_tt = _tvec(t_r_scalar)
+        out = instantiate_continuous_tokens_tt(out, r_tt, gen_timestep_r_scatter_index, timestep_r_emb, mesh_device)
+        ttnn.deallocate(r_tt, force=False)
+
     return out

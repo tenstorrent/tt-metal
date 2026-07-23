@@ -39,7 +39,12 @@ def recaption_trace_enabled(device, *, sp_factor: int = 1, use_kv_cache: bool = 
 
 
 class RecaptionDecodeTracer:
-    """Capture one KV decode step on CQ0; replay for subsequent AR tokens."""
+    """KV prefill (chunked) + optional CQ0 decode-trace replay for AR tokens.
+
+    When ``return_device_logits=True`` (HY_DEVICE_SAMPLING), returns the ttnn logits
+    tensor for on-device ``ttnn.sampling`` instead of D2H. Decode trace capture is
+    skipped in that mode (``enable_decode_trace=False``) — prefill stays chunked.
+    """
 
     def __init__(
         self,
@@ -48,7 +53,8 @@ class RecaptionDecodeTracer:
         lm_head,
         *,
         wte_tt,
-        prefix_embeds: torch.Tensor,
+        prefix_embeds: torch.Tensor | None = None,
+        prefix_input_ids: torch.Tensor | None = None,
         image_infos,
         attn_slices,
         kv_cache,
@@ -56,12 +62,20 @@ class RecaptionDecodeTracer:
         prefix_len: int,
         replicate_to_mesh=None,
         dual_cq: ArDualCQCoordinator | None = None,
+        return_device_logits: bool = False,
+        enable_decode_trace: bool = True,
     ):
+        if prefix_embeds is None and prefix_input_ids is None:
+            raise ValueError("RecaptionDecodeTracer requires prefix_embeds or prefix_input_ids")
+        if prefix_input_ids is not None and wte_tt is None:
+            raise ValueError("prefix_input_ids requires wte_tt for on-device prefix embedding")
         self.device = device
         self.model = model
         self.lm_head = lm_head
         self.wte_tt = wte_tt
         self.prefix_embeds = prefix_embeds
+        self.prefix_input_ids = prefix_input_ids
+        self.prefix_embeds_tt = None
         self.image_infos = image_infos
         self.attn_slices = attn_slices
         self.kv_cache = kv_cache
@@ -69,6 +83,8 @@ class RecaptionDecodeTracer:
         self.prefix_len = prefix_len
         self.replicate_to_mesh = replicate_to_mesh
         self.dual_cq = dual_cq
+        self.return_device_logits = return_device_logits
+        self.enable_decode_trace = enable_decode_trace and not return_device_logits
 
         self.trace_id = None
         self.prefill_trace_id = None
@@ -91,6 +107,36 @@ class RecaptionDecodeTracer:
         self._query_pos = 0
         self._cos_host: torch.Tensor | None = None
         self._sin_host: torch.Tensor | None = None
+
+    def ensure_prefix_embeds_tt(self) -> ttnn.Tensor:
+        """Materialize prefix hidden states on device (TT embed or one-shot H2D)."""
+        if self.prefix_embeds_tt is not None:
+            return self.prefix_embeds_tt
+        if self.prefix_input_ids is not None:
+            ids = self.prefix_input_ids
+            if ids.ndim == 1:
+                ids = ids.unsqueeze(0)
+            ids = ids[:, : self.prefix_len].contiguous()
+            self.prefix_embeds_tt = self.wte_tt.embed(ids)
+            print(
+                f"[recaption] prefix embedding on-device via wte "
+                f"(ids [{ids.shape[0]}, {ids.shape[1]}], no host F.embedding H2D)",
+                flush=True,
+            )
+        else:
+            self.prefix_embeds_tt = self._upload_hidden(self.prefix_embeds[:1, : self.prefix_len].float())
+            print(
+                f"[recaption] prefix embeds H2D once "
+                f"(shape={[1, self.prefix_len, int(self.prefix_embeds.shape[-1])]})",
+                flush=True,
+            )
+        return self.prefix_embeds_tt
+
+    def prefix_hidden_slice(self, start: int, end: int) -> ttnn.Tensor:
+        """Device slice of prefix embeds ``[1, end-start, H]`` (caller owns / must free)."""
+        prefix_tt = self.ensure_prefix_embeds_tt()
+        h = int(prefix_tt.shape[-1])
+        return ttnn.slice(prefix_tt, [0, start, 0], [1, end, h])
 
     def _upload_hidden(self, hidden_host: torch.Tensor) -> ttnn.Tensor:
         if self.replicate_to_mesh is not None:
@@ -116,9 +162,12 @@ class RecaptionDecodeTracer:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _mask_row_host(self, query_pos: int) -> torch.Tensor:
-        mask_bool = build_attention_mask_query_row(self.max_cache_len, query_pos, self.attn_slices, bsz=1)
-        return to_additive(mask_bool, dtype=torch.bfloat16).reshape(1, 1, 1, self.max_cache_len)
+    def _mask_row_host(self, query_pos: int, total_len: int | None = None) -> torch.Tensor:
+        # Trace replay pads KV to ``max_cache_len`` so the mask must match that fixed W.
+        # Eager (concat) decode grows K to ``query_pos+1`` — SDPA requires mask W == K len.
+        w = self.max_cache_len if total_len is None else int(total_len)
+        mask_bool = build_attention_mask_query_row(w, query_pos, self.attn_slices, bsz=1)
+        return to_additive(mask_bool, dtype=torch.bfloat16).reshape(1, 1, 1, w)
 
     def _to_torch_replicated(self, tensor: ttnn.Tensor) -> torch.Tensor:
         """Mesh-safe D2H for tensors replicated across the batch (dim 0) dimension."""
@@ -266,7 +315,96 @@ class RecaptionDecodeTracer:
         ttnn.execute_trace(self.device, self.trace_id, cq_id=COMPUTE_CQ, blocking=True)
         return (time.perf_counter() - t0) * 1000
 
-    def forward(self, ids: torch.Tensor) -> torch.Tensor:
+    def _emit_logits(self, batch_size: int):
+        if self.return_device_logits:
+            return self.logits_tt
+        return self._read_logits(batch_size)
+
+    def _eager_decode(self, token_id: int | ttnn.Tensor, query_pos: int) -> ttnn.Tensor:
+        """Single-token decode without CQ0 trace capture (device-sampling path).
+
+        ``token_id`` may be a host int (legacy) or an on-device ``[B, 1]`` id tensor
+        from ``ttnn.sampling`` — the latter avoids H2D on the sampling→embed edge.
+
+        Text-only (empty ``attn_slices``): mask + RoPE stay on device (zeros row +
+        ``slice_cos_sin``). Image-span rows still use the host mask builder.
+        """
+        if self._cos_full is None or self._sin_full is None:
+            self._cos_full, self._sin_full = self.model.layers[0].self_attn.rope.prepare_cos_sin(
+                self.max_cache_len, image_infos=self.image_infos
+            )
+        # Growing (non-trace_fixed) KV: after concat, K length == query_pos + 1 (== S).
+        total_len = query_pos + 1
+        owns_token = False
+        if isinstance(token_id, ttnn.Tensor):
+            token_tt = token_id
+        else:
+            tok = torch.tensor([[int(token_id)]], dtype=torch.int32)
+            token_tt = self._upload_trace_buffer(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            owns_token = True
+
+        text_only = not self.attn_slices
+        if text_only:
+            # Pure causal grow: every prior key is visible → additive zeros.
+            mask_kwargs = dict(
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            mask_tt = ttnn.zeros((1, 1, 1, total_len), **mask_kwargs)
+            rope = self.model.layers[0].self_attn.rope
+            cos_tt, sin_tt = rope.slice_cos_sin(self._cos_full, self._sin_full, query_pos)
+        else:
+            mask_tt = self._upload_trace_buffer(
+                self._mask_row_host(query_pos, total_len=total_len),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            cos_h, sin_h = self._rope_slice_host(query_pos)
+            cos_tt = self._upload_trace_buffer(cos_h, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            sin_tt = self._upload_trace_buffer(sin_h, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+        hidden_tt = self.wte_tt.embed(token_tt)
+        hidden = self.model.forward(
+            inputs_embeds=hidden_tt,
+            seq_len=total_len,
+            image_infos=self.image_infos,
+            attention_mask=mask_tt,
+            kv_cache=self.kv_cache,
+            use_cache=True,
+            decode_step=True,
+            cos_sin=(cos_tt, sin_tt),
+        )
+        logits_tt = self.lm_head(hidden, last_token_only=True)
+        free = [mask_tt, cos_tt, sin_tt, hidden_tt, hidden]
+        if owns_token:
+            free.append(token_tt)
+        for t in free:
+            ttnn.deallocate(t)
+        self.kv_cache.seq_len = query_pos + 1
+        return logits_tt
+
+    def forward_device_token(self, token_tt: ttnn.Tensor, *, seq_len: int):
+        """Decode one AR step from an on-device token id ``[B, 1]`` (no token H2D)."""
+        if seq_len <= self.prefix_len:
+            raise ValueError(f"forward_device_token requires seq_len > prefix_len ({self.prefix_len}), got {seq_len}")
+        if not self.prefill_done:
+            t0 = time.perf_counter()
+            self.logits_tt = self._prefill_forward()
+            self.prefill_done = True
+            self._timing_prefill_ms = (time.perf_counter() - t0) * 1000
+            print(
+                f"[recaption] chunked prefill done prefix_len={self.prefix_len} "
+                f"took {self._timing_prefill_ms:.2f} ms (device-sampling)",
+                flush=True,
+            )
+        query_pos = seq_len - 1
+        self.logits_tt = self._eager_decode(token_tt, query_pos)
+        self.replay_steps += 1
+        return self._emit_logits(int(token_tt.shape[0]))
+
+    def forward(self, ids: torch.Tensor):
         B, S = ids.shape
         if S < self.prefix_len:
             raise ValueError(f"sequence length {S} < prefix length {self.prefix_len}")
@@ -275,7 +413,8 @@ class RecaptionDecodeTracer:
             if not self.prefill_done:
                 t0 = time.perf_counter()
                 self.logits_tt = self._prefill_forward()
-                self._prepare_trace_kv()
+                if self.enable_decode_trace:
+                    self._prepare_trace_kv()
                 self.prefill_done = True
                 self._timing_prefill_ms = (time.perf_counter() - t0) * 1000
                 mode = "chunked/trace" if recaption_trace_prefill_enabled() else "chunked/eager"
@@ -284,10 +423,25 @@ class RecaptionDecodeTracer:
                     f"took {self._timing_prefill_ms:.2f} ms ({mode})",
                     flush=True,
                 )
-            return self._read_logits(B)
+            return self._emit_logits(B)
 
         token_id = int(ids[0, -1].item())
         query_pos = S - 1
+
+        if not self.enable_decode_trace:
+            if not self.prefill_done:
+                t0 = time.perf_counter()
+                self.logits_tt = self._prefill_forward()
+                self.prefill_done = True
+                self._timing_prefill_ms = (time.perf_counter() - t0) * 1000
+                print(
+                    f"[recaption] chunked prefill done prefix_len={self.prefix_len} "
+                    f"took {self._timing_prefill_ms:.2f} ms (device-sampling)",
+                    flush=True,
+                )
+            self.logits_tt = self._eager_decode(token_id, query_pos)
+            self.replay_steps += 1
+            return self._emit_logits(B)
 
         if self.trace_id is None:
             if not self.prefill_done:
@@ -303,7 +457,7 @@ class RecaptionDecodeTracer:
                     flush=True,
                 )
             self._capture(token_id, query_pos)
-            return self._read_logits(B)
+            return self._emit_logits(B)
 
         token_idx = self.replay_steps + 1
         self._update_trace_inputs(token_id, query_pos)
@@ -317,7 +471,7 @@ class RecaptionDecodeTracer:
                 f"[recaption] trace decode token #{token_idx} took {replay_ms:.2f} ms",
                 flush=True,
             )
-        return self._read_logits(B)
+        return self._emit_logits(B)
 
     def release(self) -> None:
         if self._timing_first_decode_ms > 0 or self._timing_replay_count > 0:
@@ -339,3 +493,6 @@ class RecaptionDecodeTracer:
         if self.trace_id is not None:
             ttnn.release_trace(self.device, self.trace_id)
             self.trace_id = None
+        if self.prefix_embeds_tt is not None:
+            ttnn.deallocate(self.prefix_embeds_tt)
+            self.prefix_embeds_tt = None
