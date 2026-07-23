@@ -448,3 +448,12 @@
 - Full regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> PASS, 12/12 in 11.73 s. Realistic T=32 layer output/state/conv PCC remained 0.999933/0.999870/0.999993.
 - Tracy report: `/tmp/kda_chunk_flat_gate_profile/reports/2026_07_23_08_38_17/ops_perf_results_2026_07_23_08_38_17.csv`. Ten warm T=640 iterations total 688.8416 us/iteration: beta transpose 2.1607 us, reshape 25.6073 us, prep 376.6100 us, scan 284.4636 us. The gate transpose disappeared.
 - Result: 137.1473 us (16.60%) faster than stabilized head-major 825.9889 us, and 606.3284 us (46.81%) faster than the original 1295.1700 us baseline.
+
+### 2026-07-23 08:47:05 UTC — Exact doubling WY inverse
+
+- Diagnosis: profiler RISC spans showed prep compute-active for about 369 of 377 us. Its masked 16x16 triangular solve spent 30 full 32x32 tile matmuls on quadrant data.
+- Replaced it with the exact nilpotent identity `(I-N)^-1 = (I+N)(I+N^2)(I+N^4)(I+N^8)(I+N^16)` for strictly-lower 32x32 `N`, requiring eight full-tile matmuls. Removed the superseded masked-quadrant helpers.
+- Full Blackhole regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 12/12 in 15.94 s. Realistic T=32 output/state/conv PCC remained 0.999933/0.999870/0.999993.
+- Tracy report: `/tmp/kda_chunk_doubling_paced_profile/reports/2026_07_23_08_47_05/ops_perf_results_2026_07_23_08_47_05.csv`. Ten warm T=640 calls averaged 640.8891 us: transpose 2.1554 us, reshape 25.7025 us, prep 328.8295 us, scan 284.2017 us.
+- Result: 47.9525 us (6.96%) faster than flat-gate 688.8416 us, and 654.2809 us (50.52%) faster than the original 1295.1700 us baseline.
+- A/B: removing the legacy three-tile startup read unexpectedly regressed prep to 359.6244 us (`/tmp/kda_chunk_doubling_clean_profile/reports/2026_07_23_08_46_09/ops_perf_results_2026_07_23_08_46_09.csv`). Restoring it recovered 328.8295 us, so it remains local and labeled as reader-burst pacing.

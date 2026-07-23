@@ -11,9 +11,9 @@
 
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
 constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_ones = 7;
+constexpr uint32_t cb_mask = 17;
 // Three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10) packed into one [1,1,32,96] tensor.
 // Loaded once into the cb_u slot (17), which the stable-form prep no longer uses.
-constexpr uint32_t cb_mask = 17;
 
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
@@ -43,10 +43,10 @@ void kernel_main() {
     const uint32_t v_addr = get_arg_val<uint32_t>(4);
     const uint32_t g_addr = get_arg_val<uint32_t>(5);
     const uint32_t b_addr = get_arg_val<uint32_t>(6);
+    const uint32_t mask_addr = get_arg_val<uint32_t>(10);
     const uint32_t eye_addr = get_arg_val<uint32_t>(7);
     const uint32_t tril_addr = get_arg_val<uint32_t>(8);
     const uint32_t ones_addr = get_arg_val<uint32_t>(9);
-    const uint32_t mask_addr = get_arg_val<uint32_t>(10);
     // Flat metadata (used by V_FLAT/QK_FLAT): NC = chunks/head, HV = value-head count, Hk = key-head count.
     const uint32_t NC = get_arg_val<uint32_t>(11);
     const uint32_t HV = get_arg_val<uint32_t>(12);
@@ -85,7 +85,7 @@ void kernel_main() {
     read_into(eye_acc, cb_eye, 0, cc, tb_f);
     read_into(tril_acc, cb_tril, 0, cc, tb_f);
     read_into(ones_acc, cb_ones, 0, cc, tb_f);
-    read_into(mask_acc, cb_mask, 0, 3, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
+    read_into(mask_acc, cb_mask, 0, 3, tb_f);  // intentional startup pacing before bulk input reads
 
     // Flat-v token-major read: fetch head hv's chunk c out of the flat [B,T,HV*V] tile grid
     // (row stride HV*Vt tiles, column offset hv*Vt), packing the [Ct,Vt] block contiguously into

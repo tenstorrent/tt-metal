@@ -221,7 +221,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::vbeta, cv);
     add_cb(pcb::kbeta, ck);
     add_cb(pcb::out, cv, 2, df_io);
-    add_cb(pcb::u, std::max(cv, 3u));  // aliased as the three-tile WY mask during prep startup
+    add_cb(pcb::u, std::max(cv, 3u));  // startup pacing tiles; then unused scratch
     add_cb(pcb::w, ck);
     add_cb(pcb::qdecay, ck);
     add_cb(pcb::intra, cc);
