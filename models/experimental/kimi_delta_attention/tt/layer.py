@@ -13,7 +13,7 @@ import torch
 import ttnn
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.experimental.kimi_delta_attention.config import KDAConfig
-from models.experimental.kimi_delta_attention.tt.recurrence import composed_kda_recurrence, fused_kda_recurrence
+from models.experimental.kimi_delta_attention.tt.recurrence import chunk_kda_recurrence, fused_kda_recurrence
 from models.experimental.kimi_delta_attention.tt.weights import KDAWeights, load_kda_weights
 
 
@@ -138,8 +138,8 @@ class KimiDeltaAttention:
         sequence = hidden_states.shape[1]
         if mode == "recurrent" and sequence != 1:
             raise ValueError(f"recurrent mode requires T=1, got T={sequence}")
-        if chunk_size is not None and chunk_size <= 0:
-            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+        if mode == "chunk" and chunk_size not in (None, 32):
+            raise ValueError(f"chunk KDA currently requires chunk_size=32, got {chunk_size}")
         if valid_len is not None and valid_len != sequence:
             raise NotImplementedError(f"composed KDA currently requires valid_len == T, got {valid_len} != {sequence}")
         if self.recurrent_state is None or self.convolution_state is None:
@@ -218,7 +218,7 @@ class KimiDeltaAttention:
         gate = ttnn.multiply(weights.decay_scale, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         assert self.recurrent_state is not None
-        recurrence = fused_kda_recurrence if mode == "recurrent" else composed_kda_recurrence
+        recurrence = fused_kda_recurrence if mode == "recurrent" else chunk_kda_recurrence
         output, new_recurrent_state = recurrence(q, k, v, gate, beta, self.recurrent_state)
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
             new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)

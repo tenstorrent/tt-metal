@@ -207,26 +207,26 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::q, ck, 1, df_io);
     add_cb(pcb::k, ck, 1, df_io);
     add_cb(pcb::v, cv, 1, df_io);
-    add_cb(pcb::g, Ct);
+    add_cb(pcb::g, attrs.vector_gate ? ck : Ct);
     add_cb(pcb::beta, Ct);
     add_cb(pcb::eye, cc);
     add_cb(pcb::tril, cc);
     add_cb(pcb::ones, cc);
     add_cb(pcb::S, kv, 2);
-    add_cb(pcb::decay, Ct);
-    add_cb(pcb::decay_exp, Ct);
-    add_cb(pcb::decayfac, Ct);
+    add_cb(pcb::decay, attrs.vector_gate ? ck : Ct);
+    add_cb(pcb::decay_exp, attrs.vector_gate ? ck : Ct);
+    add_cb(pcb::decayfac, attrs.vector_gate ? ck : Ct);
     add_cb(pcb::lmask, cc);
     add_cb(pcb::Tinv, cc);
     add_cb(pcb::vbeta, cv);
     add_cb(pcb::kbeta, ck);
     add_cb(pcb::out, cv, 2, df_io);
-    add_cb(pcb::u, cv);
+    add_cb(pcb::u, std::max(cv, 3u));  // aliased as the three-tile WY mask during prep startup
     add_cb(pcb::w, ck);
     add_cb(pcb::qdecay, ck);
     add_cb(pcb::intra, cc);
     add_cb(pcb::s2, kv, 2);
-    add_cb(pcb::vnew, cv);  // aliased as cb_dl in the prep kernel (1 tile used)
+    add_cb(pcb::vnew, attrs.vector_gate ? std::max(cv, Kt) : cv);  // aliased as cb_dl
     add_cb(pcb::ointer, cv);
     add_cb(pcb::kdec_t, kc);
     add_cb(pcb::supd, kv);
@@ -260,7 +260,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     }
 
     KernelDescriptor reader;
-    reader.kernel_source = kdir + "dataflow/reader_chunk_gdn_prep.cpp";
+    reader.kernel_source =
+        kdir + (attrs.vector_gate ? "dataflow/reader_chunk_kda_prep.cpp" : "dataflow/reader_chunk_gdn_prep.cpp");
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = cores;
     reader.compile_time_args = reader_ct;
@@ -268,7 +269,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     reader.runtime_args.reserve(n_used);
 
     KernelDescriptor writer;
-    writer.kernel_source = kdir + "dataflow/writer_chunk_gdn_prep.cpp";
+    writer.kernel_source =
+        kdir + (attrs.vector_gate ? "dataflow/writer_chunk_kda_prep.cpp" : "dataflow/writer_chunk_gdn_prep.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = cores;
     writer.compile_time_args = writer_ct;
@@ -276,7 +278,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     writer.runtime_args.reserve(n_used);
 
     KernelDescriptor compute;
-    compute.kernel_source = kdir + "compute/chunk_gdn_prep.cpp";
+    compute.kernel_source = kdir + (attrs.vector_gate ? "compute/chunk_kda_prep.cpp" : "compute/chunk_gdn_prep.cpp");
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     // Compute gets extra args for the in-kernel q/k L2-norm (OPT-B): QK_NORM flag, and scale/eps as
@@ -389,7 +391,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     add_cb(pcb::qdecay, ck, 1);
     add_cb(pcb::intra, cc, 1);
     add_cb(pcb::kdec_t, kc, 1);
-    add_cb(pcb::dl, 1, 1);
+    add_cb(pcb::dl, attrs.vector_gate ? Kt : 1, 1);
     add_cb(pcb::Tinv, cc, 1);  // t_inv (WY inverse)
     // State: cb_S is reader-produced (chunk 0 only); s2/s3 are compute-only ping-pong.
     add_cb(pcb::S, kv);
@@ -425,7 +427,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
 
     KernelDescriptor reader;
-    reader.kernel_source = kdir + "dataflow/reader_chunk_gdn_scan.cpp";
+    reader.kernel_source =
+        kdir + (attrs.vector_gate ? "dataflow/reader_chunk_kda_scan.cpp" : "dataflow/reader_chunk_gdn_scan.cpp");
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = cores;
     reader.compile_time_args = reader_ct;
@@ -441,7 +444,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     writer.runtime_args.reserve(n_used);
 
     KernelDescriptor compute;
-    compute.kernel_source = kdir + "compute/chunk_gdn_scan.cpp";
+    compute.kernel_source = kdir + (attrs.vector_gate ? "compute/chunk_kda_scan.cpp" : "compute/chunk_gdn_scan.cpp");
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     compute.compile_time_args = ct_args;

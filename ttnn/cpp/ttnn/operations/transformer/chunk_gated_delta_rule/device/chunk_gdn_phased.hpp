@@ -46,6 +46,7 @@ struct ChunkGdnPrepParams {
     // folds `scale` into q's norm. Only valid for chunk_size==32 (Ct==1). scale defaults to no-op.
     bool qk_norm = false;
     float scale = 1.0f;
+    bool vector_gate = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -54,7 +55,7 @@ struct ChunkGdnPrepInputs {
     Tensor q;        // [BH, NC, C, K] bf16
     Tensor k;        // [BH, NC, C, K] bf16
     Tensor v;        // [BH, NC, C, V] bf16  (or FLAT [B, T, HV*V] bf16 when params.v_flat)
-    Tensor g;        // [BH, NC, C, 1] fp32 (column)
+    Tensor g;        // [BH, NC, C, 1|K] fp32 (scalar GDN or vector KDA gate)
     Tensor beta;     // [BH, NC, C, 1] fp32 (column)
     Tensor eye_c;    // [1,1,C,C] fp32
     Tensor tril_c;   // [1,1,C,C] fp32
@@ -101,7 +102,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_norm = false,
     float scale = 1.0f,
     bool qk_flat = false,
-    uint32_t Hk = 0);
+    uint32_t Hk = 0,
+    bool vector_gate = false);
 
 // ---------------------------------------------------------------------------
 // SCAN
@@ -114,6 +116,7 @@ struct ChunkGdnScanParams {
     uint32_t val_dim;
     bool has_initial_state;
     bool output_final_state;
+    bool vector_gate = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -124,7 +127,7 @@ struct ChunkGdnScanInputs {
     Tensor q_decay;                       // [BH, NC, C, K] fp32
     Tensor intra;                         // [BH, NC, C, C] fp32
     Tensor k_dec_t;                       // [BH, NC, K, C] fp32
-    Tensor dl;                            // [BH, NC, 1, 1] fp32 (scalar per chunk in tile [0,0])
+    Tensor dl;                            // [BH, NC, 1|K, 1] fp32 (scalar GDN or vector KDA decay)
     Tensor t_inv;                         // [BH, NC, C, C] fp32  (WY inverse)
     std::optional<Tensor> initial_state;  // [BH, K, V] fp32 or absent (zeros)
 };
@@ -160,6 +163,7 @@ std::vector<Tensor> chunk_gdn_scan(
     uint32_t chunk_size,
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool vector_gate = false);
 
 }  // namespace ttnn::prim

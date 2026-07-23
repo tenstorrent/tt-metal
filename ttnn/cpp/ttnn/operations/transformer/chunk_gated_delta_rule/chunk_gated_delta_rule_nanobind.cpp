@@ -70,6 +70,33 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
         nb::arg("masks") = nb::none());
+
+    ttnn::bind_function<"chunk_kda", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Chunk-parallel Kimi Delta Attention recurrence with per-key vector decay.
+
+        q/k must be L2-normalized. Shapes: q/k/g [B,T,H,K], v [B,T,H,V],
+        beta [B,T,H], initial_state [B,H,K,V]. chunk_size is currently 32.
+        Returns token-major output [B,T,H,V] and an optional final state.
+        )doc",
+        &ttnn::transformer::chunk_kda,
+        nb::arg("q").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("v").noconvert(),
+        nb::arg("g").noconvert(),
+        nb::arg("beta").noconvert(),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("initial_state") = nb::none(),
+        nb::arg("output_final_state") = false,
+        nb::arg("chunk_size") = 32,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("eye") = nb::none(),
+        nb::arg("tril") = nb::none(),
+        nb::arg("ones") = nb::none(),
+        nb::arg("masks") = nb::none());
 }
 
 }  // namespace ttnn::operations::transformer

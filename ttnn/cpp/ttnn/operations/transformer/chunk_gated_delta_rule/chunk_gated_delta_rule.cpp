@@ -47,6 +47,13 @@ ttnn::Tensor head_split_tile(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint
 }
 
 // [B,T,Hn] -> [B*Hn, T], TILE fp32 (permute on TILE, no untilize).
+
+// [B,T,H,D] -> [B*H,T,D], TILE fp32.
+ttnn::Tensor head_split_float_tile(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t H, uint32_t D) {
+    ttnn::Tensor t = x.dtype() == DataType::FLOAT32 ? x : ttnn::typecast(x, DataType::FLOAT32);
+    t = ttnn::permute(t, ttnn::SmallVector<int64_t>{0, 2, 1, 3});
+    return ttnn::reshape(t, ttnn::Shape({B * H, T, D}));
+}
 ttnn::Tensor headvec_split_tile(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t Hn) {
     ttnn::Tensor t = x;
     if (t.dtype() != DataType::FLOAT32) {
@@ -380,4 +387,130 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     return {o, final_opt};
 }
 
+std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
+    const ttnn::Tensor& q_in,
+    const ttnn::Tensor& k_in,
+    const ttnn::Tensor& v_in,
+    const ttnn::Tensor& g_in,
+    const ttnn::Tensor& beta_in,
+    std::optional<float> scale_opt,
+    const std::optional<ttnn::Tensor>& initial_state,
+    bool output_final_state,
+    uint32_t chunk_size,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& eye,
+    const std::optional<ttnn::Tensor>& tril,
+    const std::optional<ttnn::Tensor>& ones,
+    const std::optional<ttnn::Tensor>& masks) {
+    const auto& qs = q_in.logical_shape();
+    const auto& vs = v_in.logical_shape();
+    const auto& gs = g_in.logical_shape();
+    TT_FATAL(qs.rank() == 4 && vs.rank() == 4 && gs.rank() == 4, "chunk_kda expects rank-4 q/k/v/g");
+    const uint32_t B = qs[0], T = qs[1], H = qs[2], K = qs[3], V = vs[3];
+    TT_FATAL(chunk_size == 32, "chunk_kda currently requires chunk_size=32, got {}", chunk_size);
+    TT_FATAL(
+        k_in.logical_shape() == qs && vs[0] == B && vs[1] == T && vs[2] == H,
+        "chunk_kda q/k/v shapes are inconsistent");
+    TT_FATAL(gs[0] == B && gs[1] == T && gs[2] == H && gs[3] == K, "chunk_kda g must be [B,T,H,K]");
+    TT_FATAL(
+        beta_in.logical_shape().rank() == 3 && beta_in.logical_shape()[0] == B && beta_in.logical_shape()[1] == T &&
+            beta_in.logical_shape()[2] == H,
+        "chunk_kda beta must be [B,T,H]");
+
+    auto* dev = q_in.device();
+    const uint32_t BH = B * H;
+    const uint32_t C = chunk_size;
+    const uint32_t pad = (C - (T % C)) % C;
+    const uint32_t L = T + pad;
+    const uint32_t NC = L / C;
+    const float scale = scale_opt.value_or(1.0f / std::sqrt(static_cast<float>(K)));
+
+    ttnn::Tensor q = ttnn::multiply(head_split_tile(q_in, B, T, H, K), scale);
+    ttnn::Tensor k = head_split_tile(k_in, B, T, H, K);
+    ttnn::Tensor v = head_split_tile(v_in, B, T, H, V);
+    ttnn::Tensor g = head_split_float_tile(g_in, B, T, H, K);
+    ttnn::Tensor beta = headvec_split_tile(beta_in, B, T, H);
+    q = pad_time_tile(q, BH, K, pad, dev);
+    k = pad_time_tile(k, BH, K, pad, dev);
+    v = pad_time_tile(v, BH, V, pad, dev);
+    g = pad_time_tile(g, BH, K, pad, dev);
+    if (pad > 0) {
+        auto zeros = ttnn::zeros(
+            ttnn::Shape({BH, pad}), DataType::FLOAT32, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
+        beta = ttnn::concat(std::vector<ttnn::Tensor>{beta, zeros}, 1);
+    }
+    q = ttnn::reshape(q, ttnn::Shape({BH, NC, C, K}));
+    k = ttnn::reshape(k, ttnn::Shape({BH, NC, C, K}));
+    v = ttnn::reshape(v, ttnn::Shape({BH, NC, C, V}));
+    g = ttnn::reshape(g, ttnn::Shape({BH, NC, C, K}));
+    beta = ttnn::reshape(beta, ttnn::Shape({BH, NC, C, 1}));
+
+    const bool has_const_tiles = eye.has_value() && tril.has_value() && ones.has_value() && masks.has_value();
+    ConstTiles fallback;
+    if (!has_const_tiles) {
+        fallback = build_const_tiles(C, dev);
+    }
+    const auto& eye_c = has_const_tiles ? *eye : fallback.eye;
+    const auto& tril_c = has_const_tiles ? *tril : fallback.tril;
+    const auto& ones_c = has_const_tiles ? *ones : fallback.ones;
+    const auto& masks_c = has_const_tiles ? *masks : fallback.masks;
+
+    std::optional<ttnn::Tensor> s0;
+    if (initial_state.has_value()) {
+        auto state = initial_state->dtype() == DataType::FLOAT32 ? *initial_state
+                                                                 : ttnn::typecast(*initial_state, DataType::FLOAT32);
+        s0 = ttnn::reshape(state, ttnn::Shape({BH, K, V}));
+    } else {
+        s0 = build_zero_state(BH, K, V, dev);
+    }
+
+    const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    const auto kernel_cfg = init_device_compute_kernel_config(
+        dev->arch(),
+        compute_kernel_config,
+        MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true,
+        /*default_l1_acc=*/false);
+    auto prep = ttnn::prim::chunk_gdn_prep(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        eye_c,
+        tril_c,
+        ones_c,
+        masks_c,
+        C,
+        out_mem,
+        kernel_cfg,
+        false,
+        H,
+        false,
+        scale,
+        false,
+        H,
+        true);
+    auto scan = ttnn::prim::chunk_gdn_scan(
+        prep[0], prep[1], prep[2], prep[3], prep[4], prep[5], prep[6], s0, C, true, out_mem, kernel_cfg, true);
+
+    std::optional<ttnn::Tensor> final_state;
+    if (output_final_state) {
+        final_state = ttnn::reshape(scan[1], ttnn::Shape({B, H, K, V}));
+    }
+    ttnn::Tensor output = ttnn::to_layout(scan[0], Layout::ROW_MAJOR);
+    output = ttnn::reshape(output, ttnn::Shape({BH, L, V}));
+    if (pad > 0) {
+        output = ttnn::slice(
+            output,
+            ttnn::SmallVector<int32_t>{0, 0, 0},
+            ttnn::SmallVector<int32_t>{static_cast<int32_t>(BH), static_cast<int32_t>(T), static_cast<int32_t>(V)},
+            ttnn::SmallVector<int32_t>{1, 1, 1});
+    }
+    output = ttnn::reshape(output, ttnn::Shape({B, H, T, V}));
+    output = ttnn::permute(output, ttnn::SmallVector<int64_t>{0, 2, 1, 3});
+    return {output, final_state};
+}
 }  // namespace ttnn::transformer

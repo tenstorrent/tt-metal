@@ -112,6 +112,35 @@ def composed_kda_recurrence(
     return ttnn.concat(outputs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG), state
 
 
+def chunk_kda_recurrence(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    gate: ttnn.Tensor,
+    beta: ttnn.Tensor,
+    initial_state: ttnn.Tensor,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Execute chunk-parallel KDA with FP32 recurrent state."""
+    key_dim = q.shape[-1]
+    q = l2_norm_ttnn(q, dim=-1)
+    k = l2_norm_ttnn(k, dim=-1)
+    output, final_state = ttnn.transformer.chunk_kda(
+        q,
+        k,
+        v,
+        gate,
+        beta,
+        scale=key_dim**-0.5,
+        initial_state=initial_state,
+        output_final_state=True,
+        chunk_size=32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    assert final_state is not None
+    output = ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return output, final_state
+
+
 def fused_kda_recurrence(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
