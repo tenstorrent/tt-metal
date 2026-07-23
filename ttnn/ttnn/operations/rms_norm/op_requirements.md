@@ -309,7 +309,7 @@ their cells passing (~1260 xfail cells); golden green; prior phases unregressed.
 
 ---
 
-### [ ] Refinement 5 — HEIGHT_SHARDED (local per-core reduction)
+### [~] Refinement 5 — HEIGHT_SHARDED (local per-core reduction)
 
 **Goal**: add `ttnn.TensorMemoryLayout.HEIGHT_SHARDED` to `SUPPORTED["memory_layout"]`.
 Rows are split across cores and each core keeps **full-W** rows, so the reduction
@@ -336,6 +336,69 @@ passing; the HEIGHT `_SHARDED` loose case (`(1,1,256,512)`) becomes `supported_p
 **Done when**: `HEIGHT_SHARDED`∈`SUPPORTED["memory_layout"]`; its golden + loose
 cells pass via a zero-copy sharded CB (no accessor read of a core's own shard);
 golden green; all prior phases unregressed.
+
+**Landed (partial `[~]`)**: `HEIGHT_SHARDED` in SUPPORTED. **TILE input** (TILE gamma,
+RM gamma, no gamma) lands via a native zero-copy resident-shard path — a knob-turn on
+the interleaved row-parallel R3-resident indexed two-pass, REUSING `rms_norm_reader.cpp`
++ `rms_norm_compute.cpp` unchanged except two `if constexpr (X_RESIDENT)` branches (the
+interleaved perf path stays byte-identical at `X_RESIDENT=0`):
+- `_create_height_sharded_descriptor`: core assignment pinned by the shard grid (each
+  core's resident shard = its per-core block, `num_rows = per_h_tiles`); `cb_x_in`/`cb_out`
+  backed zero-copy via `ttnn.cb_descriptor_from_sharded_tensor` (NO NoC read/write, verified
+  native — no accessor read of the own shard); **no writer kernel** (compute packs `cb_out`
+  in place).
+- Reader `X_RESIDENT`: skips the x read (x resident); streams gamma per block per row
+  (TILE tiles, or RM sticks → `cb_gamma_sticks`).
+- Compute `X_RESIDENT`: self-arms the resident `cb_x_in` (whole shard), per-row wait/pop
+  walks it (block offset indexing identical to R3); gamma STREAMED per block (small
+  `cb_gamma` fits any W — a full-W resident gamma would blow L1 on top of the resident
+  input+output shards for wide W; resident gamma is the R6 perf lamp); RM gamma tilizes
+  per block before the `·gamma` mul.
+Golden HEIGHT slice: **852 passed / 630 xfailed / 0 failed / 0 xpassed** (RM-input cells
+xfail via the one remaining EXCLUSION). Loose HEIGHT `(1,1,256,512)` → `supported_pass`
+(loose 19/19). Probes + `test_rms_norm_height_sharded.py` (22 cases) PCC ≥ 0.99967 across
+aligned/W-/H-/both-non-aligned, `per_h>1` (R>grid), wide W=8192 (L1-pressure, single core),
+fp32, bf8b, 2D/3D/4D, mixed precision — `--dev` + non-dev. Unit dir 381 passed / 32 skipped;
+interleaved + WIDTH/BLOCK unregressed.
+
+**Deferred to R5a** (structural, characterized at depth): **RM INPUT + HEIGHT_SHARDED**.
+The resident shard is full-W row-major sticks (not tiles); consuming it needs a
+tilize-on-resident-shard (loopback repack of the resident RM sticks into tile-padded
+`cb_x_sticks` → `tilize` → `cb_x_in`) and an untilize-back into the resident RM output
+shard (loopback write) — a local-reduction analog of the R4b RM sub-scheme, requiring a
+writer kernel again. The one `{layout: ROW_MAJOR, memory_layout: HEIGHT_SHARDED}` EXCLUSION
+stays xfail-strict (not silenced; it is R5a's baseline). RM+HEIGHT+TILE-gamma is INVALID.
+
+---
+
+### [ ] Refinement 5a — RM-input HEIGHT_SHARDED (tilize-on-resident-shard)
+
+**Goal**: complete R5's deferred corner — **RM input + HEIGHT_SHARDED** — where a core's
+resident row-shard is full-W row-major sticks, not tiles. Remove the one
+`{layout: ROW_MAJOR, memory_layout: HEIGHT_SHARDED}` EXCLUSION with its cells passing
+(~630 golden xfail cells; RM+HEIGHT+TILE-gamma stays INVALID).
+
+**Verifier notes**: local-reduction analog of the R4b RM sub-scheme, but SIMPLER — each
+core holds FULL-W rows, so there is no cross-core combine, no phase-alignment, and no
+per-core partial scaler beyond the standard `W % 32` mask (the shard width IS the full W).
+The exact levers:
+- **Reader**: loopback-repack the resident RM shard sticks (`cb_descriptor_from_sharded_tensor`
+  alias → local NoC loopback, no remote re-fetch) into tile-padded `cb_x_sticks`, reading
+  only `origin_W` valid columns per stick; keep the up-front `cb_x_sticks` zeroing for the
+  `W % 32` pad. gamma unchanged from R5 (streamed per block, TILE or RM sticks).
+- **Compute**: `tilize<BLOCK_SIZE, cb_x_sticks, cb_x_in>` per block per tile-row before the
+  existing R3-resident indexed two-pass (x now lives in the allocated `cb_x_in`, not a
+  zero-copy alias); after pass 2, `untilize<BLOCK_SIZE, cb_out, cb_out_sticks>` per block.
+  This means x is NO LONGER zero-copy on the RM path (it is tilized into an allocated
+  `cb_x_in`) — the resident shard is still consumed locally (loopback, no DRAM/remote read),
+  just re-paged for the tile engine.
+- **Writer**: NEW (R5's TILE path has none) — loopback-write the untilized `cb_out_sticks`
+  valid columns into the resident RM output shard (`cb_descriptor_from_sharded_tensor` alias).
+- H non-alignment: the last tile-row's padding rows are transparent (discarded on read-back),
+  same as the TILE path; the RM writer writes exactly the valid rows per the shard height.
+
+**Done when**: `{layout: ROW_MAJOR, memory_layout: HEIGHT_SHARDED}` EXCLUSION removed with
+its cells passing; golden green; all prior phases unregressed.
 
 ---
 

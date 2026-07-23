@@ -371,3 +371,49 @@
   x's leading columns zeroed). No other defects.
 - Tests added: probes 019 (shard-geometry survey) + 020–024 (RM WIDTH/BLOCK correctness
   sweeps) in `tests/ttnn/unit_tests/operations/rms_norm/probes/`.
+
+## Refinement 5 — HEIGHT_SHARDED (local per-core reduction)
+- Date: 2026-07-23
+- Type: knob-turn (partial — `[~]`).
+- What was done: added `ttnn.TensorMemoryLayout.HEIGHT_SHARDED` to
+  `SUPPORTED["memory_layout"]` for **TILE input** (TILE gamma, RM gamma, no gamma) via a
+  native zero-copy resident-shard path (op_design.md §1 lamp 3). HEIGHT sharding splits
+  rows across cores, each core keeps FULL-W rows → the RMS reduce stays LOCAL per core, so
+  this is a knob-turn on the interleaved row-parallel path (NOT the cross-core WIDTH/BLOCK
+  scheme).
+  - **Reuse**: `rms_norm_reader.cpp` + `rms_norm_compute.cpp` (the R3 resident indexed
+    two-pass) unchanged except two `if constexpr (X_RESIDENT)` branches — the interleaved
+    perf path is byte-identical at `X_RESIDENT=0`. No forked kernel files.
+  - **Added — host** `_create_height_sharded_descriptor`: core assignment pinned by the
+    shard grid (`cores = corerange_to_cores(shard_spec.grid)`, `num_rows = sh//32` per core =
+    the whole resident shard as the per-core block); `cb_x_in`/`cb_out` backed ZERO-COPY via
+    `ttnn.cb_descriptor_from_sharded_tensor` (no NoC read/write — the local shard is consumed
+    in place, never re-read through a TensorAccessor); **no writer kernel** (compute packs the
+    zero-copy `cb_out` in place; the whole-shard-sized CB fills exactly with no drain).
+  - **Added — reader** `X_RESIDENT`: skips the x read (x resident); streams gamma per block
+    per row (TILE tiles into `cb_gamma`, or RM sticks into `cb_gamma_sticks`).
+  - **Added — compute** `X_RESIDENT`: self-arms the resident `cb_x_in` (whole shard pushed
+    once), per-row `cb_wait_front/pop(Wt)` walks it so the block-offset indexing is identical
+    to R3; gamma STREAMED per block (small `cb_gamma`, never sized by Wt) so HEIGHT fits any W
+    — a full-W resident gamma (Wt tiles) would clash with the resident input+output shards in
+    L1 for wide W (found via probe on W=8192); RM gamma tilizes per block before the `·gamma`.
+  - **Deferred to R5a** (characterized at depth): RM INPUT + HEIGHT — the resident shard is
+    full-W row-major sticks, needing a tilize-on-resident-shard (loopback repack → tilize) and
+    untilize-back (loopback write, a new writer) — a local-reduction analog of the R4b RM
+    sub-scheme. The one `{layout: ROW_MAJOR, memory_layout: HEIGHT_SHARDED}` EXCLUSION stays
+    xfail-strict (not silenced). RM+HEIGHT+TILE-gamma is INVALID.
+- Accuracy achieved: PCC ≥ 0.99967 (rtol/atol via golden `TOLERANCES`: bf16 PCC≥0.995,
+  f32 PCC≥0.999, bf8b PCC≥0.99) on 20 probe geometries + 22 regression cases — tile-aligned,
+  W-/H-/both-non-aligned, `per_h>1` (R>grid, 86 cores), wide W=8192 (single-core L1 pressure),
+  fp32, bf8b, 2D/3D/4D, TILE/RM/no gamma incl. mixed precision (bf16 act + f32 gamma).
+- Golden test progress: HEIGHT cartesian slice **852 passed / 630 xfailed / 0 failed /
+  0 xpassed** (630 xfails = the deferred RM-input EXCLUSION). Loose `test_op_loose`
+  **19 passed / 0 xfail** (the HEIGHT `(1,1,256,512)` loose case moved xfail→pass; was 18/1
+  at R4b). Interleaved + WIDTH/BLOCK cartesian spot + loose unregressed (0 failed / 0 xpass).
+  Unit dir **381 passed / 32 skipped** (`--dev` + non-dev, race-clean).
+- Issues encountered: wide-W HEIGHT (e.g. `(1,1,32,8192)`, single core) tripped an L1
+  static-CB-vs-shard clash when gamma was held resident (Wt=256 tiles ≈ 512KB on top of the
+  resident input+output shards) — fixed by streaming gamma per block (small `cb_gamma`,
+  op_design.md §7 "no CB sized by an op dimension"). No other defects.
+- Tests added: `test_rms_norm_height_sharded.py` (22 cases: TILE/RM/no gamma × aligned +
+  non-aligned + per_h>1 + wide + fp32 + bf8b + 2D/3D/4D + mixed precision). Probes 025-028.
