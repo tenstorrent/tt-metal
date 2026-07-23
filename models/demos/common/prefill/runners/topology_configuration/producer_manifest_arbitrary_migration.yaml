@@ -1,0 +1,45 @@
+# Producer manifest: arbitrary any-src -> any-dst KV migration.
+#
+# Migrates via an explicit `migration.pairs` mapping (0->3, 1->2) instead of the uniform src+offset;
+# equivalent CLI: --migrations "0:3,1:2". src and dst sets must be disjoint (overlaps and duplicate
+# destinations are rejected). The runner validates the migrated KV on-device.
+#
+# Requires a real-migration runner (pipeline_prefill_glm51_1galaxy_migrate.yaml, PREFILL_NUM_USERS=4) and
+# a running migration_endpoint (launch_migration_endpoints.sh, prefill_endpoint_id 1). Run:
+#   python -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest models/demos/common/prefill/runners/topology_configuration/producer_manifest_arbitrary_migration.yaml
+
+model:
+  variant: glm_5_1
+  num_layers: 78
+  max_seq_len: 56320
+  chunk_size: 5120
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: ds_prefill
+  connect_timeout_s: 60
+
+workload:
+  num_users: 2            # src slots 0,1 (the runner's table has 4 slots, so dst 2,3 are free)
+  chunks: "11"
+  max_requests: 2         # one resident request per slot (no recycling)
+  interleave: round_robin
+  check_pcc: false        # the RUNNER validates the migrated KV on-device (VALIDATE_MIGRATION=1)
+
+migration:
+  issue: true             # attach the Python MigrationLayerClient and migrate
+  dest_endpoint_id: 1     # loopback: the endpoint's own id
+  pairs:                  # ARBITRARY any-src -> any-dst (overrides dst_slot_offset)
+    - {src: 0, dst: 3}
+    - {src: 1, dst: 2}
+  timeout_ms: 3600000
+  done_file: /tmp/migration_done.sentinel
+  client_dir: /path/to/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
+  cmd_queue: /mig_ep1_cmd
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/prefill_kv_chunk_table.pb

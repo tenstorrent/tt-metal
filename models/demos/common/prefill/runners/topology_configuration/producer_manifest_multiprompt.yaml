@@ -1,0 +1,42 @@
+# Producer manifest: multi-prompt single-stage KV validation.
+#
+# Assigns a prompt (tokens + golden) per slot via `slot_prompts` and PCCs each slot's KV against its own
+# golden (check_pcc); per-slot depth is derived from each prompt's real length. Single stage (1 rank /
+# 1 galaxy), no migration endpoint needed.
+#
+# Pair with the mock-persistent runner (stays open across producer runs):
+#   pipeline_prefill_glm51_1galaxy_mock_persistent.yaml. Run:
+#   python -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest models/demos/common/prefill/runners/topology_configuration/producer_manifest_multiprompt.yaml
+# Expect: [producer] KV cache PCC PASSED.
+#
+# glm is sparse, so the table also carries an index config; a trace with dsa/indexer_k_layer_* (as below)
+# has its index cache PCC'd alongside the KVPE cache.
+
+model:
+  variant: glm_5_1
+  num_layers: 78
+  max_seq_len: 56320
+  chunk_size: 5120
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: ds_prefill
+  connect_timeout_s: 60
+
+workload:
+  num_users: 2
+  max_requests: 2         # one resident request per slot (no recycling)
+  interleave: round_robin
+  check_pcc: true         # producer-side per-slot read-back PCC — this IS the validation gate
+  slot_prompts:           # one trace per slot (use distinct traces for a true multi-prompt run)
+    - /mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm51-indexer-kcache-55k/  # slot 0
+    - /mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm51-indexer-kcache-55k/  # slot 1
+
+migration:
+  issue: false            # single-stage multi-prompt validation; no real migration
+
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/prefill_kv_chunk_table.pb
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/prefill_kv_device_map.json

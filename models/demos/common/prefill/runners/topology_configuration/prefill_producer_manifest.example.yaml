@@ -31,11 +31,6 @@ workload:
   max_requests: 2           # PREFILL_PRODUCER_MAX_REQUESTS (default: 1)  total requests before stopping
   duration_s: "inf"         # PREFILL_PRODUCER_DURATION_S  (default: inf) wall-clock bound
   interleave: round_robin   # PREFILL_PRODUCER_INTERLEAVE  (default: random) "random" | "round_robin"
-  p_gap: 0.0                # PREFILL_PRODUCER_P_GAP       (default: 0.0) per-step idle-gap probability
-  p_burst: 0.0              # PREFILL_PRODUCER_P_BURST     (default: 0.0) per-step 2-3 chunk burst probability
-  gap_ms: "200,2000"        # PREFILL_PRODUCER_GAP_MS      (default: "200,2000") idle-gap "min,max" ms
-  mid_end_prob: 0.0         # PREFILL_PRODUCER_MID_END_PROB (default: 0.0) prob a request ends mid-chunk
-  seed: 1234                # PREFILL_PRODUCER_SEED        (default: 1234) RNG seed (deterministic schedule)
   check_pcc: false          # PREFILL_PRODUCER_CHECK_PCC   (default: false) producer-side per-slot read-back PCC
   trace_dir: /mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm
                             # PREFILL_TRACE_DIR (default: the adapter's prefill_trace_default) shared prompt

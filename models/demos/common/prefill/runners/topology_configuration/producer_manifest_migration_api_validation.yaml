@@ -1,0 +1,45 @@
+# Producer manifest: Python migration API + on-device KV validation.
+#
+# `issue: true` attaches a MigrationLayerClient and calls migrate() + wait_complete() per resident slot,
+# then writes the DONE sentinel. The paired runner validates each migrated pair on-device with
+# PREFILL_VALIDATE_MIGRATION=1 (src vs golden + dst vs golden, or dst==src with PREFILL_MIGRATE_PAIRWISE=1).
+# Uniform mapping here (dst = src + 2); set `pairs:` instead for an arbitrary mapping.
+#
+# Requires the validating real-migration runner (pipeline_prefill_glm51_1galaxy_migrate.yaml,
+# PREFILL_VALIDATE_MIGRATION=1) and a running migration_endpoint (prefill_endpoint_id 1). Run:
+#   python -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest models/demos/common/prefill/runners/topology_configuration/producer_manifest_migration_api_validation.yaml
+# Expect in the runner log: [kv-migrate-validate] ... ALL <N> migrated pair(s) PASSED.
+
+model:
+  variant: glm_5_1
+  num_layers: 78
+  max_seq_len: 56320
+  chunk_size: 5120
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: ds_prefill
+  connect_timeout_s: 60
+
+workload:
+  num_users: 2            # src slots 0,1 -> dst 2,3
+  chunks: "11"
+  max_requests: 2
+  interleave: round_robin
+  check_pcc: false        # validation is on the RUNNER (on-device), not producer-side here
+
+migration:
+  issue: true             # <-- the Python Migration API: MigrationLayerClient.migrate()/wait_complete()
+  dest_endpoint_id: 1
+  dst_slot_offset: 2      # uniform: dst = src + 2  (0->2, 1->3)
+  timeout_ms: 3600000
+  done_file: /tmp/migration_done.sentinel
+  client_dir: /path/to/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
+  cmd_queue: /mig_ep1_cmd
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/prefill_kv_chunk_table.pb

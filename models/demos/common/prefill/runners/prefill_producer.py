@@ -1022,9 +1022,7 @@ def _issue_migrations(ml, triples: list, *, dest_endpoint_id: int, timeout_ms: i
     migrated = 0
     next_uuid = 1
     for src_slot, dst_slot, real_len in triples:
-        logger.info(
-            f"[producer] MIGRATE slot {src_slot} -> {dst_slot} ep={dest_endpoint_id} pos=[0,{real_len}) single-shot"
-        )
+        logger.info(f"[producer] MIGRATE slot {src_slot} -> {dst_slot} ep={dest_endpoint_id} pos=[0,{real_len})")
         uuid = next_uuid
         next_uuid += 1
         token = ml.migrate(
