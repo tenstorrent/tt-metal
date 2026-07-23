@@ -67,7 +67,14 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
         input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32,
         "per_token_cast_to_fp8: input dtype must be BFLOAT16 or FLOAT32, got {}",
         static_cast<int>(input.dtype()));
-    const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
+    const auto& tile = input.tensor_spec().tile();
+    // The compute kernels build cb_in with the default, non-transposed tile descriptor and
+    // compute_program_hash only records tile/face shapes. A transposed tile would be unpacked with the
+    // wrong face ordering and silently produce incorrect scales and FP8 values, so reject it here.
+    TT_FATAL(
+        !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
+        "per_token_cast_to_fp8: transposed TILE inputs are not supported");
+    const auto tile_shape = tile.get_tile_shape();
     const uint32_t tile_h = tile_shape[0];
     const uint32_t tile_w = tile_shape[1];
     // Row-major circular-buffer pages still use one logical tile. The quantization kernels then stream
