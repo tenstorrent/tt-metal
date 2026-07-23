@@ -149,7 +149,7 @@ the config-spanning guard set (one representative per distinct kernel path × la
 
 ---
 
-### [ ] Refinement 4 — Cross-core W-split: WIDTH/BLOCK sharding + logical wide-interleaved split
+### [~] Refinement 4 — Cross-core W-split: WIDTH/BLOCK sharding + logical wide-interleaved split
 
 **Goal**: split the reduced dim `W` across cores and combine partials across the
 grid — the design's lamp-2 scheme-change (`op_design.md` §1 lamp 2, §5 cross-core
@@ -191,6 +191,46 @@ passing and unlocks the decode/wide perf regime for R6.
 their golden + sharded-loose cells pass via the native cross-core combine (partials
 crossing the NoC, slices consumed locally); wide interleaved / decode shapes fill
 more than one core; golden green; all prior phases unregressed.
+
+**Landed (partial)**: `WIDTH_SHARDED` + `BLOCK_SHARDED` in SUPPORTED; the native
+cross-core combine (zero-copy sharded `cb_x_in`/`cb_out`; Pattern-A all-unicast
+gather → master fold → broadcast `1/RMS`; 3 monotone counter semaphores; one
+round per tile-row so no CB grows with the tile-row count) for **TILE input +
+TILE/no gamma**. All WIDTH/BLOCK golden loose + `_perf_case` geometries pass
+(18/18 loose, PCC ≥ 0.99999); 1160 sharded cartesian cells pass, 0 supported_fail.
+Deferred to R4a (RM tilize on the cross-core path — see below). The logical
+wide-interleaved / decode W-split (shapes that under-fill the grid) is NOT yet
+wired — those still run the interleaved row-parallel path (correct, single-/few-core);
+this is a perf-parallelism gap folded into R4a, not a correctness gap.
+
+---
+
+### [ ] Refinement 4a — Cross-core W-split: RM tilize path + logical interleaved W-split
+
+**Goal**: complete R4's deferred corners, all needing a tilize/untilize on the
+cross-core (`rms_norm_xcore_*`) kernels or a new host dispatch:
+- **RM gamma + sharded** (TILE input): the reader reads the gamma W-slice as
+  row-major sticks and the compute tilizes them (`ckl::tilize`, runtime tile count)
+  before the pass-2 `·gamma` — mirror the interleaved RM-gamma knob. Remove the
+  two `{gamma_layout: ROW_MAJOR, memory_layout: *_SHARDED}` EXCLUSIONS.
+- **RM input + sharded**: consume the resident RM shard via a tilize-on-read into
+  `cb_x_in`, and untilize `cb_out` back to the sharded RM output. Remove the two
+  `{layout: ROW_MAJOR, memory_layout: *_SHARDED}` EXCLUSIONS.
+- **Logical wide-interleaved / decode W-split**: for wide/few-row INTERLEAVED
+  shapes that under-fill the grid (`W=16384/32768/12288`, decode `rows=32`),
+  add a host heuristic that assigns `K` cores per tile-row, each reading its `W/K`
+  slice from DRAM (per-core column offset via `TensorAccessor`), and route them
+  through the same cross-core combine. Currently these run correct-but-single/few-core
+  on the interleaved path. This is the parallelism R6's decode perf pass builds on.
+
+**Verifier notes**: the cross-core combine itself is done and correct (R4) — R4a
+is the RM-layout tilize plumbing + the interleaved-side per-core slice reader, both
+reusing the existing xcore compute/writer. The ~1840 deferred cartesian cells are
+the RM-input/RM-gamma sharded EXCLUSIONS; they xfail-strict today (not silenced).
+
+**Done when**: the four EXCLUSIONS above removed with their cells passing; wide
+interleaved / decode shapes fill more than one core; golden green; prior phases
+unregressed.
 
 ---
 

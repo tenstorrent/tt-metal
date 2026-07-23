@@ -207,3 +207,56 @@
 - **Tests added**: `test_rms_norm_perf.py` (prefill perf harness — 4 interleaved
   prefill shapes at the exact perf config, N-trial loop + soft PCC gate, for reading
   device-ns off the Tracy CSV).
+
+## Refinement 4 — Cross-core W-split: WIDTH/BLOCK sharding + logical wide-interleaved split
+- Date: 2026-07-23
+- Type: scheme-change (partial — `[~]`).
+- What was done: implemented the **native cross-core W-split** (op_design.md §1
+  lamp 2, §5) for WIDTH/BLOCK-sharded inputs. Added `WIDTH_SHARDED` +
+  `BLOCK_SHARDED` to `SUPPORTED["memory_layout"]`.
+  - **Reuse**: existing `reduce` / `square` / `eltwise_chain` compute helpers
+    (indexed resident access, same lower-level form as the R3 resident path);
+    zero-copy sharded CB placement via `ttnn.cb_descriptor_from_sharded_tensor`;
+    the interleaved row-parallel path is untouched (host branches on
+    `memory_layout` → separate builder + kernel set, so zero regression risk).
+  - **Added — 3 xcore kernels** (`rms_norm_xcore_{reader,writer,compute}.cpp`):
+    * reader — prepares the 1/W reduce scaler (+partial tile when W non-aligned)
+      and reads this core's gamma W-slice (TILE gamma) once into `cb_gamma` (held);
+      x is NOT read (resident sharded `cb_x_in`).
+    * compute — arms the resident sharded W-slice, pass-1 block-reduce over the
+      slice → per-tile-row partial `Σx²·(1/W)`; the group MASTER folds the K
+      gathered partials (raw-LLK add-tiles + `+eps, rsqrt` — the sanctioned
+      tensix_all_reduce fold pattern, no helper reduces across N CB tiles; with
+      the required `reconfig_data_format`/`pack_reconfig_data_format`) → `1/RMS`
+      into a SEPARATE `cb_stat_handoff` (never `cb_stat_global`, §7 two-consumer
+      trap); pass-2 `x·rstd·gamma` → zero-copy sharded `cb_out`.
+    * writer — the cross-core transport: Pattern-A **all-unicast** gather →
+      master fold → broadcast (topology-agnostic; the WIDTH auto-shard group is a
+      ragged 64-core set on the 11-wide grid, so mcast can't address it — NoC-mcast
+      / two-stage topology is the R6 lever). One fully-synchronous round per
+      tile-row with 3 MONOTONE counter semaphores (SEM_GATHER / SEM_BCAST /
+      SEM_DONE — no reset → no clobber race), fixed-base cross-core CBs, so
+      `cb_gather` stays K tiles and no CB grows with the tile-row count.
+  - **Host** (`_create_sharded_xcore_descriptor`): derives the group topology from
+    the shard spec — WIDTH = all cores (one group, master = shard core 0), BLOCK =
+    one group per grid row (master = row's x=0 core); per-core `vwt` (valid W-tiles)
+    + `is_partial_holder` for non-aligned W; virtual coords for the NoC transport.
+  - **Deferred to R4a** (EXCLUSIONS, xfail-strict): RM-input-sharded and
+    RM-gamma-sharded (need a tilize/untilize on the cross-core kernels), and the
+    logical wide-interleaved / decode W-split (parallelism prep for R6).
+- Accuracy achieved: PCC ≥ 0.999996 on WIDTH (per_w_t=1/2, R=1/2, ragged auto-64,
+  non-aligned W=50) and BLOCK (256×512, multi-group) — device probes; rtol/atol
+  via golden TOLERANCES (bf16 PCC≥0.995). Fixed a per_w_t>1 pass-1 bug (block-reduce
+  the whole vwt-tile slice in ONE `reduce` call, not per-tile accumulate).
+- Golden test progress: `test_op_loose` **18 passed / 1 xfail** (HEIGHT_SHARDED = R5)
+  — all WIDTH/BLOCK `_SHARDED` + `_perf_case` geometries pass. `test_op` sharded
+  slice (`-k "WIDTH_SHARDED or BLOCK_SHARDED"`): **1160 passed, 0 failed, 1840
+  xfailed** (the deferred RM EXCLUSIONS), 17160 INVALID skipped. No supported_fail,
+  no xpass drift. Unit dir: 345 passed / 32 skipped (no regression).
+- Issues encountered: (1) raw-LLK master fold tripped an unpacker-A src-format
+  LLK_ASSERT (hang) — fixed with `reconfig_data_format`/`pack_reconfig_data_format`.
+  (2) `noc_semaphore_inc` atomics unflushed at writer exit tripped the
+  "atomics flushed" assert — fixed with a final `noc_async_atomic_barrier()`.
+  (3) per_w_t>1 gave PCC 0.965/maxdiff 4 — fixed by the single block-reduce (above).
+- Tests added: probes in `tests/ttnn/unit_tests/operations/rms_norm/probes/`
+  (controlled + auto shard geometries, per_w_t/R sweeps, BLOCK multi-group).

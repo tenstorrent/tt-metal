@@ -134,7 +134,7 @@ EXCLUSIONS = [
     # Refinement 4 cross-core W-split lands the NATIVE TILE-input path (zero-copy
     # sharded slice + TILE/no gamma). The RM-input-sharded and RM-gamma-sharded
     # corners need the resident-shard tilize / gamma-stick tilize on the cross-core
-    # kernels — deferred (Refinement 4b). Refuse them cell-level so they stay
+    # kernels — deferred (Refinement 4a). Refuse them cell-level so they stay
     # xfail-strict instead of hitting the TILE-only xcore path.
     {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED},
     {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED},
