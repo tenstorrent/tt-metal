@@ -9,6 +9,8 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
@@ -262,7 +264,10 @@ void kernel_main() {
     }
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        WAYPOINT("CRIT");
+        DPRINT_UNPACK("C ring_iter={}\n", ring_iter);
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+        WAYPOINT("CRID");
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so compute stays aligned with reader, writer, and all-gather.
         if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
@@ -483,5 +488,9 @@ void kernel_main() {
                 use_zigzag_balancing,
                 chunked_context);
         }
+        WAYPOINT("CEIE");
+        DPRINT_UNPACK("C ring_iter={} end\n", ring_iter);
     }
+    WAYPOINT("CEND");
+    DPRINT_UNPACK("C kernel done\n");
 }
