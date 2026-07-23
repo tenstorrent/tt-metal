@@ -797,6 +797,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         in0_block_w_gu,                       // 21
         K_gate_tiles,                         // 22
         static_cast<uint32_t>(up_mode == 2),  // 23 writer_split_up
+        // down_k_tail_skip: when the compute tail-skips the last down block's
+        // K padding, the down matmul never reduces the N-OOB hidden columns, so
+        // the writer's `up` read can skip zero-filling them. Must match the
+        // reader's identically-derived constexpr.
+        static_cast<uint32_t>((K_down_tiles_padded - K_down_tiles) < in0_block_w_d),  // 24 down_k_tail_skip
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start (direct-write), then up (UP_SPLIT).
@@ -858,6 +863,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // x_is_row_major — 1 => compute tilizes CB_X_RM -> CB_IN0_X before the
         // gate/up matmul. 0 => x already TILE in CB_IN0_X (no tilize).
         static_cast<uint32_t>(op.x_is_row_major),
+        // Real (unpadded) down-K tile count. Lets the compute skip the down
+        // matmul over the last K-block's tail padding tiles (zero-activated)
+        // instead of computing dead MACs.
+        K_down_tiles,
     };
     std::unordered_map<std::string, uint32_t> compute_named_args = {
         // Row-major bf16 x staging (x_is_row_major only); tilize input CB.

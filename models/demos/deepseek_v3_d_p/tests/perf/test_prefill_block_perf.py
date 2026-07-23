@@ -104,7 +104,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         ),
         (
             f"pytest {_TEST_PATH} -k 'mesh-2x4-2link and layer3 and gate_device and no_ref and isl_6k4'",
-            50_810_785,  # Re-centered 2026-07-20 for two stacked speedups now in the tree -- BOTH
+            44_143_703,  # Re-centered 2026-07-30 for two stacked speedups now in the tree -- BOTH
             # the in-place direct-write change (drop the separate output buffer + per-layer fill;
             # measured 50.61 ms alone) AND #47536 (update_padded_kv_cache RM/fp8; measured 51.29 ms
             # alone). The combined 2x4-2link number can't be measured on the galaxy, so the target is
@@ -142,7 +142,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         ),
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4 and layer3 and gate_device and no_ref and isl_6k4'",
-            65_161_594,  # Re-centered 2026-06-25 for two stacked speedups now in the tree -- BOTH
+            58_182_777,  # Re-centered 2026-07-30 for two stacked speedups now in the tree -- BOTH
             # the in-place direct-write change (measured 64.30 ms alone) AND #47536
             # (update_padded_kv_cache RM/fp8; measured 64.80 ms alone). The combined 2x4-2link number
             # can't be measured on the galaxy, so the target is the midpoint of the plausible combined

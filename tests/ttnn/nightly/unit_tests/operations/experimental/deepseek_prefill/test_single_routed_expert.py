@@ -39,6 +39,7 @@ SINGLE_CHIP_MESH_PARAMS = [
 # (emb_dim, hidden_dim). The (num_tokens, id) pairs are model-independent.
 _TOKEN_SWEEP = [
     (1024, "1k"),
+    (5120, "5k"),
     (25600, "25k"),
 ]
 
@@ -169,21 +170,28 @@ SINGLE_EXPERT_MODELS = [
 ]
 
 
-# Registry of currently-failing single-routed-expert cases, keyed by the exact "{model}-{tag}"
-# param id -> xfail reason (with tracking issue), so CI stays green while linked issues are worked
-# on. _TOKEN_SWEEP_XFAIL is applied (strict) only on blackhole by _xfail_blackhole_token_sweep;
-# _FAKED_XFAIL by single_routed_expert_faked_params. Both are empty: the factory's adaptive L1 guard
-# (shrinks per-core CBs to fit L1 and picks an in0_block_w_gu that divides K_gate_tiles) resolved the
-# prior dsv4_pro L1 and gptoss_120b K_gate failures. Add an entry when a new blackhole-specific
-# failure appears (these pass on other arches); delete it once resolved.
-_TOKEN_SWEEP_XFAIL = {}
-_FAKED_XFAIL = {}
+# Registry of currently-failing single-routed-expert cases, strict-xfail'd on blackhole by
+# _xfail_blackhole_cases so CI stays green while linked issues are worked on. Each entry is
+# (id_substrings, reason): a case is marked when every substring is present in its param id, which is
+# how a case gets pinned to a specific layout (the id carries "-x_rm-"/"-x_tile-") and/or token count.
+# Blackhole-only: these program-creation asserts depend on the BH grid (GRID_X=11), so the same dims
+# pass on other arches where an unconditional strict xfail would flip CI red on XPASS.
+_BLACKHOLE_XFAIL = [
+    # gpt-oss emb=2880 -> K_gate_tiles=90. The factory's adaptive L1 guard narrows in0_block_w_gu to a
+    # divisor of 90 for the RM path (bf16 x-staging always inflates the CB footprint past the guard)
+    # and for the TILE path at 1k/25k, but not at the 5k footprint, where it stays 16 and 90 % 16 != 0
+    # -> TT_FATAL. So only the TILE path at 5120-token alloc fails (dense -5k plus faked -5k-alloc-*).
+    (
+        ("-x_tile-", "gptoss_120b-5k"),
+        "gpt-oss K_gate_tiles=90 not divisible by in0_block_w_gu=16 (TILE path, 5k alloc)",
+    ),
+]
 
 
 def single_routed_expert_token_sweep_params():
     """Build the per-model (num_tokens, emb_dim, hidden_dim) parametrization over _TOKEN_SWEEP.
-    Non-baseline models carry the extended_model marker so they stay gated as before; the
-    _TOKEN_SWEEP_XFAIL cases are xfail'd per-arch by _xfail_blackhole_token_sweep, not here."""
+    Non-baseline models carry the extended_model marker so they stay gated as before; currently-failing
+    cases are xfail'd per-arch by _xfail_blackhole_cases, not here."""
     params = []
     for name, config, extended in SINGLE_EXPERT_MODELS:
         for num_tokens, tag in _TOKEN_SWEEP:
@@ -196,18 +204,17 @@ def single_routed_expert_token_sweep_params():
 
 
 @pytest.fixture(autouse=True)
-def _xfail_blackhole_token_sweep(request, silicon_arch_name):
-    """Strict-xfail the _TOKEN_SWEEP_XFAIL cases only on blackhole: the K_gate / L1 issues are
-    blackhole-specific and these cases pass on other arches, where an unconditional strict xfail
-    would turn CI red on XPASS. Keyed by the full param id so each (model, token-count) is marked
-    independently."""
-    if silicon_arch_name != "blackhole" or request.node.name.split("[")[0] != "test_single_routed_expert_models":
+def _xfail_blackhole_cases(request, silicon_arch_name):
+    """Strict-xfail the _BLACKHOLE_XFAIL cases (both the dense and faked-count tests). An entry fires
+    when all of its id substrings appear in the case's param id, so a single list drives layout- and
+    token-count-specific marks without a per-case predicate. Blackhole-only, per the list's contract."""
+    if silicon_arch_name != "blackhole":
         return
     callspec = getattr(request.node, "callspec", None)
     if callspec is None:
         return
-    for param_id, reason in _TOKEN_SWEEP_XFAIL.items():
-        if callspec.id.endswith(param_id):
+    for substrings, reason in _BLACKHOLE_XFAIL:
+        if all(s in callspec.id for s in substrings):
             request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
             break
 
@@ -227,6 +234,8 @@ def test_single_routed_expert_models(
 # model with that model's (emb_dim, hidden_dim). The alloc/active pairs are model-independent.
 _FAKED_SWEEP = [
     (1024, 0, "1k-alloc-0k-active"),
+    (5120, 161, "5k-alloc-161-active"),
+    (5120, 256, "5k-alloc-256-active"),
     (25600, 4096, "25k-alloc-4k-active"),
 ]
 
@@ -330,8 +339,6 @@ def single_routed_expert_faked_params():
         for alloc, active, tag in _FAKED_SWEEP:
             test_id = f"{name}-{tag}"
             marks = (pytest.mark.extended_model,) if extended else ()
-            if test_id in _FAKED_XFAIL:
-                marks += (pytest.mark.xfail(reason=_FAKED_XFAIL[test_id], strict=True),)
             params.append(
                 pytest.param(
                     alloc,
