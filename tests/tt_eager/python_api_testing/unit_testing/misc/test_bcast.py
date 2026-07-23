@@ -27,6 +27,9 @@ from tt_lib.utils import (
         (512, 1280, 40, (8, 5), ttnn.ShardStrategy.BLOCK),
         (128, 1280, 32, (4, 8), ttnn.ShardStrategy.BLOCK),
         (512, 1280, 64, (8, 8), ttnn.ShardStrategy.BLOCK),
+        # Wt=10 per core (=ceil(1280/32/4)) exercises the partial w-block path (w_blk=8):
+        # regression for the reader over-read/over-produce that deadlocked when batch_b>1.
+        (128, 1280, 4, (8, 5), ttnn.ShardStrategy.WIDTH),
     ),
 )
 @pytest.mark.parametrize(
