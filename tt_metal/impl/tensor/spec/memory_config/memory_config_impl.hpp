@@ -9,14 +9,6 @@
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
-/**
- * Internal implementation header for MemoryConfig.
- *
- * This header exposes MemoryConfigImpl so that translation units within tt_metal
- * (e.g. experimental per-core allocation helpers) can operate on the private state
- * without putting that state in the installed public API header.
- */
-
 namespace tt::tt_metal {
 
 class MemoryConfigImpl {

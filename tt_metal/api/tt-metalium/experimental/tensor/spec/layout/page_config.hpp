@@ -6,7 +6,6 @@
 
 #include <optional>
 #include <tuple>
-#include <utility>
 #include <variant>
 
 #include <tt-metalium/tile.hpp>
@@ -17,32 +16,14 @@
 
 namespace tt::tt_metal {
 
-// Empty page-config alternative for row-major tensors.
-// User-declared ctor keeps this non-aggregate so reflection uses attribute_names/values only
-// (avoids colliding with ttsl::concepts::Reflectable).
-class RowMajorPageConfig {
-public:
-    RowMajorPageConfig() = default;
-
+struct RowMajorPageConfig {
     bool operator==(const RowMajorPageConfig&) const = default;
-    bool operator!=(const RowMajorPageConfig&) const = default;
-
-    static constexpr auto attribute_names = std::forward_as_tuple();
-    auto attribute_values() const { return std::forward_as_tuple(); }
 };
 
-class TilePageConfig {
-public:
-    TilePageConfig() = default;
-    explicit TilePageConfig(Tile tile) : tile(std::move(tile)) {}
-
-    Tile tile = Tile{};
+struct TilePageConfig {
+    Tile tile;
 
     bool operator==(const TilePageConfig&) const = default;
-    bool operator!=(const TilePageConfig&) const = default;
-
-    static constexpr auto attribute_names = std::forward_as_tuple("tile");
-    auto attribute_values() const { return std::forward_as_tuple(tile); }
 };
 
 class PageConfig {
@@ -60,7 +41,7 @@ public:
     Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
 
     Layout get_layout() const;
-    Tile get_tile() const;  // Tile{} for ROW_MAJOR
+    Tile get_tile() const;
     const Config& get_config() const { return config_; }
 
     bool operator==(const PageConfig&) const = default;

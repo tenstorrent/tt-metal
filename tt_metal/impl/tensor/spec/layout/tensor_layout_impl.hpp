@@ -9,14 +9,6 @@
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 
-/**
- * Internal implementation header for TensorLayout.
- *
- * This header exposes TensorLayoutImpl so that translation units within tt_metal (e.g. tensor_spec.cpp)
- * can operate directly on the implementation without going through the public TensorLayout accessors.
- * It is private to tt_metal and is not part of the installed public API.
- */
-
 namespace tt::tt_metal {
 
 class TensorLayoutImpl {

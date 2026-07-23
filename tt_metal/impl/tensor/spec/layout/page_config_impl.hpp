@@ -4,12 +4,6 @@
 
 #pragma once
 
-/**
- * Internal page-config layout helpers for tt_metal.
- *
- * Not part of the installed public API. Callers visit via PageConfig::get_config().
- */
-
 #include <optional>
 
 #include <tt-metalium/shape2d.hpp>
