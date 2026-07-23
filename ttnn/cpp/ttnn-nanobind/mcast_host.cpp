@@ -38,6 +38,9 @@ void py_module_types(nb::module_& mod) {
     nb::enum_<kh::Mcast1DShape>(mod, "Mcast1DShape")
         .value("PerRow", kh::Mcast1DShape::PerRow)
         .value("PerColumn", kh::Mcast1DShape::PerColumn);
+    nb::enum_<kh::Mcast1DSenderPlacement>(mod, "Mcast1DSenderPlacement")
+        .value("Uniform", kh::Mcast1DSenderPlacement::Uniform)
+        .value("Diagonal", kh::Mcast1DSenderPlacement::Diagonal);
     nb::class_<kh::McastConfig>(mod, "McastConfig");
     nb::class_<kh::Mcast1D>(mod, "Mcast1D");
     nb::class_<kh::Mcast2D>(mod, "Mcast2D");
@@ -89,6 +92,23 @@ void py_module(nb::module_& mod) {
             nb::arg("sender_index") = 0,
             nb::arg("config") = kh::McastConfig{})
         .def(
+            "__init__",
+            [](kh::Mcast1D* self,
+               MeshDevice* device,
+               const CoreRangeSet& grid,
+               kh::Mcast1DShape shape,
+               uint32_t starting_sender_index,
+               kh::Mcast1DSenderPlacement sender_placement,
+               const kh::McastConfig& config) {
+                new (self) kh::Mcast1D(device, grid, shape, starting_sender_index, config, sender_placement);
+            },
+            nb::arg("device"),
+            nb::arg("grid"),
+            nb::arg("shape"),
+            nb::arg("starting_sender_index"),
+            nb::arg("sender_placement"),
+            nb::arg("config") = kh::McastConfig{})
+        .def(
             "owned_semaphores",
             &kh::Mcast1D::owned_semaphores,
             R"doc(The SemaphoreDescriptors this helper created, for the factory to add (empty if sem_ids were adopted).)doc")
@@ -101,7 +121,7 @@ void py_module(nb::module_& mod) {
             "runtime_args",
             &kh::Mcast1D::runtime_args,
             nb::arg("core"),
-            R"doc(Per-core runtime args. Fixed: 4 words (sender -> dest rect, receiver -> [sender_x, sender_y, 0, 0]). Rotating: 4 + 2*num_senders() words (full-line rect, then one sender coord pair per round).)doc")
+            R"doc(Per-core runtime args. Fixed: 4 words (sender -> dest rect, receiver -> [sender_x, sender_y, 0, 0]); an interior fixed sender's rect is the full line and excludes the source in the device pipe. Rotating: 4 + 2*num_senders() words (full-line rect, then one sender coord pair per round).)doc")
         .def("is_sender", &kh::Mcast1D::is_sender, nb::arg("core"))
         .def("num_receivers", &kh::Mcast1D::num_receivers, nb::arg("core"))
         .def(
