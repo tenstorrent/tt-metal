@@ -81,6 +81,22 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
         validate_index_tensor(*expert_region_offsets, "per_token_cast_back: expert_region_offsets");
         validate_index_tensor(*expert_token_counts, "per_token_cast_back: expert_token_counts");
         validate_index_tensor(*global_expert_idx_table, "per_token_cast_back: global_expert_idx_table");
+        // The kernels run on input_e4m3's device and read the metadata buffers by raw address, so all three
+        // must live on that same device (a cross-device buffer would be read as an unrelated local address).
+        auto* input_device = input_e4m3.device();
+        TT_FATAL(
+            expert_region_offsets->device() == input_device && expert_token_counts->device() == input_device &&
+                global_expert_idx_table->device() == input_device,
+            "per_token_cast_back: expert_region_offsets, expert_token_counts and global_expert_idx_table must be on "
+            "the same device as input_e4m3");
+        // The kernels index both region offsets and token counts by the same global expert id (bounded by
+        // num_routed_experts = expert_region_offsets last dim), so the two vectors must be the same length;
+        // a shorter counts vector would read past its L1 scratch.
+        TT_FATAL(
+            expert_token_counts->logical_shape()[-1] == expert_region_offsets->logical_shape()[-1],
+            "per_token_cast_back: expert_token_counts last dim ({}) must equal expert_region_offsets last dim ({})",
+            expert_token_counts->logical_shape()[-1],
+            expert_region_offsets->logical_shape()[-1]);
         TT_FATAL(attrs.experts_per_chip > 0, "per_token_cast_back: experts_per_chip must be > 0");
         TT_FATAL(
             attrs.experts_per_chip <= global_expert_idx_table->logical_shape()[-1],
@@ -212,29 +228,19 @@ PerTokenCastBackDeviceOperation::tensor_return_value_t PerTokenCastBackDeviceOpe
 
 ttsl::hash::hash_t PerTokenCastBackDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    const auto tile_shape = tensor_args.input_e4m3.tensor_spec().tile().get_tile_shape();
-    const auto face_shape = tensor_args.input_e4m3.tensor_spec().tile().get_face_shape();
-    // Token-count-aware metadata tensors, when present, contribute their memory configs. Their absence
-    // (plain path) is already distinguished by attrs.token_count_aware, which hash_operation folds in via `attrs`.
-    const auto opt_mem_config = [](const std::optional<Tensor>& t) {
-        return t.has_value() ? std::optional<tt::tt_metal::MemoryConfig>(t->memory_config()) : std::nullopt;
+    // Hash each tensor's full TensorSpec (shape + dtype + layout + tile + memory config) rather than
+    // cherry-picking fields, so nothing that changes program structure is missed. The token-count-aware
+    // metadata tensors are optional (absent on the plain path, which attrs.token_count_aware distinguishes).
+    const auto opt_spec = [](const std::optional<Tensor>& t) {
+        return t.has_value() ? std::optional<tt::tt_metal::TensorSpec>(t->tensor_spec()) : std::nullopt;
     };
     return tt::tt_metal::operation::hash_operation<PerTokenCastBackDeviceOperation>(
         attrs,
-        tensor_args.input_e4m3.dtype(),
-        // Scale source dtype (fp32 vs int32/uint32 metadata) affects the reader.
-        tensor_args.input_scale.dtype(),
-        tensor_args.input_e4m3.memory_config(),
-        tensor_args.input_scale.memory_config(),
-        opt_mem_config(tensor_args.expert_region_offsets),
-        opt_mem_config(tensor_args.expert_token_counts),
-        opt_mem_config(tensor_args.global_expert_idx_table),
-        tensor_args.input_e4m3.logical_shape(),
-        tensor_args.input_scale.logical_shape(),
-        tile_shape[0],
-        tile_shape[1],
-        face_shape[0],
-        face_shape[1]);
+        tensor_args.input_e4m3.tensor_spec(),
+        tensor_args.input_scale.tensor_spec(),
+        opt_spec(tensor_args.expert_region_offsets),
+        opt_spec(tensor_args.expert_token_counts),
+        opt_spec(tensor_args.global_expert_idx_table));
 }
 
 }  // namespace ttnn::experimental::prim::per_token_cast_back
