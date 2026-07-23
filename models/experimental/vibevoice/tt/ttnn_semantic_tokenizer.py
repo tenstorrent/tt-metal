@@ -316,12 +316,6 @@ class TTConv1d:
         self._cache = None
         self._cache_zeros_host = None  # cached host zeros for in-place reset (llama-pattern trace)
 
-        # Cached conv_config for the streaming depthwise single-block pin (see __call__).
-        # Decided once, on the first pinned call (at warm-up), then reused so the traced
-        # path uses a fixed config. None once decided means "auto" (fell back on L1 overflow).
-        self._sb_cfg = None
-        self._sb_cfg_decided = False
-
     def reset_cache(self) -> None:
         self._cache = None
 
@@ -399,24 +393,27 @@ class TTConv1d:
                     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
                 x = ttnn.pad(x, [(0, 0), (0, 0), (cp, extra_pad), (0, 0)], value=0.0)
 
-        # Pin the streaming depthwise convs (groups>1, use_cache) to the HEIGHT_SHARDED
-        # single-height-block path in compute_depthwise_conv1d.cpp — the ONE path the ttnn
-        # rebuild left UNCHANGED (the multi-block accumulation got a separate-scratch rework
-        # whose output drifts and destabilizes the long-form AR loop). An explicit
-        # HEIGHT_SHARDED layout keeps act_block_h at the full per-core height (single block)
-        # while spreading the work across many cores. This reproduces the old-build depthwise
-        # output bit-for-bit (verified maxdiff=0 on real streaming inputs vs the earlier
-        # act_block_h_override>=out_height pin) but WITHOUT forcing the conv onto one/few cores
-        # and WITHOUT the per-call "act_block_h_override N is not a valid override" info spam
-        # the oversized-override approach emitted (~40k lines over a 32-token render).
-        #
-        # Gate on out_w: only wide-output stages need pinning (there auto-sharding picks a
-        # multi-block config that drifts) and only they fit HEIGHT_SHARDED single-block in L1.
-        # High-channel / tiny-width stages (out_w < 128) both overflow single-block AND already
-        # get the single-block result from auto-sharding, so they stay on auto (conv_config=None).
-        # The pin is decided+cached once, at warm-up (eager), so the traced path never re-plans.
-        pin = os.environ.get("VV_CONV_SINGLE_BLOCK", "1") == "1" and self.groups > 1 and use_cache
-        conv_kwargs = dict(
+        # VV_CONV_SINGLE_BLOCK=1: force the depthwise conv (groups>1) onto the single-height-block
+        # path (act_block_h >= full output height) — the ONE code path in compute_depthwise_conv1d.cpp
+        # that the ttnn rebuild left UNCHANGED (multi-block got a separate-scratch rework).  Reproduces
+        # the old-build depthwise numerics byte-for-byte iff the old build also ran these convs
+        # single-block (probing the long-form collapse; the conv is the only value-changing feedback op).
+        _conv_cfg = None
+        if os.environ.get("VV_CONV_SINGLE_BLOCK", "1") == "1" and self.groups > 1 and use_cache:
+            out_w = (T_padded - self.K) // self.stride + 1
+            abh = ((out_w + 31) // 32) * 32
+            # A full-height single block > ~1600 rows overflows L1 (the g=32/outw=3200 last decoder
+            # stage needs ~2.9 MB > 1.5 MB), so cap it — that conv stays on auto (multi-block).
+            _sb_cap = int(os.environ.get("VV_CONV_SB_CAP", "1600"))
+            if out_w <= _sb_cap:
+                _conv_cfg = ttnn.Conv2dConfig(act_block_h_override=abh)
+            if os.environ.get("VV_CONV_DBG") == "1":
+                print(
+                    f"[conv sb] g={self.groups} in={self.in_ch} out={self.out_ch} "
+                    f"Tpad={T_padded} outw={out_w} abh={abh} pinned={_conv_cfg is not None}",
+                    flush=True,
+                )
+        x_out, [_, w_out], [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
@@ -434,26 +431,8 @@ class TTConv1d:
             return_weights_and_bias=True,
             dtype=self.compute_dtype,
             compute_config=_HIFI4,
+            conv_config=_conv_cfg,
         )
-        if pin and not self._sb_cfg_decided:
-            out_w = (T_padded - self.K) // self.stride + 1
-            if out_w >= int(os.environ.get("VV_CONV_HS_MIN_OUTW", "128")):
-                self._sb_cfg = ttnn.Conv2dConfig(shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
-            else:
-                self._sb_cfg = None
-            self._sb_cfg_decided = True
-        cfg = self._sb_cfg if pin else None
-        try:
-            x_out, [_, w_out], [self.weight, self.bias] = ttnn.conv2d(conv_config=cfg, **conv_kwargs)
-        except RuntimeError as e:
-            # Safety net: if HEIGHT_SHARDED single-block unexpectedly doesn't fit L1 (shapes
-            # changed from those this heuristic was tuned for), fall back to auto-sharding,
-            # which yields the same single-block result for the stages where it fits.
-            msg = str(e)
-            if cfg is None or not any(s in msg for s in ("beyond max L1", "valid slice", "more memory than available")):
-                raise
-            self._sb_cfg = None
-            x_out, [_, w_out], [self.weight, self.bias] = ttnn.conv2d(conv_config=None, **conv_kwargs)
         # Output from conv2d is [1, 1, B*w_out, out_ch]; reshape to [B, 1, T_out, out_ch]
         return ttnn.reshape(x_out, [B, 1, w_out, self.out_ch])
 
