@@ -75,6 +75,10 @@ void kernel_main() {
     address_t output_address = get_arg_val<address_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    // Opposite-direction worker core on this device; used by the per-link 1-hop barriers to reach the
+    // worker on the immediate neighbour that shares the ring link (see the barriers below).
+    const uint32_t opposite_core_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t opposite_core_y = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
@@ -174,16 +178,27 @@ void kernel_main() {
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
     if (use_barrier_sem) {
-        // multicast to entire ring of workers going in the same direction
-        uint64_t barrier_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_mcastseminc, multicast_route_info);
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_connection_ptr,
-            pkt_hdr_mcastseminc,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+        // Per-link 1-hop barrier that does NOT assume the logical ring is a contiguous physical ring.
+        // The old path multicast a fixed hop-range in one physical direction, which breaks on a
+        // reshaped/bent ring. Instead each worker sends a single 1-hop atomic-inc (unicast_route_info,
+        // distance 1) to the opposite-direction worker on its immediate ring neighbour; the two workers
+        // sharing the link handshake (each sends one, waits for one). Works on any valid ring.
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
+        fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            pkt_hdr_seminc,
+            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                0,                           // ignore
+                static_cast<uint32_t>(1)});  // increment 1
 
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
+        uint64_t opposite_barrier_sem_noc_addr = safe_get_noc_addr(opposite_core_x, opposite_core_y, barrier_sem, 0);
+        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            fabric_connection_ptr,
+            pkt_hdr_seminc,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_barrier_sem_noc_addr, 0});
+
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
@@ -385,16 +400,20 @@ void kernel_main() {
         }
     }
 
-    uint64_t batch_ready_sem_noc_addr_in_pkt =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
-    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+    // Per-link 1-hop barrier (same scheme as the barrier near the top): a multi-hop multicast would
+    // break on a reshaped/bent ring. Send one 1-hop atomic-inc to the opposite-direction worker on the
+    // immediate ring neighbour and wait for one. pkt_hdr_seminc is already configured for a distance-1
+    // unicast atomic-inc by the data loop above; only the dst address changes here.
+    uint64_t opposite_batch_ready_sem_noc_addr =
+        safe_get_noc_addr(opposite_core_x, opposite_core_y, batch_ready_sem, 0);
+    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
         fabric_connection_ptr,
-        pkt_hdr_mcastseminc,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
+        pkt_hdr_seminc,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_batch_ready_sem_noc_addr, 0});
     noc_obj.async_writes_flushed();
 
     // Reset the global semaphore
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
 
     noc_obj.async_write_barrier();
