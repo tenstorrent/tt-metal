@@ -730,3 +730,13 @@
 - Ten replays reduced median slowest-device span `679.336 -> 667.330 us` (1.77%) and programs `33 -> 31/device/layer`. The fused kernel costs 19.213 us; it removes LayerNorm at 12.015 us and NLP head concat at 10.269 us, while aggregate BinaryNg time falls 30.110 -> 20.941 us.
 - Executed-work throughput is 101.29 TFLOP/s or 8.33% of peak; conservative factorized-work throughput is 88.72 TFLOP/s or 7.29%.
 - The target epilogue distributes 80 `(head, 32-token block)` work items/device, with each core processing all four value tiles. TP head ownership, prep/scan mapping, and fused-output collective placement are unchanged.
+
+
+### 2026-07-23 12:57:57 UTC — Fuse decay Softplus into multiply
+
+- Hypothesis: applying Softplus to the projected decay inside its consuming FP32 scale multiply removes one serialized unary program while preserving the tensor passed to prep.
+- The first focused run proved that BinaryNg requires parameterized Softplus (`UnaryWithParam(SOFTPLUS, 1.0, 20.0)`), not the bare enum. The first full-suite run then proved that its binding requires an empty activation sequence rather than `None` on the unchanged recurrent path. Both API-contract failures occurred before numerical comparison and were corrected locally.
+- Focused TP=8 hardware PCC passed at output/recurrent/convolution `0.999964/0.999903/0.999997`. The corrected complete functional suite ended `SAFE_PYTEST_RESULT: PASS`, 27/27 in 17.39 s.
+- Report: `/tmp/kda_tp_layer_t640_fused_softplus_mul_r10/reports/2026_07_23_12_57_57/ops_perf_results_2026_07_23_12_57_57.csv`; control: `/tmp/kda_tp_layer_t640_fused_gated_rms_r10/reports/2026_07_23_12_49_34/ops_perf_results_2026_07_23_12_49_34.csv`.
+- Ten replays reduced median slowest-device span `667.330 -> 658.960 us` (1.25%), active time `639.418 -> 633.656 us/device`, and programs `31 -> 30/device/layer`. Unary time fell `20.702 -> 15.403 us`; BinaryNg rose only `20.940 -> 21.976 us`.
+- Executed-work throughput is 102.58 TFLOP/s or 8.43% of peak; conservative factorized-work throughput is 89.85 TFLOP/s or 7.39%. Prep/scan/collective medians are unchanged, so distribution remains unchanged.
