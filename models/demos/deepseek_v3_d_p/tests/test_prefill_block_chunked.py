@@ -41,7 +41,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_route
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     cache_half_pccs,
     gather_cache_tp0,
@@ -229,8 +229,9 @@ def run_chunked_block(
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=SEQ_CACHE, chunk_size_global=CHUNK)
 
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_CACHE,
         mesh_shape=mesh_shape,
@@ -331,7 +332,7 @@ def run_chunked_block(
 
     # --- Independent sanity check: un-rotate the final device cache and compare to kv_post_transform. ---
     cache_sr = ttnn.to_torch(
-        tt_kvpe_cache,
+        tt_kvpe_cache.storage,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
     ).to(torch.float32)[:, :1][
         0, 0
@@ -473,8 +474,9 @@ def run_chunked_block_multiuser(
     indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=SEQ_CACHE, chunk_size_global=CHUNK)
 
     # num_users-slot cache (batch = num_users * 1 layer); only target_slot is written below.
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_CACHE,
         mesh_shape=mesh_shape,
@@ -503,7 +505,7 @@ def run_chunked_block_multiuser(
     block.forward(
         tt_h,
         indexed_rope,
-        tt_kvpe_cache,
+        tt_kvpe_cache.storage,
         cache_layer_idx=0,
         actual_start=0,
         actual_end=CHUNK,
@@ -513,7 +515,7 @@ def run_chunked_block_multiuser(
 
     # Read all slots: gather SP (dim2) + TP (dim1), keep TP replica 0 -> [num_users, 1, SEQ_CACHE, kvpe].
     cache_all = ttnn.to_torch(
-        tt_kvpe_cache,
+        tt_kvpe_cache.storage,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
     ).to(torch.float32)[:, :1]
     p = blockcyclic_positions(sp, CHUNK, SEQ_CACHE)
@@ -690,8 +692,9 @@ def run_chunked_block_padded(
 
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len_cache, chunk_size_global=CHUNK)
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len_cache,
         mesh_shape=mesh_shape,
@@ -798,7 +801,7 @@ def run_chunked_block_padded(
     # --- Final: gather the device KV cache, un-rotate, compare the contiguous [:total_real] valid
     #     region to the trace's kv_post_transform (this is the "5k gathered from 2 chunks" check). ---
     cache_sr = ttnn.to_torch(
-        tt_kvpe_cache,
+        tt_kvpe_cache.storage,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
     ).to(torch.float32)[:, :1][
         0, 0
