@@ -149,7 +149,6 @@ tests:
   16:
     name: "Loopback Packet Sizes"
     directory: "loopback"
-    web_viewer_name: "Packet Sizes"
 
   17:
     name: "Reshard Hardcoded Small"
@@ -268,6 +267,7 @@ tests:
   44:
     name: "Loopback Packet Sizes 2.0"
     directory: "loopback"
+    web_viewer_name: "Packet Sizes"
 
   45:
     name: "Loopback Directed Ideal 2.0"
@@ -817,7 +817,6 @@ tests:
   321:
     name: "All from All Packet Sizes"
     directory: "all_from_all"
-    web_viewer_name: "Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_from_all"
@@ -853,6 +852,7 @@ tests:
   329:
     name: "All from All Packet Sizes 2.0"
     directory: "all_from_all"
+    web_viewer_name: "Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_from_all"
