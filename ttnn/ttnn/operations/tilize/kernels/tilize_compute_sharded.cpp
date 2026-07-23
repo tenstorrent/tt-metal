@@ -32,6 +32,7 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(0);          // tiles per tile-row (shard_w / 32)
     constexpr uint32_t num_blocks = get_compile_time_arg_val(1);  // tile-rows in the shard (shard_h / 32)
     constexpr uint32_t is_fp32_in = get_compile_time_arg_val(2);
+    constexpr uint32_t needs_cast = get_compile_time_arg_val(3);  // out dtype != in dtype
     constexpr uint32_t in_pages = num_blocks * Wt;
 
     compute_kernel_hw_startup(cb_rm_in, cb_tiled_out);
@@ -51,9 +52,22 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
             compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(num_blocks);
-    } else {
-        // bf16 / integer passthrough: default Fast path; pack reconfigure drives
-        // any value-preserving dtype= cast.
+    } else if constexpr (needs_cast) {
+        // bf16 / integer with a value-preserving dtype= cast: the pack-stage
+        // reconfigure (default UnpackAndPackReconfigure) drives the cast.
         compute_kernel_lib::tilize<Wt, cb_rm_in, cb_tiled_out>(num_blocks);
+    } else {
+        // No cast (output dtype == input dtype — the whole same-spec zero-copy
+        // family). The pack/unpack reconfigure would be pure fixed per-op
+        // overhead, so skip it (NoReconfigure) — matches native's sharded path
+        // and closes the small-shard latency gap. Everything else identical to
+        // the default bf16 path (InitAndUninit, WaitBlock, Fp32Mode::Fast).
+        compute_kernel_lib::tilize<
+            Wt,
+            cb_rm_in,
+            cb_tiled_out,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(num_blocks);
     }
 }

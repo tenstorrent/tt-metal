@@ -1,5 +1,26 @@
 # tilize — changelog
 
+## Refinement 4 — Skip register reconfigure on no-cast (perf)  [x]
+
+- **Date**: 2026-07-23
+- **What was done**: gated the compute helper's pack/unpack
+  `ReconfigureRegisterDatatypeMode` on a compile-time `needs_cast` flag
+  (`output_dtype != input_dtype`), threaded from the program descriptor into
+  `tilize_compute.cpp` + `tilize_compute_sharded.cpp`. No-cast conversions (every
+  same-spec sharded case + any `output_dtype == input_dtype` call) now use
+  `NoReconfigure` instead of the default `UnpackAndPackReconfigure`; casts keep
+  the reconfigure. Matches native's `NoReconfigure`.
+- **Why**: the reconfigure is a ~fixed ≈150 ns per-op cost that is pure waste
+  with nothing to cast — invisible on large kernels but dominant on the ~1 µs
+  small sharded cases, where it left the op 8–19% behind native.
+- **Perf (device-kernel A/B, native vs generated)**: the 6 previously-slower
+  small bf16 sharded cases went from 1.08–1.19× → **0.95–1.04× (parity)**; the
+  full 64-geometry translated A/B shows **0 cases where native is faster** (max
+  1.03×, noise). fp32 sharded 0.80–0.98×, interleaved 0.18–0.91× — all unchanged.
+- **Correctness**: golden 84/60 (incl. bf16→bf8b + fp32 cast cells), sharded
+  25/25, translated 275 passed / 1 xfail — `NoReconfigure` stays bit-exact on
+  no-cast and the cast path still reconfigures correctly. No regression.
+
 ## Refinement 3 — Interleaved width-axis work-split (perf)  [x]
 
 - **Date**: 2026-07-20

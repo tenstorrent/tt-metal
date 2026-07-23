@@ -21,6 +21,7 @@ void kernel_main() {
     constexpr uint32_t Wt_chunk = get_compile_time_arg_val(0);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(1);
     constexpr uint32_t is_fp32_in = get_compile_time_arg_val(2);
+    constexpr uint32_t needs_cast = get_compile_time_arg_val(3);  // out dtype != in dtype
 
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);  // per-core tile-row count
 
@@ -41,9 +42,21 @@ void kernel_main() {
                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
                 compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(num_blocks);
-        } else {
-            // bf16 input: default Fast path; pack reconfigure drives the dtype= cast.
+        } else if constexpr (needs_cast) {
+            // bf16 input WITH a value-preserving dtype= cast: default Fast path;
+            // the pack reconfigure drives the cast.
             compute_kernel_lib::tilize<Wt_chunk, cb_rm_in, cb_tiled_out>(num_blocks);
+        } else {
+            // No cast (output dtype == input dtype): skip the pack/unpack
+            // reconfigure — pure fixed per-op overhead when there is nothing to
+            // cast. NoReconfigure; all else matches the default bf16 path.
+            compute_kernel_lib::tilize<
+                Wt_chunk,
+                cb_rm_in,
+                cb_tiled_out,
+                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(num_blocks);
         }
     }
 }

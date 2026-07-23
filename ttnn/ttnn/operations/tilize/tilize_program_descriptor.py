@@ -216,7 +216,7 @@ def _create_sharded_program_descriptor(
     cb_tiled_out_desc.format_descriptors = out_fds
 
     is_fp32_in = 1 if in_dtype == ttnn.float32 else 0
-    compute_ct_args = [wt, num_blocks, is_fp32_in]
+    compute_ct_args = [wt, num_blocks, is_fp32_in, 1 if out_dtype != in_dtype else 0]
 
     fp32_dest = in_dtype == ttnn.float32 or out_dtype == ttnn.float32
     compute_config = ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest)
@@ -348,7 +348,7 @@ def _create_general_program_descriptor(
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     is_fp32_in, compute_config = _fp32_compute_config(in_dtype, out_dtype)
-    compute_ct_args = [wt_chunk, num_chunks, is_fp32_in]
+    compute_ct_args = [wt_chunk, num_chunks, is_fp32_in, 1 if out_dtype != in_dtype else 0]
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
@@ -452,7 +452,7 @@ def _create_interleaved_width_split_descriptor(
     # num_chunks=1: each work unit is exactly one Wt_chunk-wide block, so compute
     # processes u_count blocks in a single pass (FIFO — order matches reader/writer).
     is_fp32_in, compute_config = _fp32_compute_config(in_dtype, out_dtype)
-    compute_ct_args = [wt_chunk, 1, is_fp32_in]
+    compute_ct_args = [wt_chunk, 1, is_fp32_in, 1 if out_dtype != in_dtype else 0]
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
@@ -599,7 +599,7 @@ def create_program_descriptor(
 
     # Compute (TRISC)
     is_fp32_in = 1 if in_dtype == ttnn.float32 else 0
-    compute_ct_args = [wt_chunk, num_chunks, is_fp32_in]
+    compute_ct_args = [wt_chunk, num_chunks, is_fp32_in, 1 if out_dtype != in_dtype else 0]
     compute_rt_args = ttnn.RuntimeArgs()
 
     for core, (start_tile_row, count) in zip(cores, assignment):
