@@ -82,7 +82,7 @@ def run_demo_inference(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_env and os.getenv("TT_ALLOW_HF_DOWNLOAD") != "1",
     )
     profiler.end("diffusion_pipeline_from_pretrained")
 
@@ -348,4 +348,52 @@ def test_demo(
         timesteps,
         sigmas,
         lora_path,
+    )
+
+
+@pytest.mark.parametrize(
+    "image_resolution",
+    [(1024, 1024)],
+    ids=["1024x1024"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": SDXL_L1_SMALL_SIZE}],
+    indirect=["device_params"],
+    ids=["default_device_params"],
+)
+@pytest.mark.parametrize(
+    "prompt, negative_prompt",
+    [("An alienzkin astronaut riding a green horse", ["disturbing"])],
+)
+def test_demo_text_encoder_lora(
+    validate_fabric_compatibility,
+    mesh_device,
+    is_ci_env,
+    image_resolution,
+    prompt,
+    negative_prompt,
+    evaluation_range,
+    te_lora_path,
+):
+    """End-to-end demo run with a text-encoder-impacting LoRA. Runs encoders on device
+    (required for the TE LoRA path) with a single, minimal configuration; the point is
+    to exercise TE fuse in the real generate path, not to sweep every device option.
+    """
+    prepare_device(mesh_device, use_cfg_parallel=False)
+    return run_demo_inference(
+        mesh_device,
+        is_ci_env,
+        image_resolution,
+        prompt,
+        negative_prompt,
+        num_inference_steps=50,
+        vae_on_device=True,
+        encoders_on_device=True,
+        evaluation_range=evaluation_range,
+        capture_trace=False,
+        guidance_scale=5.0,
+        use_cfg_parallel=False,
+        fixed_seed_for_batch=False,
+        lora_path=te_lora_path,
     )
