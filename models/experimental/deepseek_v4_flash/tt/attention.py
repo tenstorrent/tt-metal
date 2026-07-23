@@ -33,13 +33,20 @@ from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 #     ``sliding_window`` most recent tokens, and
 #   * for CSA / HCA layers, every source token's compressor projections
 #     (``kv`` / ``gate``); the compressed long-range entries are re-pooled from
-#     these each step with the exact prefill pooling, so decode is bit-for-bit
-#     the same function of the tokens-so-far as a full prefill over them (no
-#     separate rolling-window / overlap / entry-count bookkeeping needed).
+#     these with the exact prefill pooling, so decode is bit-for-bit the same
+#     function of the tokens-so-far as a full prefill over them (no separate
+#     rolling-window / overlap / entry-count bookkeeping needed).
 #
-# Re-pooling the (small, ``head_dim``-wide) compressor each step is cheap next
-# to the per-token MoE / projection matmuls, which now run at ``S = 1`` instead
-# of over the whole growing context as in the repeated-prefill demo.
+# The pool runs over the whole fixed capacity, so its cost scales with
+# ``max_seq``, not with the current position. It is therefore run only on the
+# steps where it can change: a compressor emits a new entry once every
+# ``compress_rate`` tokens, and the additive block-bias exposes entries
+# ``w < (pos+1)//compress_rate`` -- a quantity that is constant across the
+# ``compress_rate`` steps between two window closures. So pooling at each
+# closure and reusing the result in between is bit-identical to pooling every
+# step, at ``1/compress_rate`` of the cost. The pooled entries are kept in the
+# persistent ``compressed`` cache below; callers drive the schedule via the
+# ``pool`` flag (see ``DeepSeekV4Model._compressor_pool_due``).
 #
 # Cache updates follow the GPT-OSS / tt-transformers paged-KV pattern: fixed-size
 # DRAM buffers written in place each step via ``paged_update_cache`` (with a
@@ -59,20 +66,29 @@ class _StaticLayerCache:
         source token's compressor projection at its absolute position; the pool
         runs over the whole buffer and the block-bias mask drops the windows past
         the current position. ``None`` for sliding-only layers.
+      * ``compressed`` ``[1, 1, cap // compress_rate, Dh]`` -- the pooled (normed,
+        RoPE'd) compressed entries, refreshed only on the steps that close a
+        window and read as the compressor's KV contribution on every step.
+        ``None`` for sliding-only layers.
 
     Built empty (all-zero) by :func:`build_static_layer_cache` /
     :meth:`DeepSeekV4Model.reset_caches`; the prompt is written in by replaying
     decode one token at a time.
     """
 
-    __slots__ = ("sliding", "compressor_kv", "compressor_gate")
+    __slots__ = ("sliding", "compressor_kv", "compressor_gate", "compressed")
 
     def __init__(
-        self, sliding: ttnn.Tensor, compressor_kv: Optional[ttnn.Tensor], compressor_gate: Optional[ttnn.Tensor]
+        self,
+        sliding: ttnn.Tensor,
+        compressor_kv: Optional[ttnn.Tensor],
+        compressor_gate: Optional[ttnn.Tensor],
+        compressed: Optional[ttnn.Tensor] = None,
     ):
         self.sliding = sliding
         self.compressor_kv = compressor_kv
         self.compressor_gate = compressor_gate
+        self.compressed = compressed
 
 
 def build_static_layer_cache(
@@ -91,7 +107,7 @@ def build_static_layer_cache(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    ckv = cgate = None
+    ckv = cgate = compressed = None
     if layer_type != "sliding_attention":
         cr = compress_rates[layer_type]
         cap = max_seq
@@ -110,7 +126,15 @@ def build_static_layer_cache(
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-    return _StaticLayerCache(sliding, ckv, cgate)
+        if cap // cr > 0:
+            compressed = ttnn.from_torch(
+                torch.zeros(1, 1, cap // cr, head_dim),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+    return _StaticLayerCache(sliding, ckv, cgate, compressed)
 
 
 def int32_pos_tensor(pos: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
@@ -282,6 +306,22 @@ def _update_cache_at(
     ttnn.deallocate(row_sharded)
 
 
+def _store_compressed(compressed_cache: ttnn.Tensor, pooled: ttnn.Tensor | None) -> None:
+    """In-place write the freshly pooled entries ``[1, 1, n_win, Dh]`` into the
+    persistent ``compressed_cache`` of the same shape.
+
+    ``ttnn.fill_cache`` is the whole-tensor counterpart of ``paged_update_cache``:
+    an in-place cache writer, so (unlike ``ttnn.copy``) it is accepted mid trace
+    capture. ``batch_idx`` / ``update_idx`` are compile-time constants here, which
+    keeps the captured program valid for every replay.
+    """
+    if pooled is None:
+        return
+    pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.fill_cache(compressed_cache, pooled, 0)
+    ttnn.deallocate(pooled)
+
+
 def _softmax_weighted_sum(kv: ttnn.Tensor, gate: ttnn.Tensor, window_axis: int) -> ttnn.Tensor:
     """``sum_w softmax(gate, axis=w) * kv`` over the window axis.
 
@@ -374,25 +414,34 @@ class DeepSeekV4HCACompressor:
         sin_win: ttnn.Tensor,
         kv_cache: ttnn.Tensor,
         gate_cache: ttnn.Tensor,
+        compressed_cache: ttnn.Tensor | None,
         pos_tensor: ttnn.Tensor,
-    ) -> ttnn.Tensor:
+        pool: bool = True,
+    ) -> ttnn.Tensor | None:
         """Trace-safe decode: write this token's projection in place at ``pos_tensor``
-        into the fixed ``[1, 1, cap, Dh]`` caches, then pool over the *whole* buffer.
+        into the fixed ``[1, 1, cap, Dh]`` caches, and (when ``pool``) refresh
+        ``compressed_cache`` by pooling over the *whole* buffer.
 
         ``cos_win`` / ``sin_win`` cover every window of the fixed capacity
         (``cap // compress_rate`` rows); windows past the current position are
         pooled from zero-filled (unwritten) projections and dropped by the caller's
         additive block-bias mask.
+
+        ``pool`` is set by the caller only on the steps that close a window; in
+        between, the persistent ``compressed_cache`` already holds exactly the
+        entries the block-bias exposes (see the module header).
         """
         kv, gate = self._project(hidden)  # [1, 1, 1, Dh]
         kv = ttnn.reshape(kv, [1, 1, 1, self.head_dim])
         gate = ttnn.reshape(gate, [1, 1, 1, self.head_dim])
         _update_cache_at(kv_cache, kv, pos_tensor)
         _update_cache_at(gate_cache, gate, pos_tensor)
-        cap = kv_cache.shape[2]
-        kv_all = ttnn.reshape(kv_cache, [1, cap, self.head_dim])
-        gate_all = ttnn.reshape(gate_cache, [1, cap, self.head_dim])
-        return self._pool(kv_all, gate_all, cos_win, sin_win)
+        if pool and compressed_cache is not None:
+            cap = kv_cache.shape[2]
+            kv_all = ttnn.reshape(kv_cache, [1, cap, self.head_dim])
+            gate_all = ttnn.reshape(gate_cache, [1, cap, self.head_dim])
+            _store_compressed(compressed_cache, self._pool(kv_all, gate_all, cos_win, sin_win))
+        return compressed_cache
 
 
 class DeepSeekV4CSACompressor:
@@ -511,21 +560,26 @@ class DeepSeekV4CSACompressor:
         sin_win: ttnn.Tensor,
         kv_cache: ttnn.Tensor,
         gate_cache: ttnn.Tensor,
+        compressed_cache: ttnn.Tensor | None,
         pos_tensor: ttnn.Tensor,
-    ) -> ttnn.Tensor:
+        pool: bool = True,
+    ) -> ttnn.Tensor | None:
         """Trace-safe decode: write this token's ``2*Dh`` projection in place at
-        ``pos_tensor`` into the fixed ``[1, 1, cap, 2*Dh]`` caches, then pool the
-        whole buffer (Ca/Cb overlap). See :meth:`DeepSeekV4HCACompressor.decode_static`."""
+        ``pos_tensor`` into the fixed ``[1, 1, cap, 2*Dh]`` caches, and (when
+        ``pool``) refresh ``compressed_cache`` from the whole buffer (Ca/Cb
+        overlap). See :meth:`DeepSeekV4HCACompressor.decode_static`."""
         feat = 2 * self.head_dim
         kv, gate = self._project(hidden)  # [1, 1, 1, 2*Dh]
         kv = ttnn.reshape(kv, [1, 1, 1, feat])
         gate = ttnn.reshape(gate, [1, 1, 1, feat])
         _update_cache_at(kv_cache, kv, pos_tensor)
         _update_cache_at(gate_cache, gate, pos_tensor)
-        cap = kv_cache.shape[2]
-        kv_all = ttnn.reshape(kv_cache, [1, cap, feat])
-        gate_all = ttnn.reshape(gate_cache, [1, cap, feat])
-        return self._pool(kv_all, gate_all, cos_win, sin_win)
+        if pool and compressed_cache is not None:
+            cap = kv_cache.shape[2]
+            kv_all = ttnn.reshape(kv_cache, [1, cap, feat])
+            gate_all = ttnn.reshape(gate_cache, [1, cap, feat])
+            _store_compressed(compressed_cache, self._pool(kv_all, gate_all, cos_win, sin_win))
+        return compressed_cache
 
 
 _COMPRESSORS = {
@@ -813,6 +867,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         compress_pos: ttnn.Tensor,
         paged_sliding_pool: ttnn.Tensor | None = None,
         page_table: ttnn.Tensor | None = None,
+        pool_compressor: bool = True,
     ) -> ttnn.Tensor:
         """Single-token decode attention against the paged in-place ``scache``.
 
@@ -832,6 +887,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             compress_pos,
             paged_sliding_pool=paged_sliding_pool,
             page_table=page_table,
+            pool_compressor=pool_compressor,
         )
 
     def decode_static(
@@ -848,6 +904,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         compress_pos: ttnn.Tensor,
         paged_sliding_pool: ttnn.Tensor | None = None,
         page_table: ttnn.Tensor | None = None,
+        pool_compressor: bool = True,
     ) -> ttnn.Tensor:
         """Trace-safe single-token decode against fixed-size in-place caches.
 
@@ -855,6 +912,9 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         sliding-attention layer, K=V is stored in the shared paged pool (block
         size 64) and attention uses ``paged_scaled_dot_product_attention_decode``.
         CSA/HCA layers keep the ring buffer + compressor path with per-user caches.
+
+        ``pool_compressor`` selects whether this step re-pools the compressor (only
+        the steps that close a window need to); it is ignored by sliding layers.
         """
         q, kv_new = self._qkv(hidden, cos, sin)  # q [1,1,H,Dh], kv_new [1,1,1,Dh]
 
@@ -873,7 +933,14 @@ class DeepSeekV4Attention(DeepSeekV4Module):
 
         if self.compressor is not None:
             compressed = self.compressor.decode_static(
-                hidden, cos_win, sin_win, scache.compressor_kv, scache.compressor_gate, compress_pos
+                hidden,
+                cos_win,
+                sin_win,
+                scache.compressor_kv,
+                scache.compressor_gate,
+                scache.compressed,
+                compress_pos,
+                pool=pool_compressor,
             )
             if compressed is not None:
                 kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)

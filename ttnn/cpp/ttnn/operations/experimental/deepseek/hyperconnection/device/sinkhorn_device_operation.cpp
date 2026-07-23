@@ -64,7 +64,7 @@ SinkhornDeviceOperation::spec_return_value_t SinkhornDeviceOperation::compute_ou
     const auto& comb_w = tensor_args.comb_w;
     const auto output_layout = tt::tt_metal::TensorLayout(
         comb_w.dtype(), tt::tt_metal::PageConfig(comb_w.layout()), operation_attributes.output_mem_config);
-    return TensorSpec(comb_w.logical_shape(), output_layout);
+    return tt::tt_metal::TensorSpec(comb_w.logical_shape(), output_layout);
 }
 
 SinkhornDeviceOperation::tensor_return_value_t SinkhornDeviceOperation::create_output_tensors(
