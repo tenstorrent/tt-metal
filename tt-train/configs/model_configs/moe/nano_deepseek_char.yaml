@@ -3,7 +3,7 @@ transformer_config:
   embedding_dim: 512
   num_blocks: 8
   num_heads: 8
-  max_sequence_length: 256
+  max_sequence_length: 2048
   dropout_prob: 0.0
   # DeepSeek MLA
   q_lora_rank: 256
@@ -12,15 +12,20 @@ transformer_config:
   qk_rope_head_dim: 32
   v_head_dim: 64
   theta: 10000.0
-  # DeepSeek MoE
   n_dense_layers: 2
   inter_dim: 1536
-  moe_inter_dim: 256
-  n_routed_experts: 8
-  n_shared_experts: 1
-  n_activated_experts: 2
-  n_expert_groups: 2
-  n_limited_groups: 1
-  score_func: "sigmoid"
-  route_scale: 2.5
+  # DeepSeek MoE FFN variant:
+  #   dense | sparse_ep
+  # sparse_ep partitions experts across the device_config.moe_axis mesh axis
+  # (or "tp" under full-model TP); with no such axis they fall back to single-chip sparse.
+  moe_type: "sparse_ep"
+  moe_hyperparam:
+    moe_inter_dim: 256
+    n_routed_experts: 8
+    n_shared_experts: 1
+    n_activated_experts: 2
+    n_expert_groups: 2
+    n_limited_groups: 1
+    score_func: "sigmoid"
+    route_scale: 2.5
   runner_type: "default"

@@ -792,6 +792,33 @@ def main() -> None:
     device_cfg = DeviceConfig(yaml_config)
 
     mesh = build_mesh(device_cfg)
+
+    # Optional MoE-only expert-parallel axis (DeepSeek). device_cfg.moe_axis is an index
+    # into mesh_shape; rename that mesh axis to "moe_ep" (unless it already carries a
+    # parallelism name) and record it on the DeepSeek spec so SparseMoEEP partitions experts
+    # across it. When enable_tp is true, MoE uses the "tp" axis and this is ignored.
+    moe_ax = device_cfg.moe_axis
+    resolved_moe_axis: str | None = None
+    if moe_ax != -1:
+        shape = tuple(int(s) for s in device_cfg.mesh_shape)
+        if not (0 <= moe_ax < len(shape)):
+            raise ValueError(f"device_config.moe_axis ({moe_ax}) is out of range for mesh_shape of length {len(shape)}")
+        names = list(mesh.axis_names)
+        logical = names[moe_ax]
+        if logical.startswith("_"):
+            names[moe_ax] = "moe_ep"
+            mesh = ttml.Mesh(mesh.shape, tuple(names))
+            resolved_moe_axis = "moe_ep"
+        else:
+            resolved_moe_axis = logical
+
+    # Record the resolved MoE axis on the DeepSeek spec so sparse_ep partitions experts
+    # across it. No-op for non-DeepSeek models.
+    if model_cfg.model_type == "deepseek":
+        model_cfg.spec.moe_axis_name = resolved_moe_axis
+
+    if device_cfg.enable_ddp or device_cfg.enable_tp or moe_ax != -1:
+        print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
     ttml.open_device_mesh(mesh, tuple(device_cfg.device_ids) if device_cfg.device_ids else None)
     ttml.autograd.AutoContext.get_instance().get_device()
     ttml.manual_seed(training_cfg.seed)

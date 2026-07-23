@@ -24,11 +24,14 @@ using on-device token count accumulation.
 
 from __future__ import annotations
 
+import math
 import numpy as np
+import torch
 import ttnn
 import ttml
+from ttml.common.memory_utils import memory_snapshot
 from ttml.common.profiler_utils import profiler_marker
-from ttml.modules import AbstractModuleBase, LinearLayer, Buffer, ModuleList
+from ttml.modules import AbstractModuleBase, Buffer, LinearLayer, ModuleList, Parameter
 
 from .transformer import DeepSeekMLP
 from .autograd_ops import (
@@ -57,6 +60,41 @@ class Expert(AbstractModuleBase):
         )
 
 
+class _GatherTopK(ttml.autograd.Function):
+    """Gather routing weights at top-k expert indices.
+
+    Forward computes ``out[..., k] = routing_weights[..., topk_indices[..., k]]``.
+    Backward scatters ``grad_output`` directly back into the full expert axis,
+    avoiding per-expert slice backward concat/permute chains.
+    """
+
+    @staticmethod
+    def forward(ctx, routing_weights, topk_indices_u32):
+        routing_value = routing_weights.get_value()
+        ctx.topk_indices_u32 = topk_indices_u32
+        ctx.rw_shape = list(routing_value.shape)
+        ctx.rw_layout = routing_value.layout
+
+        # Gather routing weights at the top-k expert indices with a single
+        # tile-layout gather along the expert axis:
+        #   [B,1,S,E] gather index [B,1,S,K] -> [B,1,S,K]
+        # Avoids materializing a [B,1,S*K,E] one-hot plus the
+        # repeat_interleave / multiply / sum reduction (O(E) -> O(K) per token).
+        index = ttnn.to_layout(topk_indices_u32, routing_value.layout)
+        return ttnn.gather(routing_value, dim=-1, index=index)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Top-k indices are unique for a token, so scatter is equivalent to
+        # scatter-add here and avoids rebuilding every e:e+1 slice gradient.
+        device = grad_output.device()
+        topk_indices_rm = ttnn.to_layout(ctx.topk_indices_u32, ttnn.ROW_MAJOR_LAYOUT)
+        grad_rm = ttnn.to_layout(grad_output, ttnn.ROW_MAJOR_LAYOUT)
+        grad_routing = ttnn.zeros(ctx.rw_shape, grad_output.dtype, ttnn.ROW_MAJOR_LAYOUT, device)
+        grad_routing = ttnn.scatter(grad_routing, -1, topk_indices_rm, grad_rm)
+        return ttnn.to_layout(grad_routing, ctx.rw_layout)
+
+
 class MoE(AbstractModuleBase):
     """Mixture of Experts with fully on-device routing.
 
@@ -65,7 +103,14 @@ class MoE(AbstractModuleBase):
     No CPU interaction during forward pass.
     """
 
-    def __init__(self, config) -> None:
+    memory_marker_prefix = "DENSE_MOE"
+
+    def __init__(
+        self,
+        config,
+        *,
+        moe_axis_name: str | None = None,
+    ) -> None:
         super().__init__()
 
         # We need to cast topk output to bf16 for some ops that come next
@@ -99,12 +144,69 @@ class MoE(AbstractModuleBase):
         # Router gate
         self.gate = LinearLayer(config.dim, config.n_routed_experts, has_bias=False)
 
-        # Individual expert modules
-        self.experts = ModuleList([Expert(config.dim, config.moe_inter_dim) for _ in range(config.n_routed_experts)])
+        # Routed experts: dense ``Expert`` modules, or EP-sharded gate/up/down
+        # parameters (``SparseMoEEP``) created directly with a mesh mapper — no
+        # dense-on-device weights and no host readback from a duplicate LinearLayer.
+        H, I = config.dim, config.moe_inter_dim
+        # moe_type decides how routed experts are sharded across moe_axis_name:
+        #   sparse_ep — partition the expert list across the axis. Otherwise
+        #   (dense / plain sparse / no axis) build replicated dense Expert modules.
+        moe_type = str(getattr(config, "moe_type", "sparse_ep")).lower()
+        ep_sharded = moe_axis_name is not None and moe_type == "sparse_ep"
 
-        # Shared expert(s)
+        if ep_sharded:
+            mesh = ttml.maybe_mesh()
+            if mesh is None or not mesh.has_axis(moe_axis_name):
+                raise ValueError(f"MoE: moe_axis_name={moe_axis_name!r} requires an open mesh with that axis")
+            D = mesh.axis_size(moe_axis_name)
+            E = config.n_routed_experts
+            if E % D != 0:
+                raise ValueError(
+                    f"MoE: n_routed_experts ({E}) must be divisible by axis "
+                    f"{moe_axis_name!r} size ({D}) for EP-sharded experts"
+                )
+            self.e_local = E // D
+            self._ep_axis_name = moe_axis_name
+            # Mapper shards dim 0 of the init tensor across the EP mesh axis.
+            # Init shape (D, 1, I, H) → each EP shard gets (1, 1, I, H), i.e.
+            # the i-th Parameter on shard r holds global expert r*E_local + i.
+            mapper = ttml.mesh().axis_mapper(moe_axis_name, tdim=0)
+            k_in = math.sqrt(1.0 / H)
+            init_gate = ttml.init.uniform(-k_in, k_in)
+            k_mid = math.sqrt(1.0 / I)
+            init_down = ttml.init.uniform(-k_mid, k_mid)
+            self.w_gate = []
+            self.w_up = []
+            self.w_down = []
+            for i in range(self.e_local):
+                gate = Parameter(init_gate((D, 1, I, H), mapper))
+                up = Parameter(init_gate((D, 1, I, H), mapper))
+                down = Parameter(init_down((D, 1, H, I), mapper))
+                setattr(self, f"w_gate_{i}", gate)
+                setattr(self, f"w_up_{i}", up)
+                setattr(self, f"w_down_{i}", down)
+                self.w_gate.append(gate)
+                self.w_up.append(up)
+                self.w_down.append(down)
+            self.experts = ModuleList([])
+        else:
+            self.w_gate = []
+            self.w_up = []
+            self.w_down = []
+            self.experts = ModuleList(
+                [Expert(config.dim, config.moe_inter_dim) for _ in range(config.n_routed_experts)]
+            )
+
+        # Shared expert(s). If MoE is running EP-sharded, shard the shared MLP
+        # across the same axis so it stops being a fully-replicated FFN
+        # duplicating weights, optimizer state, and compute on every chip.
+        shared_axis = moe_axis_name if ep_sharded else None
         if config.n_shared_experts > 0:
-            self.shared_experts = DeepSeekMLP(config.dim, config.n_shared_experts * config.moe_inter_dim)
+            self.shared_experts = DeepSeekMLP(
+                config.dim,
+                config.n_shared_experts * config.moe_inter_dim,
+                tp_axis_name=shared_axis,
+            )
         else:
             self.shared_experts = None
 
@@ -124,6 +226,59 @@ class MoE(AbstractModuleBase):
                 ttnn.zeros(shape, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.Layout.TILE)
             )
         )
+
+        # Local expert-id vector [E] consumed by moe_group / moe_ungroup. It is
+        # constant across forwards, so build it once here instead of per-step.
+        # EP shards it across the expert axis (each chip sees its local
+        # [r*E_local, (r+1)*E_local) slice); every other layout leaves the
+        # mapper None so it is replicated. Only the sparse variants read it.
+        leids_mapper = ttml.mesh().axis_mapper(moe_axis_name, tdim=0) if ep_sharded else None
+        self._leids = ttnn.from_torch(
+            torch.arange(config.n_routed_experts, dtype=torch.int32),
+            dtype=ttnn.uint16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            mesh_mapper=leids_mapper,
+        )
+
+    def _memory_snapshot(self, x: ttml.autograd.Tensor, phase: str) -> ttml.autograd.Tensor:
+        layer_id = getattr(self, "_debug_layer_id", "unknown")
+        label = f"{self.memory_marker_prefix}_L{layer_id}_{phase}"
+        return memory_snapshot(x, f"{label}_FWD", f"{label}_BWD")
+
+    def gather_topk_weights(self, routing_weights, topk_indices_u32):
+        return _GatherTopK.apply(routing_weights, topk_indices_u32)
+
+    def prepare_routing_weights(self, scores, topk_indices, *, gather_topk: bool = False):
+        """Build routing mask/weights and update token-count state.
+
+        Dense MoE consumes the full ``[B,1,S,E]`` routing weights. Sparse MoE
+        additionally needs gathered top-k weights ``[B,1,S,K]`` for group/ungroup.
+        """
+        B, _, S, _ = list(scores.get_value().shape)
+        device = scores.get_value().device()
+        topk_indices_u32 = ttnn.typecast(topk_indices, ttnn.DataType.UINT32)
+        topk_indices_rm = ttnn.to_layout(topk_indices, ttnn.ROW_MAJOR_LAYOUT)
+
+        expert_mask_all = ttnn.zeros([B, 1, S, self.num_experts], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, device)
+        expert_src = ttnn.ones([B, 1, S, self.n_activated], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, device)
+        expert_mask_all = ttnn.scatter(expert_mask_all, -1, topk_indices_rm, expert_src)
+        expert_mask_all = ttnn.to_layout(expert_mask_all, ttnn.TILE_LAYOUT)
+
+        if self.score_func == "sigmoid":
+            routing_weights = moe_routing_normalize(scores, expert_mask_all, self.route_scale, 1e-20)
+        elif self.route_scale != 1.0:
+            routing_weights = ttml.ops.binary.mul(scores, self.route_scale)
+        else:
+            routing_weights = scores
+
+        mask_bs_flat = ttnn.reshape(expert_mask_all, [1, 1, B * S, self.num_experts])
+        batch_counts = ttnn.sum(mask_bs_flat, dim=-2, keepdim=True)
+        new_counts = ttnn.add(self._token_counts.tensor.get_value(), batch_counts)
+        self._token_counts.tensor.set_value(new_counts)
+
+        scores_for_routing = self.gather_topk_weights(routing_weights, topk_indices_u32) if gather_topk else None
+        return expert_mask_all, routing_weights, scores_for_routing, topk_indices_u32
 
     def compute_routing(self, x: ttml.autograd.Tensor):
         """Compute per-token expert routing decisions.
@@ -211,42 +366,21 @@ class MoE(AbstractModuleBase):
         # Branch subsections from x_in so backward markers are attributed to
         # distinct zones rather than one chained marker path.
         x_in = profiler_marker(x, "[START] [MoE]")
+        x_in = self._memory_snapshot(x_in, "START")
 
         x_r = profiler_marker(x_in, "[START] [MoE] Routing")
         scores, _topk_values, topk_indices = self.compute_routing(x_r)
 
-        # ── 3. Build dense per-token expert mask via scatter ──
-        # Scatter ones at topk indices into a zero tensor to produce a
-        # one-hot-per-selected-expert mask [B, 1, S, num_experts] in a single
-        # op instead of num_experts independent eq/sum/gt/typecast chains.
-        device = x.get_value().device()
-        topk_indices = ttnn.to_layout(topk_indices, ttnn.ROW_MAJOR_LAYOUT)
-        expert_mask_all = ttnn.zeros([B, 1, S, self.num_experts], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, device)
-        expert_src = ttnn.ones([B, 1, S, self.n_activated], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, device)
-        expert_mask_all = ttnn.scatter(expert_mask_all, -1, topk_indices, expert_src)
-        expert_mask_all = ttnn.to_layout(expert_mask_all, ttnn.TILE_LAYOUT)
-
-        # ── 4. Routing weights ──
-        # For sigmoid: use MoERoutingNormalize which has the full Jacobian
-        # (including cross-expert terms via the shared denominator). For
-        # softmax: selected scores are used directly (no renorm), so we fall
-        # back to the per-expert multiply with a detached mask.
-        if self.score_func == "sigmoid":
-            routing_weights = moe_routing_normalize(scores, expert_mask_all, self.route_scale, 1e-20)
-        else:
-            routing_weights = None  # softmax path uses score_i directly below
-
-        # Accumulate token counts on device via a single reduction:
-        # expert_mask_all [B, 1, S, num_experts] -> [1, 1, 1, num_experts].
-        mask_bs_flat = ttnn.reshape(expert_mask_all, [1, 1, B * S, self.num_experts])
-        batch_counts = ttnn.sum(mask_bs_flat, dim=-2, keepdim=True)  # [1, 1, 1, num_experts]
-        new_counts = ttnn.add(self._token_counts.tensor.get_value(), batch_counts)
-        self._token_counts.tensor.set_value(new_counts)
+        expert_mask_all, routing_weights, _scores_for_routing, _topk_indices_u32 = self.prepare_routing_weights(
+            scores, topk_indices
+        )
         scores = profiler_marker(scores, "[END] [MoE] Routing")
+        scores = self._memory_snapshot(scores, "AFTER_ROUTING")
 
         # ── 5. Per-expert weighted outputs ──
         output = None
         x_e = profiler_marker(x_in, "[START] [MoE] Experts")
+        x_e = self._memory_snapshot(x_e, "BEFORE_EXPERTS")
 
         for expert_idx in range(self.num_experts):
             x_exp = profiler_marker(x_e, "[START] [MoE] Expert")
@@ -266,11 +400,7 @@ class MoE(AbstractModuleBase):
                 mask_narrow = ttnn.slice(expert_mask_all, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])
                 expert_mask = ttnn.repeat(mask_narrow, ttnn.Shape([1, 1, 1, dim]))
                 mask_tt = ttml.autograd.Tensor(expert_mask, False)
-                score_i = autograd_slice(scores, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])
-                if self.route_scale != 1.0:
-                    routing_weight = ttml.ops.binary.mul(score_i, self.route_scale)
-                else:
-                    routing_weight = score_i
+                routing_weight = autograd_slice(routing_weights, [0, 0, 0, expert_idx], [B, 1, S, expert_idx + 1])
                 weighted = ttml.ops.binary.mul(expert_out, routing_weight)
                 weighted = ttml.ops.binary.mul(weighted, mask_tt)
 
@@ -283,15 +413,19 @@ class MoE(AbstractModuleBase):
             output = ttml.autograd.create_tensor(ttml.core.zeros_like(x_in.get_value()))
 
         output = profiler_marker(output, "[END] [MoE] Experts")
+        output = self._memory_snapshot(output, "AFTER_EXPERTS")
 
         # ── 5. Shared experts ──
         if self.shared_experts is not None:
             x_s = profiler_marker(x_in, "[START] [MoE] SharedExp")
+            x_s = self._memory_snapshot(x_s, "BEFORE_SHARED")
             shared_out = self.shared_experts(x_s)
             shared_out = profiler_marker(shared_out, "[END] [MoE] SharedExp")
+            shared_out = self._memory_snapshot(shared_out, "AFTER_SHARED")
             output = ttml.ops.binary.add(output, shared_out)
 
         output = profiler_marker(output, "[END] [MoE]")
+        output = self._memory_snapshot(output, "END")
         return output
 
     def read_activation_probabilities(self) -> np.ndarray:
