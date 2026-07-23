@@ -27,6 +27,7 @@ namespace {
 constexpr uint32_t cb_gather = 5;
 constexpr uint32_t cb_stat_handoff = 6;
 constexpr uint32_t cb_stat_global = 7;
+constexpr uint32_t cb_out = 16;
 constexpr uint32_t cb_stat_local = 25;
 }  // namespace
 
@@ -37,18 +38,36 @@ void kernel_main() {
     constexpr uint32_t HT_LOCAL = get_compile_time_arg_val(3);
     constexpr uint32_t K = get_compile_time_arg_val(4);
     constexpr uint32_t stat_bytes = get_compile_time_arg_val(5);  // fp32 tile bytes
+    // OUT_TO_DRAM (Refinement 4a, logical wide-interleaved / decode W-split): the
+    // output is INTERLEAVED, not a zero-copy sharded CB, so after the per-tile-row
+    // stat round this writer drains compute's cb_out (per_w_t tiles) and writes the
+    // vwt valid W-slice tiles to DRAM (tile_id = t*Wt + w_tile_start + w). When
+    // OUT_TO_DRAM=0 the output is a zero-copy sharded CB and compute's pack finalizes
+    // it in place (writer does not touch cb_out).
+    constexpr bool OUT_TO_DRAM = get_compile_time_arg_val(6) != 0;
+    constexpr uint32_t Wt = get_compile_time_arg_val(7);
+    constexpr uint32_t PER_W_T = get_compile_time_arg_val(8);
+    constexpr uint32_t out_page = get_compile_time_arg_val(9);
 
-    const uint32_t is_master = get_arg_val<uint32_t>(0);
-    const uint32_t slice_index = get_arg_val<uint32_t>(1);
-    const uint32_t master_vx = get_arg_val<uint32_t>(2);
-    const uint32_t master_vy = get_arg_val<uint32_t>(3);
-    const uint32_t num_workers = get_arg_val<uint32_t>(4);  // master: K-1, worker: 0
+    constexpr auto out_args = TensorAccessorArgs<10>();
+
+    // DRAM-write args first (fixed-position); the variable-length worker coords follow.
+    const uint32_t out_addr = get_arg_val<uint32_t>(0);
+    const uint32_t w_tile_start = get_arg_val<uint32_t>(1);
+    const uint32_t vwt = get_arg_val<uint32_t>(2);
+    const uint32_t is_master = get_arg_val<uint32_t>(3);
+    const uint32_t slice_index = get_arg_val<uint32_t>(4);
+    const uint32_t master_vx = get_arg_val<uint32_t>(5);
+    const uint32_t master_vy = get_arg_val<uint32_t>(6);
+    const uint32_t num_workers = get_arg_val<uint32_t>(7);  // master: K-1, worker: 0
     // master only: worker virtual coords follow as [vx, vy] * num_workers.
-    constexpr uint32_t WORKER_COORDS_BASE = 5;
+    constexpr uint32_t WORKER_COORDS_BASE = 8;
 
     volatile tt_l1_ptr uint32_t* sem_gather = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER));
     volatile tt_l1_ptr uint32_t* sem_bcast = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_BCAST));
     volatile tt_l1_ptr uint32_t* sem_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_DONE));
+
+    const auto out_accessor = TensorAccessor(out_args, out_addr, out_page);
 
     for (uint32_t t = 0; t < HT_LOCAL; ++t) {
         cb_wait_front(cb_stat_local, 1);  // compute produced this tile-row's local partial
@@ -100,6 +119,22 @@ void kernel_main() {
             cb_pop_front(cb_stat_local, 1);
             noc_semaphore_wait_min(sem_bcast, t + 1);  // master broadcast my 1/RMS
             cb_push_back(cb_stat_global, 1);           // -> worker compute pass 2 (data already at the slot)
+        }
+
+        // ---- logical W-split: drain this tile-row's compute output to DRAM ----
+        // Compute pushes PER_W_T tiles per tile-row (pass 2 loops the whole slice);
+        // write only the vwt valid W-slice tiles to interleaved DRAM (tile_id =
+        // t*Wt + w_tile_start + w), pop the full PER_W_T to keep the CB balanced.
+        if constexpr (OUT_TO_DRAM) {
+            cb_wait_front(cb_out, PER_W_T);
+            uint32_t l1 = get_read_ptr(cb_out);
+            const uint32_t tile_bytes = get_tile_size(cb_out);
+            for (uint32_t w = 0; w < vwt; ++w) {
+                noc_async_write_tile(t * Wt + w_tile_start + w, out_accessor, l1);
+                l1 += tile_bytes;
+            }
+            noc_async_write_barrier();
+            cb_pop_front(cb_out, PER_W_T);
         }
     }
     // Flush the semaphore-inc atomics (SEM_GATHER/SEM_DONE from workers, SEM_BCAST

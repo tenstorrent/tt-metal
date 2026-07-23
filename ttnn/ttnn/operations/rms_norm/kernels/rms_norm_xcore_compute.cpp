@@ -71,6 +71,11 @@ void kernel_main() {
     // cb_gamma before holding it resident. TILE gamma -> reader already filled
     // cb_gamma (tilize skipped). Cross-core mirror of the interleaved knob-turn.
     constexpr bool GAMMA_IS_RM = get_compile_time_arg_val(6) != 0;
+    // X_ZERO_COPY=1: cb_x_in is backed zero-copy on the resident sharded W-slice, so
+    // compute self-arms it (no external producer). X_ZERO_COPY=0 (logical
+    // wide-interleaved / decode W-split): the reader reads this core's W/K slice from
+    // interleaved DRAM into cb_x_in, so compute only waits on the reader's push.
+    constexpr bool X_ZERO_COPY = get_compile_time_arg_val(7) != 0;
 
     const uint32_t vwt = get_arg_val<uint32_t>(0);  // valid W-tiles (<= PER_W_T)
     const uint32_t is_partial_holder = get_arg_val<uint32_t>(1);
@@ -81,11 +86,13 @@ void kernel_main() {
     constexpr auto one_tile = ckl::EltwiseShape::of(1, 1);
     constexpr auto partial_scaler_sel = ckl::ReducePartialScaler::last_tile_at(1);
 
-    // Arm the resident sharded input W-slice once (whole shard held; indexed access).
+    // Arm the input W-slice once (whole slice held; indexed access across both passes).
     const uint32_t shard_tiles = HT_LOCAL * PER_W_T;
-    cb_reserve_back(cb_x_in, shard_tiles);
-    cb_push_back(cb_x_in, shard_tiles);
-    cb_wait_front(cb_x_in, shard_tiles);
+    if constexpr (X_ZERO_COPY) {
+        cb_reserve_back(cb_x_in, shard_tiles);  // self-arm the resident zero-copy shard
+        cb_push_back(cb_x_in, shard_tiles);
+    }
+    cb_wait_front(cb_x_in, shard_tiles);  // (reader is the producer on the logical path)
 
     if constexpr (HAS_GAMMA) {
         if constexpr (GAMMA_IS_RM) {

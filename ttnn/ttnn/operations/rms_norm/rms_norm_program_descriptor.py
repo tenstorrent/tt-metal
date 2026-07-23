@@ -132,6 +132,24 @@ def create_program_descriptor(
     # compute-side gamma tilize is skipped (op_design.md §5 knob-turn).
     gamma_is_rm = has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
 
+    # ---- Logical wide-interleaved / decode W-split (op_design.md §1 lamp 2, R4a) ----
+    # When the row-parallel split under-fills the grid (R < num_cores) AND W has more
+    # tiles than tile-rows (Wt > R, i.e. wide/few-row: decode rows=32 -> R=1, or wide
+    # W=16384/32768/12288), split W across cores via the cross-core combine instead of
+    # running few-core. TILE input only — the xcore compute is tile-based; RM input
+    # keeps the streaming row-parallel path. Prefill (R=256 >= num_cores) already fills
+    # the grid, so it stays on the row-parallel/resident path below.
+    _grid = device.compute_with_storage_grid_size()
+    _num_cores = _grid.x * _grid.y
+    if (not is_rm) and (R < _num_cores) and (Wt > R) and (Wt >= 2):
+        return _create_logical_xcore_descriptor(
+            input_tensor,
+            output_tensor,
+            gamma=gamma,
+            epsilon=epsilon,
+            compute_kernel_config=compute_kernel_config,
+        )
+
     inv_N_bits = _f32_bits(1.0 / float(origin_W))  # scaler = 1/origin_W (true element count)
     eps_bits = _f32_bits(epsilon)
 
@@ -488,9 +506,210 @@ def _create_sharded_xcore_descriptor(
         tile_gamma = tile_in
         gamma_elem = 0
 
-    all_cores = grid
+    # Sharded: x/out consumed/produced locally via zero-copy sharded CBs.
+    return _assemble_xcore_kernels(
+        input_tensor,
+        output_tensor,
+        gamma,
+        entries=entries,
+        workers_of=workers_of,
+        K=K,
+        per_w_t=per_w_t,
+        Ht_local=Ht_local,
+        Wt=Wt,
+        origin_W=origin_W,
+        has_gamma=has_gamma,
+        gamma_is_rm=gamma_is_rm,
+        has_partial_w=has_partial_w,
+        partial_w=partial_w,
+        inv_N_bits=inv_N_bits,
+        eps_bits=eps_bits,
+        in_dtype=in_dtype,
+        out_dtype=out_dtype,
+        gamma_dtype=gamma_dtype,
+        tile_gamma=tile_gamma,
+        gamma_page=gamma_page,
+        gamma_elem=gamma_elem,
+        all_cores=grid,
+        device=device,
+        compute_kernel_config=compute_kernel_config,
+        x_zero_copy=True,
+        out_to_dram=False,
+    )
 
-    # ---- Circular buffers (all bounded; no CB grows with the tile-row count) ----
+
+# ---------------------------------------------------------------------------
+# Logical wide-interleaved / decode W-split (op_design.md §1 lamp 2; Refinement 4a)
+# ---------------------------------------------------------------------------
+# Same cross-core combine as the physical WIDTH shard, but the input is an
+# INTERLEAVED tensor whose W is split LOGICALLY across K cores (no physical shard):
+# each core reads its W/K slice from DRAM (per-core tile-column offset) and writes its
+# output slice back to DRAM. Used when the row-parallel split under-fills the grid
+# (wide/few-row shapes: W=16384/32768/12288; decode rows=32 -> R=1 tile-row). One
+# group of K cores handles all R tile-rows (the WIDTH topology), so it reuses the
+# xcore reader/compute/writer via the X_FROM_DRAM / X_ZERO_COPY / OUT_TO_DRAM flags.
+
+
+def _pick_wsplit_cores(Wt, num_cores):
+    """Number of W-slices to split Wt tiles across (bounded by cores and Wt).
+
+    per_w_t = ceil(Wt / num_cores) (finest split the grid allows); the actual core
+    count is ceil(Wt / per_w_t) so no core is all-padding. Single source of truth for
+    the logical split geometry."""
+    per_w_t = -(-Wt // num_cores)  # ceildiv
+    k_actual = -(-Wt // per_w_t)
+    return per_w_t, k_actual
+
+
+def _create_logical_xcore_descriptor(
+    input_tensor,
+    output_tensor,
+    *,
+    gamma=None,
+    epsilon=1e-6,
+    compute_kernel_config=None,
+):
+    device = input_tensor.device()
+    shape = list(input_tensor.shape)
+    origin_W = int(shape[-1])
+    origin_H = int(shape[-2])
+    NC = 1
+    for d in shape[:-2]:
+        NC *= int(d)
+
+    Ht_img = (origin_H + TILE_DIM - 1) // TILE_DIM
+    Wt = (origin_W + TILE_DIM - 1) // TILE_DIM
+    R = NC * Ht_img
+    partial_w = origin_W % TILE_DIM
+    has_partial_w = partial_w != 0
+
+    has_gamma = gamma is not None
+    gamma_is_rm = has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
+    in_dtype = input_tensor.dtype
+    out_dtype = output_tensor.dtype
+
+    grid_size = device.compute_with_storage_grid_size()
+    num_cores = grid_size.x * grid_size.y
+
+    # One group of K cores splits W; each core handles all R tile-rows (HT_LOCAL=R).
+    per_w_t, K = _pick_wsplit_cores(Wt, num_cores)
+    cores = ttnn.corerange_to_cores(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}),
+        None,
+        True,
+    )[:K]
+    all_cores = ttnn.num_cores_to_corerangeset(K, grid_size, True)
+
+    # entry: (core, slice_index, master_core, is_partial_holder, w_tile_start, vwt)
+    master = cores[0]
+    entries = []
+    for i, c in enumerate(cores):
+        w_tile_start = i * per_w_t
+        vwt = max(0, min(per_w_t, Wt - w_tile_start))
+        entries.append((c, i, master, has_partial_w and (i == K - 1), w_tile_start, vwt))
+
+    workers_of = {}
+    for c, slice_index, m, _iph, _wts, _vwt in entries:
+        if slice_index != 0:
+            workers_of.setdefault((int(m.x), int(m.y)), []).append(c)
+
+    inv_N_bits = _f32_bits(1.0 / float(origin_W))
+    eps_bits = _f32_bits(epsilon)
+
+    if has_gamma:
+        gamma_dtype = gamma.dtype
+        gamma_page = gamma.buffer_aligned_page_size()
+        tile_gamma = ttnn.tile_size(gamma_dtype)
+        gamma_elem = _elem_size(gamma)
+    else:
+        gamma_dtype = in_dtype
+        gamma_page = input_tensor.buffer_aligned_page_size()
+        tile_gamma = ttnn.tile_size(in_dtype)
+        gamma_elem = 0
+
+    return _assemble_xcore_kernels(
+        input_tensor,
+        output_tensor,
+        gamma,
+        entries=entries,
+        workers_of=workers_of,
+        K=K,
+        per_w_t=per_w_t,
+        Ht_local=R,
+        Wt=Wt,
+        origin_W=origin_W,
+        has_gamma=has_gamma,
+        gamma_is_rm=gamma_is_rm,
+        has_partial_w=has_partial_w,
+        partial_w=partial_w,
+        inv_N_bits=inv_N_bits,
+        eps_bits=eps_bits,
+        in_dtype=in_dtype,
+        out_dtype=out_dtype,
+        gamma_dtype=gamma_dtype,
+        tile_gamma=tile_gamma,
+        gamma_page=gamma_page,
+        gamma_elem=gamma_elem,
+        all_cores=all_cores,
+        device=device,
+        compute_kernel_config=compute_kernel_config,
+        x_zero_copy=False,
+        out_to_dram=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared cross-core kernel assembly (sharded + logical W-split, one source of truth)
+# ---------------------------------------------------------------------------
+# The topology (entries/K/per_w_t) and CB placement (zero-copy vs allocated) are
+# computed by the two builders above; this assembles the identical xcore
+# reader/compute/writer kernels + semaphores from those pieces. x_zero_copy selects
+# whether cb_x_in is a zero-copy sharded CB (compute self-arms) or reader-fed from
+# DRAM; out_to_dram selects whether cb_out is a zero-copy sharded CB (compute's pack
+# finalizes in place) or writer-drained to DRAM.
+
+
+def _assemble_xcore_kernels(
+    input_tensor,
+    output_tensor,
+    gamma,
+    *,
+    entries,
+    workers_of,
+    K,
+    per_w_t,
+    Ht_local,
+    Wt,
+    origin_W,
+    has_gamma,
+    gamma_is_rm,
+    has_partial_w,
+    partial_w,
+    inv_N_bits,
+    eps_bits,
+    in_dtype,
+    out_dtype,
+    gamma_dtype,
+    tile_gamma,
+    gamma_page,
+    gamma_elem,
+    all_cores,
+    device,
+    compute_kernel_config,
+    x_zero_copy,
+    out_to_dram,
+):
+    def _v(core):
+        vc = device.worker_core_from_logical_core(ttnn.CoreCoord(core.x, core.y))
+        return int(vc.x), int(vc.y)
+
+    tile_in = ttnn.tile_size(in_dtype)
+    tile_out = ttnn.tile_size(out_dtype)
+    tile_bf16 = ttnn.tile_size(ttnn.bfloat16)
+    tile_fp32 = ttnn.tile_size(ttnn.float32)
+    in_page = input_tensor.buffer_aligned_page_size()
+    out_page = output_tensor.buffer_aligned_page_size()
+
     CB_X_IN = 1
     CB_SCALER = 2
     CB_GAMMA = 3
@@ -503,11 +722,8 @@ def _create_sharded_xcore_descriptor(
     CB_STAT_LOCAL = 25
     CB_NORM = 26
 
-    cbs = [
-        # zero-copy sharded input W-slice + output W-slice (consumed/produced locally)
-        ttnn.cb_descriptor_from_sharded_tensor(CB_X_IN, input_tensor),
-        ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor),
-    ]
+    shard_tiles = Ht_local * per_w_t
+    cbs = []
 
     def add_cb(idx, page_size, num_pages, fmt):
         cbs.append(
@@ -517,6 +733,19 @@ def _create_sharded_xcore_descriptor(
                 format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=page_size)],
             )
         )
+
+    if x_zero_copy:
+        # zero-copy sharded input W-slice (consumed locally, no NoC read)
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X_IN, input_tensor))
+    else:
+        # logical split: reader reads this core's W/K slice from DRAM into cb_x_in.
+        add_cb(CB_X_IN, tile_in, shard_tiles, in_dtype)
+    if not out_to_dram:
+        # zero-copy sharded output W-slice (compute's pack finalizes it in place)
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor))
+    else:
+        # logical split: compute streams per-tile-row output; writer drains to DRAM.
+        add_cb(CB_OUT, tile_out, 2 * per_w_t, out_dtype)
 
     add_cb(CB_SCALER, tile_bf16, 2 if has_partial_w else 1, ttnn.bfloat16)
     # pass-1 squares the whole vwt-tile block before the single block-reduce, so
@@ -536,7 +765,7 @@ def _create_sharded_xcore_descriptor(
             # (one tile-wide page per read); compute tilizes vwt tiles into cb_gamma.
             add_cb(CB_GAMMA_STICKS, tile_gamma, per_w_t, gamma_dtype)
 
-    # ---- Reader (scaler + gamma W-slice) ----
+    # ---- Reader (scaler + gamma W-slice + [logical] x-from-DRAM) ----
     reader_ct = [
         1 if has_gamma else 0,
         inv_N_bits,
@@ -546,17 +775,28 @@ def _create_sharded_xcore_descriptor(
         1 if gamma_is_rm else 0,
         gamma_elem,
         origin_W,
+        0 if x_zero_copy else 1,  # X_FROM_DRAM
+        Wt,
+        Ht_local,
+        per_w_t,
+        in_page,
     ]
-    # TensorAccessorArgs start after the 8 scalar CT args above (index 8).
+    # gamma accessor at idx 13; input accessor chained after it (logical path only).
     reader_ct.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
         if has_gamma
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
+    reader_ct.extend(
+        ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+        if not x_zero_copy
+        else ttnn.TensorAccessorArgs().get_compile_time_args()
+    )
     reader_rt = ttnn.RuntimeArgs()
     gamma_addr = gamma.buffer_address() if has_gamma else 0
+    in_addr = input_tensor.buffer_address() if not x_zero_copy else 0
     for c, _si, _m, _iph, w_tile_start, vwt in entries:
-        reader_rt[c.x][c.y] = [gamma_addr, w_tile_start, vwt]
+        reader_rt[c.x][c.y] = [gamma_addr, w_tile_start, vwt, in_addr]
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_xcore_reader.cpp"),
         core_ranges=all_cores,
@@ -565,13 +805,30 @@ def _create_sharded_xcore_descriptor(
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    # ---- Writer (cross-core transport) ----
-    writer_ct = [_SEM_GATHER, _SEM_BCAST, _SEM_DONE, Ht_local, K, tile_fp32]
+    # ---- Writer (cross-core transport + [logical] out-to-DRAM) ----
+    writer_ct = [
+        _SEM_GATHER,
+        _SEM_BCAST,
+        _SEM_DONE,
+        Ht_local,
+        K,
+        tile_fp32,
+        1 if out_to_dram else 0,  # OUT_TO_DRAM
+        Wt,
+        per_w_t,
+        out_page,
+    ]
+    writer_ct.extend(
+        ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+        if out_to_dram
+        else ttnn.TensorAccessorArgs().get_compile_time_args()
+    )
     writer_rt = ttnn.RuntimeArgs()
-    for c, slice_index, master, _iph, _wts, _vwt in entries:
+    out_addr = output_tensor.buffer_address() if out_to_dram else 0
+    for c, slice_index, master, _iph, w_tile_start, vwt in entries:
         mvx, mvy = _v(master)
         is_master = 1 if slice_index == 0 else 0
-        row = [is_master, slice_index, mvx, mvy]
+        row = [out_addr, w_tile_start, vwt, is_master, slice_index, mvx, mvy]
         if is_master:
             wl = workers_of.get((int(master.x), int(master.y)), [])
             row.append(len(wl))
@@ -598,6 +855,7 @@ def _create_sharded_xcore_descriptor(
         1 if has_partial_w else 0,
         eps_bits,
         1 if gamma_is_rm else 0,
+        1 if x_zero_copy else 0,  # X_ZERO_COPY (self-arm cb_x_in)
     ]
     compute_rt = ttnn.RuntimeArgs()
     for c, slice_index, _m, is_partial_holder, _wts, vwt in entries:
