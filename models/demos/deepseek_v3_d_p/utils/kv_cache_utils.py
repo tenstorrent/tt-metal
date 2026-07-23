@@ -7,10 +7,12 @@ Utilities for KVPE cache initialization and management.
 
 import socket
 
+import torch
 from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 
 # This is a predefined constant for the number of contiguous tokens in a DRAM bank
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
@@ -409,3 +411,47 @@ def allocate_mla_kvpe_cache(*, mesh_device, hf_config, max_seq_len, mesh_shape, 
         num_kvpe_cache_layers=num_layers,
         num_users=num_users,
     )
+
+
+def allocate_dflash_kv_cache(
+    mesh_device: ttnn.MeshDevice,
+    config: DFlashDrafterConfig,
+    cache_seq: int,
+    *,
+    sp_axis: int = 0,
+    tp_axis: int = 1,
+    dtype: ttnn.DataType = ttnn.bfloat8_b,  # align w/ decode KV cache (init_kvpe_cache default is bf8); bf8/TILE
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Allocate the DFlash drafter's separate K and V context caches, owned OUTSIDE the module by the
+    caller (prefill runner / test) and passed into ``TtDFlashDrafter.write_kv_cache`` — the drafter analog
+    of ``allocate_mla_kvpe_cache`` above: one file owns each model's KV layout, and the model module only
+    consumes the cache handed in (like the MLA model's ``forward(..., kvpe_cache=...)``). Keeping ownership
+    with the caller lets it drive cache lifecycle (the migration hand-off to the decode mesh) and dtype
+    (default bf8/``bfloat8_b`` to match the decode KV cache; see ``init_kvpe_cache``).
+
+    Host shape ``[num_hidden_layers, num_key_value_heads, cache_seq, head_dim]``, TP-sharded on kv-head
+    (dim 1) and SP-sharded on seq (dim 2) so each SP chip owns ``cache_seq/sp`` tokens (the
+    decode/migration layout, no redundant per-SP copies). Returns ``(k_cache, v_cache)``."""
+    shape = (config.num_hidden_layers, config.num_key_value_heads, cache_seq, config.head_dim)
+    shard = [None, None]
+    shard[tp_axis] = 1  # kv-head dim across TP
+    shard[sp_axis] = 2  # seq dim across SP → per-chip [.., cache_seq/sp, ..]
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard)
+    zeros = torch.zeros(*shape, dtype=torch.bfloat16)
+    k_cache = ttnn.from_torch(
+        zeros,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
+    )
+    v_cache = ttnn.from_torch(
+        zeros,  # from_torch(device=…) copies host→device without mutating the input, so K and V can share it
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
+    )
+    return k_cache, v_cache
