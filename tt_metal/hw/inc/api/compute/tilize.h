@@ -506,7 +506,10 @@ ALWI void fast_tilize_init_with_dt_skip_remap(std::uint32_t icb, std::uint32_t f
     tilize_init(icb, full_dim, ocb);
 }
 
-ALWI void fast_tilize_uninit(std::uint32_t icb, std::uint32_t ocb, std::uint32_t full_dim) { tilize_uninit(icb, ocb); }
+ALWI void fast_tilize_uninit(
+    std::uint32_t icb, std::uint32_t ocb, [[maybe_unused]] std::uint32_t full_dim) {
+    tilize_uninit(icb, ocb);
+}
 
 ALWI void fast_tilize_block(
     std::uint32_t icb,
