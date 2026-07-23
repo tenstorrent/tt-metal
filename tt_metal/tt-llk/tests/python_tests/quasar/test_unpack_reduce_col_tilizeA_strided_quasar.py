@@ -270,7 +270,6 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         ),
         "unpack_to_dest": False,
         "dest_acc": dest_acc,
-        "boot_mode": boot_mode,
     }
 
     if is_perf:
@@ -283,6 +282,7 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
             **test_config_kwargs,
             "templates": test_config_kwargs["templates"]
             + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+            "boot_mode": boot_mode,
         },
     )
     res_from_L1 = configuration.run().result
