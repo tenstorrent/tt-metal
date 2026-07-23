@@ -1,16 +1,6 @@
-# Mesh Graph Descriptor for the 4->4 GRPO BoolQ example: two [1, 4] meshes
-# (one per MPI rank), each covering four chips; the FABRIC graph wires them
-# together for the cross-rank transport.
-#
-# !!! HARDWARE-SPECIFIC TEMPLATE !!!
-# The [1, 4] line per rank (e.g. two eth-linked N300 boards) and the channel
-# counts / inter-mesh connections MUST match your physical wiring; the four
-# chips of each rank must be eth-connected in a line to be routable. Adjust
-# this file (and rank_bindings.yaml) for your machine.
-
 mesh_descriptors {
   name: "M0"
-  arch: WORMHOLE_B0
+  arch: BLACKHOLE
   device_topology { dims: [ 1, 4 ] }
   host_topology   { dims: [ 1, 1 ] }
   channels {

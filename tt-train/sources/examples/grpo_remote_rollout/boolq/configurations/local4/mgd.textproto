@@ -1,15 +1,6 @@
-# Mesh Graph Descriptor for the 2->2 GRPO BoolQ example: two [1, 2] meshes
-# (one per MPI rank), each covering one N300 board; the FABRIC graph wires them
-# together for the cross-rank transport.
-#
-# !!! HARDWARE-SPECIFIC TEMPLATE !!!
-# The full physical eth topology must be declared here or
-# ControlPlane::init_control_plane() trips `Fabric node ID not yet assigned for
-# ASIC id ...`. Adjust this file (and rank_bindings.yaml) for your machine.
-
 mesh_descriptors {
   name: "M0"
-  arch: WORMHOLE_B0
+  arch: BLACKHOLE
   device_topology { dims: [ 1, 2 ] }
   host_topology   { dims: [ 1, 1 ] }
   channels {
