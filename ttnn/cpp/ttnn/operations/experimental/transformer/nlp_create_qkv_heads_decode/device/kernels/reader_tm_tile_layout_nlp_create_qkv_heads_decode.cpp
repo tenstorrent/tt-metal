@@ -5,48 +5,54 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "internal/risc_attribs.h"
+#include "experimental/kernel_args.h"
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::constants;
 void kernel_main() {
     Noc noc;
 
-    uint32_t q_start_addr = get_arg_val<uint32_t>(0);
-    uint32_t batch_offset_tensor_addr = get_arg_val<uint32_t>(1);
-    uint32_t index_in_cores = get_arg_val<uint32_t>(2);
+    // Case 2 bindings. The input is read raw via hand-rolled UnicastEndpoint NoC reads (remote), and the
+    // q/k/v OUTPUTS are written raw via get_bank_base_address() + offset (local resident shard). The
+    // outputs use TensorParameters rather than borrowed-memory DFBs: a Metal 2.0 framework bug corrupts
+    // a borrowed DFB's device-side base in multi-work-unit programs (which the !overlap layout needs),
+    // whereas the TensorParameter base-address path is unaffected (it is the same mechanism the input
+    // already uses correctly here). The raw address arithmetic below is unchanged from the legacy kernel.
+    auto qkv_input = TensorAccessor(tensor::input);
+    uint32_t q_start_addr = qkv_input.get_bank_base_address();
+    uint32_t index_in_cores = get_arg(args::index_in_cores);
 
-    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(0);
-    constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_q_out = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_id_k_out = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_id_v_out = get_compile_time_arg_val(4);
-    constexpr uint32_t head_size = get_compile_time_arg_val(5);
-    constexpr uint32_t num_q_heads = get_compile_time_arg_val(6);
-    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(7);
-    constexpr uint32_t head_size_num_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t PHASES_TO_READ      = get_compile_time_arg_val(9);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
-    constexpr uint32_t num_x               = get_compile_time_arg_val(10);
-    constexpr uint32_t num_y               = get_compile_time_arg_val(11);
-    constexpr uint32_t PROCESS_QV          = get_compile_time_arg_val(12);
-    constexpr uint32_t PROCESS_K           = get_compile_time_arg_val(13);
-    constexpr bool use_batch_offset = get_compile_time_arg_val(14) == 1;
-    constexpr uint32_t index_stick_size = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_batch_offset_id = get_compile_time_arg_val(16);
-    constexpr auto index_args = TensorAccessorArgs<17>();
+    constexpr auto ELEMENT_SIZE = get_arg(args::element_size);
+    constexpr auto SUBTILE_LINE_BYTES = get_arg(args::sub_tile_line_bytes);
+    constexpr auto head_size = get_arg(args::head_size);
+    constexpr auto num_q_heads = get_arg(args::num_q_heads);
+    constexpr auto num_kv_heads = get_arg(args::num_kv_heads);
+    constexpr auto head_size_num_tiles = get_arg(args::head_size_num_tiles);
+    constexpr auto PHASES_TO_READ =
+        get_arg(args::phases_to_read);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
+    constexpr auto num_x = get_arg(args::num_x);
+    constexpr auto num_y = get_arg(args::num_y);
+    // PROCESS_QV / PROCESS_K are host-emitted defines (promoted from the legacy CTA gates) so the
+    // conditionally-bound output tensor handles are only referenced on kernels that write them.
+#ifdef USE_BATCH_OFFSET
+    constexpr auto index_stick_size = get_arg(args::index_stick_size);
+#endif
 
-    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(3 + num_x));
+    // The input-core NoC coordinate arrays are a variable-count block indexed at runtime
+    // (in0_mcast_noc_x[qkv_x]); they are runtime varargs — noc_x occupies varargs [0, num_x),
+    // noc_y occupies [num_x, num_x + num_y).
 
     uint32_t device_batch_offset = 0;
 
-    if constexpr (use_batch_offset) {
-        const auto addrg = TensorAccessor(index_args, batch_offset_tensor_addr);
-        CircularBuffer cb_batch_offset(cb_batch_offset_id);
+#ifdef USE_BATCH_OFFSET
+    {
+        const auto addrg = TensorAccessor(tensor::batch_offset);
+        DataflowBuffer cb_batch_offset(dfb::batch_offset);
         cb_batch_offset.reserve_back(1);
         uint32_t index_cb_wr_ptr = cb_batch_offset.get_write_ptr();
         // Read the batch offset 1 page to read
@@ -57,6 +63,7 @@ void kernel_main() {
         // Always pick 1st value in tensor as batch offset
         device_batch_offset = index_ptr[0];
     }
+#endif
     // Calculate the offset for the current batch
     device_batch_offset += index_in_cores;
     uint32_t in_tile_offset_by_batch = device_batch_offset < 16
@@ -65,9 +72,15 @@ void kernel_main() {
 
     UnicastEndpoint src_ep;
 
-    CircularBuffer cb_q_out(cb_id_q_out);
-    CircularBuffer cb_k_out(cb_id_k_out);
-    CircularBuffer cb_v_out(cb_id_v_out);
+    // Output shard base pointers (resident q/k/v output tensors). The kernel writes each head's tiles
+    // directly into the local output shard at base + offset — the legacy get_write_ptr() semantics.
+#ifdef PROCESS_QV
+    uint32_t q_out_base = TensorAccessor(tensor::q_out).get_bank_base_address();
+    uint32_t v_out_base = TensorAccessor(tensor::v_out).get_bank_base_address();
+#endif
+#ifdef PROCESS_K
+    uint32_t k_out_base = TensorAccessor(tensor::k_out).get_bank_base_address();
+#endif
 
     // Q
     uint32_t qkv_x = 0;
@@ -77,8 +90,8 @@ void kernel_main() {
     uint32_t num_q_cores = (num_q_heads * head_size_num_tiles) / num_tiles_per_core;
     uint32_t num_kv_cores = (num_kv_heads * head_size_num_tiles) / num_tiles_per_core;
 
-    uint32_t qkv_noc_x = in0_mcast_noc_x[qkv_x];
-    uint32_t qkv_noc_y = in0_mcast_noc_y[qkv_y];
+    uint32_t qkv_noc_x = get_vararg(qkv_x);
+    uint32_t qkv_noc_y = get_vararg(num_x + qkv_y);
     uint32_t qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
     uint32_t num_tiles_read_cur_core = 0;
     uint32_t q_write_addr = 0;
@@ -87,7 +100,8 @@ void kernel_main() {
     constexpr uint32_t SUBTILE_ROWS = FACE_HEIGHT;
 
     // Skip Q section if PROCESS_QV is False
-    if constexpr (PROCESS_QV == 1) {
+#ifdef PROCESS_QV
+    {
         for (uint32_t q = 0; q < num_q_heads; ++q) {
             uint32_t tile_row_index = q / TILE_HEIGHT;
             uint32_t row_in_tile = q % TILE_HEIGHT;
@@ -95,7 +109,7 @@ void kernel_main() {
                                                                  : (row_in_tile - SUBTILE_ROWS) * SUBTILE_LINE_BYTES +
                                                                        HALF_TILE_ELEMENTS * ELEMENT_SIZE;
             uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-            uint32_t q_write_addr = cb_q_out.get_write_ptr() + wptr_offset;
+            uint32_t q_write_addr = q_out_base + wptr_offset;
             for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
                 // Read first phase
                 if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
@@ -126,23 +140,26 @@ void kernel_main() {
                         qkv_x = 0;
                         qkv_y++;
                     }
-                    qkv_noc_x = in0_mcast_noc_x[qkv_x];
-                    qkv_noc_y = in0_mcast_noc_y[qkv_y];
+                    qkv_noc_x = get_vararg(qkv_x);
+                    qkv_noc_y = get_vararg(num_x + qkv_y);
                     qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
                     num_tiles_read_cur_core = 0;
                 }
             }
         }
     }
-    else {
+#else
+    {
         qkv_x = num_q_cores % num_x;
         qkv_y = num_q_cores / num_x;
-        qkv_noc_x = in0_mcast_noc_x[qkv_x];
-        qkv_noc_y = in0_mcast_noc_y[qkv_y];
+        qkv_noc_x = get_vararg(qkv_x);
+        qkv_noc_y = get_vararg(num_x + qkv_y);
         qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
     }
+#endif
 
-    if constexpr (PROCESS_K == 1) {
+#ifdef PROCESS_K
+    {
         // K
         uint32_t k_write_addr = 0;
 
@@ -154,7 +171,7 @@ void kernel_main() {
                                                                  : (row_in_tile - SUBTILE_ROWS) * SUBTILE_LINE_BYTES +
                                                                        HALF_TILE_ELEMENTS * ELEMENT_SIZE;
             uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-            uint32_t k_write_addr = cb_k_out.get_write_ptr() + wptr_offset;
+            uint32_t k_write_addr = k_out_base + wptr_offset;
             for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
                 // Read first phase
                 if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
@@ -185,23 +202,26 @@ void kernel_main() {
                         qkv_x = 0;
                         qkv_y++;
                     }
-                    qkv_noc_x = in0_mcast_noc_x[qkv_x];
-                    qkv_noc_y = in0_mcast_noc_y[qkv_y];
+                    qkv_noc_x = get_vararg(qkv_x);
+                    qkv_noc_y = get_vararg(num_x + qkv_y);
                     qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
                     num_tiles_read_cur_core = 0;
                 }
             }
         }
     }
-    else {
+#else
+    {
         qkv_x += (num_kv_cores % num_x);
         qkv_y += (num_kv_cores / num_x);
-        qkv_noc_x = in0_mcast_noc_x[qkv_x];
-        qkv_noc_y = in0_mcast_noc_y[qkv_y];
+        qkv_noc_x = get_vararg(qkv_x);
+        qkv_noc_y = get_vararg(num_x + qkv_y);
         qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
     }
+#endif
 
-    if constexpr (PROCESS_QV == 1) {
+#ifdef PROCESS_QV
+    {
         // v
         uint32_t v_write_addr = 0;
 
@@ -213,7 +233,7 @@ void kernel_main() {
                                                                  : (row_in_tile - SUBTILE_ROWS) * SUBTILE_LINE_BYTES +
                                                                        HALF_TILE_ELEMENTS * ELEMENT_SIZE;
             uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-            uint32_t v_write_addr = cb_v_out.get_write_ptr() + wptr_offset;
+            uint32_t v_write_addr = v_out_base + wptr_offset;
             for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
                 // Read first phase
                 if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
@@ -244,14 +264,15 @@ void kernel_main() {
                         qkv_x = 0;
                         qkv_y++;
                     }
-                    qkv_noc_x = in0_mcast_noc_x[qkv_x];
-                    qkv_noc_y = in0_mcast_noc_y[qkv_y];
+                    qkv_noc_x = get_vararg(qkv_x);
+                    qkv_noc_y = get_vararg(num_x + qkv_y);
                     qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
                     num_tiles_read_cur_core = 0;
                 }
             }
         }
     }
+#endif
 
     noc.async_read_barrier();
 }
