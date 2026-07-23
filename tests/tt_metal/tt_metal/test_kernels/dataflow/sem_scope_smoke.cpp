@@ -31,7 +31,14 @@ void kernel_main() {
     const uint32_t report_addr = get_arg(args::report_addr);
     const uint32_t increment_times = get_arg(args::increment_times);
 
+#if defined(SEM_TOKEN_CTAD)
+    // Phase-2 S1: construct from the baked SemAccessor token; CTAD deduces
+    // Semaphore<TENSIX, kScope> with no explicit template args (sem::counter is the
+    // bare id today; from S2 it becomes the token itself).
+    Semaphore s(SemAccessor<sem::counter, kScope>{});
+#else
     Semaphore<ProgrammableCoreType::TENSIX, kScope> s(sem::counter);
+#endif
     for (uint32_t i = 0; i < increment_times; i++) {
         s.up(1);
     }
