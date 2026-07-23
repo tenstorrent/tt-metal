@@ -130,7 +130,7 @@ Optional AR recaption (`HY_RECAPTION=1`) rewrites the prompt via the text-sampli
 | `HY_RECAPTION_KV` | `1` | `0` disables KV incremental decode on recaption path (required for recaption trace) |
 | `HY_RECAPTION_PREFILL_CHUNK` | `1024` | Chunk size for long-prefix KV prefill (`0` = one shot) |
 | `HY_KEEP_BACKBONE` | `1` | I2I: cache cond VAE/ViT tokens on host and **reuse** the resident backbone for denoise (skip ~140s reload). `0` = old free/rebuild sandwich |
-| `HY_DEVICE_SAMPLING` | `1` | Device-logits AR (**default on**). Alias: `HY_SAMPLE_DEVICE`. `0` = host generate on torch logits. Default sample step: D2H → host ``topk`` (Instruct k, e.g. **1024**) → host multinomial. Falls back to host generate for stage-force / ratio / rep-penalty / greedy |
+| `HY_DEVICE_SAMPLING` | `1` | Device-logits AR (**default on**). Alias: `HY_SAMPLE_DEVICE`. `0` = host generate on torch logits. Default sample step: D2H → host ``topk`` (Instruct k, e.g. **1024**) → host multinomial. Simple stage-force (``think_recaption``) stays on device; falls back to host generate for ratio / rep-penalty / greedy |
 | `HY_TOP_K` / `HY_TOPK` | (Instruct cfg) | Override sampling top-k. **`=32`** selects on-device ``ttnn.topk`` + ``ttnn.sampling``; any other value keeps host torch shortlist under device logits |
 | `HY_TTNN_SAMPLING_OP` | `0` | `1` = force pure ``ttnn.topk`` + ``ttnn.sampling`` (same as `HY_TOP_K=32`; k capped ≤32) |
 | `HY_LATENT_RESIDENT` | `1` | `1` = keep DiT latent on device between steps (TILE flat; Euler on device; one final D2H for VAE). `0` = legacy per-step ``to_torch``/``from_torch`` hops (debug) |

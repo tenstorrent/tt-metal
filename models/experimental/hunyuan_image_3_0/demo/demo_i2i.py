@@ -30,6 +30,11 @@
 # Host recaption fallback (requires NVIDIA CUDA): HY_RECAPTION_DEVICE=0
 # On TT-only systems, host recaption auto-falls back to the on-device path.
 #
+# Device-logits AR sampling is on by default (same as demo.py):
+#   HY_DEVICE_SAMPLING=1 (default) — D2H logits + host topk/shortlist
+#   HY_TOPK=32 / HY_TOP_K=32 (or HY_TTNN_SAMPLING_OP=1) — pure ttnn.topk + ttnn.sampling
+#   think→recaption stage-force stays on the device path (no host-sampler fallback)
+#
 # Trace / 2CQ ON (default): HY_TRACE=1 — recaption KV trace; denoise execute_trace when steps > 8.
 # VAE decode + cond VAE/ViT encode trace default OFF: HY_VAE_DECODE_TRACE=1 HY_COND_ENCODE_TRACE=1
 # Trace / 2CQ OFF: HY_TRACE=0 — eager 1CQ everywhere.
@@ -91,9 +96,14 @@ from dataclasses import replace
 
 from models.experimental.hunyuan_image_3_0.ref.recaption import (
     default_recaption_sampling_config,
+    extract_recaption_written_prompt,
+    extract_think_prose,
+    is_meager_recaption_cot,
+    prompt_fallback_recaption_cot,
     run_recaption,
     system_prompt_for_bot_task,
 )
+from models.experimental.hunyuan_image_3_0.ref.generate import SamplingConfig
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import (
     HunyuanTokenizer,
     build_i2i_cfg_conds,
@@ -240,6 +250,174 @@ def _use_tt_recaption() -> bool:
         )
         return True
     return False
+
+
+def _recaption_sampling_config() -> SamplingConfig:
+    """Match demo.py: HF generation_config defaults with optional HY_* overrides."""
+    from models.experimental.hunyuan_image_3_0.tt.device_sampling import resolve_hy_top_k
+
+    cfg = replace(default_recaption_sampling_config(), max_new_tokens=MAX_NEW_TOKENS)
+    if os.environ.get("HY_DO_SAMPLE") is not None:
+        cfg = replace(cfg, do_sample=os.environ.get("HY_DO_SAMPLE", "1") != "0")
+    if os.environ.get("HY_TEMPERATURE"):
+        cfg = replace(cfg, temperature=float(os.environ["HY_TEMPERATURE"]))
+    top_k = resolve_hy_top_k()
+    if top_k is not None:
+        cfg = replace(cfg, top_k=top_k)
+    if os.environ.get("HY_TOP_P"):
+        cfg = replace(cfg, top_p=float(os.environ["HY_TOP_P"]))
+    if os.environ.get("HY_REP_PENALTY"):
+        cfg = replace(cfg, repetition_penalty=float(os.environ["HY_REP_PENALTY"]))
+    return cfg
+
+
+def _norm_prompt_words(text: str) -> list[str]:
+    return "".join(ch.lower() for ch in text if ch.isalnum() or ch.isspace()).split()
+
+
+def _print_recaption_summary(tok, cot_text: str, *, user_prompt: str, image_size) -> str:
+    """Print raw cot_text plus the extracted rewritten prose. Returns written prompt."""
+    sp = tok.special
+    recaption_open = tok.tokenizer.convert_ids_to_tokens(sp.recaption_token_id)
+    recaption_close = tok.tokenizer.convert_ids_to_tokens(sp.end_recaption_token_id)
+    think_open = tok.tokenizer.convert_ids_to_tokens(sp.think_token_id)
+    think_close = tok.tokenizer.convert_ids_to_tokens(sp.end_think_token_id)
+    written = extract_recaption_written_prompt(cot_text, recaption_open=recaption_open, recaption_close=recaption_close)
+    think = extract_think_prose(
+        cot_text,
+        think_open=think_open,
+        think_close=think_close,
+        recaption_open=recaption_open,
+    )
+    meager = is_meager_recaption_cot(cot_text, recaption_open=recaption_open, recaption_close=recaption_close)
+    echo = _norm_prompt_words(written) == _norm_prompt_words(user_prompt)
+    print(f"[demo_i2i] recaption raw cot_text:\n{cot_text}", flush=True)
+    if think:
+        print(f"[demo_i2i] recaption think:\n{think}", flush=True)
+    if written:
+        print(f"[demo_i2i] recaption written prompt:\n{written}", flush=True)
+    else:
+        print(
+            "[demo_i2i] recaption written prompt: (none — only quad/structure tags, no prose)",
+            flush=True,
+        )
+    print(f"[demo_i2i] original user prompt: {user_prompt!r}", flush=True)
+    print(f"[demo_i2i] resolved image_size={image_size}", flush=True)
+    if meager:
+        print("[demo_i2i] warning: recaption has no usable rewritten prose for image gen", flush=True)
+    elif echo:
+        print("[demo_i2i] warning: recaption written prompt is an echo of the user prompt", flush=True)
+    return written or ""
+
+
+def _recaption_is_echo_or_meager(tok, cot_text: str, user_prompt: str) -> bool:
+    sp = tok.special
+    recaption_open = tok.tokenizer.convert_ids_to_tokens(sp.recaption_token_id)
+    recaption_close = tok.tokenizer.convert_ids_to_tokens(sp.end_recaption_token_id)
+    if is_meager_recaption_cot(cot_text, recaption_open=recaption_open, recaption_close=recaption_close):
+        return True
+    written = extract_recaption_written_prompt(cot_text, recaption_open=recaption_open, recaption_close=recaption_close)
+    return _norm_prompt_words(written) == _norm_prompt_words(user_prompt)
+
+
+def _run_recaption_on_device_maybe_retry_host_sample(
+    *,
+    backbone,
+    lm_head,
+    mesh_device,
+    recap_bundle,
+    tok,
+    bot_task: str,
+    proc,
+    wte,
+    prompt: str,
+    config: SamplingConfig,
+    generator,
+    replicate_to_mesh,
+    image_size,
+):
+    """Device AR recaption (same contract as demo.py).
+
+    Device-logits sampling is on by default; ``HY_TOPK=32`` selects ttnn sampling.
+    Empty/echo cot is left for ``_finalize_recaption_cot``. Set
+    ``HY_RECAPTION_HOST_RETRY=1`` to allow a host-multinomial retry.
+    """
+    from models.experimental.hunyuan_image_3_0.tt.device_sampling import device_sampling_enabled
+
+    recap_result = run_recaption_on_device(
+        backbone,
+        lm_head,
+        mesh_device,
+        recap_bundle,
+        tok,
+        bot_task,
+        proc,
+        wte_weight=wte,
+        image_size=image_size,
+        config=config,
+        generator=generator,
+        replicate_to_mesh=replicate_to_mesh,
+    )
+    cot = recap_result.cot_text[0]
+    if not _recaption_is_echo_or_meager(tok, cot, prompt):
+        return recap_result
+
+    if device_sampling_enabled() and os.environ.get("HY_RECAPTION_HOST_RETRY", "0") != "1":
+        print(
+            "[demo_i2i] device-sampling recaption looks empty/echo "
+            f"(got {cot!r}); keeping device result "
+            "(set HY_RECAPTION_HOST_RETRY=1 to allow host multinomial retry)",
+            flush=True,
+        )
+        return recap_result
+
+    print(
+        "[demo_i2i] device-sampling recaption looks empty/echo; "
+        "retrying AR with host sampling on device logits (HY_DEVICE_SAMPLING=0) ...",
+        flush=True,
+    )
+    prev = os.environ.get("HY_DEVICE_SAMPLING")
+    os.environ["HY_DEVICE_SAMPLING"] = "0"
+    try:
+        recap_result = run_recaption_on_device(
+            backbone,
+            lm_head,
+            mesh_device,
+            recap_bundle,
+            tok,
+            bot_task,
+            proc,
+            wte_weight=wte,
+            image_size=image_size,
+            config=config,
+            generator=generator,
+            replicate_to_mesh=replicate_to_mesh,
+        )
+    finally:
+        if prev is None:
+            os.environ.pop("HY_DEVICE_SAMPLING", None)
+        else:
+            os.environ["HY_DEVICE_SAMPLING"] = prev
+
+    cot2 = recap_result.cot_text[0]
+    if _recaption_is_echo_or_meager(tok, cot2, prompt):
+        print(f"[demo_i2i] host-sampling retry still empty/echo (got {cot2!r})", flush=True)
+    else:
+        print("[demo_i2i] host-sampling retry produced a rewritten recaption", flush=True)
+    return recap_result
+
+
+def _finalize_recaption_cot(tok, prompt: str, cot_text: str, image_size):
+    """String prompt-fallback when AR has no rewrite (torch-free by default)."""
+    if not _recaption_is_echo_or_meager(tok, cot_text, prompt):
+        return cot_text, image_size
+    print(
+        "[demo_i2i] device recaption produced no rewritten prose " f"(got {cot_text!r}); recovering ...",
+        flush=True,
+    )
+    cot_text = prompt_fallback_recaption_cot(tok, prompt)
+    print(f"[demo_i2i] using prompt fallback cot_text: {cot_text!r}", flush=True)
+    return cot_text, image_size
 
 
 def _cfg(model_dir: Path):
@@ -621,35 +799,38 @@ def main():
 
             print("[demo_i2i] loading LM head ...", flush=True)
             lm_head = HunyuanTtLMHead(mesh_device, {"lm_head.weight": weights.load("lm_head.weight")})
-            from models.experimental.hunyuan_image_3_0.tt.device_sampling import resolve_hy_top_k
+            recap_config = _recaption_sampling_config()
+            from models.experimental.hunyuan_image_3_0.tt.device_sampling import (
+                device_sampling_enabled,
+                ttnn_sampling_op_enabled,
+            )
 
-            recap_config = replace(default_recaption_sampling_config(), max_new_tokens=MAX_NEW_TOKENS)
-            top_k = resolve_hy_top_k()
-            if top_k is not None:
-                recap_config = replace(recap_config, top_k=top_k)
-            if os.environ.get("HY_TEMPERATURE"):
-                recap_config = replace(recap_config, temperature=float(os.environ["HY_TEMPERATURE"]))
-            if os.environ.get("HY_TOP_P"):
-                recap_config = replace(recap_config, top_p=float(os.environ["HY_TOP_P"]))
-            recap_result = run_recaption_on_device(
-                backbone,
-                lm_head,
-                mesh_device,
-                recap_bundle,
-                tok,
-                args.bot_task,
-                proc,
-                wte_weight=wte,
-                image_size=image_size,
+            print(
+                f"[demo_i2i] recaption sampling: device_logits={device_sampling_enabled()} "
+                f"ttnn_op={ttnn_sampling_op_enabled()} "
+                f"temp={recap_config.temperature} top_k={recap_config.top_k} top_p={recap_config.top_p}",
+                flush=True,
+            )
+            recap_result = _run_recaption_on_device_maybe_retry_host_sample(
+                backbone=backbone,
+                lm_head=lm_head,
+                mesh_device=mesh_device,
+                recap_bundle=recap_bundle,
+                tok=tok,
+                bot_task=args.bot_task,
+                proc=proc,
+                wte=wte,
+                prompt=args.prompt,
                 config=recap_config,
                 generator=gen,
                 replicate_to_mesh=rep,
+                image_size=image_size,
             )
             del lm_head, recap_bundle
-            cot_text = recap_result.cot_text[0]
-            if recap_result.image_size != image_size:
-                image_size = recap_result.image_size
-            print(f"[demo_i2i] cot_text:\n{cot_text}\n[demo_i2i] resolved image_size={image_size}")
+            cot_text, image_size = _finalize_recaption_cot(
+                tok, args.prompt, recap_result.cot_text[0], recap_result.image_size
+            )
+            _print_recaption_summary(tok, cot_text, user_prompt=args.prompt, image_size=image_size)
 
             if keep_backbone:
                 # Denoise path does not apply ln_f; keep MoE stack resident.
