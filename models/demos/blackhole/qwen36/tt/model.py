@@ -50,6 +50,11 @@ class Qwen36Model:
 
             # vocab/num_devices isn't a power of 2; the multi-device TopK kernel needs it padded.
             args.pad_logits_to_power_of_2 = True
+            # force_argmax (the cheap 1-all-gather greedy path) is enabled on the base
+            # SAMPLING_AG_CONFIG in model_config.py and runs IN-TRACE (faster than eager). Decode
+            # bucketing is made compatible with the in-trace sampler by namespacing the sampling
+            # trace per bucket width (SamplingGenerator.set_trace_bucket, driven from
+            # qwen36_vllm.decode_forward) — see generator._validate_trace_inputs.
             self.sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=self.tt_ccl)
         else:
             self.sampling = None

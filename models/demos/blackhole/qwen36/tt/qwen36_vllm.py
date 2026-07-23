@@ -9,6 +9,7 @@ model-bound, so the kv_cache contract param is accepted but unused.
 """
 import math
 import os
+from collections import defaultdict
 from typing import Mapping, Optional
 
 import torch
@@ -291,6 +292,72 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             slot_remap = kwargs.get("slot_remap")
             if slot_remap is not None:
                 model._remap_gdn_slots(slot_remap)
+        # DECODE-BATCH BUCKETING (opt-in via TT_DECODE_BUCKETING=1). The vLLM runner always pads the
+        # decode batch to max_num_seqs, filling unused rows with padding whose POSITION is -1. Active
+        # requests are a contiguous prefix [0:num_active) (vLLM InputBatch.condense guarantee). We
+        # slice the (host) decode inputs down to the smallest power-of-2 bucket >= num_active BEFORE
+        # the base forward, so the model runs the narrower (faster) width-`bucket` decode program.
+        # This keeps the whole change in tt-metal -- NO vLLM-runner edit -- and needs no output
+        # re-padding: the plugin reads the decode output by unpadded_batch_size (the true active
+        # count), and the bucket-width output holds those rows in slot order [0:num_active).
+        #
+        # Then multiplex the three decode-trace stores by width B: the base Generator keeps exactly
+        # one trace per on_device_sampling flag, and replaying it at a different B would mismatch the
+        # trace's baked input shapes, so each bucket width keeps its own captured trace. Correct
+        # because the model always refreshes decode-trace inputs
+        # (_tt_vllm_always_refresh_decode_trace_inputs=True): a replayed bucket trace gets this step's
+        # host tokens/positions/page_table copied in before replay. (Non-last buckets' traces are
+        # freed at device close, not via Generator.__del__ -- benign for a long-lived serving process.
+        # Currently validated for host sampling; the on-device-sampling async token path is untested
+        # with bucketing.)
+        args = list(args)
+
+        def _read(name, pos):
+            if name in kwargs:
+                return kwargs[name]
+            return args[pos] if pos < len(args) else None
+
+        def _write(name, pos, val):
+            if name in kwargs:
+                kwargs[name] = val
+            elif pos < len(args):
+                args[pos] = val
+
+        tokens = _read("tokens", 0)
+        if os.environ.get("TT_DECODE_BUCKETING") == "1" and tokens is not None:
+            start_pos = _read("start_pos", 1)
+            width = int(tokens.shape[0])
+            num_active = int((start_pos != -1).sum()) if start_pos is not None else width
+            num_active = max(1, min(num_active, width))
+            bucket = min(width, 1 << max(0, (num_active - 1).bit_length()))  # smallest pow2 >= num_active
+            if bucket < width:
+                _write("tokens", 0, tokens[:bucket])
+                if start_pos is not None:
+                    _write("start_pos", 1, start_pos[:bucket])
+                page_table = _read("page_table", 2)
+                if page_table is not None:
+                    _write("page_table", 2, page_table[:bucket])
+                tokens = tokens[:bucket]
+
+        if tokens is not None:
+            B = int(tokens.shape[0])
+            store = getattr(self, "_bucket_trace_store", None)
+            if store is None:
+                store = self._bucket_trace_store = {}
+            if B not in store:
+                store[B] = (defaultdict(lambda: None), defaultdict(lambda: None), defaultdict(lambda: None))
+            self.trace_ids_decode, self.trace_inputs_decode, self.trace_output_decode = store[B]
+            # Namespace the on-device SAMPLING trace by the same bucket width. The base Generator
+            # binds a sampling trace to ONE decode-output logits tensor by identity
+            # (generator._validate_trace_inputs). Each bucket has its own decode trace -> its own
+            # logits tensor, so the sampling trace must be keyed per width too; otherwise replaying
+            # at width B against a width-B' logits tensor raises "logits tensor does not match the
+            # tensor used during trace capture". This runs at both warmup (self.decode_forward is
+            # called per width) and serving, so each width captures/replays its own sampling trace.
+            for _m in self.model:
+                _sm = getattr(_m, "sampling", None)
+                if _sm is not None and hasattr(_sm, "set_trace_bucket"):
+                    _sm.set_trace_bucket(B)
         return super().decode_forward(*args, **kwargs)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
@@ -333,4 +400,23 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # Defer to WarmupForwardMixin, which captures the paged-SDPA + GDN decode trace at pos 0.
         # Drop stale `non_greedy_decoding_on_device` from the old vLLM plugin; no-op for Qwen.
         kwargs.pop("non_greedy_decoding_on_device", None)
+        max_b = kwargs.get("max_batch_size")
+        # DECODE-BATCH BUCKETING: pre-capture one decode trace per power-of-2 bucket
+        # [1,2,4,...,max_batch] so serving replays a compiled trace at every width the runner's
+        # bucketing may request (otherwise the first decode at a fresh width pays a one-time capture
+        # on the request's critical path). The wrapper's decode_forward multiplexes trace_ids_decode
+        # by width, so each super() call captures into its own bucket. No-op unless bucketing is on.
+        if os.environ.get("TT_DECODE_BUCKETING") == "1" and isinstance(max_b, int) and max_b > 1:
+            widths, w = [], 1
+            while w < max_b:
+                widths.append(w)
+                w *= 2
+            widths.append(max_b)
+            result = None
+            for width in widths:
+                kw = dict(kwargs)
+                kw["max_batch_size"] = width
+                logger.info(f"Qwen decode warmup: bucket width={width} (enable_trace={kw.get('enable_trace')})")
+                result = super().warmup_model_decode(*args, **kw)
+            return result
         return super().warmup_model_decode(*args, **kwargs)

@@ -8,6 +8,10 @@ Reuses `recurrent_gated_delta_rule_decode_ttnn`; weights interleaved. GDN norm u
 """
 import os
 
+# --- TEMP: env-guarded per-phase decode timing (GDN_PHASE_TIMING=1). Localizes the bucketed
+# width-8 cost (conv vs recurrence vs writeback vs out). Zero overhead when off. Remove after use.
+import time as _time
+
 import torch
 
 import ttnn
@@ -21,6 +25,25 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.tt_transformers.tt.ccl import tt_all_reduce
+
+_GDN_PT = os.environ.get("GDN_PHASE_TIMING") == "1"
+_PHASE_MS = {}
+_PHASE_N = {}
+
+# Bucketed-decode fix (GDN_BUCKET_FIX=1). Measurement (test_zzz_gdn_bucket_width) showed the B<Bmax
+# bucketing branches (pad qkv, slice init_state, slice+concat writeback) are pure overhead: width-8
+# compute is ~free on tile HW, so the full B==Bmax path is FASTER than the narrowed path. This flag
+# makes B<Bmax pad the input to Bmax, run the byte-identical B==Bmax path, and slice the output to B.
+_GDN_BUCKET_FIX = os.environ.get("GDN_BUCKET_FIX") == "1"
+
+
+def _pt_reset():
+    _PHASE_MS.clear()
+    _PHASE_N.clear()
+
+
+def _pt_report():
+    return {k: (_PHASE_MS[k], _PHASE_N[k]) for k in _PHASE_MS}
 
 
 def _softplus_add(a, bias):
@@ -971,17 +994,57 @@ class TPGatedDeltaNet:
         )
 
     def forward_decode(self, x):
-        tw, B, Nk, Nv, Dk, Dv = self.tw, self.B, self.Nk, self.Nv, self.Dk, self.Dv
+        tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
+        Bmax = self.B
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode conv→recurrence→norm/gate chain L1-resident
         if self.conv_states is None:
             self.reset_state()
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
 
+        # BUCKET FIX: pad a bucketed (B<Bmax) input up to Bmax and run the full B==Bmax path (no
+        # bucketing branches), then slice the output back to B. Idle rows are don't-care (re-init on
+        # slot assignment), so the extra rows' garbage output is discarded. See _GDN_BUCKET_FIX.
+        _fix_active = _GDN_BUCKET_FIX and self._stable_state and x.shape[-2] < Bmax
+        _fix_B_out = x.shape[-2]
+        if _fix_active:
+            x = ttnn.pad(x, [(0, 0), (0, Bmax - _fix_B_out), (0, 0)], value=0.0, memory_config=_L1)
+        # Active decode width, taken from the input. Normally == Bmax. BUCKETED decode: a request
+        # feeds B<Bmax tokens and the whole step runs on state rows [0:B]; idle rows [B:Bmax] are
+        # preserved. Conv taps are per-channel (broadcast over batch), so the conv weighted-sum
+        # works at any width. The B==Bmax path is byte-identical to before.
+        B = x.shape[-2]
+
+        if _GDN_PT:
+            _last = [_time.perf_counter()]
+
+            def _mark(lbl):
+                ttnn.synchronize_device(self.mesh)
+                now = _time.perf_counter()
+                _PHASE_MS[lbl] = _PHASE_MS.get(lbl, 0.0) + (now - _last[0]) * 1000.0
+                _PHASE_N[lbl] = _PHASE_N.get(lbl, 0) + 1
+                _last[0] = now
+
+        else:
+
+            def _mark(lbl):
+                return None
+
         qkv, z, a, b = self._project_qkvzab(x, B, out_mc=_L1)
+        _mark("proj")
 
         # Conv1d shift-register + weighted sum + SiLU
         st = self.conv_states
+        if B < Bmax:
+            # Bucketed decode: active requests occupy a contiguous prefix [0:B]; idle rows [B:Bmax]
+            # hold no live request (a slot is re-initialized by prefill/write_slot when reused), so
+            # they are don't-care. Pad the width-B new input up to Bmax and run the SAME full-width
+            # shift-register as below -- the conv sum's active rows [0:B] are exact and the downstream
+            # q/k/v slices take [0:B]. This keeps the op COUNT identical to the baseline path (just a
+            # single pad), vs a per-row slice/concat that added ~4*K ops/layer and erased the width win.
+            qkv_p = ttnn.pad(qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0, memory_config=_L1)
+            ttnn.deallocate(qkv)
+            qkv = qkv_p
         for j in range(self.K - 1):
             ttnn.copy(st[j + 1], st[j])
         ttnn.copy(qkv, st[self.K - 1])
@@ -996,6 +1059,7 @@ class TPGatedDeltaNet:
         k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
         v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
         ttnn.deallocate(conv)
+        _mark("conv")
 
         # GQA expand Q/K Nk→Nv; recurrence L2-norms + scales internally
         rf = Nv // Nk
@@ -1015,6 +1079,7 @@ class TPGatedDeltaNet:
         g = ttnn.reshape(g, (B, 1, Nv))
 
         # fp32 decode step by default (QWEN35_GDN_DECODE_BF16=1 reverts)
+        init_state = self.rec_state if B == Bmax else self._slice_along(self.rec_state, 0, 0, B)
         o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
             q,
             k,
@@ -1022,16 +1087,27 @@ class TPGatedDeltaNet:
             beta,
             g,
             scale=self.scale,
-            initial_state=self.rec_state,
+            initial_state=init_state,
             device=self.mesh,
             high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
         )
+        if init_state is not self.rec_state:
+            ttnn.deallocate(init_state)
+        _mark("recur")
         if self._stable_state:
             # In-place update preserves rec_state address for decode trace replay
-            ttnn.copy(new_rec, self.rec_state)
+            if B == Bmax:
+                ttnn.copy(new_rec, self.rec_state)
+            else:
+                rest = self._slice_along(self.rec_state, 0, B, Bmax)  # preserve idle rows [B:Bmax]
+                merged = ttnn.concat([new_rec, rest], dim=0)
+                ttnn.copy(merged, self.rec_state)
+                ttnn.deallocate(merged)
+                ttnn.deallocate(rest)
             ttnn.deallocate(new_rec)
         else:
             self.rec_state = new_rec
+        _mark("writeback")
 
         out_r = ttnn.reshape(o, (B, Nv, Dv))
         out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)
@@ -1045,7 +1121,7 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
-        return tt_all_reduce(
+        out = tt_all_reduce(
             partial,
             self.mesh,
             self.tt_ccl,
@@ -1054,3 +1130,8 @@ class TPGatedDeltaNet:
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if _fix_active:
+            # Drop the padded idle rows: out is [1, 1, Bmax, dim] -> [1, 1, B_out, dim].
+            out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, _fix_B_out, out.shape[-1]))
+        _mark("out")
+        return out

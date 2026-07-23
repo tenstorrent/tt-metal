@@ -117,6 +117,7 @@ class TPAttention:
         self.tw = tw
         self.tt_ccl = tt_ccl
         self.B = args.max_batch_size
+        self._kv_shard_cfg_cache = {}  # active-width B -> KV-update height shard cfg (bucketed decode)
         self.NH = args.n_local_heads
         self.NKV = args.n_local_kv_heads
         self.HD = args.head_dim
@@ -467,8 +468,32 @@ class TPAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _kv_shard_cfg(self, B):
+        """Height shard for paged_update_cache (one user per core), sized to the ACTIVE width B.
+        Returns the precomputed max-batch config unchanged when B==self.B (byte-identical prod path);
+        builds a width-B config (B cores) for bucketed decode. Mirrors model_config.kv_update_shard_cfg."""
+        if B == self.B:
+            return self.args.kv_update_shard_cfg
+        cfg = self._kv_shard_cfg_cache.get(B)
+        if cfg is None:
+            cols = next(c for c in range(min(8, B), 0, -1) if B % c == 0)
+            cfg = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, self.HD),
+                core_grid=ttnn.CoreGrid(x=cols, y=B // cols),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self._kv_shard_cfg_cache[B] = cfg
+        return cfg
+
     def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
-        tw, B, NH, NKV, HD = self.tw, self.B, self.NH, self.NKV, self.HD
+        tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
+        # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
+        # BUCKETED decode: a request feeds B<self.B users; every shape/reshape/rope/head-split and
+        # the KV-update shard config below run at this width, and the paged SDPA reads only these B
+        # users' pages via the width-B page_table. The B==self.B path is byte-identical to before.
+        B = x.shape[-2]
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode head-prep + attn output L1-resident
         use_paged = self.use_paged and page_table is not None
         if not use_paged and self.k_caches is None:
@@ -538,8 +563,9 @@ class TPAttention:
             v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
-            k_sh = ttnn.to_memory_config(k_p, self.args.kv_update_shard_cfg)
-            v_sh = ttnn.to_memory_config(v_p, self.args.kv_update_shard_cfg)
+            _kv_cfg = self._kv_shard_cfg(B)
+            k_sh = ttnn.to_memory_config(k_p, _kv_cfg)
+            v_sh = ttnn.to_memory_config(v_p, _kv_cfg)
             ttnn.deallocate(k_p)
             ttnn.deallocate(v_p)
             # paged_update_cache takes bf16/fp32 and casts to bf8 cache; decode K/V stay bf16 (prefill fill needs bf8)
@@ -569,8 +595,9 @@ class TPAttention:
                 v_hp = ttnn.pad(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
                 ttnn.deallocate(k_h)
                 ttnn.deallocate(v_h)
-                k_sh = ttnn.to_memory_config(k_hp, self.args.kv_update_shard_cfg)
-                v_sh = ttnn.to_memory_config(v_hp, self.args.kv_update_shard_cfg)
+                _kv_cfg = self._kv_shard_cfg(B)
+                k_sh = ttnn.to_memory_config(k_hp, _kv_cfg)
+                v_sh = ttnn.to_memory_config(v_hp, _kv_cfg)
                 ttnn.deallocate(k_hp)
                 ttnn.deallocate(v_hp)
                 ttnn.experimental.paged_update_cache(self.k_caches[h], k_sh, update_idxs_tensor=cur_pos_tt)

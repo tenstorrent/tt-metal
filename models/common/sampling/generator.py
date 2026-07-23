@@ -109,7 +109,12 @@ class SamplingGenerator:
 
         self._penalties_active = False
 
-        self._trace_states: dict[_TraceKey, dict] = {}
+        # Sampling traces are namespaced by an optional "bucket" key (default None). Decode-batch
+        # bucketing multiplexes the decode-output logits tensor per batch width; a captured sampling
+        # trace is validated by tensor IDENTITY (see _validate_trace_inputs), so its trace must be
+        # namespaced to the same width — else replaying at width B against width-B' logits fails.
+        self._trace_states: dict = {}  # {bucket: {_TraceKey: slot}}
+        self._active_trace_bucket = None
         seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
         self.seed_manager = SeedManager(
             self.tt_sampling,
@@ -119,29 +124,41 @@ class SamplingGenerator:
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
 
+    def set_trace_bucket(self, bucket):
+        """Select the trace namespace for subsequent capture/replay. Callers that multiplex the
+        decode-output logits tensor per batch width (decode bucketing) set this to the width, so a
+        sampling trace captured at width B is only ever replayed against width-B logits."""
+        self._active_trace_bucket = bucket
+
+    def _bucket_trace_states(self) -> dict:
+        return self._trace_states.setdefault(self._active_trace_bucket, {})
+
     def _trace_slot(self, penalties_on: bool, log_probs_on: bool, force_argmax: bool):
         key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on, force_argmax=force_argmax)
-        slot = self._trace_states.get(key)
+        bucket_states = self._bucket_trace_states()
+        slot = bucket_states.get(key)
         if slot is None:
             slot = self._new_trace_state()
-            self._trace_states[key] = slot
+            bucket_states[key] = slot
         return key, slot
 
     def reset_trace(self):
         """
-        Drop any cached trace metadata for both penalties/no-penalties and log-probs/no-log-probs paths.
+        Drop any cached trace metadata for both penalties/no-penalties and log-probs/no-log-probs
+        paths, across every bucket namespace.
         """
-        for key, slot in self._trace_states.items():
-            if slot["id"] is None:
-                continue
-            logger.debug(
-                f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
-            )
-            try:
-                ttnn.release_trace(self.mesh_device, slot["id"])
-            except Exception as e:
-                logger.warning(f"Failed to release trace {slot['id']} : {e}")
-                continue
+        for bucket, bucket_states in self._trace_states.items():
+            for key, slot in bucket_states.items():
+                if slot["id"] is None:
+                    continue
+                logger.debug(
+                    f"Resetting sampling trace (bucket={bucket}, penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
+                )
+                try:
+                    ttnn.release_trace(self.mesh_device, slot["id"])
+                except Exception as e:
+                    logger.warning(f"Failed to release trace {slot['id']} : {e}")
+                    continue
         self._trace_states.clear()
 
     def reset_prompt_tokens(self, prompt_tokens):
@@ -359,7 +376,7 @@ class SamplingGenerator:
         return slot["output"]
 
     def _execute_trace(self, key: _TraceKey) -> ttnn.Tensor:
-        slot = self._trace_states.get(key)
+        slot = self._bucket_trace_states().get(key)
         if slot is None:
             raise RuntimeError("Trace has not been captured yet.")
         if slot["id"] is None or slot["output"] is None:
