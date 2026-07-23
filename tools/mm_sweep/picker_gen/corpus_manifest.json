@@ -1,0 +1,4069 @@
+{
+  "sec_per_candidate": 9.0,
+  "full_target_corpus": {
+    "n_shapes": 183,
+    "n_infeasible_dropped": 10,
+    "total_feasible_configs": 226136,
+    "est_full_pass_hours": 565.3,
+    "shapes": [
+      {
+        "M": 32,
+        "K": 256,
+        "N": 6144,
+        "Mt": 1,
+        "Kt": 8,
+        "Nt": 192,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 1301,
+        "prod_pick": [
+          1,
+          3,
+          1,
+          1,
+          8,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 512,
+        "N": 4096,
+        "Mt": 1,
+        "Kt": 16,
+        "Nt": 128,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 1244,
+        "prod_pick": [
+          2,
+          4,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 512,
+        "N": 6144,
+        "Mt": 1,
+        "Kt": 16,
+        "Nt": 192,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 1746,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 512,
+        "N": 8192,
+        "Mt": 1,
+        "Kt": 16,
+        "Nt": 256,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 2254,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 768,
+        "N": 4096,
+        "Mt": 1,
+        "Kt": 24,
+        "Nt": 128,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 1244,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 768,
+        "N": 6144,
+        "Mt": 1,
+        "Kt": 24,
+        "Nt": 192,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 1746,
+        "prod_pick": [
+          3,
+          3,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 768,
+        "N": 8192,
+        "Mt": 1,
+        "Kt": 24,
+        "Nt": 256,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 2254,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 1024,
+        "N": 4096,
+        "Mt": 1,
+        "Kt": 32,
+        "Nt": 128,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 1244,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 1024,
+        "N": 6144,
+        "Mt": 1,
+        "Kt": 32,
+        "Nt": 192,
+        "tags": [
+          "anchor-wideN",
+          "mt-sweep-wideN"
+        ],
+        "n_feasible": 1746,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 1024,
+        "N": 8192,
+        "Mt": 1,
+        "Kt": 32,
+        "Nt": 256,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 2254,
+        "prod_pick": [
+          2,
+          4,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 1536,
+        "N": 1536,
+        "Mt": 1,
+        "Kt": 48,
+        "Nt": 48,
+        "tags": [
+          "anchor-balanced"
+        ],
+        "n_feasible": 472,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 2048,
+        "N": 512,
+        "Mt": 1,
+        "Kt": 64,
+        "Nt": 16,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 180,
+        "prod_pick": [
+          4,
+          2,
+          1,
+          2,
+          1,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 2048,
+        "N": 1024,
+        "Mt": 1,
+        "Kt": 64,
+        "Nt": 32,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 324,
+        "prod_pick": [
+          2,
+          4,
+          1,
+          4,
+          1,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 2048,
+        "N": 1536,
+        "Mt": 1,
+        "Kt": 64,
+        "Nt": 48,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 472,
+        "prod_pick": [
+          2,
+          2,
+          1,
+          4,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 2048,
+        "N": 2048,
+        "Mt": 1,
+        "Kt": 64,
+        "Nt": 64,
+        "tags": [
+          "anchor-balanced",
+          "mt-sweep-balanced",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 628,
+        "prod_pick": [
+          2,
+          2,
+          1,
+          4,
+          4,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 2304,
+        "N": 6144,
+        "Mt": 1,
+        "Kt": 72,
+        "Nt": 192,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 1744,
+        "prod_pick": [
+          3,
+          2,
+          1,
+          1,
+          6,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 3072,
+        "N": 3072,
+        "Mt": 1,
+        "Kt": 96,
+        "Nt": 96,
+        "tags": [
+          "anchor-balanced"
+        ],
+        "n_feasible": 924,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 4096,
+        "N": 512,
+        "Mt": 1,
+        "Kt": 128,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 180,
+        "prod_pick": [
+          8,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 4096,
+        "N": 768,
+        "Mt": 1,
+        "Kt": 128,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 256,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 4096,
+        "N": 1024,
+        "Mt": 1,
+        "Kt": 128,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 324,
+        "prod_pick": [
+          8,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 4608,
+        "N": 4608,
+        "Mt": 1,
+        "Kt": 144,
+        "Nt": 144,
+        "tags": [
+          "anchor-balanced"
+        ],
+        "n_feasible": 1370,
+        "prod_pick": [
+          9,
+          1,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 6080,
+        "N": 4640,
+        "Mt": 1,
+        "Kt": 190,
+        "Nt": 145,
+        "tags": [
+          "real-60corpus"
+        ],
+        "n_feasible": 1457,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 6100,
+        "N": 4608,
+        "Mt": 1,
+        "Kt": 190,
+        "Nt": 144,
+        "tags": [
+          "real-60corpus"
+        ],
+        "n_feasible": 1370,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 6144,
+        "N": 512,
+        "Mt": 1,
+        "Kt": 192,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 180,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 6144,
+        "N": 768,
+        "Mt": 1,
+        "Kt": 192,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 256,
+        "prod_pick": [
+          6,
+          1,
+          1,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 6144,
+        "N": 1024,
+        "Mt": 1,
+        "Kt": 192,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 324,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 1,
+        "Kt": 192,
+        "Nt": 48,
+        "tags": [
+          "mt-sweep-narrowN",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 472,
+        "prod_pick": [
+          6,
+          1,
+          1,
+          4,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 6144,
+        "N": 2304,
+        "Mt": 1,
+        "Kt": 192,
+        "Nt": 72,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 720,
+        "prod_pick": [
+          3,
+          1,
+          1,
+          4,
+          5,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 6144,
+        "N": 3072,
+        "Mt": 1,
+        "Kt": 192,
+        "Nt": 96,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 924,
+        "prod_pick": [
+          3,
+          1,
+          1,
+          4,
+          6,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 6144,
+        "N": 4600,
+        "Mt": 1,
+        "Kt": 192,
+        "Nt": 143,
+        "tags": [
+          "real-60corpus"
+        ],
+        "n_feasible": 1370,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 1,
+        "Kt": 192,
+        "Nt": 144,
+        "tags": [
+          "real-60corpus"
+        ],
+        "n_feasible": 1370,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 6144,
+        "N": 6144,
+        "Mt": 1,
+        "Kt": 192,
+        "Nt": 192,
+        "tags": [
+          "anchor-balanced",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 1740,
+        "prod_pick": [
+          6,
+          1,
+          1,
+          4,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 6144,
+        "N": 9216,
+        "Mt": 1,
+        "Kt": 192,
+        "Nt": 288,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 2418,
+        "prod_pick": [
+          3,
+          1,
+          1,
+          4,
+          6,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 8192,
+        "N": 512,
+        "Mt": 1,
+        "Kt": 256,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 180,
+        "prod_pick": [
+          11,
+          1,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 8192,
+        "N": 768,
+        "Mt": 1,
+        "Kt": 256,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 256,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 8192,
+        "N": 1024,
+        "Mt": 1,
+        "Kt": 256,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 324,
+        "prod_pick": [
+          11,
+          1,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 15360,
+        "N": 512,
+        "Mt": 1,
+        "Kt": 480,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 180,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 15360,
+        "N": 768,
+        "Mt": 1,
+        "Kt": 480,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 256,
+        "prod_pick": [
+          6,
+          1,
+          1,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 15360,
+        "N": 1024,
+        "Mt": 1,
+        "Kt": 480,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 324,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 15360,
+        "N": 1536,
+        "Mt": 1,
+        "Kt": 480,
+        "Nt": 48,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 471,
+        "prod_pick": [
+          6,
+          1,
+          1,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 15360,
+        "N": 6144,
+        "Mt": 1,
+        "Kt": 480,
+        "Nt": 192,
+        "tags": [
+          "boundary-L1"
+        ],
+        "n_feasible": 1686,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 48,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 1,
+        "Kt": 192,
+        "Nt": 144,
+        "tags": [
+          "real-60corpus"
+        ],
+        "n_feasible": 1370,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 256,
+        "N": 1536,
+        "Mt": 2,
+        "Kt": 8,
+        "Nt": 48,
+        "tags": [
+          "boundary-W"
+        ],
+        "n_feasible": 568,
+        "prod_pick": [
+          1,
+          6,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 512,
+        "N": 1536,
+        "Mt": 2,
+        "Kt": 16,
+        "Nt": 48,
+        "tags": [
+          "boundary-W"
+        ],
+        "n_feasible": 688,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 512,
+        "N": 4096,
+        "Mt": 2,
+        "Kt": 16,
+        "Nt": 128,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 1778,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 512,
+        "N": 6144,
+        "Mt": 2,
+        "Kt": 16,
+        "Nt": 192,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 2485,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 512,
+        "N": 8192,
+        "Mt": 2,
+        "Kt": 16,
+        "Nt": 256,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 3122,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 768,
+        "N": 1536,
+        "Mt": 2,
+        "Kt": 24,
+        "Nt": 48,
+        "tags": [
+          "boundary-W"
+        ],
+        "n_feasible": 688,
+        "prod_pick": [
+          3,
+          3,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 768,
+        "N": 4096,
+        "Mt": 2,
+        "Kt": 24,
+        "Nt": 128,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 1778,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 768,
+        "N": 6144,
+        "Mt": 2,
+        "Kt": 24,
+        "Nt": 192,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 2485,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 768,
+        "N": 8192,
+        "Mt": 2,
+        "Kt": 24,
+        "Nt": 256,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 3122,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 1024,
+        "N": 1536,
+        "Mt": 2,
+        "Kt": 32,
+        "Nt": 48,
+        "tags": [
+          "boundary-W"
+        ],
+        "n_feasible": 688,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 1024,
+        "N": 4096,
+        "Mt": 2,
+        "Kt": 32,
+        "Nt": 128,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 1778,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 1024,
+        "N": 6144,
+        "Mt": 2,
+        "Kt": 32,
+        "Nt": 192,
+        "tags": [
+          "anchor-wideN",
+          "mt-sweep-wideN"
+        ],
+        "n_feasible": 2485,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 1024,
+        "N": 8192,
+        "Mt": 2,
+        "Kt": 32,
+        "Nt": 256,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 3122,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 1280,
+        "N": 1536,
+        "Mt": 2,
+        "Kt": 40,
+        "Nt": 48,
+        "tags": [
+          "boundary-W"
+        ],
+        "n_feasible": 688,
+        "prod_pick": [
+          5,
+          2,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 1536,
+        "N": 1536,
+        "Mt": 2,
+        "Kt": 48,
+        "Nt": 48,
+        "tags": [
+          "anchor-balanced",
+          "boundary-W"
+        ],
+        "n_feasible": 688,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 2048,
+        "N": 512,
+        "Mt": 2,
+        "Kt": 64,
+        "Nt": 16,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 260,
+        "prod_pick": [
+          4,
+          2,
+          1,
+          2,
+          1,
+          "table"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 2048,
+        "N": 768,
+        "Mt": 2,
+        "Kt": 64,
+        "Nt": 24,
+        "tags": [
+          "boundary-Sm-div"
+        ],
+        "n_feasible": 372,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 2048,
+        "N": 1024,
+        "Mt": 2,
+        "Kt": 64,
+        "Nt": 32,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 472,
+        "prod_pick": [
+          4,
+          2,
+          1,
+          2,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 2048,
+        "N": 1536,
+        "Mt": 2,
+        "Kt": 64,
+        "Nt": 48,
+        "tags": [
+          "boundary-W",
+          "real-60corpus"
+        ],
+        "n_feasible": 688,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 2048,
+        "N": 2048,
+        "Mt": 2,
+        "Kt": 64,
+        "Nt": 64,
+        "tags": [
+          "anchor-balanced",
+          "mt-sweep-balanced",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 916,
+        "prod_pick": [
+          2,
+          3,
+          1,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 2304,
+        "N": 6144,
+        "Mt": 2,
+        "Kt": 72,
+        "Nt": 192,
+        "tags": [
+          "real-60corpus"
+        ],
+        "n_feasible": 2475,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 3072,
+        "N": 1536,
+        "Mt": 2,
+        "Kt": 96,
+        "Nt": 48,
+        "tags": [
+          "boundary-W"
+        ],
+        "n_feasible": 688,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 3072,
+        "N": 3072,
+        "Mt": 2,
+        "Kt": 96,
+        "Nt": 96,
+        "tags": [
+          "anchor-balanced"
+        ],
+        "n_feasible": 1347,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 4096,
+        "N": 512,
+        "Mt": 2,
+        "Kt": 128,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 260,
+        "prod_pick": [
+          8,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 4096,
+        "N": 768,
+        "Mt": 2,
+        "Kt": 128,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 372,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 4096,
+        "N": 1024,
+        "Mt": 2,
+        "Kt": 128,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 472,
+        "prod_pick": [
+          8,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 4096,
+        "N": 1536,
+        "Mt": 2,
+        "Kt": 128,
+        "Nt": 48,
+        "tags": [
+          "boundary-W"
+        ],
+        "n_feasible": 688,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 4608,
+        "N": 4608,
+        "Mt": 2,
+        "Kt": 144,
+        "Nt": 144,
+        "tags": [
+          "anchor-balanced"
+        ],
+        "n_feasible": 1937,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 4608,
+        "N": 6144,
+        "Mt": 2,
+        "Kt": 144,
+        "Nt": 192,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 2447,
+        "prod_pick": [
+          3,
+          2,
+          1,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 5152,
+        "N": 2080,
+        "Mt": 2,
+        "Kt": 161,
+        "Nt": 65,
+        "tags": [
+          "tail-nondiv"
+        ],
+        "n_feasible": 1047,
+        "prod_pick": [
+          11,
+          1,
+          1,
+          2,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6080,
+        "N": 4640,
+        "Mt": 2,
+        "Kt": 190,
+        "Nt": 145,
+        "tags": [
+          "real-60corpus",
+          "tail-nondiv"
+        ],
+        "n_feasible": 2061,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6144,
+        "N": 256,
+        "Mt": 2,
+        "Kt": 192,
+        "Nt": 8,
+        "tags": [
+          "boundary-Nt%8"
+        ],
+        "n_feasible": 184,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6144,
+        "N": 480,
+        "Mt": 2,
+        "Kt": 192,
+        "Nt": 15,
+        "tags": [
+          "boundary-Nt%8"
+        ],
+        "n_feasible": 260,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6144,
+        "N": 512,
+        "Mt": 2,
+        "Kt": 192,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN",
+          "boundary-Nt%8"
+        ],
+        "n_feasible": 260,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6144,
+        "N": 768,
+        "Mt": 2,
+        "Kt": 192,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN",
+          "boundary-Nt%8",
+          "real-60corpus"
+        ],
+        "n_feasible": 372,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6144,
+        "N": 992,
+        "Mt": 2,
+        "Kt": 192,
+        "Nt": 31,
+        "tags": [
+          "boundary-Nt%8"
+        ],
+        "n_feasible": 472,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6144,
+        "N": 1024,
+        "Mt": 2,
+        "Kt": 192,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN",
+          "boundary-Nt%8"
+        ],
+        "n_feasible": 472,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 2,
+        "Kt": 192,
+        "Nt": 48,
+        "tags": [
+          "boundary-W",
+          "mt-sweep-narrowN",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 688,
+        "prod_pick": [
+          3,
+          1,
+          1,
+          8,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6144,
+        "N": 2304,
+        "Mt": 2,
+        "Kt": 192,
+        "Nt": 72,
+        "tags": [
+          "real-60corpus"
+        ],
+        "n_feasible": 1047,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 2,
+        "Kt": 192,
+        "Nt": 144,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 1935,
+        "prod_pick": [
+          6,
+          1,
+          1,
+          4,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6144,
+        "N": 6144,
+        "Mt": 2,
+        "Kt": 192,
+        "Nt": 192,
+        "tags": [
+          "anchor-balanced",
+          "real-60corpus"
+        ],
+        "n_feasible": 2440,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6144,
+        "N": 9216,
+        "Mt": 2,
+        "Kt": 192,
+        "Nt": 288,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 3231,
+        "prod_pick": [
+          6,
+          1,
+          1,
+          4,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 8192,
+        "N": 512,
+        "Mt": 2,
+        "Kt": 256,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 260,
+        "prod_pick": [
+          11,
+          1,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 8192,
+        "N": 768,
+        "Mt": 2,
+        "Kt": 256,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 372,
+        "prod_pick": [
+          11,
+          1,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 8192,
+        "N": 1024,
+        "Mt": 2,
+        "Kt": 256,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 472,
+        "prod_pick": [
+          11,
+          1,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 8192,
+        "N": 1536,
+        "Mt": 2,
+        "Kt": 256,
+        "Nt": 48,
+        "tags": [
+          "boundary-W"
+        ],
+        "n_feasible": 687,
+        "prod_pick": [
+          11,
+          1,
+          1,
+          1,
+          3,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 15360,
+        "N": 512,
+        "Mt": 2,
+        "Kt": 480,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 224,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 15360,
+        "N": 768,
+        "Mt": 2,
+        "Kt": 480,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 328,
+        "prod_pick": [
+          10,
+          1,
+          1,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 15360,
+        "N": 1024,
+        "Mt": 2,
+        "Kt": 480,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 420,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 15360,
+        "N": 1536,
+        "Mt": 2,
+        "Kt": 480,
+        "Nt": 48,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 613,
+        "prod_pick": [
+          6,
+          1,
+          1,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 96,
+        "K": 1024,
+        "N": 6144,
+        "Mt": 3,
+        "Kt": 32,
+        "Nt": 192,
+        "tags": [
+          "mt-sweep-wideN"
+        ],
+        "n_feasible": 2855,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 96,
+        "K": 2048,
+        "N": 768,
+        "Mt": 3,
+        "Kt": 64,
+        "Nt": 24,
+        "tags": [
+          "boundary-Sm-div"
+        ],
+        "n_feasible": 444,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 96,
+        "K": 2048,
+        "N": 2048,
+        "Mt": 3,
+        "Kt": 64,
+        "Nt": 64,
+        "tags": [
+          "mt-sweep-balanced"
+        ],
+        "n_feasible": 1096,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 96,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 3,
+        "Kt": 192,
+        "Nt": 48,
+        "tags": [
+          "mt-sweep-narrowN"
+        ],
+        "n_feasible": 820,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 512,
+        "N": 4096,
+        "Mt": 4,
+        "Kt": 16,
+        "Nt": 128,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 2269,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 512,
+        "N": 6144,
+        "Mt": 4,
+        "Kt": 16,
+        "Nt": 192,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 3044,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 512,
+        "N": 8192,
+        "Mt": 4,
+        "Kt": 16,
+        "Nt": 256,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 3617,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 768,
+        "N": 4096,
+        "Mt": 4,
+        "Kt": 24,
+        "Nt": 128,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 2269,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 768,
+        "N": 6144,
+        "Mt": 4,
+        "Kt": 24,
+        "Nt": 192,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 3043,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 768,
+        "N": 8192,
+        "Mt": 4,
+        "Kt": 24,
+        "Nt": 256,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 3612,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 1024,
+        "N": 4096,
+        "Mt": 4,
+        "Kt": 32,
+        "Nt": 128,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 2269,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 1024,
+        "N": 6144,
+        "Mt": 4,
+        "Kt": 32,
+        "Nt": 192,
+        "tags": [
+          "anchor-wideN",
+          "mt-sweep-wideN"
+        ],
+        "n_feasible": 3042,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 1024,
+        "N": 8192,
+        "Mt": 4,
+        "Kt": 32,
+        "Nt": 256,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 3609,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 1536,
+        "N": 1536,
+        "Mt": 4,
+        "Kt": 48,
+        "Nt": 48,
+        "tags": [
+          "anchor-balanced"
+        ],
+        "n_feasible": 916,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 2048,
+        "N": 512,
+        "Mt": 4,
+        "Kt": 64,
+        "Nt": 16,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 340,
+        "prod_pick": [
+          4,
+          1,
+          2,
+          2,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 2048,
+        "N": 768,
+        "Mt": 4,
+        "Kt": 64,
+        "Nt": 24,
+        "tags": [
+          "boundary-Sm-div"
+        ],
+        "n_feasible": 492,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 2048,
+        "N": 1024,
+        "Mt": 4,
+        "Kt": 64,
+        "Nt": 32,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 628,
+        "prod_pick": [
+          4,
+          1,
+          2,
+          2,
+          4,
+          "table"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 2048,
+        "N": 1536,
+        "Mt": 4,
+        "Kt": 64,
+        "Nt": 48,
+        "tags": [
+          "real-60corpus"
+        ],
+        "n_feasible": 916,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 2048,
+        "N": 2048,
+        "Mt": 4,
+        "Kt": 64,
+        "Nt": 64,
+        "tags": [
+          "anchor-balanced",
+          "mt-sweep-balanced",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 1220,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 2304,
+        "N": 6144,
+        "Mt": 4,
+        "Kt": 72,
+        "Nt": 192,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 2964,
+        "prod_pick": [
+          3,
+          2,
+          1,
+          1,
+          6,
+          "table"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 3072,
+        "N": 3072,
+        "Mt": 4,
+        "Kt": 96,
+        "Nt": 96,
+        "tags": [
+          "anchor-balanced"
+        ],
+        "n_feasible": 1737,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 4096,
+        "N": 512,
+        "Mt": 4,
+        "Kt": 128,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 340,
+        "prod_pick": [
+          8,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 4096,
+        "N": 768,
+        "Mt": 4,
+        "Kt": 128,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 492,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 4096,
+        "N": 1024,
+        "Mt": 4,
+        "Kt": 128,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 628,
+        "prod_pick": [
+          8,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 4608,
+        "N": 4608,
+        "Mt": 4,
+        "Kt": 144,
+        "Nt": 144,
+        "tags": [
+          "anchor-balanced"
+        ],
+        "n_feasible": 2295,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          1,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 5152,
+        "N": 2080,
+        "Mt": 4,
+        "Kt": 161,
+        "Nt": 65,
+        "tags": [
+          "tail-nondiv"
+        ],
+        "n_feasible": 1278,
+        "prod_pick": [
+          11,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 6080,
+        "N": 4640,
+        "Mt": 4,
+        "Kt": 190,
+        "Nt": 145,
+        "tags": [
+          "real-60corpus",
+          "tail-nondiv"
+        ],
+        "n_feasible": 2303,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 6144,
+        "N": 512,
+        "Mt": 4,
+        "Kt": 192,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 304,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 6144,
+        "N": 768,
+        "Mt": 4,
+        "Kt": 192,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 448,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "table"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 6144,
+        "N": 1024,
+        "Mt": 4,
+        "Kt": 192,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 575,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 4,
+        "Kt": 192,
+        "Nt": 48,
+        "tags": [
+          "mt-sweep-narrowN",
+          "real-60corpus"
+        ],
+        "n_feasible": 841,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 6144,
+        "N": 2304,
+        "Mt": 4,
+        "Kt": 192,
+        "Nt": 72,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 1262,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "table"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 4,
+        "Kt": 192,
+        "Nt": 144,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 2187,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "table"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 6144,
+        "N": 6144,
+        "Mt": 4,
+        "Kt": 192,
+        "Nt": 192,
+        "tags": [
+          "anchor-balanced",
+          "real-60corpus"
+        ],
+        "n_feasible": 2595,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 8192,
+        "N": 512,
+        "Mt": 4,
+        "Kt": 256,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 304,
+        "prod_pick": [
+          11,
+          1,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 8192,
+        "N": 768,
+        "Mt": 4,
+        "Kt": 256,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 448,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 8192,
+        "N": 1024,
+        "Mt": 4,
+        "Kt": 256,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 574,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 15360,
+        "N": 512,
+        "Mt": 4,
+        "Kt": 480,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 223,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 15360,
+        "N": 768,
+        "Mt": 4,
+        "Kt": 480,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN",
+          "boundary-L1",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 338,
+        "prod_pick": [
+          6,
+          1,
+          1,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 15360,
+        "N": 1024,
+        "Mt": 4,
+        "Kt": 480,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 433,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 15360,
+        "N": 1536,
+        "Mt": 4,
+        "Kt": 480,
+        "Nt": 48,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 618,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          1,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 160,
+        "K": 1024,
+        "N": 6144,
+        "Mt": 5,
+        "Kt": 32,
+        "Nt": 192,
+        "tags": [
+          "mt-sweep-wideN"
+        ],
+        "n_feasible": 3032,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 160,
+        "K": 2048,
+        "N": 768,
+        "Mt": 5,
+        "Kt": 64,
+        "Nt": 24,
+        "tags": [
+          "boundary-Sm-div"
+        ],
+        "n_feasible": 524,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 160,
+        "K": 2048,
+        "N": 2048,
+        "Mt": 5,
+        "Kt": 64,
+        "Nt": 64,
+        "tags": [
+          "mt-sweep-balanced"
+        ],
+        "n_feasible": 1275,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 160,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 5,
+        "Kt": 192,
+        "Nt": 48,
+        "tags": [
+          "mt-sweep-narrowN"
+        ],
+        "n_feasible": 889,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 192,
+        "K": 1024,
+        "N": 6144,
+        "Mt": 6,
+        "Kt": 32,
+        "Nt": 192,
+        "tags": [
+          "mt-sweep-wideN"
+        ],
+        "n_feasible": 3087,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 192,
+        "K": 2048,
+        "N": 768,
+        "Mt": 6,
+        "Kt": 64,
+        "Nt": 24,
+        "tags": [
+          "boundary-Sm-div"
+        ],
+        "n_feasible": 556,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 192,
+        "K": 2048,
+        "N": 2048,
+        "Mt": 6,
+        "Kt": 64,
+        "Nt": 64,
+        "tags": [
+          "mt-sweep-balanced"
+        ],
+        "n_feasible": 1330,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 192,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 6,
+        "Kt": 192,
+        "Nt": 48,
+        "tags": [
+          "mt-sweep-narrowN"
+        ],
+        "n_feasible": 911,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 224,
+        "K": 1024,
+        "N": 6144,
+        "Mt": 7,
+        "Kt": 32,
+        "Nt": 192,
+        "tags": [
+          "mt-sweep-wideN"
+        ],
+        "n_feasible": 2948,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 224,
+        "K": 2048,
+        "N": 768,
+        "Mt": 7,
+        "Kt": 64,
+        "Nt": 24,
+        "tags": [
+          "boundary-Sm-div"
+        ],
+        "n_feasible": 568,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 224,
+        "K": 2048,
+        "N": 2048,
+        "Mt": 7,
+        "Kt": 64,
+        "Nt": 64,
+        "tags": [
+          "mt-sweep-balanced"
+        ],
+        "n_feasible": 1340,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 224,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 7,
+        "Kt": 192,
+        "Nt": 48,
+        "tags": [
+          "mt-sweep-narrowN"
+        ],
+        "n_feasible": 818,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 512,
+        "N": 4096,
+        "Mt": 8,
+        "Kt": 16,
+        "Nt": 128,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 2291,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 512,
+        "N": 6144,
+        "Mt": 8,
+        "Kt": 16,
+        "Nt": 192,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 2927,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 512,
+        "N": 8192,
+        "Mt": 8,
+        "Kt": 16,
+        "Nt": 256,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 3389,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 768,
+        "N": 4096,
+        "Mt": 8,
+        "Kt": 24,
+        "Nt": 128,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 2285,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 768,
+        "N": 6144,
+        "Mt": 8,
+        "Kt": 24,
+        "Nt": 192,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 2918,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 768,
+        "N": 8192,
+        "Mt": 8,
+        "Kt": 24,
+        "Nt": 256,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 3370,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 1024,
+        "N": 4096,
+        "Mt": 8,
+        "Kt": 32,
+        "Nt": 128,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 2282,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 1024,
+        "N": 6144,
+        "Mt": 8,
+        "Kt": 32,
+        "Nt": 192,
+        "tags": [
+          "anchor-wideN",
+          "mt-sweep-wideN"
+        ],
+        "n_feasible": 2913,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 1024,
+        "N": 8192,
+        "Mt": 8,
+        "Kt": 32,
+        "Nt": 256,
+        "tags": [
+          "anchor-wideN"
+        ],
+        "n_feasible": 3360,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 1536,
+        "N": 1536,
+        "Mt": 8,
+        "Kt": 48,
+        "Nt": 48,
+        "tags": [
+          "anchor-balanced"
+        ],
+        "n_feasible": 1026,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 2048,
+        "N": 512,
+        "Mt": 8,
+        "Kt": 64,
+        "Nt": 16,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 396,
+        "prod_pick": [
+          4,
+          1,
+          3,
+          2,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 2048,
+        "N": 768,
+        "Mt": 8,
+        "Kt": 64,
+        "Nt": 24,
+        "tags": [
+          "boundary-Sm-div"
+        ],
+        "n_feasible": 568,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 2048,
+        "N": 1024,
+        "Mt": 8,
+        "Kt": 64,
+        "Nt": 32,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 715,
+        "prod_pick": [
+          4,
+          1,
+          2,
+          2,
+          4,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 2048,
+        "N": 1536,
+        "Mt": 8,
+        "Kt": 64,
+        "Nt": 48,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 1024,
+        "prod_pick": [
+          4,
+          1,
+          3,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 2048,
+        "N": 2048,
+        "Mt": 8,
+        "Kt": 64,
+        "Nt": 64,
+        "tags": [
+          "anchor-balanced",
+          "mt-sweep-balanced",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 1331,
+        "prod_pick": [
+          4,
+          1,
+          3,
+          2,
+          4,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 2304,
+        "N": 6144,
+        "Mt": 8,
+        "Kt": 72,
+        "Nt": 192,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 2613,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 3072,
+        "N": 3072,
+        "Mt": 8,
+        "Kt": 96,
+        "Nt": 96,
+        "tags": [
+          "anchor-balanced"
+        ],
+        "n_feasible": 1681,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 4096,
+        "N": 512,
+        "Mt": 8,
+        "Kt": 128,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 360,
+        "prod_pick": [
+          4,
+          1,
+          3,
+          2,
+          1,
+          "fallback-msplit"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 4096,
+        "N": 768,
+        "Mt": 8,
+        "Kt": 128,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 524,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 4096,
+        "N": 1024,
+        "Mt": 8,
+        "Kt": 128,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 661,
+        "prod_pick": [
+          8,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 4608,
+        "N": 4608,
+        "Mt": 8,
+        "Kt": 144,
+        "Nt": 144,
+        "tags": [
+          "anchor-balanced"
+        ],
+        "n_feasible": 1879,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 6080,
+        "N": 4640,
+        "Mt": 8,
+        "Kt": 190,
+        "Nt": 145,
+        "tags": [
+          "real-60corpus"
+        ],
+        "n_feasible": 1743,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 6144,
+        "N": 512,
+        "Mt": 8,
+        "Kt": 192,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 304,
+        "prod_pick": [
+          6,
+          1,
+          2,
+          2,
+          1,
+          "fallback-msplit"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 6144,
+        "N": 768,
+        "Mt": 8,
+        "Kt": 192,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN",
+          "real-60corpus"
+        ],
+        "n_feasible": 453,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 6144,
+        "N": 1024,
+        "Mt": 8,
+        "Kt": 192,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 572,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 8,
+        "Kt": 192,
+        "Nt": 48,
+        "tags": [
+          "mt-sweep-narrowN",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 815,
+        "prod_pick": [
+          6,
+          1,
+          2,
+          4,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 6144,
+        "N": 2304,
+        "Mt": 8,
+        "Kt": 192,
+        "Nt": 72,
+        "tags": [
+          "real-60corpus"
+        ],
+        "n_feasible": 1149,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 8,
+        "Kt": 192,
+        "Nt": 144,
+        "tags": [
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 1690,
+        "prod_pick": [
+          6,
+          1,
+          2,
+          4,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 6144,
+        "N": 6144,
+        "Mt": 8,
+        "Kt": 192,
+        "Nt": 192,
+        "tags": [
+          "anchor-balanced",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 1886,
+        "prod_pick": [
+          6,
+          1,
+          2,
+          4,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 8192,
+        "N": 512,
+        "Mt": 8,
+        "Kt": 256,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 264,
+        "prod_pick": [
+          6,
+          1,
+          2,
+          2,
+          1,
+          "fallback-msplit"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 8192,
+        "N": 768,
+        "Mt": 8,
+        "Kt": 256,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 398,
+        "prod_pick": [
+          11,
+          1,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 8192,
+        "N": 1024,
+        "Mt": 8,
+        "Kt": 256,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 500,
+        "prod_pick": [
+          11,
+          1,
+          1,
+          1,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 15360,
+        "N": 512,
+        "Mt": 8,
+        "Kt": 480,
+        "Nt": 16,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 144,
+        "prod_pick": [
+          6,
+          1,
+          2,
+          2,
+          1,
+          "fallback-msplit"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 15360,
+        "N": 768,
+        "Mt": 8,
+        "Kt": 480,
+        "Nt": 24,
+        "tags": [
+          "anchor-narrowN",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 204,
+        "prod_pick": [
+          6,
+          1,
+          2,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 15360,
+        "N": 1024,
+        "Mt": 8,
+        "Kt": 480,
+        "Nt": 32,
+        "tags": [
+          "anchor-narrowN"
+        ],
+        "n_feasible": 250,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 15360,
+        "N": 1536,
+        "Mt": 8,
+        "Kt": 480,
+        "Nt": 48,
+        "tags": [
+          "boundary-L1",
+          "real-60corpus",
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 331,
+        "prod_pick": [
+          6,
+          1,
+          2,
+          2,
+          6,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 15360,
+        "N": 6144,
+        "Mt": 8,
+        "Kt": 480,
+        "Nt": 192,
+        "tags": [
+          "boundary-L1"
+        ],
+        "n_feasible": 517,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 512,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 16,
+        "Kt": 192,
+        "Nt": 48,
+        "tags": [
+          "real-fluxltx-table"
+        ],
+        "n_feasible": 480,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "table"
+        ]
+      }
+    ]
+  },
+  "swept": {
+    "nsb_mode": "lattice",
+    "n_shapes": 16,
+    "total_lattice_configs": 12542,
+    "est_initial_pass_hours": 31.4,
+    "est_with_reruns_hours": 37.6,
+    "split_counts": {
+      "train": 8,
+      "val": 4,
+      "holdout": 4
+    },
+    "shapes": [
+      {
+        "M": 32,
+        "K": 1024,
+        "N": 6144,
+        "Mt": 1,
+        "Kt": 32,
+        "Nt": 192,
+        "split": "val",
+        "n_feasible_full": 1746,
+        "n_feasible_lattice": 1023,
+        "prod_pick": [
+          2,
+          6,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 32,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 1,
+        "Kt": 192,
+        "Nt": 48,
+        "split": "train",
+        "n_feasible_full": 472,
+        "n_feasible_lattice": 472,
+        "prod_pick": [
+          6,
+          1,
+          1,
+          4,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 2048,
+        "N": 2048,
+        "Mt": 2,
+        "Kt": 64,
+        "Nt": 64,
+        "split": "train",
+        "n_feasible_full": 916,
+        "n_feasible_lattice": 916,
+        "prod_pick": [
+          2,
+          3,
+          1,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6080,
+        "N": 4640,
+        "Mt": 2,
+        "Kt": 190,
+        "Nt": 145,
+        "split": "holdout",
+        "n_feasible_full": 2061,
+        "n_feasible_lattice": 1354,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 64,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 2,
+        "Kt": 192,
+        "Nt": 48,
+        "split": "train",
+        "n_feasible_full": 688,
+        "n_feasible_lattice": 688,
+        "prod_pick": [
+          3,
+          1,
+          1,
+          8,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 96,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 3,
+        "Kt": 192,
+        "Nt": 48,
+        "split": "val",
+        "n_feasible_full": 820,
+        "n_feasible_lattice": 820,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          2,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 2048,
+        "N": 2048,
+        "Mt": 4,
+        "Kt": 64,
+        "Nt": 64,
+        "split": "val",
+        "n_feasible_full": 1220,
+        "n_feasible_lattice": 1220,
+        "prod_pick": [
+          4,
+          3,
+          1,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 128,
+        "K": 15360,
+        "N": 768,
+        "Mt": 4,
+        "Kt": 480,
+        "Nt": 24,
+        "split": "val",
+        "n_feasible_full": 338,
+        "n_feasible_lattice": 338,
+        "prod_pick": [
+          6,
+          1,
+          1,
+          2,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 160,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 5,
+        "Kt": 192,
+        "Nt": 48,
+        "split": "holdout",
+        "n_feasible_full": 889,
+        "n_feasible_lattice": 889,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 192,
+        "K": 6144,
+        "N": 1536,
+        "Mt": 6,
+        "Kt": 192,
+        "Nt": 48,
+        "split": "train",
+        "n_feasible_full": 911,
+        "n_feasible_lattice": 911,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 224,
+        "K": 6144,
+        "N": 512,
+        "Mt": 7,
+        "Kt": 192,
+        "Nt": 16,
+        "split": "train",
+        "n_feasible_full": 302,
+        "n_feasible_lattice": 302,
+        "prod_pick": [
+          12,
+          1,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 2048,
+        "N": 512,
+        "Mt": 8,
+        "Kt": 64,
+        "Nt": 16,
+        "split": "train",
+        "n_feasible_full": 396,
+        "n_feasible_lattice": 396,
+        "prod_pick": [
+          4,
+          1,
+          3,
+          2,
+          2,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 2048,
+        "N": 1024,
+        "Mt": 8,
+        "Kt": 64,
+        "Nt": 32,
+        "split": "train",
+        "n_feasible_full": 715,
+        "n_feasible_lattice": 715,
+        "prod_pick": [
+          4,
+          1,
+          2,
+          2,
+          4,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 2304,
+        "N": 6144,
+        "Mt": 8,
+        "Kt": 72,
+        "Nt": 192,
+        "split": "holdout",
+        "n_feasible_full": 2613,
+        "n_feasible_lattice": 1762,
+        "prod_pick": [
+          3,
+          4,
+          1,
+          1,
+          3,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 15360,
+        "N": 1536,
+        "Mt": 8,
+        "Kt": 480,
+        "Nt": 48,
+        "split": "train",
+        "n_feasible_full": 331,
+        "n_feasible_lattice": 331,
+        "prod_pick": [
+          6,
+          1,
+          2,
+          2,
+          6,
+          "table"
+        ]
+      },
+      {
+        "M": 256,
+        "K": 15360,
+        "N": 6144,
+        "Mt": 8,
+        "Kt": 480,
+        "Nt": 192,
+        "split": "holdout",
+        "n_feasible_full": 517,
+        "n_feasible_lattice": 405,
+        "prod_pick": [
+          6,
+          2,
+          1,
+          2,
+          1,
+          "fallback-anchor"
+        ]
+      }
+    ]
+  }
+}
