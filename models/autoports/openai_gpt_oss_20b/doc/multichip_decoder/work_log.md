@@ -250,3 +250,8 @@ artifacts. Fresh independent review round 2 returned `clean-pass` after the
 reviewer re-audited the corrected endpoint provenance chain; see
 `stage_review_round2.md`. The local stage commit SHA is appended after commit.
 No push is performed.
+
+## Local commits
+
+- starting checkpoint: `e78e3cd110810695ca1172002deffcc6ddb97e43`
+- multichip decoder stage: `99388e9c5f7e184e246eb0325cd0f5c7f0accdb8`
