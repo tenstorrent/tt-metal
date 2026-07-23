@@ -45,12 +45,19 @@
     (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES)))
 namespace kernel_profiler {
 
+#if defined(ARCH_QUASAR)
+extern thread_local uint32_t wIndex;
+extern thread_local uint32_t stackSize;
+extern thread_local uint32_t sums[SUM_COUNT];
+extern thread_local uint32_t sumIDs[SUM_COUNT];
+#else
 extern uint32_t wIndex;
 extern uint32_t stackSize;
-extern uint32_t traceCount;
-
 extern uint32_t sums[SUM_COUNT];
 extern uint32_t sumIDs[SUM_COUNT];
+#endif
+// Quasar: traceCount is a per-core trace-replay counter managed by the DM0, NOT thread_local.
+extern uint32_t traceCount;
 
 constexpr uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC / sizeof(uint32_t);
 constexpr uint32_t NOC_ALIGNMENT_FACTOR = 4;
@@ -699,7 +706,15 @@ template <uint32_t timer_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATC
 struct profileScope {
     bool start_marked = false;
     inline __attribute__((always_inline)) profileScope() {
+#if defined(ARCH_QUASAR)
+        // Quasar is L1-only for now, once the L1 buffer fills, markers are dropped.
+        // The ~profileScope() writes the ZONE_END unconditionally, so the constructor reserves room
+        // for both the zone's start and end markers. Request (2 * PROFILER_L1_MARKER_UINT32_SIZE - 1)
+        // "additional" words.
+        if (bufferHasRoom<dispatch>(2 * PROFILER_L1_MARKER_UINT32_SIZE - 1)) {
+#else
         if (bufferHasRoom<dispatch>()) {
+#endif
             stackSize += PROFILER_L1_MARKER_UINT32_SIZE;
             start_marked = true;
             mark_time_at_index_inlined(wIndex, timer_id);
@@ -1037,7 +1052,7 @@ __attribute__((noinline)) void trace_only_init() {
         kernel_profiler::set_host_counter(counter);    \
     }
 
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_AERISC)
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_DM)
 #define DeviceProfilerInit()                          \
     if constexpr (kernel_profiler::TRACE_ON_TENSIX) { \
         kernel_profiler::init_profiler();             \
