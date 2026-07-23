@@ -46,7 +46,7 @@ checkpoint is missing, the test is skipped.
 | --- | --- | --- |
 | `DEEPSEEK_V4_DECODE_LAYERS` | all layers (43) | Cap layer count. The full bf4 stack does not fit a single Blackhole 32 GB; start with a small `N` (e.g. `4`) for bringup. |
 | `DEEPSEEK_V4_CACHE_DIR` | `../cache` | Directory for converted ttnn weight tiles. Reuse across runs to avoid redoing the slow bf4 conversion. |
-| `DEEPSEEK_V4_MAX_NEW_TOKENS` | `2048` | Max tokens to generate after the prompt. |
+| `DEEPSEEK_V4_MAX_NEW_TOKENS` | `1024` | Max tokens to generate after the prompt. |
 | `DEEPSEEK_V4_TRACED_DECODE` | `1` (on) | Set to `0` / `false` to use eager host-bound decode instead of captured ttnn traces. |
 
 ## Run the demo
