@@ -946,7 +946,7 @@ form on Blackhole before committing — Wormhole `compute_fusion` says the FPU-c
 
 ---
 
-### [ ] Refinement 6g — Sharded cross-core: pass-2 batching + gamma-fusion residual on the compute floor
+### [x] Refinement 6g — Sharded cross-core: pass-2 batching + gamma-fusion residual on the compute floor
 
 **Type**: perf
 
@@ -984,3 +984,37 @@ per_w_t), not just BLOCK. Reuse the R4→R6f xcore kernels; do not fork. Gate on
 trial loop) toward achievable, soft PCC holding, golden green, no regression (incl. L1) across the
 config-spanning guard set (TILE interleaved, RM interleaved, HEIGHT, WIDTH, BLOCK, no-gamma) — OR the
 gamma-fusion is measured a Blackhole dead-end and recorded as such.
+
+**Landed (full `[x]`)** — lever 1 (pass-2 batching) shipped and WINS; lever 2 (gamma fusion) measured a
+Blackhole dead-end and recorded (not shipped) — the "Done when" OR is satisfied on both counts. Both on
+the shared R4→R6f xcore kernels via a CT flag (no forked files), numerically byte-identical, `--dev`-clean.
+Measured on blackhole_p150b (median of 8 fresh trials, exact perf config bf16 / fp32_dest_acc_en=False /
+TILE / TILE gamma / HiFi2; `test_rms_norm_perf_r6.py`):
+- **Lever 1 — batch pass-2's x·rstd (+ tile-aligned ·gamma) per tile-row (the cheap winner).** `do_pass2`
+  now issues x·rstd as ONE `eltwise_chain` over the tile-row's `per_w_t` W-tiles (Block-walk x from the
+  resident base `t*per_w_t`; Col-broadcast rstd tile `cc` — Ht=1 so the Col index stays `cc` across the
+  walk), and — for the vwt valid tiles — batches ·gamma over `vwt` tiles in one chain too (front-walked
+  `cb_norm` × Row gamma), leaving only the pad tail to per-tile copy (non-aligned). This mirrors the
+  interleaved resident pass 2 (`rms_norm_compute.cpp` block_shape) and amortizes the per-call chain
+  init/reconfig over the block — the R6f lever-3 square pattern applied to pass 2. `cb_norm` deepened
+  2 → `2*per_w_t` (the SAME depth `cb_xsq` has carried since R4 — proven-safe on every cross-core path),
+  folded into the `XCORE_STAT_L1_BUDGET` C gate (single source: `norm_depth`). `PASS2_BATCH` CT flag
+  (compute idx 16) gated to the non-RM xcore path; RM keeps its per-tile pass-2 loop + `cb_norm=2`;
+  `PASS2_BATCH=0` is byte-identical to R4/R6f. **BLOCK 8×8 71653 → 54060 ns (1.325×, 2.79× → 2.11× above
+  achievable)**; WIDTH 8×1 5422→4924 (1.10×), 9×1 7212→5841 (1.235×), 8×4 7341→6626 (1.108×), 7×4
+  8631→7341 (1.176×). Decode logical W-split (also batched) unregressed/correct.
+- **Lever 2 — pass-2 mul fusion via gamma pre-expansion (measured Blackhole dead-end, NOT shipped).** The
+  only expressible fusion of `(x·rstd)·gamma` is `BinaryFpu` x·rstd → `DestReuseBinary<cb_gamma_full, Mul,
+  DEST_TO_SRCA>` (a second FPU op consuming DEST). The in-tree `examples/compute_fusion` `fpu_sfpu` scenario
+  measures exactly this dstreuse-vs-unfused combine; run on Blackhole (R6f's box) it is **0.94–1.00× vs
+  unfused** across tiles 4/16/64 (0.94–0.95× at 64 tiles) — the FPU wants operands in source registers, so
+  DEST→srca costs more than the pack+unpack it replaces, and it never beats the current unfused pass 2
+  (x·rstd → `cb_norm`/L1, then FPU ·gamma reads it back). This confirms the Wormhole 0.82× on Blackhole;
+  additionally the lever would ADD a per-core gamma `[1,W]→[32,W]` pre-expansion + double gamma's L1. So it
+  is a hardware dead-end (like R6d's allgather) — unshipped, measurement recorded, not parked as dead code.
+- **No regression**: golden `test_op_loose` 19/19; golden `test_op` WIDTH/BLOCK cartesian slice 2370 passed
+  / 0 failed / 0 xpassed / 630 xfailed (the standing `{f32,acc=False}` EXCLUSION); unit dir 449 passed / 32
+  skipped (`--dev` + non-dev); decode logical + all sharded perf shapes soft PCC ≥ 0.9995. Lever 1 gates to
+  the non-RM xcore `do_pass2`; interleaved/HEIGHT/RM cells are byte-identical (`rms_norm_compute.cpp`
+  untouched). Residual (BLOCK 8×8 still 2.11× above achievable) is the cross-core round + remaining compute
+  floor — a new lever family, outside R6g's named pass-2 scope.

@@ -946,3 +946,61 @@
 - Tests added: none new — reused `test_rms_norm_perf_r6.py` (device-ns), `test_rms_norm_r6e.py`
   (two-phase correctness), `test_rms_norm_r6_ablation.py` (K∤C gate). Filed follow-up Refinement 6g
   (pass-2 batching + gamma-fusion residual).
+
+## Refinement 6g — Sharded cross-core: pass-2 batching + gamma-fusion residual on the compute floor
+- Date: 2026-07-23
+- Type: perf (full — `[x]`); no SUPPORTED change.
+- What was done: closed more of the R6f BLOCK-8×8 compute-floor residual with the two named
+  pass-2 levers, both on the shared R4→R6f xcore kernels via a CT flag (no forked files). Lever 1
+  (pass-2 batching) shipped and WINS; lever 2 (gamma fusion) measured a Blackhole dead-end and
+  recorded (not shipped) — the R6g "Done when" OR is satisfied on both counts. Roofline/ablation
+  lineage from R6e/R6f pinned the residual to the per-core compute floor; R6f lever 3 batched
+  pass-1's square, this batches pass 2.
+  - **Lever 1 — batch pass-2's x·rstd (+ tile-aligned ·gamma) per tile-row (WINNER).** `do_pass2`
+    in `rms_norm_xcore_compute.cpp` now issues x·rstd as ONE `eltwise_chain` over the tile-row's
+    `per_w_t` W-tiles (Block-walk x from the resident base `t*per_w_t`; Col-broadcast rstd tile
+    `cc` — Ht=1 so the Col index stays `cc` across the walk) instead of `per_w_t` one-tile chains,
+    and batches ·gamma over the `vwt` valid tiles in one chain (front-walked `cb_norm` × Row gamma),
+    leaving only the trailing pad tail (w ≥ vwt) to per-tile copy. Mirrors the proven interleaved
+    resident pass 2 (`rms_norm_compute.cpp` block_shape) and amortizes the fixed per-call chain
+    init/reconfig over the block — the R6f lever-3 square pattern applied to pass 2. Numerically
+    byte-identical: same x·rstd per tile, same ·gamma per valid tile, same copy per pad tile.
+    - `cb_norm` deepened 2 → `2*per_w_t` (the batch buffer) — the SAME depth `cb_xsq` has carried
+      unconditionally since R4 (the pass-1 square block buffer), so it is proven-safe on every
+      cross-core path (RM/logical/decode/physical); folded into the `XCORE_STAT_L1_BUDGET` C gate
+      via a single-source `norm_depth`. `XCORE_PASS2_BATCH` module knob + `PASS2_BATCH` compute CT
+      arg (idx 16) gated to the non-RM xcore path; the RM path keeps its own per-tile pass-2 loop +
+      `cb_norm=2`; `PASS2_BATCH=0` degenerates byte-identically to R4/R6f.
+  - **Lever 2 — pass-2 mul fusion via gamma pre-expansion (measured Blackhole dead-end, NOT
+    shipped).** The only expressible fusion of `(x·rstd)·gamma` is `BinaryFpu` x·rstd →
+    `DestReuseBinary<cb_gamma_full, Mul, DEST_TO_SRCA>` (a second FPU op consuming DEST). Ran the
+    in-tree `examples/compute_fusion --scenario fpu_sfpu` (which A/Bs exactly this dstreuse-vs-
+    unfused combine) on Blackhole p150b: dstreuse is **0.94–1.00× vs unfused** across tiles 4/16/64
+    (0.94–0.95× at 64) — never beats the pack-to-L1 round-trip (the FPU wants operands in source
+    registers; DEST→srca costs more than the pack+unpack it replaces). Confirms the Wormhole 0.82×
+    on Blackhole; the lever would also ADD a per-core gamma `[1,W]→[32,W]` pre-expansion + double
+    gamma's L1. Hardware dead-end (like R6d's allgather) — unshipped, measurement recorded.
+- Measured perf (blackhole_p150b, median of 8 fresh trials, exact perf config bf16 /
+  fp32_dest_acc_en=False / TILE / TILE gamma / HiFi2; `test_rms_norm_perf_r6.py`):
+  | shape | R6f ns | R6g ns | speedup | achievable | vs achievable |
+  |---|---|---|---|---|---|
+  | BLOCK 8×8 (1,1,8192,1024) | 71653 | **54060** | **1.325×** | 25640 | 2.79× → **2.11×** |
+  | WIDTH 8×1 (1,1,32,1024)  | 5422  | 4924  | 1.10×  | 4110 | 1.32× → 1.20× |
+  | WIDTH 9×1 (1,1,32,2304)  | 7212  | 5841  | 1.235× | 4617 | 1.56× → 1.27× |
+  | WIDTH 8×4 (1,1,32,5120)  | 7341  | 6626  | 1.108× | 5267 | 1.39× → 1.26× |
+  | WIDTH 7×4 (1,1,32,7168)  | 8631  | 7341  | 1.176× | 5481 | 1.57× → 1.34× |
+- Accuracy achieved: soft PCC gate 0.9995 holds on all sharded + decode perf shapes (PCC ≥ 0.9995);
+  golden `TOLERANCES` unchanged; lever 1 is numerically byte-identical (same ops, batched issue).
+- Golden test progress: green — `test_op_loose` 19/19; `test_op` WIDTH/BLOCK cartesian slice
+  **2370 passed / 0 failed / 0 xpassed / 630 xfailed** (the standing `{f32,acc=False}` EXCLUSION).
+  No supported_fail, no xpass drift.
+- No regression across the guard set: unit dir **449 passed / 32 skipped** (`--dev` + non-dev);
+  decode interleaved logical W-split (also batched) correct; interleaved/HEIGHT/RM cells
+  byte-identical (`rms_norm_compute.cpp` untouched — lever 1 only touches the xcore `do_pass2`).
+- Levers: lever 1 (pass-2 batching) — WINNING, kept (`XCORE_PASS2_BATCH=True`, live knob).
+  lever 2 (gamma fusion) — measured Blackhole dead-end (compute_fusion dstreuse 0.94–1.00×),
+  NOT shipped, measurement recorded (not parked as dead code).
+- Issues encountered: None. Residual (BLOCK 8×8 still 2.11× above achievable) is the cross-core
+  round + remaining compute floor — a new lever family outside R6g's named pass-2 scope.
+- Tests added: none new — reused `test_rms_norm_perf_r6.py` (device-ns + soft PCC) and the
+  in-tree `examples/compute_fusion` bake-off (lever-2 Blackhole measurement).
