@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
@@ -15,6 +16,7 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet i
 from models.experimental.kimi_delta_attention.config import KDAConfig
 from models.experimental.kimi_delta_attention.tt.recurrence import chunk_kda_recurrence, fused_kda_recurrence
 from models.experimental.kimi_delta_attention.tt.weights import KDAWeights, load_kda_weights
+from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
 
 
 def _slice_width(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
@@ -30,19 +32,25 @@ class KimiDeltaAttention:
 
     def __init__(
         self,
-        mesh_device: ttnn.Device,
+        mesh_device: ttnn.Device | ttnn.MeshDevice,
         config: KDAConfig,
         state_dict: Mapping[str, torch.Tensor],
         tensor_cache_path: Path | None = None,
+        tt_ccl: TT_CCL | None = None,
     ) -> None:
         self.device = mesh_device
-        self.config = config
         self.weights: KDAWeights = load_kda_weights(
             mesh_device,
             config,
             state_dict,
             tensor_cache_path,
         )
+        self.tensor_parallel_size = self.weights.tensor_parallel_size
+        self.global_config = config
+        self.config = replace(config, num_heads=config.num_heads // self.tensor_parallel_size)
+        if self.tensor_parallel_size > 1 and tt_ccl is None:
+            raise ValueError("tt_ccl is required for tensor-parallel KDA")
+        self.tt_ccl = tt_ccl
         self.recurrent_state: ttnn.Tensor | None = None
         self.convolution_state: ttnn.Tensor | None = None
         self.use_inplace_state = False
@@ -258,6 +266,22 @@ class KimiDeltaAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_config,
         )
+        if self.tensor_parallel_size > 1:
+            assert self.tt_ccl is not None
+            output = ttnn.reshape(output, (batch, 1, sequence, self.global_config.hidden_size))
+            output = tt_all_reduce(
+                output,
+                self.device,
+                self.tt_ccl,
+                cluster_axis=0,
+                dim=3,
+                topology=ttnn.Topology.Linear,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            output = ttnn.reshape(
+                output,
+                (batch, sequence, self.global_config.hidden_size // self.tensor_parallel_size),
+            )
 
         if self.use_inplace_state:
             ttnn.copy(new_recurrent_state, self.recurrent_state)
