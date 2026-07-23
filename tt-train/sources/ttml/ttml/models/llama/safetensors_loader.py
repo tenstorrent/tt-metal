@@ -164,20 +164,44 @@ def load_from_safetensors(
         k = k_staged.pop(layer_idx)
         v = v_staged.pop(layer_idx)
 
-        combined = np.concatenate([k, v], axis=0)
+        # Orient K/V to [kv_out, hidden] (rows = output features) so the shard axis
+        # (rows / dim 2) matches ColumnParallelLinear.
+        if k.shape[0] != full_rows // 2 and k.shape[1] == full_cols:
+            # already [kv_out, hidden]
+            pass
+        elif k.shape[1] == full_rows // 2 and k.shape[0] == full_cols:
+            k = k.T
+            v = v.T
+
+        # Fused KV layout under ColumnParallel TP: the kv_linear output rows are
+        # sharded CONTIGUOUSLY across tp devices, and per device grouped_heads_creation
+        # splits the LOCAL kv width at its midpoint into [K_local | V_local]. A naive
+        # [all-K ; all-V] concat puts the K/V boundary at the GLOBAL midpoint, which
+        # does not line up with the per-device local midpoints for tp>1 (device 0 gets
+        # all K, device 1 all V, etc.). So group the rows PER SHARD as
+        # [K_s0, V_s0, K_s1, V_s1, ...]: then contiguous shard s = [K_shard_s | V_shard_s]
+        # lands on device s as exactly [K_local | V_local]. At tp_size=1 this reduces to
+        # the plain [K ; V] concat.
+        kv_out = k.shape[0]
+        if kv_out % tp_size != 0:
+            raise RuntimeError(f"kv_out {kv_out} not divisible by tp_size {tp_size} at layer {layer_idx}")
+        per = kv_out // tp_size
+        hidden = k.shape[1]
+        k_blk = k.reshape(tp_size, per, hidden)
+        v_blk = v.reshape(tp_size, per, hidden)
+        # stack -> [tp, 2, per, hidden]; row-major flatten -> K_s0, V_s0, K_s1, V_s1, ...
+        combined = np.stack([k_blk, v_blk], axis=1).reshape(2 * kv_out, hidden)
+
         cr, cc = combined.shape
         if cr != full_rows or cc != full_cols:
-            if cc == full_rows and cr == full_cols:
-                combined = combined.T
-            else:
-                raise RuntimeError(
-                    f"KV concat shape mismatch at layer {layer_idx}: "
-                    f"combined=({cr}x{cc}), target=({full_rows}x{full_cols})"
-                )
+            raise RuntimeError(
+                f"KV combine shape mismatch at layer {layer_idx}: "
+                f"combined=({cr}x{cc}), target=({full_rows}x{full_cols})"
+            )
 
         mapper = _make_tp_mapper(shard_type)
         _assign_tensor(param, _to_bf16_4d(combined), mapper=mapper)
-        print(f"  Combined k_proj + v_proj -> kv_linear for layer {layer_idx}")
+        print(f"  Combined k_proj + v_proj -> kv_linear (per-shard interleave, tp={tp_size}) for layer {layer_idx}")
 
     weight_tying = config.weight_tying
 
