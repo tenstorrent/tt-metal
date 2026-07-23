@@ -1,0 +1,92 @@
+{
+  "decode_rank_activity": [
+    {
+      "per_token_histogram": {
+        "1": 1
+      },
+      "per_token_max": 1,
+      "rank": 0,
+      "unique_active_experts_in_batch_group": 1
+    },
+    {
+      "per_token_histogram": {
+        "3": 1
+      },
+      "per_token_max": 3,
+      "rank": 1,
+      "unique_active_experts_in_batch_group": 3
+    },
+    {
+      "per_token_histogram": {
+        "0": 1
+      },
+      "per_token_max": 0,
+      "rank": 2,
+      "unique_active_experts_in_batch_group": 0
+    },
+    {
+      "per_token_histogram": {
+        "0": 1
+      },
+      "per_token_max": 0,
+      "rank": 3,
+      "unique_active_experts_in_batch_group": 0
+    }
+  ],
+  "expert_parallel_degree": 4,
+  "global_experts": 32,
+  "global_selected_experts_per_token": 4,
+  "input_seed": 61012,
+  "layer_idx": 12,
+  "layer_kind": "sliding",
+  "local_experts_per_rank": 8,
+  "mesh": [
+    1,
+    4
+  ],
+  "prefill_rank_activity": [
+    {
+      "per_token_histogram": {
+        "0": 1,
+        "1": 12,
+        "2": 3,
+        "3": 1
+      },
+      "per_token_max": 3,
+      "rank": 0,
+      "unique_active_experts_in_batch_group": 7
+    },
+    {
+      "per_token_histogram": {
+        "0": 1,
+        "1": 10,
+        "2": 5,
+        "3": 1
+      },
+      "per_token_max": 3,
+      "rank": 1,
+      "unique_active_experts_in_batch_group": 6
+    },
+    {
+      "per_token_histogram": {
+        "0": 7,
+        "1": 6,
+        "2": 4
+      },
+      "per_token_max": 2,
+      "rank": 2,
+      "unique_active_experts_in_batch_group": 5
+    },
+    {
+      "per_token_histogram": {
+        "0": 9,
+        "1": 6,
+        "2": 2
+      },
+      "per_token_max": 2,
+      "rank": 3,
+      "unique_active_experts_in_batch_group": 7
+    }
+  ],
+  "seq_len": 17
+}

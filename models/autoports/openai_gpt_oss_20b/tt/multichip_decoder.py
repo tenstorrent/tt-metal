@@ -35,6 +35,11 @@ from models.autoports.openai_gpt_oss_20b.tt.optimized_decoder import (
     OptimizedDecoder,
     OptimizedGPTOSSProgramConfig,
 )
+from models.demos.deepseek_v3.utils.config_helpers import (
+    dram_sharded_weight_config,
+    get_activation_sharding_core_counts_for_dram_matmul,
+    get_dram_sharded_matmul_config,
+)
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 from models.demos.gpt_oss.tt.ccl import CCLManager
 from models.demos.gpt_oss.tt.experts import ExpertConfig
@@ -47,6 +52,7 @@ EP_DEGREE = 4
 PAGE_BLOCK_SIZE = 64
 SUPPORTED_CONTEXT = 131_072
 DECODE_COLLECTIVE_ALL_REDUCE = "all_reduce"
+DECODE_COLLECTIVE_MINIMAL_ALL_REDUCE = "minimal_all_reduce"
 DECODE_COLLECTIVE_RS_AG_PAD64 = "rs_ag_pad64"
 EXPERT_STRATEGY_EP = "ep"
 EXPERT_STRATEGY_TP = "tp"
@@ -58,8 +64,9 @@ class MultichipConfig:
 
     num_links: int = 1
     page_block_size: int = PAGE_BLOCK_SIZE
-    decode_collective: str = DECODE_COLLECTIVE_ALL_REDUCE
+    decode_collective: str = DECODE_COLLECTIVE_MINIMAL_ALL_REDUCE
     expert_strategy: str = EXPERT_STRATEGY_EP
+    use_fused_o_projection_rs: bool = False
     use_fused_o_projection_ag: bool = False
     fused_o_ag_pad_hidden: bool = False
     fused_ag_matmul_payload_dtype: str = "bfloat16"
@@ -69,14 +76,33 @@ class MultichipConfig:
     qkv_out_subblock_w: int = 2
     prefill_expert_cores: tuple[int, int] = (9, 10)
     decode_expert_cores: tuple[int, int] = (5, 9)
+    decode_gate_up_cores: tuple[int, int] | None = (9, 10)
+    decode_down_cores: tuple[int, int] | None = (9, 10)
     expert_in0_block_w: int = 45
+    decode_gate_up_in0_block_w: int | None = 45
+    decode_down_in0_block_w: int | None = 90
     prefill_expert_subblock_w: int = 1
     decode_expert_subblock_w: int = 2
+    decode_gate_up_subblock_w: int | None = 1
+    decode_down_subblock_w: int | None = 1
+    prefill_expert_output_l1: bool = True
+    prefill_expert_output_l1_max_seq: int = 32
+    decode_expert_output_l1: bool = True
+    use_packed_sparse_gate_up: bool = False
+    use_dram_sharded_decode_attention: bool = False
+    dram_attention_core_limit: int = 90
     active_prefill_chunk_size: int = 128
+    attention_weight_dtype: str = "bfloat16"
+    decode_attention_weight_dtype: str = "bfloat8_b"
+    attention_math_fidelity: str = "hifi2"
+    long_decode_attention_math_fidelity: str = "selected"
     expert_weight_dtype: str = "bfloat8_b"
+    expert_gate_up_weight_dtype: str = "selected"
+    expert_down_weight_dtype: str = "selected"
     expert_activation_dtype: str = "bfloat16"
     expert_math_fidelity: str = "lofi"
     kv_cache_dtype: str = "bfloat8_b"
+    decode_ccl_dtype: str = "bfloat16"
     use_sharded_decode_norms: bool = True
 
 
@@ -135,9 +161,10 @@ def _validate_qkv_geometry(
     }
     if any(value <= 0 for value in values.values()):
         raise ValueError(f"QKV geometry values must be positive, got {values}")
-    if k_tiles % config.qkv_input_cores:
-        raise ValueError(f"qkv_input_cores={config.qkv_input_cores} must divide K tiles={k_tiles}")
-    input_shard_tiles = k_tiles // config.qkv_input_cores
+    # Width sharding may pad the physical K extent.  The public hidden width
+    # remains logical H; TTNN owns the per-core tail padding during the
+    # interleaved-to-sharded conversion.
+    input_shard_tiles = math.ceil(k_tiles / config.qkv_input_cores)
     if k_tiles % config.qkv_in0_block_w or input_shard_tiles % config.qkv_in0_block_w:
         raise ValueError(
             f"qkv_in0_block_w={config.qkv_in0_block_w} must divide K tiles={k_tiles} "
@@ -165,6 +192,11 @@ class MultichipDecoder(OptimizedDecoder):
     ):
         self.multichip_config = multichip_config or MultichipConfig()
         requested_optimization = optimization_config or OptimizationConfig()
+        long_decode_fidelity = self.multichip_config.long_decode_attention_math_fidelity
+        if long_decode_fidelity == "selected":
+            long_decode_fidelity = (
+                "hifi4" if attention_window is None else requested_optimization.long_decode_attention_math_fidelity
+            )
         self.optimization_config = requested_optimization.with_changes(
             use_shard_advisor_attention_layouts=False,
             use_shard_advisor_router_layouts=False,
@@ -175,12 +207,11 @@ class MultichipDecoder(OptimizedDecoder):
             expert_input_l1=False,
             expert_weight_dtype=self.multichip_config.expert_weight_dtype,
             kv_cache_dtype=self.multichip_config.kv_cache_dtype,
+            attention_math_fidelity=self.multichip_config.attention_math_fidelity,
             # TP4 QKV/O accumulation at long full-attention positions can
             # perturb a near-tied router decision even when attention PCC is
             # above 0.9997. HiFi4 restores the exact optimized top-4 route.
-            long_decode_attention_math_fidelity=(
-                "hifi4" if attention_window is None else requested_optimization.long_decode_attention_math_fidelity
-            ),
+            long_decode_attention_math_fidelity=long_decode_fidelity,
         )
 
         # OptimizedDecoder's normal constructor creates a single-device dense
@@ -220,14 +251,37 @@ class MultichipDecoder(OptimizedDecoder):
             or self.multichip_config.active_prefill_chunk_size % ttnn.TILE_SIZE
         ):
             raise ValueError("active_prefill_chunk_size must be a positive multiple of 32")
-        if self.multichip_config.expert_weight_dtype not in ("bfloat8_b", "bfloat16"):
-            raise ValueError("expert_weight_dtype must be bfloat8_b or bfloat16")
+        if (
+            self.multichip_config.prefill_expert_output_l1_max_seq <= 0
+            or self.multichip_config.prefill_expert_output_l1_max_seq % ttnn.TILE_SIZE
+        ):
+            raise ValueError("prefill_expert_output_l1_max_seq must be a positive multiple of 32")
+        for name in ("attention_weight_dtype", "decode_attention_weight_dtype"):
+            if getattr(self.multichip_config, name) not in ("bfloat4_b", "bfloat8_b", "bfloat16"):
+                raise ValueError(f"{name} must be bfloat4_b, bfloat8_b, or bfloat16")
+        if self.multichip_config.attention_math_fidelity not in ("auto", "lofi", "hifi2", "hifi4"):
+            raise ValueError("attention_math_fidelity must be auto, lofi, hifi2, or hifi4")
+        if self.multichip_config.long_decode_attention_math_fidelity not in (
+            "selected",
+            "lofi",
+            "hifi2",
+            "hifi4",
+        ):
+            raise ValueError("long_decode_attention_math_fidelity must be selected, lofi, hifi2, or hifi4")
+        if self.multichip_config.expert_weight_dtype not in ("bfloat4_b", "bfloat8_b", "bfloat16"):
+            raise ValueError("expert_weight_dtype must be bfloat4_b, bfloat8_b, or bfloat16")
+        for name in ("expert_gate_up_weight_dtype", "expert_down_weight_dtype"):
+            if getattr(self.multichip_config, name) not in ("selected", "bfloat4_b", "bfloat8_b", "bfloat16"):
+                raise ValueError(f"{name} must be selected, bfloat4_b, bfloat8_b, or bfloat16")
         if self.multichip_config.expert_activation_dtype not in ("bfloat8_b", "bfloat16"):
             raise ValueError("expert_activation_dtype must be bfloat8_b or bfloat16")
         if self.multichip_config.kv_cache_dtype not in ("bfloat8_b", "bfloat16"):
             raise ValueError("kv_cache_dtype must be bfloat8_b or bfloat16")
+        if self.multichip_config.decode_ccl_dtype not in ("bfloat8_b", "bfloat16"):
+            raise ValueError("decode_ccl_dtype must be bfloat8_b or bfloat16")
         if self.multichip_config.decode_collective not in (
             DECODE_COLLECTIVE_ALL_REDUCE,
+            DECODE_COLLECTIVE_MINIMAL_ALL_REDUCE,
             DECODE_COLLECTIVE_RS_AG_PAD64,
         ):
             raise ValueError(f"unsupported decode_collective={self.multichip_config.decode_collective!r}")
@@ -262,6 +316,7 @@ class MultichipDecoder(OptimizedDecoder):
             )
             if (
                 self.multichip_config.decode_collective == DECODE_COLLECTIVE_RS_AG_PAD64
+                or self.multichip_config.use_fused_o_projection_rs
                 or self.multichip_config.use_fused_o_projection_ag
                 or self.multichip_config.expert_strategy == EXPERT_STRATEGY_TP
             )
@@ -320,6 +375,49 @@ class MultichipDecoder(OptimizedDecoder):
             self.multichip_config.qkv_output_tiles_per_core * ttnn.TILE_SIZE,
         )
         self.tp_o_output_config = width_config(90, self.hidden_size // 90)
+        self.minimal_ar_buffer_config = width_config(
+            90,
+            TP_DEGREE * (self.hidden_size // 90),
+        )
+        self._minimal_ar_index = 0
+        self._minimal_ar_buffers = []
+        self._minimal_ar_semaphores = []
+        if self.multichip_config.decode_collective == DECODE_COLLECTIVE_MINIMAL_ALL_REDUCE:
+            ccl_dtype = {
+                "bfloat8_b": ttnn.bfloat8_b,
+                "bfloat16": ttnn.bfloat16,
+            }[self.multichip_config.decode_ccl_dtype]
+            all_worker_cores = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1),
+                    )
+                ]
+            )
+            for _ in range(2):
+                self._minimal_ar_semaphores.append(ttnn.create_global_semaphore(self.mesh_device, all_worker_cores, 0))
+                self._minimal_ar_buffers.append(
+                    ttnn.from_torch(
+                        torch.zeros(
+                            (
+                                TARGET_MESH_SHAPE[0],
+                                TARGET_MESH_SHAPE[1],
+                                ttnn.TILE_SIZE,
+                                TP_DEGREE * self.hidden_size,
+                            )
+                        ),
+                        device=self.mesh_device,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=ccl_dtype,
+                        memory_config=self.minimal_ar_buffer_config,
+                        mesh_mapper=ttnn.ShardTensor2dMesh(
+                            self.mesh_device,
+                            dims=(0, 1),
+                            mesh_shape=TARGET_MESH_SHAPE,
+                        ),
+                    )
+                )
         self.tp_qkv_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(device_grid.x, qkv_program_rows),
             in0_block_w=self.multichip_config.qkv_in0_block_w,
@@ -345,6 +443,28 @@ class MultichipDecoder(OptimizedDecoder):
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
+        )
+        max_dram_cores = min(
+            self.multichip_config.dram_attention_core_limit,
+            device_grid.x * device_grid.y,
+        )
+
+        def dram_policy(k: int, n: int):
+            input_cores = max(get_activation_sharding_core_counts_for_dram_matmul(k, max_dram_cores))
+            output_cores = max(get_activation_sharding_core_counts_for_dram_matmul(n, max_dram_cores))
+            return (
+                get_dram_sharded_matmul_config(ttnn.TILE_SIZE, k, n, input_cores, output_cores),
+                width_config(input_cores, k // input_cores),
+                width_config(output_cores, n // output_cores),
+            )
+
+        self.dram_tp_qkv_program_config, self.dram_tp_qkv_input_config, self.dram_tp_qkv_output_config = dram_policy(
+            self.hidden_size,
+            local_qkv_width,
+        )
+        self.dram_tp_o_program_config, self.dram_tp_o_input_config, self.dram_tp_o_output_config = dram_policy(
+            self.local_num_heads * self.head_dim,
+            self.hidden_size,
         )
 
         self.advisor_norm_weights = {}
@@ -441,6 +561,11 @@ class MultichipDecoder(OptimizedDecoder):
         else:
             raise ValueError(f"unsupported layer_types[{layer_idx}]={layer_type!r}")
 
+        attention_dtype = {
+            "bfloat4_b": ttnn.bfloat4_b,
+            "bfloat8_b": ttnn.bfloat8_b,
+            "bfloat16": ttnn.bfloat16,
+        }[multichip_config.attention_weight_dtype]
         q = _state_tensor(state_dict, layer_idx, "self_attn.q_proj.weight").to(torch.bfloat16)
         k = _state_tensor(state_dict, layer_idx, "self_attn.k_proj.weight").to(torch.bfloat16)
         v = _state_tensor(state_dict, layer_idx, "self_attn.v_proj.weight").to(torch.bfloat16)
@@ -538,9 +663,9 @@ class MultichipDecoder(OptimizedDecoder):
                 _state_tensor(state_dict, layer_idx, "post_attention_layernorm.weight").to(torch.bfloat16),
                 mesh_device=mesh_device,
             ),
-            qkv_weight=_shard_tensor(qkv, mesh_device=mesh_device, dim=1),
+            qkv_weight=_shard_tensor(qkv, mesh_device=mesh_device, dim=1, dtype=attention_dtype),
             qkv_bias=_shard_tensor(packed_bias, mesh_device=mesh_device, dim=2),
-            output_weight=_shard_tensor(output.T, mesh_device=mesh_device, dim=0),
+            output_weight=_shard_tensor(output.T, mesh_device=mesh_device, dim=0, dtype=attention_dtype),
             output_bias=_shard_tensor(rank_selective_output_bias, mesh_device=mesh_device, dim=2),
             attention_sinks=_shard_tensor(prefill_sinks, mesh_device=mesh_device, dim=1),
             decode_attention_sinks=_shard_tensor(decode_sinks, mesh_device=mesh_device, dim=0),
@@ -577,8 +702,59 @@ class MultichipDecoder(OptimizedDecoder):
             if manual_prefill_sinks is not None
             else None
         )
+        decode_attention_dtype = {
+            "bfloat4_b": ttnn.bfloat4_b,
+            "bfloat8_b": ttnn.bfloat8_b,
+            "bfloat16": ttnn.bfloat16,
+        }[multichip_config.decode_attention_weight_dtype]
+        if multichip_config.decode_attention_weight_dtype == multichip_config.attention_weight_dtype:
+            decoder.decode_qkv_weight = decoder.qkv_weight
+            decoder.decode_output_weight = decoder.output_weight
+        else:
+            decoder.decode_qkv_weight = _shard_tensor(
+                qkv,
+                mesh_device=mesh_device,
+                dim=1,
+                dtype=decode_attention_dtype,
+            )
+            decoder.decode_output_weight = _shard_tensor(
+                output.T,
+                mesh_device=mesh_device,
+                dim=0,
+                dtype=decode_attention_dtype,
+            )
         decoder.fused_o_ag_weight = None
         decoder.fused_o_ag_bias = None
+        decoder.fused_o_rs_weight = None
+        decoder.fused_o_rs_bias = None
+        decoder.dram_decode_qkv_weight = None
+        decoder.dram_decode_o_weight = None
+        if multichip_config.use_dram_sharded_decode_attention:
+            dram_grid = mesh_device.dram_grid_size()
+            decoder.dram_decode_qkv_weight = ttnn.to_memory_config(
+                decoder.decode_qkv_weight,
+                dram_sharded_weight_config(hidden_size, qkv.shape[-1] // TP_DEGREE, dram_grid),
+            )
+            decoder.dram_decode_o_weight = ttnn.to_memory_config(
+                decoder.decode_output_weight,
+                dram_sharded_weight_config(num_heads * head_dim // TP_DEGREE, hidden_size, dram_grid),
+            )
+        if multichip_config.use_fused_o_projection_rs:
+            decoder.fused_o_rs_weight = _shard_tensor(
+                F.pad(output.T, (0, 64)),
+                mesh_device=mesh_device,
+                dim=0,
+                dtype=decode_attention_dtype,
+            )
+            padded_output_bias = F.pad(output_bias, (0, 64))
+            decoder.fused_o_rs_bias = _shard_tensor(
+                torch.cat(
+                    [padded_output_bias] + [torch.zeros_like(padded_output_bias) for _ in range(TP_DEGREE - 1)],
+                    dim=-1,
+                ).reshape(1, 1, -1),
+                mesh_device=mesh_device,
+                dim=2,
+            )
         if multichip_config.use_fused_o_projection_ag:
             o_ag_pad = 64 if multichip_config.fused_o_ag_pad_hidden else 0
             o_ag_dtype = {
@@ -607,19 +783,28 @@ class MultichipDecoder(OptimizedDecoder):
         up_bias = gate_up_bias[..., 1::2].reshape(1, num_experts, intermediate_size)
         down = down.reshape(1, num_experts, intermediate_size, hidden_size)
         down_bias = down_bias.reshape(1, num_experts, hidden_size)
-        expert_dtype = {
+        expert_dtype_map = {
+            "bfloat4_b": ttnn.bfloat4_b,
             "bfloat8_b": ttnn.bfloat8_b,
             "bfloat16": ttnn.bfloat16,
-        }[multichip_config.expert_weight_dtype]
+        }
+        gate_up_dtype_name = multichip_config.expert_gate_up_weight_dtype
+        if gate_up_dtype_name == "selected":
+            gate_up_dtype_name = multichip_config.expert_weight_dtype
+        down_dtype_name = multichip_config.expert_down_weight_dtype
+        if down_dtype_name == "selected":
+            down_dtype_name = multichip_config.expert_weight_dtype
+        gate_up_dtype = expert_dtype_map[gate_up_dtype_name]
+        down_dtype = expert_dtype_map[down_dtype_name]
         if multichip_config.expert_strategy == EXPERT_STRATEGY_TP:
             rank_selective_down_bias = torch.cat(
                 [down_bias] + [torch.zeros_like(down_bias) for _ in range(TP_DEGREE - 1)],
                 dim=2,
             )
             expert_weights = ExpertWeights(
-                gate_proj=_shard_tensor(gate, mesh_device=mesh_device, dim=3, dtype=expert_dtype),
-                up_proj=_shard_tensor(up, mesh_device=mesh_device, dim=3, dtype=expert_dtype),
-                down_proj=_shard_tensor(down, mesh_device=mesh_device, dim=2, dtype=expert_dtype),
+                gate_proj=_shard_tensor(gate, mesh_device=mesh_device, dim=3, dtype=gate_up_dtype),
+                up_proj=_shard_tensor(up, mesh_device=mesh_device, dim=3, dtype=gate_up_dtype),
+                down_proj=_shard_tensor(down, mesh_device=mesh_device, dim=2, dtype=down_dtype),
                 gate_proj_bias=_shard_tensor(gate_bias, mesh_device=mesh_device, dim=2),
                 up_proj_bias=_shard_tensor(up_bias, mesh_device=mesh_device, dim=2),
                 down_proj_bias=_shard_tensor(rank_selective_down_bias, mesh_device=mesh_device, dim=2),
@@ -641,26 +826,38 @@ class MultichipDecoder(OptimizedDecoder):
                 sequence_chunk_size=multichip_config.active_prefill_chunk_size,
             )
         else:
+            decode_gate_up_cores = multichip_config.decode_gate_up_cores or multichip_config.decode_expert_cores
+            decode_down_cores = multichip_config.decode_down_cores or multichip_config.decode_expert_cores
+            decode_gate_up_in0_block_w = (
+                multichip_config.decode_gate_up_in0_block_w or multichip_config.expert_in0_block_w
+            )
+            decode_down_in0_block_w = multichip_config.decode_down_in0_block_w or multichip_config.expert_in0_block_w
+            decode_gate_up_subblock_w = (
+                multichip_config.decode_gate_up_subblock_w or multichip_config.decode_expert_subblock_w
+            )
+            decode_down_subblock_w = (
+                multichip_config.decode_down_subblock_w or multichip_config.decode_expert_subblock_w
+            )
             expert_weights = ExpertWeights(
-                gate_proj=_shard_tensor(gate, mesh_device=mesh_device, dim=1, dtype=expert_dtype),
-                up_proj=_shard_tensor(up, mesh_device=mesh_device, dim=1, dtype=expert_dtype),
-                down_proj=_shard_tensor(down, mesh_device=mesh_device, dim=1, dtype=expert_dtype),
+                gate_proj=_shard_tensor(gate, mesh_device=mesh_device, dim=1, dtype=gate_up_dtype),
+                up_proj=_shard_tensor(up, mesh_device=mesh_device, dim=1, dtype=gate_up_dtype),
+                down_proj=_shard_tensor(down, mesh_device=mesh_device, dim=1, dtype=down_dtype),
                 gate_proj_bias=_shard_tensor(gate_bias, mesh_device=mesh_device, dim=1),
                 up_proj_bias=_shard_tensor(up_bias, mesh_device=mesh_device, dim=1),
                 down_proj_bias=_shard_tensor(down_bias, mesh_device=mesh_device, dim=1),
                 intermediate_size_per_device=intermediate_size,
             )
             expert_program = OptimizedGPTOSSProgramConfig(
-                decode_gate_up_cores=multichip_config.decode_expert_cores,
-                decode_down_cores=multichip_config.decode_expert_cores,
+                decode_gate_up_cores=decode_gate_up_cores,
+                decode_down_cores=decode_down_cores,
                 prefill_gate_up_cores=multichip_config.prefill_expert_cores,
                 prefill_down_cores=multichip_config.prefill_expert_cores,
-                decode_gate_up_in0_block_w=multichip_config.expert_in0_block_w,
-                decode_down_in0_block_w=multichip_config.expert_in0_block_w,
+                decode_gate_up_in0_block_w=decode_gate_up_in0_block_w,
+                decode_down_in0_block_w=decode_down_in0_block_w,
                 prefill_gate_up_in0_block_w=multichip_config.expert_in0_block_w,
                 prefill_down_in0_block_w=multichip_config.expert_in0_block_w,
-                decode_gate_up_subblock_w=multichip_config.decode_expert_subblock_w,
-                decode_down_subblock_w=multichip_config.decode_expert_subblock_w,
+                decode_gate_up_subblock_w=decode_gate_up_subblock_w,
+                decode_down_subblock_w=decode_down_subblock_w,
                 prefill_gate_up_subblock_w=multichip_config.prefill_expert_subblock_w,
                 prefill_down_subblock_w=multichip_config.prefill_expert_subblock_w,
                 sequence_chunk_size=multichip_config.active_prefill_chunk_size,
@@ -677,6 +874,20 @@ class MultichipDecoder(OptimizedDecoder):
             weights=expert_weights,
             program_config=expert_program,
         )
+        decoder.packed_gate_up_weight = None
+        decoder.packed_gate_up_bias = None
+        if multichip_config.use_packed_sparse_gate_up:
+            decoder.packed_gate_up_weight = _shard_tensor(
+                gate_up.reshape(1, num_experts, hidden_size, 2 * intermediate_size),
+                mesh_device=mesh_device,
+                dim=1,
+                dtype=gate_up_dtype,
+            )
+            decoder.packed_gate_up_bias = _shard_tensor(
+                gate_up_bias.reshape(1, num_experts, 2 * intermediate_size),
+                mesh_device=mesh_device,
+                dim=1,
+            )
         return decoder
 
     def create_page_table(self, physical_block_ids: Sequence[int] | None = None):
@@ -764,11 +975,42 @@ class MultichipDecoder(OptimizedDecoder):
             memory_config=memory_config,
         )
 
+    def _minimal_all_reduce(self, tensor, *, memory_config):
+        """Run the minimal persistent-buffer AR on a width-sharded decode tensor."""
+
+        tensor = ttnn.to_memory_config(tensor, self.tp_o_output_config)
+        ccl_dtype = {
+            "bfloat8_b": ttnn.bfloat8_b,
+            "bfloat16": ttnn.bfloat16,
+        }[self.multichip_config.decode_ccl_dtype]
+        if tensor.dtype != ccl_dtype:
+            tensor = ttnn.typecast(tensor, ccl_dtype, memory_config=self.tp_o_output_config)
+        buffer_index = self._minimal_ar_index
+        self._minimal_ar_index = (buffer_index + 1) % len(self._minimal_ar_buffers)
+        output = ttnn.experimental.all_reduce_async(
+            tensor,
+            self._minimal_ar_buffers[buffer_index],
+            cluster_axis=1,
+            mesh_device=self.mesh_device,
+            multi_device_global_semaphore=self._minimal_ar_semaphores[buffer_index],
+            dtype=ccl_dtype,
+            memory_config=self.tp_o_output_config,
+            topology=ttnn.Topology.Ring,
+            num_links=self.multichip_config.num_links,
+        )
+        if output.dtype != ttnn.bfloat16:
+            output = ttnn.typecast(output, ttnn.bfloat16, memory_config=self.tp_o_output_config)
+        if memory_config != self.tp_o_output_config:
+            output = ttnn.to_memory_config(output, memory_config)
+        return output
+
     def _all_reduce(self, tensor, *, memory_config):
         """Use ordinary AR or the decode-only padded persistent-semaphore RS+AG control."""
 
         if self.multichip_config.decode_collective == DECODE_COLLECTIVE_ALL_REDUCE or tensor.shape[-2] != 1:
             return self._ring_all_reduce(tensor, memory_config=memory_config)
+        if self.multichip_config.decode_collective == DECODE_COLLECTIVE_MINIMAL_ALL_REDUCE:
+            return self._minimal_all_reduce(tensor, memory_config=memory_config)
 
         # Four-way width reduce-scatter requires tile-aligned rank-local
         # pieces. Pad logical H=2880 to 2944 so each rank receives 736
@@ -795,7 +1037,74 @@ class MultichipDecoder(OptimizedDecoder):
         gathered.deallocate(True)
         return output
 
-    def _project_o_and_reduce(self, attended, *, is_decode: bool, compute_kernel_config=None):
+    def _fused_o_projection_reduce_scatter(self, attended, *, compute_kernel_config=None):
+        """Return the padded H=2944 O projection as a rank-local H=736 shard."""
+
+        attended = ttnn.to_memory_config(attended, ttnn.DRAM_MEMORY_CONFIG)
+        if len(attended.shape) == 3:
+            attended = ttnn.reshape(attended, [1, 1, attended.shape[-2], attended.shape[-1]])
+        if attended.dtype != self.fused_o_rs_weight.dtype:
+            attended = ttnn.typecast(attended, self.fused_o_rs_weight.dtype)
+        mm_out, scattered = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+            attended,
+            self.fused_o_rs_weight,
+            3,
+            self.ccl_manager.get_rs_ping_pong_semaphore(),
+            ttnn.CoreCoord(0, 2),
+            compute_kernel_config=(
+                compute_kernel_config if compute_kernel_config is not None else self.decode_compute_kernel_config
+            ),
+            num_links=self.ccl_manager.num_links,
+            memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+            rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.ccl_manager.topology,
+            cluster_axis=self.mesh_config.tp_axis,
+            bias=self.fused_o_rs_bias,
+            config=ttnn.MinimalMatmulConfig(
+                M_block_size=1,
+                K_block_size=8,
+                N_block_size=1,
+                subblock_h=1,
+                subblock_w=1,
+                compute_with_storage_grid_size=ttnn.CoreCoord(4, 2),
+            ),
+            barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
+            chunk_width_in_mm_blocks=1,
+            num_workers_per_link=2,
+        )
+        attended.deallocate(True)
+        mm_out.deallocate(True)
+        return scattered
+
+    def _project_o_and_reduce(
+        self,
+        attended,
+        *,
+        is_decode: bool,
+        compute_kernel_config=None,
+        use_long_attention_weights: bool = False,
+    ):
+        if is_decode and self.multichip_config.use_fused_o_projection_rs and not use_long_attention_weights:
+            scattered = self._fused_o_projection_reduce_scatter(
+                attended,
+                compute_kernel_config=compute_kernel_config,
+            )
+            gathered = self.mesh_config.allgather(
+                scattered,
+                self.ccl_manager,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                axis=self.mesh_config.tp_axis,
+            )
+            scattered.deallocate(True)
+            output = ttnn.slice(
+                gathered,
+                [0, 0, 0, 0],
+                [gathered.shape[0], gathered.shape[1], gathered.shape[2], self.hidden_size],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            gathered.deallocate(True)
+            return output
+
         if self.multichip_config.use_fused_o_projection_ag:
             attended = ttnn.to_memory_config(attended, ttnn.DRAM_MEMORY_CONFIG)
             if len(attended.shape) == 3:
@@ -844,7 +1153,9 @@ class MultichipDecoder(OptimizedDecoder):
                 compute_kernel_config=(
                     compute_kernel_config
                     if is_decode and compute_kernel_config is not None
-                    else self.decode_compute_kernel_config if is_decode else self.compute_kernel_config
+                    else self.decode_compute_kernel_config
+                    if is_decode
+                    else self.compute_kernel_config
                 ),
                 persistent_output_buffer=persistent_gather,
                 num_links=self.ccl_manager.num_links,
@@ -871,22 +1182,48 @@ class MultichipDecoder(OptimizedDecoder):
             gathered.deallocate(True)
             return output
 
-        if is_decode:
+        dram_attention = is_decode and self.multichip_config.use_dram_sharded_decode_attention
+        if dram_attention:
+            attended = ttnn.to_memory_config(attended, self.dram_tp_o_input_config)
+        elif is_decode:
             attended = ttnn.to_memory_config(attended, ttnn.L1_MEMORY_CONFIG)
         partial = ttnn.linear(
             attended,
-            self.output_weight,
-            bias=self.output_bias,
+            (
+                self.dram_decode_o_weight
+                if dram_attention
+                else (
+                    self.output_weight
+                    if is_decode and use_long_attention_weights
+                    else self.decode_output_weight
+                    if is_decode
+                    else self.output_weight
+                )
+            ),
+            bias=None if dram_attention else self.output_bias,
             dtype=ttnn.bfloat16,
-            memory_config=self.tp_o_output_config if is_decode else ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.tp_o_program_config if is_decode else None,
+            memory_config=(
+                self.dram_tp_o_output_config
+                if dram_attention
+                else self.tp_o_output_config
+                if is_decode
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
+            program_config=(
+                self.dram_tp_o_program_config if dram_attention else self.tp_o_program_config if is_decode else None
+            ),
             compute_kernel_config=(
                 compute_kernel_config
                 if is_decode and compute_kernel_config is not None
-                else self.decode_compute_kernel_config if is_decode else self.compute_kernel_config
+                else self.decode_compute_kernel_config
+                if is_decode
+                else self.compute_kernel_config
             ),
         )
-        if is_decode:
+        if dram_attention:
+            partial = ttnn.add(partial, self.output_bias, memory_config=self.dram_tp_o_output_config)
+            partial = ttnn.to_memory_config(partial, self.tp_o_output_config)
+        if is_decode and self.multichip_config.decode_collective != DECODE_COLLECTIVE_MINIMAL_ALL_REDUCE:
             partial = ttnn.to_memory_config(partial, ttnn.L1_MEMORY_CONFIG)
         return self._all_reduce(
             partial,
@@ -1250,7 +1587,16 @@ class MultichipDecoder(OptimizedDecoder):
     ):
         residual = hidden_states
         normalized = self._decode_norm(hidden_states, weight_name="input_norm")
-        normalized = ttnn.to_memory_config(normalized, self.tp_qkv_input_config)
+        use_long_attention_weights = cache_position >= EMITTED_CACHE_LENGTH - 1
+        # BFP8 projection copies are selected only for the short native-SDPA
+        # decode path.  Long trace banks retain the BF16 projection policy:
+        # a near-tied sliding-layer router decision at position 130 changes
+        # with BFP8 weights even though attention PCC remains above 0.999.
+        dram_attention = self.multichip_config.use_dram_sharded_decode_attention and not use_long_attention_weights
+        normalized = ttnn.to_memory_config(
+            normalized,
+            self.dram_tp_qkv_input_config if dram_attention else self.tp_qkv_input_config,
+        )
         projection_kernel = (
             self.long_decode_compute_kernel_config
             if cache_position >= EMITTED_CACHE_LENGTH - 1
@@ -1258,13 +1604,21 @@ class MultichipDecoder(OptimizedDecoder):
         )
         fused = ttnn.linear(
             normalized,
-            self.qkv_weight,
-            bias=self.qkv_bias,
+            (
+                self.dram_decode_qkv_weight
+                if dram_attention
+                else self.qkv_weight
+                if use_long_attention_weights
+                else self.decode_qkv_weight
+            ),
+            bias=None if dram_attention else self.qkv_bias,
             dtype=ttnn.bfloat16,
-            memory_config=self.tp_qkv_output_config,
-            program_config=self.tp_qkv_program_config,
+            memory_config=self.dram_tp_qkv_output_config if dram_attention else self.tp_qkv_output_config,
+            program_config=self.dram_tp_qkv_program_config if dram_attention else self.tp_qkv_program_config,
             compute_kernel_config=projection_kernel,
         )
+        if dram_attention:
+            fused = ttnn.add(fused, self.qkv_bias, memory_config=self.dram_tp_qkv_output_config)
         fused = ttnn.to_memory_config(fused, ttnn.L1_MEMORY_CONFIG)
         fused = ttnn.reshape(fused, [1, 1, self.batch, -1])
         query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -1363,6 +1717,7 @@ class MultichipDecoder(OptimizedDecoder):
             attention,
             is_decode=True,
             compute_kernel_config=projection_kernel,
+            use_long_attention_weights=use_long_attention_weights,
         )
         projected = ttnn.reshape(projected, [1, self.batch, 1, self.hidden_size])
         return ttnn.add(residual, projected, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1379,7 +1734,15 @@ class MultichipDecoder(OptimizedDecoder):
         local_experts = self.num_experts if use_tp_experts else self.local_num_experts
         local_intermediate = self.local_intermediate_size if use_tp_experts else self.intermediate_size
         output_tile = ttnn.Tile([ttnn.TILE_SIZE, ttnn.TILE_SIZE])
-        memory_config = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        use_l1_output = (
+            self.multichip_config.decode_expert_output_l1
+            if is_decode
+            else (
+                self.multichip_config.prefill_expert_output_l1
+                and seq_len <= self.multichip_config.prefill_expert_output_l1_max_seq
+            )
+        )
+        memory_config = ttnn.L1_MEMORY_CONFIG if use_l1_output else ttnn.DRAM_MEMORY_CONFIG
         activation_dtype = {
             "bfloat8_b": ttnn.bfloat8_b,
             "bfloat16": ttnn.bfloat16,
@@ -1416,46 +1779,86 @@ class MultichipDecoder(OptimizedDecoder):
             ttnn.ROW_MAJOR_LAYOUT,
         )
         local_routing = ttnn.to_layout(local_routing_rm, ttnn.TILE_LAYOUT)
+        gate_up_width = (
+            2 * local_intermediate if self.multichip_config.use_packed_sparse_gate_up else local_intermediate
+        )
         gate_up_config = (
-            program.get_decode_gate_up_config(1, local_intermediate, k=self.hidden_size)
+            program.get_decode_gate_up_config(1, gate_up_width, k=self.hidden_size)
             if is_decode
-            else program.get_prefill_gate_up_config(1, local_intermediate, k=self.hidden_size)
+            else program.get_prefill_gate_up_config(1, gate_up_width, k=self.hidden_size)
         )
-        gate = ttnn.sparse_matmul(
-            token_major,
-            weights.gate_proj,
-            sparsity=sparsity,
-            nnz=None,
-            memory_config=memory_config,
-            output_tile=output_tile,
-            program_config=gate_up_config,
-            dtype=activation_dtype,
-            compute_kernel_config=expert_compute_kernel_config,
-        )
-        gate = ttnn.reshape(gate, [seq_len, local_experts, local_intermediate])
-        gate = ttnn.add(
-            gate,
-            ttnn.reshape(weights.gate_proj_bias, [1, local_experts, local_intermediate]),
-            output_tensor=gate,
-        )
-        up = ttnn.sparse_matmul(
-            token_major,
-            weights.up_proj,
-            sparsity=sparsity,
-            nnz=None,
-            memory_config=memory_config,
-            output_tile=output_tile,
-            program_config=gate_up_config,
-            dtype=activation_dtype,
-            compute_kernel_config=expert_compute_kernel_config,
-        )
-        token_major.deallocate(True)
-        up = ttnn.reshape(up, [seq_len, local_experts, local_intermediate])
-        up = ttnn.add(
-            up,
-            ttnn.reshape(weights.up_proj_bias, [1, local_experts, local_intermediate]),
-            output_tensor=up,
-        )
+        if self.multichip_config.use_packed_sparse_gate_up:
+            packed = ttnn.sparse_matmul(
+                token_major,
+                self.packed_gate_up_weight,
+                sparsity=sparsity,
+                nnz=None,
+                memory_config=memory_config,
+                output_tile=output_tile,
+                program_config=gate_up_config,
+                dtype=activation_dtype,
+                compute_kernel_config=expert_compute_kernel_config,
+            )
+            token_major.deallocate(True)
+            packed = ttnn.reshape(packed, [seq_len, local_experts, 2 * local_intermediate])
+            packed = ttnn.add(
+                packed,
+                ttnn.reshape(self.packed_gate_up_bias, [1, local_experts, 2 * local_intermediate]),
+                output_tensor=packed,
+            )
+            if packed.dtype != ttnn.bfloat16:
+                packed = ttnn.typecast(packed, ttnn.bfloat16, memory_config=memory_config)
+            gate = ttnn.slice(
+                packed,
+                [0, 0, 0],
+                [seq_len, local_experts, 2 * local_intermediate],
+                [1, 1, 2],
+                memory_config=memory_config,
+            )
+            up = ttnn.slice(
+                packed,
+                [0, 0, 1],
+                [seq_len, local_experts, 2 * local_intermediate],
+                [1, 1, 2],
+                memory_config=memory_config,
+            )
+            packed.deallocate(True)
+        else:
+            gate = ttnn.sparse_matmul(
+                token_major,
+                weights.gate_proj,
+                sparsity=sparsity,
+                nnz=None,
+                memory_config=memory_config,
+                output_tile=output_tile,
+                program_config=gate_up_config,
+                dtype=activation_dtype,
+                compute_kernel_config=expert_compute_kernel_config,
+            )
+            gate = ttnn.reshape(gate, [seq_len, local_experts, local_intermediate])
+            gate = ttnn.add(
+                gate,
+                ttnn.reshape(weights.gate_proj_bias, [1, local_experts, local_intermediate]),
+                output_tensor=gate,
+            )
+            up = ttnn.sparse_matmul(
+                token_major,
+                weights.up_proj,
+                sparsity=sparsity,
+                nnz=None,
+                memory_config=memory_config,
+                output_tile=output_tile,
+                program_config=gate_up_config,
+                dtype=activation_dtype,
+                compute_kernel_config=expert_compute_kernel_config,
+            )
+            token_major.deallocate(True)
+            up = ttnn.reshape(up, [seq_len, local_experts, local_intermediate])
+            up = ttnn.add(
+                up,
+                ttnn.reshape(weights.up_proj_bias, [1, local_experts, local_intermediate]),
+                output_tensor=up,
+            )
         down_input = apply_swiglu(gate, up, self.experts.config)
         down_input = ttnn.reshape(
             down_input,
@@ -1605,6 +2008,7 @@ __all__ = [
     "EMITTED_CACHE_LENGTH",
     "EMITTED_PREFILL_SEQUENCE",
     "DECODE_COLLECTIVE_ALL_REDUCE",
+    "DECODE_COLLECTIVE_MINIMAL_ALL_REDUCE",
     "DECODE_COLLECTIVE_RS_AG_PAD64",
     "EP_DEGREE",
     "EXPERT_STRATEGY_EP",

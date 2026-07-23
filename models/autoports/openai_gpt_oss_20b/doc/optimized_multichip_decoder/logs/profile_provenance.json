@@ -1,0 +1,37 @@
+{
+  "capture_date_utc": "2026-07-23",
+  "discarded_capture": {
+    "reason": "Two prefill iterations and twenty traced-decode replays overflowed the device profiler buffer; no table from that capture was used."
+  },
+  "final_capture_policy": {
+    "mesh": [1, 4],
+    "prefill_iterations": 1,
+    "traced_decode_replays": 1,
+    "sequence_length": 17,
+    "signposts": [
+      "GPT_OSS_MULTICHIP_PREFILL_LAYER{layer}",
+      "GPT_OSS_MULTICHIP_DECODE_LAYER{layer}"
+    ]
+  },
+  "layer12": {
+    "raw_csv": "generated/profiler/reports/2026_07_23_08_43_51/ops_perf_results_2026_07_23_08_43_51.csv",
+    "raw_csv_sha256": "b0c57cdcf9c62c4213623e7ab35b5ddde2033dbc2b00474a1f2e75395ea06386",
+    "compact_outputs": [
+      "tracy/layer12_prefill_ops.csv",
+      "tracy/layer12_prefill_summary.csv",
+      "tracy/layer12_decode_ops.csv",
+      "tracy/layer12_decode_summary.csv"
+    ]
+  },
+  "layer13": {
+    "raw_csv": "generated/profiler/reports/2026_07_23_08_44_51/ops_perf_results_2026_07_23_08_44_51.csv",
+    "raw_csv_sha256": "0005bb316fe8953070beaee4c48e6c56daf8900a370bfd1e0571903eee93da42",
+    "compact_outputs": [
+      "tracy/layer13_prefill_ops.csv",
+      "tracy/layer13_prefill_summary.csv",
+      "tracy/layer13_decode_ops.csv",
+      "tracy/layer13_decode_summary.csv"
+    ]
+  },
+  "separation": "Profiler capture was completed with watcher disabled. Watcher validation was run later in a separate process."
+}

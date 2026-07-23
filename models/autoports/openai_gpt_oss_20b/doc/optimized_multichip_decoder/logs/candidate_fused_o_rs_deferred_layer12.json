@@ -1,0 +1,31 @@
+{
+  "baseline_over_candidate_speedup": 0.6801292529887913,
+  "baseline_replicated_full_boundary_ms": 0.4488075617700815,
+  "candidate": "fused_o_rs_deferred_through_post_attention_moe",
+  "candidate_collective_sequence": [
+    "fused O matmul + reduce-scatter",
+    "RMS statistics all-gather",
+    "row-sharded router all-reduce",
+    "normalized activation all-gather at sparse gate/up boundary",
+    "expert output minimal all-reduce",
+    "residual all-gather at final residual add"
+  ],
+  "candidate_deferred_gather_full_boundary_ms": 0.6598856905475259,
+  "contract": "Fused O projection H2944 RS -> local736 attention residual -> distributed post-attention RMSNorm -> row-sharded router; gather normalized activations only when the current sparse gate/up H2880 contract requires them, and gather the residual at the layer output.",
+  "layer_idx": 12,
+  "local_hidden_size": 736,
+  "logical_hidden_size": 2880,
+  "mesh": [
+    1,
+    4
+  ],
+  "padded_hidden_size": 2944,
+  "pcc": {
+    "attention_residual": 0.9998507499694824,
+    "final_output": 0.9994503855705261,
+    "post_attention_norm": 0.9997705221176147
+  },
+  "rejection_rule": "The family is retained only if this complete layer boundary beats the selected replicated O-AR + MoE boundary for both layer kinds.",
+  "router_top4_exact": true,
+  "trace_replays": 100
+}

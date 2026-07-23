@@ -1,0 +1,70 @@
+{
+  "candidate": "decode_minimal_matmul_strided_reduce_scatter_async",
+  "dtype": "bfloat8_b",
+  "layer_idx": 13,
+  "logical_shapes": {
+    "attended_global": [
+      1,
+      1,
+      1,
+      4096
+    ],
+    "attended_per_rank": [
+      1,
+      1,
+      1,
+      1024
+    ],
+    "matmul_per_rank": [
+      1,
+      1,
+      1,
+      2944
+    ],
+    "public_output": [
+      1,
+      1,
+      1,
+      2880
+    ],
+    "reduce_scatter_per_rank": [
+      1,
+      1,
+      1,
+      736
+    ],
+    "weight_per_rank": [
+      1024,
+      2944
+    ]
+  },
+  "math_fidelity": "hifi2",
+  "mesh": [
+    1,
+    4
+  ],
+  "program": {
+    "K_block_size": 8,
+    "M_block_size": 1,
+    "N_block_size": 1,
+    "chunk_width_in_mm_blocks": 1,
+    "grid": [
+      4,
+      2
+    ],
+    "num_workers_per_link": 2,
+    "rs_core_grid_offset": [
+      0,
+      2
+    ],
+    "subblock_h": 1,
+    "subblock_w": 1
+  },
+  "scattered_pcc": [
+    0.9997676610946655,
+    0.9997451305389404,
+    0.9997828602790833,
+    0.9997921586036682
+  ],
+  "verdict": "correct"
+}

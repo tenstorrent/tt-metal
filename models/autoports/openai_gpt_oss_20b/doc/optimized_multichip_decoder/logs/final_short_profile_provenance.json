@@ -1,0 +1,43 @@
+{
+  "command": "RUN_MULTICHIP_DECODER_PERF=1 MULTICHIP_DECODER_PERF_SEQ=17 MULTICHIP_DECODER_PREFILL_REPEATS=1 MULTICHIP_DECODER_TRACE_REPLAYS=1 python -m tracy -r -p --check-exit-code -o <logs>/final_short_profile -m pytest -q <test>::test_multichip_decoder_perf",
+  "purpose": "Final-default capture after selecting the M<=32 L1 sparse-output prefill branch.",
+  "watcher_enabled": false,
+  "result": "2 passed",
+  "raw_op_csv": "final_short_profile/reports/2026_07_23_10_20_21/ops_perf_results_2026_07_23_10_20_21.csv",
+  "raw_op_csv_sha256": "32e1a64bbb91d5f54bc569d577e6e15b8d66b8204d11d640bfdc601178952b35",
+  "retention": "Duplicate Tracy host/device intermediates were removed after report generation; the canonical op CSV, compact tables, summaries, PNGs, test log, JUnit, and hashes remain.",
+  "tt_perf_report": {
+    "ep_activity_source": "profile_ep_activity_layer{12,13}_seq17.json, exact profiler input seed and topology",
+    "modeling_policy": "Decode is one token, so layer 12 uses the measured critical-rank maximum K=3 and layer 13 K=2. Prefill has token- and rank-varying EP activity that the scalar --active-experts option cannot represent; prefill tables omit sparse DRAM/FLOP modeling and use the exact activity JSON as the manual control.",
+    "tables": {
+      "prefill_layer12": {
+        "csv": "final_short_profile/tt_perf_prefill_layer12_ep_variable.csv",
+        "sha256": "4488f45596282b0d400ced85e0f7e016659d542e27be4578ddd5ee687bd05278"
+      },
+      "prefill_layer13": {
+        "csv": "final_short_profile/tt_perf_prefill_layer13_ep_variable.csv",
+        "sha256": "455eae97fb36d892b2f40540d5371d7a903ae4d1cfffda9d2fa61d881f92a053"
+      },
+      "decode_layer12": {
+        "csv": "final_short_profile/tt_perf_decode_layer12_epmax3.csv",
+        "sha256": "06a831dabdb7d5ac088dc9e57f6392160988e1bd5997af06a594d30139181bbf"
+      },
+      "decode_layer13": {
+        "csv": "final_short_profile/tt_perf_decode_layer13_epmax2.csv",
+        "sha256": "fec9d27d59a2c86c9e3f6e7f2e12f827e2a083f5849741eddebd11afe860299a"
+      }
+    }
+  },
+  "signpost_wall_ms": {
+    "prefill_layer12": 5.917371,
+    "prefill_layer13": 5.85924,
+    "decode_layer12": 0.815444,
+    "decode_layer13": 0.698863
+  },
+  "authoritative_uninstrumented_ms": {
+    "prefill_layer12": 4.140304448083043,
+    "prefill_layer13": 4.1538703022524714,
+    "decode_layer12": 0.5909199118614197,
+    "decode_layer13": 0.5223633162677288
+  }
+}

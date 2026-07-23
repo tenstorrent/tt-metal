@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="6" time="58.681" timestamp="2026-07-23T08:54:31.688157+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_synthetic_non_aligned_prefill_decode_and_local_paged_cache[blackhole-1x4-12]" time="6.914"><properties><property name="start_timestamp" value="2026-07-23T08:54:33" /><property name="end_timestamp" value="2026-07-23T08:54:40" /></properties></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_boundary_positions_match_current_optimized[blackhole-1x4-12]" time="10.612"><properties><property name="start_timestamp" value="2026-07-23T08:54:40" /><property name="end_timestamp" value="2026-07-23T08:54:50" /></properties><failure message="AssertionError: real layer12 boundary routing position=130: 0.7760217256278756&#10;assert False">mesh_device = MeshDevice(1x4 grid, 4 devices), layer_idx = 12
+
+    @pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+    @parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
+    def test_real_weight_boundary_positions_match_current_optimized(
+        mesh_device,
+        device_params,
+        layer_idx,
+    ):
+        del device_params
+        path = _boundary_reference_path(layer_idx)
+        if not path.is_file():
+            pytest.fail(
+                f"missing {path}; run test_capture_real_weight_current_single_chip_boundary_reference "
+                "in an isolated 1x1 process first"
+            )
+        reference = torch.load(path, weights_only=True)
+        prefill_len = reference["prefill_len"]
+        decode_positions = reference["decode_positions"]
+        with _functional_helpers_for_layer(layer_idx):
+            config = functional_test._config()
+            state = functional_test._real_state()
+            decoder = _decoder(state, config, mesh_device, layer_idx=layer_idx, max_cache_len=256)
+            key_cache, value_cache = decoder.create_kv_cache()
+            physical_blocks = list(reversed(range(decoder.num_cache_blocks)))
+            page_table = decoder.create_page_table(physical_blocks)
+            generator = torch.Generator().manual_seed(41000 + layer_idx)
+            hidden = torch.randn(
+                (1, 1, prefill_len, config.hidden_size),
+                generator=generator,
+                dtype=torch.bfloat16,
+            )
+            tokens = [
+                torch.randn(
+                    (1, 1, 1, config.hidden_size),
+                    generator=generator,
+                    dtype=torch.bfloat16,
+                )
+                for _ in decode_positions
+            ]
+            prefill = decoder.prefill_forward(
+                _replicated(hidden, mesh_device),
+                key_cache=key_cache,
+                value_cache=value_cache,
+                page_table=page_table,
+            )
+            _assert_pcc(
+                reference["prefill"],
+                _replicated_host(prefill),
+                0.99,
+                f"real layer{layer_idx} boundary prefill S={prefill_len}",
+            )
+            _assert_pcc(
+                reference["prefill_key_cache"],
+                _head_sharded_host(decoder._logical_cache_prefix(key_cache, page_table, prefill_len)),
+                0.99,
+                f"real layer{layer_idx} boundary logical K gather",
+            )
+            _assert_pcc(
+                reference["prefill_value_cache"],
+                _head_sharded_host(decoder._logical_cache_prefix(value_cache, page_table, prefill_len)),
+                0.99,
+                f"real layer{layer_idx} boundary logical V gather",
+            )
+            for position, token, expected_attention, expected_routing, expected in zip(
+                decode_positions,
+                tokens,
+                reference["attention"],
+                reference["routing"],
+                reference["decode"],
+            ):
+                attention = decoder._decode_attention(
+                    _replicated(token, mesh_device),
+                    key_cache,
+                    value_cache,
+                    page_table,
+                    position,
+                    decoder.create_position_tensor(position),
+                )
+                _assert_pcc(
+                    expected_attention,
+                    _replicated_host(attention),
+                    0.99,
+                    f"real layer{layer_idx} boundary attention position={position}",
+                )
+                normalized = decoder._decode_norm(attention, weight_name="post_attention_norm")
+                normalized = ttnn.to_memory_config(normalized, ttnn.DRAM_MEMORY_CONFIG)
+                routing = decoder._route(normalized, 1)
+&gt;               _assert_pcc(
+                    expected_routing,
+                    _replicated_host(routing),
+                    0.99,
+                    f"real layer{layer_idx} boundary routing position={position}",
+                )
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:2326:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+reference = tensor([[0.0000, 0.0000, 0.2695, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000,
+         0.2324, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.2656,
+         0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000,
+         0.0000, 0.0000, 0.0000, 0.0000, 0.2197]], dtype=torch.bfloat16)
+actual = tensor([[0.0000, 0.0000, 0.2715, 0.0000, 0.0000, 0.0000, 0.2197, 0.0000, 0.0000,
+         0.2305, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.2676,
+         0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000,
+         0.0000, 0.0000, 0.0000, 0.0000, 0.0000]], dtype=torch.bfloat16)
+threshold = 0.99, label = 'real layer12 boundary routing position=130'
+
+    def _assert_pcc(reference: torch.Tensor, actual: torch.Tensor, threshold: float, label: str):
+        passed, message = comp_pcc(reference.float(), actual.float(), pcc=threshold)
+        print(f"{label}: {message}")
+&gt;       assert passed, f"{label}: {message}"
+E       AssertionError: real layer12 boundary routing position=130: 0.7760217256278756
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:105: AssertionError</failure></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_full_context_cache_allocation_and_last_page_update[blackhole-1x4-12]" time="11.020"><properties><property name="start_timestamp" value="2026-07-23T08:54:50" /><property name="end_timestamp" value="2026-07-23T08:55:01" /></properties></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_synthetic_non_aligned_prefill_decode_and_local_paged_cache[blackhole-1x4-13]" time="6.344"><properties><property name="start_timestamp" value="2026-07-23T08:55:01" /><property name="end_timestamp" value="2026-07-23T08:55:08" /></properties></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_boundary_positions_match_current_optimized[blackhole-1x4-13]" time="10.621"><properties><property name="start_timestamp" value="2026-07-23T08:55:08" /><property name="end_timestamp" value="2026-07-23T08:55:18" /></properties></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_full_context_cache_allocation_and_last_page_update[blackhole-1x4-13]" time="11.627"><properties><property name="start_timestamp" value="2026-07-23T08:55:18" /><property name="end_timestamp" value="2026-07-23T08:55:30" /></properties></testcase></testsuite></testsuites>

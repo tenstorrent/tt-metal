@@ -1,0 +1,32 @@
+{
+  "baseline_over_candidate_speedup": 0.8158317496296906,
+  "baseline_replicated_boundary_ms": 0.5202746661379933,
+  "candidate": "carried_ep_residual_distributed_norm_router_qkv",
+  "candidate_carried_boundary_ms": 0.6377229942008853,
+  "contract": "EP partial H2880 -> pad2944 -> persistent RS -> local736 residual -> distributed RMSNorm -> row-sharded router + AR and persistent fused AG+real packed QKV",
+  "layer_idx": 13,
+  "local_hidden_size": 736,
+  "logical_hidden_size": 2880,
+  "mesh": [
+    1,
+    4
+  ],
+  "padded_hidden_size": 2944,
+  "payload_dtype": "bfloat16",
+  "pcc": {
+    "normalized": 0.9999916553497314,
+    "packed_qkv": 0.999879777431488,
+    "residual": 0.9999999403953552,
+    "router": 0.9999935030937195
+  },
+  "persistent_buffers": [
+    "reduce_scatter_intermediate",
+    "reduce_scatter_output",
+    "stats_all_gather",
+    "qkv_all_gather"
+  ],
+  "qkv_local_width": 1280,
+  "rms_stats_padding_correction": 1.0222222222222221,
+  "router_top4_exact": true,
+  "trace_replays": 500
+}

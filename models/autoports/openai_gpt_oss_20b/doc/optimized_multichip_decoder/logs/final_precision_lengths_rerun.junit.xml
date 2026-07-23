@@ -1,0 +1,292 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="3" time="38.405" timestamp="2026-07-23T08:35:36.181065+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_precision_lengths_match_current_optimized[blackhole-1x4-128-12]" time="11.099"><properties><property name="start_timestamp" value="2026-07-23T08:35:37" /><property name="end_timestamp" value="2026-07-23T08:35:48" /></properties><failure message="AssertionError: real layer12 prefill routing S=128: 0.977706544840909&#10;assert False">mesh_device = MeshDevice(1x4 grid, 4 devices), layer_idx = 12, seq_len = 128
+
+    @pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+    @pytest.mark.parametrize("seq_len", [128, 129, 2048])
+    @parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
+    def test_real_weight_precision_lengths_match_current_optimized(
+        mesh_device,
+        device_params,
+        layer_idx,
+        seq_len,
+    ):
+        """Qualify aligned, non-aligned, and bounded-long real-weight prefill."""
+
+        del device_params
+        path = _precision_reference_path(layer_idx, seq_len)
+        if not path.is_file():
+            pytest.fail(
+                f"missing {path}; run test_capture_real_weight_current_single_chip_precision_reference "
+                "in an isolated 1x1 process first"
+            )
+        reference = torch.load(path, weights_only=True)
+        max_cache_len = seq_len + 1
+        with _functional_helpers_for_layer(layer_idx):
+            config = functional_test._config()
+            state = functional_test._real_state()
+            decoder = _decoder(
+                state,
+                config,
+                mesh_device,
+                layer_idx=layer_idx,
+                max_cache_len=max_cache_len,
+                optimization_config=_precision_optimization_variant(),
+            )
+            physical_blocks = list(reversed(range(decoder.num_cache_blocks)))
+            page_table = decoder.create_page_table(physical_blocks)
+            key_cache, value_cache = decoder.create_kv_cache()
+            generator = torch.Generator().manual_seed(61000 + layer_idx * 10000 + seq_len)
+            hidden = torch.randn(
+                (1, 1, seq_len, config.hidden_size),
+                generator=generator,
+                dtype=torch.bfloat16,
+            )
+            token = torch.randn(
+                (1, 1, 1, config.hidden_size),
+                generator=generator,
+                dtype=torch.bfloat16,
+            )
+            attention_output = decoder._prefill_attention(
+                _replicated(hidden, mesh_device),
+                key_cache,
+                value_cache,
+                page_table,
+                seq_len,
+            )
+            _assert_pcc(
+                reference["attention_output"],
+                _replicated_host(attention_output),
+                0.99,
+                f"real layer{layer_idx} attention residual S={seq_len}",
+            )
+            prefill_routing = _prefill_routing(decoder, attention_output, seq_len)
+            prefill_routing_host = _replicated_host(prefill_routing)
+&gt;           _assert_pcc(
+                reference["prefill_routing"],
+                prefill_routing_host,
+                0.99,
+                f"real layer{layer_idx} prefill routing S={seq_len}",
+            )
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:2148:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+reference = tensor([[0.0000, 0.2354, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.1982, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.1816, 0.0000],
+        ...,
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.2363, 0.0000, 0.0000]],
+       dtype=torch.bfloat16)
+actual = tensor([[0.0000, 0.2354, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.1982, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.1836, 0.0000],
+        ...,
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.2324, 0.0000, 0.0000]],
+       dtype=torch.bfloat16)
+threshold = 0.99, label = 'real layer12 prefill routing S=128'
+
+    def _assert_pcc(reference: torch.Tensor, actual: torch.Tensor, threshold: float, label: str):
+        passed, message = comp_pcc(reference.float(), actual.float(), pcc=threshold)
+        print(f"{label}: {message}")
+&gt;       assert passed, f"{label}: {message}"
+E       AssertionError: real layer12 prefill routing S=128: 0.977706544840909
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:105: AssertionError</failure></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_precision_lengths_match_current_optimized[blackhole-1x4-128-13]" time="10.198"><properties><property name="start_timestamp" value="2026-07-23T08:35:48" /><property name="end_timestamp" value="2026-07-23T08:35:59" /></properties><failure message="AssertionError: real layer13 prefill routing S=128: 0.9747194492560016&#10;assert False">mesh_device = MeshDevice(1x4 grid, 4 devices), layer_idx = 13, seq_len = 128
+
+    @pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+    @pytest.mark.parametrize("seq_len", [128, 129, 2048])
+    @parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
+    def test_real_weight_precision_lengths_match_current_optimized(
+        mesh_device,
+        device_params,
+        layer_idx,
+        seq_len,
+    ):
+        """Qualify aligned, non-aligned, and bounded-long real-weight prefill."""
+
+        del device_params
+        path = _precision_reference_path(layer_idx, seq_len)
+        if not path.is_file():
+            pytest.fail(
+                f"missing {path}; run test_capture_real_weight_current_single_chip_precision_reference "
+                "in an isolated 1x1 process first"
+            )
+        reference = torch.load(path, weights_only=True)
+        max_cache_len = seq_len + 1
+        with _functional_helpers_for_layer(layer_idx):
+            config = functional_test._config()
+            state = functional_test._real_state()
+            decoder = _decoder(
+                state,
+                config,
+                mesh_device,
+                layer_idx=layer_idx,
+                max_cache_len=max_cache_len,
+                optimization_config=_precision_optimization_variant(),
+            )
+            physical_blocks = list(reversed(range(decoder.num_cache_blocks)))
+            page_table = decoder.create_page_table(physical_blocks)
+            key_cache, value_cache = decoder.create_kv_cache()
+            generator = torch.Generator().manual_seed(61000 + layer_idx * 10000 + seq_len)
+            hidden = torch.randn(
+                (1, 1, seq_len, config.hidden_size),
+                generator=generator,
+                dtype=torch.bfloat16,
+            )
+            token = torch.randn(
+                (1, 1, 1, config.hidden_size),
+                generator=generator,
+                dtype=torch.bfloat16,
+            )
+            attention_output = decoder._prefill_attention(
+                _replicated(hidden, mesh_device),
+                key_cache,
+                value_cache,
+                page_table,
+                seq_len,
+            )
+            _assert_pcc(
+                reference["attention_output"],
+                _replicated_host(attention_output),
+                0.99,
+                f"real layer{layer_idx} attention residual S={seq_len}",
+            )
+            prefill_routing = _prefill_routing(decoder, attention_output, seq_len)
+            prefill_routing_host = _replicated_host(prefill_routing)
+&gt;           _assert_pcc(
+                reference["prefill_routing"],
+                prefill_routing_host,
+                0.99,
+                f"real layer{layer_idx} prefill routing S={seq_len}",
+            )
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:2148:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+reference = tensor([[0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.2852, 0.0000],
+        ...,
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.2471, 0.0000,  ..., 0.3008, 0.2148, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000]],
+       dtype=torch.bfloat16)
+actual = tensor([[0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.2832, 0.0000],
+        ...,
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.2471, 0.0000,  ..., 0.3008, 0.2188, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000]],
+       dtype=torch.bfloat16)
+threshold = 0.99, label = 'real layer13 prefill routing S=128'
+
+    def _assert_pcc(reference: torch.Tensor, actual: torch.Tensor, threshold: float, label: str):
+        passed, message = comp_pcc(reference.float(), actual.float(), pcc=threshold)
+        print(f"{label}: {message}")
+&gt;       assert passed, f"{label}: {message}"
+E       AssertionError: real layer13 prefill routing S=128: 0.9747194492560016
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:105: AssertionError</failure></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_precision_lengths_match_current_optimized[blackhole-1x4-129-12]" time="10.301"><properties><property name="start_timestamp" value="2026-07-23T08:35:59" /><property name="end_timestamp" value="2026-07-23T08:36:09" /></properties><failure message="AssertionError: real layer12 prefill routing S=129: 0.9787110528958326&#10;assert False">mesh_device = MeshDevice(1x4 grid, 4 devices), layer_idx = 12, seq_len = 129
+
+    @pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+    @pytest.mark.parametrize("seq_len", [128, 129, 2048])
+    @parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
+    def test_real_weight_precision_lengths_match_current_optimized(
+        mesh_device,
+        device_params,
+        layer_idx,
+        seq_len,
+    ):
+        """Qualify aligned, non-aligned, and bounded-long real-weight prefill."""
+
+        del device_params
+        path = _precision_reference_path(layer_idx, seq_len)
+        if not path.is_file():
+            pytest.fail(
+                f"missing {path}; run test_capture_real_weight_current_single_chip_precision_reference "
+                "in an isolated 1x1 process first"
+            )
+        reference = torch.load(path, weights_only=True)
+        max_cache_len = seq_len + 1
+        with _functional_helpers_for_layer(layer_idx):
+            config = functional_test._config()
+            state = functional_test._real_state()
+            decoder = _decoder(
+                state,
+                config,
+                mesh_device,
+                layer_idx=layer_idx,
+                max_cache_len=max_cache_len,
+                optimization_config=_precision_optimization_variant(),
+            )
+            physical_blocks = list(reversed(range(decoder.num_cache_blocks)))
+            page_table = decoder.create_page_table(physical_blocks)
+            key_cache, value_cache = decoder.create_kv_cache()
+            generator = torch.Generator().manual_seed(61000 + layer_idx * 10000 + seq_len)
+            hidden = torch.randn(
+                (1, 1, seq_len, config.hidden_size),
+                generator=generator,
+                dtype=torch.bfloat16,
+            )
+            token = torch.randn(
+                (1, 1, 1, config.hidden_size),
+                generator=generator,
+                dtype=torch.bfloat16,
+            )
+            attention_output = decoder._prefill_attention(
+                _replicated(hidden, mesh_device),
+                key_cache,
+                value_cache,
+                page_table,
+                seq_len,
+            )
+            _assert_pcc(
+                reference["attention_output"],
+                _replicated_host(attention_output),
+                0.99,
+                f"real layer{layer_idx} attention residual S={seq_len}",
+            )
+            prefill_routing = _prefill_routing(decoder, attention_output, seq_len)
+            prefill_routing_host = _replicated_host(prefill_routing)
+&gt;           _assert_pcc(
+                reference["prefill_routing"],
+                prefill_routing_host,
+                0.99,
+                f"real layer{layer_idx} prefill routing S={seq_len}",
+            )
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:2148:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+reference = tensor([[0.0000, 0.2207, 0.0000,  ..., 0.0000, 0.0000, 0.2021],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.2578, 0.0000, 0.2109,  ..., 0.0000, 0.0000, 0.0000],
+        ...,
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.2480, 0.0000],
+        [0.2051, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000]],
+       dtype=torch.bfloat16)
+actual = tensor([[0.0000, 0.2197, 0.0000,  ..., 0.0000, 0.0000, 0.2041],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.2578, 0.0000, 0.2080,  ..., 0.0000, 0.0000, 0.0000],
+        ...,
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000],
+        [0.0000, 0.0000, 0.0000,  ..., 0.0000, 0.2480, 0.0000],
+        [0.2061, 0.0000, 0.0000,  ..., 0.0000, 0.0000, 0.0000]],
+       dtype=torch.bfloat16)
+threshold = 0.99, label = 'real layer12 prefill routing S=129'
+
+    def _assert_pcc(reference: torch.Tensor, actual: torch.Tensor, threshold: float, label: str):
+        passed, message = comp_pcc(reference.float(), actual.float(), pcc=threshold)
+        print(f"{label}: {message}")
+&gt;       assert passed, f"{label}: {message}"
+E       AssertionError: real layer12 prefill routing S=129: 0.9787110528958326
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:105: AssertionError</failure></testcase><testcase time="0.412" /></testsuite></testsuites>

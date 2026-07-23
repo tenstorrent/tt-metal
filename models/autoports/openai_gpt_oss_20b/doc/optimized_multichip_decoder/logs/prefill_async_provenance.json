@@ -1,0 +1,30 @@
+{
+  "candidate": "persistent-buffer asynchronous all-reduce at both prefill collective placements",
+  "mesh": [1, 4],
+  "layer_kinds": {
+    "12": "sliding",
+    "13": "full"
+  },
+  "correctness": "Both layer kinds passed the real-weight S=17 accepted PCC gates.",
+  "candidate_ms": {
+    "seq17_layer12": 5.118337,
+    "seq17_layer13": 5.131175,
+    "seq128_layer12": 21.82394,
+    "seq128_layer13": 25.302397
+  },
+  "contemporaneous_selected_ms": {
+    "seq17_layer12": 5.115365,
+    "seq17_layer13": 5.131078,
+    "seq128_layer12": 21.817186,
+    "seq128_layer13": 25.305283
+  },
+  "decision": "Removed: no coherent benefit across both lengths and layer kinds, while adding persistent prefill buffers and semaphores.",
+  "artifacts": [
+    "candidate_prefill_async_ar_correctness_s17_attempt1.junit.xml",
+    "candidate_prefill_async_ar_s17.json",
+    "candidate_prefill_async_ar_perf_s17.junit.xml",
+    "candidate_prefill_async_ar_layer12_seq128.json",
+    "candidate_prefill_async_ar_layer13_seq128.json",
+    "candidate_prefill_async_ar_perf_s128.junit.xml"
+  ]
+}

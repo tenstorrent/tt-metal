@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="2" tests="13" time="71.538" timestamp="2026-07-23T08:50:56.489002+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_synthetic_non_aligned_prefill_decode_and_local_paged_cache[blackhole-1x4-12]" time="1.051"><properties><property name="start_timestamp" value="2026-07-23T08:50:57" /><property name="end_timestamp" value="2026-07-23T08:50:59" /></properties><failure message="Failed: missing models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/current_optimized_synthetic_layer12.pt; run test_capture_current_single_chip_optimized_reference in an isolated 1x1 process first">mesh_device = MeshDevice(1x4 grid, 4 devices), layer_idx = 12
+
+    @pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+    @parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
+    def test_synthetic_non_aligned_prefill_decode_and_local_paged_cache(
+        mesh_device,
+        device_params,
+        layer_idx,
+    ):
+        del device_params
+        seq_len = 17
+        cache_len = 128
+        if not _reference_path(layer_idx).is_file():
+&gt;           pytest.fail(
+                f"missing {_reference_path(layer_idx)}; run "
+                "test_capture_current_single_chip_optimized_reference in an isolated 1x1 process first"
+            )
+E           Failed: missing models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/current_optimized_synthetic_layer12.pt; run test_capture_current_single_chip_optimized_reference in an isolated 1x1 process first
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:1496: Failed</failure></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_synthetic_non_aligned_prefill_crosses_page_and_work_chunk[blackhole-1x4-12]" time="6.666"><properties><property name="start_timestamp" value="2026-07-23T08:50:59" /><property name="end_timestamp" value="2026-07-23T08:51:05" /></properties></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_stacked_decoder_device_layout_contract[blackhole-1x4]" time="11.671"><properties><property name="start_timestamp" value="2026-07-23T08:51:05" /><property name="end_timestamp" value="2026-07-23T08:51:17" /></properties></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_full_context_cache_allocation_and_last_page_update[blackhole-1x4-12]" time="0.469"><properties><property name="start_timestamp" value="2026-07-23T08:51:17" /><property name="end_timestamp" value="2026-07-23T08:51:17" /></properties><skipped type="pytest.skip" message="set RUN_MULTICHIP_CONTEXT=1 for the 131072-token cache gate">/home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:1880: set RUN_MULTICHIP_CONTEXT=1 for the 131072-token cache gate</skipped></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_boundary_positions_match_current_optimized[blackhole-1x4-12]" time="0.447"><properties><property name="start_timestamp" value="2026-07-23T08:51:17" /><property name="end_timestamp" value="2026-07-23T08:51:18" /></properties><failure message="Failed: missing models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/current_optimized_real_boundary_layer12.pt; run test_capture_real_weight_current_single_chip_boundary_reference in an isolated 1x1 process first">mesh_device = MeshDevice(1x4 grid, 4 devices), layer_idx = 12
+
+    @pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+    @parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
+    def test_real_weight_boundary_positions_match_current_optimized(
+        mesh_device,
+        device_params,
+        layer_idx,
+    ):
+        del device_params
+        path = _boundary_reference_path(layer_idx)
+        if not path.is_file():
+&gt;           pytest.fail(
+                f"missing {path}; run test_capture_real_weight_current_single_chip_boundary_reference "
+                "in an isolated 1x1 process first"
+            )
+E           Failed: missing models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/current_optimized_real_boundary_layer12.pt; run test_capture_real_weight_current_single_chip_boundary_reference in an isolated 1x1 process first
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:2250: Failed</failure></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_warmed_trace_replay_mutates_hidden_position_and_local_cache[blackhole-1x4-12]" time="10.274"><properties><property name="start_timestamp" value="2026-07-23T08:51:18" /><property name="end_timestamp" value="2026-07-23T08:51:28" /></properties></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_warmed_long_position_trace_replay_matches_eager[blackhole-1x4-12]" time="10.710"><properties><property name="start_timestamp" value="2026-07-23T08:51:28" /><property name="end_timestamp" value="2026-07-23T08:51:39" /></properties></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_synthetic_non_aligned_prefill_decode_and_local_paged_cache[blackhole-1x4-13]" time="0.463"><properties><property name="start_timestamp" value="2026-07-23T08:51:39" /><property name="end_timestamp" value="2026-07-23T08:51:39" /></properties><failure message="Failed: missing models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/current_optimized_synthetic_layer13.pt; run test_capture_current_single_chip_optimized_reference in an isolated 1x1 process first">mesh_device = MeshDevice(1x4 grid, 4 devices), layer_idx = 13
+
+    @pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+    @parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
+    def test_synthetic_non_aligned_prefill_decode_and_local_paged_cache(
+        mesh_device,
+        device_params,
+        layer_idx,
+    ):
+        del device_params
+        seq_len = 17
+        cache_len = 128
+        if not _reference_path(layer_idx).is_file():
+&gt;           pytest.fail(
+                f"missing {_reference_path(layer_idx)}; run "
+                "test_capture_current_single_chip_optimized_reference in an isolated 1x1 process first"
+            )
+E           Failed: missing models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/current_optimized_synthetic_layer13.pt; run test_capture_current_single_chip_optimized_reference in an isolated 1x1 process first
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:1496: Failed</failure></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_synthetic_non_aligned_prefill_crosses_page_and_work_chunk[blackhole-1x4-13]" time="6.565"><properties><property name="start_timestamp" value="2026-07-23T08:51:39" /><property name="end_timestamp" value="2026-07-23T08:51:46" /></properties></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_full_context_cache_allocation_and_last_page_update[blackhole-1x4-13]" time="0.457"><properties><property name="start_timestamp" value="2026-07-23T08:51:46" /><property name="end_timestamp" value="2026-07-23T08:51:46" /></properties><skipped type="pytest.skip" message="set RUN_MULTICHIP_CONTEXT=1 for the 131072-token cache gate">/home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:1880: set RUN_MULTICHIP_CONTEXT=1 for the 131072-token cache gate</skipped></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_boundary_positions_match_current_optimized[blackhole-1x4-13]" time="0.447"><properties><property name="start_timestamp" value="2026-07-23T08:51:46" /><property name="end_timestamp" value="2026-07-23T08:51:47" /></properties><failure message="Failed: missing models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/current_optimized_real_boundary_layer13.pt; run test_capture_real_weight_current_single_chip_boundary_reference in an isolated 1x1 process first">mesh_device = MeshDevice(1x4 grid, 4 devices), layer_idx = 13
+
+    @pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+    @parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
+    def test_real_weight_boundary_positions_match_current_optimized(
+        mesh_device,
+        device_params,
+        layer_idx,
+    ):
+        del device_params
+        path = _boundary_reference_path(layer_idx)
+        if not path.is_file():
+&gt;           pytest.fail(
+                f"missing {path}; run test_capture_real_weight_current_single_chip_boundary_reference "
+                "in an isolated 1x1 process first"
+            )
+E           Failed: missing models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/current_optimized_real_boundary_layer13.pt; run test_capture_real_weight_current_single_chip_boundary_reference in an isolated 1x1 process first
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:2250: Failed</failure></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_warmed_trace_replay_mutates_hidden_position_and_local_cache[blackhole-1x4-13]" time="10.145"><properties><property name="start_timestamp" value="2026-07-23T08:51:47" /><property name="end_timestamp" value="2026-07-23T08:51:57" /></properties></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_warmed_long_position_trace_replay_matches_eager[blackhole-1x4-13]" time="10.600"><properties><property name="start_timestamp" value="2026-07-23T08:51:57" /><property name="end_timestamp" value="2026-07-23T08:52:08" /></properties></testcase></testsuite></testsuites>

@@ -7,11 +7,12 @@ import inspect
 import json
 import os
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
 import torch
+import torch.nn.functional as F
 from tracy import signpost
 
 import models.autoports.openai_gpt_oss_20b.tests.test_functional_decoder as functional_test
@@ -19,7 +20,7 @@ import ttnn
 from models.autoports.openai_gpt_oss_20b.tests.test_fused_decoder import _functional_helpers_for_layer
 from models.autoports.openai_gpt_oss_20b.tt.functional_decoder import _state_tensor
 from models.autoports.openai_gpt_oss_20b.tt.multichip_decoder import (
-    DECODE_COLLECTIVE_ALL_REDUCE,
+    DECODE_COLLECTIVE_MINIMAL_ALL_REDUCE,
     DECODE_COLLECTIVE_RS_AG_PAD64,
     EP_DEGREE,
     EXPERT_STRATEGY_EP,
@@ -30,16 +31,15 @@ from models.autoports.openai_gpt_oss_20b.tt.multichip_decoder import (
     MultichipDecoder,
     _validate_qkv_geometry,
 )
-from models.autoports.openai_gpt_oss_20b.tt.optimized_decoder import (
-    OptimizationConfig,
-    OptimizedDecoder,
-)
+from models.autoports.openai_gpt_oss_20b.tt.optimized_decoder import OptimizationConfig, OptimizedDecoder
 from models.common.utility_functions import comp_pcc
 from models.demos.gpt_oss.tests.test_factory import parametrize_mesh_with_fabric
+from models.demos.gpt_oss.tt.ccl import CCLManager
 
 SLIDING_LAYER = 12
 FULL_LAYER = 13
 ARTIFACT_DIR = Path("models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs")
+OPTIMIZED_ARTIFACT_DIR = Path("models/autoports/openai_gpt_oss_20b/doc/optimized_multichip_decoder/logs")
 
 
 def _replicated(tensor: torch.Tensor, mesh_device, *, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
@@ -217,21 +217,101 @@ def _precision_optimization_variant() -> OptimizationConfig | None:
 def _multichip_candidate_config_from_env() -> MultichipConfig:
     """Expose off-by-default topology candidates to correctness/perf tests."""
 
+    defaults = MultichipConfig()
+
+    def optional_pair(name: str):
+        value = os.environ.get(name)
+        return tuple(int(part) for part in value.split("x")) if value else None
+
+    def optional_int(name: str):
+        value = os.environ.get(name)
+        return int(value) if value else None
+
     return MultichipConfig(
         decode_collective=os.environ.get(
             "MULTICHIP_DECODE_COLLECTIVE_AB",
-            DECODE_COLLECTIVE_ALL_REDUCE,
+            defaults.decode_collective,
         ),
         expert_strategy=os.environ.get(
             "MULTICHIP_EXPERT_STRATEGY",
             EXPERT_STRATEGY_EP,
         ),
+        use_fused_o_projection_rs=os.environ.get("MULTICHIP_FUSED_O_RS", "0") == "1",
         use_fused_o_projection_ag=os.environ.get("MULTICHIP_FUSED_O_AG", "0") == "1",
         fused_o_ag_pad_hidden=os.environ.get("MULTICHIP_FUSED_O_AG_PAD_HIDDEN", "0") == "1",
         fused_ag_matmul_payload_dtype=os.environ.get(
             "MULTICHIP_FUSED_AG_PAYLOAD_DTYPE",
             "bfloat16",
         ),
+        qkv_input_cores=int(os.environ.get("MULTICHIP_QKV_INPUT_CORES", str(defaults.qkv_input_cores))),
+        qkv_in0_block_w=int(os.environ.get("MULTICHIP_QKV_IN0_BLOCK_W", str(defaults.qkv_in0_block_w))),
+        qkv_output_tiles_per_core=int(
+            os.environ.get("MULTICHIP_QKV_OUTPUT_TILES_PER_CORE", str(defaults.qkv_output_tiles_per_core))
+        ),
+        qkv_out_subblock_w=int(os.environ.get("MULTICHIP_QKV_OUT_SUBBLOCK_W", str(defaults.qkv_out_subblock_w))),
+        attention_weight_dtype=os.environ.get(
+            "MULTICHIP_ATTENTION_WEIGHT_DTYPE",
+            defaults.attention_weight_dtype,
+        ),
+        decode_attention_weight_dtype=os.environ.get(
+            "MULTICHIP_DECODE_ATTENTION_WEIGHT_DTYPE",
+            (
+                os.environ["MULTICHIP_ATTENTION_WEIGHT_DTYPE"]
+                if "MULTICHIP_ATTENTION_WEIGHT_DTYPE" in os.environ
+                else defaults.decode_attention_weight_dtype
+            ),
+        ),
+        attention_math_fidelity=os.environ.get(
+            "MULTICHIP_ATTENTION_MATH_FIDELITY",
+            defaults.attention_math_fidelity,
+        ),
+        long_decode_attention_math_fidelity=os.environ.get(
+            "MULTICHIP_LONG_DECODE_ATTENTION_MATH_FIDELITY",
+            defaults.long_decode_attention_math_fidelity,
+        ),
+        expert_weight_dtype=os.environ.get("MULTICHIP_EXPERT_WEIGHT_DTYPE", "bfloat8_b"),
+        expert_gate_up_weight_dtype=os.environ.get("MULTICHIP_EXPERT_GATE_UP_WEIGHT_DTYPE", "selected"),
+        expert_down_weight_dtype=os.environ.get("MULTICHIP_EXPERT_DOWN_WEIGHT_DTYPE", "selected"),
+        expert_activation_dtype=os.environ.get("MULTICHIP_EXPERT_ACTIVATION_DTYPE", "bfloat16"),
+        expert_math_fidelity=os.environ.get("MULTICHIP_EXPERT_MATH_FIDELITY", defaults.expert_math_fidelity),
+        decode_ccl_dtype=os.environ.get("MULTICHIP_DECODE_CCL_DTYPE", defaults.decode_ccl_dtype),
+        prefill_expert_cores=optional_pair("MULTICHIP_PREFILL_EXPERT_CORES") or defaults.prefill_expert_cores,
+        expert_in0_block_w=(optional_int("MULTICHIP_PREFILL_EXPERT_IN0_BLOCK_W") or defaults.expert_in0_block_w),
+        prefill_expert_subblock_w=(
+            optional_int("MULTICHIP_PREFILL_EXPERT_SUBBLOCK_W") or defaults.prefill_expert_subblock_w
+        ),
+        decode_gate_up_cores=optional_pair("MULTICHIP_DECODE_GATE_UP_CORES") or defaults.decode_gate_up_cores,
+        decode_down_cores=optional_pair("MULTICHIP_DECODE_DOWN_CORES") or defaults.decode_down_cores,
+        decode_gate_up_in0_block_w=(
+            optional_int("MULTICHIP_DECODE_GATE_UP_IN0_BLOCK_W") or defaults.decode_gate_up_in0_block_w
+        ),
+        decode_down_in0_block_w=(optional_int("MULTICHIP_DECODE_DOWN_IN0_BLOCK_W") or defaults.decode_down_in0_block_w),
+        decode_gate_up_subblock_w=(
+            optional_int("MULTICHIP_DECODE_GATE_UP_SUBBLOCK_W") or defaults.decode_gate_up_subblock_w
+        ),
+        decode_down_subblock_w=(optional_int("MULTICHIP_DECODE_DOWN_SUBBLOCK_W") or defaults.decode_down_subblock_w),
+        prefill_expert_output_l1=os.environ.get(
+            "MULTICHIP_PREFILL_EXPERT_OUTPUT_L1",
+            "1" if defaults.prefill_expert_output_l1 else "0",
+        )
+        == "1",
+        prefill_expert_output_l1_max_seq=int(
+            os.environ.get(
+                "MULTICHIP_PREFILL_EXPERT_OUTPUT_L1_MAX_SEQ",
+                str(defaults.prefill_expert_output_l1_max_seq),
+            )
+        ),
+        decode_expert_output_l1=os.environ.get(
+            "MULTICHIP_DECODE_EXPERT_OUTPUT_L1",
+            "1" if defaults.decode_expert_output_l1 else "0",
+        )
+        == "1",
+        active_prefill_chunk_size=int(
+            os.environ.get("MULTICHIP_ACTIVE_PREFILL_CHUNK_SIZE", str(defaults.active_prefill_chunk_size))
+        ),
+        use_packed_sparse_gate_up=os.environ.get("MULTICHIP_PACKED_SPARSE_GATE_UP", "0") == "1",
+        use_dram_sharded_decode_attention=os.environ.get("MULTICHIP_DRAM_SHARDED_DECODE_ATTENTION", "0") == "1",
+        dram_attention_core_limit=int(os.environ.get("MULTICHIP_DRAM_ATTENTION_CORE_LIMIT", "90")),
     )
 
 
@@ -527,11 +607,18 @@ def test_multichip_runtime_contract_and_fallback_audit():
     assert config.kv_cache_dtype == "bfloat8_b"
     assert config.expert_weight_dtype == "bfloat8_b"
     assert config.expert_activation_dtype == "bfloat16"
-    assert config.decode_collective == DECODE_COLLECTIVE_ALL_REDUCE
+    assert config.decode_collective == DECODE_COLLECTIVE_MINIMAL_ALL_REDUCE
     assert config.expert_strategy == EXPERT_STRATEGY_EP
     assert not config.use_fused_o_projection_ag
     assert not config.fused_o_ag_pad_hidden
     assert config.fused_ag_matmul_payload_dtype == "bfloat16"
+    assert config.attention_weight_dtype == "bfloat16"
+    assert config.decode_attention_weight_dtype == "bfloat8_b"
+    assert config.attention_math_fidelity == "hifi2"
+    assert config.decode_gate_up_cores == (9, 10)
+    assert config.decode_down_cores == (9, 10)
+    assert config.prefill_expert_output_l1
+    assert config.prefill_expert_output_l1_max_seq == 32
 
     assert MultichipDecoder.prefill_forward is not OptimizedDecoder.prefill_forward
     assert MultichipDecoder.decode_forward is not OptimizedDecoder.decode_forward
@@ -567,12 +654,18 @@ def test_multichip_runtime_contract_and_fallback_audit():
             assert token not in source, f"{method.__name__} contains runtime fallback token {token!r}"
 
     expert_source = inspect.getsource(MultichipDecoder._ep_active_expert_chunk)
-    assert expert_source.count("ttnn.sparse_matmul(") == 3
+    # The source contains the off-default packed gate/up branch plus the
+    # selected split gate, up, and down calls.  Because the branches are
+    # mutually exclusive and packing defaults off, the runtime still issues
+    # exactly three sparse matmuls and never executes dense all-expert work.
+    assert expert_source.count("ttnn.sparse_matmul(") == 4
+    assert not config.use_packed_sparse_gate_up
+    assert "if self.multichip_config.use_packed_sparse_gate_up:" in expert_source
     assert "nnz=None" in expert_source
     assert "ttnn.mesh_partition(" in expert_source
 
 
-def test_multichip_geometry_validation():
+def test_multichip_geometry_validation(expect_error):
     assert _validate_qkv_geometry(
         MultichipConfig(),
         k_tiles=90,
@@ -580,9 +673,21 @@ def test_multichip_geometry_validation():
         grid_x=11,
         grid_y=10,
     ) == (9, 20, 2)
-    with pytest.raises(ValueError, match="must divide K tiles"):
+    assert _validate_qkv_geometry(
+        MultichipConfig(
+            qkv_input_cores=23,
+            qkv_in0_block_w=2,
+            qkv_output_tiles_per_core=1,
+            qkv_out_subblock_w=1,
+        ),
+        k_tiles=90,
+        n_tiles=40,
+        grid_x=11,
+        grid_y=10,
+    ) == (4, 40, 4)
+    with expect_error(ValueError, "must divide K tiles"):
         _validate_qkv_geometry(
-            MultichipConfig(qkv_input_cores=11),
+            MultichipConfig(qkv_input_cores=11, qkv_in0_block_w=10),
             k_tiles=90,
             n_tiles=40,
             grid_x=11,
@@ -591,7 +696,7 @@ def test_multichip_geometry_validation():
 
 
 def test_blackhole_fused_matmul_reduce_scatter_is_source_rejected():
-    """Keep the known-racy fused MM+RS family out of the Blackhole A/B matrix."""
+    """Record the upstream prefill-only gate; decode is exercised separately."""
 
     source_path = Path("models/demos/gpt_oss/tt/attention/operations.py")
     source = source_path.read_text()
@@ -606,13 +711,155 @@ def test_blackhole_fused_matmul_reduce_scatter_is_source_rejected():
             "#46181: M_tiles=32 races on Blackhole; reduce-scatter can read "
             "matmul output before completion and produce nondeterministic garbage"
         ),
+        "scope": "upstream prefill M_tiles=32 only; not used to reject decode M_tiles=1",
         "source": str(source_path),
         "production_gate": 'if "blackhole" in ttnn.get_arch_name(): return False',
     }
-    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
-    path = ARTIFACT_DIR / "candidate_fused_mm_rs_blackhole_rejection.json"
+    OPTIMIZED_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    path = OPTIMIZED_ARTIFACT_DIR / "candidate_fused_mm_rs_blackhole_rejection.json"
     path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
     print(f"FUSED_MM_RS_REJECTION {json.dumps(artifact, sort_keys=True)} artifact={path}")
+
+
+@pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+@parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
+def test_decode_fused_o_projection_reduce_scatter_exact_model_shape(
+    mesh_device,
+    device_params,
+    layer_idx,
+):
+    """Adapt fused MM+RS to the exact M1/K1024/N2944 TP4 O projection."""
+
+    del device_params
+    if os.environ.get("RUN_MULTICHIP_TOPOLOGY_CANDIDATES") != "1":
+        pytest.skip("set RUN_MULTICHIP_TOPOLOGY_CANDIDATES=1 for topology candidates")
+
+    with _functional_helpers_for_layer(layer_idx):
+        config = functional_test._config()
+        state = functional_test._real_state()
+        output = _state_tensor(state, layer_idx, "self_attn.o_proj.weight").to(torch.bfloat16)
+        padded_weight = F.pad(output.T, (0, 64))
+        generator = torch.Generator().manual_seed(73000 + layer_idx)
+        attended = torch.randn(
+            (1, 1, 1, config.num_attention_heads * config.head_dim),
+            generator=generator,
+            dtype=torch.bfloat16,
+        )
+
+    attended_device = ttnn.from_torch(
+        attended,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    weight_device = ttnn.from_torch(
+        padded_weight,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Ring)
+    compute = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    mm_config = ttnn.MinimalMatmulConfig(
+        M_block_size=1,
+        K_block_size=8,
+        N_block_size=1,
+        subblock_h=1,
+        subblock_w=1,
+        compute_with_storage_grid_size=ttnn.CoreCoord(4, 2),
+    )
+    mm_out, scattered = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+        attended_device,
+        weight_device,
+        3,
+        ccl.get_rs_ping_pong_semaphore(),
+        ttnn.CoreCoord(0, 2),
+        compute_kernel_config=compute,
+        num_links=1,
+        memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+        rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        topology=ttnn.Topology.Ring,
+        cluster_axis=1,
+        config=mm_config,
+        barrier_semaphore=ccl.get_barrier_semaphore(),
+        chunk_width_in_mm_blocks=1,
+        num_workers_per_link=2,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    attended_chunks = torch.chunk(attended.float(), TP_DEGREE, dim=3)
+    weight_chunks = torch.chunk(padded_weight.float(), TP_DEGREE, dim=0)
+    partials = [
+        torch.matmul(local_input, local_weight) for local_input, local_weight in zip(attended_chunks, weight_chunks)
+    ]
+    reduced = torch.stack(partials).sum(dim=0)
+    golden_scattered = torch.chunk(reduced, TP_DEGREE, dim=3)
+    scattered_pcc = []
+    for rank, (actual, expected) in enumerate(zip(_device_torch(scattered), golden_scattered)):
+        _assert_pcc(expected, actual, 0.99, f"layer{layer_idx} fused MM+RS rank{rank}")
+        scattered_pcc.append(
+            float(torch.corrcoef(torch.stack([expected.float().flatten(), actual.float().flatten()]))[0, 1])
+        )
+
+    gathered = ttnn.experimental.all_gather_async(
+        scattered,
+        dim=3,
+        cluster_axis=1,
+        mesh_device=mesh_device,
+        topology=ttnn.Topology.Ring,
+        multi_device_global_semaphore=ccl.get_ag_ping_pong_semaphore(),
+        num_links=1,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        barrier_semaphore=ccl.get_barrier_semaphore(),
+    )
+    ttnn.synchronize_device(mesh_device)
+    gathered_host = _replicated_host(gathered)[..., : config.hidden_size]
+    _assert_pcc(reduced[..., : config.hidden_size], gathered_host, 0.99, f"layer{layer_idx} fused MM+RS+AG")
+    artifact = {
+        "candidate": "decode_minimal_matmul_strided_reduce_scatter_async",
+        "layer_idx": layer_idx,
+        "mesh": list(TARGET_MESH_SHAPE),
+        "logical_shapes": {
+            "attended_global": list(attended.shape),
+            "attended_per_rank": [1, 1, 1, 1024],
+            "weight_per_rank": [1024, 2944],
+            "matmul_per_rank": [1, 1, 1, 2944],
+            "reduce_scatter_per_rank": [1, 1, 1, 736],
+            "public_output": [1, 1, 1, 2880],
+        },
+        "dtype": "bfloat8_b",
+        "math_fidelity": "hifi2",
+        "program": {
+            "M_block_size": 1,
+            "K_block_size": 8,
+            "N_block_size": 1,
+            "subblock_h": 1,
+            "subblock_w": 1,
+            "grid": [4, 2],
+            "rs_core_grid_offset": [0, 2],
+            "chunk_width_in_mm_blocks": 1,
+            "num_workers_per_link": 2,
+        },
+        "scattered_pcc": scattered_pcc,
+        "verdict": "correct",
+    }
+    OPTIMIZED_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    path = OPTIMIZED_ARTIFACT_DIR / f"candidate_fused_mm_rs_decode_layer{layer_idx}.json"
+    path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
+    print(f"FUSED_MM_RS_DECODE_RESULT {json.dumps(artifact, sort_keys=True)} artifact={path}")
+    mm_out.deallocate(True)
+    scattered.deallocate(True)
+    gathered.deallocate(True)
 
 
 @pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
@@ -622,7 +869,7 @@ def test_decode_collective_rs_ag_pad64_matches_selected_all_reduce(
     device_params,
     layer_idx,
 ):
-    """Compare both real decode reductions with the selected ring all-reduce."""
+    """Compare the real padded RS+AG decode path with the final default."""
 
     del device_params
     if os.environ.get("RUN_MULTICHIP_TOPOLOGY_CANDIDATES") != "1":
@@ -637,9 +884,7 @@ def test_decode_collective_rs_ag_pad64_matches_selected_all_reduce(
             mesh_device,
             layer_idx=layer_idx,
             max_cache_len=128,
-            multichip_config=MultichipConfig(
-                decode_collective=DECODE_COLLECTIVE_ALL_REDUCE,
-            ),
+            multichip_config=MultichipConfig(),
         )
         candidate = _decoder(
             state,
@@ -647,7 +892,8 @@ def test_decode_collective_rs_ag_pad64_matches_selected_all_reduce(
             mesh_device,
             layer_idx=layer_idx,
             max_cache_len=128,
-            multichip_config=MultichipConfig(
+            multichip_config=replace(
+                MultichipConfig(),
                 decode_collective=DECODE_COLLECTIVE_RS_AG_PAD64,
             ),
         )
@@ -714,6 +960,13 @@ def test_decode_collective_rs_ag_pad64_matches_selected_all_reduce(
         )
         artifact = {
             "candidate": DECODE_COLLECTIVE_RS_AG_PAD64,
+            "selected_config": asdict(MultichipConfig()),
+            "candidate_config": asdict(
+                replace(
+                    MultichipConfig(),
+                    decode_collective=DECODE_COLLECTIVE_RS_AG_PAD64,
+                )
+            ),
             "layer_idx": layer_idx,
             "mesh": list(TARGET_MESH_SHAPE),
             "payload_dtype": "bfloat16",
@@ -726,15 +979,15 @@ def test_decode_collective_rs_ag_pad64_matches_selected_all_reduce(
             "persistent_resources": "CCLManager ping-pong semaphores",
             "output_pcc": pcc,
         }
-        ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
-        path = ARTIFACT_DIR / f"candidate_rs_ag_pad64_layer{layer_idx}.json"
+        OPTIMIZED_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+        path = OPTIMIZED_ARTIFACT_DIR / f"candidate_rs_ag_pad64_layer{layer_idx}.json"
         path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
         print(f"RS_AG_PAD64_RESULT {json.dumps(artifact, sort_keys=True)} artifact={path}")
 
 
 @pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
 @parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
-def test_fused_o_projection_all_gather_natural_bf16_candidate(
+def test_fused_o_projection_all_gather_selected_family_candidate(
     mesh_device,
     device_params,
     layer_idx,
@@ -755,9 +1008,19 @@ def test_fused_o_projection_all_gather_natural_bf16_candidate(
             layer_idx=layer_idx,
             max_cache_len=128,
             multichip_config=MultichipConfig(
+                decode_collective=DECODE_COLLECTIVE_MINIMAL_ALL_REDUCE,
                 use_fused_o_projection_ag=True,
                 fused_o_ag_pad_hidden=False,
-                fused_ag_matmul_payload_dtype="bfloat16",
+                fused_ag_matmul_payload_dtype="bfloat8_b",
+                attention_weight_dtype="bfloat8_b",
+                attention_math_fidelity="hifi2",
+                long_decode_attention_math_fidelity="hifi2",
+                decode_gate_up_cores=(9, 10),
+                decode_gate_up_in0_block_w=45,
+                decode_gate_up_subblock_w=1,
+                decode_down_cores=(9, 10),
+                decode_down_in0_block_w=90,
+                decode_down_subblock_w=1,
             ),
         )
     generator = torch.Generator().manual_seed(8181 + layer_idx)
@@ -786,7 +1049,7 @@ def test_fused_o_projection_all_gather_natural_bf16_candidate(
             compute_kernel_config=decoder.decode_compute_kernel_config,
         )
         partial = ttnn.to_memory_config(partial, ttnn.L1_MEMORY_CONFIG)
-        return decoder._ring_all_reduce(
+        return decoder._all_reduce(
             partial,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
@@ -834,14 +1097,14 @@ def test_fused_o_projection_all_gather_natural_bf16_candidate(
         f"GPT_OSS_FUSED_O_AG_LAYER{layer_idx}",
     )
     artifact = {
-        "candidate": "fused_attended_ag_local_o_natural720_bfloat16",
+        "candidate": "fused_attended_ag_local_o_natural720_bfloat8_b",
         "layer_idx": layer_idx,
         "mesh": list(TARGET_MESH_SHAPE),
         "attended_local_shape": [1, 1, 1, 1024],
         "attended_gather_shape": [1, 1, 1, 4096],
         "local_output_shape": [1, 1, 1, 720],
         "logical_output_shape": [1, 1, 1, 2880],
-        "payload_dtype": "bfloat16",
+        "payload_dtype": "bfloat8_b",
         "persistent_buffer": "attended all-gather [1,1,1,4096]",
         "output_pcc": output_pcc,
         "trace_replays": trace_replays,
@@ -849,8 +1112,8 @@ def test_fused_o_projection_all_gather_natural_bf16_candidate(
         "candidate_fused_ag_local_o_ms": candidate_ms,
         "selected_over_candidate_speedup": selected_ms / candidate_ms,
     }
-    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
-    path = ARTIFACT_DIR / f"candidate_fused_o_ag_natural_bf16_layer{layer_idx}.json"
+    OPTIMIZED_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    path = OPTIMIZED_ARTIFACT_DIR / f"candidate_fused_o_ag_selected_layer{layer_idx}.json"
     path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
     print(f"FUSED_O_AG_RESULT {json.dumps(artifact, sort_keys=True)} artifact={path}")
 
@@ -993,6 +1256,434 @@ def test_tp4_gate_selected_experts_match_ep4_candidate(
 
 @pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
 @parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
+def test_fused_o_rs_deferred_through_post_attention_moe(
+    mesh_device,
+    device_params,
+    layer_idx,
+):
+    """Carry fused O+RS through post-attention norm/router to the sparse boundary."""
+
+    del device_params
+    if os.environ.get("RUN_MULTICHIP_TOPOLOGY_CANDIDATES") != "1":
+        pytest.skip("set RUN_MULTICHIP_TOPOLOGY_CANDIDATES=1 for topology candidates")
+    hidden_size = 2880
+    padded_hidden_size = 2944
+    local_hidden_size = padded_hidden_size // TP_DEGREE
+    trace_replays = int(os.environ.get("MULTICHIP_TOPOLOGY_TRACE_REPLAYS", "100"))
+
+    with _functional_helpers_for_layer(layer_idx):
+        config = functional_test._config()
+        state = functional_test._real_state()
+        decoder = _decoder(
+            state,
+            config,
+            mesh_device,
+            layer_idx=layer_idx,
+            max_cache_len=128,
+            multichip_config=MultichipConfig(
+                decode_collective=DECODE_COLLECTIVE_MINIMAL_ALL_REDUCE,
+                use_fused_o_projection_rs=True,
+            ),
+        )
+
+    post_attention_norm = _state_tensor(
+        state,
+        layer_idx,
+        "post_attention_layernorm.weight",
+    ).to(torch.bfloat16)
+    candidate_norm_weight = ttnn.from_torch(
+        F.pad(post_attention_norm, (0, 64)).reshape(1, 1, 1, padded_hidden_size),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    router_weight = _state_tensor(state, layer_idx, "mlp.router.weight").T.to(torch.bfloat16)
+    candidate_router_weight = ttnn.from_torch(
+        F.pad(router_weight, (0, 0, 0, 64)),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    router_bias = _state_tensor(state, layer_idx, "mlp.router.bias").float()
+    candidate_router_bias = ttnn.from_torch(
+        torch.stack([router_bias] + [torch.zeros_like(router_bias) for _ in range(TP_DEGREE - 1)]),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    stats_gather = {"buffer": None}
+    normalized_gather = ttnn.zeros(
+        [1, 1, 1, padded_hidden_size],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    residual_gather = ttnn.zeros(
+        [1, 1, 1, padded_hidden_size],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    generator = torch.Generator().manual_seed(73700 + layer_idx)
+    hidden = torch.randn(
+        (1, 1, 1, hidden_size),
+        generator=generator,
+        dtype=torch.bfloat16,
+    )
+    attended = torch.randn(
+        (1, 1, 1, config.num_attention_heads * config.head_dim),
+        generator=generator,
+        dtype=torch.bfloat16,
+    )
+    tt_hidden = _replicated(hidden, mesh_device)
+    baseline_attended_input = ttnn.from_torch(
+        attended,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    candidate_attended_input = ttnn.from_torch(
+        attended,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def baseline_boundary():
+        attended_local = ttnn.to_memory_config(
+            baseline_attended_input,
+            ttnn.L1_MEMORY_CONFIG,
+        )
+        partial = ttnn.linear(
+            attended_local,
+            decoder.decode_output_weight,
+            bias=decoder.output_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=decoder.tp_o_output_config,
+            program_config=decoder.tp_o_program_config,
+            compute_kernel_config=decoder.decode_compute_kernel_config,
+        )
+        projected = decoder._minimal_all_reduce(
+            partial,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        attention_residual = ttnn.add(
+            tt_hidden,
+            projected,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        normalized = decoder._decode_norm(
+            attention_residual,
+            weight_name="post_attention_norm",
+        )
+        normalized = ttnn.to_memory_config(normalized, ttnn.DRAM_MEMORY_CONFIG)
+        routing = decoder._route(normalized, 1)
+        normalized_for_expert = ttnn.clone(
+            normalized,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        partial_expert = decoder._ep_active_expert_chunk(
+            normalized_for_expert,
+            routing,
+            is_decode=True,
+        )
+        expert_output = decoder._minimal_all_reduce(
+            partial_expert,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        output = ttnn.add(
+            attention_residual,
+            expert_output,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return attention_residual, normalized, routing, output
+
+    def candidate_boundary():
+        attended_local = ttnn.clone(
+            candidate_attended_input,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        projected_local = decoder._fused_o_projection_reduce_scatter(
+            attended_local,
+            compute_kernel_config=decoder.decode_compute_kernel_config,
+        )
+        projected_local = ttnn.to_memory_config(
+            projected_local,
+            ttnn.L1_MEMORY_CONFIG,
+        )
+        padded_hidden = ttnn.pad(
+            tt_hidden,
+            [(0, 0), (0, 0), (0, 0), (0, 64)],
+            value=0.0,
+        )
+        hidden_local = ttnn.mesh_partition(
+            padded_hidden,
+            dim=3,
+            cluster_axis=decoder.mesh_config.tp_axis,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        attention_residual_local = ttnn.add(
+            hidden_local,
+            projected_local,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        stats = ttnn.rms_norm_pre_all_gather(
+            attention_residual_local,
+            compute_kernel_config=decoder.decode_compute_kernel_config,
+            dtype=ttnn.bfloat16,
+        )
+        if stats_gather["buffer"] is None:
+            stats_shape = list(stats.shape)
+            stats_shape[-1] *= TP_DEGREE
+            stats_gather["buffer"] = ttnn.zeros(
+                stats_shape,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        gathered_stats = ttnn.experimental.all_gather_async(
+            stats,
+            persistent_output_buffer=stats_gather["buffer"],
+            dim=3,
+            multi_device_global_semaphore=decoder.ccl_manager.get_ag_ping_pong_semaphore(),
+            num_links=decoder.ccl_manager.num_links,
+            topology=decoder.ccl_manager.topology,
+            cluster_axis=decoder.mesh_config.tp_axis,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        gathered_stats = ttnn.mul(
+            gathered_stats,
+            padded_hidden_size / hidden_size,
+        )
+        normalized_local = ttnn.rms_norm_post_all_gather(
+            attention_residual_local,
+            gathered_stats,
+            epsilon=decoder.rms_norm_eps,
+            weight=candidate_norm_weight,
+            compute_kernel_config=decoder.decode_compute_kernel_config,
+            dtype=ttnn.bfloat16,
+        )
+
+        router_input = ttnn.typecast(
+            ttnn.reshape(normalized_local, [1, local_hidden_size]),
+            ttnn.float32,
+        )
+        router_logits = ttnn.linear(
+            router_input,
+            candidate_router_weight,
+            bias=candidate_router_bias,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=decoder.compute_kernel_config,
+        )
+        router_logits = decoder._ring_all_reduce(
+            router_logits,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        router_logits = ttnn.typecast(router_logits, ttnn.bfloat16)
+        top_values, top_indices = ttnn.topk(
+            router_logits,
+            decoder.experts_per_token,
+            1,
+            True,
+            True,
+        )
+        top_values = ttnn.softmax(top_values, 1, numeric_stable=True)
+        routing = ttnn.scatter(
+            ttnn.zeros_like(router_logits),
+            dim=1,
+            index=top_indices,
+            src=top_values,
+        )
+
+        normalized_padded = ttnn.experimental.all_gather_async(
+            normalized_local,
+            persistent_output_buffer=normalized_gather,
+            dim=3,
+            multi_device_global_semaphore=decoder.ccl_manager.get_ag_ping_pong_semaphore(),
+            num_links=decoder.ccl_manager.num_links,
+            topology=decoder.ccl_manager.topology,
+            cluster_axis=decoder.mesh_config.tp_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        normalized = ttnn.slice(
+            normalized_padded,
+            [0, 0, 0, 0],
+            [1, 1, 1, hidden_size],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        normalized_for_expert = ttnn.clone(
+            normalized,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        partial_expert = decoder._ep_active_expert_chunk(
+            normalized_for_expert,
+            routing,
+            is_decode=True,
+        )
+        expert_output = decoder._minimal_all_reduce(
+            partial_expert,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        attention_residual_padded = ttnn.experimental.all_gather_async(
+            attention_residual_local,
+            persistent_output_buffer=residual_gather,
+            dim=3,
+            multi_device_global_semaphore=decoder.ccl_manager.get_ag_ping_pong_semaphore(),
+            num_links=decoder.ccl_manager.num_links,
+            topology=decoder.ccl_manager.topology,
+            cluster_axis=decoder.mesh_config.tp_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attention_residual = ttnn.slice(
+            attention_residual_padded,
+            [0, 0, 0, 0],
+            [1, 1, 1, hidden_size],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        output = ttnn.add(
+            attention_residual,
+            expert_output,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return attention_residual_local, normalized_local, routing, output
+
+    baseline_residual, baseline_normalized, baseline_routing, baseline_output = baseline_boundary()
+    candidate_residual, candidate_normalized, candidate_routing, candidate_output = candidate_boundary()
+    ttnn.synchronize_device(mesh_device)
+    baseline_residual_local = ttnn.mesh_partition(
+        ttnn.pad(
+            baseline_residual,
+            [(0, 0), (0, 0), (0, 0), (0, 64)],
+            value=0.0,
+        ),
+        dim=3,
+        cluster_axis=decoder.mesh_config.tp_axis,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    baseline_normalized_local = ttnn.mesh_partition(
+        ttnn.pad(
+            baseline_normalized,
+            [(0, 0), (0, 0), (0, 0), (0, 64)],
+            value=0.0,
+        ),
+        dim=3,
+        cluster_axis=decoder.mesh_config.tp_axis,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    pcc_values = {"attention_residual": [], "post_attention_norm": []}
+    for name, reference_mesh, actual_mesh in (
+        ("attention_residual", baseline_residual_local, candidate_residual),
+        ("post_attention_norm", baseline_normalized_local, candidate_normalized),
+    ):
+        for rank, (reference, actual) in enumerate(zip(_device_torch(reference_mesh), _device_torch(actual_mesh))):
+            _assert_pcc(
+                reference,
+                actual,
+                0.99,
+                f"layer{layer_idx} deferred fused O+RS {name} rank{rank}",
+            )
+            pcc_values[name].append(
+                float(torch.corrcoef(torch.stack([reference.float().flatten(), actual.float().flatten()]))[0, 1])
+            )
+    _assert_top4_agreement(
+        _replicated_host(baseline_routing),
+        _replicated_host(candidate_routing),
+        f"layer{layer_idx} deferred fused O+RS router",
+        threshold=1.0,
+    )
+    baseline_output_host = _replicated_host(baseline_output)
+    candidate_output_host = _replicated_host(candidate_output)
+    _assert_pcc(
+        baseline_output_host,
+        candidate_output_host,
+        0.99,
+        f"layer{layer_idx} deferred fused O+RS final output",
+    )
+    output_pcc = float(
+        torch.corrcoef(
+            torch.stack(
+                [
+                    baseline_output_host.float().flatten(),
+                    candidate_output_host.float().flatten(),
+                ]
+            )
+        )[0, 1]
+    )
+
+    baseline_ms = _time_trace_replay(
+        mesh_device,
+        baseline_boundary,
+        trace_replays,
+        f"GPT_OSS_FUSED_O_RS_DEFERRED_BASELINE_LAYER{layer_idx}",
+    )
+    candidate_ms = _time_trace_replay(
+        mesh_device,
+        candidate_boundary,
+        trace_replays,
+        f"GPT_OSS_FUSED_O_RS_DEFERRED_CANDIDATE_LAYER{layer_idx}",
+    )
+    artifact = {
+        "candidate": "fused_o_rs_deferred_through_post_attention_moe",
+        "layer_idx": layer_idx,
+        "mesh": list(TARGET_MESH_SHAPE),
+        "logical_hidden_size": hidden_size,
+        "padded_hidden_size": padded_hidden_size,
+        "local_hidden_size": local_hidden_size,
+        "pcc": {name: min(values) for name, values in pcc_values.items()} | {"final_output": output_pcc},
+        "router_top4_exact": True,
+        "trace_replays": trace_replays,
+        "baseline_replicated_full_boundary_ms": baseline_ms,
+        "candidate_deferred_gather_full_boundary_ms": candidate_ms,
+        "baseline_over_candidate_speedup": baseline_ms / candidate_ms,
+        "candidate_collective_sequence": [
+            "fused O matmul + reduce-scatter",
+            "RMS statistics all-gather",
+            "row-sharded router all-reduce",
+            "normalized activation all-gather at sparse gate/up boundary",
+            "expert output minimal all-reduce",
+            "residual all-gather at final residual add",
+        ],
+        "contract": (
+            "Fused O projection H2944 RS -> local736 attention residual -> "
+            "distributed post-attention RMSNorm -> row-sharded router; gather "
+            "normalized activations only when the current sparse gate/up H2880 "
+            "contract requires them, and gather the residual at the layer output."
+        ),
+        "rejection_rule": (
+            "The family is retained only if this complete layer boundary beats "
+            "the selected replicated O-AR + MoE boundary for both layer kinds."
+        ),
+    }
+    OPTIMIZED_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    path = OPTIMIZED_ARTIFACT_DIR / f"candidate_fused_o_rs_deferred_layer{layer_idx}.json"
+    path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
+    print(f"FUSED_O_RS_DEFERRED_RESULT {json.dumps(artifact, sort_keys=True)} " f"artifact={path}")
+
+
+@pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+@parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
 def test_carried_ep_residual_to_distributed_norm_router_and_qkv(
     mesh_device,
     device_params,
@@ -1019,9 +1710,14 @@ def test_carried_ep_residual_to_distributed_norm_router_and_qkv(
             layer_idx=layer_idx,
             max_cache_len=128,
             multichip_config=MultichipConfig(
-                decode_collective=DECODE_COLLECTIVE_RS_AG_PAD64,
+                decode_collective=DECODE_COLLECTIVE_MINIMAL_ALL_REDUCE,
             ),
         )
+    candidate_ccl = CCLManager(
+        mesh_device,
+        num_links=decoder.multichip_config.num_links,
+        topology=ttnn.Topology.Ring,
+    )
 
     # The current real-weight fixture is layer-scoped. Decoder layers share
     # this exact input-norm/router/QKV geometry, so this layer's real weights
@@ -1062,7 +1758,7 @@ def test_carried_ep_residual_to_distributed_norm_router_and_qkv(
         padded_qkv,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
-        dtype=payload_dtype,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -1141,7 +1837,7 @@ def test_carried_ep_residual_to_distributed_norm_router_and_qkv(
         normalized = ttnn.to_memory_config(normalized, ttnn.DRAM_MEMORY_CONFIG)
         routing = decoder._route(normalized, 1)
         partial = decoder._ep_active_expert_chunk(normalized, routing, is_decode=True)
-        expert_output = decoder._ring_all_reduce(partial, memory_config=ttnn.L1_MEMORY_CONFIG)
+        expert_output = decoder._all_reduce(partial, memory_config=ttnn.L1_MEMORY_CONFIG)
         next_hidden = ttnn.add(
             tt_hidden,
             expert_output,
@@ -1173,11 +1869,11 @@ def test_carried_ep_residual_to_distributed_norm_router_and_qkv(
             partial,
             persistent_output_buffers=[rs_intermediate, rs_output],
             dim=3,
-            multi_device_global_semaphore=decoder.ccl_manager.get_rs_ping_pong_semaphore(),
-            num_links=decoder.ccl_manager.num_links,
+            multi_device_global_semaphore=candidate_ccl.get_rs_ping_pong_semaphore(),
+            num_links=candidate_ccl.num_links,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             intermediate_memory_config=ttnn.L1_MEMORY_CONFIG,
-            topology=decoder.ccl_manager.topology,
+            topology=candidate_ccl.topology,
             cluster_axis=decoder.mesh_config.tp_axis,
         )
         padded_hidden = ttnn.pad(tt_hidden, [(0, 0), (0, 0), (0, 0), (0, 64)], value=0.0)
@@ -1212,9 +1908,9 @@ def test_carried_ep_residual_to_distributed_norm_router_and_qkv(
             stats,
             persistent_output_buffer=stats_gather["buffer"],
             dim=3,
-            multi_device_global_semaphore=decoder.ccl_manager.get_ag_ping_pong_semaphore(),
-            num_links=decoder.ccl_manager.num_links,
-            topology=decoder.ccl_manager.topology,
+            multi_device_global_semaphore=candidate_ccl.get_ag_ping_pong_semaphore(),
+            num_links=candidate_ccl.num_links,
+            topology=candidate_ccl.topology,
             cluster_axis=decoder.mesh_config.tp_axis,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
@@ -1272,13 +1968,13 @@ def test_carried_ep_residual_to_distributed_norm_router_and_qkv(
                 subblock_w=2,
                 compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
             ),
-            multi_device_global_semaphore=decoder.ccl_manager.get_ag_ping_pong_semaphore(),
-            topology=decoder.ccl_manager.topology,
+            multi_device_global_semaphore=candidate_ccl.get_ag_ping_pong_semaphore(),
+            topology=candidate_ccl.topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
             compute_kernel_config=decoder.decode_compute_kernel_config,
             persistent_output_buffer=qkv_gather,
-            num_links=decoder.ccl_manager.num_links,
+            num_links=candidate_ccl.num_links,
             cluster_axis=decoder.mesh_config.tp_axis,
             force_transpose=True,
             num_workers_per_link=4,
@@ -2013,6 +2709,7 @@ def test_real_weight_precision_lengths_match_current_optimized(
             mesh_device,
             layer_idx=layer_idx,
             max_cache_len=max_cache_len,
+            multichip_config=_multichip_candidate_config_from_env(),
             optimization_config=_precision_optimization_variant(),
         )
         physical_blocks = list(reversed(range(decoder.num_cache_blocks)))
@@ -2241,7 +2938,14 @@ def test_warmed_trace_replay_mutates_hidden_position_and_local_cache(
     with _functional_helpers_for_layer(layer_idx):
         config = functional_test._config()
         state = functional_test._real_state()
-        decoder = _decoder(state, config, mesh_device, layer_idx=layer_idx, max_cache_len=max_cache_len)
+        decoder = _decoder(
+            state,
+            config,
+            mesh_device,
+            layer_idx=layer_idx,
+            max_cache_len=max_cache_len,
+            multichip_config=_multichip_candidate_config_from_env(),
+        )
         reverse_blocks = list(reversed(range(decoder.num_cache_blocks)))
         eager_page_table = decoder.create_page_table(reverse_blocks)
         trace_page_table = decoder.create_page_table(reverse_blocks)
@@ -2382,7 +3086,14 @@ def test_warmed_long_position_trace_replay_matches_eager(
     with _functional_helpers_for_layer(layer_idx):
         config = functional_test._config()
         state = functional_test._real_state()
-        decoder = _decoder(state, config, mesh_device, layer_idx=layer_idx, max_cache_len=max_cache_len)
+        decoder = _decoder(
+            state,
+            config,
+            mesh_device,
+            layer_idx=layer_idx,
+            max_cache_len=max_cache_len,
+            multichip_config=_multichip_candidate_config_from_env(),
+        )
         reverse_blocks = list(reversed(range(decoder.num_cache_blocks)))
         eager_page_table = decoder.create_page_table(reverse_blocks)
         trace_page_table = decoder.create_page_table(reverse_blocks)
@@ -2702,9 +3413,36 @@ def test_multichip_decoder_perf(mesh_device, device_params, layer_idx):
         "implementation": (f"TP4 attention + {candidate_config.expert_strategy.upper()}4 gate-selected active experts"),
         "decode_collective": candidate_config.decode_collective,
         "expert_strategy": candidate_config.expert_strategy,
+        "fused_o_projection_rs": candidate_config.use_fused_o_projection_rs,
         "fused_o_projection_ag": candidate_config.use_fused_o_projection_ag,
         "fused_o_ag_pad_hidden": candidate_config.fused_o_ag_pad_hidden,
         "fused_ag_matmul_payload_dtype": candidate_config.fused_ag_matmul_payload_dtype,
+        "attention_weight_dtype": candidate_config.attention_weight_dtype,
+        "decode_attention_weight_dtype": candidate_config.decode_attention_weight_dtype,
+        "short_decode_attention_weight_dtype": candidate_config.decode_attention_weight_dtype,
+        "long_decode_attention_weight_dtype": candidate_config.attention_weight_dtype,
+        "attention_math_fidelity": candidate_config.attention_math_fidelity,
+        "long_decode_attention_math_fidelity": candidate_config.long_decode_attention_math_fidelity,
+        "expert_weight_dtype": candidate_config.expert_weight_dtype,
+        "expert_gate_up_weight_dtype": candidate_config.expert_gate_up_weight_dtype,
+        "expert_down_weight_dtype": candidate_config.expert_down_weight_dtype,
+        "expert_activation_dtype": candidate_config.expert_activation_dtype,
+        "expert_math_fidelity": candidate_config.expert_math_fidelity,
+        "decode_ccl_dtype": candidate_config.decode_ccl_dtype,
+        "prefill_expert_cores": candidate_config.prefill_expert_cores,
+        "prefill_expert_in0_block_w": candidate_config.expert_in0_block_w,
+        "prefill_expert_subblock_w": candidate_config.prefill_expert_subblock_w,
+        "prefill_expert_output_l1": candidate_config.prefill_expert_output_l1,
+        "prefill_expert_output_l1_max_seq": candidate_config.prefill_expert_output_l1_max_seq,
+        "decode_expert_output_l1": candidate_config.decode_expert_output_l1,
+        "decode_gate_up_cores": candidate_config.decode_gate_up_cores,
+        "decode_gate_up_in0_block_w": candidate_config.decode_gate_up_in0_block_w,
+        "decode_gate_up_subblock_w": candidate_config.decode_gate_up_subblock_w,
+        "decode_down_cores": candidate_config.decode_down_cores,
+        "decode_down_in0_block_w": candidate_config.decode_down_in0_block_w,
+        "decode_down_subblock_w": candidate_config.decode_down_subblock_w,
+        "use_dram_sharded_decode_attention": candidate_config.use_dram_sharded_decode_attention,
+        "dram_attention_core_limit": candidate_config.dram_attention_core_limit,
         "layer_idx": layer_idx,
         "layer_kind": "sliding" if layer_idx == SLIDING_LAYER else "full",
         "mesh": list(TARGET_MESH_SHAPE),
@@ -2720,3 +3458,94 @@ def test_multichip_decoder_perf(mesh_device, device_params, layer_idx):
     }
     _perf_result_path(layer_idx, seq_len).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(f"MULTICHIP_PERF {json.dumps(result, sort_keys=True)}")
+
+
+@pytest.mark.parametrize("seq_len", [17, 128])
+@pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+@parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
+def test_profile_ep_activity_accounting(mesh_device, device_params, layer_idx, seq_len):
+    """Capture rank-local EP activity for the exact profiler inputs."""
+
+    del device_params
+    if os.environ.get("RUN_MULTICHIP_EP_ACCOUNTING") != "1":
+        pytest.skip("set RUN_MULTICHIP_EP_ACCOUNTING=1 to capture profiler EP activity")
+    with _functional_helpers_for_layer(layer_idx):
+        config = functional_test._config()
+        state = functional_test._real_state()
+        decoder = _decoder(
+            state,
+            config,
+            mesh_device,
+            layer_idx=layer_idx,
+            max_cache_len=max(256, seq_len + 1),
+        )
+    page_table = decoder.create_page_table(list(reversed(range(decoder.num_cache_blocks))))
+    key_cache, value_cache = decoder.create_kv_cache()
+    generator = torch.Generator().manual_seed(61000 + layer_idx)
+    prefill_hidden = torch.randn(
+        (1, 1, seq_len, config.hidden_size),
+        generator=generator,
+        dtype=torch.bfloat16,
+    )
+    decode_hidden = torch.randn(
+        (1, 1, 1, config.hidden_size),
+        generator=generator,
+        dtype=torch.bfloat16,
+    )
+    attention_output = decoder._prefill_attention(
+        _replicated(prefill_hidden, mesh_device),
+        key_cache,
+        value_cache,
+        page_table,
+        seq_len,
+    )
+    prefill_routing = _replicated_host(_prefill_routing(decoder, attention_output, seq_len))
+    position = decoder.create_position_tensor(seq_len)
+    decode_attention = decoder._decode_attention(
+        _replicated(decode_hidden, mesh_device),
+        key_cache,
+        value_cache,
+        page_table,
+        seq_len,
+        position,
+    )
+    decode_normalized = decoder._decode_norm(decode_attention, weight_name="post_attention_norm")
+    decode_normalized = ttnn.to_memory_config(decode_normalized, ttnn.DRAM_MEMORY_CONFIG)
+    decode_routing = _replicated_host(decoder._route(decode_normalized, 1))
+
+    def summarize(routing: torch.Tensor):
+        selected = routing.reshape(-1, decoder.num_experts).ne(0)
+        ranks = []
+        for rank in range(EP_DEGREE):
+            local = selected[:, rank * decoder.local_num_experts : (rank + 1) * decoder.local_num_experts]
+            per_token = local.sum(dim=1)
+            histogram = torch.bincount(per_token, minlength=decoder.experts_per_token + 1)
+            ranks.append(
+                {
+                    "rank": rank,
+                    "per_token_max": int(per_token.max().item()),
+                    "per_token_histogram": {
+                        str(count): int(tokens) for count, tokens in enumerate(histogram.tolist()) if tokens
+                    },
+                    "unique_active_experts_in_batch_group": int(local.any(dim=0).sum().item()),
+                }
+            )
+        return ranks
+
+    result = {
+        "mesh": list(TARGET_MESH_SHAPE),
+        "expert_parallel_degree": EP_DEGREE,
+        "global_experts": decoder.num_experts,
+        "local_experts_per_rank": decoder.local_num_experts,
+        "global_selected_experts_per_token": decoder.experts_per_token,
+        "layer_idx": layer_idx,
+        "layer_kind": "sliding" if layer_idx == SLIDING_LAYER else "full",
+        "seq_len": seq_len,
+        "input_seed": 61000 + layer_idx,
+        "prefill_rank_activity": summarize(prefill_routing),
+        "decode_rank_activity": summarize(decode_routing),
+    }
+    OPTIMIZED_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    path = OPTIMIZED_ARTIFACT_DIR / f"profile_ep_activity_layer{layer_idx}_seq{seq_len}.json"
+    path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    print(f"EP_ACTIVITY {json.dumps(result, sort_keys=True)} artifact={path}")

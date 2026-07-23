@@ -1,0 +1,60 @@
+{
+  "stage": "optimized-multichip-decoder",
+  "model": "openai/gpt-oss-20b",
+  "starting_commit": "753f7207969",
+  "scope": "decoder only; no full-model, generator, or vLLM work",
+  "target_path": {
+    "mesh": [1, 4],
+    "hardware": "four Blackhole P300c devices",
+    "fabric": "FABRIC_1D_RING",
+    "implementation": "TP4 attention plus EP4 gate-selected top-4 experts",
+    "single_chip_fallback_accepted": false
+  },
+  "final_default": {
+    "decode_collective": "two persistent-buffer BF16 width-sharded L1 minimal async all-reduces",
+    "prefill_collective": "generic ring all-reduce",
+    "interlayer_residual": "replicated BF16 TILE DRAM [1,1,S,2880], with no inter-layer collective",
+    "short_attention_weights": "BFP8_B below position 127",
+    "long_attention_weights": "BF16 at and above position 127",
+    "expert_execution": "exactly three sparse matmuls over gate-selected active experts",
+    "expert_output_memory": "L1 for decode and internally padded prefill M<=32; DRAM for prefill M>=64",
+    "context": 131072
+  },
+  "authoritative_performance": {
+    "protocol": "20 warmed prefill iterations; 500 replays of captured decode trace",
+    "seq17_layer12_ms": {"prefill": 4.140304448083043, "decode": 0.5909199118614197},
+    "seq17_layer13_ms": {"prefill": 4.1538703022524714, "decode": 0.5223633162677288},
+    "seq128_layer12_ms": {"prefill": 21.81267235428095, "decode": 1.0390307120978832},
+    "seq128_layer13_ms": {"prefill": 25.292353541590273, "decode": 1.0237185321748257},
+    "artifacts": "logs/final_default_after_review2_layer{12,13}_seq{17,128}.json"
+  },
+  "correctness_and_stress": {
+    "real_weight_lengths": "logs/final_precision_after_l1_policy.junit.xml: 8 passed across S=17,128,129,2048 and both layer kinds",
+    "boundary_and_long_trace": "logs/final_long_watcher_clean.junit.xml: 4 passed at positions 127-131 and trace/cache banks 128-131,191-193",
+    "advertised_context": "logs/final_endpoint_after_review2.junit.xml: 2 passed at 131072",
+    "whole_default_suite": "logs/final_default_full_suite_after_review2.junit.xml: 34 passed, 26 expected opt-in skips",
+    "runtime_fallback_audit": "logs/final_static_contract_audit_after_remediation.junit.xml: 3 static checks passed; logs/final_throw_on_fallback_hardware.junit.xml: both selected real-weight S=17 layer paths passed with throw_exception_on_fallback=true",
+    "post_run_health": "logs/final_hardware_health_after_review2.log: four devices available and reset-capable",
+    "final_watcher": "logs/final_watcher_after_review2.junit.xml: 4 passed at positions 127-131 and trace/cache banks 128-131,191-193"
+  },
+  "profiler": {
+    "final_short": "logs/final_short_profile_provenance.json",
+    "final_long": "logs/final_long_profile_provenance.json",
+    "roofline_reconciliation": "logs/performance_accounting.json",
+    "actionable_advice": "Decode reports use exact critical rank-local EP activity. Prefill sparse modeling is omitted because scalar active-experts cannot represent token/rank variation; exact histograms are retained. DRAM sharding, L1 placement, K/subblock geometry, and fidelity advice have candidate evidence."
+  },
+  "candidate_families": {
+    "topology_and_collectives": "README.md Operation-topology audit resolution plus candidate_rs_ag_pad64_*, candidate_fused_o_ag_*, candidate_fused_mm_rs_*, candidate_fused_o_rs_*, candidate_fused_o_rs_deferred_*, candidate_carried_residual_*, and candidate_prefill_async_ar_*",
+    "sparse_geometry_and_memory": "logs/sparse_policy_sweep.json and sparse_* artifacts",
+    "dtype_and_fidelity": "logs/candidate_decode_only_bfp4_*, candidate_attention_*, candidate_expert_*, and candidate_ccl_bfp8_*",
+    "sharding": "shard_advise/, candidate_advisor_*, and candidate_dram_sharded_attention_*",
+    "persistent_buffers": "selected decode minimal AR plus off-default carried/fused/prefill async candidates; logs/minimal_all_reduce_config.json enumerates API knobs and non-exposed fields"
+  },
+  "documentation": {
+    "summary": "README.md",
+    "commands_and_chronology": "work_log.md",
+    "context_and_memory_contract": "../context_contract.json"
+  },
+  "stage_review": "stage_review.md: clean-pass; no required work, concerns, or hard-check gaps",
+  "local_commit": "pending final clean-pass"
+}

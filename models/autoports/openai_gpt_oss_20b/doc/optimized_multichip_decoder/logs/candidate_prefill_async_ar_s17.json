@@ -1,0 +1,22 @@
+{
+  "candidate": "composite_async_prefill_all_reduce_with_persistent_semaphores",
+  "mesh": [1, 4],
+  "prefill_repeats": 20,
+  "trace_replays": 500,
+  "seq_len": 17,
+  "layers": {
+    "12": {
+      "candidate_prefill_ms": 5.118336644954979,
+      "selected_prefill_ms": 5.115365,
+      "candidate_traced_decode_ms": 0.5912907477468252,
+      "selected_traced_decode_ms": 0.591170
+    },
+    "13": {
+      "candidate_prefill_ms": 5.131174740381539,
+      "selected_prefill_ms": 5.131078,
+      "candidate_traced_decode_ms": 0.5225779302418232,
+      "selected_traced_decode_ms": 0.522507
+    }
+  },
+  "decision": "reject: no warmed end-to-end gain at either layer kind"
+}
