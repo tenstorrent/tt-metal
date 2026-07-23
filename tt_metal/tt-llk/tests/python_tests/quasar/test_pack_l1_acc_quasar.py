@@ -285,7 +285,6 @@ def test_pack_l1_acc_quasar(
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
-        "boot_mode": boot_mode,
         "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
@@ -299,6 +298,7 @@ def test_pack_l1_acc_quasar(
             **test_config_kwargs,
             "templates": test_config_kwargs["templates"]
             + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+            "boot_mode": boot_mode,
         },
     )
 
