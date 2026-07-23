@@ -7,13 +7,16 @@ GPT-OSS chunked-prefill attention forward. Mirrors ``minimax_m3/tt/attention/pre
 QK-norm. GQA with full rotary (YaRN baked into the cos/sin), attention sinks, and per-layer
 sliding-window vs full-causal masking.
 
-SP seam (P1): when the sequence is SP-sharded, AllGather K/V so each chip holds the full K/V, then
-run single-chip SDPA. The native ring SDPA (sinks+sliding+halo CCL) swaps in later — see the SP branch.
+Sequence-parallel seam (P1 bring-up): when the sequence is sharded across the SP axis, we
+AllGather K/V so every chip holds the full K/V and then run a normal single-chip SDPA. The
+native ring SDPA (sinks + sliding + halo CCL, Pavle's op) is swapped in behind this seam later.
+See the ``config.sequence_parallel`` branch below.
 """
 
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
+from .kv_cache import GptOssKVCache, write_kv_chunk
 from .operations import (
     apply_allgather_and_slice,
     apply_allreduce,
@@ -57,6 +60,8 @@ def attention_forward(
     user_id=0,
     batch_size=1,
     layer_idx=0,
+    cached_len=0,
+    indexed_rope=False,
 ):
     """
     Prefill forward pass — optimized for sequence processing (seq_len > 1).
@@ -66,9 +71,11 @@ def attention_forward(
 
     Args:
         hidden_states: Input tensor [batch, seq_len, hidden_size]
-        rope_mats: Tuple/list of (cos, sin) matrices for RoPE (YaRN baked in, full head_dim wide)
+        rope_mats: Tuple/list of (cos, sin) matrices for RoPE (YaRN baked in, full head_dim wide).
+            When ``indexed_rope`` is set these are the WHOLE-cache block-cyclic SP-sharded cos/sin
+            built once by tt/rope.build_indexed_rope (not per-chunk).
         weights: Attention weights
-        kv_cache: Optional [k_cache, v_cache] pair; may be None (e.g. the unit test)
+        kv_cache: Optional GptOssKVCache (packed K/V); may be None (e.g. the unit test)
         config: Attention configuration
         mesh_config: Mesh parallelization config
         mesh_device: TTNN mesh device
@@ -78,7 +85,11 @@ def attention_forward(
         ccl_manager: Communication manager (only used when TP > 1 or SP > 1)
         user_id: cache slot index for the per-user cache write
         batch_size: number of users packed on the sequence dim
-        layer_idx: this layer's index (informational)
+        layer_idx: this layer's index, for the per-layer cache write
+        cached_len: valid prefix length already in the cache BEFORE this chunk (0 = first/only chunk).
+            >0 selects the cache-read attention path (current chunk attends the accumulated prefix).
+        indexed_rope: use the on-device indexed RoPE (rope_mats are the whole-cache block-cyclic SP
+            cos/sin; the op derives this chunk's rows from cached_len + the SP mesh coord).
 
     Returns:
         Attention output [batch, seq_len, hidden_size]
@@ -111,55 +122,100 @@ def attention_forward(
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(xqkv_fused, num_local_heads, num_local_kv_heads)
     xqkv_fused.deallocate(True)
 
-    # Apply full RoPE on Q and K (use per-user seq_len positions when multi-user)
-    if batch_size > 1:
+    # Apply full RoPE on Q and K.
+    # indexed_rope: rope_mats are the WHOLE-cache block-cyclic SP-sharded cos/sin (built once); the
+    # indexed op derives this chunk's per-chip start from kv_actual_global=cached_len + the device's
+    # SP mesh coord on-device (no per-chunk host reshard). The per-user seq_len slice only applies to
+    # the non-indexed multi-user path (indexed rope carries the whole cache, never sliced here).
+    rope_kv_actual = cached_len if indexed_rope else None
+    rope_cluster_axis = mesh_config.sp_axis if indexed_rope else None
+    if batch_size > 1 and not indexed_rope:
         rope_mats_sliced = [rope_mats[0][:, :, :seq_len, :], rope_mats[1][:, :, :seq_len, :]]
     else:
         rope_mats_sliced = rope_mats
     tt_q_orig = tt_q
     tt_k_orig = tt_k
-    tt_q = apply_rope(tt_q, rope_mats_sliced, transformation_mat, is_decode_mode=False)
-    tt_k = apply_rope(tt_k, rope_mats_sliced, transformation_mat, is_decode_mode=False)
+    tt_q = apply_rope(
+        tt_q,
+        rope_mats_sliced,
+        transformation_mat,
+        is_decode_mode=False,
+        kv_actual_global=rope_kv_actual,
+        cluster_axis=rope_cluster_axis,
+    )
+    tt_k = apply_rope(
+        tt_k,
+        rope_mats_sliced,
+        transformation_mat,
+        is_decode_mode=False,
+        kv_actual_global=rope_kv_actual,
+        cluster_axis=rope_cluster_axis,
+    )
     tt_q_orig.deallocate(True)
     tt_k_orig.deallocate(True)
 
-    # Optional KV-cache write (non-paged). None in the unit test. Post-RoPE K + raw V.
-    # Write the cache in its own dtype (e.g. bf8_b) via a cast copy, but keep the bf16 tt_k/tt_v
-    # live for this chunk's SDPA below (casting them in place would run attention at cache precision).
+    # Per-layer KV cache write: post-RoPE K + raw V into the packed SP cache at this chunk's offset
+    # (cached_len). Single write point for all chunks; the cache-read path below then reads the
+    # accumulated prefix. None in the unit test. tt_k / tt_v stay live (bf16) for the SDPA that follows;
+    # write_kv_chunk casts its own copy to the cache dtype.
     if kv_cache is not None:
-        k_cache, v_cache = kv_cache
-        k_for_cache = ttnn.typecast(tt_k, k_cache.dtype)
-        v_for_cache = ttnn.typecast(tt_v, v_cache.dtype)
-        if batch_size > 1:
-            for b in range(batch_size):
-                k_b = ttnn.slice(
-                    k_for_cache, (b, 0, 0, 0), (b + 1, k_for_cache.shape[1], k_for_cache.shape[2], k_for_cache.shape[3])
-                )
-                v_b = ttnn.slice(
-                    v_for_cache, (b, 0, 0, 0), (b + 1, v_for_cache.shape[1], v_for_cache.shape[2], v_for_cache.shape[3])
-                )
-                ttnn.fill_cache(k_cache, k_b, batch_idx=b)
-                ttnn.fill_cache(v_cache, v_b, batch_idx=b)
-                k_b.deallocate(True)
-                v_b.deallocate(True)
-        else:
-            ttnn.fill_cache(k_cache, k_for_cache, batch_idx=user_id)
-            ttnn.fill_cache(v_cache, v_for_cache, batch_idx=user_id)
-        k_for_cache.deallocate(True)
-        v_for_cache.deallocate(True)
+        assert isinstance(kv_cache, GptOssKVCache), "kv_cache must be a GptOssKVCache"
+        write_kv_chunk(
+            kv_cache,
+            tt_k,
+            tt_v,
+            slot_idx=user_id,
+            layer_idx=layer_idx,
+            kv_actual=cached_len,
+            sp_axis=mesh_config.sp_axis,
+        )
 
     # --- Attention core ---
+    # Clean sequence_parallel seam. sp==1 => single-chip SDPA (exact). sp>1 => P1 bring-up path:
+    # AllGather K/V across the SP axis so each chip holds the full K/V, then single-chip SDPA.
+    # cached_len > 0 selects the cache-read path (current chunk attends the accumulated prefix).
     if config.sequence_parallel and mesh_config.sp > 1:
-        # PLACEHOLDER (SP>1): AllGather K/V to the full sequence, then single-chip SDPA. BROKEN as-is —
-        # Q stays the local SP shard while K spans the full seq, so is_causal SDPA has no per-rank
-        # position offset and the causal mask is wrong for rank>0. Not exercised by the single-chip PCC
-        # test; replaced by the native ring SDPA (sinks+sliding+halo CCL) at P6 — validate before SP>1 use.
+        if cached_len > 0:
+            # TODO(P6): SP cache-read needs the native ring SDPA over the block-cyclic packed cache
+            # (mirror M3's dense_sp_attention / ring_joint, which gpt_oss_d_p has not yet ported).
+            # The current AllGather + single-chip SDPA seam cannot read the SP-sharded accumulated
+            # prefix with correct per-rank causality. Raise until the ring op lands.
+            raise NotImplementedError(
+                "SP (sp>1) chunked cache-read is not implemented yet; needs the ring-joint dense SDPA "
+                "over the block-cyclic packed cache (see M3 dense_sp_attention). Single-chip cache-read "
+                "(sp==1) and the SP first-chunk (cached_len==0) path are supported."
+            )
+        # TODO(P6): replace this AllGather + single-chip SDPA with the native ring SDPA
+        # (sinks + sliding + halo CCL, Pavle's op). That op keeps Q/K/V SP-sharded and streams
+        # the K/V halo across the ring instead of materializing the full K/V on every chip.
+        #
+        # KNOWN LIMITATION of this bring-up stub: after the AllGather, K/V span the full sequence
+        # but Q is still the local SP shard. A plain is_causal SDPA assumes Q and K start at the
+        # same global position, which is only true for the first SP rank. Correct per-rank causal
+        # masking needs a position offset (cached_len + rank * seq_local) that the current
+        # ttnn.transformer.scaled_dot_product_attention prefill entrypoint does not expose. This
+        # branch is therefore a placeholder for the multi-chip wiring and is NOT exercised by the
+        # single-chip PCC test; it must be validated (or replaced by the ring op) before SP>1 use.
         tt_k_full = mesh_config.allgather(tt_k, ccl_manager, axis=mesh_config.sp_axis, dim=2)
         tt_v_full = mesh_config.allgather(tt_v, ccl_manager, axis=mesh_config.sp_axis, dim=2)
         tt_k.deallocate(True)
         tt_v.deallocate(True)
         tt_k, tt_v = tt_k_full, tt_v_full
         tt_sdpa_out = _run_sdpa(tt_q, tt_k, tt_v, weights, config, program_config, mesh_device, seq_len)
+    elif cached_len > 0:
+        # Chunked cache-read (current chunk attends the accumulated prefix) is not implemented yet.
+        # The KV-cache STORAGE + write is done and validated (test_kv_cache_vs_ref); reading it back
+        # for attention needs a chunk-position-aware SDPA, because Q is the current chunk at global
+        # offset cached_len while K/V span [0, cached_len+seq_len) — plain is_causal SDPA (which assumes
+        # Q row 0 aligns with K row 0) is off by cached_len and silently wrong. The correct paths are
+        # the paged chunked_scaled_dot_product_attention (needs a paged KV cache + page table) or the
+        # ring-joint dense SDPA over the block-cyclic cache (M3 dense_sp_attention). Wired when the
+        # runtime drives multi-chunk prefill. Fail loud rather than return wrong output.
+        raise NotImplementedError(
+            "gpt_oss_d_p: chunked cache-read attention (cached_len>0) is not implemented yet — needs a "
+            "chunk-position-aware SDPA (paged chunked SDPA or ring-joint over the block-cyclic cache). "
+            "KV-cache storage/write is supported and validated; first-chunk (cached_len==0) works."
+        )
     else:
         tt_sdpa_out = _run_sdpa(tt_q, tt_k, tt_v, weights, config, program_config, mesh_device, seq_len)
 
@@ -176,9 +232,11 @@ def attention_forward(
     if batch_size > 1:
         tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
 
-    # o_proj (+bias) + TP reduce. TP>1 on Ring (and a supported shape) uses fused matmul+reduce-scatter
-    # (then all-gather + slice off padding); else plain o_proj + all-reduce. Fused MM+RS is gated off
-    # on Blackhole (see is_shape_fused_mm_rs_supported).
+    # Output projection (+bias) + tensor-parallel allreduce.
+    # When TP > 1 (and supported), use the fused matmul + reduce-scatter op; the trailing
+    # all-gather + padding slice stay separate. The fused MM+RS op only supports Ring topology and
+    # is gated off on Blackhole (see is_shape_fused_mm_rs_supported), so fall back to plain
+    # o_proj + all-reduce otherwise.
     use_fused_rs = (
         mesh_config.tp > 1
         and is_shape_fused_mm_rs_supported(tt_sdpa_out)
