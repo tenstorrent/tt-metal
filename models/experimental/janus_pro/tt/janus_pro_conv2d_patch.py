@@ -47,6 +47,7 @@ class TtJanusProConv2dPatch(LightweightModule):
 
         self.mesh_device = mesh_device
         self.num_devices = self.mesh_device.get_num_devices()
+        self.dtype = dtype
 
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -56,7 +57,7 @@ class TtJanusProConv2dPatch(LightweightModule):
         self.bias = (
             ttnn.as_tensor(
                 torch.reshape(state_dict[f"{state_dict_prefix}_linear.bias"], (1, -1)),
-                dtype=dtype,
+                dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -78,7 +79,7 @@ class TtJanusProConv2dPatch(LightweightModule):
 
         self._linear_weight = ttnn.as_tensor(
             padded_weight,
-            dtype=dtype,
+            dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -104,7 +105,7 @@ class TtJanusProConv2dPatch(LightweightModule):
 
         x = ttnn.as_tensor(
             x,
-            dtype=ttnn.bfloat16,
+            dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -115,7 +116,7 @@ class TtJanusProConv2dPatch(LightweightModule):
         out = ttnn.linear(
             x,
             self._linear_weight,
-            dtype=ttnn.bfloat16,
+            dtype=self.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             core_grid=ttnn.CoreGrid(y=8, x=8),

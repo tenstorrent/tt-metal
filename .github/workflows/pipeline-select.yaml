@@ -64,7 +64,7 @@ run-name: ${{ inputs.trigger_type == 'manual' && 'custom' || inputs.trigger_type
 jobs:
   # Centralized logic to determine what should run
   determine-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       run-demo: ${{ steps.logic.outputs.run-demo }}
       run-perf-models: ${{ steps.logic.outputs.run-perf-models }}

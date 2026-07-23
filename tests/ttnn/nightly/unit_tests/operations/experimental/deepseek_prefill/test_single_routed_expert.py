@@ -49,10 +49,11 @@ def run_single_routed_expert(
     num_tokens: int,
     emb_dim: int,
     hidden_dim: int,
+    x_row_major: bool = False,
 ):
     """
     Simplest scenario: 1 chip, 1 expert. Shared body for the per-model entrypoints below — they
-    differ only on the (emb_dim, hidden_dim) shape axis.
+    differ only on the (emb_dim, hidden_dim) shape axis and the x input layout.
 
     Perfect for profiling the core FFN computation without any mesh complexity.
     """
@@ -85,12 +86,15 @@ def run_single_routed_expert(
     logger.debug(f"Torch output shape: {torch_output.shape}")
 
     # Create TTNN input: 2D (num_tokens, emb_dim), replicated across the 1-device mesh.
+    # The composite op branches on x layout: ROW_MAJOR is bf16 (tilized and bf8-packed
+    # inside the op), TILE is consumed directly as bf8. Pair the dtype with the layout so
+    # each variation drives its real device path.
     tt_input = ttnn.from_torch(
         torch_input,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT if x_row_major else ttnn.TILE_LAYOUT,
         device=mesh_device,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16 if x_row_major else ttnn.bfloat8_b,
     )
     logger.debug(f"TTNN input shape: {tt_input.shape}")
 
@@ -212,8 +216,11 @@ def _xfail_blackhole_token_sweep(request, silicon_arch_name):
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-def test_single_routed_expert_models(mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int):
-    run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim)
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+def test_single_routed_expert_models(
+    mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int, x_row_major: bool
+):
+    run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim, x_row_major)
 
 
 # (allocated_tokens, active_tokens, id) sweep for the count-aware sparsity test, applied per
@@ -231,6 +238,7 @@ def run_single_routed_expert_faked_token_count(
     active_tokens: int,
     emb_dim: int,
     hidden_dim: int,
+    x_row_major: bool = False,
 ):
     """
     Verifies the unified kernel honors expert_token_counts and skips work on
@@ -261,12 +269,15 @@ def run_single_routed_expert_faked_token_count(
     with torch.no_grad():
         torch_output_active = torch_expert(torch_active)
 
+    # ROW_MAJOR is bf16 (tilized + bf8-packed in-op), TILE is consumed directly as bf8.
+    # With active_tokens < allocated_tokens the ROW_MAJOR variant is what exercises the
+    # reader's clamp-read of the inactive rows past the runtime count.
     tt_input = ttnn.from_torch(
         torch_input,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT if x_row_major else ttnn.TILE_LAYOUT,
         device=mesh_device,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16 if x_row_major else ttnn.bfloat8_b,
     )
 
     def _make_idx_tensor(values):
@@ -338,10 +349,17 @@ def single_routed_expert_faked_params():
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
 def test_single_routed_expert_faked_token_count_models(
-    mesh_device, device_params, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int
+    mesh_device,
+    device_params,
+    allocated_tokens: int,
+    active_tokens: int,
+    emb_dim: int,
+    hidden_dim: int,
+    x_row_major: bool,
 ):
     run_single_routed_expert_faked_token_count(
-        mesh_device, device_params, allocated_tokens, active_tokens, emb_dim, hidden_dim
+        mesh_device, device_params, allocated_tokens, active_tokens, emb_dim, hidden_dim, x_row_major
     )

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.tensor_utils import align_shape_to_tile
 from models.common.tests.utils import stable_model_seed
 
 

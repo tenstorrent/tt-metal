@@ -647,11 +647,11 @@ def get_num_blocks_and_num_tiles_in_block(
         processed with blocks of the same size. Opposite is possible but not recommended.
     """
 
-    num_rows_tensor, num_cols_tensor = input_dimensions
-    num_rows_tile, num_cols_tile = tile_dimensions
-
     if tile_dimensions is None:
         tile_dimensions = TILE_DIMENSIONS
+
+    num_rows_tensor, num_cols_tensor = input_dimensions
+    num_rows_tile, num_cols_tile = tile_dimensions
 
     is_outlier = is_format_combination_outlier(
         formats.input_format, formats.output_format, dest_acc

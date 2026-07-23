@@ -91,7 +91,8 @@ AttnMatmulDeviceOperation::spec_return_value_t AttnMatmulDeviceOperation::comput
         N = args.num_tokens.value();
     }
     Shape shape({1, ashape[1], ashape[2], N});
-    return TensorSpec(shape, TensorLayout(args.output_dtype, PageConfig(Layout::TILE), args.output_mem_config));
+    return tt::tt_metal::TensorSpec(
+        shape, TensorLayout(args.output_dtype, PageConfig(Layout::TILE), args.output_mem_config));
 }
 
 AttnMatmulDeviceOperation::tensor_return_value_t AttnMatmulDeviceOperation::create_output_tensors(

@@ -59,9 +59,9 @@ NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgram
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     TT_ASSERT((output.size() == 3), "Output vector must be size 3 for split fused qkv!");
-    tt_metal::Tensor& q = output[0];
-    tt_metal::Tensor& k = output[1];
-    tt_metal::Tensor& v = output[2];
+    ttnn::Tensor& q = output[0];
+    ttnn::Tensor& k = output[1];
+    ttnn::Tensor& v = output[2];
 
     tt_metal::Buffer* q_buffer = q.buffer();
     TT_ASSERT(q_buffer != nullptr, "Output q buffer should be allocated on device!");

@@ -54,7 +54,7 @@ void FullDeviceOperation::validate_on_program_cache_miss(
 
 FullDeviceOperation::spec_return_value_t FullDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t&) {
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         Shape(operation_attributes.shape),
         tt::tt_metal::TensorLayout(
             operation_attributes.dtype,

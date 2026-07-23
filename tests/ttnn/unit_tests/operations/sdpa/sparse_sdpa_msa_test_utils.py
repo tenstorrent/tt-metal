@@ -188,6 +188,7 @@ def run_op_msa_composed(q, k, v, indices, device, *, k_chunk_size=128):
         dev(kv_packed.to(torch.bfloat16), ttnn.bfloat16),
         dev(exp.to(torch.int32), ttnn.uint32),
         v_dim,
+        kv_format=ttnn.transformer.SparseKVFormat.BF16,
         scale=scale,
         k_chunk_size=k_chunk_size,
     )
@@ -206,6 +207,8 @@ def run_op_msa_native(
     q_dtype=ttnn.bfloat16,
     chunk_start_idx=None,
     cluster_axis=None,
+    block_cyclic_sp_axis=None,
+    block_cyclic_chunk_local=None,
 ):
     """Run the native op. K/V are pre-tiled; q/indices/output stay row-major."""
     _, H, _, d = q.shape
@@ -234,6 +237,8 @@ def run_op_msa_native(
         block_size=block_size,
         chunk_start_idx=chunk_start_idx,  # set -> enable token-level diagonal-block causal mask
         cluster_axis=cluster_axis,
+        block_cyclic_sp_axis=block_cyclic_sp_axis,  # set -> K/V are block-cyclic; op remaps block ids in-kernel
+        block_cyclic_chunk_local=block_cyclic_chunk_local,
     )
     # Output dtype matches q. fp8 can't be to_torch'd directly, so typecast fp8 -> bf16 on device first.
     if tt_out.dtype == ttnn.fp8_e4m3:

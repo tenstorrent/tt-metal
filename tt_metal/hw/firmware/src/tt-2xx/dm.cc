@@ -16,6 +16,16 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "api/kernel_thread_globals.h"
 
+#if defined(PROFILE_KERNEL)
+namespace kernel_profiler {
+uint32_t wIndex __attribute__((used));
+uint32_t stackSize __attribute__((used));
+uint32_t sums[SUM_COUNT] __attribute__((used));
+uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+uint32_t traceCount __attribute__((used));
+}  // namespace kernel_profiler
+#endif
+
 uint8_t noc_index;
 constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
 
@@ -102,8 +112,23 @@ void invalidate_trisc_instruction_cache() {
 
 void deassert_trisc() {
     // Temporary workaround due to race vs. host deasserting TRISC reset.
+    // Workaround includes both the assert_trisc_reset() and the DPRINT workaround.
     // https://github.com/tenstorrent/tt-metal/issues/48064
     assert_trisc_reset();
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
+    // Host may have released TRISCs early; a TRISC can hold the shared compute DPRINT lock
+    // (or leave wpos/rpos mid-print) when we assert reset. Clear that state while TRISCs are
+    // held so the next boot cannot hang in acquire_lock / wait_for_space before writing DONE.
+    {
+        auto* trisc_print = GET_MAILBOX_ADDRESS_DEV(dprint_buf.buffer_triscs);
+        trisc_print->aux.lock = 0;
+        uint32_t wpos = trisc_print->aux.wpos;
+        if (wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC && wpos != DEBUG_PRINT_SERVER_STARTING_MAGIC) {
+            trisc_print->aux.wpos = 0;
+            trisc_print->aux.rpos = 0;
+        }
+    }
+#endif
     subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
@@ -278,13 +303,13 @@ extern "C" uint32_t _start1() {
 
             WAYPOINT("GD");
 
+            uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+            launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             {
                 // Only include this iteration in the device profile if the launch message is valid. This is because all
                 // workers get a go signal regardless of whether they're running a kernel or not. We don't want to
                 // profile "invalid" iterations.
                 DeviceZoneScopedMainN("DM0-FW");
-                uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
-                launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
                 DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
                 DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
                 uint32_t enables = launch_msg_address->kernel_config.enables;
@@ -377,25 +402,27 @@ extern "C" uint32_t _start1() {
                     g_remapper_configurator.clear_all_pairs();
                     g_remapper_configurator.disable_remapper();
                 }
+            }
 
-                uint32_t go_message_index = mailboxes->go_message_index;
-                mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+            // Signal host/dispatcher completion after the DM0-FW zone above has finalized, so DM0's markers
+            // are readable when the host wakes on RUN_MSG_DONE.
+            uint32_t go_message_index = mailboxes->go_message_index;
+            mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
 
-                // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
-                if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
-                    // Set launch message to invalid, so that the next time this slot is encountered, kernels are only
-                    // run if a valid launch message is sent.
-                    launch_msg_address->kernel_config.enables = 0;
-                    launch_msg_address->kernel_config.preload = 0;
-                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                    // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid
-                    // launch messages in the ring buffer. Must be executed before the atomic increment, as after that
-                    // the launch message is no longer owned by us.
-                    CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                    notify_dispatch_core_done(dispatch_addr, noc_index);
-                    mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
-                }
+            // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
+            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
+                // Set launch message to invalid, so that the next time this slot is encountered, kernels are only
+                // run if a valid launch message is sent.
+                launch_msg_address->kernel_config.enables = 0;
+                launch_msg_address->kernel_config.preload = 0;
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid
+                // launch messages in the ring buffer. Must be executed before the atomic increment, as after that
+                // the launch message is no longer owned by us.
+                CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
+                notify_dispatch_core_done(dispatch_addr, noc_index);
+                mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
     }
@@ -435,9 +462,13 @@ extern "C" uint32_t _start1() {
         // Invalidate the i$ now the kernels have loaded and before running
         invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, index);
         invalidate_l1_icache();
-        auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+        {
+            // Profiler FW zone for subordinate DMs (DM1-DM7).
+            DeviceZoneScopedMainN("DM-FW");
+            auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
 
-        record_stack_usage(stack_free);
+            record_stack_usage(stack_free);
+        }
         WAYPOINT("D1");
         DEVICE_PRINT_KERNEL_FINISHED();
 

@@ -65,11 +65,15 @@ Tests:
             (optional) destination:
               - (optional) device: 1 # Or [mesh_id, chip_id] or [mesh_id, [row, col]]
                 (optional) core: [1, 1] # [row, col] of the receiver worker core.
-                (optional) hops: # multicast only
+                # multicast only. Either a per-direction map, or the scalar "full".
+                # A per-direction value may be an integer or "max" (resolved to axis_dim - 1 from the
+                # global mesh shape). "full" resolves to get_full_mcast_hops (torus split) per source.
+                (optional) hops:
                   S: 1
-                  E: 1
+                  E: max
                   N: 0
                   W: 0
+                # (optional) hops: full_mcast
             (optional) atomic_inc_val: 1 # Only used for atomic_inc ntype, how much to increment by.
             (optional) atomic_inc_wrap: 65535 # Only used for atomic_inc ntype, the maximum value of the remote counter after which it will wrap to 0.
             # How many hops to perform before starting the multicast. Used for grid-based multicasting.

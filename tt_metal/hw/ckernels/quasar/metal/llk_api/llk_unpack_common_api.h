@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "internal/circular_buffer_interface.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -53,6 +54,7 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         bd_val.f.y_dim = unpack_tile_face_r_dim[i];
         bd_val.f.z_dim = unpack_tile_num_faces[i];
 
+        ckernel::trisc::validate_buffer_desc<ckernel::trisc::L1AccessMode::Continuous>(bd_val);
         ckernel::trisc::_configure_buf_desc_table_(i, bd_val);
     }
 

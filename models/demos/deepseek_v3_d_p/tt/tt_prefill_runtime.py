@@ -5,7 +5,7 @@
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple, Union
 
 import torch
 from loguru import logger
@@ -16,6 +16,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
 
 @dataclass
@@ -30,7 +31,9 @@ class TtPrefillRuntimeConfig:
     sp_axis: int = 0
     tp_axis: int = 1
     num_links: int = 1
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    # Scalar applies to both mesh axes; a (sp_axis_0, tp_axis_1) tuple configures each independently.
+    # Derived from the opened fabric via tt_ccl.per_axis_topology() in the runner.
+    topology: Union[ttnn.Topology, Tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear
     capacity_factor: int = 2
     gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL
     routed_expert_activations_dtype: ttnn.DataType = ttnn.bfloat8_b
@@ -59,6 +62,7 @@ class TtPrefillRuntimeConfig:
     first_layer_idx: int = 0
     is_first_rank: bool = True
     is_last_rank: bool = True
+    sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM
 
     @property
     def sp_factor(self) -> int:
@@ -160,6 +164,7 @@ class TtPrefillRuntime:
             first_layer_idx=self.config.first_layer_idx,
             is_first_rank=self.config.is_first_rank,
             is_last_rank=self.config.is_last_rank,
+            sparse_kv_cache_format=self.config.sparse_kv_cache_format,
         )
         self.model_built = True
 

@@ -39,7 +39,7 @@ namespace unit_tests::llk::mxint_typecast {
 // unpacker/packer performs the format conversion implicitly. Identical to the
 // MXFP4/MXFP8 typecast drivers — only the format(s) under test differ.
 static vector<uint32_t> run_mxint_typecast(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     tt::DataFormat input_fmt,
     tt::DataFormat output_fmt,
     const vector<uint32_t>& src_vec,
@@ -233,7 +233,7 @@ constexpr float kOffset = -10.0f;  // U(0, 20) + (-10) = U(-10, 10)
 // power-of-two block scale), so the conversion is lossless. We compare the
 // device output against the host-decoded source — both must be bit-identical.
 static void run_widening_or_identity_test(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     tt::DataFormat input_fmt,   // an MxInt format
     tt::DataFormat output_fmt,  // Float16_b or the same MxInt format
     bool fp32_dest_acc_en) {
@@ -258,7 +258,7 @@ static void run_widening_or_identity_test(
 // validates that the hardware quantizer matches the OCP MX golden bit-for-bit
 // (modulo rare rounding ties absorbed by `atol`).
 static void run_narrowing_test(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     tt::DataFormat output_fmt,  // an MxInt format
     float atol,
     bool fp32_dest_acc_en) {

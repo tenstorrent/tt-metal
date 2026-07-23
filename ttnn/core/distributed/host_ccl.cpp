@@ -23,7 +23,7 @@ using ::tt::tt_metal::DistributedHostBuffer;
 using ::tt::tt_metal::HostBuffer;
 
 Tensor all_gather(const Tensor& tensor) {
-    TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::HOST, "Tensor must be on host");
+    TT_FATAL(tensor.storage_type() == ttnn::StorageType::HOST, "Tensor must be on host");
     const auto& ctx = tensor.host_storage().buffer().context();
     // A null context is the sentinel for "single-host degenerate"; treat it like a size-1 context.
     if (!ctx || *ctx->size() == 1) {

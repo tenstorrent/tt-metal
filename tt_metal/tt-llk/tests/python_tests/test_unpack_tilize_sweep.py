@@ -8,19 +8,26 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     NarrowTile,
     StochasticRounding,
     Transpose,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
+    input_output_formats,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     INPUT_DIMENSIONS,
     NARROW_TILE,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     STOCHASTIC_ROUNDING,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -95,9 +102,9 @@ def _regular_path(src_A, input_dimensions, formats, num_faces, torch_format):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     num_faces=lambda narrow_tile: ([4, 2, 1] if narrow_tile == NarrowTile.No else [2]),
     input_dimensions=lambda narrow_tile: (
-        [[32, 32], [64, 64], [32, 64], [32, 128], [128, 32]]
+        [[32, 32], [64, 64], [32, 64], [32, 128], [128, 32], [128, 256]]
         if narrow_tile == NarrowTile.No
-        else [[32, 16], [64, 16], [128, 16]]
+        else [[32, 16], [64, 16], [128, 16], [1024, 16]]
     ),
 )
 def test_unpack_tilize_comprehensive(
@@ -140,6 +147,13 @@ def test_unpack_tilize_comprehensive(
             "MOP_OUTER_LOOP=2 and PACK_INTF_SEL values that don't adapt to tiny tiles"
         )
 
+    # BH unpack_tilize does not support num_faces=1 (LLK asserts num_faces in {2, 4}).
+    # WH supports num_faces=1. Tracked in https://github.com/tenstorrent/tt-metal/issues/50707.
+    if arch == ChipArchitecture.BLACKHOLE and num_faces == 1:
+        pytest.skip(
+            "BH unpack_tilize does not support num_faces=1; see https://github.com/tenstorrent/tt-metal/issues/50707"
+        )
+
     is_narrow = narrow_tile == NarrowTile.Yes
     # Narrow tile: 2 vertical 16x16 faces (num_faces=2).
     tile_dimensions = [DEFAULT_TILE_R_DIM, FACE_C_DIM] if is_narrow else None
@@ -163,6 +177,15 @@ def test_unpack_tilize_comprehensive(
         else _regular_path(src_A, input_dimensions, formats, num_faces, torch_format)
     )
 
+    block_tile_dimensions = tile_dimensions if tile_dimensions is not None else [32, 32]
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        block_tile_dimensions,
+    )
+
     configuration = TestConfig(
         "sources/unpack_tilize_sweep_test.cpp",
         formats,
@@ -176,6 +199,8 @@ def test_unpack_tilize_comprehensive(
             NARROW_TILE(narrow_tile),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
