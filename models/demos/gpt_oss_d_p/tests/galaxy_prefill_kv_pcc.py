@@ -60,7 +60,12 @@ def plan(n_tokens, chunk_size, chunked, sp):
     """Resolve (n_chunks, chunk, total). one-shot: a single chunk == total, padded up to a multiple of
     TILE_SIZE*sp (=128 at sp=4) so build_indexed_rope's chunk_size % (TILE_SIZE*sp) == 0 holds and the
     SP shard stays tile-aligned. chunked: full chunk_size chunks (tail padded)."""
-    align = ttnn.TILE_SIZE * sp
+    # chunk//sp feeds the MoE routing setup, which shard-splits it across num_cores=64 Tensix cores
+    # (tt_moe_routing_setup asserts seq_len_per_chip % num_cores == 0). So align to num_cores*sp (=256
+    # at sp=4), which also satisfies build_indexed_rope's TILE_SIZE*sp (=128) constraint. TILE_SIZE*sp
+    # alone (128) fails when the rounded length/sp isn't a multiple of 64 (e.g. 10000 -> 10112 -> 2528).
+    MOE_ROUTING_NUM_CORES = 64
+    align = max(ttnn.TILE_SIZE, MOE_ROUTING_NUM_CORES) * sp
     if chunked:
         chunk = math.ceil(chunk_size / align) * align
         n_chunks = max(1, math.ceil(n_tokens / chunk))
@@ -125,6 +130,12 @@ def main():
             print(f"[prefill-pcc] PREFILL_NUM_LAYERS={num_layers}: first {num_layers} layers only", flush=True)
 
         expert_dtype = ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b
+        # KV-cache storage dtype (default bf8). KV_CACHE_DTYPE=bf16 -> bump the cache to bf16 to test
+        # whether bf8 block-float storage (shared-exponent tiles, hurt by the growing MoE outliers) is
+        # what drives the V-at-depth PCC decline. ~2x KV DRAM. Write-only in one-shot (SDPA uses live
+        # bf16), so this changes only the STORED K/V precision, not the compute.
+        kv_cache_dtype = ttnn.bfloat16 if os.getenv("KV_CACHE_DTYPE", "bf8") == "bf16" else ttnn.bfloat8_b
+        print(f"[prefill-pcc] expert_dtype={expert_dtype} kv_cache_dtype={kv_cache_dtype}", flush=True)
         cache_path = model_args.weight_cache_path(ttnn.bfloat8_b)
 
         if os.getenv("GPT_OSS_WEIGHTS_FROM_CACHE") == "1":
@@ -141,6 +152,7 @@ def main():
             chunk_size=chunk,
             num_users=1,
             expert_weight_dtype=expert_dtype,
+            cache_dtype=kv_cache_dtype,
             weight_cache_path=cache_path,
             owns_kv_cache=True,  # standalone harness owns its cache (runtime.kv_cache)
         )
