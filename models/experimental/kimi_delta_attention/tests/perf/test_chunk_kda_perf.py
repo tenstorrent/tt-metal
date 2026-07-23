@@ -32,8 +32,12 @@ def test_chunk_kda_device_perf(device: ttnn.Device) -> None:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    q = to_device(torch.randn(*shape, key_dim, generator=generator), ttnn.bfloat16)
-    k = to_device(torch.randn(*shape, key_dim, generator=generator), ttnn.bfloat16)
+    q = to_device(
+        torch.randn(*shape, key_dim, generator=generator).reshape(batch, sequence, heads * key_dim), ttnn.bfloat16
+    )
+    k = to_device(
+        torch.randn(*shape, key_dim, generator=generator).reshape(batch, sequence, heads * key_dim), ttnn.bfloat16
+    )
     v = to_device(
         torch.randn(*shape, value_dim, generator=generator).reshape(batch, sequence, heads * value_dim), ttnn.bfloat16
     )

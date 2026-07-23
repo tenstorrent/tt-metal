@@ -410,3 +410,14 @@
 - Profiler smoke: `PERF_REPS=2 scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/perf/test_chunk_kda_perf.py -q -s`. Result: `SAFE_PYTEST_RESULT: PASS`; one case passed in 2.92 s.
 - Tracy report: `/tmp/kda_chunk_flat_v_profile/reports/2026_07_23_08_12_08/ops_perf_results_2026_07_23_08_12_08.csv`. Ten warm calls averaged `1.186095 ms` serialized device-kernel time, down `109.076 us` or `8.42%` from `1.295170 ms`.
 - Mean prep/scan times remained stable at `353.214 us` / `284.964 us`. Four remaining transposes total `356.243 us`; output untilize/permute cost `56.997 us` / `78.941 us`. The measured delta matches the eliminated value transpose, validating the layout-cost diagnosis.
+
+
+### 2026-07-23 08:18:47 UTC — Flat q/k with fused normalization
+
+- Hypothesis: direct token-major q/k reads plus in-kernel L2 normalization will cost less than two head-split transposes and a standalone q scale. The implementation mirrors scalar GDN normalization, but uses KDA-safe scratch whose lifetimes end before WY inversion.
+- Full TTNN build: `./build_metal.sh --build-ttnn`. Result: PASS.
+- Direct hardware command: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s`. Result: `SAFE_PYTEST_RESULT: PASS`; four cases passed in 10.29 s. Exact flat q/k/v output/state PCC: `0.999994` / `0.999995`; max absolute errors: `8.402988e-04` / `9.960890e-03`.
+- Full layer command: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s`. Result: `SAFE_PYTEST_RESULT: PASS`; six cases passed in 7.37 s.
+- Profiler smoke: `PERF_REPS=2 scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/perf/test_chunk_kda_perf.py -q -s`. Result: `SAFE_PYTEST_RESULT: PASS`; one case passed in 2.88 s.
+- Tracy report: `/tmp/kda_chunk_flat_qkv_profile/reports/2026_07_23_08_18_47/ops_perf_results_2026_07_23_08_18_47.csv`. Ten warm calls averaged `0.922861 ms`, down `263.233 us` or `22.19%` from flat-v and `372.309 us` or `28.75%` from the original baseline.
+- Prep/scan averaged `341.005 us` / `284.850 us`. Two remaining transposes total `135.062 us`; output untilize/permute remain `56.833 us` / `79.474 us`.

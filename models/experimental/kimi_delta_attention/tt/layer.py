@@ -178,11 +178,11 @@ class KimiDeltaAttention:
             conv_state=self.convolution_state,
             weight_taps=weights.convolution_taps,
         )
-        q = ttnn.reshape(_slice_width(qkv, 0, config.q_dim), (batch, sequence, config.num_heads, config.head_k_dim))
-        k = ttnn.reshape(
-            _slice_width(qkv, config.q_dim, config.q_dim + config.k_dim),
-            (batch, sequence, config.num_heads, config.head_k_dim),
-        )
+        q = _slice_width(qkv, 0, config.q_dim)
+        k = _slice_width(qkv, config.q_dim, config.q_dim + config.k_dim)
+        if mode == "recurrent" or sequence % ttnn.TILE_SIZE != 0:
+            q = ttnn.reshape(q, (batch, sequence, config.num_heads, config.head_k_dim))
+            k = ttnn.reshape(k, (batch, sequence, config.num_heads, config.head_k_dim))
         v = _slice_width(qkv, config.q_dim + config.k_dim, self._convolution_width)
         if mode == "recurrent" or sequence % ttnn.TILE_SIZE != 0:
             v = ttnn.reshape(v, (batch, sequence, config.num_heads, config.head_v_dim))
