@@ -76,10 +76,11 @@ def weight_cache_is_complete(weight_cache_path, hf_config, num_layers: int, expe
     use_qk_norm = bool(getattr(hf_config, "use_qk_norm", True))
 
     # Top-level (embed / final norm / lm head). The token embedding is now the SHARDED parallel table
-    # (see tt/parallel_embedding.py), cached under a distinct key from the old replicated layout.
-    from models.demos.minimax_m3.tt.parallel_embedding import EMBED_CACHE_NAME
+    # (see tt/parallel_embedding.py), cached under a distinct key from the old replicated layout — and a
+    # further-distinct key when 2D vocab-sharding is enabled (M3_EMBED_SHARD_VOCAB=1).
+    from models.demos.minimax_m3.tt.parallel_embedding import cache_name_for, embed_shard_2d
 
-    required = [EMBED_CACHE_NAME, "lm_head_padded_pow2.weight", "norm/weight"]
+    required = [cache_name_for(embed_shard_2d()), "lm_head_padded_pow2.weight", "norm/weight"]
 
     for L in range(num_layers):
         base = f"model.layers.{L}"

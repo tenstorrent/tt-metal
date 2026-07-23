@@ -14,7 +14,7 @@ from models.tt_transformers.tt.common import rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
-from .parallel_embedding import EMBED_CACHE_NAME, TtParallelEmbedding
+from .parallel_embedding import TtParallelEmbedding, cache_name_for, embed_shard_2d
 from .rms_norm import RMSNorm
 
 
@@ -157,9 +157,13 @@ class Model:
 
         # Parallel (sharded) token embedding: the [vocab, hidden] table is sharded on hidden across the
         # TP cols and replicated across the SP rows, so each device stores only [vocab, hidden/tp] —
-        # ~1.85 GB/device less than a fully-replicated table. forward() does the local emb-dim-slice
+        # ~1.72 GiB/device less than a fully-replicated table. forward() does the local emb-dim-slice
         # lookup then a managed TP all-gather to rebuild the full-hidden, TP-replicated residual stream
         # the decoder layers expect (kept bf16 so the residual stream keeps full dynamic range).
+        # Sharding mode (2D vocab+hidden by default; M3_EMBED_SHARD_VOCAB=0 for 1D hidden-only). 2D shards
+        # vocab across the SP rows too (~0.5 GiB/device less) for two SP-axis CCL ops per chunk (measured
+        # perf-neutral, KV-PCC bit-identical) — see tt/parallel_embedding.py.
+        shard_vocab = embed_shard_2d()
         if state_dict:
             embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]  # [vocab, hidden]
         else:
@@ -171,8 +175,9 @@ class Model:
             self.mesh_config,
             self.ccl_manager,
             torch_weight=embedding_weight,
-            cache_file_name=get_cache_file_name(tensor_cache_path, EMBED_CACHE_NAME),
+            cache_file_name=get_cache_file_name(tensor_cache_path, cache_name_for(shard_vocab)),
             dtype=ttnn.bfloat16,
+            shard_vocab_on_sp=shard_vocab,
         )
         self.layers = [
             DecoderLayer(
