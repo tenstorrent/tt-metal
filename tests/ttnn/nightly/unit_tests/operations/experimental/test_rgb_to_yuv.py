@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for the on-device YUV conversion op.
 
-Tests the ttnn.experimental.yuv_conversion op which converts a CHWT bfloat16
+Tests the ttnn.experimental.rgb_to_yuv op which converts a CHWT bfloat16
 tensor (C=3, values in [-1, 1]) to YUV 4:2:0 uint8 planar format.
 
 Run with:
-    scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/experimental/test_yuv_conversion.py -s
+    scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/experimental/test_rgb_to_yuv.py -s
 """
 
 import os
@@ -17,7 +17,7 @@ import torch
 import ttnn
 
 # BT.601 coefficients for input ∈ [-1, 1] → limited-range uint8.
-# These must match yuv_conversion.hpp::yuv_coefficients(BT601, MinusOneToOne, Limited).
+# These must match rgb_to_yuv.hpp::yuv_coefficients(BT601, MinusOneToOne, Limited).
 _Y_COEFF = (32.74, 64.28, 12.48, 125.5)
 _CB_COEFF = (-18.90, -37.10, 56.00, 128.0)
 _CR_COEFF = (56.00, -46.89, -9.11, 128.0)
@@ -90,7 +90,7 @@ def _host_yuv_reference(rgb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, 
     ],
     ids=["720p_shard", "small", "tiny", "tile_aligned", "non_aligned", "medium_square", "single_row_group"],
 )
-class TestYUVConversion:
+class TestRgbToYuv:
     def _run(self, H, W, T, device, seed=42):
         """Helper: create reference tensor, run op, return (device_Y, device_Cb, device_Cr, ref_Y, ref_Cb, ref_Cr)."""
         gen = torch.Generator().manual_seed(seed)
@@ -106,7 +106,7 @@ class TestYUVConversion:
             cb=list(_CB_COEFF),
             cr=list(_CR_COEFF),
         )
-        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients)
+        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_in, coefficients=coefficients)
         ttnn.synchronize_device(device)
 
         dev_Y = ttnn.to_torch(tt_Y)
@@ -158,7 +158,7 @@ class TestYUVConversion:
             gen = torch.Generator().manual_seed(seed)
             cpu = torch.rand(3, H, W, T, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
             tt_in = ttnn.from_torch(cpu, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients)
+            tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_in, coefficients=coefficients)
             ttnn.synchronize_device(device)
             outs = (ttnn.to_torch(tt_Y), ttnn.to_torch(tt_Cb), ttnn.to_torch(tt_Cr))
             return cpu, tt_in, outs
@@ -192,7 +192,7 @@ class TestYUVConversion:
             cpu = torch.full((3, H, W, T), fill, dtype=torch.bfloat16)
             tt_in = ttnn.from_torch(cpu, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
             coefficients = ttnn.experimental.YUVCoefficients(y=list(_Y_COEFF), cb=list(_CB_COEFF), cr=list(_CR_COEFF))
-            tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients)
+            tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_in, coefficients=coefficients)
             ttnn.synchronize_device(device)
 
             for name, t in [("Y", tt_Y), ("Cb", tt_Cb), ("Cr", tt_Cr)]:
@@ -220,7 +220,7 @@ class TestYUVValidation:
         sharded_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
         with expect_error(RuntimeError, "Sharded output is not supported"):
-            ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients, memory_config=sharded_cfg)
+            ttnn.experimental.rgb_to_yuv(tt_in, coefficients=coefficients, memory_config=sharded_cfg)
 
 
 class TestYUVColorSpaceAPI:
@@ -235,7 +235,7 @@ class TestYUVColorSpaceAPI:
         ref_Y, ref_Cb, ref_Cr = _host_yuv_reference(cpu)
 
         tt_in = ttnn.from_torch(cpu, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        y, cb, cr = ttnn.experimental.yuv_conversion(
+        y, cb, cr = ttnn.experimental.rgb_to_yuv(
             tt_in,
             color_space=ttnn.experimental.YUVColorSpace.BT601,
             input_range=ttnn.experimental.RGBRange.MinusOneToOne,
@@ -259,7 +259,7 @@ class TestYUVColorSpaceAPI:
             ttnn.experimental.YUVColorSpace.BT709,
             ttnn.experimental.YUVColorSpace.BT2020,
         ):
-            y, _, _ = ttnn.experimental.yuv_conversion(tt_in, color_space=cs)
+            y, _, _ = ttnn.experimental.rgb_to_yuv(tt_in, color_space=cs)
             ttnn.synchronize_device(device)
             hy = ttnn.to_torch(y)
             assert hy.dtype == torch.uint8 and hy.min().item() >= 0 and hy.max().item() <= 255
@@ -287,7 +287,7 @@ class TestYUVColorSpaceAPI:
         ref_Y, ref_Cb, ref_Cr = _yuv_reference(rgb, y_c, cb_c, cr_c)
 
         tt_in = ttnn.from_torch(rgb, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        y, cb, cr = ttnn.experimental.yuv_conversion(
+        y, cb, cr = ttnn.experimental.rgb_to_yuv(
             tt_in,
             color_space=ttnn.experimental.YUVColorSpace.BT601,
             input_range=getattr(ttnn.experimental.RGBRange, input_range),
@@ -298,6 +298,20 @@ class TestYUVColorSpaceAPI:
         assert (ttnn.to_torch(y).squeeze(0).int() - ref_Y.int()).abs().max().item() <= y_tol, f"{input_range} Y"
         assert (ttnn.to_torch(cb).squeeze(0).int() - ref_Cb.int()).abs().max().item() <= 2, f"{input_range} Cb"
         assert (ttnn.to_torch(cr).squeeze(0).int() - ref_Cr.int()).abs().max().item() <= 2, f"{input_range} Cr"
+
+    def test_output_format_param(self, device):
+        # The output format param exists for future formats; the only supported
+        # value (YUV420Planar) must equal the default.
+        H, W, T = 64, 64, 64
+        gen = torch.Generator().manual_seed(17)
+        cpu = torch.rand(3, H, W, T, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
+        tt_in = ttnn.from_torch(cpu, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        y0, cb0, cr0 = ttnn.experimental.rgb_to_yuv(tt_in)  # default format
+        y1, cb1, cr1 = ttnn.experimental.rgb_to_yuv(tt_in, format=ttnn.experimental.YUVFormat.YUV420Planar)
+        ttnn.synchronize_device(device)
+        for a, b in [(y0, y1), (cb0, cb1), (cr0, cr1)]:
+            assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), "explicit YUV420Planar != default"
 
 
 _SWEEP_H = [2, 4, 6, 10, 32, 64, 180]
@@ -324,7 +338,7 @@ class TestYUVSweep:
 
         tt_in = ttnn.from_torch(cpu_bf16, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         coefficients = ttnn.experimental.YUVCoefficients(y=list(_Y_COEFF), cb=list(_CB_COEFF), cr=list(_CR_COEFF))
-        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients)
+        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_in, coefficients=coefficients)
         ttnn.synchronize_device(device)
 
         dev_Y = ttnn.to_torch(tt_Y).squeeze(0)
@@ -367,12 +381,12 @@ class TestYUVPerformance:
 
         # Warmup
         for _ in range(3):
-            ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients)
+            ttnn.experimental.rgb_to_yuv(tt_in, coefficients=coefficients)
         ttnn.synchronize_device(device)
 
         start = time.perf_counter()
         for _ in range(n_iters):
-            ttnn.experimental.yuv_conversion(tt_in, coefficients=coefficients)
+            ttnn.experimental.rgb_to_yuv(tt_in, coefficients=coefficients)
             ttnn.synchronize_device(device)
         elapsed = time.perf_counter() - start
 

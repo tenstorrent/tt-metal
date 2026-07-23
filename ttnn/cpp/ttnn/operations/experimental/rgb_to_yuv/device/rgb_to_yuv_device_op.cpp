@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "yuv_conversion_device_op.hpp"
+#include "rgb_to_yuv_device_op.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <cmath>
 
@@ -21,12 +21,12 @@ static void reject_unsupported_output_memory_config(const MemoryConfig& mem_cfg)
         mem_cfg.memory_layout());
 }
 
-YUVConversionDeviceOperation::program_factory_t YUVConversionDeviceOperation::select_program_factory(
+RgbToYuvDeviceOperation::program_factory_t RgbToYuvDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return YUVConversionProgramFactory{};
+    return RgbToYuvProgramFactory{};
 }
 
-void YUVConversionDeviceOperation::validate_on_program_cache_miss(
+void RgbToYuvDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& in = tensor_args.input;
     TT_FATAL(in.storage_type() == StorageType::DEVICE, "Input must be on device");
@@ -54,6 +54,9 @@ void YUVConversionDeviceOperation::validate_on_program_cache_miss(
 
     reject_unsupported_output_memory_config(attrs.output_memory_config);
 
+    TT_FATAL(
+        attrs.format == YUVFormat::YUV420Planar, "Only YUV 4:2:0 planar output (YUVFormat::YUV420Planar) is supported");
+
     const auto& c = attrs.coefficients;
     for (int i = 0; i < 4; i++) {
         TT_FATAL(std::isfinite(c.y[i]), "y coefficient [{}] is not finite", i);
@@ -62,12 +65,12 @@ void YUVConversionDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-void YUVConversionDeviceOperation::validate_on_program_cache_hit(
+void RgbToYuvDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(attrs, tensor_args);
 }
 
-YUVConversionDeviceOperation::spec_return_value_t YUVConversionDeviceOperation::compute_output_specs(
+RgbToYuvDeviceOperation::spec_return_value_t RgbToYuvDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     reject_unsupported_output_memory_config(attrs.output_memory_config);
 
@@ -84,7 +87,7 @@ YUVConversionDeviceOperation::spec_return_value_t YUVConversionDeviceOperation::
     return {y_spec, u_spec, v_spec};
 }
 
-YUVConversionDeviceOperation::tensor_return_value_t YUVConversionDeviceOperation::create_output_tensors(
+RgbToYuvDeviceOperation::tensor_return_value_t RgbToYuvDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     auto [y_spec, u_spec, v_spec] = compute_output_specs(attrs, tensor_args);
     auto* device = tensor_args.input.device();
@@ -99,14 +102,16 @@ YUVConversionDeviceOperation::tensor_return_value_t YUVConversionDeviceOperation
 
 namespace ttnn::prim {
 
-std::tuple<Tensor, Tensor, Tensor> yuv_conversion(
+std::tuple<Tensor, Tensor, Tensor> rgb_to_yuv(
     const Tensor& input,
     const ttnn::experimental::prim::YUVCoefficients& coefficients,
+    ttnn::experimental::prim::YUVFormat format,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
-    using Op = ttnn::experimental::prim::YUVConversionDeviceOperation;
+    using Op = ttnn::experimental::prim::RgbToYuvDeviceOperation;
 
     auto op_attrs = Op::operation_attributes_t{
         .coefficients = coefficients,
+        .format = format,
         .output_memory_config = memory_config.value_or(input.memory_config()),
     };
     auto tensor_args = Op::tensor_args_t{.input = input};

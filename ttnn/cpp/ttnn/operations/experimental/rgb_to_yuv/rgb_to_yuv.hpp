@@ -7,7 +7,7 @@
 #include <optional>
 #include <tuple>
 #include "ttnn/tensor/tensor.hpp"
-#include "device/yuv_conversion_device_op_types.hpp"
+#include "device/rgb_to_yuv_device_op_types.hpp"
 
 namespace ttnn::experimental {
 
@@ -80,13 +80,16 @@ inline prim::YUVCoefficients yuv_coefficients(YUVColorSpace color_space, RGBRang
 //   U: shape (1, H/2, W/2, T) — Cb chroma (4:2:0 subsampled)
 //   V: shape (1, H/2, W/2, T) — Cr chroma (4:2:0 subsampled)
 //
+// format: output pixel format; only YUV 4:2:0 planar is supported today (the
+//         shapes above), but the parameter exists so other formats can be added.
 // The conversion coefficients are chosen by color_space / input_range /
 // output_range (derived via yuv_coefficients).  Power users can instead pass an
 // explicit `coefficients` matrix, which overrides the color_space/range choice.
 // memory_config: output memory config; defaults to the input's. Must be
 //                interleaved — sharded output is not supported.
-std::tuple<Tensor, Tensor, Tensor> yuv_conversion(
+std::tuple<Tensor, Tensor, Tensor> rgb_to_yuv(
     const Tensor& input,
+    prim::YUVFormat format = prim::YUVFormat::YUV420Planar,
     YUVColorSpace color_space = YUVColorSpace::BT601,
     RGBRange input_range = RGBRange::MinusOneToOne,
     YUVRange output_range = YUVRange::Limited,

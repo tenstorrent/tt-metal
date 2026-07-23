@@ -9,5 +9,5 @@
 namespace nb = nanobind;
 
 namespace ttnn::experimental::detail {
-void bind_yuv_conversion(nb::module_& mod);
+void bind_rgb_to_yuv(nb::module_& mod);
 }

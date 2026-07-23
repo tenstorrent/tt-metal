@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include "yuv_conversion_device_op_types.hpp"
+#include "rgb_to_yuv_device_op_types.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct YUVConversionProgramFactory {
+struct RgbToYuvProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id;
         tt::tt_metal::KernelHandle writer_kernel_id;
@@ -24,14 +24,12 @@ struct YUVConversionProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const YUVConversionParams& op_attrs,
-        const YUVConversionInputs& tensor_args,
-        std::tuple<Tensor, Tensor, Tensor>& output);
+        const RgbToYuvParams& op_attrs, const RgbToYuvInputs& tensor_args, std::tuple<Tensor, Tensor, Tensor>& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const YUVConversionParams& op_attrs,
-        const YUVConversionInputs& tensor_args,
+        const RgbToYuvParams& op_attrs,
+        const RgbToYuvInputs& tensor_args,
         std::tuple<Tensor, Tensor, Tensor>& output);
 };
 

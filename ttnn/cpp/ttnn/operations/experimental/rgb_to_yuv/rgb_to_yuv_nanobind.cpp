@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "yuv_conversion_nanobind.hpp"
+#include "rgb_to_yuv_nanobind.hpp"
 
 #include <array>
 #include <optional>
@@ -17,15 +17,15 @@
 #include <nanobind/stl/vector.h>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "yuv_conversion.hpp"
-#include "device/yuv_conversion_device_op_types.hpp"
+#include "rgb_to_yuv.hpp"
+#include "device/rgb_to_yuv_device_op_types.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
 
 namespace ttnn::experimental::detail {
 
-void bind_yuv_conversion(nb::module_& mod) {
+void bind_rgb_to_yuv(nb::module_& mod) {
     // Standard conversion selectors.
     nb::enum_<YUVColorSpace>(mod, "YUVColorSpace")
         .value("BT601", YUVColorSpace::BT601)
@@ -35,6 +35,7 @@ void bind_yuv_conversion(nb::module_& mod) {
         .value("MinusOneToOne", RGBRange::MinusOneToOne)
         .value("ZeroToOne", RGBRange::ZeroToOne);
     nb::enum_<YUVRange>(mod, "YUVRange").value("Full", YUVRange::Full).value("Limited", YUVRange::Limited);
+    nb::enum_<prim::YUVFormat>(mod, "YUVFormat").value("YUV420Planar", prim::YUVFormat::YUV420Planar);
 
     // Expose the YUVCoefficients struct to Python so callers can construct it.
     nb::class_<prim::YUVCoefficients>(mod, "YUVCoefficients")
@@ -63,18 +64,20 @@ void bind_yuv_conversion(nb::module_& mod) {
 
     // Main op: CHWT bf16 → (Y, U, V) uint8 tuple.
     mod.def(
-        "yuv_conversion",
+        "rgb_to_yuv",
         [](const Tensor& input,
+           prim::YUVFormat format,
            YUVColorSpace color_space,
            RGBRange input_range,
            YUVRange output_range,
            const std::optional<prim::YUVCoefficients>& coefficients,
            const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
-            return ttnn::experimental::yuv_conversion(
-                input, color_space, input_range, output_range, coefficients, memory_config);
+            return ttnn::experimental::rgb_to_yuv(
+                input, format, color_space, input_range, output_range, coefficients, memory_config);
         },
         "input"_a,
         nb::kw_only(),
+        "format"_a = prim::YUVFormat::YUV420Planar,
         "color_space"_a = YUVColorSpace::BT601,
         "input_range"_a = RGBRange::MinusOneToOne,
         "output_range"_a = YUVRange::Limited,
@@ -90,6 +93,7 @@ Args:
     input: CHWT bfloat16 tensor on device, C=3.  Must be interleaved.
 
 Keyword Args:
+    format: YUVFormat output pixel format. Only YUV420Planar is supported today.
     color_space: YUVColorSpace (BT601/BT709/BT2020). Default BT601.
     input_range: RGBRange of the input samples (MinusOneToOne or ZeroToOne).
         Default MinusOneToOne.

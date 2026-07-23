@@ -23,12 +23,18 @@ struct YUVCoefficients {
     std::array<float, 4> cr = {};  // {wcr_r, wcr_g, wcr_b, offset_cr}
 };
 
-struct YUVConversionParams {
+// Output pixel format. Only 4:2:0 planar (ffmpeg AV_PIX_FMT_YUV420P: full-res Y
+// plane, then half-res Cb and Cr planes) is implemented today; the enum is the
+// extension point for adding other formats (e.g. NV12, 4:2:2) later.
+enum class YUVFormat { YUV420Planar };
+
+struct RgbToYuvParams {
     YUVCoefficients coefficients;
+    YUVFormat format = YUVFormat::YUV420Planar;
     tt::tt_metal::MemoryConfig output_memory_config;
 };
 
-struct YUVConversionInputs {
+struct RgbToYuvInputs {
     const Tensor& input;  // CHWT bfloat16, row-major; C=3
 };
 

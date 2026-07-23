@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "yuv_conversion_program_factory.hpp"
+#include "rgb_to_yuv_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -41,10 +41,8 @@ static std::array<uint32_t, 12> packed_coeffs(const YUVCoefficients& c) {
     };
 }
 
-YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::create(
-    const YUVConversionParams& op_attrs,
-    const YUVConversionInputs& tensor_args,
-    std::tuple<Tensor, Tensor, Tensor>& output) {
+RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
+    const RgbToYuvParams& op_attrs, const RgbToYuvInputs& tensor_args, std::tuple<Tensor, Tensor, Tensor>& output) {
     Program program{};
 
     const auto& input = tensor_args.input;
@@ -204,13 +202,13 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
     // --- Kernel creation -----------------------------------------------------
     KernelHandle reader_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/yuv_conversion/device/kernels/dataflow/reader_yuv_chwt.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/rgb_to_yuv/device/kernels/dataflow/reader_yuv_chwt.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
 
     KernelHandle writer_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/yuv_conversion/device/kernels/dataflow/writer_yuv_planes.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/rgb_to_yuv/device/kernels/dataflow/writer_yuv_planes.cpp",
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
 
@@ -219,7 +217,7 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
     // fp32_dest_acc_en is required for the SFPU bf16->uint8 typecast.
     KernelHandle compute_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/yuv_conversion/device/kernels/compute/yuv_compute.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/rgb_to_yuv/device/kernels/compute/yuv_compute.cpp",
         all_cores,
         ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_ct_args, .defines = compute_defines});
 
@@ -257,10 +255,10 @@ YUVConversionProgramFactory::cached_program_t YUVConversionProgramFactory::creat
          units_per_core_g2}};
 }
 
-void YUVConversionProgramFactory::override_runtime_arguments(
+void RgbToYuvProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const YUVConversionParams& op_attrs,
-    const YUVConversionInputs& tensor_args,
+    const RgbToYuvParams& op_attrs,
+    const RgbToYuvInputs& tensor_args,
     std::tuple<Tensor, Tensor, Tensor>& output) {
     auto& sv = cached_program.shared_variables;
     auto& program = cached_program.program;

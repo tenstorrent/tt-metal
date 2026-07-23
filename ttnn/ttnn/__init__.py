@@ -558,12 +558,13 @@ from ttnn._ttnn.operations.experimental import RoutedExpertActivation
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
 
-# YUV conversion op
+# RGB -> YUV conversion op
 from ttnn._ttnn.operations.experimental import YUVCoefficients
 from ttnn._ttnn.operations.experimental import YUVColorSpace
 from ttnn._ttnn.operations.experimental import RGBRange
 from ttnn._ttnn.operations.experimental import YUVRange
-from ttnn._ttnn.operations.experimental import yuv_conversion
+from ttnn._ttnn.operations.experimental import YUVFormat
+from ttnn._ttnn.operations.experimental import rgb_to_yuv
 from ttnn._ttnn.operations.experimental import yuv_bt601_coefficients
 from ttnn._ttnn.operations.experimental import yuv_bt709_coefficients
 
@@ -571,7 +572,8 @@ experimental.YUVCoefficients = YUVCoefficients
 experimental.YUVColorSpace = YUVColorSpace
 experimental.RGBRange = RGBRange
 experimental.YUVRange = YUVRange
-experimental.yuv_conversion = yuv_conversion
+experimental.YUVFormat = YUVFormat
+experimental.rgb_to_yuv = rgb_to_yuv
 experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
 experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
 
