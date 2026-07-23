@@ -83,11 +83,11 @@ class TtXttsGptModel(LightweightModule):
         pos_tt = ttnn.arange(0, seq, 1, dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT)
         pos_tt = ttnn.reshape(pos_tt, (1, seq))  # [seq] -> [1, seq]; broadcasts over batch on add
 
-        tok = ttnn.to_layout(ttnn.embedding(ids_tt, tok_weight), ttnn.TILE_LAYOUT)
+        tok = ttnn.to_layout(ttnn.embedding(ids_tt, tok_weight), ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(ids_tt)
-        pos = ttnn.to_layout(ttnn.embedding(pos_tt, pos_weight), ttnn.TILE_LAYOUT)
+        pos = ttnn.to_layout(ttnn.embedding(pos_tt, pos_weight), ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(pos_tt)
-        emb = ttnn.add(tok, pos)
+        emb = ttnn.add(tok, pos, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(tok)
         ttnn.deallocate(pos)
         return emb
@@ -266,10 +266,10 @@ class TtXttsGptModel(LightweightModule):
         write), so the whole thing is trace-capturable (``ttnn.arange`` would be a fatal in-capture write)."""
         seq = ids_tt.shape[1]
         pos_tt = ttnn.slice(self._text_pos_full, [0, 0], [1, seq])  # [1, seq] uint32, device slice
-        tok = ttnn.to_layout(ttnn.embedding(ids_tt, tok_weight), ttnn.TILE_LAYOUT)
-        pos = ttnn.to_layout(ttnn.embedding(pos_tt, pos_weight), ttnn.TILE_LAYOUT)
+        tok = ttnn.to_layout(ttnn.embedding(ids_tt, tok_weight), ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pos = ttnn.to_layout(ttnn.embedding(pos_tt, pos_weight), ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(pos_tt)
-        emb = ttnn.add(tok, pos)
+        emb = ttnn.add(tok, pos, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(tok)
         ttnn.deallocate(pos)
         return emb
@@ -280,7 +280,9 @@ class TtXttsGptModel(LightweightModule):
         ``self._static_kv`` in place with ``fill_cache``. Returns ``prompt_len`` (mel token i ->
         cache pos prompt_len + i). Requires ``alloc_static_kv`` first (zero cache + text-pos table)."""
         text_emb = self._embed_dev(text_ids_tt, self.text_emb_weight, self.text_pos_weight)
-        prefix = ttnn.concat([cond_latents, text_emb], dim=1)  # [1, n_cond + text_len, hidden]
+        prefix = ttnn.concat(
+            [cond_latents, text_emb], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
+        )  # [1, n_cond+text, hidden]
         ttnn.deallocate(text_emb)
         prompt_ln, kv = self.stack.forward_prefill(prefix)  # per-layer (k, v) [1, heads, prompt_len, head_dim]
         ttnn.deallocate(prompt_ln)
