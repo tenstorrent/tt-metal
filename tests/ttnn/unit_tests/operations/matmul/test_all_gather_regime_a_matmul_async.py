@@ -103,8 +103,8 @@ def test_d1_matches_regime_a(device):
 # handshake) and the conftest fixture's STRICT_INIT fabric config + the watcher both overflow the ACTIVE_ETH
 # kernel-config buffer on this build — so we open the full mesh with a BARE fabric config, no watcher, and carve
 # a (1,D) submesh. D>2 uses a ring so the injector's forward hops 1..D-1 reach every other device.
-def _run_full_gather(D, mesh_shape, fabric_config, topology):
-    M, K, N = 32, 6144, 3072  # K == K_global; each device owns K_local = K/D
+def _run_full_gather(D, mesh_shape, fabric_config, topology, shape=(32, 6144, 3072), cfg_kwargs=None):
+    M, K, N = shape  # K == K_global; each device owns K_local = K/D
     torch.manual_seed(0)
     t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)  # global in0 [M, K_global], sharded on K
     t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)  # in1 [K_global, N], replicated
@@ -147,7 +147,8 @@ def _run_full_gather(D, mesh_shape, fabric_config, topology):
                 ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementReplicate()], ttnn.MeshShape(1, D)),
             ),
         )
-        cfg = ttnn.RegimeAMatmulConfig(k_slices=3, n_slices=1, m_slices=1, k_block_tiles=4, n_subblock_tiles=6)
+        # cfg_kwargs=None -> config=None (auto-picker); else an explicit RegimeAMatmulConfig.
+        cfg = None if cfg_kwargs is None else ttnn.RegimeAMatmulConfig(**cfg_kwargs)
 
         # Two invocations: iteration 0 is a fresh program (cache miss), iteration 1 replays the cached program
         # through override_runtime_arguments (exercises the custom compute_program_hash + arg relocation).
@@ -180,10 +181,13 @@ def _run_full_gather(D, mesh_shape, fabric_config, topology):
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
+_PINNED = dict(k_slices=3, n_slices=1, m_slices=1, k_block_tiles=4, n_subblock_tiles=6)
+
+
 @pytest.mark.skipif(not is_blackhole(), reason="regime_a_matmul is Blackhole-only")
 def test_d2_full_gather_correctness():
     # D=2 on a line: device 0 -> forward, device 1 -> backward (both one hop).
-    _run_full_gather(2, (8, 4), ttnn.FabricConfig.FABRIC_1D, ttnn.Topology.Linear)
+    _run_full_gather(2, (8, 4), ttnn.FabricConfig.FABRIC_1D, ttnn.Topology.Linear, cfg_kwargs=_PINNED)
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="regime_a_matmul is Blackhole-only")
@@ -193,4 +197,19 @@ def test_d2_full_gather_correctness():
 )
 def test_dn_full_gather_correctness_ring(D, mesh_shape):
     # D>2: ring so the injector's forward hops 1..D-1 reach every other device.
-    _run_full_gather(D, mesh_shape, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.Topology.Ring)
+    _run_full_gather(D, mesh_shape, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.Topology.Ring, cfg_kwargs=_PINNED)
+
+
+# ---- config coverage at D=4 (ring): auto-picker, Ns>1, Sm>1 exercise distinct factory paths ----
+@pytest.mark.skipif(not is_blackhole(), reason="regime_a_matmul is Blackhole-only")
+@pytest.mark.parametrize(
+    "shape, cfg_kwargs, label",
+    [
+        ((32, 6144, 3072), None, "auto_picker"),
+        ((32, 6144, 6144), dict(k_slices=3, n_slices=2, m_slices=1, k_block_tiles=4, n_subblock_tiles=6), "Ns2"),
+        ((128, 6144, 3072), dict(k_slices=3, n_slices=1, m_slices=2, k_block_tiles=4, n_subblock_tiles=6), "Sm2"),
+    ],
+    ids=lambda v: v if isinstance(v, str) else "",
+)
+def test_d4_config_coverage(shape, cfg_kwargs, label):
+    _run_full_gather(4, (8, 4), ttnn.FabricConfig.FABRIC_1D_RING, ttnn.Topology.Ring, shape=shape, cfg_kwargs=cfg_kwargs)
