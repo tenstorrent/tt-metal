@@ -305,8 +305,12 @@ class TtHifiganGenerator(LightweightModule):
     def forward(self, x, g):
         # Deep conv chain — the vocoder's memory-dominant path, whose activation
         # footprint grows with output length. Each temporary is freed the moment the
-        # next op consumes it; ``g`` is never freed (reused by every cond layer).
-        cond_global = self.cond_layer(g)  # [N, 1, 512], broadcasts over T
+        # next op consumes it; ``g``/``g_t`` are never freed (reused by every cond layer).
+        # cond_layer/conds are 1x1 convs (matmuls); each would otherwise tilize ``g`` from
+        # ROW_MAJOR internally, so tilize it ONCE here and hand the TILE copy to all 5 — turns
+        # 5 TilizeWithValPadding ops into 1 (verified same result). Pure device op: trace-safe.
+        g_t = ttnn.to_layout(g, ttnn.TILE_LAYOUT)
+        cond_global = self.cond_layer(g_t)  # [N, 1, 512], broadcasts over T
         pre = self.conv_pre(x)
         ttnn.deallocate(x)  # upsampler output, not reused after conv_pre
         o = ttnn.add(pre, cond_global)
@@ -319,7 +323,7 @@ class TtHifiganGenerator(LightweightModule):
             # ``conds[i](g)`` is a length-1, per-channel constant, so ``ups[i](a) +
             # conds[i](g)`` is just a per-channel bias add — fold it into the ups conv's
             # fused bias epilogue instead of a separate full-length broadcast add.
-            cg = self.conds[i](g)  # [1, 1, C_i]
+            cg = self.conds[i](g_t)  # [1, 1, C_i]
             cg = ttnn.reshape(cg, [1, 1, 1, cg.shape[-1]])
             if cg.dtype != ttnn.float32:
                 cg = ttnn.typecast(cg, ttnn.float32)
@@ -340,6 +344,7 @@ class TtHifiganGenerator(LightweightModule):
             ttnn.deallocate(z_sum)
             ttnn.deallocate(o)  # free the resblock input once the MRF sum is done
             o = o_new
+        ttnn.deallocate(g_t)  # our tiled copy of g; last used by conds[-1] above
         a = ttnn.leaky_relu(o, negative_slope=FINAL_LRELU_SLOPE)
         ttnn.deallocate(o)
         p = self.conv_post(a)
