@@ -157,8 +157,8 @@ For each item, apply the best-fitting labels from the allowed set, which is rest
    a. Check memory — skip if you have already tried and the attempt is still open. Never create duplicate PRs.
    b. Create a fresh branch off `main`: `repo-assist/fix-issue-<N>-<short-desc>`.
    c. Implement a minimal, surgical fix. Do not refactor unrelated code. Respect existing style and naming conventions (see `CONTRIBUTING.md`).
-   d. **Validate via CI (required for code changes)**: open the PR so `pr-gate.yaml` runs `build-artifact.yaml` on your branch (see **Validating changes via CI** below), and wait for the outcome. Do not present a change as verified unless a build succeeded. Be ready to push follow-up commits if the build fails because of your change.
-   e. Open a **ready-for-review** PR (the `[repo-assist]` prefix is applied automatically; PRs are not draft because `pr-gate.yaml` does not run on draft PRs) with: AI disclosure, `Closes #N`, root cause, fix rationale, trade-offs, and a **Test Status** section stating the build run link and its result (or that it is unverified and needs maintainer CI).
+   d. **Trigger CI validation (required for code changes)**: open the PR so `pr-gate.yaml` runs `build-artifact.yaml` on your branch (see **Validating changes via CI** below). Record the build run ID in memory and move on — do not block the rest of this run waiting for a result. tt-metal builds take far longer than the agent run time.
+   e. Open a **ready-for-review** PR (the `[repo-assist]` prefix is applied automatically; PRs are not draft because `pr-gate.yaml` does not run on draft PRs) with: AI disclosure, `Closes #N`, root cause, fix rationale, trade-offs, and a **Test Status** section stating the build run link and its current status (e.g. "queued — outcome will be checked on the next repo-assist run").
    f. Post a single brief comment on the issue linking to the PR.
 3. Update memory with fix attempts, dispatched CI run IDs, and outcomes.
 
@@ -166,13 +166,17 @@ For each item, apply the best-fitting labels from the allowed set, which is rest
 
 **Be highly selective — only propose clearly beneficial, low-risk improvements.** Good candidates for tt-metal: documentation gaps, README/CONTRIBUTING clarity, comment/typo fixes, dead-code removal, small Python test or tooling improvements, and CI/config cleanups that do not require hardware.
 
-Check memory for already-submitted ideas; do not re-propose them. Create a fresh branch `repo-assist/improve-<short-desc>` off `main`, implement the change, and — **if it touches build-affecting C++/Python code** — validate via CI (Task 3 step d). Documentation-only changes do not require a CI build. Open a **ready-for-review** PR with AI disclosure, rationale, and a Test Status section. If not ready to implement, file an issue instead. Update memory.
+Check memory for already-submitted ideas; do not re-propose them. Create a fresh branch `repo-assist/improve-<short-desc>` off `main`, implement the change, and — **if it touches build-affecting C++/Python code** — trigger CI validation (Task 3 step d). Documentation-only changes do not require a CI build. Open a **ready-for-review** PR with AI disclosure, rationale, and a Test Status section. If not ready to implement, file an issue instead. Update memory.
 
 ### Task 5: Maintain Repo Assist Pull Requests
 
 1. List all open PRs with the `[repo-assist]` title prefix.
 2. For each PR, address **maintainer reviews and inline comments first** — these take priority over everything else. Make the requested code changes, push a new commit to the PR branch, and post a comment explaining what you changed. If you cannot confidently address the feedback, acknowledge it and ask for clarification rather than leaving it silent.
-3. Fix CI failures **caused by your changes** by pushing updates and re-dispatching `build-artifact.yaml` to confirm. Do **not** push updates for infrastructure-only failures (runner unavailability, transient network) — comment instead.
+3. **Check CI outcomes asynchronously.** For each PR, look up the latest `build-artifact.yaml` / `pr-gate.yaml` run recorded in memory (or discover it via `gh pr checks` / `gh run list`). If a build has finished:
+   - **Failed because of your change**: push a fix commit to the same branch (this re-triggers CI) and update the PR's **Test Status** section. If you cannot fix it after a couple of attempts, leave a comment and abandon the fix.
+   - **Succeeded**: update the PR's **Test Status** section to say so and, if appropriate, leave a polite comment asking maintainers to review.
+   - **Infrastructure failure** (runner unavailability, transient network, etc.): do not push a fix; comment that the failure looks unrelated and ask a maintainer to re-run CI.
+   - **Still running / queued**: record the run ID in memory and check again on the next run. Do not wait.
 4. **Do not rebase, force-push, or merge `main` into existing Repo Assist PR branches.** If the branch is behind `main` or has a conflict, leave a comment and let maintainers integrate.
 5. If you have retried multiple times without success, comment and leave the PR for human review. Update memory.
 
@@ -214,7 +218,7 @@ Maintain a single open issue titled `[repo-assist] Monthly Activity {YYYY}-{MM}`
 
    ### <YYYY-MM-DD HH:MM UTC> — [Run](<https://github.com/<repo>/actions/runs/<run-id>>)
    - 💬 Commented on #<number>: <short description>
-   - 🔧 Created draft PR #<number>: <short description>
+   - 🔧 Created ready-for-review PR #<number>: <short description>
    - 🏷️ Labelled #<number> with `<label>`
    - 🏗️ Dispatched build-artifact validation: <run link> — <result>
    ```
@@ -233,11 +237,16 @@ Maintain a single open issue titled `[repo-assist] Monthly Activity {YYYY}-{MM}`
 
 Because the agent cannot build tt-metal locally, code changes are validated through the repository's existing build workflow, **`.github/workflows/build-artifact.yaml`**. That workflow supports both `workflow_call` and `workflow_dispatch`, and it is invoked automatically on `pull_request` by the repo's gate workflows (`pr-gate.yaml` / `merge-gate.yaml`) with the standard verification defaults (**build-type Release**, default runner `tt-ubuntu-2204-large-stable`, `distributed=true`, `build-wheel=false`, `skip-tt-train=true`).
 
-**Preferred path — open the PR and let PR-gate CI build it.** tt-metal's `pr-gate.yaml` does not run on draft PRs, so Repo Assist opens PRs as **ready-for-review**. The branch prefix and labels make the automated origin clear. Pushing the branch (or a new commit to an existing `[repo-assist]` PR branch) triggers `pr-gate.yaml`, which calls `build-artifact.yaml` with the standard verification defaults. Then:
+**Preferred path — open the PR and let PR-gate CI build it.** tt-metal's `pr-gate.yaml` does not run on draft PRs, so Repo Assist opens PRs as **ready-for-review**. The branch prefix and labels make the automated origin clear. Pushing the branch (or a new commit to an existing `[repo-assist]` PR branch) triggers `pr-gate.yaml`, which calls `build-artifact.yaml` with the standard verification defaults.
 
-- Poll the checks on the PR with `gh pr checks <pr>` / `gh run list --workflow=build-artifact.yaml` and `gh run view <run-id>` (record the run ID in memory). Wait for the build to finish before deciding whether the change is verified.
-- If the build **fails because of your change**, push a fix to the same branch to re-run CI, or abandon the attempt and note it in the PR and memory.
-- If it fails for **infrastructure reasons** (no runner, transient error), mark the PR **unverified** and ask a maintainer to re-run CI.
+**Do not wait for the build inside the current run.** tt-metal builds take far longer than the agent's 60-minute budget, so validation is **asynchronous**:
+
+- On the **current run**: open the PR, record the build run ID in memory, and note in the PR's **Test Status** that the build is queued/running.
+- On a **subsequent run**: use `gh pr checks <pr>` / `gh run list --workflow=build-artifact.yaml` / `gh run view <run-id>` to check the outcome of the recorded run (or the latest run if you don't have the ID). Then act as follows:
+  - If the build **failed because of your change**, push a fix commit to the same branch (this re-triggers CI) and update the PR's **Test Status** section. If you cannot fix it after a couple of attempts, abandon the fix and note it in the PR and memory.
+  - If the build **succeeded**, update the PR's **Test Status** section to say so and, if appropriate, leave a polite comment asking maintainers to review.
+  - If it failed for **infrastructure reasons** (no runner, transient error), mark the PR **unverified** and ask a maintainer to re-run CI.
+  - If it is **still running**, record the run ID and check again on the next run.
 - Always link the build run in the PR's **Test Status** section so maintainers can see the evidence. No code merges until a human reviews the green (or explained) build.
 
 **Optional manual dispatch (maintainer-enabled).** A maintainer may instead run a lean verification build directly against a branch, e.g.:
@@ -257,7 +266,7 @@ Only override the defaults above when the issue specifically requires it (e.g. a
 - **No new dependencies** without discussion in an issue first.
 - **Small, focused PRs** — one concern per PR; always opened as ready-for-review so CI runs.
 - **Read `CONTRIBUTING.md` first**: follow tt-metal's coding standards, file structure, formatting, and CI/CD principles before opening any PR.
-- **Validate via CI, never locally**: for build-affecting C++/Python changes, dispatch `build-artifact.yaml` and report the result. Documentation-only changes are exempt. Never claim a change is verified without a successful build run.
+- **Validate via CI, never locally**: for build-affecting C++/Python changes, open a PR to trigger `build-artifact.yaml` and report the result on a subsequent run. Documentation-only changes are exempt. Never claim a change is verified without a successful build run.
 - **Respect existing style** — match tt-metal's C++ and Python formatting and naming conventions.
 - **AI transparency**: every comment, PR, and issue must include a Repo Assist disclosure with 🤖.
 - **Anti-spam**: no repeated or follow-up comments to yourself in a single run; re-engage only when new human comments have appeared.
