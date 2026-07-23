@@ -119,13 +119,9 @@ PrepWorkDist distribute_prep(CoreCoord grid, uint32_t total, uint32_t core_cap) 
     return d;
 }
 
-// Value-parallel work distribution for SCAN. The chunk recurrence is sequential in TIME, but it
-// factorizes EXACTLY over the value dimension: each V-block S[:, vb] evolves independently (every
-// scan op — kd@S, T_inv@diff, q_decay@S, intra@v_new, k_dec_t@v_new, S*dl — is column-wise in V,
-// needing only the full-K shared per-chunk tensors + that block's own V-slice). This mirrors FLA's
-// fwd_h/fwd_o launch grid over (i_v, i_bh) with a sequential loop over time. K is NOT split (v_new
-// and o reduce over all K). We pick the finest V-blocking that fits the grid: the largest NV | Vt
-// with BH*NV <= cores. Each core runs one (head, v-block) => BH*NV independent scans vs BH today.
+// The scan factorizes over V, but splitting V duplicates every V-independent tensor read and matmul setup.
+// For Kimi KDA (Vt=4), one full-V core per head is 36% faster than two V-shards. Keep value
+// splitting only as an explicit A/B knob until a larger-V crossover is measured.
 struct ScanWorkDist {
     std::vector<CoreCoord> cores;
     std::vector<uint32_t> head;  // head index per core
@@ -138,14 +134,16 @@ struct ScanWorkDist {
 ScanWorkDist distribute_scan(CoreCoord grid, uint32_t BH, uint32_t Vt) {
     const uint32_t ncores = grid.x * grid.y;
     TT_FATAL(BH <= ncores, "num_heads {} exceeds compute cores {}", BH, ncores);
-    // QWEN_GDN_SCAN_SERIAL=1 forces NV=1 (full V on 1 core/head, the old layout) for perf A/B only.
-    const char* serial_env = std::getenv("QWEN_GDN_SCAN_SERIAL");
-    const bool force_serial = serial_env && serial_env[0] == '1';
+    // QWEN_GDN_SCAN_VALUE_SPLIT=1 enables the previous finest-grain V split for perf A/B only.
+    const char* split_env = std::getenv("QWEN_GDN_SCAN_VALUE_SPLIT");
+    const bool value_split = split_env && split_env[0] == '1';
     uint32_t NV = 1;
-    for (uint32_t cand = force_serial ? 1u : Vt; cand >= 1; cand--) {  // cand==1 always satisfies
-        if (Vt % cand == 0 && BH * cand <= ncores) {
-            NV = cand;
-            break;
+    if (value_split) {
+        for (uint32_t cand = Vt; cand >= 1; cand--) {  // cand==1 always satisfies
+            if (Vt % cand == 0 && BH * cand <= ncores) {
+                NV = cand;
+                break;
+            }
         }
     }
     ScanWorkDist d;

@@ -466,3 +466,12 @@
 - Hardware suite: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` passed 12/12 in 16.09 s. HiFi2 direct T=64 output/state PCC was 0.999928/0.999932.
 - Controlled T=640 fidelity A/B: HiFi4 report `/tmp/kda_chunk_hifi4_control_profile/reports/2026_07_23_09_02_22/ops_perf_results_2026_07_23_09_02_22.csv` averaged 647.9074 us total (prep 335.1173 us, scan 285.0497 us); HiFi2 report `/tmp/kda_chunk_hifi2_profile/reports/2026_07_23_09_00_37/ops_perf_results_2026_07_23_09_00_37.csv` averaged 663.6048 us (prep 351.6653 us, scan 283.8808 us). HiFi4 is retained as the layer/perf default because it is 15.6974 us faster and more accurate.
 - LoFi was rejected before profiling: T=64 output PCC was 0.998563, below the 0.999 acceptance floor.
+
+### 2026-07-23 09:08:00 UTC — Keep complete value blocks on scan cores
+
+- Hypothesis: splitting each head's four value tiles across two cores duplicated all value-independent reads and matmul setup, costing more than the extra column parallelism saved.
+- Controlled T=640 A/B confirmed it. The 64-core value-split scan averaged 285.0497 us in `/tmp/kda_chunk_hifi4_control_profile/reports/2026_07_23_09_02_22/ops_perf_results_2026_07_23_09_02_22.csv`; the 32-core full-value scan averaged 182.1508 us in `/tmp/kda_chunk_scan_serial_profile/reports/2026_07_23_09_03_06/ops_perf_results_2026_07_23_09_03_06.csv`, 102.8989 us or 36.10% faster.
+- Made one full-value core per head the default. `QWEN_GDN_SCAN_VALUE_SPLIT=1` retains the previous mapping solely as an explicit performance A/B knob until a larger-value crossover is measured.
+- Full build and hardware suite: `./build_metal.sh --build-ttnn && scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 12/12 in 21.06 s.
+- Confirmation report: `/tmp/kda_chunk_full_v_default_profile/reports/2026_07_23_09_07_51/ops_perf_results_2026_07_23_09_07_51.csv`. Ten warm T=640 calls averaged 553.9449 us: transpose 1.7821 us, reshape 25.4826 us, prep 343.9508 us, scan 182.7294 us.
+- The confirmed default is 93.9625 us or 14.50% faster than the controlled 647.9074 us value-split baseline, and 741.2251 us or 57.23% faster than the original 1295.1700 us baseline.
