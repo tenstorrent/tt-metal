@@ -168,7 +168,9 @@ DispatchMemMap::DispatchMemMap(
         l1_size);
     TT_ASSERT(dispatch_cb_end < l1_size);
 
-    const uint32_t dispatch_s_buffer_base = (core_type == CoreType::WORKER) ? dispatch_cb_end : dispatch_buffer_base_;
+    // WORKER and Quasar DISPATCH co-locate dispatch_s on the same core as dispatch; ETH does not.
+    const uint32_t dispatch_s_buffer_base =
+        (core_type == CoreType::WORKER || core_type == CoreType::DISPATCH) ? dispatch_cb_end : dispatch_buffer_base_;
     dispatch_s_buffer_end_ = dispatch_s_buffer_base + settings.dispatch_s_buffer_size_;
     TT_FATAL(
         dispatch_s_buffer_end_ <= l1_size,

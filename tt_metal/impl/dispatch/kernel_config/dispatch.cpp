@@ -93,7 +93,6 @@ DispatchKernel::DispatchKernel(
     }
     this->kernel_type_ = FDKernelType::DISPATCH;
     this->send_to_brisc_ = true;
-    this->quasar_dm_processor_ = detail::dispatch_dm_processor();
     // Log dispatch core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
     Inspector::set_dispatch_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);

@@ -40,9 +40,10 @@ std::vector<tt::tt_metal::CoreCoord> get_quasar_tensix_fallback_dispatch_cores_f
     return core_desc.logical_dispatch_cores;
 }
 
-// Quasar 1CQ fast dispatch places prefetch and dispatch HD on the same dispatch-engine tile (DM0/DM1).
-// dispatch_s shares that tile on DM2; dispatch_core_manager assigns prefetch/dispatch via separate pool
-// pops, mirroring interim Tensix YAML that lists the same logical coord twice.
+// Quasar 1CQ fast dispatch places prefetch and dispatch HD on the same dispatch-engine tile.
+// dispatch_s shares that tile; dispatch_core_manager assigns prefetch/dispatch via separate pool
+// pops, mirroring interim Tensix YAML that lists the same logical coord twice. Free DMs are
+// auto-assigned at CreateDispatchEngineKernel time (same policy as Quasar Tensix CreateKernel).
 void expand_quasar_dispatch_engine_pool_for_fd_assignment(
     std::vector<tt::tt_metal::CoreCoord>& logical_cores, uint8_t num_hw_cqs) {
     if (logical_cores.size() != 1) {

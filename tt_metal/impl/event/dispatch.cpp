@@ -93,8 +93,6 @@ void issue_record_event_commands(
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
-    CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         auto offset_index = *sub_device_ids[i];
         // recording an event does not have any side-effects on the dispatch completion count

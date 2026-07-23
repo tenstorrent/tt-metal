@@ -87,7 +87,6 @@ PrefetchKernel::PrefetchKernel(
     }
     this->kernel_type_ = FDKernelType::DISPATCH;
     this->send_to_brisc_ = true;
-    this->quasar_dm_processor_ = detail::prefetch_dm_processor();
     // Log prefetcher core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
     tt::tt_metal::Inspector::set_prefetcher_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
@@ -150,9 +149,9 @@ void PrefetchKernel::GenerateStaticConfigs() {
         uint32_t dispatch_s_buffer_base = 0xff;
         if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
-            if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
-                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
+            if (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH) {
+                // dispatch_s (and on Quasar, prefetch itself) shares a core with dispatch_d
+                // (Tensix WORKER or Quasar DE). Place dispatch_s CB immediately after dispatch_d's CB.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();
@@ -246,9 +245,9 @@ void PrefetchKernel::GenerateStaticConfigs() {
         uint32_t dispatch_s_buffer_base = 0xff;
         {  // Just to make it match previous implementation
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
-            if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
-                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
+            if (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH) {
+                // dispatch_s (and on Quasar, prefetch itself) shares a core with dispatch_d
+                // (Tensix WORKER or Quasar DE). Place dispatch_s CB immediately after dispatch_d's CB.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();

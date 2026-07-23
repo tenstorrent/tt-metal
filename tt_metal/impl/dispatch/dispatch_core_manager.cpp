@@ -196,7 +196,7 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, ui
     return assignment.dispatcher_s.value();
 }
 
-CoreType dispatch_core_manager::get_dispatch_core_type() {
+CoreType dispatch_core_manager::get_dispatch_core_type() const {
     const auto& cluster = env_.get_cluster();
     if (cluster.all_chip_ids().empty()) {
         return get_core_type_from_config(this->dispatch_core_config_);
