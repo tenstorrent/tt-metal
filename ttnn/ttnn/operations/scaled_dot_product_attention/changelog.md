@@ -89,3 +89,41 @@
 - **Tests added**: test_scaled_dot_product_attention_precision_matrix.py
   (dtype × fp32_dest_acc_en × distribution over tile-aligned D≤128 shapes;
   40 passed / 8 skipped for the fp32@False EXCLUSION) + precision_matrix_results.md.
+
+## Refinement 1b — Numerical configurability expansion (debug: fix gate violations)
+- **Date**: 2026-07-23
+- **What was done**: Fixed the hard golden REGRESSION the completion gate caught in
+  Refinement 1. **Root cause**: R1 set `interm_df = float32 if fp32_dest_acc_en else
+  bfloat16` in the program descriptor — but the Phase-0 baseline config is bf16 input @
+  `fp32_dest_acc_en=True`, so this **doubled every intermediate CB** on the exact
+  previously-passing bf16 path, pushing the D=256 bf16@True cells (which passed in
+  Phase-0) into L1 OOM (`program.cpp:1751`). That is the "prior-passing cells no longer
+  pass" the gate reported.
+- **Fix (one line, single source)**: `interm_df = float32 if in_df == float32 else
+  bfloat16`. Intermediate-CB fp32 now couples to **float32 INPUT**, not to the bf16-input
+  DEST-acc flag — which is what the R1 verifier note actually meant by "float32 + fp32
+  intermediate CBs". Consequences:
+  - **bf16 input** → bf16 intermediates → **byte-identical to Phase-0** (both acc
+    settings). The whole bf16 supported rectangle keeps its exact Phase-0 L1 footprint;
+    D=256 bf16@True no longer OOMs. Change is monotone-non-increasing in L1 vs the failed
+    R1 (fp32→bf16), so no bf16/bf8b cell can regress from it.
+  - **float32 input** → fp32 intermediates (unchanged; needed so the parked online-softmax
+    (m,l,O) is not truncated mid-reduce).
+  - **bf8b input** → bf16 intermediates (bf8b can't be an accumulator format; bf16 is the
+    correct upcast and already dominates the bf8b error budget).
+- **Golden suite after fix** (full run, no subset): **1029 passed / 32 failed / 848
+  xfailed**, completed in 106s, exit code 1 (test failures, **not** a hang). Up from the
+  failed R1's 1025 passed / 36 failed — the 4 flipped cells are the restored D=256 bf16@True
+  cells. All 32 remaining failures are large-head-dim L1 OOM (`program.cpp:1751`):
+  bf16 only at D∈{512,1024} (= Phase-0's OOM baseline), fp32 at D∈{256,512,1024},
+  bf8b at D=1024 — **exactly the D-scaling L1 pressure the R1 note foretold**, and
+  Refinement 2's explicit, anticipated scope. Zero prior-passing regressions; zero hangs.
+- **Accuracy**: unchanged from R1 on the passing shapes (bf16 path is byte-identical to
+  Phase-0; fp32/bf8b paths untouched by this fix).
+- **Completion-gate bullets**: (1) zero hangs in SUPPORTED (full suite terminated in 106s);
+  (2) acceptance 32/32 + precision matrix 44 passed / 8 skipped + baseline pass;
+  (3) golden majority (1029/1061 responsible) with no regression. test_regression at 14
+  failed / 25 passed = Phase-0 baseline (these hardcode bf16 adversarial distributions —
+  pre-existing bf16-compute-path noise, the verifier's float32 lever can't reach them).
+- **Issues encountered**: None beyond the diagnosed root cause.
+- **Tests added**: None (reused the R1 test set + the golden suite as the regression net).

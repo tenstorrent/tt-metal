@@ -145,17 +145,23 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     #   * input CBs (Q/K/V/mask) carry the user input dtype — the reader byte-
     #     copies DRAM tiles into them, so the CB tile size must match.
     #   * cb_out carries the bf16 output (op contract; writer byte-copies out).
-    #   * intermediates: fp32 whenever fp32_dest_acc_en=True. The online-softmax
-    #     running (m,l,O) is parked in a CB and reloaded every KV-block, so the
-    #     accumulation crosses the CB — a bf16 park truncates back to 7 mantissa
-    #     bits each step and erases the fp32-DEST gain (skill §4). fp32 here is
-    #     the lever that clears the adversarial-distribution regressions
-    #     (large-magnitude / uniform / negative). When acc is off (16-bit-DEST
-    #     path, e.g. the bf16 perf profile) the CB matches the streaming width.
+    #   * intermediates: fp32 ONLY for float32 INPUT. The online-softmax running
+    #     (m,l,O) is parked in a CB and reloaded every KV-block; for a float32
+    #     input the CB must carry fp32 or the park truncates the mantissa mid-
+    #     reduce and erases the point of the fp32 datapath (skill §4 — this is
+    #     the "float32 + fp32 intermediate CBs" lever the R1 verifier note names,
+    #     coupled to the float32 dtype, NOT to the bf16-input fp32_dest_acc_en=
+    #     True config). bf16 / bf8b inputs keep bf16 intermediates: this is byte-
+    #     identical to Phase-0, so the whole bf16 supported rectangle (incl. the
+    #     D=256 cells) keeps its exact Phase-0 L1 footprint and does not OOM —
+    #     widening those to fp32 was the R1 regression (doubled every bf16@True
+    #     intermediate CB). bf8b can't be an intermediate accumulator format;
+    #     bf16 is the correct upcast target and already dominates the bf8b error
+    #     budget, so DEST width is second-order there.
     #   * scalers stay bf16 (reader packs them via prepare_reduce_scaler).
     in_df = query.dtype
     out_df = output_tensor.dtype  # follows the input dtype (see entry point)
-    interm_df = ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+    interm_df = ttnn.float32 if in_df == ttnn.float32 else ttnn.bfloat16
     scaler_df = ttnn.bfloat16
 
     def cb(index, num_pages, data_format):

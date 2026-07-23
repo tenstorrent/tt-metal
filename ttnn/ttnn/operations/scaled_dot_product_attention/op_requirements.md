@@ -83,6 +83,19 @@ move from xfail_expected to supported_pass (minus the EXCLUDED corner(s)); zero 
 changes beyond CB-format / config wiring where helpers are used correctly; the
 bf16 @ `fp32_dest_acc_en=False` path passes for the flagged shape's config.
 
+
+
+### [x] Refinement 1b — Numerical configurability expansion (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 1 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (responsible cells 1025/1061). A prior-passing cell that failed, hung, or never ran (suite hung before reaching it) is a regression.
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
 ### [ ] Refinement 2 — Per-core L1 budget fit for large head_dim
 
 **Goal**: bound the per-core CB footprint so the D∈{512,1024} shapes stop OOMing.
