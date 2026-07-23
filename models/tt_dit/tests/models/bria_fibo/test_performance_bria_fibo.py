@@ -194,10 +194,21 @@ def _perf_breakdown(
     run_once({})
     if traced:
         # The warmup captured the denoise trace but (by the ordering gate in _encode) left the encoder
-        # untraced. Capture the encoder trace now that the denoise trace + its buffers exist, so ALL
+        # untraced. Capture the encoder trace(s) now that the denoise trace + its buffers exist, so ALL
         # measured runs are pure replay (one warmup suffices, no encoder-capture cost leaking into the
-        # measured encode stage). Mirrors the trailing capture in BriaFiboPipeline.__call__.
+        # measured encode stage). Capture EVERY bucket the measured runs replay: pos and neg may land on
+        # different buckets (long positive -> 1024, short negative -> 256). Mirrors the trailing capture
+        # in BriaFiboPipeline.__call__.
         pipe._text_encoder.encode_prompt(prompt, traced=True)
+        if do_cfg:
+            pipe._text_encoder.encode_prompt(negative_prompt, traced=True)
+        # One UNTIMED settle generation. The FIRST traced replay after a fresh capture pays one-time
+        # costs the steady state does not: the first read-back of the trace's output buffers and any
+        # lazy program-cache population on the replay path. Paying them here (untimed) keeps them out of
+        # the measured window, so every measured run below is true steady-state replay. Without it a
+        # single first-run outlier skews the stats (observed: encode ~0.3 s steady vs ~7 s on run 1).
+        logger.info(f"perf harness [{label}]: settle run (untimed, absorbs first-replay one-time cost)...")
+        run_once({})
 
     runs = []
     image = None
@@ -222,29 +233,42 @@ def _perf_breakdown(
         assert arr.std() > 1.0, f"image looks degenerate (std={arr.std():.4f})"
         assert np.unique(arr).size > 16, f"image looks degenerate ({np.unique(arr).size} unique values)"
 
-    # Aggregate across measured runs and print the breakdown.
-    avg = {s: sum(run[s] for run in runs) / len(runs) for s in STAGES}
+    # Aggregate across measured runs. Report each stage's MEDIAN (robust to a stray host stall/GC) with
+    # the observed [min/max] spread. The headline total is the MEDIAN of PER-RUN totals: we sum the
+    # stages WITHIN each run first, then take the median across runs. Summing per-stage means/medians
+    # would describe a generation that never happened -- each stage's slow iteration is a different run,
+    # so a column-sum over-counts. Also surface the best (min) per-run total as the device-capability
+    # ceiling. (Percentages use the sum of per-stage medians, a share breakdown, not the headline total.)
+    med = {s: float(np.median([run[s] for run in runs])) for s in STAGES}
     lo = {s: min(run[s] for run in runs) for s in STAGES}
     hi = {s: max(run[s] for run in runs) for s in STAGES}
-    total = sum(avg[s] for s in STAGES)
+    per_run_total = [sum(run[s] for s in STAGES) for run in runs]
+    total = float(np.median(per_run_total))
+    best_total = min(per_run_total)
+    med_sum = sum(med[s] for s in STAGES)
 
     cfg_note = "CFG on (2 fwd/step)" if do_cfg else "no-CFG gate (1 fwd/step)"
     trace_note = "traced" if traced else "untraced"
+    warm_note = "1 warmup + 1 settle" if traced else "1 warmup"
     lines = [
         f"\nFIBO perf breakdown [{label}] — {width}x{height}, {num_inference_steps} steps, "
-        f"gs={guidance_scale} [{cfg_note}, {trace_note}], avg of {num_measured_runs} runs (after 1 warmup)"
+        f"gs={guidance_scale} [{cfg_note}, {trace_note}], median of {num_measured_runs} runs (after {warm_note})"
     ]
     for s in STAGES:
-        pct = 100.0 * avg[s] / total if total else 0.0
+        pct = 100.0 * med[s] / med_sum if med_sum else 0.0
         extra = ""
         if s == "prepare":
             extra = "RoPE recompute + 92-tensor upload"
-        elif s == "denoise" and avg[s]:
-            extra = f"-> {num_inference_steps / avg[s]:.2f} it/s"
-        lines.append(f"  {s:<9} {avg[s]:7.2f} s  ({pct:4.1f}%)  [min {lo[s]:6.2f} / max {hi[s]:6.2f}]  {extra}")
+        elif s == "denoise" and med[s]:
+            extra = f"-> {num_inference_steps / med[s]:.2f} it/s"
+        lines.append(f"  {s:<9} {med[s]:7.2f} s  ({pct:4.1f}%)  [min {lo[s]:6.2f} / max {hi[s]:6.2f}]  {extra}")
     lines.append("  " + "-" * 62)
-    images_per_s = 1.0 / total if total else 0.0
-    lines.append(f"  {'total':<9} {total:7.2f} s             -> {images_per_s:.4f} images/s")
+    med_ips = 1.0 / total if total else 0.0
+    best_ips = 1.0 / best_total if best_total else 0.0
+    lines.append(
+        f"  {'total':<9} {total:7.2f} s  (median full gen)  -> {med_ips:.4f} images/s"
+        f"   |  best {best_total:.2f} s -> {best_ips:.4f} images/s"
+    )
     logger.info("\n".join(lines))
 
     # Free the resident denoise traces so a subsequent build/test starts with a clean trace region.
@@ -340,9 +364,11 @@ def test_fibo_encode_perf(*, mesh_device, traced):
     Builds the full ``BriaFiboPipeline`` and times ONLY ``pipe._encode(prompt, negative_prompt, do_cfg=True)``
     -- the same encode the pipeline runs under CFG, encoding both prompts SEQUENTIALLY and returning
     ``(cond_embeds, cond_hidden_states, uncond_embeds, uncond_hidden_states)``. On the 4x8 Galaxy the encoder
-    runs SP=8 (axis 1) x TP=4 (axis 0) on the whole mesh: the token sequence (padded to the fixed 1024 bucket)
-    is sharded across the SP axis (all-gather K/V per attention layer) and Q/K/V/O are tensor-parallel on the
-    TP axis. ``traced`` captures/replays the encoder device forward (per 1024 bucket, shared by pos+neg) --
+    runs SP=8 (axis 1) x TP=4 (axis 0) on the whole mesh: the token sequence (padded to its bucket -- the
+    long JSON positive -> 1024, the short negative -> 256) is sharded across the SP axis (all-gather K/V per
+    attention layer) and Q/K/V/O are tensor-parallel on the TP axis. ``traced`` captures/replays the encoder
+    device forward per bucket (pos and neg land on DIFFERENT buckets here, so two traces; the warmup encodes
+    both, so all measured runs are pure replay) --
     the same flag the DiT denoise uses; untraced, the encode is host-op-dispatch-bound (the traced replay
     removes those gaps, ~3.6x on the JSON prompt). The hidden-state readback reads only the SP shards from one TP row via
     get_device_tensors (~0.6 s) instead of the mesh composer over all 32 devices (~10 s). Positive prompt is FIBO's intended structured-JSON caption (the committed
@@ -375,7 +401,12 @@ def test_fibo_encode_perf(*, mesh_device, traced):
         return perf_counter() - t0, (cond, uncond)
 
     logger.info("encode perf: warmup run...")
-    encode_once()  # warmup: compile/populate the program cache
+    encode_once()  # warmup: compile/populate the program cache (traced: captures both bucket traces)
+    if traced:
+        # Settle: the first traced replay after capture pays one-time costs (first output-buffer
+        # read-back, lazy replay-path prog-cache). Absorb them untimed so measured runs are steady state.
+        logger.info("encode perf: settle run (untimed, absorbs first-replay one-time cost)...")
+        encode_once()
 
     times = []
     encoded = None
@@ -389,10 +420,11 @@ def test_fibo_encode_perf(*, mesh_device, traced):
     assert cond_embeds is not None and len(cond_hidden_states) > 0, "positive branch produced no output"
     assert uncond_embeds is not None and len(uncond_hidden_states) > 0, "negative branch produced no output"
 
-    avg, lo, hi = sum(times) / len(times), min(times), max(times)
+    med, lo, hi = float(np.median(times)), min(times), max(times)
+    warm_note = "1 warmup + 1 settle" if traced else "1 warmup"
     logger.info(
-        f"\nFIBO encode perf -- avg of {num_measured_runs} runs (after 1 warmup)"
-        f"\n  encode (pos+neg)  {avg:6.3f} s  [min {lo:.3f} / max {hi:.3f}]"
+        f"\nFIBO encode perf -- median of {num_measured_runs} runs (after {warm_note})"
+        f"\n  encode (pos+neg)  {med:6.3f} s  [min {lo:.3f} / max {hi:.3f}]"
         f"\n  cond_embeds   {list(cond_embeds.shape)}  ({len(cond_hidden_states)} hidden-state layers)"
         f"\n  uncond_embeds {list(uncond_embeds.shape)}  ({len(uncond_hidden_states)} hidden-state layers)"
     )
