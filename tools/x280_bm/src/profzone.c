@@ -79,7 +79,13 @@
 
 #define NRISC 5
 #define RING_CAP 512u                /* worker L1 ring depth, words */
-#define ADAPT_THRESH (4u * RING_CAP) /* adaptive: bulk-read a core once >= 4 rings' worth of data pending */
+#define ADAPT_THRESH                                                                                           \
+    (4u * RING_CAP)                  /* adaptive: bulk-read a core once >= 4 rings' worth of data pending.     \
+                                      * NOTE: lowering to 1x (force bulk in the multi-node sparse regime)      \
+                                      * RAISED the knee (>830, was ~780): at the high-proddelay knee cores are \
+                                      * sparse, so whole-core bulk over-reads empty sub-rings and wastes NoC   \
+                                      * time. Per-risc (what adaptive picks here, bulk=0) is optimal at the    \
+                                      * knee -- it reads only riscs with data. Do NOT lower for the knee. */
 #define PP_BULK_CORE 5u              /* raw-bulk core frame type (MUST match prof_packet.h) */
 #define WRITE_WIN_BASE 200u
 
