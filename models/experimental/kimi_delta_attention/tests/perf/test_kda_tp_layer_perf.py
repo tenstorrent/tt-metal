@@ -22,10 +22,54 @@ pytestmark = [
     pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True),
     pytest.mark.parametrize(
         "device_params",
-        [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+        [
+            {
+                "l1_small_size": 24576,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 256 * 1024 * 1024,
+            }
+        ],
         indirect=True,
     ),
 ]
+
+
+def _profile_eager(
+    mesh_device: ttnn.MeshDevice,
+    layer: KimiDeltaAttention,
+    hidden: ttnn.Tensor,
+    repetitions: int,
+) -> None:
+    outputs: list[ttnn.Tensor] = []
+    signpost(header="start")
+    for _ in range(repetitions):
+        outputs.append(layer.forward(hidden, mode="chunk"))
+    ttnn.synchronize_device(mesh_device)
+    signpost(header="stop")
+    for output in outputs:
+        ttnn.deallocate(output)
+
+
+def _profile_trace(
+    mesh_device: ttnn.MeshDevice,
+    layer: KimiDeltaAttention,
+    hidden: ttnn.Tensor,
+    repetitions: int,
+) -> None:
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    output = layer.forward(hidden, mode="chunk")
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+
+    signpost(header="start")
+    for _ in range(repetitions):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    signpost(header="stop")
+
+    ttnn.release_trace(mesh_device, trace_id)
+    ttnn.deallocate(output)
 
 
 def test_kda_tp_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
@@ -63,13 +107,8 @@ def test_kda_tp_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
     ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(warm_output)
 
-    outputs: list[ttnn.Tensor] = []
     repetitions = int(os.getenv("PERF_REPS", "3"))
-    signpost(header="start")
-    for _ in range(repetitions):
-        outputs.append(layer.forward(hidden_tt, mode="chunk"))
-    ttnn.synchronize_device(mesh_device)
-    signpost(header="stop")
-
-    for output in outputs:
-        ttnn.deallocate(output)
+    if os.getenv("PERF_TRACE", "0") == "1":
+        _profile_trace(mesh_device, layer, hidden_tt, repetitions)
+    else:
+        _profile_eager(mesh_device, layer, hidden_tt, repetitions)

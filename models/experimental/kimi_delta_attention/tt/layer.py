@@ -12,6 +12,7 @@ from typing import Literal
 import torch
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import _FUSED_CHUNK_SIZE, build_fused_const_tiles
 from models.demos.blackhole.qwen36.tt.tp_common import matmul_reduce_scatter_prefill
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.experimental.kimi_delta_attention.config import KDAConfig
@@ -52,6 +53,7 @@ class KimiDeltaAttention:
         if self.tensor_parallel_size > 1 and tt_ccl is None:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
+        self.chunk_const_tiles = build_fused_const_tiles(mesh_device, _FUSED_CHUNK_SIZE)
         self.recurrent_state: ttnn.Tensor | None = None
         self.convolution_state: ttnn.Tensor | None = None
         self.use_inplace_state = False
@@ -233,8 +235,12 @@ class KimiDeltaAttention:
         gate = ttnn.multiply(decay_scale, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         assert self.recurrent_state is not None
-        recurrence = fused_kda_recurrence if mode == "recurrent" else chunk_kda_recurrence
-        output, new_recurrent_state = recurrence(q, k, v, gate, beta, self.recurrent_state)
+        if mode == "recurrent":
+            output, new_recurrent_state = fused_kda_recurrence(q, k, v, gate, beta, self.recurrent_state)
+        else:
+            output, new_recurrent_state = chunk_kda_recurrence(
+                q, k, v, gate, beta, self.recurrent_state, self.chunk_const_tiles
+            )
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
             new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)
         output_gate = ttnn.linear(
