@@ -39,12 +39,43 @@ def test_host_top_k_uses_instruct_1024():
     assert _host_top_k(200000, HUNYUAN_VOCAB) == HUNYUAN_VOCAB
 
 
+def test_device_sampling_defaults_on(monkeypatch):
+    from models.experimental.hunyuan_image_3_0.tt.device_sampling import (
+        device_sampling_enabled,
+        ttnn_sampling_op_enabled,
+    )
+
+    monkeypatch.delenv("HY_DEVICE_SAMPLING", raising=False)
+    monkeypatch.delenv("HY_SAMPLE_DEVICE", raising=False)
+    monkeypatch.delenv("HY_TTNN_SAMPLING_OP", raising=False)
+    monkeypatch.delenv("HY_TOP_K", raising=False)
+    monkeypatch.delenv("HY_TOPK", raising=False)
+    assert device_sampling_enabled() is True
+    assert ttnn_sampling_op_enabled() is False
+
+
+def test_ttnn_sampling_op_when_hy_top_k_32(monkeypatch):
+    from models.experimental.hunyuan_image_3_0.tt.device_sampling import ttnn_sampling_op_enabled
+
+    monkeypatch.delenv("HY_TTNN_SAMPLING_OP", raising=False)
+    monkeypatch.setenv("HY_TOP_K", "32")
+    assert ttnn_sampling_op_enabled() is True
+    monkeypatch.setenv("HY_TOP_K", "1024")
+    assert ttnn_sampling_op_enabled() is False
+    monkeypatch.delenv("HY_TOP_K", raising=False)
+    monkeypatch.setenv("HY_TOPK", "32")
+    assert ttnn_sampling_op_enabled() is True
+
+
 def test_can_use_device_sampling_allows_instruct_topk(monkeypatch):
     """Device-logits path stays eligible; host shortlist uses Instruct top_k."""
-    monkeypatch.setenv("HY_DEVICE_SAMPLING", "1")
+    monkeypatch.delenv("HY_DEVICE_SAMPLING", raising=False)
+    monkeypatch.delenv("HY_SAMPLE_DEVICE", raising=False)
     assert can_use_device_sampling(SamplingConfig(do_sample=True, top_k=32, repetition_penalty=1.0))
     assert can_use_device_sampling(SamplingConfig(do_sample=True, top_k=1024, repetition_penalty=1.0))
     assert can_use_device_sampling(SamplingConfig(do_sample=True, top_k=0, repetition_penalty=1.0))
+    monkeypatch.setenv("HY_DEVICE_SAMPLING", "0")
+    assert can_use_device_sampling(SamplingConfig(do_sample=True, top_k=32, repetition_penalty=1.0)) is False
 
 
 @pytest.fixture(scope="function")

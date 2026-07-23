@@ -45,29 +45,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from models.experimental.hunyuan_image_3_0.ref.model_config import ALIGNER_CONFIG, VIT_CONFIG
 from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR, load_prefixed_state_dict
-
-# Defaults from ref/tokenizer/assets/config.json -> "vit"
-VIT_CONFIG = {
-    "hidden_size": 1152,
-    "intermediate_size": 4304,
-    "num_attention_heads": 16,
-    "num_hidden_layers": 27,
-    "num_channels": 3,
-    "patch_size": 16,
-    "num_patches": 256,
-    "layer_norm_eps": 1e-6,
-    "attention_dropout": 0.0,
-    "hidden_act": "gelu_pytorch_tanh",
-}
-
-# ref/tokenizer/assets/config.json -> "vit_aligner"
-ALIGNER_CONFIG = {
-    "projector_type": "mlp_gelu",
-    "input_dim": 1152,
-    "n_embed": 4096,
-    "depth": 2,
-}
 
 
 @dataclass

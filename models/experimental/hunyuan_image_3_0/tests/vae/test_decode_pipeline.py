@@ -23,10 +23,11 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.tt_dit.parallel.manager import CCLManager
 from models.experimental.hunyuan_image_3_0.ref.vae.decoder import Z_CHANNELS, load_decoder, vae_decode_output_to_rgb
+from models.experimental.hunyuan_image_3_0.ref.model_config import VAE_SCALING_FACTOR
 from models.experimental.hunyuan_image_3_0.tt.pipeline import decode_latent
 
 PCC_THRESHOLD = 0.99
-SCALING_FACTOR = 0.562679178327931
+SCALING_FACTOR = VAE_SCALING_FACTOR
 
 
 @pytest.fixture(scope="function")

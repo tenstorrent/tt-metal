@@ -28,6 +28,7 @@ import os
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.hunyuan_image_3_0.ref.model_config import ATTENTION_KWARGS
 
 # SDPA flash-attention chunk sizes for the PREFILL path. TTNN's default auto-chunker is
 # ~3-8x slower than an explicit chunk at large ISL (measured at S=22784 and S=4096, both
@@ -40,8 +41,9 @@ _SDPA_PREFILL_Q_CHUNK = int(os.environ.get("HY_SDPA_Q_CHUNK", "256"))
 _SDPA_PREFILL_K_CHUNK = int(os.environ.get("HY_SDPA_K_CHUNK", "256"))
 _SDPA_PREFILL_MIN_Q = 512  # below this local query length, keep the default config
 # Causal prefill (recaption, no mask) has no mask CB, so a larger q_chunk fits L1 and is
-# faster (512/256 ~23ms vs 256/256 ~25.5ms at S=22784). The masked path (denoise) keeps
-# 256/256 — 512/256 overflows L1 there (mask CB). PCC-neutral (chunking doesn't change math).
+# faster (512/256 ~23ms vs 256/256 ~25.5ms at S=22784) on *one-shot* prefill. Chunked KV
+# continuation (K>>Q) must stay on 256/256 — see forward() — or CBs clash with L1.
+# Masked path always keeps 256/256 (512/256 overflows L1 there). PCC-neutral.
 _SDPA_CAUSAL_Q_CHUNK = int(os.environ.get("HY_SDPA_CAUSAL_Q_CHUNK", "512"))
 
 from ..cache import cache_file
@@ -50,6 +52,7 @@ from ..parallel_utils import resid_mem_config
 from .rms_norm import HunyuanTtRMSNorm
 from .rope_2d import HunyuanTtRoPE2D
 
+_AK = ATTENTION_KWARGS
 _TILE = 32
 
 
@@ -127,12 +130,12 @@ class HunyuanTtAttention(LightweightModule):
         device,
         state_dict: dict,
         layer_num: int = 0,
-        hidden_size: int = 4096,
-        num_heads: int = 32,
-        num_kv_heads: int = 8,
-        head_dim: int = 128,
-        use_qk_norm: bool = True,
-        eps: float = 1e-5,
+        hidden_size: int = _AK["hidden_size"],
+        num_heads: int = _AK["num_heads"],
+        num_kv_heads: int = _AK["num_kv_heads"],
+        head_dim: int = _AK["head_dim"],
+        use_qk_norm: bool = _AK["use_qk_norm"],
+        eps: float = _AK["eps"],
         weight_dtype=ttnn.bfloat16,
         weight_cache_path=None,
         ccl_manager=None,
@@ -303,7 +306,15 @@ class HunyuanTtAttention(LightweightModule):
         # Keep them L1-resident up to the measured CB-clash bound, else DRAM — same gate
         # as the residual stream (parallel_utils.resid_mem_config). Above the bound these
         # ops' CBs would otherwise collide with the resident intermediates.
+        # Chunked KV continuation: Q is often a short remainder (< RESID_L1_MAX_SEQ) while
+        # K is the full prefix — L1 attn intermediates then sit under SDPA's K-scaled CBs.
         attn_mc = resid_mem_config(x.shape[1])
+        chunked_kv_continuation = False
+        if use_cache and kv_cache is not None and not decode_step:
+            _past_k, _ = kv_cache.get(layer_idx)
+            if _past_k is not None:
+                chunked_kv_continuation = True
+                attn_mc = ttnn.DRAM_MEMORY_CONFIG
 
         # ---- 1. Fused QKV projection ----------------------------------------
         # x: [B, S, H]  →  xqkv: [B, S, Q_dim + 2*KV_dim]
@@ -447,14 +458,23 @@ class HunyuanTtAttention(LightweightModule):
         # query/key positions are aligned from 0 — i.e. the initial prefill; a decode
         # step (offset query) always supplies its own row mask, so gate on decode_step
         # rather than use_cache. SP (sp_factor>1) already asserts an explicit mask above.
+        # Chunked KV continuation (Q=chunk, K=prefix+chunk) still uses is_causal: the
+        # kernel treats Q as the sequence suffix (query i ↔ keys 0..Sk-Sq+i).
         is_causal = attention_mask is None and not decode_step
         # Explicit flash-attention chunking on the prefill path — ~3-8x faster than the
         # default auto-chunker at large ISL (see _SDPA_PREFILL_* above). Decode's 1-row
         # query keeps the default (auto) config.
         sdpa_program_config = None
-        if not decode_step and int(q_rot.shape[-2]) >= _SDPA_PREFILL_MIN_Q:
-            # Causal (no mask) fits a larger q_chunk in L1 → faster; masked keeps 256/256.
+        q_len = int(q_rot.shape[-2])
+        k_len = int(k_attn.shape[-2])
+        # One-shot large-Q prefill: optional fast causal 512. Chunked continuation (K>Q)
+        # always pins 256/256 — including short remainder chunks (Q < MIN_Q) where the
+        # auto-chunker would otherwise inflate CBs against long K.
+        use_explicit_chunks = (not decode_step) and (q_len >= _SDPA_PREFILL_MIN_Q or chunked_kv_continuation)
+        if use_explicit_chunks:
             q_chunk = _SDPA_CAUSAL_Q_CHUNK if is_causal else _SDPA_PREFILL_Q_CHUNK
+            if is_causal and (chunked_kv_continuation or k_len > q_len):
+                q_chunk = _SDPA_PREFILL_Q_CHUNK
             sdpa_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
                 q_chunk_size=q_chunk,

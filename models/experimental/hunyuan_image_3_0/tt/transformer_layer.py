@@ -19,12 +19,15 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.hunyuan_image_3_0.ref.model_config import BACKBONE_KWARGS
 
 from .attention.attention import HunyuanTtAttention
 from .attention.rms_norm import HunyuanTtRMSNorm
 from .moe.moe import HunyuanTtMoE
 from .moe.moe_parallel import HunyuanTtMoEParallel
 from .parallel_utils import resid_mem_config
+
+_BD = BACKBONE_KWARGS
 
 
 class HunyuanTtDecoderLayer(LightweightModule):
@@ -33,16 +36,16 @@ class HunyuanTtDecoderLayer(LightweightModule):
         device,
         state_dict: dict,
         layer_num: int = 0,
-        hidden_size: int = 4096,
-        num_heads: int = 32,
-        num_kv_heads: int = 8,
-        head_dim: int = 128,
-        num_experts: int = 64,
-        moe_topk: int = 8,
-        use_qk_norm: bool = True,
-        use_mixed_mlp_moe: bool = True,
-        norm_topk_prob: bool = True,
-        rms_norm_eps: float = 1e-6,
+        hidden_size: int = _BD["hidden_size"],
+        num_heads: int = _BD["num_heads"],
+        num_kv_heads: int = _BD["num_kv_heads"],
+        head_dim: int = _BD["head_dim"],
+        num_experts: int = _BD["num_experts"],
+        moe_topk: int = _BD["moe_topk"],
+        use_qk_norm: bool = _BD["use_qk_norm"],
+        use_mixed_mlp_moe: bool = _BD["use_mixed_mlp_moe"],
+        norm_topk_prob: bool = _BD["norm_topk_prob"],
+        rms_norm_eps: float = _BD["rms_norm_eps"],
         weight_dtype=ttnn.bfloat16,
         stream_experts: bool = True,
         ccl_manager=None,
@@ -162,7 +165,13 @@ class HunyuanTtDecoderLayer(LightweightModule):
         # Residual-stream ops run on the per-device (sp-sharded) sequence. Keep them
         # L1-resident up to the measured CB-clash bound, else DRAM together (moving
         # only some leaves a live tensor in the next op's CB path — see parallel_utils).
+        # Chunked KV continuation (past present, Q often < RESID_L1_MAX_SEQ): SDPA CBs
+        # scale with full K and collide with L1 residual/attn intermediates — force DRAM.
         rs_mc = resid_mem_config(x.shape[1])
+        if use_cache and kv_cache is not None and not decode_step:
+            past_k, _ = kv_cache.get(self.layer_num)
+            if past_k is not None:
+                rs_mc = ttnn.DRAM_MEMORY_CONFIG
         residual = x
         h = self.input_layernorm(x, out_memory_config=rs_mc)
         attn_out = self.self_attn(

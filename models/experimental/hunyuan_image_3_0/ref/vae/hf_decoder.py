@@ -12,6 +12,7 @@ from pathlib import Path
 import torch
 from torch import Tensor
 
+from models.experimental.hunyuan_image_3_0.ref.model_config import VAE_SCALING_FACTOR
 from models.experimental.hunyuan_image_3_0.ref.weights import load_tensors
 
 _VAE_CACHE: dict[Path, object] = {}
@@ -71,7 +72,7 @@ def decode_latent_hf(
     latent_bchw: Tensor,
     *,
     model_dir: Path,
-    scaling_factor: float = 0.562679178327931,
+    scaling_factor: float = VAE_SCALING_FACTOR,
 ) -> Tensor:
     """Decode diffusion latent [B,C,h,w] -> RGB [B,3,H,W] in [0,1] via HF AutoencoderKLConv3D."""
     vae = load_hf_vae(model_dir)

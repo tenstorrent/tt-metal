@@ -476,14 +476,11 @@ def generate_text(
 ):
     """AR decode loop — host golden by default; device-logits sample when eligible.
 
-    When ``HY_DEVICE_SAMPLING=1`` and host-only processors are inactive, expects
-    ``forward_logits_fn`` to return device logits (``return_device_logits=True``).
+    Default sampling: D2H full-V logits → host topk → host shortlist multinomial
+    → host token ids → ``forward_logits_fn(ids)`` each step.
 
-    Default sampling (yesterday afternoon): D2H full-V logits → host topk → host
-    shortlist multinomial → host token ids → ``forward_logits_fn(ids)`` each step.
-
-    Opt-in ``HY_TTNN_SAMPLING_OP=1``: ``ttnn.topk`` + ``ttnn.sampling`` with
-    on-device id concat / stop checks.
+    On-device top-k when ``HY_TOP_K=32`` / ``HY_TOPK=32`` (or ``HY_TTNN_SAMPLING_OP=1``):
+    ``ttnn.topk`` + ``ttnn.sampling`` with on-device id concat / stop checks.
     """
     import torch
     import ttnn
@@ -527,7 +524,7 @@ def generate_text(
         )
 
     if not wants_device_logits:
-        raise ValueError("HY_DEVICE_SAMPLING=1 requires forward_logits_fn built with return_device_logits=True")
+        raise ValueError("device sampling requires forward_logits_fn built with return_device_logits=True")
 
     device = forward_logits_fn.device
     vocab_size = forward_logits_fn.vocab_size
@@ -561,8 +558,8 @@ def generate_text(
         )
     else:
         print(
-            f"[generate] device-logits sampling (D2H + host topk/shortlist; "
-            f"set HY_TTNN_SAMPLING_OP=1 for ttnn.sampling) "
+            f"[generate] device-logits sampling (D2H + host torch topk/shortlist; "
+            f"set HY_TOP_K=32 for ttnn.topk+sampling) "
             f"temp={config.temperature} top_p={config.top_p} top_k={config.top_k} "
             f"V={vocab_size} vocab_parallel={vocab_parallel}",
             flush=True,

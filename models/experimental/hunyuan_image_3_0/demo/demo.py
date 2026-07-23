@@ -47,6 +47,13 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from models.experimental.hunyuan_image_3_0.ref.weights import ensure_base_weights, ensure_instruct_weights, load_tensors
+from models.experimental.hunyuan_image_3_0.ref.model_config import (
+    NUM_HIDDEN_LAYERS,
+    IMAGE_BASE_SIZE,
+    VAE_SCALING_FACTOR,
+    load_config,
+    transformer_cfg,
+)
 
 WEIGHTS = ensure_base_weights()
 HUNYUAN = str(WEIGHTS)
@@ -98,7 +105,7 @@ if _PROMPT_FILE:
 else:
     PROMPT = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("HY_PROMPT", "a photo of a cat, studio lighting")
 STEPS = int(os.environ.get("HY_STEPS", "50"))
-NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "32"))
+NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", str(NUM_HIDDEN_LAYERS)))
 GUIDANCE = float(os.environ.get("HY_GUIDANCE", "5.0"))
 SEED = int(os.environ.get("HY_SEED", "0"))
 # Image side in pixels; grid = IMAGE_SIZE / 16 (vae_downsample_factor), and the
@@ -106,7 +113,7 @@ SEED = int(os.environ.get("HY_SEED", "0"))
 # max_position_embeddings (the run asserts the cap). Default 1024 -> 64x64 grid.
 # When set, overrides the recaption-resolved size. The VAE is rebuilt for the grid.
 IMAGE_SIZE = int(os.environ["HY_IMAGE_SIZE"]) if os.environ.get("HY_IMAGE_SIZE") else None
-SCALING = 0.562679178327931
+SCALING = VAE_SCALING_FACTOR
 _DEMO_DIR = Path(__file__).resolve().parent
 _PKG_DIR = _DEMO_DIR.parent
 OUT_PNG = os.environ.get("HY_OUT", str(_PKG_DIR / "output.png"))
@@ -177,21 +184,7 @@ def _load_prefix(prefix):
 
 
 def _cfg_from(model_dir: Path):
-    c = json.load(open(model_dir / "config.json"))
-    first = lambda v: v if isinstance(v, int) else v[0]
-    return dict(
-        H=c["hidden_size"],
-        HEADS=c["num_attention_heads"],
-        KV=c.get("num_key_value_heads", c["num_attention_heads"]),
-        HD=c.get("attention_head_dim", c["hidden_size"] // c["num_attention_heads"]),
-        E=first(c["num_experts"]),
-        K=first(c["moe_topk"]),
-        NORM=c.get("norm_topk_prob", True),
-        MIXED=c.get("use_mixed_mlp_moe", True),
-        QKN=c.get("use_qk_norm", True),
-        EPS=c.get("rms_norm_eps", 1e-5),
-        MAX_SEQ=int(c["max_position_embeddings"]),
-    )
+    return transformer_cfg(load_config(model_dir))
 
 
 def _cfg():
@@ -286,13 +279,16 @@ def _base_layer_loader(i: int):
 
 def _recaption_sampling_config() -> SamplingConfig:
     """Match demo_i2i: HF generation_config defaults with optional HY_* overrides."""
+    from models.experimental.hunyuan_image_3_0.tt.device_sampling import resolve_hy_top_k
+
     cfg = replace(_SAMPLE_DEFAULTS, max_new_tokens=MAX_NEW_TOKENS)
     if os.environ.get("HY_DO_SAMPLE") is not None:
         cfg = replace(cfg, do_sample=os.environ.get("HY_DO_SAMPLE", "1") != "0")
     if os.environ.get("HY_TEMPERATURE"):
         cfg = replace(cfg, temperature=float(os.environ["HY_TEMPERATURE"]))
-    if os.environ.get("HY_TOP_K"):
-        cfg = replace(cfg, top_k=int(os.environ["HY_TOP_K"]))
+    top_k = resolve_hy_top_k()
+    if top_k is not None:
+        cfg = replace(cfg, top_k=top_k)
     if os.environ.get("HY_TOP_P"):
         cfg = replace(cfg, top_p=float(os.environ["HY_TOP_P"]))
     if os.environ.get("HY_REP_PENALTY"):
@@ -313,7 +309,7 @@ def _use_tt_recaption() -> bool:
     return False
 
 
-def _run_recaption_host(prompt: str, *, image_size: str | int = 1024):
+def _run_recaption_host(prompt: str, *, image_size: str | int = IMAGE_BASE_SIZE):
     """Gold recaption on CUDA via upstream ``generate`` (accurate AR logits)."""
     if not torch.cuda.is_available():
         raise RuntimeError("Host recaption requires CUDA (set HY_RECAPTION_DEVICE=1 for TT-only)")
@@ -353,13 +349,9 @@ def _run_recaption_host(prompt: str, *, image_size: str | int = 1024):
     return result.cot_text[0], result.image_size
 
 
-def _print_recaption_summary(
-    tok, cot_text: str, *, user_prompt: str, image_size, save_path: Path | None = None, note: str | None = None
-) -> str:
+def _print_recaption_summary(tok, cot_text: str, *, user_prompt: str, image_size) -> str:
     """Print raw cot_text plus the extracted rewritten prose (what image gen actually uses).
 
-    Also writes the same text to ``save_path`` when set (default: next to ``HY_OUT``),
-    so long runs do not lose it when the terminal scrollback truncates.
     Returns the extracted written prompt (may be empty).
     """
     sp = tok.special
@@ -392,30 +384,6 @@ def _print_recaption_summary(
         print("[demo] warning: recaption has no usable rewritten prose for image gen", flush=True)
     elif echo:
         print("[demo] warning: recaption written prompt is an echo of the user prompt", flush=True)
-
-    if save_path is None:
-        save_path = Path(OUT_PNG).with_suffix(".recaption.txt")
-    save_path = Path(save_path)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    if note is None and echo:
-        note = "written prompt equals user prompt (recaption did not rewrite)"
-    elif note is None and meager:
-        note = "meager cot (no rewritten prose)"
-    lines = [
-        f"user_prompt: {user_prompt}",
-        f"image_size: {image_size}",
-        "",
-        "=== raw cot_text ===",
-        cot_text,
-        "",
-    ]
-    if think:
-        lines += ["=== think ===", think, ""]
-    lines += ["=== written prompt ===", written or "(none)", ""]
-    if note:
-        lines += ["=== note ===", note, ""]
-    save_path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"[demo] saved recaption text -> {save_path.resolve()}", flush=True)
     return written or ""
 
 
@@ -447,16 +415,17 @@ def _run_recaption_on_device_maybe_retry_host_sample(
     config: SamplingConfig,
     generator,
     replicate_to_mesh,
-    image_size: str | int = 1024,
+    image_size: str | int = IMAGE_BASE_SIZE,
 ):
     """Run device AR.
 
-    With ``HY_DEVICE_SAMPLING=1`` (this demo's preferred path) there is **no**
-    host-sampling / CUDA torch fallback retry — empty/echo cot is left as-is for
+    Device-logits sampling is on by default. Empty/echo cot is left as-is for
     ``_finalize_recaption_cot`` (string prompt-fallback only, no torch compute).
 
     Set ``HY_RECAPTION_HOST_RETRY=1`` to restore the old echo→host-multinomial retry.
     """
+    from models.experimental.hunyuan_image_3_0.tt.device_sampling import device_sampling_enabled
+
     recap_result = run_recaption_on_device(
         backbone,
         lm_head,
@@ -475,8 +444,8 @@ def _run_recaption_on_device_maybe_retry_host_sample(
     if not _recaption_is_echo_or_meager(tok, cot, prompt):
         return recap_result
 
-    # Default: no torch fallback when device sampling was requested.
-    if os.environ.get("HY_DEVICE_SAMPLING", "0") == "1" and os.environ.get("HY_RECAPTION_HOST_RETRY", "0") != "1":
+    # Default: no torch fallback when device sampling is active.
+    if device_sampling_enabled() and os.environ.get("HY_RECAPTION_HOST_RETRY", "0") != "1":
         print(
             "[demo] device-sampling recaption looks empty/echo "
             f"(got {cot!r}); keeping device result "
@@ -631,7 +600,7 @@ def _run_recaption_instruct_on_mesh(
         config=config,
         generator=generator,
         replicate_to_mesh=rep,
-        image_size=1024,
+        image_size=IMAGE_BASE_SIZE,
     )
     del lm_head
     cot_text, image_size = _finalize_recaption_cot(tok, prompt, recap_result.cot_text[0], recap_result.image_size)
@@ -714,7 +683,7 @@ def _run_recaption(mesh_device, ccl, c, tok, proc, wte, prompt, generator, *, ba
         config=config,
         generator=generator,
         replicate_to_mesh=rep,
-        image_size=1024,
+        image_size=IMAGE_BASE_SIZE,
     )
     del lm_head
     cot_text, image_size = _finalize_recaption_cot(tok, prompt, recap_result.cot_text[0], recap_result.image_size)
@@ -741,7 +710,7 @@ def main():
     generator = torch.Generator().manual_seed(SEED)
     t = _mark("1_setup_weights_tokenizer", t)
 
-    cot_text, image_size = None, 1024
+    cot_text, image_size = None, IMAGE_BASE_SIZE
     recaption_written = ""
     use_tt_recaption_mesh = RECAPTION and _use_tt_recaption() and not TORCH_DENOISE
     can_share_backbone = use_tt_recaption_mesh and RECAPTION_LAYERS == NUM_LAYERS
@@ -1107,12 +1076,9 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(arr).save(out_path)
     print(f"[demo] saved image -> {out_path}")
-    if cot_text:
-        recap_path = out_path.with_suffix(".recaption.txt")
-        print(f"[demo] recaption text also at -> {recap_path.resolve()}", flush=True)
-        if recaption_written:
-            preview = recaption_written if len(recaption_written) <= 240 else recaption_written[:237] + "..."
-            print(f"[demo] recaption written prompt (preview): {preview}", flush=True)
+    if cot_text and recaption_written:
+        preview = recaption_written if len(recaption_written) <= 240 else recaption_written[:237] + "..."
+        print(f"[demo] recaption written prompt (preview): {preview}", flush=True)
     t = _mark("7_save_png", t)
     _print_timing_summary(time.time() - t_start)
 

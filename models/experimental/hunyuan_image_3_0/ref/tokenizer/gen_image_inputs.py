@@ -34,6 +34,7 @@ import torch
 import torch.nn.functional as F
 
 from .image_info import CondImage
+from models.experimental.hunyuan_image_3_0.ref.model_config import VAE_SCALING_FACTOR
 
 if TYPE_CHECKING:
     from models.experimental.hunyuan_image_3_0.ref.image_processor import HunyuanImage3ImageProcessor
@@ -782,7 +783,7 @@ def build_i2i_inputs_embeds(
         vae_encoder = load_encoder(model_dir or MODEL_DIR, dtype=dtype)
 
     if vae_scaling_factor is None:
-        vae_scaling_factor = 0.562679178327931
+        vae_scaling_factor = VAE_SCALING_FACTOR
 
     hidden = F.embedding(bundle.input_ids, wte_weight.to(dtype=dtype))
     enc = encode_cond_images(
