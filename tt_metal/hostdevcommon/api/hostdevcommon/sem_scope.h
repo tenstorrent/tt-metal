@@ -30,14 +30,17 @@
  *      error in this scope. (HW validated: TestDmCachedAmo32.)
  *
  *  - EXTERNAL: the semaphore is touched externally (NoC / another node / chip).
- *      EVERY access — including a local increment — goes through a self-targeted NoC
- *      atomic (NOC_AT_INS_INCR_GET) so local and remote writers serialize at one NIU
- *      atomicity point; local reads use the uncached alias. Correct + atomic; pays a
- *      NoC round-trip. (HW validated: TestSelfTargetedNocAtomicIncrement /
- *      TestSelfVsRemoteNodeNocAtomic.) Cross-domain atomic DECREMENT is also supported
- *      (INCR_GET of a negative value, wrap=31; HW/emu-verified TestAtomicDecrementIncrGet),
- *      so EXTERNAL up()/down() are both atomic. CAS/swap are available via the NoC
- *      RISCV_AMO/CAS opcodes too (TestAtomicCas) for future non-counting semantics.
+ *      The RMW ops up() and down() go through a self-targeted NoC atomic (INCR_GET; the
+ *      decrement is INCR_GET of a negative value, wrap=31) so local and remote writers
+ *      serialize at one NIU atomicity point. (HW/emu-verified:
+ *      TestSelfTargetedNocAtomicIncrement / TestSelfVsRemoteNodeNocAtomic /
+ *      TestAtomicDecrementIncrGet.) So up() is fully atomic, and the down() decrement
+ *      *step* is atomic; but the check-then-decrement in down() is only single-consumer
+ *      safe (multi-consumer down must be host-guarded in Phase-2 or use CAS). The
+ *      READ/observe ops (wait()/wait_min()/value()) and set() use the plain uncached
+ *      alias, NOT a NoC atomic — set() is a non-atomic destructive store, so use it
+ *      init/reset-only, never concurrently with up()/down(). CAS/swap are also reachable
+ *      via the NoC RISCV_AMO/CAS opcodes (TestAtomicCas) for future non-counting uses.
  */
 enum class SemScope : uint8_t {
     LOCAL_NONATOMIC = 0,

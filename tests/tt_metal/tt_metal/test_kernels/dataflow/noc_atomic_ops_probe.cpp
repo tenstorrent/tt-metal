@@ -41,7 +41,10 @@ inline __attribute__((always_inline)) void noc_raw_atomic(uint64_t noc_addr, uin
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, (uint64_t)operand);
     __builtin_riscv_ttrocc_scmdbuf_issue_trans();
-    // Match noc_fast_atomic_increment's bookkeeping so noc_async_atomic_barrier() waits for it.
+    // Mirror noc_fast_atomic_increment's software bookkeeping for consistency. (On Quasar
+    // noc_async_atomic_barrier() actually waits on the HW ack counter via
+    // ncrisc_noc_nonposted_atomics_flushed, not this software counter, but keeping it in
+    // sync avoids surprising a later context save/restore.)
     noc_nonposted_atomics_acked[noc] += 1;
 }
 #endif
