@@ -555,4 +555,24 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     output = ttnn::permute(output, ttnn::SmallVector<int64_t>{0, 2, 1, 3});
     return {output, final_state};
 }
+
+ttnn::Tensor kda_gated_rms_norm(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& gate,
+    const ttnn::Tensor& weight,
+    uint32_t num_heads,
+    float epsilon,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const auto output_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    const auto kernel_config = init_device_compute_kernel_config(
+        input.device()->arch(),
+        compute_kernel_config,
+        MathFidelity::HiFi4,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/true,
+        /*default_l1_acc=*/true);
+    return ttnn::prim::kda_gated_rms_norm(input, gate, weight, num_heads, epsilon, output_memory_config, kernel_config);
+}
+
 }  // namespace ttnn::transformer

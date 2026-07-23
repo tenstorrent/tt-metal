@@ -362,22 +362,30 @@ class KimiDeltaAttention:
                 compute_kernel_config=self.compute_config,
             )
             output_gate = ttnn.reshape(output_gate, (batch, sequence, config.num_heads, config.head_v_dim))
-        output = ttnn.rms_norm(
-            output,
-            weight=weights.norm,
-            epsilon=config.norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
         if head_major:
-            output = ttnn.reshape(output, (batch, config.num_heads, sequence, config.head_v_dim))
-            output = ttnn.experimental.nlp_concat_heads(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        output = ttnn.multiply(
-            output_gate,
-            output,
-            input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID],
-            dtype=ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+            output = ttnn.transformer.kda_gated_rms_norm(
+                output,
+                output_gate,
+                weights.norm,
+                config.num_heads,
+                epsilon=config.norm_eps,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
+        else:
+            output = ttnn.rms_norm(
+                output,
+                weight=weights.norm,
+                epsilon=config.norm_eps,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            output = ttnn.multiply(
+                output_gate,
+                output,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID],
+                dtype=ttnn.float32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         output = ttnn.reshape(output, (batch, sequence, config.v_dim))
         fused_output_collective = (
             self.tensor_parallel_size > 1 and mode == "chunk" and config.v_dim >= 8 * ttnn.TILE_SIZE

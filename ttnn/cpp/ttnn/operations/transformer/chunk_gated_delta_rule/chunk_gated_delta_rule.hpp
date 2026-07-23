@@ -79,4 +79,14 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     const std::optional<ttnn::Tensor>& ones = std::nullopt,
     const std::optional<ttnn::Tensor>& masks = std::nullopt);
 
+/** Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill. */
+ttnn::Tensor kda_gated_rms_norm(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& gate,
+    const ttnn::Tensor& weight,
+    uint32_t num_heads,
+    float epsilon = 1e-5f,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
 }  // namespace ttnn::transformer
