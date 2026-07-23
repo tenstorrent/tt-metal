@@ -98,6 +98,18 @@ void kernel_main() {
     // (RM / logical-out-to-DRAM keep C=1, their per-tile-row drain unchanged). This tiled
     // path is the only one batched; the RM path above always runs at C=1.
     constexpr uint32_t C_ROWS = get_compile_time_arg_val(9);
+    // PIPELINE_LOOKAHEAD (Refinement 6b lever 2): when set, the compute issues batch r+1's
+    // pass 1 BEFORE batch r's fold/pass 2, so the local reduce overlaps the writer's
+    // synchronous cross-core round. It is the COMPLEMENTARY STEP to the gather compaction
+    // (lever 1): with the full-tile gather the round dwarfs the compute so overlap is flat
+    // (ablation mode0: pipe-on 119036 == pipe-off 119027), but once the compaction shrinks the
+    // gather (mode 2) the round is small enough that overlapping compute WINS — BLOCK 8x8
+    // 113810 (pipe-off) -> 107995 (pipe-on), 1.05x on top of compaction. Ships ON (idx 10=1) on
+    // the multi-round tiled path; degenerates byte-identically to the R6a sequential order for
+    // single-round groups (WIDTH, num_rounds==1) and when the host sets it 0. cb_stat_local is
+    // 2*C deep (two rounds in flight) and the writer/semaphore protocol + fixed-base
+    // cb_gather/cb_stat_global addressing are UNCHANGED — only the compute issue order changes.
+    constexpr bool PIPELINE_LOOKAHEAD = get_compile_time_arg_val(10) != 0;
 
     const uint32_t vwt = get_arg_val<uint32_t>(0);  // valid W-tiles (<= PER_W_T)
     const uint32_t is_partial_holder = get_arg_val<uint32_t>(1);
@@ -269,17 +281,18 @@ void kernel_main() {
     // tile-rows' partials. Rounds = ceil(HT_LOCAL / C_ROWS); the last is short when
     // C_ROWS does not divide HT_LOCAL. C_ROWS=1 reduces exactly to the R4 per-row loop.
     const uint32_t num_rounds = (HT_LOCAL + C_ROWS - 1) / C_ROWS;
-    for (uint32_t r = 0; r < num_rounds; ++r) {
-        const uint32_t base_t = r * C_ROWS;
-        uint32_t C_this = HT_LOCAL - base_t;
-        if (C_this > C_ROWS) {
-            C_this = C_ROWS;
-        }
+    auto c_of = [&](uint32_t r) -> uint32_t {
+        const uint32_t c = HT_LOCAL - r * C_ROWS;
+        return (c > C_ROWS) ? C_ROWS : c;
+    };
 
-        // ---------- Pass 1: local partial Σ_slice x²·(1/W) for the C_this tile-rows ----------
-        // Square the vwt valid W-tiles into cb_xsq, then reduce the whole block in ONE call
-        // (cols=vwt) per tile-row — each reduce pushes one partial into cb_stat_local (depth
-        // 2*C). The partial-holder routes the partial scaler to the block's last tile.
+    // ---------- Pass 1: local partial Σ_slice x²·(1/W) for a batch of C_this tile-rows ----------
+    // Square the vwt valid W-tiles into cb_xsq, then reduce the whole block in ONE call
+    // (cols=vwt) per tile-row — each reduce pushes one partial into cb_stat_local (depth 2*C).
+    // The partial-holder routes the partial scaler to the block's last tile. A lambda so the
+    // round/compute pipeline (R6b lever 2) can issue the NEXT round's pass 1 before the current
+    // round's fold/pass 2 — overlapping this compute with the writer's synchronous transport.
+    auto do_pass1 = [&](uint32_t base_t, uint32_t C_this) {
         for (uint32_t cc = 0; cc < C_this; ++cc) {
             const uint32_t t = base_t + cc;
             for (uint32_t w = 0; w < vwt; ++w) {
@@ -311,51 +324,53 @@ void kernel_main() {
                 ps);
         }
         // reduce pushed C_this partials into cb_stat_local. Writer gathers them to the master.
+    };
 
-        // ---------- Master: fold K partials -> mean; (+eps, rsqrt) -> 1/RMS, per row ----------
-        if (is_master) {
-            cb_wait_front(cb_gather, K * C_this);  // writer gathered K partials × C_this rows
-            cb_reserve_back(cb_stat_handoff, C_this);
-            // Raw-LLK fold needs the data-format reconfig the helpers do implicitly: pass 1 left
-            // the unpacker configured for cb_xsq/cb_scaler; the fold reads cb_gather (fp32) and
-            // packs cb_stat_handoff (fp32). Without this the unpacker-A src-format LLK_ASSERT
-            // trips (hang). One reconfig covers all C_this folds (same src/dst formats).
-            reconfig_data_format(cb_gather, cb_gather);
-            pack_reconfig_data_format(cb_stat_handoff);
-            for (uint32_t cc = 0; cc < C_this; ++cc) {
-                // Row cc's K partials are the contiguous cb_gather tiles [cc*K, cc*K + K).
-                const uint32_t g = cc * K;
-                tile_regs_acquire();
-                // dst0 = Σ_{k=0..K-1} cb_gather[g + k]  (col0 holds the per-row partial;
-                // other columns are ignored downstream via BroadcastDim::Col).
-                uint32_t first_pair = 0;
-                if (K & 1u) {
-                    copy_tile_to_dst_init_short(cb_gather);
-                    copy_tile(cb_gather, g + 0, 0);
-                    first_pair = 1;
-                }
-                if (K > 1) {
-                    add_tiles_init(cb_gather, cb_gather, /*acc_to_dest=*/true);
-                    for (uint32_t k = first_pair; k < K; k += 2) {
-                        add_tiles(cb_gather, cb_gather, g + k, g + k + 1, 0);
-                    }
-                }
-                // RMS finalize on the summed mean (same body as the streaming
-                // transform_in_place lambda): rstd = rsqrt(mean + eps).
-                binop_with_scalar_tile_init();
-                add_unary_tile(0, eps_bits);
-                rsqrt_tile_init();
-                rsqrt_tile(0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(0, cb_stat_handoff);  // sequential pack -> handoff slot cc
-                tile_regs_release();
+    // ---------- Master: fold K partials -> mean; (+eps, rsqrt) -> 1/RMS, per row ----------
+    auto do_fold = [&](uint32_t C_this) {
+        cb_wait_front(cb_gather, K * C_this);  // writer gathered K partials × C_this rows
+        cb_reserve_back(cb_stat_handoff, C_this);
+        // Raw-LLK fold needs the data-format reconfig the helpers do implicitly: pass 1 left
+        // the unpacker configured for cb_xsq/cb_scaler; the fold reads cb_gather (fp32) and
+        // packs cb_stat_handoff (fp32). Without this the unpacker-A src-format LLK_ASSERT
+        // trips (hang). One reconfig covers all C_this folds (same src/dst formats).
+        reconfig_data_format(cb_gather, cb_gather);
+        pack_reconfig_data_format(cb_stat_handoff);
+        for (uint32_t cc = 0; cc < C_this; ++cc) {
+            // Row cc's K partials are the contiguous cb_gather tiles [cc*K, cc*K + K).
+            const uint32_t g = cc * K;
+            tile_regs_acquire();
+            // dst0 = Σ_{k=0..K-1} cb_gather[g + k]  (col0 holds the per-row partial;
+            // other columns are ignored downstream via BroadcastDim::Col).
+            uint32_t first_pair = 0;
+            if (K & 1u) {
+                copy_tile_to_dst_init_short(cb_gather);
+                copy_tile(cb_gather, g + 0, 0);
+                first_pair = 1;
             }
-            cb_push_back(cb_stat_handoff, C_this);
-            cb_pop_front(cb_gather, K * C_this);
+            if (K > 1) {
+                add_tiles_init(cb_gather, cb_gather, /*acc_to_dest=*/true);
+                for (uint32_t k = first_pair; k < K; k += 2) {
+                    add_tiles(cb_gather, cb_gather, g + k, g + k + 1, 0);
+                }
+            }
+            // RMS finalize on the summed mean (same body as the streaming
+            // transform_in_place lambda): rstd = rsqrt(mean + eps).
+            binop_with_scalar_tile_init();
+            add_unary_tile(0, eps_bits);
+            rsqrt_tile_init();
+            rsqrt_tile(0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_stat_handoff);  // sequential pack -> handoff slot cc
+            tile_regs_release();
         }
+        cb_push_back(cb_stat_handoff, C_this);
+        cb_pop_front(cb_gather, K * C_this);
+    };
 
-        // ---------- Pass 2: x·rstd·gamma over the W-slice for the C_this tile-rows ----------
+    // ---------- Pass 2: x·rstd·gamma over the W-slice for a batch of C_this tile-rows ----------
+    auto do_pass2 = [&](uint32_t base_t, uint32_t C_this) {
         cb_wait_front(cb_stat_global, C_this);  // C_this 1/RMS tiles (broadcast landed)
         for (uint32_t cc = 0; cc < C_this; ++cc) {
             const uint32_t t = base_t + cc;
@@ -407,6 +422,36 @@ void kernel_main() {
             }
         }
         cb_pop_front(cb_stat_global, C_this);
+    };
+
+    // Round loop. PIPELINE_LOOKAHEAD (R6b lever 2) selects the issue order:
+    //  * OFF (byte-identical to R6a): strictly sequential per round — pass 1 -> fold -> pass 2.
+    //  * ON (shipped on the tiled path): batch r+1's pass 1 is issued one round AHEAD so the
+    //      local reduce overlaps the writer's synchronous cross-core round. Wins 1.05x on
+    //      BLOCK 8x8 once lever 1 has compacted the gather (its complementary step). Both loops
+    //      are numerically identical (same ops, same per-round order) — only the ISSUE order of
+    //      the next round's pass 1 differs; single-round groups degenerate to the OFF loop.
+    if constexpr (PIPELINE_LOOKAHEAD) {
+        if (num_rounds > 0) {
+            do_pass1(0, c_of(0));  // prologue: batch 0's partials
+        }
+        for (uint32_t r = 0; r < num_rounds; ++r) {
+            if (r + 1 < num_rounds) {
+                do_pass1((r + 1) * C_ROWS, c_of(r + 1));  // overlap batch r+1's pass 1 with round r
+            }
+            if (is_master) {
+                do_fold(c_of(r));
+            }
+            do_pass2(r * C_ROWS, c_of(r));
+        }
+    } else {
+        for (uint32_t r = 0; r < num_rounds; ++r) {
+            do_pass1(r * C_ROWS, c_of(r));
+            if (is_master) {
+                do_fold(c_of(r));
+            }
+            do_pass2(r * C_ROWS, c_of(r));
+        }
     }
 
     cb_pop_front(cb_x_in, shard_tiles);

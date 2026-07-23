@@ -607,3 +607,75 @@
   the per-tile-row-stat-transport floor, characterized above and filed as R6b — not a defect).
 - Tests added: `test_rms_norm_perf_r6a.py` (batched-round correctness across HT_LOCAL incl.
   short-last-round edges + gap-aware-mcast targets, gamma/no-gamma, soft PCC gate).
+
+## Refinement 6b — Sharded cross-core: stat-tile compaction + round/compute pipelining (+ two-stage gather)
+- Date: 2026-07-23
+- Type: perf (partial — `[~]`); no SUPPORTED change.
+- What was done: landed the two headline R6b levers on the shared cross-core
+  (`_assemble_xcore_kernels`) reader/compute/writer transport — no forked kernel files; both
+  numerically byte-identical, `--dev`-clean, and non-regressing. Reused the R4/R6/R6a xcore combine
+  + segmented-mcast transport unchanged; only the gather transfer size and the compute issue order
+  changed. Roofline/ablation-first per the perf methodology.
+  - **Lever 1 — stat-tile compaction (the winner).** The cross-core stat is a REDUCE_ROW result whose
+    ONLY consumed data is COLUMN 0 (the master fold is element-wise; pass-2 reads it via
+    `BroadcastDim::Col`). In an fp32 tile column 0 lives entirely in faces 0 (rows 0-15) + 2
+    (rows 16-31) — byte ranges [0,1024) and [2048,3072). The GATHER (K partials converging on the
+    master, ~86% of the round per the R6a ablation) now moves ONLY those faces via `G_OFF0/G_LEN0/
+    G_OFF1/G_LEN1` writer CT args (`_gather_runs(STAT_COMPACT_MODE)` on the host, single source of
+    truth); the untransferred faces leave stale L1 that the fold sums-then-ignores, so the output is
+    **numerically byte-identical** (PCC 1.001005 == baseline). The literal "32× column-only" transfer
+    is infeasible (col 0 is strided across faces at 64 B stride; the NoC rewards contiguous runs, and
+    every in-tree precedent — `tensix_all_reduce`, `combine_welford` — moves whole tiles), so the
+    real compaction is the col-0 FACES. Gated to the pure tiled sharded cross-core path (WIDTH/BLOCK
+    physical shards); RM / logical / decode keep the full transfer (mode 0, byte-identical to R6a).
+    The broadcast leg (~14% of the round, one mcast of C contiguous tiles) stays full — per-tile
+    mcast-splitting would cost more than the byte saving (R6a ablation: broadcast is off the critical
+    path).
+  - **Lever 2 — round/compute pipelining (the COMPLEMENTARY step to lever 1).** Compute issues batch
+    r+1's pass-1 one round AHEAD (via a `PIPELINE_LOOKAHEAD` CT flag + a do_pass1/do_fold/do_pass2
+    lambda refactor) so the local reduce overlaps the writer's synchronous cross-core round.
+    `cb_stat_local` is already 2*C deep (two rounds in flight) and the writer/semaphore protocol +
+    fixed-base `cb_gather`/`cb_stat_global` addressing are UNCHANGED — only the compute ISSUE order
+    changes (both loop forms are numerically identical). Shipped ON on the multi-round tiled path;
+    single-round WIDTH groups (num_rounds==1) degenerate byte-identically to the R6a sequential order.
+  - **Levers COMPOSE (the key finding).** Pipelining is FLAT on its own (ablation mode0: pipe-on
+    119036 == baseline 119027 — with the full 4 KB gather the round dwarfs the compute so overlap
+    buys nothing), but WINS once lever 1 shrinks the gather (BLOCK 8x8 113810 pipe-off → 107995
+    pipe-on, 1.05x on top of compaction). This is the "a batched reader only pays off once the writer
+    batches too" pattern — the empirical measurement caught it after an initial (wrong) "pipelining is
+    flat" read from the mode-0 ablation.
+- Accuracy achieved: soft PCC gate 0.9995 holds on all decode + sharded perf shapes (PCC ≥ 0.99998;
+  BLOCK 8x8 PCC 1.001005 == baseline, confirming byte-identical). Golden `TOLERANCES` unchanged.
+- Measured perf (blackhole_p150b, 110-core grid, median of 8 fresh trials, exact perf config
+  bf16 / fp32_dest_acc_en=False / TILE / TILE gamma / HiFi2; `test_rms_norm_perf_r6.py`):
+  | case | grid/K | R6a | R6b | vs achievable | speedup |
+  |---|---|---|---|---|---|
+  | BLOCK 8x8 (HT_LOCAL=32) | K=8 | 119027 | 107995 | 4.64x → 4.21x | **1.10x** (compaction 1.046x + pipeline 1.054x) |
+  | WIDTH 8x4 | K=32 | 8933 | 8132 | 1.70x → 1.54x | **1.10x** (compaction; pipeline no-op at HT=1) |
+  | WIDTH 7x4 | K=28 | 9850 | 9182 | 1.68x | **1.07x** (compaction, gap-free) |
+  | WIDTH 8x1 | K=8 | 5836 | 5619 | 1.37x | **1.04x** (compaction) |
+  | WIDTH 9x1 | K=9 | 7883 | 7691 | 1.67x | **1.02x** (compaction) |
+  | decode 32x1024 (logical) | — | 8700 | 8691 | 0.95x | flat (gated OFF, byte-identical) |
+  - Mode ablation (BLOCK 8x8, gather transfer size): full 4 KB = 119036 / faces 0-2 3 KB 1-txn = 116219
+    / faces 0&2 2 KB 2-txn = 108028 — the core-to-core L1 gather is BANDWIDTH-dominated (unlike the
+    DRAM `tile_reorder` regime), so mode 2 (skip the unused middle face) wins despite the extra
+    transaction. Shipped mode 2.
+- Levers: lever 1 (stat compaction) — WINNING, kept (mode 2, tiled path). lever 2 (round/compute
+  pipelining) — WINNING as lever 1's complementary step, kept ON (multi-round tiled path). lever 3
+  (two-stage gather) — NOT implemented (deferred to R6c; it is the remaining dominant cost — the
+  master-serialized fold+gather — and the complementary step that would let pipelining also hide the
+  fold).
+- Golden test progress: green — no regression. `test_op_loose` 19/19. `test_op` cartesian slice
+  (1x1x2048x256, multi-round BLOCK) 165 passed / 0 failed / 0 xpassed / 39 xfailed (the standing
+  `{f32,acc=False}` EXCLUSION). No supported_fail, no xpass drift.
+- No regression across the guard set: unit dir **431 passed / 32 skipped** (`--dev` + non-dev,
+  race-clean); R6a batched-round correctness **14/14** (`--dev` + non-dev); decode logical W-split
+  byte-identical (gated off). Both levers gate to the tiled cross-core path, so every RM / logical /
+  interleaved / HEIGHT cell is byte-identical.
+- Issues encountered: initial mode-0 ablation read pipelining as "flat" (it is, in isolation); the
+  correct picture — pipelining is lever 1's complementary step and wins once the gather is compacted —
+  emerged only from measuring the SHIPPED combination (mode 2 + pipeline). The literal 32× column
+  compaction was found infeasible (strided col-0 across tile faces; NoC rewards contiguous transfers)
+  and replaced with the byte-identical col-0-FACES compaction. No defects.
+- Tests added: none new (the R6a `test_rms_norm_perf_r6a.py` batched-round correctness + `test_rms_norm_perf_r6.py`
+  perf harness cover the changed path); probes 038-042 (prior R6b attempt's grid/geometry surveys) preserved.

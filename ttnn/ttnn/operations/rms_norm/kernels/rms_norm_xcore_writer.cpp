@@ -62,8 +62,23 @@ void kernel_main() {
     // round. C_ROWS=1 reduces to the R4 per-tile-row round. Monotone counter semaphores count
     // per ROUND (each worker incs SEM_GATHER/SEM_DONE once/round; master sets SEM_BCAST=r+1).
     constexpr uint32_t C_ROWS = get_compile_time_arg_val(13);
+    // Stat-tile compaction (Refinement 6b lever 1). The cross-core stat is a REDUCE_ROW
+    // result: only COLUMN 0 is ever consumed (the master fold is element-wise; pass-2 reads
+    // it via BroadcastDim::Col). In an fp32 tile column 0 lives entirely in faces 0 (rows
+    // 0-15) and 2 (rows 16-31) — i.e. byte ranges [0,1024) and [2048,3072). The gather
+    // therefore only needs to move those bytes; the untransferred faces (1 always, 3 in the
+    // 2-run form) leave STALE L1 that the fold sums-then-ignores, so the output is
+    // numerically BYTE-IDENTICAL. The slot STRIDE stays a full fp32 tile (stat_bytes) — only
+    // the moved bytes shrink. Configured as up to two contiguous runs so the host can select:
+    //   full  (byte-identical R6a): (0, stat_bytes, _, 0)
+    //   faces 0-2 contiguous 3 KB : (0, 3072, _, 0)
+    //   faces 0 & 2 only 2 KB     : (0, 1024, 2048, 1024)
+    constexpr uint32_t G_OFF0 = get_compile_time_arg_val(14);
+    constexpr uint32_t G_LEN0 = get_compile_time_arg_val(15);
+    constexpr uint32_t G_OFF1 = get_compile_time_arg_val(16);
+    constexpr uint32_t G_LEN1 = get_compile_time_arg_val(17);
 
-    constexpr auto out_args = TensorAccessorArgs<14>();
+    constexpr auto out_args = TensorAccessorArgs<18>();
 
     // DRAM-write args first (fixed-position); the variable-length worker coords follow.
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
@@ -130,10 +145,13 @@ void kernel_main() {
             cb_reserve_back(cb_gather, K * C_this);  // blocks until compute popped last round's gather
             const uint32_t gather_base = get_write_ptr(cb_gather);
             for (uint32_t cc = 0; cc < C_this; ++cc) {
-                noc_async_read(
-                    get_noc_addr(master_vx, master_vy, local_src + cc * stat_bytes),
-                    gather_base + cc * K * stat_bytes,
-                    stat_bytes);  // loopback own partial to slot cc*K + 0
+                // loopback own partial to slot cc*K + 0 (compacted: only the col-0 faces)
+                const uint32_t src = local_src + cc * stat_bytes;
+                const uint32_t dst = gather_base + cc * K * stat_bytes;
+                noc_async_read(get_noc_addr(master_vx, master_vy, src + G_OFF0), dst + G_OFF0, G_LEN0);
+                if (G_LEN1) {
+                    noc_async_read(get_noc_addr(master_vx, master_vy, src + G_OFF1), dst + G_OFF1, G_LEN1);
+                }
             }
             noc_async_read_barrier();
             cb_pop_front(cb_stat_local, C_this);
@@ -215,10 +233,13 @@ void kernel_main() {
             // master's cb_gather base == this core's cb_gather base (uniform CB offset, empty->base).
             const uint32_t master_gather_base = get_write_ptr(cb_gather);
             for (uint32_t cc = 0; cc < C_this; ++cc) {
-                noc_async_write(
-                    local_src + cc * stat_bytes,
-                    get_noc_addr(master_vx, master_vy, master_gather_base + (cc * K + slice_index) * stat_bytes),
-                    stat_bytes);  // my partial for row cc -> slot cc*K + slice_index
+                // my partial for row cc -> slot cc*K + slice_index (compacted: col-0 faces only)
+                const uint32_t src = local_src + cc * stat_bytes;
+                const uint32_t dst = master_gather_base + (cc * K + slice_index) * stat_bytes;
+                noc_async_write(src + G_OFF0, get_noc_addr(master_vx, master_vy, dst + G_OFF0), G_LEN0);
+                if (G_LEN1) {
+                    noc_async_write(src + G_OFF1, get_noc_addr(master_vx, master_vy, dst + G_OFF1), G_LEN1);
+                }
             }
             noc_async_write_barrier();
             noc_semaphore_inc(get_noc_addr(master_vx, master_vy, get_semaphore(SEM_GATHER)), 1);  // partials landed

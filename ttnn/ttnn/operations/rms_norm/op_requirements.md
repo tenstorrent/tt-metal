@@ -559,7 +559,7 @@ Lever 3 (two-stage gather) not implemented. Deferred to R6b.
 
 ---
 
-### [ ] Refinement 6b — Sharded cross-core: stat-tile compaction + round/compute pipelining (+ two-stage gather)
+### [~] Refinement 6b — Sharded cross-core: stat-tile compaction + round/compute pipelining (+ two-stage gather)
 
 **Type**: perf
 
@@ -588,4 +588,82 @@ via C-sweep + mcast A/B ablations. R6b is the stat-tile-compaction / pipelining 
 do not fork. Gate on soft `pcc_threshold` 0.9995.
 
 **Done when**: measured median device-ns improves further on the BLOCK/WIDTH sharded perf shapes
+(fresh-cache trial loop) toward achievable, soft PCC holding, golden green, no regression.
+
+**Landed (partial `[~]`)**: the two headline levers (1 stat compaction, 2 round/compute pipelining)
+shipped on the shared `_assemble_xcore_kernels` transport via CT flags — no forked files; both
+numerically byte-identical (compaction preserves the only consumed data; pipelining reorders the
+same ops), `--dev`-clean, non-regressing. Measured (blackhole_p150b, median of 8 fresh trials, exact
+perf config bf16 / fp32_dest_acc_en=False / TILE / TILE gamma / HiFi2):
+- **Lever 1 — stat-tile compaction (the winner).** The cross-core stat is a REDUCE_ROW result whose
+  only consumed data is COLUMN 0, which in an fp32 tile lives entirely in faces 0 (rows 0-15) + 2
+  (rows 16-31). The GATHER (K partials converging on the master, ~86% of the round per the R6a
+  ablation) now moves ONLY those faces (`G_OFF/G_LEN` writer CT args + `_gather_runs`/`STAT_COMPACT_MODE`);
+  the untransferred faces leave stale L1 the fold sums-then-ignores → **numerically byte-identical**
+  (PCC 1.001005 == baseline). The literal "32× column-only" transfer is infeasible (col 0 is strided
+  across faces at 64 B stride; the NoC rewards contiguous runs and every in-tree precedent —
+  `tensix_all_reduce`, `combine_welford` — moves whole tiles), so the achievable compaction is
+  the col-0 FACES. **Mode ablation (BLOCK 8x8): full 4 KB = 119036, faces 0-2 3 KB/1 txn = 116219,
+  faces 0&2 2 KB/2 txn = 108028** — the core-to-core L1 gather is bandwidth-dominated (unlike the DRAM
+  `tile_reorder` regime), so mode 2 (skip the unused middle face) wins despite the extra transaction.
+  Gated to the pure tiled sharded path (WIDTH/BLOCK physical shards); RM / logical / decode keep the
+  full transfer (mode 0, byte-identical). The broadcast leg (~14%, one mcast of C contiguous tiles)
+  stays full — per-tile mcast-splitting would add more overhead than the byte saving (R6a ablation
+  shows it is off the critical path).
+- **Lever 2 — round/compute pipelining (the COMPLEMENTARY step to lever 1).** Compute issues batch
+  r+1's pass-1 one round ahead so the local reduce overlaps the writer's synchronous round
+  (`PIPELINE_LOOKAHEAD` CT flag; `cb_stat_local` already 2*C deep; writer/semaphore protocol +
+  fixed-base addressing UNCHANGED — only the compute issue order changes). **Flat on its own**
+  (mode0 pipe-on 119036 == baseline 119027 — with the full gather the round dwarfs the compute), but
+  once lever 1 shrinks the gather it **wins**: BLOCK 8x8 113810 (pipe-off) → 107995 (pipe-on), 1.05x
+  on top of compaction. Shipped ON on the multi-round tiled path; single-round WIDTH groups
+  (num_rounds==1) degenerate byte-identically.
+- **Measured speedups** (R6a → R6b, all sharded WIDTH/BLOCK perf shapes; soft PCC ≥ 0.99998):
+  BLOCK 8x8 119027 → **107995 (1.10x)** (4.64x → 4.21x above achievable); WIDTH 8x4 8933 → 8132 (1.10x);
+  WIDTH 7x4 9850 → 9182 (1.07x); WIDTH 8x1 5836 → 5619 (1.04x); WIDTH 9x1 7883 → 7691 (1.02x). Decode
+  interleaved (logical W-split, gated off) unaffected/byte-identical (8691 ns).
+- **No regression**: golden `test_op_loose` 19/19; `test_op` cartesian slice (1x1x2048x256, multi-round
+  BLOCK) 165 passed / 0 failed / 0 xpassed / 39 xfailed (the standing `{f32,acc=False}` EXCLUSION);
+  unit dir 431 passed / 32 skipped (`--dev` + non-dev); R6a batched-round correctness 14/14 (`--dev`
+  + non-dev). Both levers gate to the tiled path, so every non-tiled sharded/interleaved cell is
+  byte-identical.
+
+**Deferred to R6c** (lever 3, characterized): **two-stage gather.** Even after compaction+pipelining,
+BLOCK 8x8 is still 4.21x above achievable — the residual is the master-serialized fold+gather
+(the K-1 workers still converge on one master core, and the master's fold sits ON the round's
+critical path, which is exactly why lever 2 (pipelining) only recovers the pass-1 overlap and not
+the fold). Lever 3 restructures the gather into a hierarchy (reduce along x → row-leaders, then y →
+root) so the fold is distributed off the master's critical path — the smallest R6b lever, most
+relevant to the large-K 2D WIDTH groups (8x4 K=32) and the missing complementary step that would let
+pipelining also hide the fold. Reuse the R4/R6/R6a xcore kernels + segmented-mcast transport; do not
+fork. Gate on soft `pcc_threshold` 0.9995.
+
+---
+
+### [ ] Refinement 6c — Sharded cross-core: two-stage (hierarchical) gather
+
+**Type**: perf
+
+**Goal**: close more of the BLOCK/large-K WIDTH sharded residual R6b left (BLOCK 8x8 still 4.21x above
+achievable after stat-tile compaction + round/compute pipelining). R6b's ablation showed the dominant
+remaining cost is the **master-serialized gather + fold**: all K-1 workers unicast their partials to one
+master core (fan-in latency ~92 ns/core, and the 4 KB→2 KB compaction only halved the bytes, not the
+transaction count), and the master's fold sits ON the round's critical path — which is precisely why
+lever 2 (pipelining) recovered only the pass-1 overlap, not the fold. One lever:
+
+1. **Two-stage (hierarchical) gather.** Replace the flat K-1→master gather with a 2-stage reduce over
+   the group rectangle: stage 1 reduces along x (each grid-row's cores → the row-leader, folding
+   locally), stage 2 reduces the row-leaders along y → the root, which finalizes (+eps, rsqrt) and
+   broadcasts (the existing segmented mcast). This cuts the fan-in from K-1 to (nx-1)+(ny-1) converging
+   transfers and distributes the fold off the single master — the `tensix_all_reduce` grid-two-stage
+   pattern. Most relevant to the large-K 2D WIDTH groups (8x4 K=32) and BLOCK's per-row groups; it is
+   also the complementary step that would let R6b's pipelining hide the (now-distributed) fold.
+
+**Verifier notes**: R6b landed compaction (winner) + pipelining (its complementary step) and characterized
+the residual as the master-serialized fold+gather via mode/pipeline ablations. R6c is the gather-topology
+restructure (lever 3). Reuse the R4/R6/R6a/R6b xcore kernels + segmented-mcast transport + the 3-monotone-
+counter protocol; do not fork. This is a T3 collective-topology change (two semaphore stages), so verify
+`--dev`-clean across HT_LOCAL and ragged groups. Gate on soft `pcc_threshold` 0.9995.
+
+**Done when**: measured median device-ns improves further on the BLOCK/large-K WIDTH sharded perf shapes
 (fresh-cache trial loop) toward achievable, soft PCC holding, golden green, no regression.

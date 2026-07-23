@@ -62,6 +62,42 @@ L1_RESIDENT_BUDGET = 1_100_000
 STAT_BATCH_ROWS = 8  # cap on C (round-batching factor); L1-gated per program by XCORE_STAT_L1_BUDGET
 XCORE_STAT_L1_BUDGET = 1_400_000  # per-core L1 arena the tiled-sharded xcore CBs must fit under
 
+# ---- Cross-core stat-tile compaction (op_requirements.md R6b lever 1) ----
+# The gathered/broadcast cross-core stat is a REDUCE_ROW result whose only consumed data is
+# COLUMN 0 (the master fold is element-wise; pass-2 reads it via BroadcastDim::Col). In an
+# fp32 tile column 0 lives entirely in faces 0 (rows 0-15) + 2 (rows 16-31), i.e. byte ranges
+# [0,1024) and [2048,3072). Moving only those bytes during the GATHER (the dominant ~86% of
+# the round, K partials converging on the master) leaves the untransferred faces stale — the
+# master fold sums-then-ignores them, so the output is numerically BYTE-IDENTICAL. `_gather_runs`
+# turns STAT_COMPACT_MODE into up to two contiguous (offset,len) runs applied per stat tile
+# (the slot stride stays a full fp32 tile). MODE 0 is byte-identical to R6a (the trivial default,
+# a live knob); the tiled sharded path uses the col-0-faces compaction. Ablation (BLOCK 8x8,
+# blackhole, median of 8 fresh trials): mode 0 = 119036 ns, mode 1 (3 KB, 1 txn) = 116219 ns,
+# mode 2 (2 KB, 2 txn) = 108028 ns -> the core-to-core L1 gather is BANDWIDTH-dominated (unlike
+# the DRAM `tile_reorder` regime), so skipping the unused middle face wins despite the extra
+# transaction. Only the GATHER (~86% of the round) is compacted; the broadcast leg (~14%, one
+# mcast of C contiguous tiles) stays full to avoid per-tile mcast-splitting overhead.
+#   0 = full 4 KB (1 run)            — byte-identical R6a default
+#   1 = faces 0-2 contiguous 3 KB    — 1 run, 25% fewer bytes
+#   2 = faces 0 & 2 only 2 KB        — 2 runs, 50% fewer bytes (skips the unused middle face) [WINNER]
+STAT_COMPACT_MODE = 2
+_STAT_TILE_BYTES = 4096  # fp32 32x32 tile (4 faces x 1024 B); face = 1024 B (asserted == tile_fp32)
+_STAT_FACE_BYTES = _STAT_TILE_BYTES // 4
+# Round/compute pipelining (R6b lever 2). The COMPLEMENTARY step to the gather compaction: flat
+# on its own (mode0 pipe-on 119036 == baseline 119027) but wins 1.05x once the compacted gather
+# shrinks the round (BLOCK 8x8 113810 pipe-off -> 107995 pipe-on). Shipped ON; gated to the
+# multi-round tiled path (single-round WIDTH groups degenerate byte-identically). Live knob.
+XCORE_PIPELINE_LOOKAHEAD = True
+
+
+def _gather_runs(mode: int):
+    """(off0, len0, off1, len1) contiguous byte runs the gather moves per stat tile."""
+    if mode == 1:
+        return (0, 3 * _STAT_FACE_BYTES, 0, 0)  # faces 0,1,2 contiguous (col-0 in faces 0,2)
+    if mode == 2:
+        return (0, _STAT_FACE_BYTES, 2 * _STAT_FACE_BYTES, _STAT_FACE_BYTES)  # faces 0 and 2 only
+    return (0, _STAT_TILE_BYTES, 0, 0)  # full tile (byte-identical)
+
 
 def _ceildiv(a: int, b: int) -> int:
     return -(-a // b)
@@ -1284,6 +1320,24 @@ def _assemble_xcore_kernels(
         config=ttnn.ReaderConfigDescriptor(),
     )
 
+    # ---- Stat-tile compaction (R6b lever 1) ----
+    # Move only the col-0-bearing faces of each fp32 stat tile during the gather (numerically
+    # byte-identical). Applied on the pure tiled sharded cross-core path (WIDTH + BLOCK physical
+    # shards, where the K-partial gather is the dominant round cost); RM / logical paths keep the
+    # full-tile transfer (mode 0, byte-identical to R6a). Single source of truth: `_gather_runs`.
+    stat_compact_mode = STAT_COMPACT_MODE if (x_zero_copy and (not is_rm) and (not out_to_dram)) else 0
+    assert (
+        _STAT_TILE_BYTES == tile_fp32
+    ), f"stat compaction face offsets assume an fp32 stat tile ({_STAT_TILE_BYTES} B); got {tile_fp32}"
+    g_off0, g_len0, g_off1, g_len1 = _gather_runs(stat_compact_mode)
+
+    # ---- Round/compute pipelining (R6b lever 2; parked OFF) ----
+    # Issue batch r+1's pass 1 one round ahead so the local reduce overlaps the writer's
+    # synchronous cross-core round. Measured FLAT on BLOCK 8x8 (the master fold stays on the
+    # critical path), so it ships parked OFF (byte-identical to R6a); kept as a validated live
+    # knob. Only meaningful on the multi-round tiled path; a single source of truth constant.
+    pipeline_lookahead = XCORE_PIPELINE_LOOKAHEAD and (x_zero_copy and (not is_rm) and (not out_to_dram))
+
     # ---- Writer (cross-core transport + [logical] out-to-DRAM) ----
     writer_ct = [
         _SEM_GATHER,
@@ -1299,7 +1353,11 @@ def _assemble_xcore_kernels(
         1 if is_rm else 0,  # IS_RM
         in_elem,  # ELEM (RM loopback byte math)
         out_page,  # SHARD_STICK_BYTES (resident RM output shard stick stride)
-        C,  # C_ROWS (round-batching factor; idx 13) — accessor chained after at <14>
+        C,  # C_ROWS (round-batching factor; idx 13)
+        g_off0,  # gather run0 offset (idx 14)
+        g_len0,  # gather run0 length (idx 15)
+        g_off1,  # gather run1 offset (idx 16)
+        g_len1,  # gather run1 length (idx 17) — accessor chained after at <18>
     ]
     writer_ct.extend(
         ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
@@ -1371,6 +1429,7 @@ def _assemble_xcore_kernels(
         1 if x_zero_copy else 0,  # X_ZERO_COPY (self-arm cb_x_in)
         1 if is_rm else 0,  # IS_RM (tilize resident RM shard, untilize output)
         C,  # C_ROWS (round-batching factor; idx 9)
+        1 if pipeline_lookahead else 0,  # PIPELINE_LOOKAHEAD (R6b lever 2; idx 10)
     ]
     compute_rt = ttnn.RuntimeArgs()
     for c, slice_index, _m, is_partial_holder, _wts, vwt in entries:
