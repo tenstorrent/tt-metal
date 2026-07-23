@@ -32,6 +32,7 @@ from models.experimental.xtts_v2.reference.xtts_gpt_ref import (
     N_HEAD,
     N_LAYER,
     START_AUDIO_TOKEN,
+    STOP_AUDIO_TOKEN,
     load_gen_head,
     load_gpt_core_state,
 )
@@ -250,14 +251,50 @@ class TracedGPTDecoder:
         return ttnn.to_torch(out).to(torch.float32)
 
 
-def generate_traced(device, prefix_emb, heads, max_new=24, max_seq=128, use_trace=True):
-    """Greedy generation with the traced decoder. Fills the cache with a single batched prefill pass
-    over the prompt, then decodes token by token; mel_head + argmax + embedding run on host.
-    Returns dict(codes [T], latents [1,T,1024])."""
+def _select_token(logits, prev, temperature, top_k, top_p, repetition_penalty):
+    """HF-style token sampling on the mel logits (host side): repetition penalty -> temperature ->
+    top-k -> top-p (nucleus) -> multinomial. XTTS needs sampling; pure argmax collapses into a
+    repeated-code loop. `prev` = audio codes generated so far (for the repetition penalty)."""
+    logits = logits.clone().float().view(-1)
+    if repetition_penalty and repetition_penalty != 1.0 and prev:
+        idx = torch.tensor(sorted(set(prev)))
+        s = logits[idx]
+        logits[idx] = torch.where(s > 0, s / repetition_penalty, s * repetition_penalty)
+    if temperature and temperature != 1.0:
+        logits = logits / temperature
+    if top_k:
+        kth = torch.topk(logits, min(top_k, logits.numel())).values[-1]
+        logits[logits < kth] = float("-inf")
+    if top_p and top_p < 1.0:
+        sl, si = torch.sort(logits, descending=True)
+        remove = torch.cumsum(torch.softmax(sl, dim=-1), dim=-1) > top_p
+        remove[1:] = remove[:-1].clone()
+        remove[0] = False
+        sl[remove] = float("-inf")
+        logits = torch.full_like(logits, float("-inf")).scatter(0, si, sl)
+    return int(torch.multinomial(torch.softmax(logits, dim=-1), 1))
+
+
+def generate_traced(device, prefix_emb, heads, max_new=24, max_seq=128, use_trace=True, stop_token=None,
+                    do_sample=False, temperature=0.75, top_k=50, top_p=0.85, repetition_penalty=10.0, seed=None):
+    """Autoregressive generation with the traced decoder. Fills the cache with a single batched prefill
+    pass over the prompt, then decodes token by token; mel_head + token selection + embedding run on host.
+    do_sample=False (default) is greedy argmax — deterministic, for the PCC tests. do_sample=True uses
+    HF-style sampling with the XTTS defaults (temp 0.75 / top_k 50 / top_p 0.85 / repetition_penalty 10),
+    which the model REQUIRES for real speech (greedy collapses into a repeated code).
+    stop_token (e.g. STOP_AUDIO_TOKEN) ends generation once emitted. Returns dict(codes [T], latents [1,T,1024])."""
+    if seed is not None:
+        torch.manual_seed(seed)
     dec = TracedGPTDecoder(device, max_seq=max_seq)
     mel_emb, mel_pos = heads["mel_emb"], heads["mel_pos"]
     mh_w, mh_b = heads["mel_head_w"], heads["mel_head_b"]
     head = lambda latent: latent @ mh_w.t() + mh_b
+
+    def pick(lat, prev):
+        logits = head(lat)
+        if do_sample:
+            return _select_token(logits, prev, temperature, top_k, top_p, repetition_penalty)
+        return int(logits.argmax(-1))
 
     dec.reset()
     dec.prefill(prefix_emb)  # fill cache positions 0..P-1 in one batched pass (before any trace exists)
@@ -266,12 +303,14 @@ def generate_traced(device, prefix_emb, heads, max_new=24, max_seq=128, use_trac
     pos = prefix_emb.shape[1]
     lat = dec.step((mel_emb[START_AUDIO_TOKEN] + mel_pos[0]).view(1, 1, -1), pos)  # start token at pos P
     pos += 1
-    code = int(head(lat).argmax(-1))
+    code = pick(lat, [])
     codes, lats = [code], [lat]
     for m in range(1, max_new):
         lat = dec.step((mel_emb[code] + mel_pos[m]).view(1, 1, -1), pos)
         pos += 1
-        code = int(head(lat).argmax(-1))
+        code = pick(lat, codes)
+        if stop_token is not None and code == stop_token:
+            break
         codes.append(code)
         lats.append(lat)
     return {"codes": torch.tensor(codes), "latents": torch.cat(lats, dim=1)}
