@@ -14,10 +14,12 @@
 namespace tt::tt_metal {
 
 // ======================================================================================
-//                    Unit Tensor enqueue_read/write_tensor
+//                    Byte-based data transfer APIs
 // ======================================================================================
-// Internal, unstable API - see tt_metal/api/internal/README.md.
-// Single-device (unit mesh) byte* enqueue helpers.
+//
+// Explicitly provided for unit mesh (single device) ttnn::Tensor H<->D access.
+// Exposed via ttnn/async_runtime.hpp (write_buffer / read_buffer) and have
+// external dependencies.
 
 void enqueue_read_tensor(
     distributed::MeshCommandQueue& queue,

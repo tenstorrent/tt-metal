@@ -13,7 +13,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
-#include <internal/tensor/unit_tensor_apis.hpp>
+#include <internal/tensor/byte_based_data_transfer_apis.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
