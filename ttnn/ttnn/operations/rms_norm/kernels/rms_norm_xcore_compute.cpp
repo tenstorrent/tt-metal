@@ -89,6 +89,15 @@ void kernel_main() {
     // output shard. PER_W_T here is per_w_t_padded; vwt is the reduce tile count
     // (ceil(valid_cols/32)); is_partial_holder is per-core (valid_cols % 32 != 0).
     constexpr bool IS_RM = get_compile_time_arg_val(8) != 0;
+    // C_ROWS (Refinement 6a lever 1): batch C tile-rows' stats per cross-core round so the
+    // fully-synchronous round latency (~3150 ns, dominant for BLOCK's HT_LOCAL=32) amortizes
+    // over C rows — sync rounds drop from HT_LOCAL to ceil(HT_LOCAL/C). Compute produces C
+    // local partials (cb_stat_local depth 2*C), the writer gathers K*C, the master folds C
+    // rstds, broadcasts C, then pass-2 covers the C tile-rows. C=1 is byte-identical to the
+    // per-tile-row scheme (R4); the host sets C>1 only on the pure tiled resident-shard path
+    // (RM / logical-out-to-DRAM keep C=1, their per-tile-row drain unchanged). This tiled
+    // path is the only one batched; the RM path above always runs at C=1.
+    constexpr uint32_t C_ROWS = get_compile_time_arg_val(9);
 
     const uint32_t vwt = get_arg_val<uint32_t>(0);  // valid W-tiles (<= PER_W_T)
     const uint32_t is_partial_holder = get_arg_val<uint32_t>(1);
@@ -256,125 +265,148 @@ void kernel_main() {
         cb_wait_front(cb_gamma, vwt);  // gamma W-slice held (read/tilized once)
     }
 
-    for (uint32_t t = 0; t < HT_LOCAL; ++t) {
-        // ---------- Pass 1: local partial Σ_slice x²·(1/W) ----------
-        // Square the vwt valid W-tiles into cb_xsq, then reduce the whole block in
-        // ONE call (cols=vwt) — the interleaved-path block-reduce pattern. The
-        // partial-holder routes the partial scaler to the block's last tile.
-        for (uint32_t w = 0; w < vwt; ++w) {
-            const uint32_t xin_off = t * PER_W_T + w;
-            ckl::eltwise_chain(
-                one_tile,
-                ckl::BinaryFpu<
-                    cb_x_in,
-                    cb_x_in,
-                    ckl::BinaryFpuOp::Mul,
-                    ckl::BroadcastDim::None,
-                    ckl::InputLifecycle::CallerManaged,
-                    ckl::InputLifecycle::CallerManaged,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::Dst::D0,
-                    ckl::OperandKind::Block,
-                    ckl::OperandKind::Block,
-                    ckl::TileOffset::Set,
-                    ckl::TileOffset::Set>{xin_off, xin_off},
-                ckl::PackTile<cb_xsq, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
-        }
-        const ckl::ReducePartialScaler ps =
-            (HAS_PARTIAL_W && is_partial_holder) ? partial_scaler_sel : ckl::ReducePartialScaler::none();
-        ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_stat_local>(
-            ckl::ReduceInputBlockShape::of(1, vwt, 1),
-            ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::Accumulate::at(cb_stat_local, 0),
-            ckl::NoOp{},
-            ps);
-        // reduce pushed cb_stat_local (1 tile). Writer gathers it to the master.
-
-        // ---------- Master: fold K partials -> mean; (+eps, rsqrt) -> 1/RMS ----------
-        if (is_master) {
-            cb_wait_front(cb_gather, K);  // writer gathered K partials for this tile-row
-            cb_reserve_back(cb_stat_handoff, 1);
-            // Raw-LLK fold needs the data-format reconfig the helpers do implicitly:
-            // pass 1 left the unpacker configured for cb_xsq/cb_scaler; the fold reads
-            // cb_gather (fp32) and packs cb_stat_handoff (fp32). Without this the
-            // unpacker-A src-format LLK_ASSERT trips (hang).
-            reconfig_data_format(cb_gather, cb_gather);
-            pack_reconfig_data_format(cb_stat_handoff);
-            tile_regs_acquire();
-            // dst0 = Σ_{k=0..K-1} cb_gather[k]  (col0 holds the per-row partial;
-            // other columns are ignored downstream via BroadcastDim::Col).
-            uint32_t first_pair = 0;
-            if (K & 1u) {
-                copy_tile_to_dst_init_short(cb_gather);
-                copy_tile(cb_gather, 0, 0);
-                first_pair = 1;
-            }
-            if (K > 1) {
-                add_tiles_init(cb_gather, cb_gather, /*acc_to_dest=*/true);
-                for (uint32_t k = first_pair; k < K; k += 2) {
-                    add_tiles(cb_gather, cb_gather, k, k + 1, 0);
-                }
-            }
-            // RMS finalize on the summed mean (same body as the streaming
-            // transform_in_place lambda): rstd = rsqrt(mean + eps).
-            binop_with_scalar_tile_init();
-            add_unary_tile(0, eps_bits);
-            rsqrt_tile_init();
-            rsqrt_tile(0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, cb_stat_handoff);
-            tile_regs_release();
-            cb_push_back(cb_stat_handoff, 1);
-            cb_pop_front(cb_gather, K);
+    // Round-batching (Refinement 6a lever 1): one cross-core round exchanges C_ROWS
+    // tile-rows' partials. Rounds = ceil(HT_LOCAL / C_ROWS); the last is short when
+    // C_ROWS does not divide HT_LOCAL. C_ROWS=1 reduces exactly to the R4 per-row loop.
+    const uint32_t num_rounds = (HT_LOCAL + C_ROWS - 1) / C_ROWS;
+    for (uint32_t r = 0; r < num_rounds; ++r) {
+        const uint32_t base_t = r * C_ROWS;
+        uint32_t C_this = HT_LOCAL - base_t;
+        if (C_this > C_ROWS) {
+            C_this = C_ROWS;
         }
 
-        // ---------- Pass 2: x·rstd·gamma over the W-slice (all cores) ----------
-        cb_wait_front(cb_stat_global, 1);  // 1/RMS for this tile-row (broadcast landed)
-        for (uint32_t w = 0; w < PER_W_T; ++w) {
-            const uint32_t xin_off = t * PER_W_T + w;
-            // x·rstd (rstd is REDUCE_ROW -> column-shaped -> BroadcastDim::Col).
-            ckl::eltwise_chain(
-                one_tile,
-                ckl::BinaryFpu<
-                    cb_x_in,
-                    cb_stat_global,
-                    ckl::BinaryFpuOp::Mul,
-                    ckl::BroadcastDim::Col,
-                    ckl::InputLifecycle::CallerManaged,
-                    ckl::InputLifecycle::HeldBulk,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::Dst::D0,
-                    ckl::OperandKind::Block,
-                    ckl::OperandKind::Col,
-                    ckl::TileOffset::Set,
-                    ckl::TileOffset::Unset>{xin_off, 0},
-                ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
-
-            if (HAS_GAMMA && (w < vwt)) {
-                // norm·gamma (gamma is [1,W] -> row-shaped -> BroadcastDim::Row).
+        // ---------- Pass 1: local partial Σ_slice x²·(1/W) for the C_this tile-rows ----------
+        // Square the vwt valid W-tiles into cb_xsq, then reduce the whole block in ONE call
+        // (cols=vwt) per tile-row — each reduce pushes one partial into cb_stat_local (depth
+        // 2*C). The partial-holder routes the partial scaler to the block's last tile.
+        for (uint32_t cc = 0; cc < C_this; ++cc) {
+            const uint32_t t = base_t + cc;
+            for (uint32_t w = 0; w < vwt; ++w) {
+                const uint32_t xin_off = t * PER_W_T + w;
                 ckl::eltwise_chain(
                     one_tile,
                     ckl::BinaryFpu<
-                        cb_norm,
-                        cb_gamma,
+                        cb_x_in,
+                        cb_x_in,
                         ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::Row,
-                        ckl::InputLifecycle::Streaming,
+                        ckl::BroadcastDim::None,
+                        ckl::InputLifecycle::CallerManaged,
                         ckl::InputLifecycle::CallerManaged,
                         ckl::BinaryDataFormatReconfig::Input,
                         ckl::Dst::D0,
-                        ckl::OperandKind::Scalar,
-                        ckl::OperandKind::Row,
-                        ckl::TileOffset::Unset,
-                        ckl::TileOffset::Set>{0, w},
-                    ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
-            } else {
-                // no gamma, or a trailing padding tile (output discarded on read-back).
-                ckl::copy<cb_norm, cb_out>(one_tile);
+                        ckl::OperandKind::Block,
+                        ckl::OperandKind::Block,
+                        ckl::TileOffset::Set,
+                        ckl::TileOffset::Set>{xin_off, xin_off},
+                    ckl::PackTile<cb_xsq, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+            }
+            const ckl::ReducePartialScaler ps =
+                (HAS_PARTIAL_W && is_partial_holder) ? partial_scaler_sel : ckl::ReducePartialScaler::none();
+            ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_stat_local>(
+                ckl::ReduceInputBlockShape::of(1, vwt, 1),
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::Accumulate::at(cb_stat_local, 0),
+                ckl::NoOp{},
+                ps);
+        }
+        // reduce pushed C_this partials into cb_stat_local. Writer gathers them to the master.
+
+        // ---------- Master: fold K partials -> mean; (+eps, rsqrt) -> 1/RMS, per row ----------
+        if (is_master) {
+            cb_wait_front(cb_gather, K * C_this);  // writer gathered K partials × C_this rows
+            cb_reserve_back(cb_stat_handoff, C_this);
+            // Raw-LLK fold needs the data-format reconfig the helpers do implicitly: pass 1 left
+            // the unpacker configured for cb_xsq/cb_scaler; the fold reads cb_gather (fp32) and
+            // packs cb_stat_handoff (fp32). Without this the unpacker-A src-format LLK_ASSERT
+            // trips (hang). One reconfig covers all C_this folds (same src/dst formats).
+            reconfig_data_format(cb_gather, cb_gather);
+            pack_reconfig_data_format(cb_stat_handoff);
+            for (uint32_t cc = 0; cc < C_this; ++cc) {
+                // Row cc's K partials are the contiguous cb_gather tiles [cc*K, cc*K + K).
+                const uint32_t g = cc * K;
+                tile_regs_acquire();
+                // dst0 = Σ_{k=0..K-1} cb_gather[g + k]  (col0 holds the per-row partial;
+                // other columns are ignored downstream via BroadcastDim::Col).
+                uint32_t first_pair = 0;
+                if (K & 1u) {
+                    copy_tile_to_dst_init_short(cb_gather);
+                    copy_tile(cb_gather, g + 0, 0);
+                    first_pair = 1;
+                }
+                if (K > 1) {
+                    add_tiles_init(cb_gather, cb_gather, /*acc_to_dest=*/true);
+                    for (uint32_t k = first_pair; k < K; k += 2) {
+                        add_tiles(cb_gather, cb_gather, g + k, g + k + 1, 0);
+                    }
+                }
+                // RMS finalize on the summed mean (same body as the streaming
+                // transform_in_place lambda): rstd = rsqrt(mean + eps).
+                binop_with_scalar_tile_init();
+                add_unary_tile(0, eps_bits);
+                rsqrt_tile_init();
+                rsqrt_tile(0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_stat_handoff);  // sequential pack -> handoff slot cc
+                tile_regs_release();
+            }
+            cb_push_back(cb_stat_handoff, C_this);
+            cb_pop_front(cb_gather, K * C_this);
+        }
+
+        // ---------- Pass 2: x·rstd·gamma over the W-slice for the C_this tile-rows ----------
+        cb_wait_front(cb_stat_global, C_this);  // C_this 1/RMS tiles (broadcast landed)
+        for (uint32_t cc = 0; cc < C_this; ++cc) {
+            const uint32_t t = base_t + cc;
+            for (uint32_t w = 0; w < PER_W_T; ++w) {
+                const uint32_t xin_off = t * PER_W_T + w;
+                // x·rstd (rstd is REDUCE_ROW -> column-shaped -> BroadcastDim::Col). rstd for
+                // row cc lives at cb_stat_global tile cc (broadcast wrote C_this contiguous
+                // tiles); read it via the Col operand's TileOffset::Set base. CallerManaged:
+                // this loop owns the cb_stat_global wait/pop (C_this) around the whole batch.
+                ckl::eltwise_chain(
+                    one_tile,
+                    ckl::BinaryFpu<
+                        cb_x_in,
+                        cb_stat_global,
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::Col,
+                        ckl::InputLifecycle::CallerManaged,
+                        ckl::InputLifecycle::CallerManaged,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::Dst::D0,
+                        ckl::OperandKind::Block,
+                        ckl::OperandKind::Col,
+                        ckl::TileOffset::Set,
+                        ckl::TileOffset::Set>{xin_off, cc},
+                    ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+
+                if (HAS_GAMMA && (w < vwt)) {
+                    // norm·gamma (gamma is [1,W] -> row-shaped -> BroadcastDim::Row).
+                    ckl::eltwise_chain(
+                        one_tile,
+                        ckl::BinaryFpu<
+                            cb_norm,
+                            cb_gamma,
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::Row,
+                            ckl::InputLifecycle::Streaming,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Scalar,
+                            ckl::OperandKind::Row,
+                            ckl::TileOffset::Unset,
+                            ckl::TileOffset::Set>{0, w},
+                        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                } else {
+                    // no gamma, or a trailing padding tile (output discarded on read-back).
+                    ckl::copy<cb_norm, cb_out>(one_tile);
+                }
             }
         }
-        cb_pop_front(cb_stat_global, 1);
+        cb_pop_front(cb_stat_global, C_this);
     }
 
     cb_pop_front(cb_x_in, shard_tiles);

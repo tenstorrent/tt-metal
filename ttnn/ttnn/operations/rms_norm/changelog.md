@@ -531,3 +531,79 @@
   harness at the exact perf configs, N-trial loop + soft PCC gate) and
   `test_rms_norm_r6_ablation.py` (K-scaling + HT_LOCAL-scaling ablation on gap-free 7-wide
   grids — documents the per-round-sync bottleneck). Probes 035-037 (grid/topology survey).
+
+## Refinement 6a — Sharded cross-core: batch the per-tile-row round + gap-aware mcast
+- Date: 2026-07-23
+- Type: perf (partial — `[~]`); no SUPPORTED change.
+- What was done: landed the two headline R6a levers on the shared cross-core
+  (`_assemble_xcore_kernels`) reader/compute/writer transport — no forked kernel files;
+  both correct, race-clean (`--dev`), and non-regressing. Reused the R4/R6 xcore combine +
+  topology; only the round granularity and the broadcast segmentation changed.
+  - **Lever 1 — batch C tile-rows' stats per cross-core round (the headline; BLOCK).** One
+    round now exchanges C tile-rows' partials: compute produces C local partials
+    (`cb_stat_local` depth 2*C), the writer gathers `K*C` (fixed-base fan-in, layout
+    slot = cc*K + slice_index), the master folds C rstds (`cb_stat_handoff` depth 2*C),
+    broadcasts C (`cb_stat_global` depth C, exact for the fixed-base wrap), then pass-2
+    covers the C tile-rows (rstd for row cc read from `cb_stat_global` tile cc via the Col
+    operand's `TileOffset::Set` base). Sync rounds drop from `HT_LOCAL` to `ceil(HT_LOCAL/C)`;
+    the 3 monotone counter semaphores now count per ROUND. C is a host tunable
+    (`STAT_BATCH_ROWS=8`) bounded per program by an explicit L1 gate (`XCORE_STAT_L1_BUDGET`;
+    `cb_gather` scales `K*C` fp32 tiles) — the sanctioned relaxation of R4's "cb_gather stays
+    K" invariant, same exception class as R3's resident dual-path. **C=1 is byte-identical to
+    R4**, and the host sets C>1 ONLY on the pure tiled resident-shard cross-core path — RM
+    (`is_rm`) and logical (`out_to_dram`) keep C=1 (their per-tile-row output drain is
+    unchanged), and single-tile-row groups (`Ht_local==1`, e.g. WIDTH shards) get C=1.
+  - **Lever 2 — gap-aware mcast (unblocks the 8-wide WIDTH/BLOCK broadcast).** The 1/RMS
+    broadcast now mcasts in up to TWO contiguous virtual-x runs (`_mcast_segments`): a
+    gap-free group is one rectangle (R6), and a group straddling the Blackhole DRAM columns
+    (virtual x=8,9) splits into `[xlo..7]` + `[10..xhi]`, each a full rectangle the master
+    mcasts to separately (the sender is auto-excluded from the segment it sits in, so its
+    `ndests` is members-1). Truly ragged groups (logical decode's multi-row-major set; a
+    WIDTH auto-shard wrapping a partial row; any y-gap) get 0 segments and keep the
+    byte-identical all-unicast fallback. Writer RT layout: `n_mcast_seg`(11) + seg0(12-16) +
+    seg1(17-21); `WORKER_COORDS_BASE` 16->22. Compute/writer gained a `C_ROWS` CT arg
+    (compute idx 9; writer idx 13, accessor bumped to `<14>`).
+- Accuracy achieved: soft PCC gate 0.9995 holds on all sharded perf + batched-round
+  correctness cases (PCC >= 0.99998; `test_rms_norm_perf_r6a.py` 14/14 incl. short-last-round
+  edges HT=3/5/13 with C not dividing HT_LOCAL). Golden `TOLERANCES` unchanged.
+- Measured perf (blackhole_p150b, 110-core grid, median of 8 fresh trials, exact perf config
+  bf16 / fp32_dest_acc_en=False / TILE / TILE gamma / HiFi2):
+  | case | grid/K | R6 baseline | R6a | vs achievable | speedup |
+  |---|---|---|---|---|---|
+  | BLOCK 8x8 (HT_LOCAL=32) | K=8 | 147729 | 119030 | 5.76x -> 4.64x | **1.24x** (lever 1 + small lever-2 mcast) |
+  | WIDTH 8x4 | K=32 | 10204 | 8920 | 1.94x -> 1.69x | **1.14x** (lever 2 mcast; A/B: 8884 mcast vs 10173 unicast) |
+  | WIDTH 7x4 | K=28 | 9870 | 9850 | 1.80x | flat (already mcast in R6; A/B confirms 9764 mcast vs 11173 unicast) |
+  | WIDTH 8x1 | K=8 | 5781 | 5836 | 1.42x | flat (HT=1 -> lever 1 no-op; K=8 broadcast cheap either way) |
+  | WIDTH 9x1 | K=9 | 7889 | 7883 | 1.71x | flat (HT=1; K=9) |
+  - Lever-1 C-sweep on BLOCK 8x8 (mcast off): C=1 147849 / C=2 134810 / C=4 127731 / C=8
+    125027 ns — diminishing returns (per-round cost scales with C: `round(C) ≈ 1029 + C*2121`
+    ns, so batching amortizes only the fixed ~1us/round, and the ~2.1us/tile-row stat
+    data-movement floor remains). Lever-2 A/B (mcast on vs forced unicast) confirms mcast
+    wins on the large-K broadcasts (W8x4 1.15x, W7x4 1.14x, BLK8x8 1.05x) and is flat on the
+    small-K HT=1 cases (broadcast to 7-8 workers is cheap).
+- Levers: lever 1 (round-batching) — WINNING on BLOCK, kept (C=8, L1-gated). lever 2
+  (gap-aware mcast) — WINNING on the large-K WIDTH broadcasts, kept (can never regress via the
+  strict per-segment rectangle check). lever 3 (two-stage gather) — NOT implemented (deferred,
+  see below).
+- Deferred to R6b (characterized at depth): the dominant BLOCK-8x8 residual is NOT the
+  broadcast (lever 2) nor the round count (lever 1 plateaus ~4.6x) — it is the **per-tile-row
+  stat data-movement** (~2.1us/tile-row: K bloated 4KB fp32 stat tiles gathered per tile-row,
+  each carrying only a 32-value column) PLUS the compute floor (~47us, unpipelined). The two
+  next levers: (a) round/compute PIPELINING (overlap batch b+1's pass-1 with batch b's
+  synchronous round — the round waits are where the master idles); (b) stat-tile COMPACTION
+  (transfer only the meaningful reduce column, not the full 4KB tile — a ~32x gather/broadcast
+  bandwidth cut). Lever 3 (two-stage gather) remains relevant only for the large-K 2D WIDTH
+  gather fan-in (W8x4 K=32) and is the smallest — filed with the exact levers in R6b.
+- Golden test progress: green — no regression. `test_op_loose` 19/19. `test_op` cartesian
+  slices: BLOCK bfloat16 815 passed / 0 failed / 0 xpassed / 105 xfailed; WIDTH bfloat16 815
+  passed / 0 failed; WIDTH+BLOCK float32 1210 passed / 0 failed / 630 xfailed (the standing
+  `{f32,acc=False}` EXCLUSION). No supported_fail, no xpass drift.
+- No regression across the guard set: unit dir **431 passed / 32 skipped** (`--dev` + non-dev,
+  race-clean); RM/HEIGHT/RM-HEIGHT sharded (56 passed); RM WIDTH/BLOCK sharded (14 passed);
+  interleaved TILE/RM + decode logical W-split (test_rms_norm 70/70, decode perf 4/4). The
+  C=1 default keeps every non-batched sharded path byte-identical; the segmented mcast is
+  byte-identical on ragged/gap-free groups.
+- Issues encountered: None (both levers correct on first device run; the modest BLOCK win is
+  the per-tile-row-stat-transport floor, characterized above and filed as R6b — not a defect).
+- Tests added: `test_rms_norm_perf_r6a.py` (batched-round correctness across HT_LOCAL incl.
+  short-last-round edges + gap-aware-mcast targets, gamma/no-gamma, soft PCC gate).

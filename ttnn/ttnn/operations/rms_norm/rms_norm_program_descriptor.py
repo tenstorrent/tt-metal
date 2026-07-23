@@ -49,6 +49,19 @@ DEPTH = 2  # per-streaming-CB double-buffer depth (op_design.md §1)
 RESIDENT_X_DEPTH = 2
 L1_RESIDENT_BUDGET = 1_100_000
 
+# ---- Cross-core round-batching knob (op_requirements.md R6a lever 1) ----
+# The cross-core stat round (gather -> master fold -> broadcast) is fully synchronous and
+# costs a FLAT ~3150 ns per round regardless of per-core work (R6 ablation), so it dominates
+# any shard with many tile-rows per group (BLOCK 8x8: HT_LOCAL=32 -> 32 rounds -> 5.76x above
+# achievable). STAT_BATCH_ROWS is the max number of tile-rows whose partials one round exchanges;
+# rounds drop from HT_LOCAL to ceil(HT_LOCAL / C). Bounded per-program by XCORE_STAT_L1_BUDGET
+# (cb_gather scales K*C fp32 tiles) — the sanctioned "relax the one-round-per-tile-row invariant
+# under an explicit L1 gate" exception (same class as R3's resident dual-path). C=1 is the
+# trivial default (byte-identical to R4); only the pure tiled resident-shard cross-core path
+# batches (RM / logical-out-to-DRAM keep C=1, their per-tile-row output drain unchanged).
+STAT_BATCH_ROWS = 8  # cap on C (round-batching factor); L1-gated per program by XCORE_STAT_L1_BUDGET
+XCORE_STAT_L1_BUDGET = 1_400_000  # per-core L1 arena the tiled-sharded xcore CBs must fit under
+
 
 def _ceildiv(a: int, b: int) -> int:
     return -(-a // b)
@@ -1015,6 +1028,57 @@ def _create_logical_xcore_descriptor(
     )
 
 
+def _mcast_segments(members_v, master_v):
+    """Segmented NoC-mcast plan for one reduction group's broadcast (R6 + R6a lever 2).
+
+    ``members_v`` is the list of (vx, vy) VIRTUAL NoC coords of the group (incl. master);
+    ``master_v`` is the mcast sender's (vx, vy). Returns ``(n_seg, segs)`` where ``segs`` is
+    a list of ``(xlo, ylo, xhi, yhi, ndests)`` VIRTUAL rectangles:
+
+      * ``n_seg == 1`` — one gap-free rectangle (bounding-box area == group size; the R6 case);
+      * ``n_seg == 2`` — two contiguous virtual-x runs that straddle the Blackhole DRAM columns
+        (virtual x=8,9 have no worker cores), each a FULL rectangle over the group's y-range
+        (the R6a gap-aware case that unblocks the 8-wide WIDTH/BLOCK groups);
+      * ``n_seg == 0`` — ragged (logical decode's multi-row-major set; a WIDTH auto-shard group
+        wrapping a partial grid row; or any y-gap) — the caller keeps the all-unicast fallback.
+
+    The mcast sender (master) is auto-excluded from the segment it sits in, so that segment's
+    ``ndests`` is (members-1); a segment without the master carries its full member count. This
+    finds contiguous virtual-x runs and validates each is a full rectangle, so a naive mcast
+    to the [xlo..xhi] bounding box (which would fault on the DRAM columns) is never issued.
+    """
+    if len(members_v) <= 1:
+        return 0, []
+    vylo = min(v[1] for v in members_v)
+    vyhi = max(v[1] for v in members_v)
+    xs = sorted({v[0] for v in members_v})
+    runs = []
+    start = prev = xs[0]
+    for x in xs[1:]:
+        if x == prev + 1:
+            prev = x
+        else:
+            runs.append((start, prev))
+            start = prev = x
+    runs.append((start, prev))
+    if len(runs) > 2:
+        return 0, []  # too fragmented for a 1/2-segment mcast
+    segs = []
+    covered = 0
+    for rxlo, rxhi in runs:
+        run_members = [v for v in members_v if rxlo <= v[0] <= rxhi]
+        # each run must be a FULL rectangle over the group's whole virtual y-range
+        if (rxhi - rxlo + 1) * (vyhi - vylo + 1) != len(run_members):
+            return 0, []
+        covered += len(run_members)
+        master_in = rxlo <= master_v[0] <= rxhi and vylo <= master_v[1] <= vyhi
+        ndests = len(run_members) - (1 if master_in else 0)
+        segs.append((rxlo, vylo, rxhi, vyhi, ndests))
+    if covered != len(members_v):
+        return 0, []
+    return len(segs), segs
+
+
 # ---------------------------------------------------------------------------
 # Shared cross-core kernel assembly (sharded + logical W-split, one source of truth)
 # ---------------------------------------------------------------------------
@@ -1090,6 +1154,32 @@ def _assemble_xcore_kernels(
     CB_NORM = 26
 
     shard_tiles = Ht_local * per_w_t
+
+    # ---- Round-batching factor C (op_requirements.md R6a lever 1) ----
+    # Batch C tile-rows' partials into one cross-core round so the flat ~3150 ns round
+    # latency amortizes over C rows (rounds = ceil(Ht_local / C)). Only the pure tiled
+    # resident-shard cross-core path batches: RM (is_rm) and logical (out_to_dram) keep
+    # C=1 (their per-tile-row output drain stays per-tile-row), and single-tile-row groups
+    # (Ht_local==1, e.g. WIDTH shards) gain nothing. C is bounded by an explicit L1 gate —
+    # cb_gather scales K*C fp32 tiles — so the master never OOMs (the sanctioned relaxation
+    # of the R4 "cb_gather stays K" invariant). Single source of truth: every stat-CB depth
+    # and the compute/writer round loops derive from this one C.
+    batch_rows = 1
+    if x_zero_copy and (not is_rm) and (not out_to_dram) and Ht_local > 1:
+        shard_l1 = shard_tiles * (tile_in + tile_out)  # zero-copy resident in+out shards
+        fixed_cb = (2 * per_w_t) * tile_in  # cb_xsq
+        fixed_cb += 2 * tile_in  # cb_norm
+        fixed_cb += (2 if has_partial_w else 1) * tile_bf16  # cb_scaler
+        if has_gamma:
+            fixed_cb += per_w_t * tile_gamma  # cb_gamma
+        avail = XCORE_STAT_L1_BUDGET - shard_l1 - fixed_cb
+        # stat CBs scale as C*(K+5) fp32 tiles: cb_gather K*C, cb_stat_local 2*C,
+        # cb_stat_handoff 2*C, cb_stat_global C.
+        per_C = (K + 5) * tile_fp32
+        c_max_l1 = max(1, avail // per_C)
+        batch_rows = max(1, min(Ht_local, STAT_BATCH_ROWS, c_max_l1))
+    C = batch_rows
+
     cbs = []
 
     def add_cb(idx, page_size, num_pages, fmt):
@@ -1132,10 +1222,14 @@ def _assemble_xcore_kernels(
     # pass-1 squares the whole vwt-tile block before the single block-reduce, so
     # cb_xsq must hold a full W-slice block (2*per_w_t double-buffers it).
     add_cb(CB_XSQ, tile_in, 2 * per_w_t, in_dtype)
-    add_cb(CB_STAT_LOCAL, tile_fp32, 2, ttnn.float32)
-    add_cb(CB_GATHER, tile_fp32, K, ttnn.float32)  # fixed-base fan-in (K partials/round)
-    add_cb(CB_STAT_HANDOFF, tile_fp32, 2, ttnn.float32)
-    add_cb(CB_STAT_GLOBAL, tile_fp32, 1, ttnn.float32)  # depth 1 -> fixed base for the mcast-back
+    # Stat CBs scale with the round-batch factor C (R6a). cb_gather / cb_stat_global are
+    # cross-core-written at a FIXED base, so their depth must be EXACTLY the per-round count
+    # (K*C / C) — full rounds wrap the fifo back to base so every core's get_write_ptr matches.
+    # cb_stat_local / cb_stat_handoff are local (compute<->writer), double-buffered at 2*C.
+    add_cb(CB_STAT_LOCAL, tile_fp32, 2 * C, ttnn.float32)
+    add_cb(CB_GATHER, tile_fp32, K * C, ttnn.float32)  # fixed-base fan-in (K partials/round × C rows)
+    add_cb(CB_STAT_HANDOFF, tile_fp32, 2 * C, ttnn.float32)
+    add_cb(CB_STAT_GLOBAL, tile_fp32, C, ttnn.float32)  # depth C -> fixed base for the batched mcast-back
     add_cb(CB_NORM, tile_in, 2, in_dtype)
     if has_gamma:
         # cb_gamma holds tiles in both regimes; single producer per compiled
@@ -1205,36 +1299,30 @@ def _assemble_xcore_kernels(
         1 if is_rm else 0,  # IS_RM
         in_elem,  # ELEM (RM loopback byte math)
         out_page,  # SHARD_STICK_BYTES (resident RM output shard stick stride)
+        C,  # C_ROWS (round-batching factor; idx 13) — accessor chained after at <14>
     ]
     writer_ct.extend(
         ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
         if out_to_dram
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
-    # ---- Refinement 6 collective-topology lever: per-group NoC-mcast eligibility ----
-    # A reduction group can broadcast the finalized 1/RMS with ONE noc_async_write_multicast
-    # (K-independent) instead of K-1 serial unicast writes IFF its cores form a GAP-FREE
-    # rectangle in VIRTUAL NoC space (bounding-box area == group size). The master is the
-    # rectangle's low corner (WIDTH master = cores[0] = (x0,y0); BLOCK master = row x0).
-    # Ragged groups (logical decode W-split's first-K row-major cores; WIDTH auto-shard groups
-    # that wrap a partial grid row) fail the area test and keep the all-unicast fallback —
-    # so the already-fast decode path stays byte-identical. Measured before this lever, the
-    # sharded WIDTH slowdown scaled with K (the master's serial broadcast), which this removes.
+    # ---- Refinement 6 + 6a collective-topology lever: per-group NoC-mcast plan ----
+    # A reduction group broadcasts the finalized 1/RMS with a NoC multicast (K-independent)
+    # instead of K-1 serial unicast writes. `_mcast_segments` returns 1 rectangle for a
+    # gap-free group (R6), or 2 contiguous virtual-x runs for a group straddling the Blackhole
+    # DRAM columns (virtual x=8,9) — the 8-wide WIDTH/BLOCK targets R6 could not mcast (R6a
+    # lever 2). Ragged groups (logical decode's multi-row-major set; WIDTH auto-shard wrapping
+    # a partial row) get 0 segments and keep the topology-agnostic all-unicast fallback, so
+    # those paths stay byte-identical. Master = group low corner (WIDTH cores[0]; BLOCK row x0).
     masters = {}
     for _c, _si, _master, _iph, _wts, _vwt in entries:
         _key = (int(_master.x), int(_master.y))
         masters.setdefault(_key, _master)
-    group_rect = {}
+    group_seg = {}
     for _key, _master in masters.items():
         _members = [_master] + workers_of.get(_key, [])
-        _vs = [_v(m) for m in _members]
-        _vxlo = min(v[0] for v in _vs)
-        _vxhi = max(v[0] for v in _vs)
-        _vylo = min(v[1] for v in _vs)
-        _vyhi = max(v[1] for v in _vs)
-        _area = (_vxhi - _vxlo + 1) * (_vyhi - _vylo + 1)
-        _use_mcast = 1 if (len(_members) > 1 and _area == len(_members)) else 0
-        group_rect[_key] = (_use_mcast, _vxlo, _vylo, _vxhi, _vyhi)
+        _members_v = [_v(m) for m in _members]
+        group_seg[_key] = _mcast_segments(_members_v, _v(_master))
 
     writer_rt = ttnn.RuntimeArgs()
     out_addr = output_tensor.buffer_address() if out_to_dram else 0
@@ -1242,22 +1330,26 @@ def _assemble_xcore_kernels(
         mvx, mvy = _v(master)
         is_master = 1 if slice_index == 0 else 0
         vc, vrt, _rpw, phase = rm_percore[(int(c.x), int(c.y))] if is_rm else (0, 0, 0, 0)
-        um, rxlo, rylo, rxhi, ryhi = group_rect[(int(master.x), int(master.y))]
-        # fixed fields 0-9; num_workers at 10; use_mcast at 11; rect corners 12-15;
-        # worker coords from 16 (WORKER_COORDS_BASE).
+        n_seg, segs = group_seg[(int(master.x), int(master.y))]
+        # fixed fields 0-9; num_workers at 10; n_mcast_seg at 11; seg0 12-16; seg1 17-21;
+        # worker coords from 22 (WORKER_COORDS_BASE).
         row = [out_addr, w_tile_start, vwt, is_master, slice_index, mvx, mvy, vc, vrt, phase]
         if is_master:
             wl = workers_of.get((int(master.x), int(master.y)), [])
             row.append(len(wl))  # 10 num_workers
-            row.append(um)  # 11 use_mcast
-            row.extend([rxlo, rylo, rxhi, ryhi])  # 12-15 rect corners (virtual)
+            row.append(n_seg)  # 11 n_mcast_seg (0 -> unicast fallback)
+            for si in range(2):
+                if si < n_seg:
+                    row.extend(list(segs[si]))  # (xlo, ylo, xhi, yhi, ndests)
+                else:
+                    row.extend([0, 0, 0, 0, 0])
             for w in wl:
                 wvx, wvy = _v(w)
-                row.extend([wvx, wvy])  # 16+ worker coords (unicast fallback)
+                row.extend([wvx, wvy])  # 22+ worker coords (unicast fallback)
         else:
             row.append(0)  # 10 num_workers
-            row.append(0)  # 11 use_mcast (workers never broadcast)
-            row.extend([0, 0, 0, 0])  # 12-15 rect corners (unused)
+            row.append(0)  # 11 n_mcast_seg (workers never broadcast)
+            row.extend([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])  # 12-21 seg0/seg1 (unused)
         writer_rt[c.x][c.y] = row
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_xcore_writer.cpp"),
@@ -1278,6 +1370,7 @@ def _assemble_xcore_kernels(
         1 if gamma_is_rm else 0,
         1 if x_zero_copy else 0,  # X_ZERO_COPY (self-arm cb_x_in)
         1 if is_rm else 0,  # IS_RM (tilize resident RM shard, untilize output)
+        C,  # C_ROWS (round-batching factor; idx 9)
     ]
     compute_rt = ttnn.RuntimeArgs()
     for c, slice_index, _m, is_partial_holder, _wts, vwt in entries:

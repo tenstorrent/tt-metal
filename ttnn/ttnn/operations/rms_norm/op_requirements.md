@@ -503,7 +503,7 @@ bottleneck and needs a round-granularity restructure, not the broadcast mechanis
 
 ---
 
-### [ ] Refinement 6a — Sharded cross-core: batch the per-tile-row round + gap-aware mcast
+### [~] Refinement 6a — Sharded cross-core: batch the per-tile-row round + gap-aware mcast
 
 **Type**: perf
 
@@ -538,3 +538,54 @@ kernels + transport; do not fork. Gate on soft `pcc_threshold` 0.9995.
 **Done when**: measured median device-ns improves on the WIDTH/BLOCK sharded perf shapes
 (fresh-cache trial loop) toward achievable, soft PCC holding, golden green, no regression
 across the guard set.
+
+**Landed (partial `[~]`)**: the two headline levers (1 round-batching, 2 gap-aware mcast)
+shipped on the shared `_assemble_xcore_kernels` transport via a `C_ROWS` CT arg + segmented
+mcast (no forked files); both correct, `--dev`-clean, non-regressing. Measured
+(blackhole_p150b, median of 8 fresh trials, exact perf config):
+- **Lever 1 (round-batching)** — one round exchanges C tile-rows' partials (compute produces
+  C, writer gathers `K*C`, master folds C, broadcasts C; sync rounds `HT_LOCAL`→`ceil(HT/C)`).
+  C=`STAT_BATCH_ROWS`=8, L1-gated (`cb_gather`=`K*C`); C=1 byte-identical to R4; C>1 only on the
+  pure tiled resident-shard path (RM/logical keep C=1). **BLOCK 8×8: 147729→119030 ns (5.76×→
+  4.64×, 1.24×)** — the only multi-tile-row-per-group target.
+- **Lever 2 (gap-aware mcast)** — the 1/RMS broadcast mcasts in up to 2 contiguous virtual-x
+  runs (`[xlo..7]`+`[10..xhi]`) for groups straddling the Blackhole DRAM columns (x=8,9); ragged
+  groups keep unicast. **WIDTH 8×4 (K=32): 10204→8920 ns (1.94×→1.69×, 1.14×; A/B 8884 mcast vs
+  10173 unicast)**; WIDTH 7×4 confirms R6 mcast; WIDTH 8×1/9×1 flat (K=8/9 broadcast cheap either way).
+- C-sweep + A/B ablations show the **BLOCK residual is per-tile-row stat data-movement** (K
+  bloated 4KB fp32 stat tiles/tile-row, ~2.1 µs/tile-row) + the unpipelined compute floor (~47 µs),
+  NOT the broadcast — lever 1 plateaus ~4.6× and lever 2's broadcast is only ~14% of a round.
+Lever 3 (two-stage gather) not implemented. Deferred to R6b.
+
+---
+
+### [ ] Refinement 6b — Sharded cross-core: stat-tile compaction + round/compute pipelining (+ two-stage gather)
+
+**Type**: perf
+
+**Goal**: close the BLOCK-8×8 residual R6a characterized (still 4.64× above achievable after
+round-batching + gap-aware mcast) — the dominant cost is the **per-tile-row stat data-movement**,
+not the round count or the broadcast. Levers in priority order:
+
+1. **Stat-tile compaction (biggest — cuts gather+broadcast bandwidth ~32×).** The cross-core
+   stat is a REDUCE_ROW result: a 32-value fp32 column (128 bytes), but it is gathered/broadcast
+   as a full 32×32 fp32 tile (4 KB) — 32× bloat. The gather moves `K` such tiles per tile-row into
+   the master (~2.1 µs/tile-row on BLOCK 8×8, the measured floor). Transfer only the meaningful
+   column (partial-tile NoC read/write with the right stride, or repack the K partials into one
+   tile before the fold) so the gather/broadcast bytes drop ~32×.
+2. **Round/compute pipelining (hides the round under compute).** The batched loop is
+   pass-1(C) → synchronous round → pass-2(C), fully serial; the master idles during the round's
+   semaphore waits. Software-pipeline so batch b+1's pass-1 overlaps batch b's round (deeper
+   `cb_stat_local`/`cb_gather` staging). On BLOCK 8×8 the compute floor (~47 µs) and round
+   (~68 µs) are additive today (~115 µs) — overlapping would approach `max(...)`.
+3. **Two-stage gather (residual K-cost, R6a lever 3 — smallest).** For the large-K 2D WIDTH
+   groups (8×4 K=32), reduce the gather fan-in with a hierarchy (reduce along x → row-leaders,
+   then y → root) instead of K-1 workers converging on one master core.
+
+**Verifier notes**: R6a landed round-batching + gap-aware mcast and characterized the residual
+via C-sweep + mcast A/B ablations. R6b is the stat-tile-compaction / pipelining restructure
+(lever 1 headline, lever 2 next); reuse the R4/R6/R6a xcore kernels + segmented-mcast transport,
+do not fork. Gate on soft `pcc_threshold` 0.9995.
+
+**Done when**: measured median device-ns improves further on the BLOCK/WIDTH sharded perf shapes
+(fresh-cache trial loop) toward achievable, soft PCC holding, golden green, no regression.
