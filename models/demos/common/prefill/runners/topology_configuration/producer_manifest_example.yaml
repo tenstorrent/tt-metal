@@ -1,0 +1,62 @@
+# Example prefill_producer manifest (YAML). Drive it with:
+#   python -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest models/demos/common/prefill/runners/topology_configuration/producer_manifest_example.yaml
+#
+# Applied at startup via setdefault: every field below maps to a PREFILL_* env var, and any PREFILL_*
+# you export in the shell still OVERRIDES the manifest. This mirrors the glm_5_1 1-galaxy migration run
+# (2 src users [0,1] -> dst slots [2,3], 11 chunks each, single-shot migration). It targets the REAL
+# loopback flow (issue: true), so it needs a migration_endpoint up + a runner with PREFILL_ENABLE_MIGRATION
+# (e.g. pipeline_prefill_glm51_1galaxy_migrate.yaml). To test WITHOUT an endpoint / keep the runner open,
+# see producer_manifest_glm51_multiprompt.yaml + pipeline_prefill_glm51_1galaxy_mock_persistent.yaml.
+#
+# NOTE: transport (sp/tp/chunk_size/max_seq_len) and num_layers MUST match the runner this producer
+# drives (the runner's topology YAML / PREFILL_MANIFEST), or the wire layout and per-layer ack counts
+# won't line up.
+
+model:
+  variant: glm_5_1
+  num_layers: 78
+  max_seq_len: 56320
+  chunk_size: 5120
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: ds_prefill
+  connect_timeout_s: 60
+
+workload:
+  num_users: 2            # src slots [0, num_users)
+  chunks: "11"            # "N" fixed, or "min,max" random
+  max_requests: 2         # <= num_users => one resident request per slot (no recycling)
+  interleave: round_robin # "random" | "round_robin"
+  check_pcc: false        # producer-side src-vs-golden read-back (separate from runner validation)
+  trace_dir: /mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm
+  # slot_prompts: per-slot prompt (tokens + golden). Index = slot_id; a slot pushes tokens from — and is
+  # PCC'd against — its own trace, with depth derived from that prompt's real length. Overrides trace_dir
+  # + chunks for those slots. Omit for a single shared prompt on every slot (the default above).
+  # slot_prompts:
+  #   - /mnt/.../structured_traces/prompt_a   # slot 0
+  #   - /mnt/.../structured_traces/prompt_b   # slot 1
+
+migration:
+  issue: true             # attach a MigrationLayerClient and migrate resident slots
+  dest_endpoint_id: 1
+  # Slot mapping — pick ONE:
+  #   * dst_slot_offset: uniform dst_slot = src_slot + offset over all resident src slots.
+  #   * pairs:           arbitrary any-src -> any-dst list (overrides dst_slot_offset). Each `src` must be
+  #                      a resident/prefilled slot; each `dst` must fit the KV table (< num slots).
+  dst_slot_offset: 2      # dst_slot = src_slot + 2  (slots 0,1 -> 2,3)
+  # pairs:                # arbitrary mapping example (also: PREFILL_MIGRATION_PAIRS="0:3,1:2" or --migrations)
+  #   - {src: 0, dst: 3}
+  #   - {src: 1, dst: 2}
+  timeout_ms: 3600000
+  done_file: /tmp/migration_done.sentinel
+  client_dir: /data/yeongyun/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
+  cmd_queue: /mig_ep1_cmd
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+
+# Escape hatch: any raw PREFILL_* key not covered by the typed blocks above (wins over them).
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/prefill_kv_chunk_table.pb
