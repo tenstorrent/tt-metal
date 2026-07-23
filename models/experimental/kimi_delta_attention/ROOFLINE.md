@@ -372,3 +372,20 @@ The measured approximately 12.9 us standalone SiLU therefore remains part of
 the convolution boundary. Removing it requires a numerically matched KDA-local
 kernel or an independently validated math mode, not the generic Conv1d
 activation switch.
+
+
+## Fused output sigmoid-multiply
+
+Profile:
+`/tmp/kda_tp_layer_t640_fused_sigmoid_mul_r10/reports/2026_07_23_12_35_26/ops_perf_results_2026_07_23_12_35_26.csv`.
+BinaryNg applies sigmoid to the gate operand before multiplying by the
+normalized recurrence output. Against the direct-slicing control, median
+device span falls 683.463 -> 679.336 us (0.60%), active time falls
+650.942 -> 646.984 us/device, and programs fall 34 -> 33/device/layer.
+Unary time falls 25.447 -> 20.773 us while the two binary programs rise only
+29.277 -> 30.110 us.
+
+The unchanged 67.594 GFLOP executed path reaches 99.50 TFLOP/s or 8.18% of
+eight-chip peak. Conservative factorized-work throughput is 87.15 TFLOP/s or
+7.16%. The fused output collective remains approximately 147 us, so this
+launch-chain reduction does not alter the core or CCL distribution.

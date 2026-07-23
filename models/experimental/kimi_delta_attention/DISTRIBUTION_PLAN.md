@@ -202,6 +202,12 @@ Direct projected offsets for decay, gate, and beta remove one local slice
 program and reduce layer span 0.69072 -> 0.68346 ms. This is another
 launch/dataflow reduction with no ownership or core-map change.
 
+Fusing the output-gate sigmoid into its consuming multiply removes one more
+local program and reduces layer span 0.68346 -> 0.67934 ms. The approximately
+147 us fused output collective is unchanged. Retain the four-head/device,
+80-core prep, 16-core independent-reader scan, and 8x8 output/Ring
+reduce-scatter distribution.
+
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP
 already removes weight pressure without placing a collective on the recurrence

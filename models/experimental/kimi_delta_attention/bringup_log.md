@@ -708,3 +708,12 @@
 - Focused TP=8 hardware correctness rejected the hypothesis: output PCC fell to 0.884267 versus the required 0.98.
 - Restoring the standalone `ttnn.silu` restored output/recurrent/convolution PCC to 0.999952/0.999903/0.999997; `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py::test_kimi_delta_attention_tensor_parallel -q -s` ended with `SAFE_PYTEST_RESULT: PASS`.
 - No Tracy comparison was run because the fused variant failed correctness. A future fusion must preserve the standalone operation's math rather than use the generic Conv1d activation hook.
+
+
+### 2026-07-23 12:35:26 UTC — Fuse output sigmoid into multiply
+
+- Hypothesis: BinaryNg can apply sigmoid to the gate operand before multiplying by the normalized recurrence output, eliminating one serialized unary program without the unsafe `z * sigmoid(z)` intermediate in Qwen's rejected fused-SiLU path.
+- Full hardware regression passed: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 9/9 in 11.20 s. TP output/recurrent/convolution PCC was 0.999952/0.999903/0.999997.
+- Report: `/tmp/kda_tp_layer_t640_fused_sigmoid_mul_r10/reports/2026_07_23_12_35_26/ops_perf_results_2026_07_23_12_35_26.csv`; control: `/tmp/kda_tp_layer_t640_direct_aux_slices_r10/reports/2026_07_23_12_25_10/ops_perf_results_2026_07_23_12_25_10.csv`.
+- Ten replays reduced median slowest-device span 683.463 -> 679.336 us (0.60%), active time 650.942 -> 646.984 us/device, and programs 34 -> 33/device/layer. Unary time fell 25.447 -> 20.773 us while binary time rose 29.277 -> 30.110 us.
+- Executed-work throughput is 99.50 TFLOP/s or 8.18% of peak; conservative factorized-work throughput is 87.15 TFLOP/s or 7.16%. Distribution is unchanged.
