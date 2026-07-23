@@ -12,6 +12,7 @@ from typing import Literal
 import torch
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.tp_common import matmul_reduce_scatter_prefill
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.experimental.kimi_delta_attention.config import KDAConfig
 from models.experimental.kimi_delta_attention.tt.recurrence import chunk_kda_recurrence, fused_kda_recurrence
@@ -260,13 +261,28 @@ class KimiDeltaAttention:
             output = ttnn.reshape(output, (batch, config.num_heads, sequence, config.head_v_dim))
             output = ttnn.experimental.nlp_concat_heads(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.reshape(output, (batch, sequence, config.v_dim))
-        output = ttnn.linear(
-            output,
-            weights.output_projection,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_config,
+        fused_output_collective = (
+            self.tensor_parallel_size > 1 and mode == "chunk" and config.v_dim >= 8 * ttnn.TILE_SIZE
         )
-        if self.tensor_parallel_size > 1:
+        if fused_output_collective:
+            assert self.tt_ccl is not None
+            output = matmul_reduce_scatter_prefill(
+                output,
+                weights.output_projection,
+                self.tt_ccl,
+                self.compute_config,
+                ttnn.Topology.Ring,
+                self.tensor_parallel_size,
+                output.dtype,
+            )
+        else:
+            output = ttnn.linear(
+                output,
+                weights.output_projection,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
+        if self.tensor_parallel_size > 1 and not fused_output_collective:
             assert self.tt_ccl is not None
             output = ttnn.reshape(output, (batch, 1, sequence, self.global_config.hidden_size))
             output = tt_all_reduce(
