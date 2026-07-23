@@ -823,6 +823,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
+        # The chained D2D socket rendezvous finishes at staggered times per rank. Without this barrier
+        # a rank can reach the loop's first fabric-link lease while an upstream/downstream rank is still
+        # in rendezvous, deadlocking the lease handshake before any chunk flows.
+        ttnn.distributed_context_barrier()
 
     # Migration KV-chunk-table + LayerAck: single-rank only (disabled for the pipeline for now).
     ack_channel = None
