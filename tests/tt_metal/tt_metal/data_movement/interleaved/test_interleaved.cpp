@@ -2,6 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdlib>
+#include <set>
+
 #include "multi_device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -72,6 +78,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
 
     uint8_t l1_cb_index = CBIndex::c_0;
     bool sync = test_config.read_kernel == test_config.write_kernel;
+    const bool enable_phase_counters = tt::tt_metal::unit_tests::dm::phase_counters_enabled();
 
     // Compile-time arguments for kernels
     vector<uint32_t> reader_compile_args = {
@@ -81,7 +88,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
         (uint32_t)l1_cb_index,
         (uint32_t)test_config.test_id,
         (uint32_t)sync,
-        (uint32_t)test_config.default_noc};
+        (uint32_t)test_config.default_noc,
+        (uint32_t)enable_phase_counters};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_args);
 
     vector<uint32_t> writer_compile_args = {
@@ -196,6 +204,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
 
     return is_equal;
 }
+
 }  // namespace unit_tests::dm::interleaved_page
 
 /* ========== INTERLEAVED DRAM TESTS ========== */
@@ -243,8 +252,6 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageNumbers) {
 
 /* ========== Test case for varying core location; Test id = 62 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageCoreLocations) {
-    GTEST_SKIP() << "Skipping test";
-
     // Parameters
     uint32_t num_pages = 16;
     uint32_t page_size_bytes = 32 * 32 * 2;  // = tile

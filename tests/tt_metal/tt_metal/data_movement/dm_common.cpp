@@ -6,6 +6,7 @@
 #include "device_fixture.hpp"
 #include "hal_types.hpp"
 #include <tt-metalium/mesh_device.hpp>
+#include <cstdlib>
 #include <tuple>
 #include <distributed/mesh_device_impl.hpp>
 
@@ -56,6 +57,24 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(
     uint32_t max_transmittable_pages = max_transmittable_bytes / bytes_per_page;
 
     return {bytes_per_page, static_cast<uint32_t>(max_transmittable_bytes), max_transmittable_pages};
+}
+
+bool phase_counters_enabled() {
+    const char* v = std::getenv("TT_DM_PHASE_COUNTERS");
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
+}
+
+uint32_t env_uint(const char* name, uint32_t default_value) {
+    const char* v = std::getenv(name);
+    if (v == nullptr || v[0] == '\0') {
+        return default_value;
+    }
+    char* end = nullptr;
+    unsigned long parsed = std::strtoul(v, &end, 10);
+    if (end == v) {
+        return default_value;
+    }
+    return static_cast<uint32_t>(parsed);
 }
 
 }  // namespace tt::tt_metal::unit_tests::dm

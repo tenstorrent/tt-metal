@@ -58,6 +58,20 @@ class TestMetadataLoader:
 
         return result
 
+    def get_output_subdir(self, test_id) -> str:
+        """Return the nested 'group/subgroup' output subdir for a test's plots/CSVs.
+
+        Reads the optional ``group`` and ``subgroup`` fields from test_information.yaml.
+        Returns "" when the test is untagged, so callers fall back to the flat layout.
+        """
+        test_info = self.load_test_information()
+        test_data = test_info.get("tests", {}).get(test_id, {})
+        group = test_data.get("group")
+        if not group:
+            return ""
+        subgroup = test_data.get("subgroup")
+        return os.path.join(str(group), str(subgroup)) if subgroup else str(group)
+
     @staticmethod
     def metadata_field_to_column_name(field_name: str) -> str:
         """

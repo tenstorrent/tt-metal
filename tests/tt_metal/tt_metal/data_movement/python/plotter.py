@@ -172,8 +172,11 @@ class Plotter:
             # Add comments section to the figure below the plots
             self.add_comment_section(fig, gridspec, test_id)
 
-            # Save the plot for this test id
-            output_file = os.path.join(self.output_dir, f"{test_name}.png")
+            # Save the plot for this test id, nesting into group/subgroup when tagged.
+            subdir = self.metadata_loader.get_output_subdir(test_id) if self.metadata_loader else ""
+            test_output_dir = os.path.join(self.output_dir, subdir) if subdir else self.output_dir
+            os.makedirs(test_output_dir, exist_ok=True)
+            output_file = os.path.join(test_output_dir, f"{test_name}.png")
             plt.savefig(output_file)
             plt.close(fig)
             logger.info(f"dm_stats plot for test id {test_id} saved at {output_file}")

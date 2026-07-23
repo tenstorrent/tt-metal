@@ -319,4 +319,77 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMPacketSizes2_0) {
     );
 }
 
+namespace unit_tests::dm::dram {
+
+// L2-knee sweep: focused (Q, N) grid that crosses NOC_MAX_BURST_SIZE (16 KB)
+// and the predicted single-rate / pipelined knee around 32 KB. All Q reads
+// share a single barrier (L2 batch). N is in pages of `bytes_per_page`
+// (64 B flit on Blackhole, 32 B on Wormhole).
+inline void packet_sizes_l2_knee_test(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t test_case_id,
+    CoreCoord core_coord = {0, 0},
+    uint32_t dram_channel = 0,
+    bool use_2_0_api = false) {
+    auto [bytes_per_page, max_reservable_bytes, _max_reservable_pages] =
+        unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    // Queue depths that span the L2 amortization regime.
+    const std::vector<uint32_t> q_grid = {1, 2, 4, 8, 16, 64, 256};
+
+    // Pages-per-transaction grid covering 16 KB ... 256 KB on BH (page=64B):
+    //   16K, 24K, 32K, 48K, 64K, 96K, 128K, 192K, 256K
+    // On WH (page=32B) the same grid maps to 8K ... 128 KB, which still
+    // crosses NOC_MAX_BURST_SIZE (8 KB on WH) and the knee.
+    const std::vector<uint32_t> pages_grid = {256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096};
+
+    for (uint32_t num_of_transactions : q_grid) {
+        for (uint32_t pages_per_transaction : pages_grid) {
+            // Per-read L1 footprint (kernel reuses the same L1 buffer every read).
+            // Multiply by 2 to leave room for the writer's separate output region.
+            const uint64_t bytes_per_read = static_cast<uint64_t>(pages_per_transaction) * bytes_per_page;
+            if (bytes_per_read * 2 >= max_reservable_bytes) {
+                continue;
+            }
+
+            unit_tests::dm::dram::DramConfig test_config = {
+                .test_id = test_case_id,
+                .num_of_transactions = num_of_transactions,
+                .pages_per_transaction = pages_per_transaction,
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+                .core_coord = core_coord,
+                .dram_channel = dram_channel,
+                .virtual_channel = 0,
+                .use_2_0_api = use_2_0_api};
+
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
+}  // namespace unit_tests::dm::dram
+
+/* ========== Test case for L2 model validation across the knee; Test id = 41 ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMPacketSizesL2Knee) {
+    unit_tests::dm::dram::packet_sizes_l2_knee_test(
+        get_mesh_device(),
+        41,      // Test case ID
+        {0, 0},  // Core coordinates (default)
+        0,       // DRAM channel (default)
+        false    // Use 1.0 API
+    );
+}
+
+/* ========== Test case for L2 model validation across the knee with 2.0 API; Test id = 42 ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMPacketSizesL2Knee2_0) {
+    unit_tests::dm::dram::packet_sizes_l2_knee_test(
+        get_mesh_device(),
+        42,      // Test case ID
+        {0, 0},  // Core coordinates (default)
+        0,       // DRAM channel (default)
+        true     // Use 2.0 API
+    );
+}
+
 }  // namespace tt::tt_metal

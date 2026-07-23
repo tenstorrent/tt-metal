@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include "multi_device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -41,6 +42,14 @@ struct AllFromAllConfig {
     NOC noc_id = NOC::NOC_1;
     uint32_t num_virtual_channels = 1;
     bool use_2_0_api = false;
+
+    /* Throttled-injection-rate knobs (test-90 style; used only by the id-320 sweep).
+       All 0 => the requestor kernel compiles its original path (configs 310-319 unchanged). */
+    uint32_t stall_cycles = 0;     // open-loop per-issue delay (NoC cycles)
+    uint32_t max_outstanding = 0;  // closed-loop window W (max reads in flight); 0 = sweep off
+    uint32_t latency_probe = 0;    // W=1 explicit round-trip timing for the L0 floor
+    uint32_t src_slots = 1;        // distinct source offsets exposed per subordinate
+    uint32_t dst_slots = 1;        // distinct destination offsets a master fans reads across
 
     // TODO: Add the following parameters
     //  1. Virtual Channel (only useful for unicast)
@@ -128,6 +137,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFro
         (uint32_t)num_subordinates,
         //     6: Virtual channels
         (uint32_t)test_config.num_virtual_channels,
+        // 7 - 11: Throttled-injection-sweep knobs (0 for configs 310-319 -> original kernel path)
+        (uint32_t)test_config.stall_cycles,
+        (uint32_t)test_config.max_outstanding,
+        (uint32_t)test_config.latency_probe,
+        (uint32_t)test_config.src_slots,
+        (uint32_t)test_config.dst_slots,
     };
 
     std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/all_from_all/kernels/";
@@ -204,6 +219,125 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFro
     }
 
     return is_equal;
+}
+
+/// @brief Throttled-injection-rate variant of run_dm for the fixed-full-grid bisection sweep
+/// (test 90 methodology -> test id 320). Differs from run_dm in exactly the ways test 90 differs
+/// from the single-shot reads:
+///   * a cross-core barrier aligns the start of the timed RISCV zone across all masters so the
+///     wall-clock makespan reflects genuinely concurrent injection (not dispatch skew),
+///   * each master reads from a DISTINCT source offset on every subordinate and fans its reads
+///     across DISTINCT destination offsets -- removing the shared-address serialization that
+///     pinned the existing configs at ~2 B/cyc per core,
+///   * the requestor kernel paces itself with the closed-loop outstanding window W.
+/// Read-only perf characterization: no golden comparison (data is intentionally striped/aliased).
+bool run_injection_sweep_dm(
+    const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFromAllConfig& test_config) {
+    IDevice* device = mesh_device->impl().get_device(0);
+    Program program = CreateProgram();
+
+    CoreCoord mst_logical_start_coord = test_config.mst_logical_start_coord;
+    CoreCoord mst_logical_end_coord = CoreCoord(
+        mst_logical_start_coord.x + test_config.mst_grid_size.x - 1,
+        mst_logical_start_coord.y + test_config.mst_grid_size.y - 1);
+    CoreRangeSet mst_logical_core_set({CoreRange(mst_logical_start_coord, mst_logical_end_coord)});
+
+    CoreCoord sub_logical_start_coord = test_config.sub_logical_start_coord;
+    CoreCoord sub_logical_end_coord = CoreCoord(
+        sub_logical_start_coord.x + test_config.sub_grid_size.x - 1,
+        sub_logical_start_coord.y + test_config.sub_grid_size.y - 1);
+    CoreRangeSet sub_logical_core_set({CoreRange(sub_logical_start_coord, sub_logical_end_coord)});
+    uint32_t num_subordinates = sub_logical_core_set.num_cores();
+
+    vector<uint32_t> sub_worker_coordinates = {};
+    for (auto& sub_logical_core : corerange_to_cores(sub_logical_core_set)) {
+        CoreCoord sub_worker_core = device->worker_core_from_logical_core(sub_logical_core);
+        sub_worker_coordinates.push_back(sub_worker_core.x);
+        sub_worker_coordinates.push_back(sub_worker_core.y);
+    }
+
+    const uint32_t bytes_per_transaction = test_config.pages_reservable_per_transaction * test_config.bytes_per_page;
+    auto core_list = corerange_to_cores(mst_logical_core_set);
+    const uint32_t num_cores = mst_logical_core_set.num_cores();
+
+    // L1 layout per core (each core is both a subordinate source and a master sink):
+    //   [base, base + src_slots*N)                    <- source region (read FROM by masters)
+    //   [base + src_slots*N, + dst_slots*N)           <- destination region (read INTO)
+    //   [.. + 16)                                      <- barrier scratch
+    // src_slots is capped so the whole layout fits usable L1; each master i reads slot i%src_slots.
+    L1AddressInfo l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, {0, 0});
+    const uint32_t l1_base = l1_info.base_address;
+    const uint32_t usable = (uint32_t)l1_info.size;
+    constexpr uint32_t barrier_scratch_bytes = 16;
+    const uint32_t dst_slots = std::max<uint32_t>(1, test_config.dst_slots);
+    uint32_t src_slots = 1;
+    if (bytes_per_transaction > 0) {
+        uint32_t affordable =
+            (usable > (dst_slots * bytes_per_transaction + barrier_scratch_bytes))
+                ? (usable - dst_slots * bytes_per_transaction - barrier_scratch_bytes) / bytes_per_transaction
+                : 1;
+        src_slots = std::max<uint32_t>(1, std::min<uint32_t>(num_cores, affordable));
+    }
+    const uint32_t sub_l1_base_address = l1_base;
+    const uint32_t mst_l1_base_address = l1_base + src_slots * bytes_per_transaction;
+    const uint32_t local_barrier_addr = mst_l1_base_address + dst_slots * bytes_per_transaction;
+    TT_FATAL(
+        local_barrier_addr + barrier_scratch_bytes <= l1_base + usable,
+        "all_from_all sweep L1 layout ({} B) exceeds usable L1 ({} B) at N={}",
+        local_barrier_addr + barrier_scratch_bytes - l1_base,
+        usable,
+        bytes_per_transaction);
+
+    vector<uint32_t> requestor_compile_args = {
+        (uint32_t)test_config.test_id,
+        (uint32_t)mst_l1_base_address,
+        (uint32_t)sub_l1_base_address,
+        (uint32_t)test_config.num_of_transactions_per_subordinate,
+        (uint32_t)bytes_per_transaction,
+        (uint32_t)num_subordinates,
+        (uint32_t)test_config.num_virtual_channels,
+        (uint32_t)test_config.stall_cycles,
+        (uint32_t)test_config.max_outstanding,
+        (uint32_t)test_config.latency_probe,
+        (uint32_t)src_slots,
+        (uint32_t)dst_slots,
+    };
+
+    uint32_t barrier_sem_id = CreateSemaphore(program, mst_logical_core_set, 0);
+    CoreCoord coordinator_phys = device->worker_core_from_logical_core(core_list[0]);
+
+    auto requestor_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/data_movement/all_from_all/kernels/requestor.cpp",
+        mst_logical_core_set,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = test_config.noc_id,
+            .compile_args = requestor_compile_args});
+
+    for (uint32_t i = 0; i < num_cores; i++) {
+        vector<uint32_t> runtime_args = sub_worker_coordinates;  // [0 .. 2*num_sub)
+        runtime_args.push_back(barrier_sem_id);
+        runtime_args.push_back((uint32_t)coordinator_phys.x);
+        runtime_args.push_back((uint32_t)coordinator_phys.y);
+        runtime_args.push_back(num_cores);
+        runtime_args.push_back(local_barrier_addr);
+        runtime_args.push_back(i);  // master_index
+        SetRuntimeArgs(program, requestor_kernel, core_list[i], runtime_args);
+    }
+
+    log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+
+    auto mesh_workload = distributed::MeshWorkload();
+    vector<uint32_t> coord_data = {0, 0};
+    auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
+    mesh_workload.add_program(target_devices, std::move(program));
+
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
+    Finish(cq);
+    return true;
 }
 
 void directed_ideal_test(
@@ -568,6 +702,84 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes2_0) {
 
     unit_tests::dm::all_from_all::packet_sizes_test(
         mesh_device, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size, true);
+}
+
+/* ======== THROTTLED INJECTION SWEEP (bisection probe, reads) ======== */
+// Fixed full 11x10 grid; sweep the per-core closed-loop outstanding window W (and a W=1 stall
+// ladder for the L0 floor) at N in {4 KB, 16 KB}. Mirrors test 90's methodology so that
+// throttled_injection_analysis.py -i 320 -r riscv_1 works unchanged. Goal: raise offered load
+// off the credit-limited ~2 B/cyc floor toward the NoC bisection prediction (~2920 B/cyc, one NoC).
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllThrottledInjectionSweep) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+    auto grid_size = device->compute_with_storage_grid_size();
+    log_info(tt::LogTest, "AllFromAll injection sweep grid size x: {}, y: {}", grid_size.x, grid_size.y);
+
+    auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
+        unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord sub_start_coord = {0, 0};
+    CoreCoord full_grid = {grid_size.x, grid_size.y};
+
+    constexpr uint32_t test_case_id = 320;
+    // Q = num_of_transactions_per_subordinate * num_subordinates reads/core. With 110 subs and
+    // 4 transactions, Q = 440 -> W up to 256 is still window-limited (steady state established).
+    constexpr uint32_t num_of_transactions_per_subordinate = 4;
+    const std::vector<uint32_t> page_sizes = {4096, 16384};
+    const std::vector<uint32_t> window_grid = {1, 2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 64, 128, 256};
+    const std::vector<uint32_t> probe_stall_grid = {0, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
+
+    (void)max_reservable_bytes;
+    for (uint32_t page_size_bytes : page_sizes) {
+        uint32_t pages_per_transaction = page_size_bytes / bytes_per_page;
+        if (pages_per_transaction > max_reservable_pages) {
+            log_info(tt::LogTest, "AllFromAll injection sweep: skipping N={} (exceeds L1)", page_size_bytes);
+            continue;
+        }
+        log_info(
+            tt::LogTest, "AllFromAll injection sweep: N = {} B ({} pages)", page_size_bytes, pages_per_transaction);
+
+        for (uint32_t window : window_grid) {
+            unit_tests::dm::all_from_all::AllFromAllConfig test_config = {
+                .test_id = test_case_id,
+                .mst_logical_start_coord = mst_start_coord,
+                .sub_logical_start_coord = sub_start_coord,
+                .mst_grid_size = full_grid,
+                .sub_grid_size = full_grid,
+                .num_of_transactions_per_subordinate = num_of_transactions_per_subordinate,
+                .pages_reservable_per_transaction = pages_per_transaction,
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+                .noc_id = NOC::NOC_1,
+                .stall_cycles = 0,
+                .max_outstanding = window,
+                .latency_probe = 0,
+                .dst_slots = 8,
+            };
+            EXPECT_TRUE(unit_tests::dm::all_from_all::run_injection_sweep_dm(mesh_device, test_config));
+        }
+
+        for (uint32_t stall : probe_stall_grid) {
+            unit_tests::dm::all_from_all::AllFromAllConfig probe_config = {
+                .test_id = test_case_id,
+                .mst_logical_start_coord = mst_start_coord,
+                .sub_logical_start_coord = sub_start_coord,
+                .mst_grid_size = full_grid,
+                .sub_grid_size = full_grid,
+                .num_of_transactions_per_subordinate = num_of_transactions_per_subordinate,
+                .pages_reservable_per_transaction = pages_per_transaction,
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+                .noc_id = NOC::NOC_1,
+                .stall_cycles = stall,
+                .max_outstanding = 1,
+                .latency_probe = 1,
+                .dst_slots = 8,
+            };
+            EXPECT_TRUE(unit_tests::dm::all_from_all::run_injection_sweep_dm(mesh_device, probe_config));
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

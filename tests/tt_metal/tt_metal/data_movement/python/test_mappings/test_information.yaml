@@ -8,6 +8,13 @@
 # - name: Human-readable test name
 # - comment: (optional) Additional notes about test behavior and performance
 #
+# Output organization (optional):
+#   - group: Test suite subdir under data/<arch>/ (e.g. "interleaved", "multi_interleaved").
+#   - subgroup: Per-test-case subdir under the group (e.g. "read_directed_ideal", "read_grid_sweep").
+#   Plots (plotter.py), CSVs (stats_reporter.py) and heatmaps (heatmap.py /
+#   core_locations_heatmap.py) are written to data/<arch>/<group>/<subgroup>/. When
+#   group is absent the output falls back to the flat data/<arch>/ layout.
+#
 # Required fields for packet sizes tests:
 #   - memory_type: Memory type being accessed
 #       Values: "l1" | "dram"
@@ -220,6 +227,29 @@ tests:
   40:
     name: "DRAM Packet Sizes 2.0"
 
+  41:
+    name: "DRAM Packet Sizes L2 Knee"
+    memory_type: "dram"
+    mechanism: "unicast"
+    pattern: "one_to_one"
+    comment: |
+      Focused L2-model sweep: Q in {1, 2, 4, 8, 16, 64, 256} crossed with
+      N in {16K, 24K, 32K, 48K, 64K, 96K, 128K, 192K, 256K} bytes (BH).
+      Each test issues Q noc_async_reads of size N to a single DRAM channel/address
+      followed by one barrier (L2 batch). Crosses NOC_MAX_BURST_SIZE (16 KB) and
+      the predicted single-rate / pipelined knee around 32 KB so the receiver
+      curve discriminates between "all 2.8 cyc/flit" and "intra-read pipelined"
+      L2 models for N > 32 KB.
+
+  42:
+    name: "DRAM Packet Sizes L2 Knee 2.0"
+    memory_type: "dram"
+    mechanism: "unicast"
+    pattern: "one_to_one"
+    comment: |
+      Device 2.0 API mirror of "DRAM Packet Sizes L2 Knee" (test id 41).
+      Same (Q, N) grid; uses the 2.0 reader/writer kernels.
+
   50:
     name: "One to One Directed Ideal"
 
@@ -243,45 +273,73 @@ tests:
 
   61:
     name: "DRAM Interleaved Page Numbers"
+    group: "interleaved"
+    subgroup: "dram_page_numbers"
 
   62:
     name: "DRAM Interleaved Page Core Locations"
+    group: "interleaved"
+    subgroup: "dram_core_locations"
 
   63:
     name: "DRAM Interleaved Page Read Numbers"
+    group: "interleaved"
+    subgroup: "dram_read_numbers"
 
   64:
     name: "DRAM Interleaved Page Write Numbers"
+    group: "interleaved"
+    subgroup: "dram_write_numbers"
 
   65:
     name: "DRAM Interleaved Page Directed Ideal"
+    group: "interleaved"
+    subgroup: "dram_directed_ideal"
 
   66:
     name: "L1 Interleaved Page Numbers"
+    group: "interleaved"
+    subgroup: "l1_page_numbers"
 
   67:
     name: "L1 Interleaved Page Core Locations"
+    group: "interleaved"
+    subgroup: "l1_core_locations"
 
   68:
     name: "L1 Interleaved Page Read Numbers"
+    group: "interleaved"
+    subgroup: "l1_read_numbers"
 
   69:
     name: "L1 Interleaved Page Write Numbers"
+    group: "interleaved"
+    subgroup: "l1_write_numbers"
 
   71:
     name: "L1 Interleaved Page Directed Ideal"
+    group: "interleaved"
+    subgroup: "l1_directed_ideal"
 
   72:
     name: "DRAM Interleaved Page Read Noc Swap"
+    group: "interleaved"
+    subgroup: "dram_read_noc_swap"
 
   73:
     name: "DRAM Interleaved Page Write Noc Swap"
+    group: "interleaved"
+    subgroup: "dram_write_noc_swap"
 
   74:
     name: "L1 Interleaved Page Read Noc Swap"
+    group: "interleaved"
+    subgroup: "l1_read_noc_swap"
 
   75:
     name: "L1 Interleaved Page Write Noc Swap"
+    group: "interleaved"
+    subgroup: "l1_write_noc_swap"
 
   80:
     name: "One Packet Read Sizes"
@@ -318,18 +376,26 @@ tests:
 
   110:
     name: "Multi Interleaved Directed Ideal"
+    group: "multi_interleaved"
+    subgroup: "directed_ideal"
     bandwidth_mode: "combined"
 
   111:
     name: "Multi Interleaved Sizes"
+    group: "multi_interleaved"
+    subgroup: "sizes"
     bandwidth_mode: "combined"
 
   112:
     name: "Multi Interleaved Read Directed Ideal"
+    group: "multi_interleaved"
+    subgroup: "read_directed_ideal"
     bandwidth_mode: "combined"
 
   113:
     name: "Multi Interleaved Read Sizes"
+    group: "multi_interleaved"
+    subgroup: "read_sizes"
     memory_type: "dram"
     mechanism: "unicast"
     pattern: "one_from_one"
@@ -337,59 +403,110 @@ tests:
 
   114:
     name: "Multi Interleaved Write Directed Ideal"
+    group: "multi_interleaved"
+    subgroup: "write_directed_ideal"
     bandwidth_mode: "combined"
 
   115:
     name: "Multi Interleaved Write Sizes"
+    group: "multi_interleaved"
+    subgroup: "write_sizes"
     bandwidth_mode: "combined"
 
   116:
     name: "Multi Interleaved 2x2 Directed Ideal"
+    group: "multi_interleaved"
+    subgroup: "2x2_directed_ideal"
     bandwidth_mode: "combined"
 
   117:
     name: "Multi Interleaved 2x2 Sizes"
+    group: "multi_interleaved"
+    subgroup: "2x2_sizes"
     bandwidth_mode: "combined"
 
   118:
     name: "Multi Interleaved 2x2 Read Directed Ideal"
+    group: "multi_interleaved"
+    subgroup: "2x2_read_directed_ideal"
     bandwidth_mode: "combined"
 
   119:
     name: "Multi Interleaved 2x2 Read Sizes"
+    group: "multi_interleaved"
+    subgroup: "2x2_read_sizes"
     bandwidth_mode: "combined"
 
   120:
     name: "Multi Interleaved 2x2 Write Directed Ideal"
+    group: "multi_interleaved"
+    subgroup: "2x2_write_directed_ideal"
     bandwidth_mode: "combined"
 
   121:
     name: "Multi Interleaved 2x2 Write Sizes"
+    group: "multi_interleaved"
+    subgroup: "2x2_write_sizes"
     bandwidth_mode: "combined"
 
   122:
     name: "Multi Interleaved 6x6 Directed Ideal"
+    group: "multi_interleaved"
+    subgroup: "6x6_directed_ideal"
     bandwidth_mode: "combined"
 
   123:
     name: "Multi Interleaved 6x6 Sizes"
+    group: "multi_interleaved"
+    subgroup: "6x6_sizes"
     bandwidth_mode: "combined"
 
   124:
     name: "Multi Interleaved 6x6 Read Directed Ideal"
+    group: "multi_interleaved"
+    subgroup: "6x6_read_directed_ideal"
     bandwidth_mode: "combined"
 
   125:
     name: "Multi Interleaved 6x6 Read Sizes"
+    group: "multi_interleaved"
+    subgroup: "6x6_read_sizes"
     bandwidth_mode: "combined"
 
   126:
     name: "Multi Interleaved 6x6 Write Directed Ideal"
+    group: "multi_interleaved"
+    subgroup: "6x6_write_directed_ideal"
     bandwidth_mode: "combined"
 
   127:
     name: "Multi Interleaved 6x6 Write Sizes"
+    group: "multi_interleaved"
+    subgroup: "6x6_write_sizes"
     bandwidth_mode: "combined"
+
+  128:
+    name: "Multi Interleaved 6x6 Read Sizes NOC1"
+    group: "multi_interleaved"
+    subgroup: "6x6_read_sizes_noc1"
+    bandwidth_mode: "combined"
+
+  129:
+    name: "Multi Interleaved Read Grid Sweep"
+    group: "multi_interleaved"
+    subgroup: "read_grid_sweep"
+    memory_type: "dram"
+    mechanism: "interleaved"
+    pattern: "one_from_all"
+    bandwidth_mode: "combined"
+    comment: |
+      Read-only packet-size sweep over a runtime-configurable core block. The block
+      geometry is set by env vars TT_DM_GRID_COLS (cores along x) and TT_DM_GRID_ROWS
+      (cores along y), each defaulting to and clamped by the harvested compute grid, so
+      one build covers row (COLS=k, ROWS=1), column (COLS=1, ROWS=k), and NxN block
+      (COLS=ROWS=k) topologies. Same (Q, N) sweep and NOC0/RISCV0 methodology as the
+      other Multi Interleaved read tests. Set TT_DM_PHASE_COUNTERS=1 to compile in the
+      t0..t3 read-phase counters.
 
   140:
     name: "Core Bidirectional Directed Ideal Same Kernel"

@@ -75,7 +75,11 @@ class StatsReporter:
                 else f"Test ID {test_id}"
             )
 
-            csv_file = os.path.join(self.output_dir, f"{test_name}.csv")
+            # Nest into group/subgroup when the test is tagged; flat fallback otherwise.
+            subdir = self.metadata_loader.get_output_subdir(test_id) if self.metadata_loader else ""
+            test_output_dir = os.path.join(self.output_dir, subdir) if subdir else self.output_dir
+            os.makedirs(test_output_dir, exist_ok=True)
+            csv_file = os.path.join(test_output_dir, f"{test_name}.csv")
             with open(csv_file, mode="w", newline="") as csvfile:
                 writer = csv.writer(csvfile)
 

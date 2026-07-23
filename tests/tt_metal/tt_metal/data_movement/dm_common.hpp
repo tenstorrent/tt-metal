@@ -37,6 +37,16 @@ DramAddressInfo get_dram_address_and_size();
 std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device);
 
+// Host-side test knobs read from environment variables.
+// TT_DM_PHASE_COUNTERS enables the device-side t0..t3 phase-counter instrumentation
+// (forwarded to the kernels as a compile-time arg and compiled out when disabled).
+// Any non-empty value other than "0" enables it. Default: disabled (clean timing).
+bool phase_counters_enabled();
+
+// Generic unsigned env-var reader; returns default_value when the variable is unset,
+// empty, or not parseable as a base-10 unsigned integer.
+uint32_t env_uint(const char* name, uint32_t default_value);
+
 }  // namespace tt::tt_metal::unit_tests::dm
 
 #endif  // DM_COMMON_HPP

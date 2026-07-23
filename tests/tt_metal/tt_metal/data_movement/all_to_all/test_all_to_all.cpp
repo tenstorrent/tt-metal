@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include "multi_device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -41,6 +42,13 @@ struct AllToAllConfig {
     NOC noc_id = NOC::NOC_0;
     uint32_t num_virtual_channels = 1;  // Number of virtual channels to cycle through
     bool use_2_0_api = false;
+
+    /* Throttled-injection-rate knobs (test-90 style; used only by the id-321 sweep).
+       All 0 => the sender kernel compiles its original path (configs 300-309 unchanged). */
+    uint32_t stall_cycles = 0;     // open-loop per-issue delay (NoC cycles)
+    uint32_t max_outstanding = 0;  // closed-loop window W (max writes in flight); 0 = sweep off
+    uint32_t latency_probe = 0;    // W=1 explicit ack round-trip timing for the L0 floor
+    uint32_t recv_slots = 1;       // distinct receiver offsets exposed per subordinate
 
     // TODO: Add the following parameters
     //  1. Posted flag (posted multicast has much better performance at larger grid sizes, than non-posted due to
@@ -136,6 +144,11 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllToA
         (uint32_t)num_subordinates,  // num_subordinates
         //     6: Virtual channels
         (uint32_t)test_config.num_virtual_channels,  // num_virtual_channels
+        // 7 - 10: Throttled-injection-sweep knobs (0 for configs 300-309 -> original kernel path)
+        (uint32_t)test_config.stall_cycles,
+        (uint32_t)test_config.max_outstanding,
+        (uint32_t)test_config.latency_probe,
+        (uint32_t)test_config.recv_slots,
     };
 
     // Create kernels
@@ -215,6 +228,116 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllToA
     }
 
     return is_equal;
+}
+
+/// @brief Throttled-injection-rate variant of run_dm for the fixed-full-grid bisection sweep
+/// (test 90 methodology -> test id 321), writes edition. Adds a cross-core start barrier, a
+/// per-master distinct receiver offset (removing the shared-address serialization that pinned the
+/// existing configs at ~3.5 B/cyc per master), and the closed-loop outstanding window W paced to
+/// the HW write-ack counter (NIU_MST_WR_ACK_RECEIVED). Perf characterization: no golden comparison.
+bool run_injection_sweep_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllToAllConfig& test_config) {
+    IDevice* device = mesh_device->impl().get_device(0);
+    Program program = CreateProgram();
+
+    CoreCoord mst_logical_start_coord = test_config.mst_logical_start_coord;
+    CoreCoord mst_logical_end_coord = CoreCoord(
+        mst_logical_start_coord.x + test_config.mst_grid_size.x - 1,
+        mst_logical_start_coord.y + test_config.mst_grid_size.y - 1);
+    CoreRangeSet mst_logical_core_set({CoreRange(mst_logical_start_coord, mst_logical_end_coord)});
+
+    CoreCoord sub_logical_start_coord = test_config.sub_logical_start_coord;
+    CoreCoord sub_logical_end_coord = CoreCoord(
+        sub_logical_start_coord.x + test_config.sub_grid_size.x - 1,
+        sub_logical_start_coord.y + test_config.sub_grid_size.y - 1);
+    CoreRangeSet sub_logical_core_set({CoreRange(sub_logical_start_coord, sub_logical_end_coord)});
+    uint32_t num_subordinates = sub_logical_core_set.num_cores();
+
+    vector<uint32_t> sub_worker_coordinates = {};
+    for (auto& sub_logical_core : corerange_to_cores(sub_logical_core_set)) {
+        CoreCoord sub_worker_core = device->worker_core_from_logical_core(sub_logical_core);
+        sub_worker_coordinates.push_back(sub_worker_core.x);
+        sub_worker_coordinates.push_back(sub_worker_core.y);
+    }
+
+    const uint32_t bytes_per_transaction = test_config.pages_reservable_per_transaction * test_config.bytes_per_page;
+    auto core_list = corerange_to_cores(mst_logical_core_set);
+    const uint32_t num_cores = mst_logical_core_set.num_cores();
+
+    // L1 layout per core (each core is both a master source and a subordinate sink):
+    //   [base, base + N)                       <- master source region (data it sends)
+    //   [base + N, + recv_slots*N)             <- subordinate receive region (written INTO)
+    //   [.. + 16)                              <- barrier scratch
+    // recv_slots is capped so the layout fits usable L1; master i writes to slot i%recv_slots.
+    L1AddressInfo l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, {0, 0});
+    const uint32_t l1_base = l1_info.base_address;
+    const uint32_t usable = (uint32_t)l1_info.size;
+    constexpr uint32_t barrier_scratch_bytes = 16;
+    const uint32_t mst_l1_base_address = l1_base;
+    const uint32_t sub_l1_base_address = l1_base + bytes_per_transaction;
+    uint32_t recv_slots = 1;
+    if (bytes_per_transaction > 0) {
+        uint32_t affordable = (usable > (bytes_per_transaction + barrier_scratch_bytes))
+                                  ? (usable - bytes_per_transaction - barrier_scratch_bytes) / bytes_per_transaction
+                                  : 1;
+        recv_slots = std::max<uint32_t>(1, std::min<uint32_t>(num_cores, affordable));
+    }
+    const uint32_t local_barrier_addr = sub_l1_base_address + recv_slots * bytes_per_transaction;
+    TT_FATAL(
+        local_barrier_addr + barrier_scratch_bytes <= l1_base + usable,
+        "all_to_all sweep L1 layout ({} B) exceeds usable L1 ({} B) at N={}",
+        local_barrier_addr + barrier_scratch_bytes - l1_base,
+        usable,
+        bytes_per_transaction);
+
+    vector<uint32_t> sender_compile_args = {
+        (uint32_t)test_config.test_id,
+        (uint32_t)mst_l1_base_address,
+        (uint32_t)sub_l1_base_address,
+        (uint32_t)test_config.num_of_transactions_per_master,
+        (uint32_t)bytes_per_transaction,
+        (uint32_t)num_subordinates,
+        (uint32_t)test_config.num_virtual_channels,
+        (uint32_t)test_config.stall_cycles,
+        (uint32_t)test_config.max_outstanding,
+        (uint32_t)test_config.latency_probe,
+        (uint32_t)recv_slots,
+    };
+
+    uint32_t barrier_sem_id = CreateSemaphore(program, mst_logical_core_set, 0);
+    CoreCoord coordinator_phys = device->worker_core_from_logical_core(core_list[0]);
+
+    auto sender_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/data_movement/all_to_all/kernels/sender.cpp",
+        mst_logical_core_set,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = test_config.noc_id,
+            .compile_args = sender_compile_args});
+
+    for (uint32_t i = 0; i < num_cores; i++) {
+        vector<uint32_t> runtime_args = sub_worker_coordinates;  // [0 .. 2*num_sub)
+        runtime_args.push_back(barrier_sem_id);
+        runtime_args.push_back((uint32_t)coordinator_phys.x);
+        runtime_args.push_back((uint32_t)coordinator_phys.y);
+        runtime_args.push_back(num_cores);
+        runtime_args.push_back(local_barrier_addr);
+        runtime_args.push_back(i);  // master_index
+        SetRuntimeArgs(program, sender_kernel, core_list[i], runtime_args);
+    }
+
+    log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+
+    auto mesh_workload = distributed::MeshWorkload();
+    vector<uint32_t> coord_data = {0, 0};
+    auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
+    mesh_workload.add_program(target_devices, std::move(program));
+
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
+    Finish(cq);
+    return true;
 }
 
 void directed_ideal_test(
@@ -566,6 +689,79 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllPacketSizes2_0) {
 
     unit_tests::dm::all_to_all::packet_sizes_test(
         mesh_device, test_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size, true);
+}
+
+/* ======== THROTTLED INJECTION SWEEP (bisection probe, writes) ======== */
+// Fixed full 11x10 grid; sweep the per-core closed-loop outstanding window W (and a W=1 stall
+// ladder for the L0 floor) at N in {4 KB, 16 KB}. Mirrors test 90 so that
+// throttled_injection_analysis.py -i 321 -r riscv_0 works unchanged. Goal: raise offered load off
+// the credit-limited ~3.5 B/cyc floor toward the NoC bisection prediction (~2920 B/cyc, one NoC).
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllThrottledInjectionSweep) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+    auto grid_size = device->compute_with_storage_grid_size();
+    log_info(tt::LogTest, "AllToAll injection sweep grid size x: {}, y: {}", grid_size.x, grid_size.y);
+
+    auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
+        unit_tests::dm::compute_physical_constraints(mesh_device);
+    (void)max_reservable_bytes;
+
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord sub_start_coord = {0, 0};
+    CoreCoord full_grid = {grid_size.x, grid_size.y};
+
+    constexpr uint32_t test_case_id = 321;
+    constexpr uint32_t num_of_transactions_per_master = 4;  // Q = 4*110 = 440 writes/core
+    const std::vector<uint32_t> page_sizes = {4096, 16384};
+    const std::vector<uint32_t> window_grid = {1, 2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 64, 128, 256};
+    const std::vector<uint32_t> probe_stall_grid = {0, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
+
+    for (uint32_t page_size_bytes : page_sizes) {
+        uint32_t pages_per_transaction = page_size_bytes / bytes_per_page;
+        if (pages_per_transaction > max_reservable_pages) {
+            log_info(tt::LogTest, "AllToAll injection sweep: skipping N={} (exceeds L1)", page_size_bytes);
+            continue;
+        }
+        log_info(tt::LogTest, "AllToAll injection sweep: N = {} B ({} pages)", page_size_bytes, pages_per_transaction);
+
+        for (uint32_t window : window_grid) {
+            unit_tests::dm::all_to_all::AllToAllConfig test_config = {
+                .test_id = test_case_id,
+                .mst_logical_start_coord = mst_start_coord,
+                .sub_logical_start_coord = sub_start_coord,
+                .mst_grid_size = full_grid,
+                .sub_grid_size = full_grid,
+                .num_of_transactions_per_master = num_of_transactions_per_master,
+                .pages_reservable_per_transaction = pages_per_transaction,
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+                .noc_id = NOC::NOC_0,
+                .stall_cycles = 0,
+                .max_outstanding = window,
+                .latency_probe = 0,
+            };
+            EXPECT_TRUE(unit_tests::dm::all_to_all::run_injection_sweep_dm(mesh_device, test_config));
+        }
+
+        for (uint32_t stall : probe_stall_grid) {
+            unit_tests::dm::all_to_all::AllToAllConfig probe_config = {
+                .test_id = test_case_id,
+                .mst_logical_start_coord = mst_start_coord,
+                .sub_logical_start_coord = sub_start_coord,
+                .mst_grid_size = full_grid,
+                .sub_grid_size = full_grid,
+                .num_of_transactions_per_master = num_of_transactions_per_master,
+                .pages_reservable_per_transaction = pages_per_transaction,
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+                .noc_id = NOC::NOC_0,
+                .stall_cycles = stall,
+                .max_outstanding = 1,
+                .latency_probe = 1,
+            };
+            EXPECT_TRUE(unit_tests::dm::all_to_all::run_injection_sweep_dm(mesh_device, probe_config));
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

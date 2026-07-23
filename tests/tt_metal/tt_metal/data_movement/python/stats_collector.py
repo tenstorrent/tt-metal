@@ -273,9 +273,10 @@ class StatsCollector:
             result[riscv] = agg
         return result
 
-    def gather_bw_per_core(self, num_transactions=None, transaction_size=None, risc=None, test_id=None):
+    def gather_bw_and_latency_per_core(self, num_transactions=None, transaction_size=None, risc=None, test_id=None):
         _, aggregate_stats = self.gather_analysis_stats()
-        result = defaultdict(int)
+        bw_result = defaultdict(int)
+        latency_result = defaultdict(int)
 
         if risc is None:
             riscs_with_stats = [r for r, v in aggregate_stats.items() if len(v) > 0]
@@ -333,11 +334,20 @@ class StatsCollector:
         run_host_id = valid_run_host_ids[0]
 
         test_case = aggregate_stats[risc][run_host_id]
-        for core, bandwidth in zip(test_case["all_cores"], test_case["all_bandwidths"]):
-            result[core] = bandwidth
+        for core, bandwidth, duration in zip(
+            test_case["all_cores"], test_case["all_bandwidths"], test_case["all_durations"]
+        ):
+            bw_result[core] = bandwidth
+            latency_result[core] = duration
         attrs = test_case["attributes"]
         attrs["Risc"] = 0 if risc == "riscv_0" else 1
-        return result, attrs
+        return bw_result, latency_result, attrs
+
+    def gather_bw_per_core(self, num_transactions=None, transaction_size=None, risc=None, test_id=None):
+        bw_result, _latency_result, attrs = self.gather_bw_and_latency_per_core(
+            num_transactions, transaction_size, risc, test_id
+        )
+        return bw_result, attrs
 
 
 if __name__ == "__main__":
