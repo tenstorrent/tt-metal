@@ -96,8 +96,6 @@ This is a TTNN wrapper around two device operations executed in sequence:
 """
 
 import torch
-from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -191,7 +189,7 @@ class TtMoERoutingSetup(LightweightModule):
             expert_histograms: Per-device token count per expert (before cross-chip aggregation).
                 Shape per device: (num_routed_experts,), uint32
         """
-        signpost(header="MoERoutingSetup")
+        # signpost(header="MoERoutingSetup")
 
         if isinstance(ttnn_top_k_experts_indices, torch.Tensor):
             mesh_mapper = ttnn.ShardTensor2dMesh(
@@ -244,14 +242,14 @@ class TtMoERoutingSetup(LightweightModule):
 
         if len(ttnn_top_k_experts_indices.shape) == 3:
             ttnn_top_k_experts_indices = ttnn.squeeze(ttnn_top_k_experts_indices, 0)
-        logger.debug(f"{ttnn_top_k_experts_indices.shape=}")
+        # logger.debug(f"{ttnn_top_k_experts_indices.shape=}")
 
         # Constraint imposed by masked_bincount
         if len(self.experts_in_dispatch_group.shape) != 1:
             assert (
                 self.experts_in_dispatch_group.shape[0] == 1
             ), "Expected first dimension to be 1 after sharding expert dispatch table"
-        logger.debug(f"{self.experts_in_dispatch_group.shape=}")
+        # logger.debug(f"{self.experts_in_dispatch_group.shape=}")
 
         expert_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(
             ttnn_top_k_experts_indices, self.experts_in_dispatch_group, num_routed_experts, num_experts_per_tok
@@ -284,6 +282,6 @@ class TtMoERoutingSetup(LightweightModule):
             # device is opened with l1_small_size > 0 (e.g. the Kimi chunked test).
             use_l1_small_for_semaphores=self.use_l1_small_for_semaphores,
         )
-        signpost(header="moe_gate_calculate_global_dispatch_offsets")
+        # signpost(header="moe_gate_calculate_global_dispatch_offsets")
 
         return global_dispatch_offsets, total_counts_per_expert, expert_region_offsets, expert_histograms

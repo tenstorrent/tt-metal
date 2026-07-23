@@ -457,13 +457,14 @@ class TtPrefillTransformer(LightweightModule):
         if return_intermediates and self.is_balanced:
             for key, tensor in intermediates.items():
                 if key in no_reorder_keys:
-                    logger.debug(f"Skipping reordering for non-sequence intermediate {key}")
+                    # logger.debug(f"Skipping reordering for non-sequence intermediate {key}")
                     continue
                 if isinstance(tensor, torch.Tensor):
-                    logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
+                    # logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
                     intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
                 else:
-                    logger.debug(f"Skipping reordering for intermediate {key} of type {type(tensor)}")
+                    # logger.debug(f"Skipping reordering for intermediate {key} of type {type(tensor)}")
+                    pass
 
         # Sample token(s) from logits
         first_token_id, first_token_prob, sweep_results = self._sample(first_token_logits, actual_isl, temperature)
@@ -500,9 +501,9 @@ class TtPrefillTransformer(LightweightModule):
         ), f"Expected full vocab {self.lm_head.vocab_size}, got {logits_host.shape[-1]} — TP concat may be broken"
         first_token_logits = self.lm_head.select_first_token(logits_host, token_offset)
 
-        logger.debug(f"[TtPrefillTransformer._extract] {logits.shape}")
-        logger.debug(f"[TtPrefillTransformer._extract] {logits_host.shape}")
-        logger.debug(f"[TtPrefillTransformer._extract] {first_token_logits.shape}")
+        # logger.debug(f"[TtPrefillTransformer._extract] {logits.shape}")
+        # logger.debug(f"[TtPrefillTransformer._extract] {logits_host.shape}")
+        # logger.debug(f"[TtPrefillTransformer._extract] {first_token_logits.shape}")
 
         return logits_host, first_token_logits
 
@@ -540,7 +541,7 @@ class TtPrefillTransformer(LightweightModule):
         first_token_id = sweep_results[0]["token_id"]
         first_token_prob = sweep_results[0]["probability"]
 
-        logger.debug(f"[TtPrefillTransformer._sample] {first_token_id=}, {first_token_prob=:.4f}")
+        # logger.debug(f"[TtPrefillTransformer._sample] {first_token_id=}, {first_token_prob=:.4f}")
 
         return first_token_id, first_token_prob, sweep_results
 

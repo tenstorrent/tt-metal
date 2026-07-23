@@ -17,7 +17,6 @@ from typing import Optional
 
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -481,7 +480,7 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
         """
-        logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
+        # logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
         if is_blackhole():
             # Fused path. The composite op selects its strategy from the input
@@ -493,7 +492,7 @@ class TtRoutedExpert(LightweightModule):
             if dispatched_buffer.layout == ttnn.TILE_LAYOUT and dispatched_buffer.dtype != self.activations_dtype:
                 logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
                 dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
-            signpost(header="UnifiedRoutedExpertMoe")
+            # signpost(header="UnifiedRoutedExpertMoe")
             expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
                 dispatched_buffer,
                 expert_region_offsets,
@@ -509,7 +508,7 @@ class TtRoutedExpert(LightweightModule):
                 up_biases=self.up_biases,
                 down_biases=self.down_biases,
             )
-            logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+            # logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
 
         if self.gate_biases is not None:
@@ -528,7 +527,7 @@ class TtRoutedExpert(LightweightModule):
             dispatched_buffer = ttnn.to_layout(dispatched_buffer, ttnn.TILE_LAYOUT, dtype=self.activations_dtype)
         expert_outputs = dispatched_buffer
         for local_expert in range(self.experts_per_chip):
-            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
+            # signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
 
             tokens = ttnn.experimental.deepseek_prefill.extract(
                 dispatched_buffer,

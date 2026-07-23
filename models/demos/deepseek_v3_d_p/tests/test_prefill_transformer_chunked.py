@@ -1350,6 +1350,10 @@ def run_chunked_transformer_no_pcc(
     for it in range(num_iters):
         iter_start = time.time()
         chunk_times: list[float] = []
+        # Device-idle boundary for the profiler: sync, then mark the iteration start. The per-layer
+        # post-processor keeps only ops between iter_{i}_start / iter_{i}_end and reports the warm iter.
+        ttnn.synchronize_device(mesh_device)
+        signpost(f"iter_{it}_start")
         for c in range(n_chunks):
             kv_actual = preload_isl + c * CHUNK
             tt_tokens = ttnn.from_torch(
@@ -1379,6 +1383,12 @@ def run_chunked_transformer_no_pcc(
             chunk_times.append(time.time() - chunk_start)
         iter_total = time.time() - iter_start
         iteration_chunk_times.append(chunk_times)
+        # The last per-chunk ttnn.synchronize_device above already made the device idle; mark iter end.
+        signpost(f"iter_{it}_end")
+        # Flush the on-device profiler buffer between iterations so it does not overflow across iters
+        # (default 1000 programs/device; ~940 ops/L10-iter). Ops still land in the final report.
+        if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
+            ttnn.ReadDeviceProfiler(mesh_device)
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
         # Drop iter 0's per-layer MLA/FFN samples (the compile iteration), same as the chunk-time table.
         if it == 0:
