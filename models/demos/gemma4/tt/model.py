@@ -22,7 +22,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
-from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
+from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
@@ -787,11 +787,9 @@ class Gemma4Model:
         rope_seq_len = seq_len // batch_size if (not is_decode and batch_size > 1) else seq_len
         caches = kv_caches or self.tt_kv_cache
 
-        # Real (unpadded) prefill length: the prompt is padded up to a power of 2
-        # for the single prefill chunk, and bounded sliding layers must NOT write
-        # the padding tail into their circular KV cache (it would overwrite the
-        # real recent window and corrupt decode). get_last_token is the last real
-        # token index in non-traced long-context prefill; +1 gives the real length.
+        # Real (unpadded) prefill length for bounded ring fill. When bounded,
+        # generators pass the *true* last-token index (not tile-aligned); +1 is
+        # the fill length. lm_head tile-aligns separately below.
         prefill_valid_len = None
         if not is_decode and get_last_token is not None and get_last_token >= 0:
             prefill_valid_len = get_last_token + 1
@@ -979,6 +977,8 @@ class Gemma4Model:
         # Gate on chunk_page_table: get_last_token defaults to -1 for all direct
         # ttnn_prefill_forward callers (unit tests, demos), which still need logits.
         if not is_decode and get_last_token == -1 and batch_size > 1:
+            # Batched prefill returns hidden; flush any deferred bounded ring fills.
+            self._flush_deferred_bounded_fills_if_needed()
             return hidden_states
         if (
             not is_decode
@@ -987,6 +987,7 @@ class Gemma4Model:
             and chunk_page_table is not None
             and not getattr(self, "_prefill_trace_mode", False)
         ):
+            # Intermediate generator chunk: do not flush (last chunk owns the ring).
             return None
 
         # Final norm
@@ -1027,13 +1028,25 @@ class Gemma4Model:
         # >= 4k OOMs DRAM on smaller WH SKUs (lm_head logits = seq_len * vocab
         # * 2B; at seq=4096 that's 2 GiB, doesn't fit in DRAM with weights).
         if get_last_token != -1:
+            # Tile-align here so callers may pass the true last-token index
+            # (bounded fill length) without undershooting the lm_head slice.
+            tile_start = (int(get_last_token) // 32) * 32
             hidden_states = ttnn.slice(
                 hidden_states,
-                (0, 0, get_last_token, 0),
-                (1, 1, get_last_token + 32, hidden_states.shape[-1]),
+                (0, 0, tile_start, 0),
+                (1, 1, tile_start + 32, hidden_states.shape[-1]),
             )
 
-        return self._apply_lm_head(hidden_states, is_decode=is_decode)
+        logits = self._apply_lm_head(hidden_states, is_decode=is_decode)
+        if not is_decode:
+            # After lm_head only — mid-forward / pre-lm_head flush corrupts token-0 on TP.
+            self._flush_deferred_bounded_fills_if_needed()
+        return logits
+
+    def _flush_deferred_bounded_fills_if_needed(self):
+        """Commit stashed bounded ring K/V after lm_head (or batched-hidden return)."""
+        if getattr(self, "bounded_sliding_kv_cache", False):
+            flush_deferred_bounded_fills(self.layers)
 
     def _apply_lm_head(self, hidden_states, is_decode=False):
         """Project post-norm hidden states to vocab logits, softcap, all-gather.
@@ -1657,8 +1670,12 @@ class Gemma4Model:
             (1, 1, get_last_token + 32, hidden_states.shape[-1]),
         )
         if sliced.shape[-1] == self.hidden_size:
-            return self._apply_lm_head(sliced, is_decode=False)
-        return sliced
+            logits = self._apply_lm_head(sliced, is_decode=False)
+        else:
+            logits = sliced
+        # Trace deferred lm_head: commit bounded ring fills after logits.
+        self._flush_deferred_bounded_fills_if_needed()
+        return logits
 
     def switch_mode(self, mode):
         """Generator compatibility — no prefetcher to reinitialize."""

@@ -111,6 +111,10 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "bounded_isl_min": 65536,  # auto bounded at 64k+
             "chunked_bounded_isl_min": 262144,  # single-chunk ~5.6GB OOM at 256k
             "prefill_chunk": _CHUNK,
+            # Bounded multi-chunk @ 128k: chunk=4096 → token-0 garbage on QB2;
+            # 2048 is coherent. Do not apply at 64k (unnecessary).
+            "bounded_prefill_chunk": 2048,
+            "bounded_prefill_chunk_isl_min": 131072,
             "source": "measured",
         },
         # P150x8 (isl_sweep_logs/p150x8_bg_lb): unbounded allocates through 128k
@@ -136,11 +140,20 @@ GEMMA4_LONG_CONTEXT_POLICY = {
     },
     # Dense 12B — HF max_pos=256k. QB2: unbounded 64k+128k PASSED; unbounded 256k OOM.
     # P150x8: unbounded 64k+128k+256k PASSED (isl_sweep_logs/p150x8_bg_lb).
+    # Single P150: unbounded 32k OK; 64k+ unbounded KV OOM (~22GB sliding pool) —
+    # auto-bound sliding + chunked prefill through 256k (256k already measured PASS).
     "12B": {
         _QB2: {
             "unbounded_isl_max": 131072,
             "bounded_isl_min": 262144,  # auto bounded at 256k (unbounded OOM)
             "chunked_bounded_isl_min": 262144,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
+        "P150": {
+            "unbounded_isl_max": 32768,
+            "bounded_isl_min": 65536,
+            "chunked_bounded_isl_min": 65536,
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
@@ -197,6 +210,8 @@ GEMMA4_LONG_CONTEXT_POLICY = {
     },
     # MatFormer E2B — HF max_pos=128k native; demo can force higher. QB2: unbounded
     # 64k+128k+256k PASSED. P150x8: same (isl_sweep_logs/p150x8_bg_lb).
+    # Also use_double_wide_mlp on KV-shared layers (2× intermediate).
+    # Prefer multi-chunk (4096): single-chunk 64k+ warmup can hang on P150x8.
     "E2B": {
         _QB2: {
             "unbounded_isl_max": 262144,
@@ -254,11 +269,14 @@ def _device_name(mesh_device) -> str | None:
 
 
 def _canonical_device_name(device: str | None) -> str | None:
-    """Map QB2 aliases (P150x4 / P300x2) onto the canonical policy key."""
+    """Map device aliases onto canonical policy keys (QB2 / single P150)."""
     if device is None:
         return None
     if device in _QB2_ALIASES:
         return _QB2
+    # Historical WH tag; this host is Blackhole P150.
+    if device in ("N150", "n150"):
+        return "P150"
     return device
 
 
@@ -306,7 +324,12 @@ def _is_qb2(mesh_device) -> bool:
 
 
 def resolve_gemma4_prefill_chunk_size(
-    max_seq_len: int, mesh_device=None, non_qb2_default=None, model_name_or_path=None
+    max_seq_len: int,
+    mesh_device=None,
+    non_qb2_default=None,
+    model_name_or_path=None,
+    *,
+    bounded_sliding: bool = False,
 ) -> int:
     """Generator-level prefill chunk size for demo + vLLM serving.
 
@@ -315,6 +338,10 @@ def resolve_gemma4_prefill_chunk_size(
     is measured (incl. P150x8) or the board is QB2. Other boards keep
     ``non_qb2_default`` (often ``max_seq_len``) so unvalidated configs stay
     single-chunk unless the caller passes 4096.
+
+    When ``bounded_sliding`` and the policy defines ``bounded_prefill_chunk`` /
+    ``bounded_prefill_chunk_isl_min`` (31B QB2 @ 128k+), cap the chunk so
+    bounded multi-chunk stays coherent (4096 → token-0 garbage).
 
     P150x8 / 31B / 128k unbounded (prefill_chunk_ab.tsv): chunk=4096 ~31s TTFT
     vs full-ISL single ~60s; quality OK.
@@ -325,7 +352,13 @@ def resolve_gemma4_prefill_chunk_size(
     policy = get_gemma4_long_context_policy(mesh_device, model_name_or_path)
     source = str(policy.get("source", ""))
     if _is_qb2(mesh_device) or source.startswith("measured"):
-        return min(int(policy["prefill_chunk"]), max_seq_len)
+        chunk = int(policy["prefill_chunk"])
+        if bounded_sliding:
+            bchunk = policy.get("bounded_prefill_chunk")
+            bmin = policy.get("bounded_prefill_chunk_isl_min")
+            if bchunk is not None and bmin is not None and max_seq_len >= int(bmin):
+                chunk = min(chunk, int(bchunk))
+        return min(chunk, max_seq_len)
     return non_qb2_default if non_qb2_default is not None else max_seq_len
 
 

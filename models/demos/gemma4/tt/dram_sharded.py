@@ -221,7 +221,10 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
     out_subblock_h = 1
     out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
     k_tiles = math.ceil(k / TILE_SIZE)
-    in0_block_w = min(4, max(1, k_tiles // grid_size[0]))
+    # Kernel requires Kt % in0_block_w == 0. Prefer ~k_tiles/cols capped at 4,
+    # then snap down to a divisor (26B down_proj K=288 → Kt=9; 9//2=4 is invalid).
+    candidate = min(4, max(1, k_tiles // max(1, grid_size[0])))
+    in0_block_w = _find_largest_divisor(k_tiles, max_div=candidate)
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,

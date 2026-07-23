@@ -922,8 +922,8 @@ def run_generation(
             * model.embed_scale
         ).float()
 
-        # Get last token tile for first decode token
-        get_last_token = ((prompt_len - 1) // 32) * 32
+        # True last-token index for bounded ring fill; model tile-aligns lm_head.
+        get_last_token = prompt_len - 1
 
         def _build_prefill_embeds():
             """Build a fresh ttnn embeds tensor for ttnn_prefill_forward.
@@ -995,8 +995,8 @@ def run_generation(
             logits_cpu = ttnn.to_torch(logits)
         logits.deallocate(True)
 
-        # Get logits at the actual last prompt position within the tile
-        pos_in_tile = (prompt_len - 1) - get_last_token
+        # Logits are the tile containing the last prompt token.
+        pos_in_tile = (prompt_len - 1) % 32
         next_token = logits_cpu[0, 0, pos_in_tile, :].argmax().item()
         profiler.end(f"inference_prefill", iteration=prompt_idx)
 

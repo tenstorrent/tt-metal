@@ -14,6 +14,7 @@ from models.demos.gemma4.tt.generator_trace import (
     patch_gemma4_trace_model_args,
     resolve_gemma4_prefill_chunk_size,
     resolve_gemma4_prefill_trace_enable,
+    should_auto_enable_bounded_sliding,
     warmup_gemma4_model_prefill,
 )
 from models.tt_transformers.tt.common import get_padded_prefill_len
@@ -82,17 +83,44 @@ def _gemma4_prefill_trace_unsafe(model, bounded_sliding_kv_cache) -> bool:
     return False
 
 
-def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, model_path, prefill_trace_enabled=True):
+def _resolve_vllm_bounded_sliding(max_seq_len, mesh_device, model_path, *, hybrid_groups_enabled: bool) -> bool:
+    """Mirror demo: auto policy + ``GEMMA4_BOUNDED_SLIDING_KV_CACHE`` / legacy env."""
+    # Hybrid-groups mode historically defaulted bounded ON; keep that unless env overrides.
+    _bounded_default = "1" if hybrid_groups_enabled else None
+    _bs_env = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE")
+    if _bs_env is None and _bounded_default is not None:
+        _bs_env = _bounded_default
+    if _bs_env is None:
+        # Also accept GEMMA4_BOUNDED_SLIDING (demo alias) when unset.
+        _bs_env = os.environ.get("GEMMA4_BOUNDED_SLIDING")
+    if _bs_env is None:
+        return should_auto_enable_bounded_sliding(max_seq_len, mesh_device, model_path)
+    return _bs_env.lower() in ("1", "true", "yes")
+
+
+def _patch_model_args(
+    model_args,
+    mesh_device,
+    max_batch_size,
+    max_seq_len,
+    model_path,
+    prefill_trace_enabled=True,
+    *,
+    bounded_sliding=False,
+):
     model_args.max_batch_size = max_batch_size
     model_args.max_seq_len = max_seq_len
     # Generator-level chunked prefill (GEMMA4_GEN_PREFILL_CHUNK=<2048-multiple
     # <32768>): chunk the prefill so no full-sequence op hits the 2^15 boundary
     # (Bug A), the ~120K hang (GH #48289), or the ISL>=8192 fetch-queue wedge
-    # (GH #49083). The bounded default (4096) is shared with the demo generator
-    # via resolve_gemma4_prefill_chunk_size but applies on QB2 (P150x4) ONLY;
-    # other boards keep the prior vLLM default (a single max_seq_len chunk).
+    # (GH #49083). Shared with the demo via resolve_gemma4_prefill_chunk_size;
+    # QB2 + bounded + ISL≥128k caps to bounded_prefill_chunk (2048).
     model_args.max_prefill_chunk_size = resolve_gemma4_prefill_chunk_size(
-        max_seq_len, mesh_device=mesh_device, non_qb2_default=max_seq_len
+        max_seq_len,
+        mesh_device=mesh_device,
+        non_qb2_default=max_seq_len,
+        model_name_or_path=model_path,
+        bounded_sliding=bounded_sliding,
     )
     patch_gemma4_trace_model_args(model_args, prefill_trace_enabled=prefill_trace_enabled)
     model_args.optimizations = _Gemma4VllmOptimizations()
@@ -155,11 +183,14 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Bounded sliding KV defaults to match the hybrid-groups mode — bounded is
-        # only correct alongside the ``SlidingWindowSpec`` layout. Override with
-        # ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=0/1``.
-        _bounded_default = "1" if self._HYBRID_KV_CACHE_GROUPS_ENABLED else "0"
-        self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", _bounded_default) != "0"
+        # Prefer the flag baked into the TT model at create time (resolve + env);
+        # fall back to hybrid-default env when the model was built elsewhere.
+        model0 = self.model[0] if getattr(self, "model", None) else None
+        if model0 is not None and hasattr(model0, "bounded_sliding_kv_cache"):
+            self._bounded_sliding_kv_cache = bool(model0.bounded_sliding_kv_cache)
+        else:
+            _bounded_default = "1" if self._HYBRID_KV_CACHE_GROUPS_ENABLED else "0"
+            self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", _bounded_default) != "0"
 
     @classmethod
     def get_max_tokens_all_users(cls, model_name: str = "", **kwargs) -> int:
@@ -556,14 +587,14 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         model_path = hf_config._name_or_path
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
-        # Bounded sliding KV defaults to match the hybrid-groups mode — the
-        # bounded path (``cache_position_modulo=sliding_window``) is only correct
-        # alongside the hybrid ``SlidingWindowSpec`` layout. With hybrid OFF every
-        # layer is ``FullAttentionSpec`` and the device allocates/reads the full
-        # pool. Override with ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=0/1``. See the
-        # class docstring.
-        _bounded_default = "1" if cls._HYBRID_KV_CACHE_GROUPS_ENABLED else "0"
-        bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", _bounded_default) != "0"
+        # Bounded sliding: mirror demo (auto policy + env). Hybrid-groups mode
+        # still defaults ON when env unset — see ``_resolve_vllm_bounded_sliding``.
+        bounded_sliding_kv_cache = _resolve_vllm_bounded_sliding(
+            max_seq_len,
+            mesh_device,
+            model_path,
+            hybrid_groups_enabled=cls._HYBRID_KV_CACHE_GROUPS_ENABLED,
+        )
 
         model_args = []
         model = []
@@ -610,6 +641,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 max_seq_len=max_seq_len,
                 model_path=model_path,
                 prefill_trace_enabled=prefill_trace_enabled,
+                bounded_sliding=bounded_sliding_kv_cache,
             )
             # The shared TT vLLM cache allocator reads ``model.args.optimizations``;
             # mirror the text-transformer wrappers by exposing model_args here.
