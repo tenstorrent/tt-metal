@@ -57,7 +57,10 @@ def load_lora_weights_te_compat(pipeline, lora_path, adapter_name=None):
         pipeline.load_lora_weights(lora_path)
         return
 
-    result = pipeline.lora_state_dict(lora_path)
+    # unet_config is required so diffusers remaps SGM block numbers to diffusers
+    # block names (e.g. down_blocks.1.attentions.0); without it the UNet LoRA keys
+    # stay half-converted and peft can't find the target modules.
+    result = pipeline.lora_state_dict(lora_path, unet_config=pipeline.unet.config)
     state_dict = result[0]
     network_alphas = result[1] if len(result) > 1 else None
 
