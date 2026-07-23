@@ -286,6 +286,19 @@ SHAPES = [
     (864, 3072, 1536, 11, 10, False, "plain_gelu"),  # ff_context.ff1 prompt
     (864, 1536, 3072, 11, 10, False, "plain"),  # ff_context.ff2 prompt
     (864, 1920, 3072, 11, 10, False, "plain"),  # single proj_out prompt
+    # --- FIBO DiT prompt-branch matmuls at M=256: the short/empty CFG NEGATIVE branch under the 256
+    # encoder bucket. keep_padding (now default) pads the negative prompt to the 256 bucket, so its DiT
+    # prompt branch runs at M=256 -- distinct from the M=1024 padded-positive, M=864 unpadded-JSON, and
+    # M=128/M=32 twins already tuned. Discovered 2026-07-23 from get_matmul_config "No known best
+    # blocking" warnings in test_fibo_pipeline_perf_breakdown_json[mesh_device1]. Same use_cases as the
+    # other prompt shapes. 12x10 only (per request).
+    (256, 4096, 384, 12, 10, False, "plain"),  # context_embedder (joint_attention_dim 4096)
+    (256, 2048, 1536, 12, 10, False, "plain"),  # caption_projection (text_encoder_dim 2048)
+    (256, 3072, 1152, 12, 10, False, "qkv"),  # to_qkv prompt (chunks=3, approx)
+    (256, 3072, 384, 12, 10, False, "to_out"),  # attn to_add_out prompt (addcmul, approx)
+    (256, 3072, 1536, 12, 10, False, "plain_gelu"),  # ff_context.ff1 prompt (fused GELU)
+    (256, 1536, 3072, 12, 10, False, "plain"),  # ff_context.ff2 prompt (RowParallel)
+    (256, 1920, 3072, 12, 10, False, "plain"),  # single proj_out prompt
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]

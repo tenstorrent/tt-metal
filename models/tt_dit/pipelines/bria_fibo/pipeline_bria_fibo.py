@@ -44,7 +44,11 @@ from models.tt_dit.models.transformers.transformer_bria_fibo import BriaFiboChec
 from models.tt_dit.models.vae.vae_bria_fibo import WanVAEDecoderAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.pipelines.bria_fibo.text_encoder import SmolLM3TextEncoderWrapper, build_text_encoder_layers
+from models.tt_dit.pipelines.bria_fibo.text_encoder import (
+    SmolLM3TextEncoderWrapper,
+    build_text_encoder_layers,
+    default_pad_buckets,
+)
 from models.tt_dit.pipelines.cfg import create_submeshes
 from models.tt_dit.solvers import EulerSolver
 from models.tt_dit.utils import tensor as tt_tensor
@@ -70,12 +74,14 @@ class BriaFiboPipelineConfig:
     checkpoint_name: str
 
     # Fixed-length padding of the DiT prompt branch (see SmolLM3TextEncoderWrapper.keep_padding).
-    # True -> every prompt runs the DiT prompt branch at the fixed 1024 bucket (stable trace, one
-    # matmul-config set); False -> true-length (unpadded) branch. Env-toggle for A/B: FIBO_KEEP_PADDING.
-    # Default False: padding drops latent PCC to ~92% (the diffusers reference masks pad tokens but the
-    # tt joint SDPA exposes no mask kwarg) and regresses denoise ~25% (M 864->1024). Opt-in experiment
-    # via FIBO_KEEP_PADDING=1; correct padding needs a masked joint-SDPA op (device-op + rebuild).
-    keep_padding: bool = False
+    # True -> every prompt runs the DiT prompt branch at its bucket length (stable trace, one
+    # matmul-config set per bucket); False -> true-length (unpadded) branch. Env-toggle: FIBO_KEEP_PADDING.
+    # Default True: bucketing (see pad_bucket) keeps the short/empty negative branch at the small 256
+    # bucket, so CFG's uncond branch denoises at M=256 instead of the full bucket. NOTE: fixed padding
+    # still drops latent PCC to ~92% on the positive branch (the diffusers reference masks pad tokens but
+    # the tt joint SDPA exposes no mask kwarg); a masked joint-SDPA op would be needed to close that.
+    # Opt out via FIBO_KEEP_PADDING=0.
+    keep_padding: bool = True
 
     # Fixed padding bucket (tokens). Drives BOTH the encoder pad length AND -- when keep_padding is
     # True -- the DiT prompt-branch M (the prompt is the replicated joint tensor, so DiT M == bucket).
@@ -96,9 +102,9 @@ class BriaFiboPipelineConfig:
         keep_padding: bool | None = None,
         pad_bucket: int | None = None,
     ) -> BriaFiboPipelineConfig:
-        # Default to the unpadded (true-length) branch; FIBO_KEEP_PADDING=1 opts into fixed padding.
+        # Default to fixed padding (bucketed); FIBO_KEEP_PADDING=0 opts back into the unpadded branch.
         if keep_padding is None:
-            keep_padding = os.environ.get("FIBO_KEEP_PADDING", "0") == "1"
+            keep_padding = os.environ.get("FIBO_KEEP_PADDING", "1") == "1"
         # Padding bucket (default 1024); FIBO_PAD_BUCKET overrides (e.g. 4096 to pad everything to 4k).
         if pad_bucket is None:
             pad_bucket = int(os.environ.get("FIBO_PAD_BUCKET", "1024"))
@@ -126,7 +132,8 @@ class BriaFiboPipelineConfig:
 
         # Encoder: sequence-parallel across tokens on axis 1 (SP = mesh[1] = 8 on 4x8) x tensor-parallel
         # on axis 0 (TP = mesh[0] = 4), on the whole mesh (same submesh as the DiT). The token sequence is
-        # padded to a fixed 1024 bucket and sharded over the SP axis; SmolLM3Attention all-gathers K/V over
+        # padded to its bucket (short/empty negative -> 256, long positive -> 1024) and sharded over the
+        # SP axis; SmolLM3Attention all-gathers K/V over
         # the SP axis and Q/K/V/O over the TP axis. PCC-validated by
         # tests/models/bria_fibo/smollm3/test_smollm3.py::test_smollm3_encoder_sp. On the 4x8 Galaxy this SP=8 x
         # TP=4 layout measured ~12.5 s/encode vs ~23.8 s for SP=4 x TP=8 (test_fibo_encode_perf).
@@ -202,17 +209,23 @@ class BriaFiboPipeline:
         # the established pattern (see the VAE below); it does NOT hit the overlapping-submesh CCL hang
         # that separate cfg-parallel encoder submeshes did.
         self._encoder_ccl_manager = CCLManager(self._submesh, num_links=config.num_links, topology=config.topology)
+        # Bucket ladder: a small 256 bucket (short/empty negative branch) plus the configured max
+        # bucket. Each bucket gets its own encoder-forward trace; a short prompt uses the small one so
+        # its encode (and, under keep_padding, its DiT prompt branch) stays cheap. On the 4x8 encoder
+        # SP=8 -> sp_factor*32 = 256, so 256 is the minimum legal bucket.
+        enc_sp_factor = config.encoder_parallel_config.sequence_parallel.factor
+        pad_buckets = default_pad_buckets(config.pad_bucket, enc_sp_factor)
         self._text_encoder = SmolLM3TextEncoderWrapper(
             config.checkpoint_name,
             device=self._submesh,
             ccl_manager=self._encoder_ccl_manager,
             parallel_config=config.encoder_parallel_config,
-            pad_buckets=(config.pad_bucket,),
+            pad_buckets=pad_buckets,
             keep_padding=config.keep_padding,
         )
         logger.info(
             f"FIBO DiT prompt-branch padding: "
-            f"{f'fixed {config.pad_bucket} bucket' if config.keep_padding else 'unpadded (true length)'}"
+            f"{f'fixed buckets {pad_buckets}' if config.keep_padding else 'unpadded (true length)'}"
         )
         ttnn.synchronize_device(self._submesh)
 
@@ -300,8 +313,15 @@ class BriaFiboPipeline:
         # generation suffices (no second warmup). Guarded so it captures once per (re)capture cycle;
         # release_traces() clears it after a denoise recapture so this re-arms it.
         if traced and self._tracer.trace_captured and not self._text_encoder.has_trace():
-            logger.info("capturing encoder trace (trailing the denoise trace)...")
+            logger.info("capturing encoder trace(s) (trailing the denoise trace)...")
+            # Pre-capture EVERY bucket the measured runs will replay: the positive prompt and (under
+            # CFG) the negative prompt may land on different buckets (e.g. a long positive -> 1024, a
+            # short negative -> 256), each with its own trace. Capturing both here -- after the denoise
+            # trace -- keeps the "encoder trace captured after denoise" ordering and leaves gen 2 pure
+            # replay. If pos and neg share a bucket the second call just replays (harmless).
             self._text_encoder.encode_prompt(prompt, traced=True)
+            if do_cfg:
+                self._text_encoder.encode_prompt(negative_prompt, traced=True)
 
         # 5. Return the pre-VAE latent (PCC gate) or decode to an image.
         if output_type == "latent":
@@ -317,7 +337,9 @@ class BriaFiboPipeline:
 
         When ``do_cfg`` is False (``guidance_scale <= 1``) the negative branch is unused, so it is not
         encoded and the uncond entries are returned as ``None``. ``traced`` captures/replays the encoder
-        forward (per 1024 bucket, shared by pos+neg) -- the same flag that drives the DiT denoise trace.
+        forward per bucket (a long positive and a short negative land on DIFFERENT buckets -> two traces;
+        both pre-captured after the denoise trace in ``__call__``) -- the same flag that drives the DiT
+        denoise trace.
         """
         logger.info("encoding prompts...")
         # SP x TP encoder on the whole mesh; positive and negative prompts are encoded sequentially,

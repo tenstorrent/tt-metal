@@ -106,6 +106,11 @@ def _register_fibo_matmul_configs() -> None:
                 # -- RE-SWEEP at M=1024 via sweep_mm_block_sizes.py (bh_4x8_fibo, 12x10).
                 (1024, 4096, 384): (3, 8, 2, (3, 1)),  # context_embedder prompt (seed from M=864)
                 (1024, 2048, 1536): (3, 4, 4, (1, 4)),  # caption_projection prompt (seed from M=864)
+                # NOTE (2026-07-23): with the 256 encoder bucket, a short/empty CFG negative pads to the
+                # 256 bucket, so its DiT prompt branch runs at M=256 -- a shape NOT registered here (neither
+                # the M=1024 padded-positive entries nor the M=32 unpadded-short twins). It currently falls
+                # back to the generic matmul config (correct, not perf-tuned). RE-SWEEP the 7 prompt (K,N)
+                # shapes at M=256 via sweep_mm_block_sizes.py (bh_4x8_fibo) to close the gap.
                 # SmolLM3 text encoder (tensor-parallel, tp=8) matmuls on the 4x8 Galaxy. M=32 (short
                 # prompt, one tile), K=2048=hidden. Swept 2026-07-15 (bh_4x8_fibo). SmolLM3 has no matmul
                 # registration of its own and FIBO is its only user, so its configs live here (additive,
@@ -151,6 +156,11 @@ def _register_fibo_matmul_configs() -> None:
                 # from the 12x10 M=864 winners -- RE-SWEEP at M=1024 (bh_4x8_fibo, 11x10).
                 (1024, 4096, 384): (3, 8, 2, (3, 1)),  # context_embedder prompt (seed from M=864)
                 (1024, 2048, 1536): (3, 4, 4, (1, 4)),  # caption_projection prompt (seed from M=864)
+                # NOTE (2026-07-23): with the 256 encoder bucket, a short/empty CFG negative pads to the
+                # 256 bucket, so its DiT prompt branch runs at M=256 -- a shape NOT registered here (neither
+                # the M=1024 padded-positive entries nor the M=32 unpadded-short twins). It currently falls
+                # back to the generic matmul config (correct, not perf-tuned). RE-SWEEP the 7 prompt (K,N)
+                # shapes at M=256 via sweep_mm_block_sizes.py (bh_4x8_fibo) to close the gap.
                 (32, 256, 3072): (2, 2, 10, (2, 2)),  # timestep_embedder linear_1 — 15618 ns
                 (32, 3072, 3072): (2, 4, 16, (2, 2)),  # timestep_embedder linear_2 — 89023 ns
                 (32, 3072, 6144): (2, 8, 12, (2, 2)),  # time_embed_out — 164954 ns

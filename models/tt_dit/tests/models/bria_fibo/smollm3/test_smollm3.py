@@ -134,6 +134,20 @@ def test_fibo_wrapper_bucket_pick(*, expect_error):
         pick_bucket(10, (1000,), sp_factor=4)  # 1000 % (4*32) != 0
 
 
+def test_fibo_default_pad_buckets():
+    from models.tt_dit.pipelines.bria_fibo.text_encoder import default_pad_buckets
+
+    # 4x8 encoder SP=8 -> sp_factor*32 = 256, so 256 is a valid small bucket below 1024.
+    assert default_pad_buckets(1024, sp_factor=8) == (256, 1024)
+    # 2x2 encoder SP=2 -> sp_factor*32 = 64; 256 % 64 == 0, still valid.
+    assert default_pad_buckets(1024, sp_factor=2) == (256, 1024)
+    # small bucket must be strictly smaller than max -> no duplicate/empty ladder.
+    assert default_pad_buckets(256, sp_factor=8) == (256,)
+    assert default_pad_buckets(128, sp_factor=2) == (128,)
+    # small bucket dropped when it is not shardable (sp_factor*32 = 512 does not divide 256).
+    assert default_pad_buckets(1024, sp_factor=16) == (1024,)
+
+
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize(
     "device_params",

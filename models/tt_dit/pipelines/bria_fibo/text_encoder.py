@@ -52,6 +52,21 @@ def pick_bucket(seq_len: int, buckets, sp_factor: int) -> int:
     raise ValueError(f"prompt seq_len {seq_len} exceeds all buckets {sorted(buckets)}; add a larger bucket")
 
 
+def default_pad_buckets(max_bucket: int, sp_factor: int, *, small_bucket: int = 256) -> tuple[int, ...]:
+    """Bucket ladder for the encoder: a small bucket plus ``max_bucket``, deduped and sorted.
+
+    A short prompt (e.g. an empty/short negative branch) pads to ``small_bucket`` while a long
+    positive prompt uses the full ``max_bucket`` -- each bucket gets its own device-forward trace
+    (see ``encode_prompt``), so the short branch runs a cheaper encoder forward (and, under
+    ``keep_padding``, a cheaper DiT prompt branch). ``small_bucket`` is included only when it is a
+    valid shardable size (divisible by ``sp_factor * 32``) and strictly smaller than ``max_bucket``;
+    otherwise the ladder is just ``(max_bucket,)`` (its validity is enforced by ``pick_bucket``).
+    """
+    if small_bucket < max_bucket and small_bucket % (sp_factor * 32) == 0:
+        return (small_bucket, max_bucket)
+    return (max_bucket,)
+
+
 def build_text_encoder_layers(all_hidden_states: list, num_blocks: int) -> list:
     """Stretch/trim SmolLM3's hidden-state list to the transformer's per-block count.
 
