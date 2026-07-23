@@ -8,32 +8,30 @@ Written during the inventory and planning steps; committed alongside the port fo
 
 ## Scope of this pass
 
-`BcastDeviceOperation` has **five** program factories. This pass ports **three** (final result):
+`BcastDeviceOperation` has **five** program factories. This pass ports **four** (final result):
 
 - `BcastMultiCoreHProgramFactory` (H, interleaved) — **PORTED**
 - `BcastMultiCoreWProgramFactory` (W, interleaved) — **PORTED**
 - `BcastShardedHProgramFactory` (H, sharded) — **PORTED**
+- `BcastShardedHOptimisedProgramFactory` (H, sharded, optimised) — **PORTED**
 
-**Two factories are deferred:**
+**One factory is deferred:**
 
 - **`BcastMultiCoreHWProgramFactory` (HW)** — binds the cross-family donor writer
   `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`, shared by ~46 factories
   tree-wide. Porting it requires forking that writer (a change *outside* bcast's directory), which the
   brief flags for coordination and the recipe treats as its canonical stop signal. The invoker chose to
   defer HW.
-- **`BcastShardedHOptimisedProgramFactory` (ShardedHOptimised)** — was fully ported and passed most
-  configs, but **hangs reproducibly on `in1_batch_size == 2` (`batch_b > 1`) width-sharded configs**
-  (legacy passes the same config). Root cause is a latent kernel over-run the new DFB L1 layout no
-  longer tolerates (see `METAL2_PORT_REPORT.md` → Handoff points). Fixing it needs a kernel-logic
-  change (out of scope), so the port **reverts this factory to legacy** and defers it.
 
-Both deferred factories stay on `create_descriptor` (`ProgramDescriptorFactoryConcept`) and the op keeps
-building and running (per-factory dispatch). Because the framework dispatches per factory, the device-op
-`program_factory_t` variant is unchanged: three alternatives satisfy `MetalV2FactoryConcept`, two
-(`BcastMultiCoreHW`, `BcastShardedHOptimised`) stay on `ProgramDescriptorFactoryConcept`.
+`BcastShardedHOptimised` initially hung on `in1_batch_size == 2` (`batch_b > 1`) / wide-shard configs — a
+latent kernel buffer over-run this port surfaced. That was root-caused and fixed on `main` by **PR #51056**
+(`e09c6aea658`); this branch is rebased onto that fix and merges it into the Metal 2.0 kernel, so the
+factory now ports cleanly (640/640 `misc/test_bcast.py` configs pass). See `METAL2_PORT_REPORT.md`.
 
-*(The inventory / spec-plan sections below still describe ShardedHOptimised as it was constructed, since
-that work informed the regression finding; treat it as reverted for the shipped diff.)*
+The deferred HW factory stays on `create_descriptor` (`ProgramDescriptorFactoryConcept`) and the op keeps
+building and running (per-factory dispatch). The device-op `program_factory_t` variant is unchanged: four
+alternatives satisfy `MetalV2FactoryConcept`, one (`BcastMultiCoreHW`) stays on
+`ProgramDescriptorFactoryConcept`.
 
 ## Legacy Inventory
 
