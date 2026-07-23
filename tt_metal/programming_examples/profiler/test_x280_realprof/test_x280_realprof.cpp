@@ -200,6 +200,14 @@ int main(int argc, char** argv) {
     // connected): 256 KB knee ~4400, 1 MB ~2800, 2 MiB ~1000, 4 MiB ~850 == the no-Tracy drain floor (~830) -> live
     // Tracy is essentially free at 4 MiB. Below ~600 every size craters to the worker-L1-ring floor
     // (total_markers/256) that no host buffer can beat. (4 MiB-64 = 1048560 keeps it to nwin=2 -> nread<=4 if needed.)
+    bool col_split = false;        // --colsplit: split the multi-node grid by COLUMN (default is by ROW). With
+                                   // per-node NoC planes this puts each cluster on one SIDE of NoC col 8 reading
+                                   // on the plane that reaches its side without a torus wrap (see band-split note).
+    bool flip_noc = false;         // --flipnoc: XOR the per-node read NoC plane (node n -> NoC (n&1)^1) so the
+                                   // left-half cluster can take NoC1 (leftward) + right-half NoC0 (rightward).
+    std::vector<int> l2cpus_list;  // --l2cpus a,b[,c,d]: explicit per-node L2CPU cluster idx (overrides the
+                                   // default y-sorted pick). e.g. --colsplit --l2cpus 2,0 = left band on
+                                   // idx2 (tile 8,5 / "CPU 4-7"), right band on idx0 (tile 8,3 / "CPU 0-3").
     bool do_reset = false, direct = false;  // --direct: direct drain (no reader/relay split); --ndrain N: N drainers
     bool rr_consumer = false;  // --rrconsumer: one host thread round-robins all rings (else one thread per ring)
     bool split_noc = false;    // --splitnoc: drain hart h reads its slice over NoC (h&1) to relieve read contention
@@ -272,6 +280,20 @@ int main(int argc, char** argv) {
             l2cpu = std::stoi(next());  // which L2CPU cluster (0-3) to boot on (default 0); single-node cluster
         } else if (a == "--nodes") {
             nodes = std::stoi(next());  // # L2CPU clusters to drive in parallel; nodes>1 uses clusters 0..N-1
+        } else if (a == "--colsplit") {
+            col_split = true;  // split the multi-node grid by column (default row)
+        } else if (a == "--flipnoc") {
+            flip_noc = true;  // XOR the per-node read NoC plane
+        } else if (a == "--l2cpus") {
+            std::string s = next();
+            for (size_t p = 0; p < s.size();) {
+                size_t c = s.find(',', p);
+                l2cpus_list.push_back(std::stoi(s.substr(p, c == std::string::npos ? std::string::npos : c - p)));
+                if (c == std::string::npos) {
+                    break;
+                }
+                p = c + 1;
+            }
         } else if (a == "--reset") {
             do_reset = true;
         } else if (a == "--direct") {
@@ -413,13 +435,25 @@ int main(int argc, char** argv) {
     static const int kL2cpuByY[4] = {0, 2, 3, 1};  // x280_l2cpu_tile idx sorted by ascending tile-y (3,5,7,9)
     uint32_t rgy = (uint32_t)(cy1 - cy0 + 1);
     uint32_t band_h = (rgy + (uint32_t)nodes - 1) / (uint32_t)nodes;
+    uint32_t band_w = (rgx + (uint32_t)nodes - 1) / (uint32_t)nodes;  // --colsplit: column bands
     for (int n = 0; n < nodes; n++) {
         NodeCtx& nc = node[n];
-        nc.l2cpu = (nodes == 1) ? l2cpu : kL2cpuByY[n];  // single: --l2cpu; multi: n-th cluster top->bottom by y
-        nc.bcx0 = (uint32_t)cx0;
-        nc.bcx1 = (uint32_t)cx1;
-        nc.bcy0 = (uint32_t)cy0 + (uint32_t)n * band_h;
-        nc.bcy1 = (n == nodes - 1) ? (uint32_t)cy1 : std::min<uint32_t>((uint32_t)cy1, nc.bcy0 + band_h - 1);
+        // single: --l2cpu; multi: --l2cpus list if given, else n-th cluster top->bottom by y.
+        nc.l2cpu = (nodes == 1)                                               ? l2cpu
+                   : (!l2cpus_list.empty() && (size_t)n < l2cpus_list.size()) ? l2cpus_list[n]
+                                                                              : kL2cpuByY[n];
+        if (col_split) {  // COLUMN bands: node n = cols [cx0+n*W..], full cy -- each cluster reads one SIDE of
+                          // NoC col 8; pair with per-node NoC planes so each side reads on its no-wrap plane.
+            nc.bcy0 = (uint32_t)cy0;
+            nc.bcy1 = (uint32_t)cy1;
+            nc.bcx0 = (uint32_t)cx0 + (uint32_t)n * band_w;
+            nc.bcx1 = (n == nodes - 1) ? (uint32_t)cx1 : std::min<uint32_t>((uint32_t)cx1, nc.bcx0 + band_w - 1);
+        } else {  // ROW bands (default): node n = rows [cy0+n*H..], full cx
+            nc.bcx0 = (uint32_t)cx0;
+            nc.bcx1 = (uint32_t)cx1;
+            nc.bcy0 = (uint32_t)cy0 + (uint32_t)n * band_h;
+            nc.bcy1 = (n == nodes - 1) ? (uint32_t)cy1 : std::min<uint32_t>((uint32_t)cy1, nc.bcy0 + band_h - 1);
+        }
     }
 
     // VIRTUAL coords for host UMD access; TRANSLATED for the X280 read-window table; NOC0 for the Tracy
@@ -538,10 +572,14 @@ int main(int argc, char** argv) {
             }
         }
         if (nodes > 1) {
+            CoreCoord ltile = pz::x280_l2cpu_tile(nc.l2cpu);
             printf(
-                "[node%d] l2cpu=%d band cols [%u..%u] x rows [%u..%u] = %u cores (%u lanes)\n",
+                "[node%d] l2cpu=%d tile(%u,%u) noc%llu band cols [%u..%u] x rows [%u..%u] = %u cores (%u lanes)\n",
                 n,
                 nc.l2cpu,
+                (uint32_t)ltile.x,
+                (uint32_t)ltile.y,
+                (unsigned long long)((n & 1) ^ (flip_noc ? 1u : 0u)),
                 nc.bcx0,
                 nc.bcx1,
                 nc.bcy0,
@@ -570,7 +608,7 @@ int main(int argc, char** argv) {
         // the clusters read on DIFFERENT NoC planes -- decontends the reads that otherwise collide on NoC0
         // (measured ~2x cyc/word penalty, 4.5->8, when two clusters read the same plane concurrently). For
         // nodes=2: node0(idx0, top rows) -> NoC0, node1(idx1, bottom rows) -> NoC1. Single node keeps --noc.
-        bcfg.read_noc = (nodes > 1) ? (uint64_t)(n & 1) : read_noc;
+        bcfg.read_noc = (nodes > 1) ? (uint64_t)((n & 1) ^ (flip_noc ? 1u : 0u)) : read_noc;
         bcfg.direct = direct;
         bcfg.split_noc = split_noc;
         bcfg.wnoc1 = wnoc1;
