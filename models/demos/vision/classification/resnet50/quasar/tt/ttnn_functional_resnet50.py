@@ -869,16 +869,67 @@ class resnet50:
             "conv_config": self.conv1_config,
         }
 
-        x, [x_height, x_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.experimental.quasar.conv2d(
-            input_tensor=fold_output_tensor,
-            weight_tensor=self.conv1_weight_tensor,
-            bias_tensor=self.conv1_bias_tensor,
-            **conv_kwargs,
-            compute_config=self.conv1_compute_config,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-            dtype=self.model_config["ACTIVATIONS_DTYPE"],
-        )
+        # Toggle for the stem conv1. on_device=True runs it on the device (currently deadlocks on the Quasar
+        # emulator — sliced split-conv, LLK-team WIP, ~/conv_stem_sliced.md). on_device=False computes the
+        # folded 4x4/s1/p0 conv on HOST from the REAL device input + weights so maxpool and all downstream
+        # layers still run and stay numerically correct. Flip this bool to go back and forth. Restore to True
+        # once the LLK MATH_PACK program-boundary fence lands.
+        on_device = True
+        if on_device:
+            (
+                x,
+                [x_height, x_width],
+                [self.conv1_weight_tensor, self.conv1_bias_tensor],
+            ) = ttnn.experimental.quasar.conv2d(
+                input_tensor=fold_output_tensor,
+                weight_tensor=self.conv1_weight_tensor,
+                bias_tensor=self.conv1_bias_tensor,
+                **conv_kwargs,
+                compute_config=self.conv1_compute_config,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+                dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            )
+        else:
+            logger.warning("[QSR] stem conv1 HOST bypass active (on_device=False)")
+            _inp = (
+                ttnn.to_torch(fold_output_tensor)
+                .float()
+                .reshape(1, self.conv1_input_height, self.conv1_input_width, self.conv1_input_channels)
+                .permute(0, 3, 1, 2)  # NHWC -> NCHW [1, in_ch, 115, 115]
+            )
+            _w = (
+                ttnn.to_torch(self.conv1_weight_tensor)
+                .float()
+                .reshape(self.conv1_output_channels, self.conv1_input_channels, *self.conv1_kernel_size)
+            )
+            _b = None
+            if self.conv1_bias_tensor is not None:
+                _b = ttnn.to_torch(self.conv1_bias_tensor).float().reshape(-1)[: self.conv1_output_channels]
+            _g = torch.nn.functional.conv2d(_inp, _w, bias=_b, stride=self.conv1_stride, padding=self.conv1_padding)
+            _g = torch.relu(_g)  # conv1_config fuses RELU
+            x_height, x_width = int(_g.shape[2]), int(_g.shape[3])
+            _flat = _g.permute(0, 2, 3, 1).reshape(1, 1, x_height * x_width, self.conv1_output_channels).contiguous()
+            # Upload height-sharded ROW_MAJOR (the layout quasar max_pool2d consumes — mirrors test_stem_maxpool).
+            _nhw = x_height * x_width
+            _grid = device.compute_with_storage_grid_size()
+            _maxc = _grid.x * _grid.y
+            _nc = max(c for c in range(1, _maxc + 1) if _nhw % c == 0)
+            _mem = ttnn.create_sharded_memory_config(
+                shape=(1, 1, _nhw // _nc, self.conv1_output_channels),
+                core_grid=ttnn.num_cores_to_corerangeset(_nc, _grid, True),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            x = ttnn.from_torch(
+                _flat.to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=_mem,
+            )
+            ttnn.deallocate(fold_output_tensor)
         x = _log_op("stem_conv1", x)
 
         x = ttnn.experimental.quasar.max_pool2d(
