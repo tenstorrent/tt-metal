@@ -49,7 +49,6 @@ struct SparseSDPAOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     // cache_batch_idx is excluded from the program hash, so it must be re-applied to the cached program on
     // every dispatch (the non-Buffer analog of buffer-address patching). Returns the per-core gather page

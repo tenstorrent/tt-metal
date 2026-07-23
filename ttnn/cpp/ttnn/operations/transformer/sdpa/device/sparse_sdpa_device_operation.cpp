@@ -8,7 +8,6 @@
 #include "ttnn/device.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <bit>
 
 namespace ttnn::prim {
 
@@ -185,46 +184,6 @@ SparseSDPAOperation::tensor_return_value_t SparseSDPAOperation::create_output_te
     return create_device_tensor(compute_output_specs(attrs, t), t.q.device());
 }
 
-ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
-    // dtypes + compute_kernel_config MUST be in the hash: q/kv may be bf16 or fp8_e4m3 (different CB
-    // formats, row byte widths, fp32-dest/unpack modes, and output dtype), and fp32_dest_acc_en changes
-    // the program. Same-shape-different-dtype (or -config) calls otherwise alias to one program and the
-    // second silently reuses the first's kernel (wrong results).
-    //
-    // kv's shape is hashed ONLY when kv is sharded. For an INTERLEAVED kv the per-page address is
-    // shape-independent (just page_id, page_size, num_banks), so T rides on the accessor's common runtime
-    // args and may change without recompiling. For a SHARDED kv the per-page bank mapping derives from the
-    // tensor shape (the shard-grid strides), which is baked into the accessor at create time and is NOT
-    // re-emitted on a cache-hit fast path — so a sharded kv MUST recompile when its shape changes, else a hit
-    // would reuse stale strides and read the wrong banks. (K_DIM is pinned via q's hashed shape regardless.)
-    return tt::tt_metal::operation::hash_operation<SparseSDPAOperation>(
-        std::bit_cast<uint32_t>(attrs.scale),
-        attrs.v_dim,
-        attrs.k_chunk_size,
-        attrs.compute_kernel_config,
-        t.q.logical_shape(),
-        t.q.dtype(),
-        t.kv.dtype(),
-        // kv.memory_config(): an ND-sharded kv produces different TensorAccessor compile-time args than an
-        // interleaved one, so they must be distinct programs.
-        t.kv.memory_config(),
-        // kv.logical_shape() when sharded (see above) OR block-cyclic: the block-cyclic remap bakes its
-        // T-dependent stride gap as a compile-time argument, so the cache length T must be in the hash (a
-        // different cache size is a distinct program). A plain interleaved kv keeps T out of the hash (sentinel
-        // shape) so changing T does not recompile.
-        (t.kv.memory_config().is_sharded() || attrs.has_block_cyclic()) ? t.kv.logical_shape() : tt::tt_metal::Shape{},
-        // Only whether kv is indexed (not which slot): cache_batch_idx's VALUE is a dynamic runtime arg
-        // (see get_dynamic_runtime_args), so indexing into a different slot reuses the same program.
-        attrs.has_indexed_kv_cache(),
-        // Block-cyclic remap configuration is compile-time; distinct sp/chunk_local/cache-size values produce
-        // distinct programs (T is hashed above). No runtime remap arg.
-        attrs.has_block_cyclic(),
-        attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
-        attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
-        t.indices.logical_shape(),
-        t.indices.dtype());
-}
-
 std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAOperation::get_dynamic_runtime_args(
     const SparseSDPAParams& attrs,
     const SparseSDPAInputs& t,
@@ -278,18 +237,8 @@ Tensor sparse_sdpa(
     using OperationType = ttnn::prim::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            .scale = scale,
-            .v_dim = v_dim,
-            .k_chunk_size = k_chunk_size,
-            .compute_kernel_config = compute_kernel_config,
-            .cache_batch_idx = cache_batch_idx,
-            .block_cyclic = block_cyclic,
-        },
-        OperationType::tensor_args_t{
-            .q = q,
-            .kv = kv,
-            .indices = indices,
-        });
+            scale, v_dim, k_chunk_size, compute_kernel_config, cache_batch_idx, block_cyclic},
+        OperationType::tensor_args_t{q, kv, indices, block_cyclic.has_value()});
 }
 
 }  // namespace ttnn::prim
