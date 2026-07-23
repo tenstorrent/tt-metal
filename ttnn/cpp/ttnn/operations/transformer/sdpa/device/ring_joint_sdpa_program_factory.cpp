@@ -1471,10 +1471,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : inactive_cb;
 
     // Signal CB: compute signals writer when last K-chunk starts.
-    // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
+    // Normally 1 page suffices: writer pops during SALAD before compute pushes the next Q's
+    // signal. But under sparse-frames, some Q chunks have zero K processed in an iter (fully
+    // drained), so compute pushes their per-iter signal immediately at the end of the K loop
+    // (no SALAD work between them). Under those conditions compute can push several signals
+    // faster than the writer drains — depth 1 deadlocks. Size the CB to num_q_chunks so compute
+    // can push a full iter's worth of signals without blocking; writer catches up asynchronously.
     constexpr uint32_t signal_page_size = 16;
     const uint32_t cb_signal =
-        use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
+        use_streaming_compute ? allocate_cb(signal_page_size, num_q_chunks, tt::DataFormat::UInt16) : inactive_cb;
 
     const std::vector<uint32_t> cb_compile_time_args = {
         cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,    cb_identity_scale_in,
