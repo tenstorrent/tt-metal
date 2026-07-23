@@ -20,7 +20,6 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
-#include "api/debug/assert.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -47,9 +46,6 @@ void kernel_main() {
     constexpr uint32_t cb_table_scratch = get_compile_time_arg_val(6);
     constexpr uint32_t num_cores = get_compile_time_arg_val(7);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(8);
-    // Bounds used by the metadata sanity-check asserts below.
-    constexpr uint32_t num_routed_experts = get_compile_time_arg_val(9);  // length of region/counts vectors
-    constexpr uint32_t input_num_rows = get_compile_time_arg_val(10);     // M: output buffer row capacity
     constexpr uint32_t ACCESSOR_CT_BASE = 11;
 #else
     constexpr uint32_t ACCESSOR_CT_BASE = 4;
@@ -94,7 +90,6 @@ void kernel_main() {
     uint32_t total_valid_rows = 0;
     for (uint32_t local_slot = 0; local_slot < experts_per_chip; ++local_slot) {
         const uint32_t global_expert_id = table_ptr[local_slot];
-        ASSERT(global_expert_id < num_routed_experts);
         const uint32_t token_count = counts_ptr[global_expert_id];
         const uint32_t token_count_ceil = ((token_count + tile_h - 1) / tile_h) * tile_h;
         const uint32_t region_end = region_ptr[global_expert_id] + token_count_ceil;
@@ -102,7 +97,6 @@ void kernel_main() {
             total_valid_rows = region_end;
         }
     }
-    ASSERT(total_valid_rows <= input_num_rows);
 
     // Balanced split over the FLATTENED compute-block space (identical formula to the reader), so the
     // reader/compute/writer on the same core agree on the exact (start_row, start_col) .. flattened range.

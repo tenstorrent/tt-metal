@@ -399,7 +399,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
 
 void PerTokenCastBackProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const PerTokenCastBackParams& /*operation_attributes*/,
+    const PerTokenCastBackParams& operation_attributes,
     const PerTokenCastBackInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto& program = cached_program.program;
@@ -408,7 +408,7 @@ void PerTokenCastBackProgramFactory::override_runtime_arguments(
     uint32_t src_e4m3_addr = tensor_args.input_e4m3.buffer()->address();
     uint32_t src_scale_addr = tensor_args.input_scale.buffer()->address();
     uint32_t dst_addr = tensor_return_value.buffer()->address();
-    const bool token_count_aware = tensor_args.expert_region_offsets.has_value();
+    const bool token_count_aware = operation_attributes.token_count_aware;
 
     if (token_count_aware) {
         const uint32_t region_addr = tensor_args.expert_region_offsets->buffer()->address();

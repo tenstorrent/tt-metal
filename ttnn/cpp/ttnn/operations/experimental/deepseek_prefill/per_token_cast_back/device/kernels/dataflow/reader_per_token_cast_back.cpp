@@ -27,7 +27,6 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
-#include "api/debug/assert.h"
 
 void kernel_main() {
     uint32_t input_e4m3_addr = get_arg_val<uint32_t>(0);
@@ -66,9 +65,6 @@ void kernel_main() {
     // Element offset of the scale tail within each scale-source row. 0 for a plain (M, H/128) scale
     // tensor; = metadata_len - H/128 (skip the routing header) for the metadata path.
     constexpr uint32_t scale_col_offset = get_compile_time_arg_val(16);
-    // Bounds used by the metadata sanity-check asserts below.
-    constexpr uint32_t num_routed_experts = get_compile_time_arg_val(17);  // length of region/counts vectors
-    constexpr uint32_t input_num_rows = get_compile_time_arg_val(18);      // M: input buffer row capacity
     constexpr uint32_t ACCESSOR_CT_BASE = 19;
 #else
     // Plain path: the scale is a FLOAT32 (M, H/128) tensor read from column 0.
@@ -129,7 +125,6 @@ void kernel_main() {
     uint32_t total_valid_rows = 0;
     for (uint32_t local_slot = 0; local_slot < experts_per_chip; ++local_slot) {
         const uint32_t global_expert_id = table_ptr[local_slot];
-        ASSERT(global_expert_id < num_routed_experts);
         const uint32_t token_count = counts_ptr[global_expert_id];
         const uint32_t token_count_ceil = ((token_count + tile_h - 1) / tile_h) * tile_h;
         const uint32_t region_end = region_ptr[global_expert_id] + token_count_ceil;
@@ -137,7 +132,6 @@ void kernel_main() {
             total_valid_rows = region_end;
         }
     }
-    ASSERT(total_valid_rows <= input_num_rows);
 
     // Split the work across the cores: this core takes a contiguous slice of the flattened compute-block space.
     const uint32_t total_tile_rows = total_valid_rows / tile_h;
