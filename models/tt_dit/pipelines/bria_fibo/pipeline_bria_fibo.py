@@ -41,7 +41,7 @@ from loguru import logger
 import ttnn
 from models.tt_dit.layers.module import LoadingError
 from models.tt_dit.models.transformers.transformer_bria_fibo import BriaFiboCheckpoint
-from models.tt_dit.models.vae.vae_wan2_1 import WanVAEDecoderAdapter
+from models.tt_dit.models.vae.vae_bria_fibo import WanVAEDecoderAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.bria_fibo.text_encoder import SmolLM3TextEncoderWrapper, build_text_encoder_layers

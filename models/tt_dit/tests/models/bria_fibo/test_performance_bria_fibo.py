@@ -710,7 +710,7 @@ def test_fibo_decode_device_profile(*, mesh_device, height, width):
     """
     import torch
 
-    from models.tt_dit.models.vae.vae_wan2_1 import WanVAEDecoderAdapter
+    from models.tt_dit.models.vae.vae_bria_fibo import WanVAEDecoderAdapter
     from models.tt_dit.parallel.config import VaeHWParallelConfig
     from models.tt_dit.parallel.manager import CCLManager
 

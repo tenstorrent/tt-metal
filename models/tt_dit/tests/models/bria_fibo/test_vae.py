@@ -50,7 +50,7 @@ def test_fibo_vae_decode(*, mesh_device):
     from loguru import logger
 
     import ttnn
-    from models.tt_dit.models.vae.vae_wan2_1 import WanDecoder
+    from models.tt_dit.models.vae.vae_bria_fibo import WanDecoder
     from models.tt_dit.parallel.config import VaeHWParallelConfig
     from models.tt_dit.parallel.manager import CCLManager
     from models.tt_dit.utils.check import assert_quality
@@ -144,7 +144,7 @@ def test_fibo_vae_decode_production(*, mesh_device):
     from loguru import logger
 
     import ttnn
-    from models.tt_dit.models.vae.vae_wan2_1 import WanDecoder
+    from models.tt_dit.models.vae.vae_bria_fibo import WanDecoder
     from models.tt_dit.parallel.config import VaeHWParallelConfig
     from models.tt_dit.parallel.manager import CCLManager
     from models.tt_dit.utils.check import assert_quality
