@@ -200,7 +200,7 @@
 
 - name: Mistral-7B unit tests
   cmd: |
-    export TT_METAL_WATCHER=120
+    export TT_METAL_WATCHER=30
     export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3
     pytest --timeout 600 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 600 models/tt_transformers/tests/test_attention.py
@@ -797,6 +797,7 @@
 
 - name: Stable Diffusion XL LoRA unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0
     exit_code=0
     pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/test_lora_fusion.py || exit_code=$?
@@ -819,6 +820,7 @@
 
 - name: Stable Diffusion XL refiner unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/refiner/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py
   model: sdxl
@@ -856,6 +858,7 @@
 
 - name: Stable Diffusion XL base unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_euler_discrete_scheduler.py
   model: sdxl
@@ -874,6 +877,7 @@
 
 - name: Stable Diffusion XL base unet-loop unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0
     exit_code=0
     pytest --timeout 1800 models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py || exit_code=$?
@@ -895,6 +899,7 @@
 
 - name: Stable Diffusion XL refiner unet-loop unit tests
   cmd: |
+    export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0
     exit_code=0
     pytest --timeout 1800 models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py || exit_code=$?
