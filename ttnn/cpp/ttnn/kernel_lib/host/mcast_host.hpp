@@ -19,8 +19,9 @@
 // PerRow, one PerColumn — express a 2D dual-multicast.
 //
 // It serves TWO sender modes over the same 1D line:
-//   * FIXED sender (default): one core on the line broadcasts to the rest. The sender sits on an
-//     edge of the axis so the receivers form ONE contiguous rect.
+//   * FIXED sender (default): one core on the line broadcasts to the rest. The fixed sender placement
+//     may be uniform (the same axis index on every line) or diagonal (the index advances by one per
+//     line). An interior sender targets the full line and the kernel pipe excludes the source.
 //   * ROTATING sender (`config.rotating_sender`): the sender role walks the whole line — over `span`
 //     rounds every core takes a turn broadcasting to the other `span-1`. Each core therefore acts
 //     as BOTH faces of the channel, so its runtime args carry its own dest rect AND the ordered
@@ -62,8 +63,18 @@ namespace ttnn::kernel_lib::host {
 // pure host concern (which cores send, what rect they target). A 2D single-sender->whole-grid mcast is
 // out of scope for a 1D helper — express it as two families (one PerRow, one PerColumn).
 enum class Mcast1DShape {
-    PerRow,     // one mcast per ROW: sender in a fixed COLUMN, broadcasts ACROSS its row
-    PerColumn,  // one mcast per COLUMN: sender in a fixed ROW, broadcasts DOWN its column
+    PerRow,     // one mcast per ROW: one sender broadcasts ACROSS its row
+    PerColumn,  // one mcast per COLUMN: one sender broadcasts DOWN its column
+};
+
+// Placement of the one fixed sender on each independent line. Uniform preserves the original
+// Mcast1D behavior. Diagonal advances the sender's broadcast-axis index by the line index and wraps
+// at the broadcast span:
+//   PerRow    -> sender_x(y) = (starting_sender_index + y) % columns
+//   PerColumn -> sender_y(x) = (starting_sender_index + x) % rows
+enum class Mcast1DSenderPlacement {
+    Uniform,
+    Diagonal,
 };
 
 // Mirrors the kernel's DataReadySignal. Flag = level flag (default, fastest); Counter = reset-free.
@@ -80,8 +91,8 @@ struct McastConfig {
     bool handshake = true;
     DataReadyMode data_ready = DataReadyMode::Flag;
     // Rotating sender: the sender role walks the line over `span` rounds; every core is a sender once
-    // and a receiver span-1 times. When set, `sender_index` is ignored (there is no single sender) and
-    // runtime_args() emits the rotating layout.
+    // and a receiver span-1 times. When set, the fixed sender placement is ignored (there is no single
+    // sender) and runtime_args() emits the rotating layout.
     bool rotating_sender = false;
     // Semaphore ids the helper assigns, starting here (data_ready = base, consumer_ready = base+1).
     // Two independent families on one grid pass base 0 and base 2. Ignored when `sem_ids` adopts.
@@ -148,9 +159,14 @@ public:
         tt::tt_metal::IDevice* device,
         const tt::tt_metal::CoreRangeSet& grid,
         Mcast1DShape shape,
-        uint32_t sender_index,
-        const McastConfig& cfg) :
-        device_(device), shape_(shape), sender_index_(sender_index), cfg_(cfg) {
+        uint32_t starting_sender_index,
+        const McastConfig& cfg,
+        Mcast1DSenderPlacement sender_placement = Mcast1DSenderPlacement::Uniform) :
+        device_(device),
+        shape_(shape),
+        starting_sender_index_(starting_sender_index),
+        sender_placement_(sender_placement),
+        cfg_(cfg) {
         TT_FATAL(device_ != nullptr, "Mcast1D: device must not be null");
 
         // Grid extent. The grid must be a single 0-anchored rectangle.
@@ -167,17 +183,21 @@ public:
         span_ = (shape_ == Mcast1DShape::PerRow) ? GC_ : GR_;
         active_ = span_ > 1;
 
-        // FIXED sender only: the sender must sit on an EDGE of the broadcast axis, so the receivers
-        // form ONE contiguous rect. A middle sender splits the row/column into two rects (multi-rect,
-        // deferred). ROTATING has no single sender — every index sends on its own round — so the
-        // constraint does not apply and sender_index is ignored.
+        // Diagonal is a FIXED-sender placement; combining it with rotating sender is contradictory.
         TT_FATAL(
-            cfg_.rotating_sender || !active_ || sender_index_ == 0 || sender_index_ == span_ - 1,
-            "Mcast1D: sender_index {} must be on an edge of the {}-wide broadcast axis (0 or {}); "
-            "a middle sender needs multi-rect, which is deferred",
-            sender_index_,
-            span_,
-            span_ - 1);
+            !cfg_.rotating_sender || sender_placement_ == Mcast1DSenderPlacement::Uniform,
+            "Mcast1D: Diagonal sender placement cannot be combined with rotating_sender");
+
+        // FIXED sender only: every selected sender must lie on its line. Interior senders are valid:
+        // their sender RT carries the full-line rect and SenderPipe's EXCLUDE-source mode reaches the
+        // other span-1 cores without loopback.
+        if (!cfg_.rotating_sender) {
+            TT_FATAL(
+                starting_sender_index_ < span_,
+                "Mcast1D: starting_sender_index {} must be less than the broadcast span {}",
+                starting_sender_index_,
+                span_);
+        }
 
         // Semaphore ids: adopt the factory's, or assign from base (data_ready, consumer_ready).
         if (cfg_.sem_ids.has_value()) {
@@ -266,8 +286,9 @@ public:
         if (cfg_.rotating_sender) {
             return active_;
         }
-        return (shape_ == Mcast1DShape::PerRow) ? (static_cast<uint32_t>(core.x) == sender_index_)
-                                                : (static_cast<uint32_t>(core.y) == sender_index_);
+        const uint32_t sender_index = sender_index_for_(core);
+        return (shape_ == Mcast1DShape::PerRow) ? (static_cast<uint32_t>(core.x) == sender_index)
+                                                : (static_cast<uint32_t>(core.y) == sender_index);
     }
 
     // Number of receiver cores a broadcast lands on (0 for a non-sender or a degenerate sender).
@@ -311,8 +332,22 @@ private:
 
     // The sender core a given receiver listens to (FIXED mode).
     tt::tt_metal::CoreCoord sender_of_(const tt::tt_metal::CoreCoord& core) const {
-        return (shape_ == Mcast1DShape::PerRow) ? tt::tt_metal::CoreCoord{sender_index_, core.y}
-                                                : tt::tt_metal::CoreCoord{core.x, sender_index_};
+        const uint32_t sender_index = sender_index_for_(core);
+        return (shape_ == Mcast1DShape::PerRow) ? tt::tt_metal::CoreCoord{sender_index, core.y}
+                                                : tt::tt_metal::CoreCoord{core.x, sender_index};
+    }
+
+    // The independent line index: row for PerRow, column for PerColumn.
+    uint32_t line_index_(const tt::tt_metal::CoreCoord& core) const {
+        return (shape_ == Mcast1DShape::PerRow) ? static_cast<uint32_t>(core.y) : static_cast<uint32_t>(core.x);
+    }
+
+    // The fixed sender's broadcast-axis index on the line containing `core`.
+    uint32_t sender_index_for_(const tt::tt_metal::CoreCoord& core) const {
+        if (sender_placement_ == Mcast1DSenderPlacement::Diagonal) {
+            return (starting_sender_index_ + line_index_(core)) % span_;
+        }
+        return starting_sender_index_;
     }
 
     // The logical core at axis position `i` on the line `core` belongs to.
@@ -326,12 +361,24 @@ private:
         return detail::noc_ordered_bbox(cfg_.noc, vs);
     }
 
-    // FIXED sender's dest rectangle (receivers only), virtualized + NOC-ordered.
+    // FIXED sender's dest rectangle, virtualized + NOC-ordered. Preserve the compact receiver-only
+    // rectangle for edge senders. An interior sender uses the full line; SenderPipe detects that the
+    // sender lies inside and EXCLUDE-source mode broadcasts to exactly the other span-1 cores.
     std::vector<uint32_t> sender_rect_(const tt::tt_metal::CoreCoord& core) const {
-        // Receiver range along the broadcast axis = [lo, hi], excluding the edge sender.
-        const uint32_t lo = (sender_index_ == 0) ? 1u : 0u;
-        const uint32_t hi = (sender_index_ == 0) ? (span_ - 1) : (span_ - 2);
-        return noc_ordered_bbox_({virt_(line_coord_(core, lo)), virt_(line_coord_(core, hi))});
+        const uint32_t sender_index = sender_index_for_(core);
+        if (sender_index == 0) {
+            return noc_ordered_bbox_({virt_(line_coord_(core, 1u)), virt_(line_coord_(core, span_ - 1u))});
+        }
+        if (sender_index == span_ - 1u) {
+            return noc_ordered_bbox_({virt_(line_coord_(core, 0u)), virt_(line_coord_(core, span_ - 2u))});
+        }
+
+        std::vector<std::pair<uint32_t, uint32_t>> coords;
+        coords.reserve(span_);
+        for (uint32_t i = 0; i < span_; ++i) {
+            coords.push_back(virt_(line_coord_(core, i)));
+        }
+        return noc_ordered_bbox_(coords);
     }
 
     // ROTATING runtime block: the full-line dest rect (all span cores) followed by the ordered sender
@@ -355,7 +402,8 @@ private:
     tt::tt_metal::IDevice* device_;
     tt::tt_metal::CoreRangeSet grid_;
     Mcast1DShape shape_;
-    uint32_t sender_index_;
+    uint32_t starting_sender_index_;
+    Mcast1DSenderPlacement sender_placement_;
     McastConfig cfg_;
     uint32_t GR_ = 1;
     uint32_t GC_ = 1;
