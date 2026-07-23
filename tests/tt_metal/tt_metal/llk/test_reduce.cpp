@@ -282,6 +282,11 @@ static experimental::KernelSpec::CompilerOptions::Defines build_reduce_defines(c
     }
     reduce_defines.emplace("MATH_ONLY", test_config.math_only_reduce ? "1" : "0");
     reduce_defines.emplace("DST_ACCUM_MODE", test_config.fp32_dest_acc_en ? "1" : "0");
+    // Opt into the 2x-packed src-register format via a compile-time define (presence-only);
+    // jit_build detects experimental::k2xSrcFormatDefine and flips the unpack format-table remap.
+    if (test_config.enable_2x_src_format) {
+        reduce_defines.emplace(experimental::k2xSrcFormatDefine, "1");
+    }
     return reduce_defines;
 }
 
@@ -430,7 +435,6 @@ void run_single_core_reduce_program(
             .fpu_math_fidelity = test_config.math_fidelity,
             .enable_32_bit_dest = test_config.fp32_dest_acc_en,
             .double_buffer_dest = !test_config.dst_full_sync_en,
-            .enable_2x_src_register = test_config.enable_2x_src_format,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{

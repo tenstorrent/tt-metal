@@ -14,6 +14,12 @@
 
 namespace tt::tt_metal::experimental {
 
+// Compile-time define a compute kernel adds to KernelSpec::compiler_options.defines to opt into
+// the 2x-packed source-register format (Mxfp4 only). See the note in ComputeGen2Config below.
+// This is the single source of truth for the define name, shared by the host-side jit_build path
+// that detects it. Kept as a macro name (no value required); presence is what matters.
+inline constexpr const char* k2xSrcFormatDefine = "ENABLE_2X_SRC_FORMAT";
+
 // ============================================================================
 //  ComputeHardwareConfig
 // ============================================================================
