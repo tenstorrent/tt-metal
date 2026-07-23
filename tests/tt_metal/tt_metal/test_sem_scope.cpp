@@ -60,7 +60,7 @@ protected:
 
     // Runs the smoke kernel with the given scope define and returns the value the
     // kernel read back from the semaphore after `iterations` increments.
-    uint32_t run_scope(const std::string& scope_define) {
+    uint32_t run_scope(const std::string& scope_define, bool with_down = false) {
         // Zero the report scratch word.
         std::vector<uint32_t> zero(1, 0);
         tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, zero);
@@ -75,12 +75,18 @@ protected:
             .target_nodes = core,
         };
 
+        std::map<std::string, std::string> defs{{scope_define, "1"}};
+        if (with_down) {
+            defs.emplace("SEM_SCOPE_UPDOWN", "1");  // kernel also does down(N) after up(N)
+        }
+        experimental::KernelSpec::CompilerOptions::Defines defines_obj(defs);
+
         const experimental::KernelSpecName DM_KERNEL{"sem_scope_kernel"};
         experimental::KernelSpec kernel_spec{
             .unique_id = DM_KERNEL,
             .source = kernel_path,
             .num_threads = 1,
-            .compiler_options = {.defines = {{scope_define, "1"}}},
+            .compiler_options = {.defines = defines_obj},
             .semaphore_bindings =
                 {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times"}},
@@ -146,6 +152,27 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeIncrement) {
     log_info(LogTest, "LOCAL_NONATOMIC scope value(): {} (expected {})", observed, iterations);
     EXPECT_EQ(observed, iterations)
         << "Semaphore<LOCAL_NONATOMIC>::up()/value() (legacy default) did not produce the expected count.";
+}
+
+// up(N) then down(N) must leave the semaphore at 0, per scope. For EXTERNAL this
+// exercises the atomic NoC decrement (INCR_GET of a negative value); for
+// DM_LOCAL_CACHED the AMO subtract; for LOCAL_NONATOMIC the legacy decrement.
+TEST_F(SemScopeFixture, TestExternalScopeUpDown) {
+    const uint32_t observed = run_scope("SEM_SCOPE_EXTERNAL", /*with_down=*/true);
+    log_info(LogTest, "EXTERNAL up/down value(): {} (expected 0)", observed);
+    EXPECT_EQ(observed, 0u) << "Semaphore<EXTERNAL>::down() (atomic NoC decrement) did not return to 0.";
+}
+
+TEST_F(SemScopeFixture, TestDmLocalCachedScopeUpDown) {
+    const uint32_t observed = run_scope("SEM_SCOPE_DM_LOCAL_CACHED", /*with_down=*/true);
+    log_info(LogTest, "DM_LOCAL_CACHED up/down value(): {} (expected 0)", observed);
+    EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() (AMO subtract) did not return to 0.";
+}
+
+TEST_F(SemScopeFixture, TestLocalNonatomicScopeUpDown) {
+    const uint32_t observed = run_scope("SEM_SCOPE_LEGACY", /*with_down=*/true);
+    log_info(LogTest, "LOCAL_NONATOMIC up/down value(): {} (expected 0)", observed);
+    EXPECT_EQ(observed, 0u) << "Semaphore<LOCAL_NONATOMIC>::down() (legacy) did not return to 0.";
 }
 
 }  // namespace tt::tt_metal

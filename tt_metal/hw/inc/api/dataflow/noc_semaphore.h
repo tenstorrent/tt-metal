@@ -98,9 +98,13 @@ public:
      * @brief Decrement the semaphore by the specified value, blocking until the semaphore is sufficient.
      *
      * DM_LOCAL_CACHED: atomic AMO subtract after a coherent spin.
-     * EXTERNAL / LOCAL_NONATOMIC: single-owner (non-atomic) decrement after an uncached spin.
-     *   (Cross-domain atomic decrement is not available; EXTERNAL semaphores are
-     *    counting-up + single-owner reset.)
+     * EXTERNAL: the decrement is an ATOMIC self-targeted NoC RMW (INCR_GET with a negative
+     *   increment; wrap=31 => 32-bit modular subtract), so it serializes with concurrent
+     *   producer increments at the NIU — no lost update. (HW/emu-verified:
+     *   NocAtomicOpsFixture.TestAtomicDecrementIncrGet.) The wait-then-decrement is still
+     *   only single-consumer-safe (the >=value check and the decrement are separate); a
+     *   multi-consumer EXTERNAL decrement must be host-guarded (Phase-2) or use CAS.
+     * LOCAL_NONATOMIC: legacy single-owner (non-atomic) decrement after an uncached spin.
      *
      * @param value The value to decrement the semaphore by.
      */
@@ -112,7 +116,17 @@ public:
             }
             WAYPOINT("NSDD");
             __atomic_sub_fetch(reinterpret_cast<uint32_t*>(l1_offset_), value, __ATOMIC_SEQ_CST);
-        } else {
+        } else if constexpr (Scope == SemScope::EXTERNAL) {
+            do {
+                invalidate_l1_cache();
+            } while ((*sem_addr) < value);
+            WAYPOINT("NSDD");
+            // Atomic decrement at the NIU: subtract via INCR_GET of the two's-complement of
+            // value (wrap=31 gives a full 32-bit modular add). Serializes with concurrent
+            // producer increments — unlike the old *sem -= value, which could lose one.
+            noc_semaphore_inc(::get_noc_addr(l1_offset_), (uint32_t)(0u - value));
+            noc_async_atomic_barrier();
+        } else {  // LOCAL_NONATOMIC (legacy)
             do {
                 invalidate_l1_cache();
             } while ((*sem_addr) < value);
