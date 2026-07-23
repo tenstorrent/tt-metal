@@ -20,7 +20,9 @@ Usage (from tt-metal root):
     python models/experimental/vibevoice/demo/demo.py --demo 2p_goat
     python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --output_dir ~/vv_ttnn_long
     python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 256
-    python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 32 --trace
+    python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 32
+    python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min --isl 1024 --warmup
+    python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 32 --no-trace
     python models/experimental/vibevoice/demo/demo.py --text ... --voice alice.wav carter.wav frank.wav --max_new_tokens 64 --debug
 """
 
@@ -44,6 +46,11 @@ from models.experimental.vibevoice.common.resource_utils import (
     voice_preset_demo_id,
     ensure_demo_resources,
     load_script,
+)
+from models.experimental.vibevoice.demo.perf_metrics import (
+    crop_processor_inputs_to_isl,
+    format_perf_line,
+    summarize_generate_perf,
 )
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
 
@@ -105,6 +112,23 @@ def main() -> int:
         default=2.0,
         help="Max AR steps ≈ max_length_times × prefill token length (HF default: 2)",
     )
+    ap.add_argument(
+        "--isl",
+        type=int,
+        default=None,
+        help="Crop processor batch to the first N tokens after tokenization (input sequence length)",
+    )
+    ap.add_argument(
+        "--warmup",
+        action="store_true",
+        help="Run an untimed short generate before the measured pass (warm program cache)",
+    )
+    ap.add_argument(
+        "--warmup_tokens",
+        type=int,
+        default=4,
+        help="AR steps for --warmup generate (default: 4)",
+    )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--text", default=None, help="Custom script path (overrides --demo)")
     ap.add_argument(
@@ -121,13 +145,15 @@ def main() -> int:
     )
     ap.add_argument(
         "--trace",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="ttnn-trace the whole steady-state speech-diffusion frame as ONE device-driven graph "
         "(VV_TRACE_SEGMENT=1), the llama shape: neg-LM + diffusion + post-diffusion + pos-LM fused "
         "and replayed per frame — positions self-advance (ttnn.plus_one), RoPE is gathered on device "
         "(bf16), the neg embed is a per-frame input (a segment's first frame folds the negative "
         "prefill), pos hidden is loop-carried on device. Lifecycle is warmup -> throwaway capture -> "
-        "reset (no capture-poison re-run). Reserves a large trace region & 2 command queues.",
+        "reset (no capture-poison re-run). Reserves a large trace region & 2 command queues. "
+        "On by default; pass --no-trace for eager decode.",
     )
     args = ap.parse_args()
 
@@ -139,6 +165,9 @@ def main() -> int:
     if args.trace:
         os.environ["VV_TRACE_SEGMENT"] = "1"
         print("[demo_ttnn] trace enabled: whole-segment fused frame (VV_TRACE_SEGMENT=1, llama shape)", flush=True)
+    else:
+        os.environ["VV_TRACE_SEGMENT"] = "0"
+        print("[demo_ttnn] trace disabled (--no-trace): eager decode", flush=True)
 
     if args.text:
         text_path = Path(args.text)
@@ -216,7 +245,14 @@ def main() -> int:
     if voice_samples:
         processor_kwargs["voice_samples"] = [voice_samples]
     inputs = processor(**processor_kwargs)
-    prefill_len = inputs["input_ids"].shape[1]
+    full_prefill_len = int(inputs["input_ids"].shape[1])
+    if args.isl is not None:
+        inputs = crop_processor_inputs_to_isl(inputs, args.isl)
+        print(
+            f"[demo_ttnn] ISL crop: {full_prefill_len} → {args.isl} tokens (post-tokenization)",
+            flush=True,
+        )
+    prefill_len = int(inputs["input_ids"].shape[1])
 
     if args.debug:
         speech_slots = int(inputs["speech_input_mask"][0].sum().item()) if "speech_input_mask" in inputs else 0
@@ -235,7 +271,8 @@ def main() -> int:
     if max_ar_steps is None:
         max_ar_steps = int(args.max_length_times * prefill_len)
     print(
-        f"[demo_ttnn] prefill tokens={prefill_len}  max AR steps≈{max_ar_steps} (max_length_times={args.max_length_times})",
+        f"[demo_ttnn] prefill tokens={prefill_len}  max AR steps≈{max_ar_steps} "
+        f"(max_new_tokens={args.max_new_tokens} max_length_times={args.max_length_times})",
         flush=True,
     )
 
@@ -274,7 +311,6 @@ def main() -> int:
                 f"AR loop up to {max_ar_steps} steps (see [VV_DEBUG] per step)",
                 flush=True,
             )
-        _t_gen0 = _time.perf_counter()
         generate_kwargs = {
             "input_ids": inputs["input_ids"],
             "attention_mask": inputs["attention_mask"],
@@ -288,30 +324,36 @@ def main() -> int:
         if voice_samples and inputs.get("speech_tensors") is not None:
             generate_kwargs["speech_tensors"] = inputs["speech_tensors"]
             generate_kwargs["speech_masks"] = inputs["speech_masks"]
+
+        if args.warmup:
+            warm_n = max(1, int(args.warmup_tokens))
+            print(f"[demo_ttnn] warmup generate (max_new_tokens={warm_n}, untimed)...", flush=True)
+            warm_kw = dict(generate_kwargs)
+            warm_kw["max_new_tokens"] = warm_n
+            torch.manual_seed(args.seed)
+            _ = tt_model.generate(**warm_kw)
+            ttnn.synchronize_device(mesh)
+            print("[demo_ttnn] warmup done; starting timed generate", flush=True)
+
+        torch.manual_seed(args.seed)
+        _t_gen0 = _time.perf_counter()
         tt_out = tt_model.generate(**generate_kwargs)
+        ttnn.synchronize_device(mesh)
         _generate_wall = _time.perf_counter() - _t_gen0
         print(f"[demo_ttnn] generate wall: {_generate_wall:.1f}s", flush=True)
         tt_speech = tt_out.speech_outputs[0].to(torch.float32).reshape(-1)
         tt_gen = tt_out.sequences[0, prefill_len:]
         _ar_tokens = int(tt_gen.numel())
-        _prefill_tps = prefill_len / tt_out.prefill_wall_s if tt_out.prefill_wall_s > 0 else 0.0
-        # Decode throughput: when the fused-frame trace (--trace) is active, report the STEADY-STATE rate
-        # (trace-replay frames only, excluding warmup+capture) — apples-to-apples with the
-        # tt_transformers/llama demos.  Otherwise fall back to the whole-loop rate.
-        if tt_out.steady_decode_frames > 0:
-            _decode_wall = tt_out.steady_decode_s
-            _decode_tps = tt_out.steady_decode_frames / tt_out.steady_decode_s
-        else:
-            _decode_wall = tt_out.decode_wall_s
-            _decode_tps = _ar_tokens / tt_out.decode_wall_s if tt_out.decode_wall_s > 0 else 0.0
-        print(
-            f"[demo_ttnn] prefill_tokens={prefill_len}  "
-            f"TTFT={tt_out.prefill_wall_s:.2f}s  "
-            f"decode={_decode_wall:.2f}s  "
-            f"decode={_decode_tps:.1f} tok/s  "
-            f"prefill={_prefill_tps:.0f} tok/s",
-            flush=True,
+        perf = summarize_generate_perf(
+            prefill_len=prefill_len,
+            ar_tokens=_ar_tokens,
+            prefill_wall_s=tt_out.prefill_wall_s,
+            decode_wall_s=tt_out.decode_wall_s,
+            generate_wall_s=_generate_wall,
+            steady_decode_s=tt_out.steady_decode_s,
+            steady_decode_frames=tt_out.steady_decode_frames,
         )
+        print(f"[demo_ttnn] {format_perf_line(perf)}", flush=True)
     finally:
         ttnn.close_device(mesh)
 
@@ -329,18 +371,15 @@ def main() -> int:
         "text_file": text_path.name,
         "voice_cloning": use_voice_cloning,
         "voice_mapping": voice_mapping,
-        "prefill_tokens": prefill_len,
-        "ar_tokens_generated": int(tt_gen.numel()),
-        "ttft_s": round(tt_out.prefill_wall_s, 3),
-        "decode_wall_s": round(_decode_wall, 3),  # steady-state (replay) when traced, else whole-loop
-        "decode_toks_per_s": round(_decode_tps, 2),  # steady-state (replay only) when --trace
-        "decode_frames": tt_out.steady_decode_frames,  # # of timed replay frames (0 if not traced)
-        "prefill_toks_per_s": round(_prefill_tps, 1),
-        "generate_wall_s": round(_generate_wall, 3),
+        "isl": args.isl,
+        "full_prefill_tokens": full_prefill_len,
+        "warmup": bool(args.warmup),
+        "warmup_tokens": args.warmup_tokens if args.warmup else None,
         "max_length_times": args.max_length_times,
         "max_new_tokens": args.max_new_tokens,
         "tt_wav": str(tt_path),
         "script_copy": str(paths["script"]),
+        **perf,
     }
     paths["meta"].write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
