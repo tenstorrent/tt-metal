@@ -71,3 +71,30 @@ def test_dram_shard_31b_gate_up_fits_with_in0_cap(monkeypatch):
     # hidden=5376, gu_n=2*21504/4=10752
     assert can_dram_shard(5376, 10752, dtype=ttnn.bfloat16)
     assert can_dram_shard(5376, 10752, dtype=ttnn.bfloat8_b)
+
+
+def test_prefill_progcfg_in0_block_w_divides_kt():
+    """26B padded down_proj K=288 → Kt=9; in0_block_w must divide Kt."""
+    from models.demos.gemma4.tt.dram_sharded import prefill_progcfg
+
+    pc = prefill_progcfg(m=512, k=288, n=2816)
+    k_tiles = (288 + 31) // 32
+    assert k_tiles % pc.in0_block_w == 0
+
+
+def test_weight_cache_path_qualified_by_mesh():
+    """TP=4 on 1x4 vs 2x4 must not share tensorbin directories."""
+    from pathlib import Path
+
+    import ttnn
+    from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+
+    args = Gemma4ModelArgs()
+    args.model_cache_path = Path("/tmp/gemma4_cache_test")
+    p_1x4 = args.weight_cache_path(ttnn.bfloat16, mesh_shape=(1, 4))
+    p_2x4 = args.weight_cache_path(ttnn.bfloat16, mesh_shape=(2, 4))
+    p_1x1 = args.weight_cache_path(ttnn.bfloat16, mesh_shape=(1, 1))
+    assert "mesh1x4" in str(p_1x4)
+    assert "mesh2x4" in str(p_2x4)
+    assert p_1x4 != p_2x4
+    assert "mesh" not in Path(p_1x1).name

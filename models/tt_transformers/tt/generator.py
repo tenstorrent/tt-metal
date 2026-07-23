@@ -1080,6 +1080,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         """
         return get_block_size(kv_cache)
 
+    def _prefill_get_last_token(self, last_token_idx):
+        """``get_last_token`` for single-chunk prefill (relative to padded seq).
+
+        Default: tile-align for lm_head slice. Models that need the true last
+        index for KV fill length (Gemma4 bounded sliding) override this and
+        tile-align inside the model before lm_head.
+        """
+        return (int(last_token_idx) // 32) * 32
+
     def _chunk_prefill_get_last_token(self, *, is_last_chunk, last_token_idx_in_chunk, chunk_size):
         """``get_last_token`` for one generator-level prefill chunk.
 
@@ -1091,6 +1100,25 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         """
         del is_last_chunk, chunk_size
         return (last_token_idx_in_chunk // 32) * 32
+
+    def _adjust_last_prefill_chunk(
+        self,
+        *,
+        last_chunk_start,
+        last_token_idx_in_chunk,
+        last_token_idx_in_seq,
+        chunk_size,
+        block_size,
+        model_id=-1,
+    ):
+        """Optionally rewrite the last multi-chunk start (relative, excl. cache).
+
+        Default: no-op. Gemma4 bounded sliding expands the last-chunk start so a
+        full ``chunk_size`` window covers ≥ sliding_window ending at the true
+        last token (avoids under-filled deferred ring fill).
+        """
+        del last_token_idx_in_seq, chunk_size, block_size, model_id
+        return last_chunk_start, last_token_idx_in_chunk
 
     def _chunk_prefill_page_table(self, page_table, *, user_id, model_id=-1, kv_cache=None):
         """Page table + block_size for multi-chunk ``chunk_page_table`` slices.
@@ -1157,6 +1185,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             chunk_source_page_table, block_size = self._chunk_prefill_page_table(
                 page_table, user_id=user_id, model_id=model_id, kv_cache=kv_cache
             )
+            last_chunk_start, last_token_idx_in_chunk = self._adjust_last_prefill_chunk(
+                last_chunk_start=last_chunk_start,
+                last_token_idx_in_chunk=last_token_idx_in_chunk,
+                last_token_idx_in_seq=last_token_idx_in_seq,
+                chunk_size=chunk_size,
+                block_size=block_size,
+                model_id=model_id,
+            )
             page_table_user = chunk_source_page_table[user_id : user_id + 1, :]
             # Trim over-wide tables (vLLM hybrid pads per-layer tables to
             # max_num_blocks_per_req) so the pad width below stays non-negative.
@@ -1169,29 +1205,30 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
             CHUNK_USER_ID = 0
 
-            for chunk_start in range(num_cached_tokens, num_cached_tokens + seq_len, chunk_size):
+            # Build absolute chunk starts; inject an expanded last start when the
+            # Gemma4 (or other) adjust hook moves it off the chunk_size grid.
+            last_abs = num_cached_tokens + last_chunk_start
+            chunk_starts = list(range(num_cached_tokens, num_cached_tokens + seq_len, chunk_size))
+            chunk_starts = [s for s in chunk_starts if s < last_abs]
+            chunk_starts.append(last_abs)
+
+            for chunk_start in chunk_starts:
                 # These are absolute, i.e. including the cached tokens
                 chunk_end = chunk_start + chunk_size
                 # These are relative, i.e. excluding the cached tokens
                 chunk_start_relative = chunk_start - num_cached_tokens
-                chunk_end_relative = chunk_end - num_cached_tokens
-                assert chunk_end <= num_cached_tokens + seq_len, (
-                    f"chunk_end should be less or equal to "
-                    f"num_cached_tokens + seq_len. "
-                    f"Got: chunk_end={chunk_end}, "
-                    f"num_cached_tokens={num_cached_tokens}, seq_len={seq_len}"
-                )
+                chunk_end_relative = min(chunk_end - num_cached_tokens, seq_len)
+                is_last_chunk = chunk_start == last_abs
 
-                # Select tokens for the current chunk.
-                # Cached tokens were already excluded (not part of the input),
-                # so using relative indexes.
+                # Select tokens for the current chunk (pad last chunk to chunk_size).
                 chunk_tokens = tokens[:, chunk_start_relative:chunk_end_relative]
+                if chunk_tokens.shape[-1] < chunk_size:
+                    chunk_tokens = torch.nn.functional.pad(chunk_tokens, (0, chunk_size - chunk_tokens.shape[-1]))
 
                 # Select pages for the current chunk.
                 # Cached pages must be skipped as well,
                 # so using absolute indexes.
                 chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
-                is_last_chunk = chunk_start_relative == last_chunk_start
 
                 chunk_inputs = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
@@ -1220,7 +1257,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     chunk_start_idx=chunk_start,
                     get_last_token=self._chunk_prefill_get_last_token(
                         is_last_chunk=is_last_chunk,
-                        last_token_idx_in_chunk=last_token_idx_in_chunk,
+                        last_token_idx_in_chunk=last_token_idx_in_chunk if is_last_chunk else (chunk_size - 1),
                         chunk_size=chunk_size,
                     ),
                     kv_cache=kv_cache,
@@ -1248,7 +1285,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 rot_mats_local=rot_mats_local_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
-                get_last_token=-1 if batch_size > 1 else (last_token_idx // 32) * 32,
+                get_last_token=(-1 if batch_size > 1 else self._prefill_get_last_token(last_token_idx)),
                 kv_cache=kv_cache,
                 batch_size=batch_size,
             )

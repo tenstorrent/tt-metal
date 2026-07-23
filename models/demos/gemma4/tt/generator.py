@@ -156,6 +156,7 @@ def _patch_model_args(
             mesh_device=mesh_device,
             non_qb2_default=GEMMA4_DEFAULT_PREFILL_CHUNK,
             model_name_or_path=model_path,
+            bounded_sliding=bounded_sliding,
         )
         if _needs_chunk_for_dram:
             logger.warning(
@@ -243,21 +244,87 @@ class ChunkedPrefillPageTableGuardMixin:
         # it matches the HMA effective block_size instead of the declared shape.
         return self._effective_paged_block_size(kv_cache)
 
-    def _chunk_prefill_get_last_token(self, *, is_last_chunk, last_token_idx_in_chunk, chunk_size):
-        """Per-chunk fill length for Gemma4 multi-chunk prefill.
+    def _uses_bounded_sliding_kv(self, model_id=-1):
+        model = self.model[model_id]
+        return bool(getattr(model, "bounded_sliding_kv_cache", False))
 
-        Intermediate chunks are fully real tokens (padding lives only in the last
-        chunk). The legacy default reuses the last-chunk's short index for every
-        chunk, which under-fills intermediate KV and breaks cross-chunk /
-        bounded-sliding attention. Return ``-1`` for intermediate chunks so:
-          * ``valid_seq_len`` stays unset → the whole chunk is written to KV
-          * the model skips the last-token lm_head slice (logits are discarded)
-        Keep the real (tile-aligned) index on the last chunk.
+    def _prefill_get_last_token(self, last_token_idx):
+        """True last-token index when bounded (fill length); else tile-align."""
+        if self._uses_bounded_sliding_kv():
+            return int(last_token_idx)
+        return (int(last_token_idx) // 32) * 32
+
+    def _chunk_prefill_get_last_token(self, *, is_last_chunk, last_token_idx_in_chunk, chunk_size):
+        """Per-chunk ``get_last_token`` for Gemma4 multi-chunk prefill.
+
+        Intermediate → ``-1`` (skip lm_head; skip bounded ring stash — last chunk
+        overwrites). Last chunk → true index when bounded (model tile-aligns for
+        lm_head); else legacy tile-align.
         """
         del chunk_size
-        if is_last_chunk:
-            return (last_token_idx_in_chunk // 32) * 32
-        return -1
+        if not is_last_chunk:
+            return -1
+        if self._uses_bounded_sliding_kv():
+            return int(last_token_idx_in_chunk)
+        return (int(last_token_idx_in_chunk) // 32) * 32
+
+    def _adjust_last_prefill_chunk(
+        self,
+        *,
+        last_chunk_start,
+        last_token_idx_in_chunk,
+        last_token_idx_in_seq,
+        chunk_size,
+        block_size,
+        model_id=-1,
+    ):
+        """Expand last-chunk start so one full chunk covers ≥ sliding window.
+
+        When bounded and the grid remnant is ``< cache_position_modulo``, pull
+        the start earlier (align by ``max(block_size, 128)``). Do **not** merge
+        the previous chunk or flush intermediates — that corrupted token-0.
+        """
+        if not self._uses_bounded_sliding_kv(model_id):
+            return last_chunk_start, last_token_idx_in_chunk
+        modulo = None
+        model = self.model[model_id]
+        for layer in getattr(model, "layers", []):
+            cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+            if cfg is not None and getattr(cfg, "cache_position_modulo", None) is not None:
+                modulo = int(cfg.cache_position_modulo)
+                break
+        if modulo is None:
+            sw = getattr(getattr(model, "hf_config", None), "sliding_window", None)
+            modulo = int(sw) if sw else None
+        if not modulo or last_chunk_start <= 0:
+            return last_chunk_start, last_token_idx_in_chunk
+        remnant = int(last_token_idx_in_chunk) + 1
+        if remnant >= modulo:
+            return last_chunk_start, last_token_idx_in_chunk
+        # paged_fill_cache has no start-position input: row r is written to
+        # circular slot r % modulo. Keep the expanded chunk's absolute start
+        # ring-aligned so local row indices map to the corresponding absolute
+        # slots. Pulling back by one complete window gives the last chunk at
+        # least one full window of real K/V without changing its ring origin.
+        align = max(int(block_size), 128)
+        target_start = max(0, int(last_chunk_start) - modulo)
+        new_start = ((target_start + align - 1) // align) * align
+        new_idx = int(last_token_idx_in_seq) - new_start
+        if new_idx + 1 > int(chunk_size):
+            raise ValueError(f"Expanded bounded last chunk has {new_idx + 1} rows, exceeding chunk_size={chunk_size}")
+        if new_start % modulo != 0:
+            raise ValueError(f"Expanded bounded last chunk start={new_start} must be aligned to modulo={modulo}")
+        logger.info(
+            "Gemma4 multi-chunk: expanded ring-aligned last chunk start {}→{} "
+            "(remnant={}, expanded_rows={}, sliding_window={}, align={})",
+            last_chunk_start,
+            new_start,
+            remnant,
+            new_idx + 1,
+            modulo,
+            align,
+        )
+        return new_start, new_idx
 
     def _refresh_prefill_valid_seq_len(self, *, model_id=-1, last_token_idx=None, num_cached_tokens=0):
         """Refresh the persistent bounded-fill cap tensor out of any active trace.
@@ -549,6 +616,10 @@ class ChunkedPrefillPageTableGuardMixin:
             and seq_len > max_chunk
             and max_chunk in (128, 512, 1024, 2048, 4096)
             and not bool(getattr(self.model[model_id], "hidden_size_per_layer_input", 0))
+            # Bounded final-chunk K/V must be stashed eagerly and committed only
+            # after lm_head. A captured chunk has get_last_token=-1 and cannot
+            # perform the host-side boundary merge safely after the trace.
+            and not self._uses_bounded_sliding_kv(model_id)
         )
         if not use_traced_chunks:
             return super().prefill_forward_single_user_text(
