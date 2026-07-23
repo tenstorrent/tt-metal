@@ -199,6 +199,39 @@ class JanusForConditionalGeneration(JanusMultimodalGenerator, SupportsMultiModal
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
+    # ── vLLM ``VllmModelForTextGeneration`` protocol shim ────────────────
+    #
+    # vLLM's ``is_text_generation_model`` predicate checks for
+    # ``embed_input_ids``, ``forward(input_ids, positions)``, and
+    # ``compute_logits`` on the resolved model class — that's how upstream
+    # ``runner_type=="generate"`` validates a model is generative. Other TT
+    # multimodal bridges (Mistral3, Gemma3, …) get away without these because
+    # vLLM finds an upstream torch implementation in its registry first and
+    # uses *that* class for inspection, while the plugin's ``TT``-prefix
+    # logic routes execution to the TT class. Janus has no upstream vLLM
+    # impl, so inspection lands on this class (same situation as Gemma4).
+    #
+    # Actual execution on the TT path goes through ``prefill_forward`` /
+    # ``decode_forward`` (called by the TT runner), so these stubs are never
+    # invoked. They exist purely to satisfy the protocol check.
+    def embed_input_ids(self, input_ids):  # pragma: no cover - protocol shim
+        raise NotImplementedError(
+            "JanusForConditionalGeneration is a TT bridge; embeddings happen "
+            "on TT via prefill_forward / decode_forward, not through this method."
+        )
+
+    def forward(self, input_ids, positions, **kwargs):  # pragma: no cover - protocol shim
+        raise NotImplementedError(
+            "JanusForConditionalGeneration is a TT bridge; the TT runner "
+            "invokes prefill_forward / decode_forward, not forward()."
+        )
+
+    def compute_logits(self, hidden_states, **kwargs):  # pragma: no cover - protocol shim
+        raise NotImplementedError(
+            "JanusForConditionalGeneration is a TT bridge; logits are produced "
+            "on TT and surfaced through prefill_forward / decode_forward."
+        )
+
 
 if _JANUS_VLLM_PROCESSOR is not None:
     JanusForConditionalGeneration = MULTIMODAL_REGISTRY.register_processor(
