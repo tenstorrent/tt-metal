@@ -316,8 +316,7 @@ def load_weights_from_hf(
                 # tr = ("combine_kv", num_kv_heads, v_hf_name). Build the fused
                 # kv_proj weight: unpermute K (RoPE row-permute), leave V as-is,
                 # then concatenate [K ; V] on the row axis (dim 0) so the fused
-                # projection outputs K features first, then V. Matches Llama's
-                # try_combine_kv and grouped_heads_creation's midpoint split.
+                # projection outputs K features first, then V.
                 num_kv_heads, v_hf_name = tr[1], tr[2]
                 if v_hf_name not in hf_state_dict:
                     return None
