@@ -43,7 +43,7 @@ def _forward(
     return ttnn.to_torch(output)
 
 
-@pytest.mark.parametrize("sequence", [1, 4])
+@pytest.mark.parametrize("sequence", [1, 4, 32])
 def test_composed_layer_pcc(device: ttnn.Device, sequence: int) -> None:
     config = make_config()
     weights = random_weights(config)

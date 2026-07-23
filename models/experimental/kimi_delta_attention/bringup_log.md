@@ -421,3 +421,13 @@
 - Profiler smoke: `PERF_REPS=2 scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/perf/test_chunk_kda_perf.py -q -s`. Result: `SAFE_PYTEST_RESULT: PASS`; one case passed in 2.88 s.
 - Tracy report: `/tmp/kda_chunk_flat_qkv_profile/reports/2026_07_23_08_18_47/ops_perf_results_2026_07_23_08_18_47.csv`. Ten warm calls averaged `0.922861 ms`, down `263.233 us` or `22.19%` from flat-v and `372.309 us` or `28.75%` from the original baseline.
 - Prep/scan averaged `341.005 us` / `284.850 us`. Two remaining transposes total `135.062 us`; output untilize/permute remain `56.833 us` / `79.474 us`.
+
+
+### 2026-07-23 08:27:52 UTC — Stable realistic vector decay
+
+- The first realistic aligned T=32 layer test failed despite synthetic direct tests passing: output/state PCC were `0.988784` / `0.773279`, and part of the state was exactly zero. A direct H=2 flat-q/k/v case passed at `0.999993` / `0.999994`, ruling out flat addressing and scan scheduling.
+- Root cause: prep formed pairwise decay as `exp(G_i) * exp(-G_j)`. Real model gates accumulate to roughly -90 or below within a 32-token chunk, so the second factor overflowed even though the required causal difference `exp(G_i-G_j)` is finite. FLA likewise bounds exponent spans around an interior anchor.
+- Fix: anchor the separable factors at `G_last/2`. `exp(G-anchor) * exp(anchor-G)` is algebraically identical, but each exponent spans at most half of the cumulative range. Scan-facing `exp(G)`, `exp(G_last)`, and `exp(G_last-G)` remain exact.
+- A T=640 smoke initially hung because a raw Aqk intermediate was published through writer-facing `cb_intra`; with multiple work items per core, the writer became a competing consumer. Keeping raw Aqk private and publishing only the masked result removed the race.
+- Realistic T=32 layer output/state PCC after the fix: `0.999933` / `0.999870`; convolution-state PCC: `0.999993`.
+- Full device regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s`. Result: `SAFE_PYTEST_RESULT: PASS`; 12 cases passed in 15.05 s.
