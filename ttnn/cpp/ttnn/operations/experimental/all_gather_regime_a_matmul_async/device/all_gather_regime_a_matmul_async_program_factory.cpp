@@ -58,6 +58,9 @@ constexpr const char* kWriterKernel =
     "ttnn/cpp/ttnn/operations/experimental/all_gather_regime_a_matmul_async/device/kernels/in0_ring_reduce_writer.cpp";
 constexpr const char* kInjectorKernel =
     "ttnn/cpp/ttnn/operations/experimental/all_gather_regime_a_matmul_async/device/kernels/dm_in0_injector.cpp";
+// Production streaming-ring relay (neighbor store-and-forward, per-kb-block). D=2 path implemented.
+constexpr const char* kRingKernel =
+    "ttnn/cpp/ttnn/operations/experimental/all_gather_regime_a_matmul_async/device/kernels/dm_in0_ring.cpp";
 
 constexpr uint32_t kTileBytesBf16 = 2048u;
 constexpr uint32_t kTileBytesFp32 = 4096u;
@@ -102,9 +105,12 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
 
     const uint32_t D = op.d;
     TT_FATAL(D >= 2, "all_gather_regime_a_matmul_async fused path requires D>=2 (got D={})", D);
-    // Milestone #17/#18 (full-gather barrier): the injector unicasts this device's shard to all D-1 other
-    // devices through a SINGLE forward mux, reaching the device h hops away for h=1..D-1. For D>2 this only
-    // covers every device under a RING (the forward direction wraps around); D=2 also works on a line.
+    // Transport: 0 = ring_stream (production streaming ring), 1 = source_to_all, 2 = full_wait (diagnostics).
+    const bool ring_stream = (op.transport_mode == 0u);
+    const bool full_gather_diag = (op.transport_mode == 2u);
+    // ring_stream neighbor store-and-forward relay: general D over D-1 forward rounds (data 1 hop, credit wraps
+    // D-1 hops). D>2 (both ring_stream relay and the source_to_all/full_wait diagnostics) needs a ring topology so
+    // the multi-hop credit / unicast-to-all-peers wraps around.
     TT_FATAL(D == 2 || op.topology == ttnn::ccl::Topology::Ring, "all_gather_regime_a_matmul_async D>2 requires ring topology");
 
     const uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
@@ -374,11 +380,9 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     };
 
     // ---- writer (COPIED gated in0 ring/reduce writer) compile args ----
-    // Base layout identical to regime_a; the AGMM gate appends (gather_ready_addr, Kt_local, D) at the end.
-    // Default = AGMM_STREAM (per-shard progressive gate → matmul overlaps the gather). The full-gather-before-
-    // matmul diagnostic (reader waits for all shards) is selected by the hashed op attribute (from
-    // TT_AGMM_FULL_GATHER at invoke time), so the two reader variants never alias in the program cache.
-    const bool full_gather_diag = op.full_gather_diagnostic;
+    // Base layout identical to regime_a; the AGMM gate appends (Kt_local, kb, D, blk_ready[0..D-1]) at the end.
+    // AGMM_STREAM = per-kb-block progressive gate (matmul overlaps the gather); AGMM_FULL_GATHER_BARRIER waits
+    // for all shards up front (full_wait diagnostic). transport_mode is hashed, so variants never alias.
     std::map<std::string, std::string> wdefs;
     wdefs[full_gather_diag ? "AGMM_FULL_GATHER_BARRIER" : "AGMM_STREAM"] = "1";
     std::vector<uint32_t> wct = {
@@ -444,26 +448,38 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     const CoreCoord inj_logical = take_free_core();
     const CoreRangeSet inj_crs(CoreRange(inj_logical, inj_logical));
 
-    // Coordination uses 2*D GlobalSemaphores: [0..D-1] = shard_ready[s] (compute-core fan-out; reader waits),
-    // [D..2D-1] = shard_landed[s] (injector landing counters; device s increments on every device). They are
-    // GlobalSemaphores (not program-local CreateSemaphores) so the caller can reset them between launches —
-    // program-local semaphores keep their accumulated value across cache replays and defeat the barrier. All
-    // live on the CCL sub-device CRS (all cores), so each address is valid on every compute core AND the
-    // injector core. override_runtime_arguments() relocates these addresses on cache replay.
+    // GlobalSemaphores (reset by the caller each launch -> cache-replay safe; relocated by override). Common
+    // to both transports: [0..D-1] = blk_ready[s] (compute-core fan-out; the reader waits per kb-block).
+    // ring_stream additionally uses [D] = recv_sem, [D+1] = credit_sem (relay hand-off/credit). source_to_all
+    // uses [D..2D-1] = shard_landed[s]. Require >= 2*D so both layouts fit.
     TT_FATAL(
         op.multi_device_global_semaphore.size() >= 2u * D,
-        "all_gather_regime_a_matmul_async needs >= 2*D global semaphores (D shard_ready + D shard_landed), got {} "
-        "for D={}",
+        "all_gather_regime_a_matmul_async needs >= 2*D global semaphores, got {} for D={}",
         op.multi_device_global_semaphore.size(),
         D);
-    auto shard_ready_addr = [&](uint32_t s) { return op.multi_device_global_semaphore.at(s).address(); };
+    auto blk_ready_addr = [&](uint32_t s) { return op.multi_device_global_semaphore.at(s).address(); };
     auto shard_landed_addr = [&](uint32_t s) { return op.multi_device_global_semaphore.at(D + s).address(); };
+    const uint32_t recv_sem_addr = op.multi_device_global_semaphore.at(D).address();         // ring_stream
+    const uint32_t credit_sem_addr = op.multi_device_global_semaphore.at(D + 1u).address();  // ring_stream
 
-    // Injector L1 scratch: payload tile CB (c_0) + packet-header CB (c_1).
+    // Transport chunk = Mt*kb bf16 tiles; ring_stream keeps `num_slots` L1 send + recv slots (bounded buffering).
+    const uint32_t kb_tiles = kb;
+    const uint32_t chunk_tiles = geo.Mt * kb_tiles;
+    const uint32_t num_slots = op.transport_slots ? op.transport_slots : 2u;
+    const uint32_t packet_payload = op.packet_bytes ? op.packet_bytes : 4096u;  // 4 KiB fabric packet baseline
+
+    // L1 scratch. ring_stream: c_0 send slots, c_1 recv slots (num_slots*chunk_tiles each), c_2 packet header.
+    // source_to_all: c_0 one payload tile, c_1 packet header.
     const uint32_t aligned_hdr = align_up((uint32_t)tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
                                           (uint32_t)hal::get_l1_alignment());
-    mkcb(program, inj_crs, 0, 1, tt::DataFormat::Float16_b, kTileBytesBf16);  // payload (one tile)
-    {
+    if (ring_stream) {
+        mkcb(program, inj_crs, 0, num_slots * chunk_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // send
+        mkcb(program, inj_crs, 1, num_slots * chunk_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // recv
+        CircularBufferConfig hc(aligned_hdr, {{2, tt::DataFormat::Float16_b}});
+        hc.set_page_size(2, aligned_hdr);
+        CreateCircularBuffer(program, inj_crs, hc);
+    } else {
+        mkcb(program, inj_crs, 0, 1, tt::DataFormat::Float16_b, kTileBytesBf16);  // payload (one tile)
         CircularBufferConfig hc(aligned_hdr, {{1, tt::DataFormat::Float16_b}});
         hc.set_page_size(1, aligned_hdr);
         CreateCircularBuffer(program, inj_crs, hc);
@@ -474,7 +490,9 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     const auto dst_node = mesh_device->get_fabric_node_id(other_coord.value());
     const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(src_node, dst_node);
     TT_FATAL(!link_indices.empty(), "no fabric forwarding link from src to forward neighbour");
-    const uint32_t channel_buf_bytes = align_up(aligned_hdr + kTileBytesBf16, (uint32_t)hal::get_l1_alignment());
+    // Channel buffer holds one packet: header + up to packet_payload (ring_stream, contiguous L1) or one tile.
+    const uint32_t max_pkt = ring_stream ? packet_payload : kTileBytesBf16;
+    const uint32_t channel_buf_bytes = align_up(aligned_hdr + max_pkt, (uint32_t)hal::get_l1_alignment());
     tt::tt_fabric::FabricMuxV2Config mux_config(
         /*num_channels=*/1,
         /*num_buffers_per_channel=*/(uint8_t)op.num_buffers_per_channel,
@@ -484,19 +502,22 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         program, mux_config, mux_logical, src_node, dst_node, link_indices.front(), NOC::RISCV_0_default);
     const CoreCoord mux_virtual = mesh_device->worker_core_from_logical_core(mux_logical);
 
-    // The injector reaches all D-1 other devices by unicasting forward with num_hops = 1..D-1 (ring wrap).
+    // source_to_all reaches all D-1 other devices by unicasting forward with num_hops = 1..D-1 (ring wrap).
     const uint32_t num_dests = D - 1u;
 
-    // Injector compile args: TensorAccessorArgs(in0 shard) then TensorAccessorArgs(gather buffer).
+    // Fabric kernel compile args: TensorAccessorArgs(in0 shard) then TensorAccessorArgs(gather buffer).
     std::vector<uint32_t> ict;
     TensorAccessorArgs(*in0_shard.buffer()).append_to(ict);
     TensorAccessorArgs(*gather.buffer()).append_to(ict);
     KernelHandle injector = CreateKernel(
         program,
-        kInjectorKernel,
+        ring_stream ? kRingKernel : kInjectorKernel,
         inj_crs,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ict, .defines = {}});
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = ict,
+            .defines = {}});
 
     // ============================ runtime args ============================
     const uint32_t in1_addr = in1.buffer()->address();
@@ -556,9 +577,10 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             cp.valid_m,              // 15
             cp.valid_n,              // 16
             geo.Kt / D,              // 17 Kt_local (K tiles per device shard; shard of global tile = kg/Kt_local)
-            D};                      // 18 device count
+            kb,                      // 18 kb (K_block tiles; within-shard block = (kg - sh*Kt_local)/kb)
+            D};                      // 19 device count
         for (uint32_t s = 0; s < D; ++s) {
-            wa.push_back(shard_ready_addr(s));  // 19..19+D-1 shard_ready[s] GlobalSemaphore addresses
+            wa.push_back(blk_ready_addr(s));  // 20..20+D-1 blk_ready[s] GlobalSemaphore addresses
         }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
@@ -566,47 +588,74 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         SetRuntimeArgs(program, compute, cores[i], ca);
     }
 
-    // ---- injector runtime args ----
-    // in0 shard has K_local tiles; this device owns global K-tile offset device_index * Kt_local.
+    // ---- fabric kernel runtime args ----
     const uint32_t Kt_global = geo.Kt;
     const uint32_t Kt_local = Kt_global / D;
+    const uint32_t blocks_per_shard = Kt_local / kb;
     const uint32_t k_tile_global_base = device_index * Kt_local;
-    // injector core (symmetric across devices): where shard_landed lives and where remote shard_landed
-    // atomic-incs are targeted. NOTE: this assumes identical logical->virtual worker mapping across the D
-    // devices (true under uniform harvesting, as on this galaxy). See F4/harvesting note in the op header.
+    // fabric core (symmetric across devices): where recv/credit/shard_landed live and where cross-device
+    // atomic-incs are targeted. NOTE: assumes identical logical->virtual worker mapping across the D devices
+    // (true under uniform harvesting on this galaxy). See harvesting note in the op header.
     const CoreCoord inj_virtual = mesh_device->worker_core_from_logical_core(inj_logical);
 
-    // Record the injector-arg offset of the sem-address block so override_runtime_arguments can relocate the
-    // GlobalSemaphore addresses on a program-cache replay that supplies a fresh semaphore set.
-    const uint32_t inj_sem_base = 13u;  // a13.. = D shard_ready then D shard_landed
-    std::vector<uint32_t> inj_rt = {
-        in0_shard.buffer()->address(),  // a0 in0 shard base
-        gather_addr,                    // a1 local gather base
-        geo.Mt,                         // a2 Mt
-        Kt_local,                       // a3 Kt_local
-        Kt_global,                      // a4 Kt_global (gather row stride)
-        k_tile_global_base,             // a5 global K-tile base of this shard
-        kTileBytesBf16,                 // a6 tile bytes
-        num_dests,                      // a7 number of remote devices to reach (hops 1..num_dests)
-        D,                              // a8 device count
-        device_index,                  // a9 this device's shard index
-        (uint32_t)inj_virtual.x,        // a10 injector core x
-        (uint32_t)inj_virtual.y,        // a11 injector core y
-        geo.num_cores};                 // a12 number of compute cores to fan out to
-    // a13..a13+D-1: shard_ready[0..D-1] ; a13+D..a13+2D-1: shard_landed[0..D-1] GlobalSemaphore addresses.
-    for (uint32_t s = 0; s < D; ++s) {
-        inj_rt.push_back(shard_ready_addr(s));
+    std::vector<uint32_t> inj_rt;
+    uint32_t inj_sem_base = 0;  // arg offset of blk_ready[0] (for override relocation)
+    if (ring_stream) {
+        // dm_in0_ring (D=2): a17.. = blk_ready[0..D-1]. recv/credit are scalar addrs at a13/a14.
+        inj_rt = {
+            in0_shard.buffer()->address(),  // a0
+            gather_addr,                    // a1
+            geo.Mt,                         // a2
+            Kt_local,                       // a3
+            Kt_global,                      // a4
+            kb,                             // a5
+            kTileBytesBf16,                 // a6
+            blocks_per_shard,               // a7
+            D,                              // a8
+            device_index,                   // a9
+            (uint32_t)inj_virtual.x,        // a10
+            (uint32_t)inj_virtual.y,        // a11
+            num_slots,                      // a12
+            recv_sem_addr,                  // a13
+            credit_sem_addr,                // a14
+            packet_payload,                 // a15
+            geo.num_cores};                 // a16
+        inj_sem_base = 17u;
+        for (uint32_t s = 0; s < D; ++s) {
+            inj_rt.push_back(blk_ready_addr(s));  // a17..a17+D-1
+        }
+    } else {
+        // dm_in0_injector (source_to_all/full_wait): a14.. = blk_ready[0..D-1] then shard_landed[0..D-1].
+        inj_rt = {
+            in0_shard.buffer()->address(),  // a0
+            gather_addr,                    // a1
+            geo.Mt,                         // a2
+            Kt_local,                       // a3
+            Kt_global,                      // a4
+            k_tile_global_base,             // a5
+            kTileBytesBf16,                 // a6
+            num_dests,                      // a7
+            D,                              // a8
+            device_index,                   // a9
+            (uint32_t)inj_virtual.x,        // a10
+            (uint32_t)inj_virtual.y,        // a11
+            geo.num_cores,                  // a12
+            blocks_per_shard};              // a13 (inc blk_ready[s] by blocks_per_shard once shard s is present)
+        inj_sem_base = 14u;
+        for (uint32_t s = 0; s < D; ++s) {
+            inj_rt.push_back(blk_ready_addr(s));  // a14..a14+D-1
+        }
+        for (uint32_t s = 0; s < D; ++s) {
+            inj_rt.push_back(shard_landed_addr(s));  // a14+D..a14+2D-1
+        }
     }
-    for (uint32_t s = 0; s < D; ++s) {
-        inj_rt.push_back(shard_landed_addr(s));
-    }
-    // followed by each compute core's (x,y) for the shard_ready fan-out.
+    // followed by each compute core's (x,y) for the blk_ready fan-out.
     for (uint32_t i = 0; i < geo.num_cores; ++i) {
         auto p = phys(i);
         inj_rt.push_back(p.x);
         inj_rt.push_back(p.y);
     }
-    // then the mux v2 client connection args (packet-header/payload come from CBs c_1/c_0 in-kernel).
+    // then the mux v2 client connection args (packet-header/payload come from in-kernel CBs).
     const uint32_t flow_control_sem = CreateSemaphore(program, inj_logical, 0u);
     const uint32_t teardown_sem = CreateSemaphore(program, inj_logical, 0u);
     mux_config.append_client_connection_rt_args(
@@ -630,8 +679,9 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             .injector_cores = {inj_logical},
             .injector = injector,
             .d = D,
-            .writer_sem_base = 19u,      // writer arg 19.. = shard_ready[0..D-1]
-            .injector_sem_base = inj_sem_base}};  // injector arg 13.. = shard_ready[0..D-1] then shard_landed[0..D-1]
+            .ring_stream = ring_stream,
+            .writer_sem_base = 20u,  // writer arg 20.. = blk_ready[0..D-1]
+            .injector_sem_base = inj_sem_base}};
 }
 
 void AllGatherRegimeAMatmulAsyncProgramFactory::override_runtime_arguments(
@@ -645,8 +695,10 @@ void AllGatherRegimeAMatmulAsyncProgramFactory::override_runtime_arguments(
     const uint32_t in0_addr = tensor_args.input_tensor.buffer()->address();
     // Fresh GlobalSemaphore addresses (the cache key does not include them, so a replay may supply a new set).
     const uint32_t D = op.d;
-    auto sr = [&](uint32_t s) { return op.multi_device_global_semaphore.at(s).address(); };          // shard_ready
-    auto sl = [&](uint32_t s) { return op.multi_device_global_semaphore.at(D + s).address(); };       // shard_landed
+    auto blk = [&](uint32_t s) { return op.multi_device_global_semaphore.at(s).address(); };     // blk_ready[s]
+    auto sl = [&](uint32_t s) { return op.multi_device_global_semaphore.at(D + s).address(); };  // shard_landed[s]
+    const uint32_t recv_addr = op.multi_device_global_semaphore.at(D).address();                 // ring: recv_sem
+    const uint32_t credit_addr = op.multi_device_global_semaphore.at(D + 1u).address();          // ring: credit_sem
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         auto& sv = cached_workload.shared_variables.at(range);
@@ -665,19 +717,26 @@ void AllGatherRegimeAMatmulAsyncProgramFactory::override_runtime_arguments(
             auto& wa = (*(b ? writerB_args : writerA_args))[core.x][core.y];
             wa[0] = gather_addr;
             wa[1] = out_addr;
-            for (uint32_t s = 0; s < sv.d; ++s) {  // relocate shard_ready[s] in the writer args
-                wa[sv.writer_sem_base + s] = sr(s);
+            for (uint32_t s = 0; s < sv.d; ++s) {  // relocate blk_ready[s] in the writer args
+                wa[sv.writer_sem_base + s] = blk(s);
             }
         }
-        // injector: a0 in0 shard, a1 local gather base; shard_ready[0..D-1] then shard_landed[0..D-1].
+        // fabric kernel: a0 in0 shard, a1 local gather base; then the transport-specific sem addresses.
         auto& inj_args = GetRuntimeArgs(program, sv.injector);
         const CoreCoord& ic = sv.injector_cores.at(0);
         auto& ia = inj_args[ic.x][ic.y];
         ia[0] = in0_addr;
         ia[1] = gather_addr;
-        for (uint32_t s = 0; s < sv.d; ++s) {
-            ia[sv.injector_sem_base + s] = sr(s);
-            ia[sv.injector_sem_base + sv.d + s] = sl(s);
+        for (uint32_t s = 0; s < sv.d; ++s) {  // blk_ready[s] (both transports, at injector_sem_base)
+            ia[sv.injector_sem_base + s] = blk(s);
+        }
+        if (sv.ring_stream) {
+            ia[13] = recv_addr;    // dm_in0_ring a13 = recv_sem
+            ia[14] = credit_addr;  // dm_in0_ring a14 = credit_sem
+        } else {
+            for (uint32_t s = 0; s < sv.d; ++s) {  // dm_in0_injector shard_landed[s] follow blk_ready
+                ia[sv.injector_sem_base + sv.d + s] = sl(s);
+            }
         }
     }
 }

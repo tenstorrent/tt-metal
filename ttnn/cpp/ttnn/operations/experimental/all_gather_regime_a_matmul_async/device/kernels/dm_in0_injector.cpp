@@ -61,12 +61,13 @@ void kernel_main() {
     const uint32_t inj_x = get_arg_val<uint32_t>(a++);
     const uint32_t inj_y = get_arg_val<uint32_t>(a++);
     const uint32_t num_compute_cores = get_arg_val<uint32_t>(a++);
+    const uint32_t blocks_per_shard = get_arg_val<uint32_t>(a++);  // reader gate is per-kb-block, so publish by shard
 
     constexpr uint32_t kMaxD = 8u;
-    uint32_t shard_ready_addr[kMaxD];
+    uint32_t blk_ready_addr[kMaxD];  // per-kb-block readiness counters (source_to_all bumps by whole shard)
     uint32_t shard_landed_addr[kMaxD];
     for (uint32_t s = 0; s < D; ++s) {
-        shard_ready_addr[s] = get_arg_val<uint32_t>(a++);
+        blk_ready_addr[s] = get_arg_val<uint32_t>(a++);
     }
     for (uint32_t s = 0; s < D; ++s) {
         shard_landed_addr[s] = get_arg_val<uint32_t>(a++);
@@ -94,10 +95,11 @@ void kernel_main() {
     auto sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(a);
     sender.open();
 
-    // fan out shard s readiness to every compute core (local NoC increments).
+    // fan out shard s readiness to every compute core: bump blk_ready[s] by blocks_per_shard (source_to_all
+    // publishes the whole shard at once, so the reader's per-kb-block gate `blk_ready[s] >= block+1` passes).
     auto fanout = [&](uint32_t s) {
         for (uint32_t i = 0; i < num_compute_cores; ++i) {
-            noc_semaphore_inc(get_noc_addr(cc_x[i], cc_y[i], shard_ready_addr[s]), 1);
+            noc_semaphore_inc(get_noc_addr(cc_x[i], cc_y[i], blk_ready_addr[s]), blocks_per_shard);
         }
         noc_async_atomic_barrier();
     };

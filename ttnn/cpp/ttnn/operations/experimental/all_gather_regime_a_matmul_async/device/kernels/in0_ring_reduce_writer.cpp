@@ -77,16 +77,19 @@ void kernel_main() {
     const uint32_t valid_n = get_arg_val<uint32_t>(16);  // valid N tiles (rest zero / not written)
 
 #if defined(AGMM_STREAM) || defined(AGMM_FULL_GATHER_BARRIER)
-    // Fused per-shard gather gate. arg 17 = Kt_local (K tiles per device shard), arg 18 = D, args 19..19+D-1 =
-    // shard_ready[0..D-1] GlobalSemaphore L1 addresses (the injector sets shard_ready[s]>=1 once shard s has
-    // landed in this device's gather buffer — INDEPENDENTLY per shard, own shard first). STREAM gates each in0
-    // read on its OWN shard so the local Pk band starts before remote shards arrive; the diagnostic waits for
-    // all D shards up front (== all_gather then matmul, no overlap).
+    // Fused per-kb-block gather gate. arg 17 = Kt_local (K tiles per device shard), arg 18 = kb (K_block tiles),
+    // arg 19 = D, args 20..20+D-1 = blk_ready[0..D-1] GlobalSemaphore L1 addresses. The transport increments
+    // blk_ready[s] by one for each stored kb-block of shard s (in ascending within-shard block order), reaching
+    // Kt_local/kb when shard s is complete. STREAM gates each in0 read on the specific (shard, within-shard
+    // block) it touches → the local shard's blocks are consumable immediately, remote blocks as they stream in.
+    // The diagnostic (FULL_GATHER) waits for every shard's blocks up front (== all_gather then matmul).
     const uint32_t agmm_Kt_local = get_arg_val<uint32_t>(17);
-    const uint32_t agmm_D = get_arg_val<uint32_t>(18);
-    uint32_t agmm_shard_ready[8];
+    const uint32_t agmm_kb = get_arg_val<uint32_t>(18);
+    const uint32_t agmm_D = get_arg_val<uint32_t>(19);
+    const uint32_t agmm_blocks_per_shard = agmm_Kt_local / agmm_kb;
+    uint32_t agmm_blk_ready[8];
     for (uint32_t s = 0; s < agmm_D; ++s) {
-        agmm_shard_ready[s] = get_arg_val<uint32_t>(19u + s);
+        agmm_blk_ready[s] = get_arg_val<uint32_t>(20u + s);
     }
 #endif
 
@@ -232,9 +235,10 @@ void kernel_main() {
 #endif
 
 #if defined(AGMM_FULL_GATHER_BARRIER)
-    // Diagnostic: block until ALL D in0 shards are present before any matmul (no overlap; == AG then MM).
+    // Diagnostic: block until ALL D in0 shards are fully present before any matmul (no overlap; == AG then MM).
     for (uint32_t s = 0; s < agmm_D; ++s) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(agmm_shard_ready[s]), 1);
+        noc_semaphore_wait_min(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(agmm_blk_ready[s]), agmm_blocks_per_shard);
     }
 #endif
 
@@ -253,13 +257,15 @@ void kernel_main() {
                         const uint32_t l = sb * K_block + k;  // capacity-local K index within the slice
                         if (m < valid_m && l < valid_k) {
 #if defined(AGMM_STREAM)
-                            // Per-shard gate: this DRAM read hits global K-tile (k_start+l), owned by shard
-                            // (k_start+l)/Kt_local. Wait only for THAT shard to have landed — independent of the
-                            // others, so the local-shard band computes while remote shards are still arriving.
+                            // Per-kb-block gate: global K-tile (k_start+l) is in shard sh and within-shard block
+                            // bws; wait only for that block to have been stored by the transport. Independent per
+                            // block, so the local shard's blocks are consumable immediately while remote blocks
+                            // continue to stream in (local-first at the block granularity).
+                            const uint32_t agmm_kg = k_start + l;
+                            const uint32_t agmm_sh = agmm_kg / agmm_Kt_local;
+                            const uint32_t agmm_bws = (agmm_kg - agmm_sh * agmm_Kt_local) / agmm_kb;
                             noc_semaphore_wait_min(
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                    agmm_shard_ready[(k_start + l) / agmm_Kt_local]),
-                                1u);
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(agmm_blk_ready[agmm_sh]), agmm_bws + 1u);
 #endif
                             noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
                         } else {

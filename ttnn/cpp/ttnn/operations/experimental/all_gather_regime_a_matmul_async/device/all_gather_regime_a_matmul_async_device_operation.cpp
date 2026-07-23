@@ -5,6 +5,7 @@
 #include "all_gather_regime_a_matmul_async_device_operation.hpp"
 
 #include <cstdlib>
+#include <string>
 
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -105,7 +106,7 @@ tt::stl::hash::hash_t AllGatherRegimeAMatmulAsyncDeviceOperation::compute_progra
         op.transport_c,
         op.transport_slots,
         op.packet_bytes,
-        op.full_gather_diagnostic,
+        op.transport_mode,
         cfg.has_value(),
         cfg.has_value() ? cfg->k_slices : 0u,
         cfg.has_value() ? cfg->n_slices : 0u,
@@ -194,8 +195,21 @@ AllGatherRegimeAMatmulAsyncDeviceOperation::invoke(
             .output_mem_config = memory_config,
             .output_dtype = dtype,
             .compute_kernel_config = ckc,
-            // Same-binary no-overlap A/B diagnostic, captured here so it is part of the hashed attributes.
-            .full_gather_diagnostic = (std::getenv("TT_AGMM_FULL_GATHER") != nullptr),
+            // Transport mode captured here so it is part of the hashed attributes (distinct program per mode).
+            .transport_mode =
+                [] {
+                    const char* t = std::getenv("TT_AGMM_TRANSPORT");
+                    if (t == nullptr) {
+                        return 0u;  // default: ring_stream
+                    }
+                    if (std::string(t) == "source_to_all") {
+                        return 1u;
+                    }
+                    if (std::string(t) == "full_wait") {
+                        return 2u;
+                    }
+                    return 0u;
+                }(),
             .multi_device_global_semaphore = std::move(multi_device_global_semaphore),
             .barrier_semaphore = std::move(barrier_semaphore)},
         tensor_args_t{

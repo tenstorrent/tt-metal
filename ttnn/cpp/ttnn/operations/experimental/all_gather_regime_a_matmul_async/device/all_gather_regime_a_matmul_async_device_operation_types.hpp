@@ -41,9 +41,11 @@ struct AllGatherRegimeAMatmulAsyncParams {
     std::optional<tt::tt_metal::DataType> output_dtype;
     DeviceComputeKernelConfig compute_kernel_config;
 
-    // Same-binary full-gather-before-matmul diagnostic (no-overlap A/B). Captured from TT_AGMM_FULL_GATHER at
-    // invoke() so it is part of the (hashed) attributes — switching modes yields a distinct cached program.
-    bool full_gather_diagnostic = false;
+    // Transport mode (hashed; captured from TT_AGMM_TRANSPORT at invoke): 0 = ring_stream (production
+    // DRAM-staged streaming ring: neighbor store-and-forward, per-kb-block readiness, local-first), 1 =
+    // source_to_all (diagnostic: each device unicasts its whole shard to all peers), 2 = full_wait (diagnostic:
+    // source_to_all + reader waits for the entire gather before any matmul). Distinct programs per mode.
+    uint32_t transport_mode = 0;
 
     // CCL semaphores live in operation_attributes (NOT tensor_args): the device_operation framework runs a
     // count_object_of_type<Tensor> traversal over tensor_args that would recurse into GlobalSemaphore's
@@ -68,7 +70,7 @@ struct AllGatherRegimeAMatmulAsyncParams {
         "regime_a_config",
         "output_mem_config",
         "output_dtype",
-        "full_gather_diagnostic");
+        "transport_mode");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -84,7 +86,7 @@ struct AllGatherRegimeAMatmulAsyncParams {
             this->regime_a_config,
             this->output_mem_config,
             this->output_dtype,
-            this->full_gather_diagnostic);
+            this->transport_mode);
     }
 };
 

@@ -42,8 +42,9 @@ struct AllGatherRegimeAMatmulAsyncProgramFactory {
         // fresh semaphore set: D, the writer-arg offset of shard_ready[0] (per compute core), and the
         // injector-arg offset of shard_ready[0] (shard_landed[0] follows D words later).
         uint32_t d{};
-        uint32_t writer_sem_base{};
-        uint32_t injector_sem_base{};
+        bool ring_stream{};
+        uint32_t writer_sem_base{};    // writer arg offset of blk_ready[0]
+        uint32_t injector_sem_base{};  // fabric-kernel arg offset of blk_ready[0]
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

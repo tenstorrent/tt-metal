@@ -25,8 +25,9 @@ def _plan(**kw):
 @pytest.mark.parametrize("topology", ["ring", "linear"])
 def test_plan_kblock_coverage_and_fit(D, topology):
     # K=6144 -> Kt=192; kb=2 -> global_k_blocks=96, divisible by all D in {1,2,4,8}.
-    p = _plan(M=32, K=6144, N=3072, D=D, Ns=1, Pk=3, Sm=1, kb=2, nsb=6,
-              topology=topology, num_links=2, num_workers_per_link=6)
+    p = _plan(
+        M=32, K=6144, N=3072, D=D, Ns=1, Pk=3, Sm=1, kb=2, nsb=6, topology=topology, num_links=2, num_workers_per_link=6
+    )
     assert p["valid"], p["errors"]
     assert p["global_k_blocks"] == 96
     # Every global K-block owned by exactly one device (explicit ids, full coverage, no dupes/gaps).
@@ -67,8 +68,21 @@ def test_plan_core_oversubscription_detected():
 
 def test_plan_l1_oversubscription_detected():
     # Force a large transport footprint: big Mt (M=8192 -> Mt=256) * kb * C * slots.
-    p = _plan(M=8192, K=6144, N=3072, D=2, Ns=1, Pk=1, Sm=1, kb=8, nsb=0,
-              C=8, transport_slots=4, num_links=2, num_workers_per_link=6)
+    p = _plan(
+        M=8192,
+        K=6144,
+        N=3072,
+        D=2,
+        Ns=1,
+        Pk=1,
+        Sm=1,
+        kb=8,
+        nsb=0,
+        C=8,
+        transport_slots=4,
+        num_links=2,
+        num_workers_per_link=6,
+    )
     assert not p["l1_fit"]
     assert not p["valid"]
 
@@ -103,7 +117,17 @@ def test_d1_matches_regime_a(device):
 # handshake) and the conftest fixture's STRICT_INIT fabric config + the watcher both overflow the ACTIVE_ETH
 # kernel-config buffer on this build — so we open the full mesh with a BARE fabric config, no watcher, and carve
 # a (1,D) submesh. D>2 uses a ring so the injector's forward hops 1..D-1 reach every other device.
-def _run_full_gather(D, mesh_shape, fabric_config, topology, shape=(32, 6144, 3072), cfg_kwargs=None):
+def _run_full_gather(
+    D, mesh_shape, fabric_config, topology, shape=(32, 6144, 3072), cfg_kwargs=None, transport="ring_stream"
+):
+    import os
+
+    # transport_mode is read from TT_AGMM_TRANSPORT at the op's invoke() (hashed attribute). ring_stream is the
+    # production streaming ring (D=2 so far); source_to_all/full_wait are diagnostics valid for all D.
+    if transport == "ring_stream":
+        os.environ.pop("TT_AGMM_TRANSPORT", None)
+    else:
+        os.environ["TT_AGMM_TRANSPORT"] = transport
     M, K, N = shape  # K == K_global; each device owns K_local = K/D
     torch.manual_seed(0)
     t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)  # global in0 [M, K_global], sharded on K
@@ -197,20 +221,35 @@ def test_d2_full_gather_correctness():
     [(4, (8, 4)), (8, (4, 8))],  # (1,8) submesh needs axis-1 extent 8 -> open the mesh as (4,8)
 )
 def test_dn_full_gather_correctness_ring(D, mesh_shape):
-    # D>2: ring so the injector's forward hops 1..D-1 reach every other device.
-    _run_full_gather(D, mesh_shape, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.Topology.Ring, cfg_kwargs=_PINNED)
+    # D>2: production streaming ring — neighbor store-and-forward over D-1 forward rounds (data 1 hop, credit
+    # wraps D-1 hops on the ring). Each shard travels one device hop at a time; every device forwards received
+    # chunks onward and publishes them progressively.
+    _run_full_gather(
+        D, mesh_shape, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.Topology.Ring, cfg_kwargs=_PINNED, transport="ring_stream"
+    )
 
 
-# ---- config coverage at D=4 (ring): auto-picker, Ns>1, Sm>1 exercise distinct factory paths ----
+# ---- config coverage at D=4 (ring): auto-picker, Pk=1, Pk>1, Ns>1, Sm>1 exercise distinct factory paths ----
+# Pk=1 (k_slices=1) and Pk>1 (k_slices=3) both required by the Task-3 gates: the ring's per-kb-block readiness
+# must gate the in0 reader correctly whether K is one band or several.
 @pytest.mark.skipif(not is_blackhole(), reason="regime_a_matmul is Blackhole-only")
 @pytest.mark.parametrize(
     "shape, cfg_kwargs, label",
     [
         ((32, 6144, 3072), None, "auto_picker"),
+        ((32, 6144, 3072), dict(k_slices=1, n_slices=1, m_slices=1, k_block_tiles=4, n_subblock_tiles=6), "Pk1"),
         ((32, 6144, 6144), dict(k_slices=3, n_slices=2, m_slices=1, k_block_tiles=4, n_subblock_tiles=6), "Ns2"),
         ((128, 6144, 3072), dict(k_slices=3, n_slices=1, m_slices=2, k_block_tiles=4, n_subblock_tiles=6), "Sm2"),
     ],
     ids=lambda v: v if isinstance(v, str) else "",
 )
 def test_d4_config_coverage(shape, cfg_kwargs, label):
-    _run_full_gather(4, (8, 4), ttnn.FabricConfig.FABRIC_1D_RING, ttnn.Topology.Ring, shape=shape, cfg_kwargs=cfg_kwargs)
+    _run_full_gather(
+        4,
+        (8, 4),
+        ttnn.FabricConfig.FABRIC_1D_RING,
+        ttnn.Topology.Ring,
+        shape=shape,
+        cfg_kwargs=cfg_kwargs,
+        transport="ring_stream",
+    )
