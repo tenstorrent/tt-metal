@@ -371,8 +371,15 @@ def main() -> int:
 
     width = max(len(k) for k in metrics)
     print("op_to_op_latency metrics:")
+    # RT is opt-in (device-profiler-only CI flow); when it wasn't captured, collapse the two
+    # rt_gap_to_next_go_* rows into one clear note instead of printing nan / 0.
+    rt_off = not metrics.get("rt_gap_to_next_go_n")
     for k, v in metrics.items():
+        if rt_off and k in ("rt_gap_to_next_go_ns", "rt_gap_to_next_go_n"):
+            continue
         print(f"  {k:<{width}} : {v}")
+    if rt_off:
+        print(f"  {'rt_gap_to_next_go':<{width}} : not captured (realtime profiler not enabled)")
 
     if args.out_json is not None:
         args.out_json.parent.mkdir(parents=True, exist_ok=True)
