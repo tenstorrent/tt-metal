@@ -307,9 +307,15 @@ class APPROX_MODE(TemplateParameter):
 class REDUCE_BLOCK_CT_DIM(TemplateParameter):
     """Compile-time block width (in tiles) for the block-based reduce_block_max_row LLKs.
 
-    Emits a dedicated ``REDUCE_BLOCK_CT_DIM`` symbol (not ``BLOCK_CT_DIM``) so it cannot
-    collide with the ``BLOCK_CT_DIM`` that ``INPUT_DIMENSIONS`` already emits — the header
-    generator concatenates every param's ``convert_to_cpp()`` with no de-dup.
+    A standalone one-line constant, deliberately *not* routed through the matmul-centric
+    ``INPUT_DIMENSIONS`` bundle: this pure block-reduce test has no use for that bundle's
+    other fields (``FULL_RT_DIM`` / ``FULL_CT_DIM`` / ``BLOCK_RT_DIM``) or its
+    ``generate_input_dim`` tile-shape validation, and it needs only a plain compile-time
+    block width. The distinct name (``REDUCE_BLOCK_CT_DIM``, not ``BLOCK_CT_DIM``) also
+    preempts a redefinition clash if ``INPUT_DIMENSIONS`` — the sole emitter of
+    ``BLOCK_CT_DIM`` — is ever added to this test: the header generator concatenates every
+    param's ``convert_to_cpp()`` with no de-dup, so two same-named ``constexpr`` lines would
+    fail to compile. (This test does not currently emit ``BLOCK_CT_DIM``.)
     """
 
     block_ct_dim: int
