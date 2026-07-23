@@ -12,6 +12,7 @@
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/negative.h"
@@ -87,6 +88,26 @@ void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
         } else {
             mul_tiles(a, b, i, i, 0);
         }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, o, i);
+        tile_regs_release();
+    }
+    cb_push_back(o, n);
+}
+
+// Square through SFPU destination-register multiply; avoids occupying the matrix FPU used by prep.
+void square_sfpu(uint32_t in, uint32_t o, uint32_t n) {
+    cb_reserve_back(o, n);
+    pack_reconfig_data_format(o);
+    reconfig_data_format_srca(in);
+    copy_tile_to_dst_init_short(in);
+    for (uint32_t i = 0; i < n; i++) {
+        tile_regs_acquire();
+        copy_tile(in, i, 0);
+        copy_tile(in, i, 1);
+        mul_binary_tile_init();
+        mul_binary_tile(0, 1, 0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, o, i);
@@ -327,7 +348,7 @@ void kernel_main() {
 
         uint32_t Q = cb_q, Kk = cb_k;
         if constexpr (QK_NORM) {
-            ew(cb_q, cb_q, cb_scr1, ck, 2);
+            square_sfpu(cb_q, cb_scr1, ck);
             WAIT(cb_scr1, ck);
             rowsum_k(cb_scr1, cb_scr2, Ct, Kt);
             WAIT(cb_scr2, Ct);
@@ -340,7 +361,7 @@ void kernel_main() {
             POP(cb_scr3, Ct);
             POP(cb_q, ck);
 
-            ew(cb_k, cb_k, cb_scr1, ck, 2);
+            square_sfpu(cb_k, cb_scr1, ck);
             WAIT(cb_scr1, ck);
             rowsum_k(cb_scr1, cb_scr2, Ct, Kt);
             WAIT(cb_scr2, Ct);
