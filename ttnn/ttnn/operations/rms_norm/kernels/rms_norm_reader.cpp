@@ -59,8 +59,15 @@ void kernel_main() {
     // input (+ TILE / no gamma) that fits L1. x is read ONCE per tile-row (compute
     // does both passes over L1) and gamma is read ONCE per core (held resident).
     constexpr bool USE_RESIDENT = get_compile_time_arg_val(16) != 0;
+    // HEIGHT_SHARDED local per-core reduction (op_design.md §1 lamp 3, Refinement 5):
+    // this core's full-W row-shard is already resident in its L1, so cb_x_in is a
+    // zero-copy CB backed on the sharded buffer (compute self-arms it). The reader
+    // does NOT read x at all — only the scaler prep and the (interleaved DRAM) gamma
+    // read below run. A knob-turn on the USE_RESIDENT path: same indexed two-pass
+    // compute, x placement pinned by the shard instead of read from DRAM.
+    constexpr bool X_RESIDENT = get_compile_time_arg_val(17) != 0;
 
-    constexpr auto in_args = TensorAccessorArgs<17>();
+    constexpr auto in_args = TensorAccessorArgs<18>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -105,8 +112,9 @@ void kernel_main() {
     // gamma read ONCE (held resident across all rows); x read ONCE per tile-row
     // (compute does BOTH passes over L1). One coalesced barrier per read.
     if constexpr (USE_RESIDENT) {
-        if constexpr (HAS_GAMMA) {
-            // gamma (1,1,1,W) -> Wt tiles in one tile-row; read all Wt once.
+        if constexpr (HAS_GAMMA && !X_RESIDENT) {
+            // Interleaved resident: gamma (1,1,1,W) -> Wt tiles in one tile-row; read all
+            // Wt ONCE, held resident across all rows.
             const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
             cb_reserve_back(cb_gamma, Wt);
             uint32_t gl1 = get_write_ptr(cb_gamma);
@@ -117,17 +125,38 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_gamma, Wt);
         }
-        const uint32_t tile_bytes = get_tile_size(cb_x_in);
-        for (uint32_t i = 0; i < num_rows; ++i) {
-            const uint32_t row_tile_base = (row_start + i) * Wt;
-            cb_reserve_back(cb_x_in, Wt);
-            uint32_t l1 = get_write_ptr(cb_x_in);
-            for (uint32_t wt = 0; wt < Wt; ++wt) {
-                noc_async_read_tile(row_tile_base + wt, in_accessor, l1);
-                l1 += tile_bytes;
+        if constexpr (!X_RESIDENT) {
+            // Interleaved resident: x read ONCE per tile-row (compute does both passes over L1).
+            const uint32_t tile_bytes = get_tile_size(cb_x_in);
+            for (uint32_t i = 0; i < num_rows; ++i) {
+                const uint32_t row_tile_base = (row_start + i) * Wt;
+                cb_reserve_back(cb_x_in, Wt);
+                uint32_t l1 = get_write_ptr(cb_x_in);
+                for (uint32_t wt = 0; wt < Wt; ++wt) {
+                    noc_async_read_tile(row_tile_base + wt, in_accessor, l1);
+                    l1 += tile_bytes;
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_x_in, Wt);
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_x_in, Wt);
+        } else if constexpr (HAS_GAMMA) {
+            // HEIGHT_SHARDED (Refinement 5): x is the resident zero-copy shard (compute
+            // self-arms cb_x_in), so skip the x read. gamma is STREAMED per block per row
+            // in compute's pass-2 consume order (small cb_gamma fits any W; gamma is the
+            // same (1,1,1,W) for every row so tile b = b*BLOCK_SIZE + wt, re-read per row).
+            const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
+            for (uint32_t i = 0; i < num_rows; ++i) {
+                for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
+                    cb_reserve_back(cb_gamma, BLOCK_SIZE);
+                    uint32_t gl1 = get_write_ptr(cb_gamma);
+                    for (uint32_t wt = 0; wt < BLOCK_SIZE; ++wt) {
+                        noc_async_read_tile(b * BLOCK_SIZE + wt, gamma_accessor, gl1);
+                        gl1 += gamma_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_gamma, BLOCK_SIZE);
+                }
+            }
         }
         return;
     }

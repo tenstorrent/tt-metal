@@ -110,6 +110,12 @@ SUPPORTED = {
     "gamma_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, "none"],
     "memory_layout": [
         ttnn.TensorMemoryLayout.INTERLEAVED,
+        # Local per-core reduction (Refinement 5): HEIGHT sharding splits rows across
+        # cores, each core keeps FULL-W rows, so the RMS reduce stays LOCAL per core.
+        # The row-shard is resident in each core's L1 -> cb_x_in/cb_out backed zero-copy
+        # on the sharded buffers (no NoC read/write), reusing the interleaved row-parallel
+        # compute unchanged (op_design.md §1 lamp 3 — a knob-turn, not a cross-core scheme).
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         # Cross-core W-split (Refinement 4): the hidden dim is pre-placed across a
         # group of cores; each reduces its local W-slice to a partial Σx², then one
         # cross-core round (gather -> fold -> broadcast 1/RMS) precedes normalize.
@@ -131,6 +137,14 @@ SUPPORTED = {
 
 EXCLUSIONS = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+    # Refinement 5 lands HEIGHT_SHARDED for TILE input + {TILE gamma, no gamma} via the
+    # zero-copy resident-shard row-parallel path. The two RM corners on HEIGHT need the
+    # tilize/untilize-on-resident-shard plumbing (RM input) or the resident-path RM-gamma
+    # tilize (RM gamma) — deferred to R5a. Refused cell-level so they stay xfail-strict:
+    #   * RM INPUT + HEIGHT: covers RM+no-gamma and RM+RM-gamma (RM+TILE-gamma is INVALID).
+    #   * RM GAMMA + HEIGHT: covers TILE-input+RM-gamma (and RM-input+RM-gamma, redundant).
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED},
+    {"gamma_layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED},
     # Refinement 4a lands RM-gamma on the cross-core path (reader reads the gamma
     # W-slice as row-major sticks, compute tilizes them into cb_gamma before the
     # pass-2 ·gamma). Refinement 4b lands RM-INPUT + WIDTH/BLOCK sharded: the reader

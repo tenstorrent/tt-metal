@@ -83,6 +83,13 @@ void kernel_main() {
     // the input CB policy + CB sizing change vs the streaming path — the compute
     // phase sequence is identical (square -> reduce -> rsqrt -> x*rstd -> *gamma).
     constexpr bool USE_RESIDENT = get_compile_time_arg_val(7) != 0;
+    // HEIGHT_SHARDED local per-core reduction (op_design.md §1 lamp 3, Refinement 5):
+    // this core's full-W row-shard is resident in L1, so cb_x_in is a zero-copy CB
+    // backed on the sharded buffer and cb_out is zero-copy on the sharded output (no
+    // writer drains it). Compute SELF-ARMS cb_x_in (there is no reader push) and packs
+    // cb_out in place. Knob-turn on the USE_RESIDENT path: the two-pass indexed compute
+    // is identical — only the input arming + the (whole-shard) cb_out sizing change.
+    constexpr bool X_RESIDENT = get_compile_time_arg_val(8) != 0;
     constexpr uint32_t Wt = BLOCK_SIZE * NUM_BLOCKS;  // whole tile-row width
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
@@ -109,7 +116,24 @@ void kernel_main() {
     // block at offset b*BLOCK_SIZE (CallerManaged), popped once at core exit. The
     // compute phase sequence is otherwise identical to the streaming path below.
     if constexpr (USE_RESIDENT) {
-        if constexpr (HAS_GAMMA) {
+        // HEIGHT_SHARDED (Refinement 5): the whole resident row-shard (num_rows tile-rows
+        // x Wt tiles) is backed zero-copy on cb_x_in with no external producer, so
+        // self-arm it once. The per-row cb_wait_front/pop below then walks the shard
+        // tile-row by tile-row, keeping the front at the current row — so the block
+        // offset indexing (b*BLOCK_SIZE, relative to the front) is IDENTICAL to the R3
+        // resident path. cb_out is likewise zero-copy on the output shard (sized to the
+        // whole shard, no writer drains it): the Streaming PackTile below fills it
+        // exactly, so no pop is needed.
+        if constexpr (X_RESIDENT) {
+            cb_reserve_back(cb_x_in, num_rows * Wt);
+            cb_push_back(cb_x_in, num_rows * Wt);
+        }
+        // Interleaved resident path holds the whole gamma row resident (read once by the
+        // reader). HEIGHT (X_RESIDENT) instead STREAMS gamma per block (small cb_gamma):
+        // a full-W gamma held resident (Wt tiles) would blow L1 on top of the resident
+        // input+output shards for wide W, so gamma is re-read per block per row (phase-1
+        // gamma behavior; resident gamma is the R6 perf lamp). No pre-loop wait/pop then.
+        if constexpr (HAS_GAMMA && !X_RESIDENT) {
             cb_wait_front(cb_gamma, Wt);  // resident gamma: read once by the reader, held
         }
         for (uint32_t row = 0; row < num_rows; ++row) {
@@ -175,23 +199,41 @@ void kernel_main() {
                     ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
 
                 if constexpr (HAS_GAMMA) {
-                    // norm * gamma for block b: gamma held resident, read at offset b*BS.
-                    ckl::eltwise_chain(
-                        block_shape,
-                        ckl::BinaryFpu<
+                    if constexpr (X_RESIDENT) {
+                        // HEIGHT: gamma streamed per block (reader pushes BLOCK_SIZE/block);
+                        // Bulk = wait+pop the block's gamma tiles. Same streaming ·gamma mul
+                        // as the interleaved streaming path below (small cb_gamma, any W).
+                        ckl::mul<
                             cb_norm,
                             cb_gamma,
-                            ckl::BinaryFpuOp::Mul,
+                            cb_out,
                             ckl::BroadcastDim::Row,
                             ckl::InputLifecycle::Streaming,
-                            ckl::InputLifecycle::CallerManaged,
+                            ckl::InputLifecycle::Bulk,
+                            ckl::OutputLifecycle::Streaming,
                             ckl::BinaryDataFormatReconfig::Input,
-                            ckl::Dst::D0,
+                            ckl::PackTileReconfig::Output,
                             ckl::OperandKind::Scalar,
-                            ckl::OperandKind::Row,
-                            ckl::TileOffset::Unset,
-                            ckl::TileOffset::Set>{0, b * BLOCK_SIZE},
-                        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                            ckl::OperandKind::Row>(block_shape);
+                    } else {
+                        // interleaved resident: gamma held, read at offset b*BS.
+                        ckl::eltwise_chain(
+                            block_shape,
+                            ckl::BinaryFpu<
+                                cb_norm,
+                                cb_gamma,
+                                ckl::BinaryFpuOp::Mul,
+                                ckl::BroadcastDim::Row,
+                                ckl::InputLifecycle::Streaming,
+                                ckl::InputLifecycle::CallerManaged,
+                                ckl::BinaryDataFormatReconfig::Input,
+                                ckl::Dst::D0,
+                                ckl::OperandKind::Scalar,
+                                ckl::OperandKind::Row,
+                                ckl::TileOffset::Unset,
+                                ckl::TileOffset::Set>{0, b * BLOCK_SIZE},
+                            ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                    }
                 } else {
                     ckl::copy<cb_norm, cb_out>(block_shape);
                 }
@@ -200,8 +242,8 @@ void kernel_main() {
             cb_pop_front(cb_x_in, Wt);  // release the resident tile-row
             cb_pop_front(cb_rstd, 1);   // release the held 1/RMS tile
         }
-        if constexpr (HAS_GAMMA) {
-            cb_pop_front(cb_gamma, Wt);  // release the resident gamma row
+        if constexpr (HAS_GAMMA && !X_RESIDENT) {
+            cb_pop_front(cb_gamma, Wt);  // release the resident gamma row (interleaved only)
         }
         cb_pop_front(cb_scaler, HAS_PARTIAL_W ? 2 : 1);
         return;

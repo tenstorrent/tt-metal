@@ -110,6 +110,22 @@ def create_program_descriptor(
             compute_kernel_config=compute_kernel_config,
         )
 
+    # HEIGHT_SHARDED local per-core reduction (op_design.md §1 lamp 3, Refinement 5):
+    # rows are split across cores, each core keeps FULL-W rows, so the RMS reduce stays
+    # LOCAL per core — the exact row-parallel scheme, just with the row-shard resident in
+    # L1. A knob-turn: reuse the interleaved row-parallel reader/compute (the R3 resident
+    # indexed two-pass) with cb_x_in/cb_out backed ZERO-COPY on the sharded buffers (no
+    # NoC read/write), core assignment pinned by the shard grid. Not the cross-core
+    # WIDTH/BLOCK scheme (orthogonal mechanism).
+    if _ml == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        return _create_height_sharded_descriptor(
+            input_tensor,
+            output_tensor,
+            gamma=gamma,
+            epsilon=epsilon,
+            compute_kernel_config=compute_kernel_config,
+        )
+
     shape = list(input_tensor.shape)
 
     origin_W = int(shape[-1])
@@ -314,6 +330,7 @@ def create_program_descriptor(
         gamma_page,
         1 if gamma_is_rm else 0,
         1 if use_resident else 0,
+        0,  # X_RESIDENT: interleaved reads x from DRAM (Refinement 5 sets this on HEIGHT)
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
@@ -373,6 +390,7 @@ def create_program_descriptor(
         eps_bits,
         1 if gamma_is_rm else 0,
         1 if use_resident else 0,
+        0,  # X_RESIDENT: interleaved (Refinement 5 sets this on HEIGHT)
     ]
 
     compute_rt_args = ttnn.RuntimeArgs()
@@ -389,6 +407,198 @@ def create_program_descriptor(
 
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
+        semaphores=[],
+        cbs=cbs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# HEIGHT_SHARDED local per-core reduction builder (op_design.md §1 lamp 3, R5)
+# ---------------------------------------------------------------------------
+# Rows are split across cores; each core keeps FULL-W rows, so the RMS reduce
+# stays LOCAL per core — the row-parallel scheme with the row-shard resident in
+# each core's L1. A knob-turn on the interleaved row-parallel path: it REUSES the
+# interleaved reader + compute (the R3 resident indexed two-pass) unchanged except
+# for two compile-time flags:
+#   * cb_x_in is backed ZERO-COPY on the resident input shard (compute self-arms it
+#     via X_RESIDENT; the reader skips the x read — no NoC read of the own shard);
+#   * cb_out is backed ZERO-COPY on the resident output shard (sized to the whole
+#     shard; the compute's Streaming pack fills it in place, so NO writer is needed).
+# Core assignment + per-core tile-row count are pinned by the shard grid (each core's
+# resident shard = its per-core block). Not the cross-core WIDTH/BLOCK scheme.
+def _create_height_sharded_descriptor(
+    input_tensor,
+    output_tensor,
+    *,
+    gamma=None,
+    epsilon=1e-6,
+    compute_kernel_config=None,
+):
+    device = input_tensor.device()
+    shape = list(input_tensor.shape)
+    origin_W = int(shape[-1])
+    origin_H = int(shape[-2])
+    NC = 1
+    for d in shape[:-2]:
+        NC *= int(d)
+
+    Ht_img = _ceildiv(origin_H, TILE_DIM)
+    Wt = _ceildiv(origin_W, TILE_DIM)
+    partial_w = origin_W % TILE_DIM
+    has_partial_w = partial_w != 0
+
+    # BLOCK_SIZE / NUM_BLOCKS: the same live block knob as the interleaved path
+    # (single source of truth). The per-core block is the WHOLE resident shard;
+    # within a tile-row it is streamed in NUM_BLOCKS blocks of BLOCK_SIZE tiles.
+    BLOCK_SIZE = _pick_block_size(Wt)
+    NUM_BLOCKS = Wt // BLOCK_SIZE
+
+    has_gamma = gamma is not None
+    gamma_is_rm = has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    inv_N_bits = _f32_bits(1.0 / float(origin_W))
+    eps_bits = _f32_bits(epsilon)
+
+    in_dtype = input_tensor.dtype
+    out_dtype = output_tensor.dtype
+    in_page = input_tensor.buffer_aligned_page_size()
+
+    tile_in = ttnn.tile_size(in_dtype)
+    tile_out = ttnn.tile_size(out_dtype)
+    tile_bf16 = ttnn.tile_size(ttnn.bfloat16)
+    tile_fp32 = ttnn.tile_size(ttnn.float32)
+
+    if has_gamma:
+        gamma_dtype = gamma.dtype
+        gamma_page = gamma.buffer_aligned_page_size()
+        tile_gamma = ttnn.tile_size(gamma_dtype)
+        gamma_elem = _elem_size(gamma)
+    else:
+        gamma_dtype = in_dtype
+        gamma_page = in_page
+        tile_gamma = tile_in
+        gamma_elem = 0
+
+    # ---- Shard geometry: each core holds per_h_tiles FULL-W tile-rows, resident ----
+    # TILE input only (RM input HEIGHT is EXCLUDED -> R5a); shard extents are tile
+    # multiples, so sh/32 = per-core tile-rows and sw/32 = Wt (full W). The shard's
+    # CoreRangeSet pins the core assignment (row-major shard order).
+    mem = input_tensor.memory_config()
+    ss = mem.shard_spec
+    sh, sw = int(ss.shape[0]), int(ss.shape[1])
+    grid = ss.grid
+    cores = ttnn.corerange_to_cores(grid, None, True)  # row-major shard order
+    per_h_tiles = sh // TILE_DIM  # tile-rows this core holds (its resident block)
+    assert sw // TILE_DIM == Wt, f"HEIGHT shard width {sw} inconsistent with Wt*32={Wt * TILE_DIM}"
+
+    # ---- Circular buffers (op_design.md §7); cb_x_in / cb_out zero-copy on shards ----
+    CB_X_IN = 1
+    CB_SCALER = 2
+    CB_GAMMA = 3
+    CB_OUT = 16
+    CB_XSQ = 24
+    CB_RSTD = 25
+    CB_NORM = 26
+
+    cbs = [
+        # zero-copy: consumed/produced in place on the resident row-shard (no NoC).
+        ttnn.cb_descriptor_from_sharded_tensor(CB_X_IN, input_tensor),
+        ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor),
+    ]
+
+    def add_cb(idx, page_size, num_pages, fmt):
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=num_pages * page_size,
+                core_ranges=grid,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=page_size)],
+            )
+        )
+
+    # 1/W reduce scaler (+partial tile), bf16, wait-not-pop across all rows/passes.
+    add_cb(CB_SCALER, tile_bf16, 2 if has_partial_w else 1, ttnn.bfloat16)
+    # pass-1 x^2 (square -> reduce) and pass-2 x*rstd (mul<Col> -> mul<Row>): per-block.
+    add_cb(CB_XSQ, tile_in, 2 * BLOCK_SIZE, in_dtype)
+    add_cb(CB_RSTD, tile_fp32, max(DEPTH, 2), ttnn.float32)
+    add_cb(CB_NORM, tile_in, 2 * BLOCK_SIZE, in_dtype)
+    if has_gamma:
+        # gamma STREAMED per block (DEPTH*BLOCK_SIZE): a full-W resident gamma (Wt tiles)
+        # would blow L1 on top of the resident input+output shards for wide W. cb_gamma
+        # stays small (never sized by Wt), so HEIGHT fits any W (op_design.md §7).
+        add_cb(CB_GAMMA, tile_gamma, DEPTH * BLOCK_SIZE, gamma_dtype)
+
+    # ---- Reader: scaler prep + resident gamma read; x is resident (no x read) ----
+    reader_ct_args = [
+        Ht_img,
+        Wt,
+        BLOCK_SIZE,
+        NUM_BLOCKS,
+        origin_H,
+        origin_W,
+        inv_N_bits,
+        1 if has_partial_w else 0,
+        partial_w if has_partial_w else TILE_DIM,
+        0,  # is_rm: TILE input only on this path
+        1 if has_gamma else 0,
+        0,  # in_elem: RM-only, unused
+        gamma_elem,
+        in_page,
+        gamma_page,
+        1 if gamma_is_rm else 0,
+        1,  # use_resident: reuse the R3 resident indexed two-pass
+        1,  # X_RESIDENT: cb_x_in is the resident zero-copy shard (skip x read)
+    ]
+    # Input accessor is declared-but-unused on the resident path (x never read);
+    # gamma accessor addresses the interleaved DRAM gamma.
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct_args.extend(
+        ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
+        if has_gamma
+        else ttnn.TensorAccessorArgs().get_compile_time_args()
+    )
+
+    reader_rt_args = ttnn.RuntimeArgs()
+    in_addr = input_tensor.buffer_address()
+    gamma_addr = gamma.buffer_address() if has_gamma else 0
+    for core in cores:
+        # row_start unused (x resident); num_rows = the core's whole resident shard.
+        reader_rt_args[core.x][core.y] = [in_addr, gamma_addr, 0, per_h_tiles]
+
+    reader_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
+        core_ranges=grid,
+        compile_time_args=reader_ct_args,
+        runtime_args=reader_rt_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    # ---- Compute: R3 resident indexed two-pass; self-arms cb_x_in, packs cb_out ----
+    compute_ct_args = [
+        BLOCK_SIZE,
+        NUM_BLOCKS,
+        0,  # is_rm
+        1 if has_gamma else 0,
+        1 if has_partial_w else 0,
+        eps_bits,
+        1 if gamma_is_rm else 0,
+        1,  # use_resident
+        1,  # X_RESIDENT: self-arm the resident input shard; cb_out zero-copy (no writer)
+    ]
+    compute_rt_args = ttnn.RuntimeArgs()
+    for core in cores:
+        compute_rt_args[core.x][core.y] = [per_h_tiles]
+
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
+        core_ranges=grid,
+        compile_time_args=compute_ct_args,
+        runtime_args=compute_rt_args,
+        config=compute_kernel_config if compute_kernel_config is not None else ttnn.ComputeConfigDescriptor(),
+    )
+
+    # No writer: cb_out is the zero-copy output shard, filled in place by compute.
+    return ttnn.ProgramDescriptor(
+        kernels=[reader_kernel, compute_kernel],
         semaphores=[],
         cbs=cbs,
     )
