@@ -267,7 +267,7 @@ _BACKENDS: List[FamilyBackend] = [
         use_module_tree=False,
     ),
     FamilyBackend(
-        category="STT",
+        category="TTS",
         name="XTTS-v2 (multilingual TTS)",
         demo_path="models/demos/xtts_v2",
         routing_mode="template",

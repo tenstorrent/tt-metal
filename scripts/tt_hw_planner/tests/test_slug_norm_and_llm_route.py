@@ -116,6 +116,37 @@ def test_vl_demos_derive_as_vlm_with_tag():
     assert fams["whisper (auto-upstream)"]["category"] == "STT"
 
 
+def test_backend_category_matches_pipeline_tag():
+    # guards the XTTS-v2 STT-vs-TTS typo class: a template backend's category must be
+    # consistent with its pipeline_tags (a text-to-speech backend can't be category STT)
+    from scripts.tt_hw_planner.family_backends import all_backends
+
+    cat_of_tag = {
+        "text-to-speech": "TTS",
+        "automatic-speech-recognition": "STT",
+        "text-to-image": "Image",
+        "image-classification": "CNN",
+    }
+    mismatches = []
+    for b in all_backends():
+        if getattr(b, "routing_mode", "") == "generic":
+            continue
+        for t in b.pipeline_tags:
+            expected = cat_of_tag.get(t)
+            if expected and b.category != expected:
+                mismatches.append((b.name, b.category, t, expected))
+    assert not mismatches, f"category/pipeline_tag mismatches: {mismatches}"
+
+
+def test_xtts_v2_is_in_tts_bucket():
+    from scripts.tt_hw_planner.family_backends import backends_for_category
+
+    tts = [b.name for b in backends_for_category("TTS")]
+    stt = [b.name for b in backends_for_category("STT")]
+    assert any("XTTS" in n for n in tts), "XTTS-v2 must be in the TTS bucket"
+    assert not any("XTTS" in n for n in stt), "XTTS-v2 must NOT be in the STT bucket"
+
+
 def test_sibling_voting_runs_n_asks_and_caches(monkeypatch):
     import threading
 
