@@ -20,11 +20,12 @@ void kernel_main() {
     const uint32_t end_core_physical_coord_x = get_arg_val<uint32_t>(2);
     const uint32_t end_core_physical_coord_y = get_arg_val<uint32_t>(3);
     const uint32_t coordinator_to_cores_semaphore_arg = get_arg_val<uint32_t>(4);
-    const uint32_t cores_to_coordinator_semaphore_arg = get_arg_val<uint32_t>(5);
-    const uint32_t number_of_dest = get_arg_val<uint32_t>(6);
-    const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(7);
-    const uint32_t output_tensor_buffer_addr = get_arg_val<uint32_t>(8);
-    const uint32_t output_index_tensor_buffer_addr = get_arg_val<uint32_t>(9);
+    const uint32_t cores_to_coordinator_ready_semaphore_arg = get_arg_val<uint32_t>(5);
+    const uint32_t cores_to_coordinator_done_semaphore_arg = get_arg_val<uint32_t>(6);
+    const uint32_t number_of_dest = get_arg_val<uint32_t>(7);
+    const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(8);
+    const uint32_t output_tensor_buffer_addr = get_arg_val<uint32_t>(9);
+    const uint32_t output_index_tensor_buffer_addr = get_arg_val<uint32_t>(10);
 
     // Compile time args
     constexpr uint32_t total_work_units = get_compile_time_arg_val(0);
@@ -63,7 +64,14 @@ void kernel_main() {
 
     // Semaphore setup
     Semaphore<> coordinator_to_cores_sem(coordinator_to_cores_semaphore_arg);
-    Semaphore<> cores_to_coordinator_sem(cores_to_coordinator_semaphore_arg);
+    // Two separate up-channels from the worker cores: the reader's per-row readiness ->
+    // ready sem, the writer's per-pair confirmations -> done sem.  They are kept on
+    // distinct semaphores so each exact-match wait() below has its own monotonic target;
+    // folded onto one shared counter, at a tile-row boundary (Ht >= 2) a fast reader's
+    // next-row readiness could land during the confirmation window and push the counter
+    // past the done target, so the wait would never match and the op would deadlock.
+    Semaphore<> cores_to_coordinator_ready_sem(cores_to_coordinator_ready_semaphore_arg);
+    Semaphore<> cores_to_coordinator_done_sem(cores_to_coordinator_done_semaphore_arg);
 
     const uint32_t number_of_confirmations = Wt / 2;
 
@@ -172,8 +180,8 @@ void kernel_main() {
         }  // Wt loop
 
         // Wait until all cores are ready to start
-        cores_to_coordinator_sem.wait(number_of_dest);
-        cores_to_coordinator_sem.set(0);  // Reset the semaphore
+        cores_to_coordinator_ready_sem.wait(number_of_dest);
+        cores_to_coordinator_ready_sem.set(0);  // Reset the semaphore
 
         // Set signal to start processing
         coordinator_to_cores_sem.set_multicast<NocOptions::DEFAULT>(
@@ -204,8 +212,8 @@ void kernel_main() {
                 noc.async_write_barrier();
 
                 // Wait until cores will process and save data
-                cores_to_coordinator_sem.wait(number_of_confirmations);
-                cores_to_coordinator_sem.set(0);  // Reset the semaphore
+                cores_to_coordinator_done_sem.wait(number_of_confirmations);
+                cores_to_coordinator_done_sem.set(0);  // Reset the semaphore
             }  // sub loop
         }  // stage loop
     }  // Ht loop

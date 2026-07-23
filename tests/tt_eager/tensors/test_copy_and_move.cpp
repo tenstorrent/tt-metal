@@ -33,6 +33,8 @@ class IDevice;
 
 using namespace tt;
 using namespace tt_metal;
+using ttnn::StorageType;
+using ttnn::Tensor;
 using namespace constants;
 
 void test_tensor_copy_semantics(distributed::MeshDevice* device) {

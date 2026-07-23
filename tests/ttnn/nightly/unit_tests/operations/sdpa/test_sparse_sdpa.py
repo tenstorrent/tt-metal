@@ -10,9 +10,11 @@ tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py (shared helpers in spa
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_test_utils import (
     make_inputs,
     golden,
@@ -199,9 +201,14 @@ def test_sparse_sdpa_determinism(device, q_dtype, kv_dtype):
     assert mismatch == 0.0, "sparse_sdpa output is not deterministic across repeated runs"
 
 
-# ---- Perf-only (no golden; full-size golden gather is ~GBs). Profile with:
-#      python -m tracy -p -r -v -m pytest <thisfile>::test_sparse_sdpa_perf
-#      then read "DEVICE KERNEL DURATION [ns]" for SparseSDPAOperation. ----
+# ---- Perf check (no golden; full-size golden gather is ~GBs). Device timing via the real-time device program
+#      profiler: the op is profiled with profile_realtime_program and its device kernel duration is asserted
+#      within +/- SPARSE_PERF_MARGIN of the value measured on a Blackhole p150b. A symmetric band catches
+#      regressions AND unexpected speedups. Math utilization is not meaningful for this block-sparse op (the
+#      gather/DMA dominates), so we gate on wall-clock device duration. Needs no tracy build. ----
+# Observed run-to-run spread is <1%; 5% leaves headroom for board/thermal variance while catching a regression.
+SPARSE_PERF_MARGIN = 0.05
+
 # nv (valid keys/token) patterns. Chunk-skip benefit is sparsity-dependent, so sweep it.
 _NV = {
     "dense": lambda s, T, K: K,  # all TOPK valid (no skip) -> worst case, proves no regression
@@ -214,21 +221,45 @@ _NV = {
 
 @run_for_blackhole()
 @pytest.mark.parametrize(
-    "S,T,TOPK,kc,nv",
+    "S,T,TOPK,kc,nv,expected_ms",
     [
-        (640, 56320, 2048, 256, "dense"),  # production shape (Q[32,640,576], KV[56320,576], idx[640,2048])
-        (640, 56320, 2048, 256, "half"),
-        (640, 56320, 2048, 256, "causal"),
-        (640, 56320, 2048, 256, "sparse"),
-        (640, 56320, 2048, 256, "mixed"),
-        (110, 56320, 2048, 256, "dense"),  # 1 token/core, 8 chunks, real T -> representative DRAM locality
-        (8, 56320, 2048, 256, "dense"),  # 8 cores -> low DRAM contention; isolates BW headroom vs floor
+        (640, 56320, 2048, 256, "dense", 3.33),  # production shape (Q[32,640,576], KV[56320,576], idx[640,2048])
+        (640, 56320, 2048, 256, "half", 1.78),
+        (640, 56320, 2048, 256, "causal", 0.732),
+        (640, 56320, 2048, 256, "sparse", 0.576),
+        (640, 56320, 2048, 256, "mixed", 1.838),
+        (110, 56320, 2048, 256, "dense", 0.576),  # 1 token/core, 8 chunks, real T -> representative DRAM locality
+        (8, 56320, 2048, 256, "dense", 0.155),  # 8 cores -> low DRAM contention; isolates BW headroom vs floor
     ],
     ids=["prod-dense", "prod-half", "prod-causal", "prod-sparse", "prod-mixed", "zone1tok", "lowcore"],
 )
-def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv):
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv, expected_ms):
     H = 32
     nv_fn = _NV[nv]
     q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: nv_fn(s, T, TOPK))
-    out, _ = run_op(q, kv, indices, device, kc, V_DIM)  # no golden; correctness covered by the PCC tests
+
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        # This runs only on the IOMMU-pinned sku (the broad non-IOMMU sdpa glob excludes it by marker), so an
+        # inactive profiler means it regressed on a sku that should have it -- fail (not skip), matching the
+        # sprint / ring-joint perf checks.
+        pytest.fail("Real-time profiler must be active for sparse_sdpa perf checks (needs IOMMU)")
+
+    # Profile the op with the real-time device profiler (one dispatch -> one device program record), same as
+    # the single-chip SDPA sprint perf check. No golden; correctness is covered by the PCC tests.
+    result, perf_record = profile_realtime_program(device, lambda: run_op(q, kv, indices, device, kc, V_DIM))
+    out, _ = result
+    duration_ms = perf_record["duration_ns"] / 1e6
+    lower = expected_ms * (1 - SPARSE_PERF_MARGIN)
+    upper = expected_ms * (1 + SPARSE_PERF_MARGIN)
+    logger.info(
+        f"sparse_sdpa perf S={S} T={T} TOPK={TOPK} kc={kc} nv={nv}: duration={duration_ms:.3f} ms "
+        f"(expected {expected_ms:.3f} ms, band [{lower:.3f}, {upper:.3f}])"
+    )
     assert tuple(out.shape) == (1, H, S, V_DIM)
+    assert lower <= duration_ms <= upper, (
+        f"sparse_sdpa {nv} device kernel duration {duration_ms:.3f} ms outside band [{lower:.3f}, {upper:.3f}] ms "
+        f"(expected {expected_ms:.3f} ms, margin +/- {SPARSE_PERF_MARGIN * 100:.0f}%)"
+    )

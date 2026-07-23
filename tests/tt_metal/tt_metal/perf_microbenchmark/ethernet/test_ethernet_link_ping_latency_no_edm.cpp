@@ -89,15 +89,15 @@ private:
 };
 
 struct ChipSenderReceiverEthCore {
-    CoreCoord sender_core;
-    CoreCoord receiver_core;
+    tt::tt_metal::CoreCoord sender_core;
+    tt::tt_metal::CoreCoord receiver_core;
 };
 
 std::tuple<tt_metal::Program, tt_metal::Program> build(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device0*/,
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device1*/,
-    CoreCoord eth_sender_core,
-    CoreCoord eth_receiver_core,
+    tt::tt_metal::CoreCoord eth_sender_core,
+    tt::tt_metal::CoreCoord eth_receiver_core,
     std::size_t num_samples,
     std::size_t sample_page_size,
     std::size_t num_channels,
@@ -141,8 +141,8 @@ void run(
     tt_metal::KernelHandle local_kernel,
     tt_metal::KernelHandle remote_kernel,
 
-    CoreCoord eth_sender_core,
-    CoreCoord eth_receiver_core,
+    tt::tt_metal::CoreCoord eth_sender_core,
+    tt::tt_metal::CoreCoord eth_receiver_core,
     std::size_t num_samples,
     std::size_t sample_page_size,
     std::size_t /*max_channels_per_direction*/) {

@@ -128,6 +128,8 @@ protected:
         return true;
     }
 
+    virtual size_t num_command_queues() const { return 1; }
+
     void create_devices() {
         std::vector<ChipId> ids;
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
@@ -136,7 +138,7 @@ protected:
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
-            ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
+            ids, l1_small_size_, trace_region_size_, num_command_queues(), dispatch_core_config);
         devices_.clear();
         for (const auto& [device_id, device] : id_to_device_) {
             devices_.push_back(device);
@@ -176,6 +178,11 @@ protected:
         this->create_devices();
         init_max_cbs();
     }
+};
+
+class QuasarMultiCQMeshDeviceSingleCardFixture : public QuasarMeshDeviceSingleCardFixture {
+protected:
+    size_t num_command_queues() const override { return 2; }
 };
 
 }  // namespace tt::tt_metal

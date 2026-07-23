@@ -31,7 +31,7 @@ namespace ttnn::prim::qsr {
 struct SliceDeviceOperation {
     using operation_attributes_t = SliceParams;
     using tensor_args_t = SliceInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         SliceRmProgramFactory,

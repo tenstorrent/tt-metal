@@ -143,9 +143,10 @@ uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
 void RemapperIndexAllocator::reset() { next_index_.clear(); }
 
 std::vector<uint8_t> TxnIdAllocator::allocate(uint8_t count) {
+    // IDs are drawn from [1, 31]; id 0 is implicitly reserved (NOC_V2_TRID_STATIC).
     TT_FATAL(
         next_id_ + count <= 32,
-        "TxnIdAllocator exhausted: requested {} IDs at next_id_={}, but only 32 are available",
+        "TxnIdAllocator exhausted: requested {} IDs at next_id_={}, but only [1, 31] are available",
         count,
         next_id_);
     std::vector<uint8_t> ids;

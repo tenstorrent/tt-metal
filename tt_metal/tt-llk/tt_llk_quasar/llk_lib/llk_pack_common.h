@@ -16,16 +16,63 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 
 /**
- * @brief Programs the packer input data format (THCON) for the selected packer.
+ * @brief Configures packer ReLU (mode and threshold) for the selected packer only.
+ *
+ * Programs RELU_MODE and RELU_THRESHOLD via THCON_PACKER*_REG3_*_RMW (cfg_defines.h).
+ * Quasar layout (see tests/hw_specific/quasar/inc/cfg_defines.h):
+ *   - RELU_MODE: NO_RELU, ZERO_RELU, MIN_THRESHOLD_RELU, MAX_THRESHOLD_RELU.
+ *   - RELU_THRESHOLD: separate 32-bit register. Format depends on pack input: FP16 path expects 16-bit
+ *     threshold in low 16 bits; FP32 path expects BF16/FP16 threshold in high 16 bits.
+ *
+ * @tparam PACK_SEL: Which packer to configure, values = <p_pacr::PACK0/PACK1>
+ * @tparam EN_32BIT_DEST: Set to true when datums in the dst register are 32-bit, values = <true/false>
+ * @param relu_config: ReLU config (mode + threshold). Default ReluConfig::none() = no ReLU.
+ */
+template <std::uint32_t PACK_SEL, bool EN_32BIT_DEST>
+inline void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config = ckernel::ReluConfig::none())
+{
+    static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
+
+    // Select register constants for the chosen packer (PACK0 or PACK1). Avoiding branching and duplicated code.
+    constexpr std::uint32_t packer_relu_mode_mask = (PACK_SEL == p_pacr::PACK0) ? THCON_PACKER0_REG3_RELU_MODE_MASK : THCON_PACKER1_REG3_RELU_MODE_MASK;
+    constexpr std::uint32_t packer_relu_threshold_mask =
+        (PACK_SEL == p_pacr::PACK0) ? THCON_PACKER0_REG3_RELU_THRESHOLD_MASK : THCON_PACKER1_REG3_RELU_THRESHOLD_MASK;
+
+    // Apply packer-specific masks and extract mode and threshold.
+    const std::uint32_t mode = static_cast<std::uint32_t>(relu_config.get_mode()) & packer_relu_mode_mask;
+    std::uint32_t threshold  = static_cast<std::uint32_t>(relu_config.get_threshold()) & packer_relu_threshold_mask;
+
+    // FP32 path: 32-bit register holds float; threshold in high 16 bits must shift left by 16 bits.
+    // FP16 path: HW compares 16-bit values; threshold in low 16 bits.
+    threshold = EN_32BIT_DEST ? (threshold << 16) : threshold;
+
+    // Branch on PACK_SEL since each *_RMW macro expands to (addr, shamt, mask); a ternary would see a comma expression
+    // and not a single value, so we must call cfg_rmw with the correct macro per packer.
+    if constexpr (PACK_SEL == p_pacr::PACK0)
+    {
+        cfg_rmw(THCON_PACKER0_REG3_RELU_MODE_RMW, mode);
+        cfg_rmw(THCON_PACKER0_REG3_RELU_THRESHOLD_RMW, threshold);
+    }
+    else
+    {
+        cfg_rmw(THCON_PACKER1_REG3_RELU_MODE_RMW, mode);
+        cfg_rmw(THCON_PACKER1_REG3_RELU_THRESHOLD_RMW, threshold);
+    }
+}
+
+/**
+ * @brief Programs the packer input data format (THCON) for the selected packer and the packer ReLU (mode and threshold).
  *
  * PACK1 instructions require autoloop setup: use _llk_pack_srcs_config_ / _llk_pack_srcs_ in
  * llk_srcs.h — do not drive Packer 1 via the llk_pack.h MOP APIs.
  *
  * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1> (PACK0 = math dest -> L1, PACK1 = SrcS -> L1)
+ * @tparam EN_32BIT_DEST: Dest register 32-bit/16-bit mode, values = <true/false>
  * @param tdma_desc: Contains destination register format.
+ * @param relu_config: ReLU config (mode + threshold).
  */
-template <std::uint32_t PACK_SEL>
-inline void _llk_pack_hw_configure_(const tdma_descriptor_t& tdma_desc)
+template <std::uint32_t PACK_SEL, bool EN_32BIT_DEST>
+inline void _llk_pack_hw_configure_(const tdma_descriptor_t& tdma_desc, const ckernel::ReluConfig& relu_config)
 {
     static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
 
@@ -39,6 +86,7 @@ inline void _llk_pack_hw_configure_(const tdma_descriptor_t& tdma_desc)
     {
         cfg_rmw(THCON_PACKER1_REG0_IN_DATA_FORMAT_RMW, static_cast<std::uint8_t>(tdma_desc.reg_data_format));
     }
+    _llk_pack_relu_config_<PACK_SEL, EN_32BIT_DEST>(relu_config);
 }
 
 /**
@@ -214,51 +262,6 @@ inline void _llk_pack_set_l1_acc_(const bool l1_acc_en)
     else
     {
         cfg_rmw(THCON_PACKER1_REG0_L1_ACC_RMW, l1_acc_en);
-    }
-}
-
-/**
- * @brief Configures packer ReLU (mode and threshold) for the selected packer only.
- *
- * Programs RELU_MODE and RELU_THRESHOLD via THCON_PACKER*_REG3_*_RMW (cfg_defines.h).
- * Quasar layout (see tests/hw_specific/quasar/inc/cfg_defines.h):
- *   - RELU_MODE: NO_RELU, ZERO_RELU, MIN_THRESHOLD_RELU, MAX_THRESHOLD_RELU.
- *   - RELU_THRESHOLD: separate 32-bit register. Format depends on pack input: FP16 path expects 16-bit
- *     threshold in low 16 bits; FP32 path expects BF16/FP16 threshold in high 16 bits.
- *
- * @tparam PACK_SEL: Which packer to configure, values = <p_pacr::PACK0/PACK1>
- * @tparam EN_32BIT_DEST: Set to true when datums in the dst register are 32-bit, values = <true/false>
- * @param relu_config: ReLU config (mode + threshold). Default ReluConfig::none() = no ReLU.
- */
-template <std::uint8_t PACK_SEL, bool EN_32BIT_DEST>
-inline void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config = ckernel::ReluConfig::none())
-{
-    static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
-
-    // Select register constants for the chosen packer (PACK0 or PACK1). Avoiding branching and duplicated code.
-    constexpr std::uint32_t packer_relu_mode_mask = (PACK_SEL == p_pacr::PACK0) ? THCON_PACKER0_REG3_RELU_MODE_MASK : THCON_PACKER1_REG3_RELU_MODE_MASK;
-    constexpr std::uint32_t packer_relu_threshold_mask =
-        (PACK_SEL == p_pacr::PACK0) ? THCON_PACKER0_REG3_RELU_THRESHOLD_MASK : THCON_PACKER1_REG3_RELU_THRESHOLD_MASK;
-
-    // Apply packer-specific masks and extract mode and threshold.
-    const std::uint32_t mode = static_cast<std::uint32_t>(relu_config.get_mode()) & packer_relu_mode_mask;
-    std::uint32_t threshold  = static_cast<std::uint32_t>(relu_config.get_threshold()) & packer_relu_threshold_mask;
-
-    // FP32 path: 32-bit register holds float; threshold in high 16 bits must shift left by 16 bits.
-    // FP16 path: HW compares 16-bit values; threshold in low 16 bits.
-    threshold = EN_32BIT_DEST ? (threshold << 16) : threshold;
-
-    // Branch on PACK_SEL since each *_RMW macro expands to (addr, shamt, mask); a ternary would see a comma expression
-    // and not a single value, so we must call cfg_rmw with the correct macro per packer.
-    if constexpr (PACK_SEL == p_pacr::PACK0)
-    {
-        cfg_rmw(THCON_PACKER0_REG3_RELU_MODE_RMW, mode);
-        cfg_rmw(THCON_PACKER0_REG3_RELU_THRESHOLD_RMW, threshold);
-    }
-    else
-    {
-        cfg_rmw(THCON_PACKER1_REG3_RELU_MODE_RMW, mode);
-        cfg_rmw(THCON_PACKER1_REG3_RELU_THRESHOLD_RMW, threshold);
     }
 }
 
