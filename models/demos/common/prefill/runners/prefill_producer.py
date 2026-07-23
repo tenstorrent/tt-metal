@@ -22,7 +22,7 @@ Config — a YAML manifest (like the runner's PREFILL_MANIFEST) or PREFILL_* env
   manifest with ``--manifest <path>`` (or PREFILL_PRODUCER_MANIFEST); it is applied at startup via
   setdefault, so any explicitly exported PREFILL_* env var still overrides it. Typed blocks map to the
   env vars documented below; a verbatim ``env:`` block passes any raw PREFILL_* key through (and wins
-  over the typed blocks). See topology_configuration/producer_manifest_example.yaml. Schema:
+  over the typed blocks). See topology_configuration/prefill_producer_manifest.example.yaml. Schema:
     model:     {variant, num_layers, max_seq_len, chunk_size}
     transport: {sp, tp, h2d_service_id, connect_timeout_s}
     workload:  {num_users, chunks, max_requests, duration_s, interleave, p_gap, p_burst, gap_ms,
