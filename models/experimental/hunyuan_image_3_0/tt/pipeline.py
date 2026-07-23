@@ -269,22 +269,26 @@ class HunyuanTtDenoiseStep:
 def denoise_loop(
     step: HunyuanTtDenoiseStep,
     scheduler,  # HunyuanTtScheduler, set_timesteps() already called
-    init_latent,  # torch [B, C, h, w] — initial noise
+    init_latent,  # torch [B,C,h,w] OR ttnn flat NHWC [1,1,B*h*w,C]
     *,
     time_embed,  # HunyuanTtTimestepEmbedder for patch_embed (UNetDown)
     time_embed_2,  # HunyuanTtTimestepEmbedder for final_layer (UNetUp)
     cond,  # conditioning dict for the conditional pass (see below)
     uncond=None,  # same dict for the unconditional pass; None => no CFG
     guidance_scale: float = 1.0,
-    timestep_emb=None,  # host ref TimestepEmbedder for gen_timestep_scatter_index
-    guidance_emb=None,  # host ref TimestepEmbedder for guidance_scatter_index (distil)
-    timestep_r_emb=None,  # host ref TimestepEmbedder for gen_timestep_r_scatter_index (meanflow)
+    timestep_emb=None,  # host TimestepEmbedder OR HunyuanTtTimestepEmbedder
+    guidance_emb=None,  # host OR TT (distil guidance scatter)
+    timestep_r_emb=None,  # host OR TT (meanflow timestep_r scatter)
     cfg_distilled: bool = False,
     use_meanflow: bool = False,
     mesh_device=None,  # pass the MeshDevice when the backbone is mesh-resident
     dual_cq: DenoiseDualCQCoordinator | None = None,
+    return_device_latent: bool = False,
 ):
-    """Run the diffusion denoise loop, returning the final latent (torch NCHW).
+    """Run the diffusion denoise loop.
+
+    Returns torch NCHW by default, or a resident device flat NHWC tensor when
+    ``return_device_latent=True`` (skip final D2H for on-device VAE handoff).
 
     `cond`/`uncond` carry the static, timestep-independent conditioning forwarded
     to `step.__call__`:
@@ -298,28 +302,44 @@ def denoise_loop(
     scheduler. With CFG, the conditional and unconditional predictions are
     combined on device before the update.
 
-    When ``timestep_emb`` is set and ``cond`` carries ``base_embeds_host`` plus
-    ``gen_timestep_scatter_index``, the gen-image timestep token is re-scattered
-    on host each step before upload (I2I/T2I gen path). For Instruct-Distil
-    (``cfg_distilled``), also scatters ``guidance`` at ``1000 * guidance_scale``.
-    For meanflow (``use_meanflow``), scatters ``timestep_r`` from
-    ``scheduler.get_timestep_r(t)`` each step.
+    When ``timestep_emb`` is a ``HunyuanTtTimestepEmbedder`` and ``cond`` carries
+    ``base_embeds_host`` + ``gen_timestep_scatter_index``, gen-image timestep
+    tokens are re-scattered **on device** each step (no host MLP / full-embed H2D).
+    Host ``TimestepEmbedder`` keeps the legacy scatter-then-upload path. Distil /
+    meanflow follow the same rule when their emb args are TT modules.
 
-    Latent representation: the scheduler operates on device NHWC-flat tensors,
-    but UNetDown's entry only accepts torch NCHW, so the (small) latent makes one
-    host hop per step. The heavy compute (backbone, MoE) stays on device. A
-    future patch_embed change to accept a device NHWC-flat latent would remove
-    this hop; the latent is tiny relative to the backbone, so it is not on the
-    critical path.
+    Latent representation (default ``HY_LATENT_RESIDENT=0``): legacy per-step torch
+    NCHW ``to_torch``/``from_torch`` hops — known-good image quality. Set
+    ``HY_LATENT_RESIDENT=1`` to keep TILE flat NHWC on device between steps (Euler
+    on device; one final D2H for VAE); that path still needs PCC validation.
     """
     import torch
 
+    from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import (
+        HunyuanTtTimestepEmbedder,
+    )
+    from models.experimental.hunyuan_image_3_0.tt.noise import resolve_latent_nchw
     from models.experimental.hunyuan_image_3_0.tt.stage_trace import DenoiseStepTracer
     from models.experimental.hunyuan_image_3_0.tt.trace_config import denoise_execute_trace_enabled
 
-    B, C, h, w = init_latent.shape
+    B, C, h, w = resolve_latent_nchw(init_latent, token_h=step.token_h, token_w=step.token_w)
+    device_init = isinstance(init_latent, ttnn.Tensor)
     scheduler.set_begin_index(0)
     num_steps = len(scheduler.timesteps) if scheduler.timesteps is not None else 0
+    # Keep latent on device between DiT steps (no to_torch/from_torch mid-loop).
+    # Default OFF: resident TILE Euler previously decoded to neon band garbage.
+    # Opt in with HY_LATENT_RESIDENT=1 once that path is PCC-clean vs host hops.
+    latent_resident = os.environ.get("HY_LATENT_RESIDENT", "0") == "1"
+    # Device scatter when TT timestep embedders are passed (I2I / distil / meanflow).
+    device_scatter = isinstance(timestep_emb, HunyuanTtTimestepEmbedder)
+    # Import only when needed — avoids pulling cond_instantiate on the T2I path.
+    scatter_distill_step_embeds_tt = None
+    if device_scatter:
+        from models.experimental.hunyuan_image_3_0.tt.image_gen.cond_instantiate import (
+            scatter_distill_step_embeds_tt as _scatter_distill_tt,
+        )
+
+        scatter_distill_step_embeds_tt = _scatter_distill_tt
 
     if denoise_execute_trace_enabled(steps=num_steps) and mesh_device is not None:
         print("[denoise] execute_trace loop on CQ0 (HY_TRACE=1)", flush=True)
@@ -342,20 +362,21 @@ def denoise_loop(
             timestep_r_emb=timestep_r_emb,
             cfg_distilled=cfg_distilled,
             use_meanflow=use_meanflow,
+            latent_resident=latent_resident,
         )
         try:
-            latent = tracer.run(init_latent, scheduler.timesteps)
+            latent = tracer.run(init_latent, scheduler.timesteps, return_device_latent=return_device_latent)
         finally:
             tracer.release()
         return latent
 
-    if dual_cq is None and mesh_device is not None and denoise_2cq_enabled(mesh_device):
+    # Inter-step 2CQ latent D2H is only useful for the legacy host-hop path.
+    if not latent_resident and dual_cq is None and mesh_device is not None and denoise_2cq_enabled(mesh_device):
         dual_cq = DenoiseDualCQCoordinator(mesh_device)
         print("[denoise] 2CQ latent D2H on CQ1 (HY_TRACE=1)", flush=True)
 
     do_cfg = uncond is not None and guidance_scale != 1.0 and not cfg_distilled
     distill_guidance = 1000.0 * guidance_scale if cfg_distilled else None
-    latent = init_latent  # torch NCHW (canonical host form; small tensor)
     timesteps = list(scheduler.timesteps)
     total_steps = len(timesteps)
     verbose = os.environ.get("HY_VERBOSE", "1") != "0"
@@ -374,45 +395,124 @@ def denoise_loop(
             )
         return ttnn.from_torch(t_host, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=step.device)
 
-    def _down(t_dev):
-        if mesh_device is not None:
-            out = ttnn.to_torch(t_dev, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-            return out[:1]  # one replica (flat leading dim is 1)
-        return ttnn.to_torch(t_dev)
+    def _tvec_device(t_scalar: float):
+        """Create ``[1,1,B,1]`` float32 TILE on device — no ``torch.tensor`` / from_torch.
+
+        ``ttnn.full`` has no ``mesh_mapper`` kwarg; a MeshDevice fill is already replicated.
+        """
+        return ttnn.full(
+            (1, 1, B, 1),
+            fill_value=float(t_scalar),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device if mesh_device is not None else step.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def _down_latent_bchw(t_dev):
         return latent_tt_to_torch(t_dev, mesh_device, batch=B, channels=C, h=h, w=w)
 
+    # Pristine I2I base embeds on device (copied + scattered each step).
+    _base_pristine: dict[int, ttnn.Tensor] = {}
+
+    def _pristine_for(c):
+        key = id(c)
+        if key not in _base_pristine:
+            host = c.get("base_embeds_host")
+            if host is None:
+                raise KeyError("device scatter requires base_embeds_host")
+            _base_pristine[key] = _up(host.detach().to(torch.bfloat16).contiguous(), ttnn.bfloat16)
+            if verbose and len(_base_pristine) == 1:
+                print(
+                    "[denoise] I2I base_embeds resident on device — "
+                    "per-step scatter via HunyuanTtTimestepEmbedder (no host MLP H2D)",
+                    flush=True,
+                )
+        return _base_pristine[key]
+
+    def _clone_base(src: ttnn.Tensor) -> ttnn.Tensor:
+        dst = ttnn.allocate_tensor_on_device(src.spec, src.device())
+        ttnn.copy(src, dst)
+        return dst
+
     def _prepare_base_embeds(c, t_scalar):
         host = c.get("base_embeds_host")
-        if host is not None:
-            emb = host
-            idx = c.get("gen_timestep_scatter_index")
-            needs_scatter = (
-                (idx is not None and timestep_emb is not None)
-                or (cfg_distilled and c.get("guidance_scatter_index") is not None and guidance_emb is not None)
-                or (use_meanflow and c.get("gen_timestep_r_scatter_index") is not None and timestep_r_emb is not None)
-            )
-            if needs_scatter:
-                from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import (
-                    scatter_distill_step_embeds,
-                )
+        if host is None:
+            return c.get("base_embeds")
 
-                t_r = float(scheduler.get_timestep_r(t_scalar)) if use_meanflow else None
-                emb = scatter_distill_step_embeds(
-                    emb,
-                    t_scalar=float(t_scalar),
-                    gen_timestep_scatter_index=idx,
-                    timestep_emb=timestep_emb,
-                    guidance_scalar=distill_guidance,
-                    guidance_scatter_index=c.get("guidance_scatter_index"),
-                    guidance_emb=guidance_emb,
-                    t_r_scalar=t_r,
-                    gen_timestep_r_scatter_index=c.get("gen_timestep_r_scatter_index"),
-                    timestep_r_emb=timestep_r_emb,
-                )
-            return _up(emb, ttnn.bfloat16)
-        return c.get("base_embeds")
+        idx = c.get("gen_timestep_scatter_index")
+        needs_scatter = (
+            (idx is not None and timestep_emb is not None)
+            or (cfg_distilled and c.get("guidance_scatter_index") is not None and guidance_emb is not None)
+            or (use_meanflow and c.get("gen_timestep_r_scatter_index") is not None and timestep_r_emb is not None)
+        )
+
+        if device_scatter and needs_scatter:
+            base = _clone_base(_pristine_for(c))
+            t_r = float(scheduler.get_timestep_r(t_scalar)) if use_meanflow else None
+            g_emb = guidance_emb if isinstance(guidance_emb, HunyuanTtTimestepEmbedder) else None
+            r_emb = timestep_r_emb if isinstance(timestep_r_emb, HunyuanTtTimestepEmbedder) else None
+            return scatter_distill_step_embeds_tt(
+                base,
+                t_scalar=float(t_scalar),
+                gen_timestep_scatter_index=idx,
+                timestep_emb=timestep_emb,
+                mesh_device=mesh_device,
+                guidance_scalar=distill_guidance if g_emb is not None else None,
+                guidance_scatter_index=c.get("guidance_scatter_index"),
+                guidance_emb=g_emb,
+                t_r_scalar=t_r if r_emb is not None else None,
+                gen_timestep_r_scatter_index=c.get("gen_timestep_r_scatter_index"),
+                timestep_r_emb=r_emb,
+            )
+
+        # Legacy: host TimestepEmbedder scatter → H2D each step.
+        emb = host
+        if needs_scatter:
+            from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import (
+                scatter_distill_step_embeds,
+            )
+
+            t_r = float(scheduler.get_timestep_r(t_scalar)) if use_meanflow else None
+            emb = scatter_distill_step_embeds(
+                emb,
+                t_scalar=float(t_scalar),
+                gen_timestep_scatter_index=idx,
+                timestep_emb=timestep_emb,
+                guidance_scalar=distill_guidance,
+                guidance_scatter_index=c.get("guidance_scatter_index"),
+                guidance_emb=guidance_emb,
+                t_r_scalar=t_r,
+                gen_timestep_r_scatter_index=c.get("gen_timestep_r_scatter_index"),
+                timestep_r_emb=timestep_r_emb,
+            )
+        return _up(emb, ttnn.bfloat16)
+
+    if latent_resident or device_init:
+        if device_init:
+            latent_tt = init_latent
+            if latent_tt.layout != ttnn.TILE_LAYOUT:
+                tiled = ttnn.to_layout(latent_tt, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(latent_tt)
+                latent_tt = tiled
+            print(
+                f"[denoise] device init latent (no torch.randn H2D) "
+                f"flat={tuple(int(x) for x in latent_tt.shape)} layout=TILE",
+                flush=True,
+            )
+        else:
+            # One H2D of host init noise as TILE flat — same layout Euler/pred use.
+            nhwc = init_latent.permute(0, 2, 3, 1).reshape(1, 1, B * h * w, C).contiguous()
+            latent_tt = _up(nhwc, ttnn.bfloat16)
+            print(
+                f"[denoise] latent resident on device (HY_LATENT_RESIDENT=1) "
+                f"flat={tuple(nhwc.shape)} — no inter-step to_torch/from_torch",
+                flush=True,
+            )
+        use_device_latent = True
+    else:
+        latent = init_latent  # torch NCHW (legacy hop path)
+        use_device_latent = False
 
     for step_i, t in enumerate(timesteps):
         step_t0 = time.time()
@@ -424,9 +524,7 @@ def denoise_loop(
                 f"[denoise] step {step_i + 1}/{total_steps} t={float(t):.0f}{cfg_note} ...",
                 flush=True,
             )
-        # Timestep embedding: pass a (replicated) device tensor [1,1,B,1] so the
-        # embedder doesn't host-upload internally (which ignores the mesh).
-        tvec = _up(torch.tensor([float(t)] * B, dtype=torch.float32).reshape(1, 1, B, 1), ttnn.float32)
+        tvec = _tvec_device(float(t))
         # Pad t_emb to M=32 (skip FillPad in ResBlock). Spill off L1 before
         # backbone — WIDTH_SHARDED emb conflicts with MoE l1_sharded_linear CBs.
         te1 = time_embed.forward(tvec, keep_resident=True, resident_next_n=2 * step.patch_embed.resblock.out_channels)
@@ -449,7 +547,10 @@ def denoise_loop(
             else:
                 kwargs["text_pre"] = c["text_pre"]
                 kwargs["text_post"] = c.get("text_post")
-            pred = step(latent, **kwargs)
+            if use_device_latent:
+                pred = step.forward_device(latent_tt, **kwargs)
+            else:
+                pred = step(latent, **kwargs)
             if base is not None and c.get("base_embeds_host") is not None:
                 ttnn.deallocate(base)
             return pred
@@ -465,16 +566,27 @@ def denoise_loop(
             pred = combined
 
         # On-device Euler update: prev = sample + (sigma_next - sigma) * pred.
-        sample = _up(latent.permute(0, 2, 3, 1).reshape(1, 1, B * h * w, C).contiguous(), pred.dtype)
-        nxt = scheduler.step(pred, t, sample)
-        if dual_cq is not None:
-            dual_cq.launch_latent_d2h(nxt)
+        if use_device_latent:
+            sample = latent_tt
+            if sample.dtype != pred.dtype:
+                cast = ttnn.typecast(sample, pred.dtype)
+                ttnn.deallocate(latent_tt)
+                sample = cast
+            nxt = scheduler.step(pred, t, sample)
+            if sample is not nxt:
+                ttnn.deallocate(sample)
+            latent_tt = nxt
         else:
-            latent = _down_latent_bchw(nxt)
-            ttnn.deallocate(nxt)
+            sample = _up(latent.permute(0, 2, 3, 1).reshape(1, 1, B * h * w, C).contiguous(), pred.dtype)
+            nxt = scheduler.step(pred, t, sample)
+            if dual_cq is not None:
+                dual_cq.launch_latent_d2h(nxt)
+            else:
+                latent = _down_latent_bchw(nxt)
+                ttnn.deallocate(nxt)
+            ttnn.deallocate(sample)
 
         ttnn.deallocate(pred)
-        ttnn.deallocate(sample)
         ttnn.deallocate(te1)
         ttnn.deallocate(te2)
         if verbose:
@@ -485,9 +597,20 @@ def denoise_loop(
                 flush=True,
             )
 
+    for t_pr in _base_pristine.values():
+        ttnn.deallocate(t_pr, force=False)
+    _base_pristine.clear()
+
     if dual_cq is not None:
         latent = dual_cq.consume_latent_torch(mesh_device, batch=B, channels=C, h=h, w=w)
         print(f"[denoise] 2CQ completed {dual_cq.steps} latent D2H transfers on CQ1", flush=True)
+    elif use_device_latent:
+        if return_device_latent:
+            print("[denoise] returning device latent for on-device VAE (no D2H)", flush=True)
+            return latent_tt
+        latent = _down_latent_bchw(latent_tt)
+        ttnn.deallocate(latent_tt)
+        print("[denoise] final latent D2H for VAE (resident path)", flush=True)
 
     return latent  # torch [B, C, h, w] — feed to VAE decode
 
@@ -554,6 +677,41 @@ def upload_denoise_cond_mesh(
     return out
 
 
+def _latent_to_bthwc_device(latent_tt, *, batch: int, h: int, w: int, channels: int, scaling_factor: float, dtype):
+    """Flat NHWC ``[1,1,B*h*w,C]`` or BTHWC → scaled ROW_MAJOR BTHWC on device.
+
+    Must untilize **before** reshaping flat TILE ``[1,1,N,C]`` → spatial BTHWC.
+    Reshape-while-TILE retargets the tiled dims (N,C) → (W,C) and scrambles pixels
+    into neon band artifacts with a visible mesh W midline after ``partition_hw``.
+    """
+    shape = list(latent_tt.shape)
+    x = latent_tt
+    owns = False
+    if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        owns = True
+    if len(shape) == 4 and int(shape[0]) == 1 and int(shape[1]) == 1:
+        reshaped = ttnn.reshape(x, [batch, 1, h, w, channels])
+        if owns and reshaped is not x:
+            ttnn.deallocate(x, force=False)
+        x = reshaped
+        owns = True
+    elif len(shape) != 5:
+        if owns:
+            ttnn.deallocate(x, force=False)
+        raise ValueError(f"device latent must be flat NHWC or BTHWC, got shape={tuple(shape)}")
+    inv = 1.0 / float(scaling_factor)
+    scaled = ttnn.multiply(x, inv)
+    if owns and scaled is not x:
+        ttnn.deallocate(x, force=False)
+    if scaled.dtype != dtype:
+        cast = ttnn.typecast(scaled, dtype)
+        if cast is not scaled:
+            ttnn.deallocate(scaled, force=False)
+        scaled = cast
+    return scaled
+
+
 def decode_latent(
     mesh_device,  # ttnn.MeshDevice (replicated) — the VAE decoder's device context
     latent,  # torch [B, C, h, w] diffusion latent (single frame)
@@ -579,6 +737,9 @@ def decode_latent(
         image  = (image / 2 + 0.5).clamp(0, 1)
 
     Returns torch [B, 3, H, W] in [0, 1].
+
+    ``latent`` may be torch NCHW **or** a device flat NHWC / BTHWC tensor from
+    ``denoise_loop(..., return_device_latent=True)`` (no host latent round-trip).
     """
     from models.experimental.hunyuan_image_3_0.ref.vae.decoder import vae_decode_output_to_rgb
     from .vae.decoder import VAEDecoderTTNN, bcthw_to_bthwc, bthwc_to_bcthw
@@ -638,19 +799,45 @@ def decode_latent(
             dtype=dtype,
         )
 
-    # [B, C, h, w] -> scaled BCTHW [B, C, 1, h, w]
-    z = (latent / scaling_factor).unsqueeze(2)
-    host = z.bfloat16() if dtype == ttnn.bfloat16 else z.float()
-    x_bcthw = ttnn.from_torch(
-        host,
-        dtype=dtype,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    x_bthwc = bcthw_to_bthwc(x_bcthw)
-    ttnn.deallocate(x_bcthw, force=False)
+    if isinstance(latent, ttnn.Tensor):
+        shape = list(latent.shape)
+        if len(shape) == 4 and int(shape[0]) == 1 and int(shape[1]) == 1:
+            n, c = int(shape[2]), int(shape[3])
+            h = int(getattr(decoder, "latent_h", 0) or 0)
+            w = int(getattr(decoder, "latent_w", 0) or 0)
+            if h <= 0 or w <= 0 or h * w != n:
+                side = int(n**0.5)
+                h = w = side
+            x_bthwc = _latent_to_bthwc_device(
+                latent, batch=1, h=h, w=w, channels=c, scaling_factor=scaling_factor, dtype=dtype
+            )
+        elif len(shape) == 5:
+            x_bthwc = _latent_to_bthwc_device(
+                latent,
+                batch=int(shape[0]),
+                h=int(shape[2]),
+                w=int(shape[3]),
+                channels=int(shape[4]),
+                scaling_factor=scaling_factor,
+                dtype=dtype,
+            )
+        else:
+            raise ValueError(f"unsupported device latent shape {tuple(shape)}")
+        print("[vae] device latent handoff (replicated) — no latent D2H/H2D", flush=True)
+    else:
+        # [B, C, h, w] -> scaled BCTHW [B, C, 1, h, w]
+        z = (latent / scaling_factor).unsqueeze(2)
+        host = z.bfloat16() if dtype == ttnn.bfloat16 else z.float()
+        x_bcthw = ttnn.from_torch(
+            host,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        x_bthwc = bcthw_to_bthwc(x_bcthw)
+        ttnn.deallocate(x_bcthw, force=False)
 
     if dual_cq is not None:
         dual_cq.fence_compute_before_forward()
@@ -775,14 +962,10 @@ def _decode_latent_spatial(
     W->axis1), run the spatially-sharded decoder (convs keep a halo, norms/attn
     gather), then ConcatMesh2dToTensor the output back to full resolution."""
     from models.experimental.hunyuan_image_3_0.ref.vae.decoder import vae_decode_output_to_rgb
-    from .vae.spatial import enable_vae_spatial
+    from .vae.spatial import enable_vae_spatial, partition_hw
 
     enable_vae_spatial(decoder, ccl, h_mesh_axis=h_mesh_axis, w_mesh_axis=w_mesh_axis)
     mesh_shape = tuple(mesh_device.shape)
-
-    # [B,C,h,w] -> BTHWC [B,1,h,w,C] on host; H,W must divide the axis sizes (64 / 2 ok).
-    z = (latent / scaling_factor).unsqueeze(2)  # [B,C,1,h,w]
-    host = (z.bfloat16() if dtype == ttnn.bfloat16 else z.float()).permute(0, 2, 3, 4, 1).contiguous()  # BTHWC
 
     # ShardTensor2dMesh dims: index = mesh_axis, value = tensor dim. H=dim2, W=dim3.
     dims = [None, None]
@@ -791,14 +974,56 @@ def _decode_latent_spatial(
     if w_mesh_axis is not None:
         dims[w_mesh_axis] = 3
     dims = [d if d is not None else (3 if 2 in dims else 2) for d in dims]  # fill unused axis w/ a unique dummy dim
-    x_bthwc = ttnn.from_torch(
-        host,
-        dtype=dtype,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
-    )
+
+    if isinstance(latent, ttnn.Tensor):
+        # Device handoff from denoise: flat NHWC → BTHWC → mesh_partition (no host hop).
+        shape = list(latent.shape)
+        if len(shape) == 4 and int(shape[0]) == 1 and int(shape[1]) == 1:
+            n, c = int(shape[2]), int(shape[3])
+            # Infer square grid when not given via reshape factors later.
+            # Caller should pass grid via decoder latent_h/w; use shape from decoder.
+            h = int(getattr(decoder, "latent_h", 0) or 0)
+            w = int(getattr(decoder, "latent_w", 0) or 0)
+            if h <= 0 or w <= 0 or h * w != n:
+                side = int(n**0.5)
+                if side * side != n:
+                    raise ValueError(f"cannot infer h,w from flat latent length {n}")
+                h = w = side
+            print(
+                f"[vae] device latent handoff flat→BTHWC→partition_hw ({h}x{w}) — no latent D2H/H2D",
+                flush=True,
+            )
+            full = _latent_to_bthwc_device(
+                latent, batch=1, h=h, w=w, channels=c, scaling_factor=scaling_factor, dtype=dtype
+            )
+        elif len(shape) == 5:
+            print("[vae] device latent handoff BTHWC→partition_hw — no latent D2H/H2D", flush=True)
+            full = _latent_to_bthwc_device(
+                latent,
+                batch=int(shape[0]),
+                h=int(shape[2]),
+                w=int(shape[3]),
+                channels=int(shape[4]),
+                scaling_factor=scaling_factor,
+                dtype=dtype,
+            )
+        else:
+            raise ValueError(f"unsupported device latent shape {tuple(shape)}")
+        x_bthwc = partition_hw(full, h_mesh_axis=h_mesh_axis, w_mesh_axis=w_mesh_axis)
+        if full is not latent and full is not x_bthwc:
+            ttnn.deallocate(full, force=False)
+    else:
+        # Legacy: [B,C,h,w] -> BTHWC on host then ShardTensor2dMesh.
+        z = (latent / scaling_factor).unsqueeze(2)  # [B,C,1,h,w]
+        host = (z.bfloat16() if dtype == ttnn.bfloat16 else z.float()).permute(0, 2, 3, 4, 1).contiguous()
+        x_bthwc = ttnn.from_torch(
+            host,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+        )
 
     if dual_cq is not None:
         dual_cq.fence_compute_before_forward()

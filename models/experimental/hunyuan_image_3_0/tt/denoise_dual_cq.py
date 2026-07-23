@@ -4,7 +4,9 @@
 # Two-command-queue (2CQ) coordination for HunyuanImage-3.0 DiT denoise loop.
 #
 # CQ0: patch_embed + backbone + final_layer + scheduler Euler update
-# CQ1: async latent D2H after each step (overlaps host distill-scatter prep on the next step)
+# CQ1: async latent D2H after each step (legacy ``HY_LATENT_RESIDENT=0`` only;
+#      overlaps host distill-scatter prep on the next step). With resident latents
+#      the loop stays on-device until a single final D2H for VAE.
 
 from __future__ import annotations
 

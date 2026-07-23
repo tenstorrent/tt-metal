@@ -24,8 +24,13 @@ from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import
 from models.experimental.hunyuan_image_3_0.ref.tokenizer.hunyuan_tokenizer import HunyuanTokenizer
 from models.experimental.hunyuan_image_3_0.tt.ar_dual_cq import ArDualCQCoordinator, recaption_2cq_enabled
 from models.experimental.hunyuan_image_3_0.tt.ar_trace import recaption_trace_enabled
+from models.experimental.hunyuan_image_3_0.tt.device_sampling import (
+    can_use_device_sampling,
+    device_sampling_enabled,
+)
 from models.experimental.hunyuan_image_3_0.tt.generate import (
     generate_text,
+    make_backbone_logits_fn,
     make_recaption_logits_fn,
 )
 
@@ -52,6 +57,12 @@ def run_recaption_on_device(
     ``model`` must be built with ``apply_final_norm=True`` and ``norm_state_dict`` so
     the LM head receives ln_f-normalized hidden states. For I2I, pass a bundle from
     ``prepare_recaption_ar_bundle`` (with ``inputs_embeds`` and ``full_attn_slices``).
+
+    Opt-in on-device sampling: ``HY_DEVICE_SAMPLING=1`` (falls back to
+    host sampler when stage-force / ratio / rep-penalty processors are active).
+    Default device path: D2H logits → host topk (Instruct ``top_k``, e.g. 1024)
+    → host shortlist sample. Set ``HY_TTNN_SAMPLING_OP=1`` for pure
+    ``ttnn.topk`` + ``ttnn.sampling`` (k capped at 32).
     """
     if wte_tt is None and wte_weight is None:
         raise ValueError("run_recaption_on_device requires wte_tt or wte_weight")
@@ -74,13 +85,45 @@ def run_recaption_on_device(
     image_infos = [bundle.rope_image_info[0]] if bundle.rope_image_info else None
     attn_slices = bundle.full_attn_slices or [[]]
 
+    logits_processors = None
+    if params.need_ratio:
+        logits_processors = [build_ratio_logits_processor(tok, force_greedy=True)]
+
+    use_device_sampling = can_use_device_sampling(
+        config,
+        stage_transitions=params.stage_transitions or None,
+        logits_processors=logits_processors,
+    )
+    if device_sampling_enabled() and not use_device_sampling:
+        print(
+            "[recaption] HY_DEVICE_SAMPLING=1 but host processors active "
+            "(stage transitions / ratio / rep-penalty / greedy) — using host sampler",
+            flush=True,
+        )
+    elif use_device_sampling:
+        if os.environ.get("HY_TTNN_SAMPLING_OP", "0") == "1":
+            print("[recaption] on-device sampling (ttnn.topk + ttnn.sampling)", flush=True)
+        else:
+            print(
+                "[recaption] on-device sampling (D2H + host topk/shortlist; "
+                "set HY_TTNN_SAMPLING_OP=1 for ttnn.sampling)",
+                flush=True,
+            )
+
     has_prefix_embeds = bundle.inputs_embeds is not None
     has_cond_images = bundle.batch_cond_images is not None and len(bundle.batch_cond_images[0]) > 0
     use_kv_cache = os.environ.get("HY_RECAPTION_KV", "1") != "0"
     sp_factor = int(getattr(model, "sp_factor", 1))
-    use_prefix_kv = has_prefix_embeds and use_kv_cache
-    use_trace = recaption_trace_enabled(device, sp_factor=sp_factor, use_kv_cache=use_kv_cache)
-    use_2cq = recaption_2cq_enabled(device)
+    # Text-only: embed prefix ids on device (no host F.embedding H2D). I2I keeps host/TT mixed embeds.
+    use_device_prefix = (not has_cond_images) and (bundle.input_ids is not None)
+    use_prefix_kv = use_kv_cache and (has_prefix_embeds or use_device_prefix)
+    # Keep chunked KV prefill available under device sampling (via device-logits tracer).
+    use_trace = (
+        False
+        if use_device_sampling
+        else recaption_trace_enabled(device, sp_factor=sp_factor, use_kv_cache=use_kv_cache)
+    )
+    use_2cq = False if use_device_sampling else recaption_2cq_enabled(device)
     dual_cq = ArDualCQCoordinator(device) if use_2cq else None
     if dual_cq is not None:
         # Tell the async logits reader whether the lm_head sharded V across the mesh.
@@ -97,17 +140,20 @@ def run_recaption_on_device(
             flush=True,
         )
 
-    # I2I and text-only T2I both use fixed prefix_embeds + KV/trace decode when
-    # ``inputs_embeds`` is set (``prepare_recaption_ar_bundle``). Full-seq forward
-    # per token is only used when KV is disabled or prefix embeds are unavailable.
+    # I2I uses mixed ``inputs_embeds``; text-only prefers on-device prefix embed from ids.
     if use_prefix_kv:
+        prefix_kw = {}
+        if use_device_prefix:
+            prefix_kw["prefix_input_ids"] = bundle.input_ids[:1].contiguous()
+            print("[recaption] text-only prefix: on-device wte embed (skip host F.embedding)", flush=True)
+        else:
+            prefix_kw["prefix_embeds"] = bundle.inputs_embeds[:1]
         forward_logits_fn = make_recaption_logits_fn(
             model,
             lm_head,
             device,
             wte_tt=wte_tt,
             wte_weight=wte_weight,
-            prefix_embeds=bundle.inputs_embeds[:1],
             image_infos=image_infos,
             attn_slices=attn_slices,
             replicate_to_mesh=replicate_to_mesh,
@@ -116,9 +162,10 @@ def run_recaption_on_device(
             dual_cq=dual_cq,
             sp_factor=sp_factor,
             use_trace=use_trace,
+            return_device_logits=use_device_sampling,
+            **prefix_kw,
         )
     else:
-        from models.experimental.hunyuan_image_3_0.tt.generate import make_backbone_logits_fn
 
         def attention_mask_fn(S: int):
             import ttnn
@@ -143,11 +190,8 @@ def run_recaption_on_device(
             image_infos=image_infos,
             dual_cq=dual_cq,
             replicate_to_mesh=replicate_to_mesh,
+            return_device_logits=use_device_sampling,
         )
-
-    logits_processors = None
-    if params.need_ratio:
-        logits_processors = [build_ratio_logits_processor(tok, force_greedy=True)]
 
     tracer = getattr(forward_logits_fn, "tracer", None)
 
@@ -172,6 +216,20 @@ def run_recaption_on_device(
                 flush=True,
             )
             return logits
+
+        # Preserve metadata used by generate_text device path.
+        for attr in (
+            "return_device_logits",
+            "decode_device_token",
+            "prefix_len",
+            "vocab_size",
+            "vocab_parallel",
+            "device",
+            "kv_cache",
+            "tracer",
+        ):
+            if hasattr(_orig, attr):
+                setattr(forward_logits_fn, attr, getattr(_orig, attr))
 
     out = generate_text(
         forward_logits_fn,

@@ -2,14 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # On-device sequence scatter via concat (same pattern as tt/vision/inject.py).
+#
+# Lazy-import ``vision.inject`` inside helpers so ``cond_instantiate`` → this
+# module does not pull ``vision.__init__`` → ``i2i_bundle`` → ``cond_instantiate``
+# (circular import).
 
 from __future__ import annotations
 
 from typing import Sequence
 
 import ttnn
-
-from models.experimental.hunyuan_image_3_0.tt.vision.inject import scatter_cond_vision_embeddings_multi
 
 
 def mask_to_spans(mask_row: Sequence[bool] | Sequence[int]) -> list[slice]:
@@ -33,6 +35,11 @@ def scatter_token_spans(
     spans: list[tuple[slice, ttnn.Tensor]],
 ) -> ttnn.Tensor:
     """Inject ``(slice, [B,n,H])`` token blocks into ``hidden`` ``[B,S,H]`` on device."""
+    # Deferred: avoids circular import with cond_instantiate / vision.i2i_bundle.
+    from models.experimental.hunyuan_image_3_0.tt.vision.inject import (
+        scatter_cond_vision_embeddings_multi,
+    )
+
     return scatter_cond_vision_embeddings_multi(hidden, spans)
 
 
@@ -49,15 +56,17 @@ def scatter_tokens_from_mask(
     else:
         row = list(mask_row)
     spans_idx = mask_to_spans(row)
-    bsz, n_total, hidden = token_embeds.shape
+    bsz, n_total, hidden_size = token_embeds.shape
     cursor = 0
     paired: list[tuple[slice, ttnn.Tensor]] = []
     for sl in spans_idx:
         n = sl.stop - sl.start
         if bsz == 1:
-            chunk = token_embeds if n_total == n else ttnn.slice(token_embeds, [0, cursor, 0], [1, cursor + n, hidden])
+            chunk = (
+                token_embeds if n_total == n else ttnn.slice(token_embeds, [0, cursor, 0], [1, cursor + n, hidden_size])
+            )
         else:
-            chunk = ttnn.slice(token_embeds, [batch_row, cursor, 0], [batch_row + 1, cursor + n, hidden])
+            chunk = ttnn.slice(token_embeds, [batch_row, cursor, 0], [batch_row + 1, cursor + n, hidden_size])
         paired.append((sl, chunk))
         cursor += n
     out = scatter_token_spans(hidden, paired)
