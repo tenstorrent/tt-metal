@@ -26,6 +26,12 @@ from models.tt_dit.utils.ltx import (
 )
 from models.tt_dit.utils.test import line_params, ring_params
 
+# The audio vocoder's native conv1d taps run an UntilizeWithHalo gather whose config tensors
+# allocate from the dedicated L1_SMALL pool; it defaults to 0 and OOMs decode. 32 KB matches the
+# audio component tests. trace_region_size holds the AV command stream under LTX_TRACED=1.
+ring_trace_params = {**ring_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+line_trace_params = {**line_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+
 
 def test_euler_step():
     """Test Euler step: x_{t+1} = x_t + velocity * dt."""
@@ -62,14 +68,14 @@ def test_euler_step():
         [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         # BH on 2x4
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_trace_params, ttnn.Topology.Linear, False],
         # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_trace_params, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_trace_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",

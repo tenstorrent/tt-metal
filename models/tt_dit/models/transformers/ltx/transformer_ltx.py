@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 
 import torch
 from loguru import logger
@@ -26,6 +27,31 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
+
+
+def _tile_preserving_chunk0(x: ttnn.Tensor, n: int) -> list[ttnn.Tensor]:
+    """Split ``x`` into ``n`` size-1 slices along dim 0 WITHOUT leaving TILE layout.
+
+    ``ttnn.chunk`` is a host fallback that untilizes to ROW_MAJOR (and, for the
+    ``(coeff,B,1,D)`` AdaLN modulation, the ``(1,B,1,D)`` slices never re-tile), forcing
+    every downstream ``addcmul``/matmul epilogue to re-tilize the shift/scale/gate vectors
+    (the dominant BF16->BF16 tilize cost per block). Slicing dim 0 -- a non-tile outer dim --
+    on the already-TILE ``shifted`` tensor keeps every slice in TILE, so consumers take the
+    fused LLK path instead of the composite (multiply+add w/ per-input tilize) fallback.
+    Output is bit-identical to ``ttnn.chunk`` (pure layout, no value change).
+
+    ``x`` is already TILE here (``TILE scale_shift_table.data`` + temb; ttnn add promotes to
+    TILE), so no explicit re-tilize is needed -- ``ttnn.slice`` is a trace-safe device op that
+    preserves the input layout, whereas ``ttnn.chunk``'s host untilize is what forced RM."""
+    shape = list(x.shape)
+    out = []
+    for i in range(n):
+        starts = [0] * len(shape)
+        ends = list(shape)
+        starts[0] = i
+        ends[0] = i + 1
+        out.append(ttnn.slice(x, starts, ends))
+    return out
 
 
 def build_audio_masks(
@@ -330,7 +356,7 @@ class LTXTransformerBlock(Module):
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         # Video modulation; `_p1` chunks carry +1 baked into the scale slot (see _prepare_torch_state).
         shifted_v = self.scale_shift_table.data + video_temb
-        chunks = ttnn.chunk(shifted_v, self.adaln_coeff, dim=0)
+        chunks = _tile_preserving_chunk0(shifted_v, self.adaln_coeff)
         v_shift_sa, v_scale_sa_p1, v_gate_sa = chunks[0], chunks[1], chunks[2]
         v_shift_ff, v_scale_ff_p1, v_gate_ff = chunks[3], chunks[4], chunks[5]
         if self.cross_attention_adaln:
@@ -355,7 +381,7 @@ class LTXTransformerBlock(Module):
             video_ca_input = ttnn.addcmul(v_shift_ca, self.norm2(video_1BND), v_scale_ca_p1)
             if video_prompt_temb is not None:
                 shifted_prompt_v = self.prompt_scale_shift_table.data + video_prompt_temb
-                v_kv_shift, v_kv_scale_p1 = ttnn.chunk(shifted_prompt_v, 2, dim=0)
+                v_kv_shift, v_kv_scale_p1 = _tile_preserving_chunk0(shifted_prompt_v, 2)
                 video_prompt_mod = ttnn.addcmul(v_kv_shift, video_prompt, v_kv_scale_p1)
             else:
                 video_prompt_mod = video_prompt
@@ -413,10 +439,14 @@ class LTXTransformerBlock(Module):
                 audio_prompt_mod = ttnn.addcmul(a_kv_shift, audio_prompt, a_kv_scale_p1)
             else:
                 audio_prompt_mod = audio_prompt
-            audio_ca_out = self.audio_attn2(
-                spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt_mod, kv_replicated=True
+            audio_1BND = self.audio_attn2(
+                spatial_1BND=audio_ca_input,
+                N=audio_N,
+                prompt_1BLP=audio_prompt_mod,
+                kv_replicated=True,
+                addcmul_residual=audio_1BND,
+                addcmul_gate=a_gate_ca,
             )
-            audio_1BND = ttnn.addcmul(audio_1BND, audio_ca_out, a_gate_ca)
         else:
             audio_ca_input = self.audio_norm2(audio_1BND)
             audio_ca_out = self.audio_attn2(
@@ -456,8 +486,10 @@ class LTXTransformerBlock(Module):
                 k_rope_cos=audio_cross_pe_cos_full,
                 k_rope_sin=audio_cross_pe_sin_full,
                 trans_mat=trans_mat,
+                addcmul_residual=video_1BND,
+                addcmul_gate=v_ca_gate,
             )
-            video_1BND = ttnn.addcmul(video_1BND, a2v_output, v_ca_gate)
+            video_1BND = a2v_output
 
             # V→A: video provides context for audio
             audio_q_v2a = ttnn.addcmul(a_shift_v2a, audio_normed_xattn, a_scale_v2a_p1)
@@ -477,8 +509,10 @@ class LTXTransformerBlock(Module):
                 k_rope_sin=video_cross_pe_sin,
                 kv_logical_n=video_N,
                 trans_mat=trans_mat,
+                addcmul_residual=audio_1BND,
+                addcmul_gate=a_ca_gate,
             )
-            audio_1BND = ttnn.addcmul(audio_1BND, v2a_output, a_ca_gate)
+            audio_1BND = v2a_output
 
         # Video feed forward
         video_1BND = self._modulated_ffn(self.ffn, self.norm3, video_1BND, v_shift_ff, v_scale_ff_p1, v_gate_ff)
@@ -837,17 +871,25 @@ class LTXTransformerModel(Module):
                 )
             mod_pair = ttnn.permute(mod_pair, (2, 0, 1, 3))  # (coeff,1,2,Dloc)
             mod_pin, mod_base = ttnn.chunk(mod_pair, 2, dim=2)  # each (coeff,1,1,Dloc)
+            ttnn.deallocate(mod_pair)
             # video_mod = base + (pin - base) * mask, materialized per token via broadcast-safe ops.
             mod_delta = ttnn.sub(mod_pin, mod_base)
             mod_delta = ttnn.repeat(mod_delta, ttnn.Shape([1, 1, N, 1]))  # (coeff,1,N,Dloc)
             mod_delta = ttnn.mul(mod_delta, video_pin_mask)  # mask broadcasts over coeff/Dloc
             video_mod_CB1D = ttnn.add(mod_base, mod_delta)  # base broadcasts over N
+            ttnn.deallocate(mod_delta)
+            ttnn.deallocate(mod_pin)
+            ttnn.deallocate(mod_base)
             # Embedded timestep (for norm_out), same per-token blend, kept full-D.
             emb_pin, emb_base = ttnn.chunk(emb_pair, 2, dim=2)  # each (1,1,1,D)
+            ttnn.deallocate(emb_pair)
             emb_delta = ttnn.sub(emb_pin, emb_base)
             emb_delta = ttnn.repeat(emb_delta, ttnn.Shape([1, 1, N, 1]))  # (1,1,N,D)
             emb_delta = ttnn.mul(emb_delta, video_pin_mask)
             video_emb_ts = ttnn.add(emb_base, emb_delta)
+            ttnn.deallocate(emb_delta)
+            ttnn.deallocate(emb_pin)
+            ttnn.deallocate(emb_base)
             B = 1
         else:
             # I2V (dense): feed the per-token timestep so each token gets its own AdaLN modulation.
@@ -1094,14 +1136,17 @@ class LTXTransformerCheckpoint:
             sd = fuse_loras_into(sd, lora_specs)
         return sd
 
-    def cache_name(self, lora_specs: list[LoraSpec]) -> str:
-        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and
-        base weights don't alias in ``TT_DIT_CACHE_DIR``."""
+    def cache_name(self, lora_specs: list[LoraSpec], quant_tag: str | None = None) -> str:
+        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and base weights don't
+        alias in ``TT_DIT_CACHE_DIR``; quant-tagged because cached tensorbins carry their dtype, so
+        a bf8 preset run and the bf16 baseline must live in separate dirs."""
         base = os.path.basename(self._checkpoint_path).removesuffix(".safetensors")
-        if not lora_specs:
-            return base
-        tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
-        return f"{base}.lora-{tag}"
+        if lora_specs:
+            tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
+            base = f"{base}.lora-{tag}"
+        if quant_tag:
+            base = f"{base}.q-{quant_tag}"
+        return base
 
     def build(
         self,
@@ -1148,15 +1193,18 @@ class LTXTransformerCheckpoint:
         mesh_shape: tuple[int, ...],
         is_fsdp: bool,
         lora_specs: list[LoraSpec],
+        quant_tag: str | None = None,
+        post_load_hook: Callable[[Module], None] | None = None,
     ) -> None:
         """Load (or reload) weights for a previously-built transformer."""
         cache_module.load_model(
             model,
-            model_name=self.cache_name(lora_specs),
+            model_name=self.cache_name(lora_specs, quant_tag),
             subfolder="transformer",
             parallel_config=parallel_config,
             mesh_shape=mesh_shape,
             mesh_device=model.mesh_device,
             is_fsdp=is_fsdp,
             get_torch_state_dict=lambda: self.state_dict(lora_specs),
+            post_load_hook=post_load_hook,
         )
