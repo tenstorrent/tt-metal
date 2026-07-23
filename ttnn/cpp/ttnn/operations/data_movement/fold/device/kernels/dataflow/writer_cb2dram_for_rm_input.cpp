@@ -16,46 +16,43 @@ void kernel_main() {
     constexpr uint32_t stride_h = get_compile_time_arg_val(3);
     constexpr uint32_t stride_w = get_compile_time_arg_val(4);
     constexpr uint32_t input_width = get_compile_time_arg_val(5);
-    constexpr uint32_t work_per_core = get_compile_time_arg_val(6);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(7);
-    constexpr bool is_l1_aligned = get_compile_time_arg_val(8);
-    constexpr auto dst_args = TensorAccessorArgs<9>();
+    // work_per_core is now runtime (per-core) so unused cores skip iteration and the cliff core can carry a partial
+    // tail.
+    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(6);
+    constexpr bool is_l1_aligned = get_compile_time_arg_val(7);
+    constexpr auto dst_args = TensorAccessorArgs<8>();
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uint32_t work_per_core = get_arg_val<uint32_t>(1);
     constexpr uint32_t patch_size = stride_h * stride_w;
+    constexpr uint32_t output_stick_nbytes = stick_nbytes * patch_size;
+    // noc_async_write_sharded compile-time collapses to noc.async_write for interleaved and
+    // single-page-per-row (H-sharded) outputs, and splits per-shard for W/B-sharded outputs.
+    // Matches the pattern transpose/slice/pad/permute/repeat use.
     const auto s_out = TensorAccessor(dst_args, dst_addr);
-    uint32_t dst_index = get_arg_val<uint32_t>(1);
+    uint32_t dst_index = get_arg_val<uint32_t>(2);
 
     Noc noc;
     experimental::CB cb_in0(cb_id_in0);
     experimental::CB cb_in1(cb_id_in1);
 
     uint32_t intermed_l1_scratch = cb_in1.get_write_ptr();
-    // Datatypes will be multiple of 2 bytes only so it is safe to use uint16_t pointer
     volatile tt_l1_ptr uint16_t* patch_data = (volatile uint16_t*)intermed_l1_scratch;
     for (uint32_t input_idx = 0; input_idx < work_per_core; input_idx++) {
-        uint32_t idx = 0;
         cb_in0.wait_front(1);
-        uint32_t l1_addr = cb_in0.get_read_ptr();
+        uint32_t l1_read_addr = cb_in0.get_read_ptr();
         if constexpr (!is_l1_aligned) {
+            uint32_t idx = 0;
+            uint32_t l1_addr = l1_read_addr;
             for (uint32_t i = 0; i < patch_size; i++) {
                 for (uint32_t j = 0; j < (stick_nbytes / 2); j++) {
                     patch_data[idx++] = *(volatile uint16_t*)(l1_addr + j * 2);
                 }
                 l1_addr += aligned_stick_nbytes_dram;
             }
-        }
-        if constexpr (!is_l1_aligned) {
-            // Scratch buffer (cb_in1) is populated at its WRITE_PTR; no push_back has advanced it yet.
-            noc.async_write(
-                use<experimental::CB::AddrSelector::WRITE_PTR>(cb_in1),
-                s_out,
-                stick_nbytes * patch_size,
-                {},
-                {.page_id = dst_index});
+            noc_async_write_sharded(noc, intermed_l1_scratch, s_out, dst_index, /*offset=*/0, output_stick_nbytes);
         } else {
-            // If L1 aligned, write directly from the circular buffer
-            noc.async_write(cb_in0, s_out, stick_nbytes * patch_size, {}, {.page_id = dst_index});
+            noc_async_write_sharded(noc, l1_read_addr, s_out, dst_index, /*offset=*/0, output_stick_nbytes);
         }
         noc.async_write_barrier();
         cb_in0.pop_front(1);

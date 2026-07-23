@@ -276,35 +276,29 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     return output_tensors;
 }
 
-// Extract padding values from variant
+// Normalise 2/4/6-elem pad specs to [top, bot, left, right, c_front, c_back].
 static std::array<uint32_t, 6> extract_padding_values(
     const std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>>& padding) {
     return std::visit(
         [](const auto& pad_array) -> std::array<uint32_t, 6> {
             using T = std::decay_t<decltype(pad_array)>;
             if constexpr (std::is_same_v<T, std::array<uint32_t, 2>>) {
-                // [pad_h, pad_w] -> [pad_h, pad_h, pad_w, pad_w, 0, 0]
                 return {pad_array[0], pad_array[0], pad_array[1], pad_array[1], 0, 0};
             } else if constexpr (std::is_same_v<T, std::array<uint32_t, 4>>) {
-                // [pad_h_top, pad_h_bottom, pad_w_left, pad_w_right] -> [pad_h_top, pad_h_bottom, pad_w_left,
-                // pad_w_right, 0, 0]
                 return {pad_array[0], pad_array[1], pad_array[2], pad_array[3], 0, 0};
             } else {
-                // [pad_h_top, pad_h_bottom, pad_w_left, pad_w_right, pad_c_front, pad_c_back]
                 return pad_array;
             }
         },
         padding);
 }
 
-// Helper function to validate height sharding
 static void validate_height_sharding(const Tensor& tensor) {
     if (tensor.is_sharded() && tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         TT_THROW("fold op does not support non height-sharding!");
     }
 }
 
-// Helper function to apply halo padding to sharded tensors
 static Tensor apply_halo_padding(
     const Tensor& input_tensor, uint32_t pad_top, uint32_t pad_bottom, uint32_t pad_left, uint32_t pad_right) {
     using namespace ttnn::operations::sliding_window;
@@ -343,11 +337,7 @@ static Tensor apply_halo_padding(
     return ttnn::reshape(halo_output, padded_shape);
 }
 
-// Each core needs to process multiple of (stride_h * input_width) rows to ensure that
-// the fold operation can be performed locally and do not need to read from remote cores.
-// This function checks if the current shard height is divisible by (stride_h * input_width).
-// If not, it calculates an optimal number of cores and corresponding shard height
-// to enable efficient fold computation across the tensor dimensions.
+// Reshard so shard_h is a multiple of stride_h·input_width (zero-NOC pre-condition).
 Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uint32_t /*stride_w*/) {
     ttnn::Shape input_shape = input.logical_shape();
     uint32_t input_width = input_shape[2];
@@ -382,6 +372,41 @@ Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uin
     return input;
 }
 
+// Fill in shard_spec for a sharded override that has none (mirror transpose).
+MemoryConfig derive_effective_override_memory_config(
+    const Tensor& input_tensor,
+    const Tensor& fold_output,
+    const MemoryConfig& override_memory_config,
+    uint32_t stride_h,
+    uint32_t stride_w) {
+    if (!override_memory_config.is_sharded() || override_memory_config.shard_spec().has_value()) {
+        return override_memory_config;
+    }
+
+    const auto& shape = fold_output.padded_shape();
+    const uint32_t rows = shape[0] * shape[1] * shape[2];
+    const uint32_t cols = shape[3];
+    const auto layout = override_memory_config.memory_layout();
+
+    // Matching-layout override → rescale the input's own spec (patch_size = stride_h*stride_w). Preserves grid +
+    // orientation even when the composite staged input through L1 interleaved (sub-align W/B RM), so fold_output
+    // has no spec of its own. Mirrors compute_output_specs' rescale.
+    if (input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
+        input_tensor.memory_config().memory_layout() == layout) {
+        auto s = input_tensor.shard_spec().value();
+        const uint32_t patch_size = stride_h * stride_w;
+        s.shape[0] = s.shape[0] / patch_size;
+        s.shape[1] = s.shape[1] * patch_size;
+        return MemoryConfig(layout, override_memory_config.buffer_type(), s);
+    }
+
+    // Cross-layout or non-sharded input → synthesise via shared helper (in lock-step with compute_output_specs).
+    return MemoryConfig(
+        layout,
+        override_memory_config.buffer_type(),
+        synthesize_fold_output_shard_spec(input_tensor, layout, rows, cols));
+}
+
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn {
@@ -394,7 +419,8 @@ Tensor fold(
     const std::optional<const ttnn::Shape>& output_shape,
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>> padding,
     const std::optional<CoreRangeSet>& core_grid,
-    const std::optional<MemoryConfig>& override_memory_config) {
+    const std::optional<MemoryConfig>& override_memory_config,
+    bool collapse_output) {
     // Extract padding values
     const std::array<uint32_t, 6> padding_values = operations::data_movement::extract_padding_values(padding);
     const uint32_t pad_top = padding_values[0];
@@ -412,7 +438,11 @@ Tensor fold(
     const Tensor& input_tensor = input_tensor_;
     TT_ASSERT(input_tensor.logical_shape().rank() == 4, "Fold op only supports 4D tensors");
 
-    // Legacy transpose-based fold (TODO: remove when #29514 is solved)
+    // Legacy transpose composite bypasses prim::fold → no place to honour collapse_output.
+    TT_FATAL(
+        !(use_transpose_as_fold && collapse_output),
+        "Fold: collapse_output=True is not supported with use_transpose_as_fold=True "
+        "(legacy path bypasses prim::fold). Drop use_transpose_as_fold to use collapse_output.");
     if (use_transpose_as_fold) {
         if (input_tensor.is_sharded()) {
             operations::data_movement::validate_height_sharding(input_tensor);
@@ -432,19 +462,25 @@ Tensor fold(
                    input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w)
             .at(0);
     }
-    // Modern sharded tensor path
-    if (input_tensor.memory_config().is_l1() && input_tensor.is_sharded()) {
+    // Shared with select_program_factory; TILE branch is untilized below before prim dispatch.
+    const bool fast_path_input =
+        operations::data_movement::is_fast_path_input(input_tensor) ||
+        (input_tensor.memory_config().is_l1() && input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
+         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+         input_tensor.layout() == Layout::TILE);
+
+    // Hoisted: the tensor prim::fold actually consumes. The tail helper below rescales this (not input_tensor) so a
+    // matching-layout specless override sees the post-reshard / post-staging geometry, not the pre-repair original.
+    Tensor processed_tensor = input_tensor;
+    Tensor result;
+    if (fast_path_input) {
         operations::data_movement::validate_height_sharding(input_tensor);
 
-        Tensor processed_tensor = input_tensor;
-
-        // Apply H,W padding using halo if needed
         if (has_hw_padding) {
             processed_tensor = operations::data_movement::apply_halo_padding(
                 processed_tensor, pad_top, pad_bottom, pad_left, pad_right);
         }
 
-        // Apply channel padding separately if needed
         if (has_c_padding) {
             const auto current_shape = processed_tensor.logical_shape();
             const ttnn::Array4D padded_shape = {
@@ -455,51 +491,75 @@ Tensor fold(
             processed_tensor = ::ttnn::pad(processed_tensor, padded_shape, ttnn::Array4D({0, 0, 0, pad_c_front}), 0);
         }
 
-        // If processed tensor is tiled, convert to row-major.
         if (processed_tensor.layout() == Layout::TILE) {
             processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
         }
-        // Reshard if needed for optimal fold computation
         processed_tensor = operations::data_movement::reshard_if_needed(processed_tensor, stride_h, stride_w);
 
-        return ttnn::prim::fold(processed_tensor, stride_h, stride_w);
+        result = ttnn::prim::fold(processed_tensor, stride_h, stride_w, collapse_output);
+    } else {
+        // Composite path: sub-L1-align W/B RM → L1 interleaved (mirror transpose::irregular_hw); TILE → RM.
+        const auto l1_interleaved =
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+
+        const auto in_ml = processed_tensor.memory_config().memory_layout();
+        // Specless sharded → prim path (compute_output_specs synthesises the output spec).
+        const bool wb_sharded_rm = processed_tensor.layout() == Layout::ROW_MAJOR && processed_tensor.is_sharded() &&
+                                   processed_tensor.shard_spec().has_value() &&
+                                   (in_ml == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED ||
+                                    in_ml == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED);
+        const bool sub_alignment_wb_sharded_rm = [&] {
+            if (!wb_sharded_rm) {
+                return false;
+            }
+            const auto& spec = processed_tensor.shard_spec().value();
+            const uint32_t shard_row_bytes = spec.shape[1] * processed_tensor.element_size();
+            // Match the alignment the TensorAccessor / noc_async_read_sharded pair will actually enforce for this
+            // buffer type.
+            const bool is_dram = processed_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
+            const uint32_t alignment =
+                is_dram ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
+            return shard_row_bytes % alignment != 0;
+        }();
+        if (sub_alignment_wb_sharded_rm) {
+            processed_tensor = ttnn::to_memory_config(processed_tensor, l1_interleaved, std::nullopt);
+        }
+
+        if (has_hw_padding || has_c_padding) {
+            ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
+            padding_spec.push_back({0, 0});
+            padding_spec.push_back({pad_top, pad_bottom});
+            padding_spec.push_back({pad_left, pad_right});
+            padding_spec.push_back({pad_c_front, pad_c_back});
+            processed_tensor = ttnn::pad(processed_tensor, padding_spec, 0.0f, true, std::nullopt);
+        }
+
+        if (processed_tensor.layout() == Layout::TILE) {
+            // TILE-native factory is broken (see fold_multi_core_tiled_interleaved) → untilize→RM.
+            processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
+        }
+
+        result = ttnn::prim::fold(processed_tensor, stride_h, stride_w, collapse_output);
     }
-    // Interleaved tensor path (DRAM or L1)
-    Tensor processed_tensor = input_tensor;
 
-    // Apply padding if needed
-    if (has_hw_padding || has_c_padding) {
-        ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
-        padding_spec.push_back({0, 0});                     // N dimension
-        padding_spec.push_back({pad_top, pad_bottom});      // H dimension
-        padding_spec.push_back({pad_left, pad_right});      // W dimension
-        padding_spec.push_back({pad_c_front, pad_c_back});  // C dimension
-
-        processed_tensor = ttnn::pad(processed_tensor, padding_spec, 0.0f, true, std::nullopt);
+    // Universal-IO tail: honour override_memory_config via to_memory_config. Prefer processed_tensor's spec (fast-path
+    // reshard_if_needed can change shard geometry → must rescale the post-reshard shape, not the pre-reshard original,
+    // else integer truncation under-covers the output). Fall back to input_tensor when processed_tensor lost its
+    // sharded spec via staging (sub-align W/B → L1 interleaved) so the caller's expressed grid is still reusable.
+    if (override_memory_config.has_value()) {
+        const auto& tensor_for_derive =
+            (processed_tensor.is_sharded() && processed_tensor.shard_spec().has_value() &&
+             processed_tensor.memory_config().memory_layout() == override_memory_config->memory_layout())
+                ? processed_tensor
+                : input_tensor;
+        const auto effective = operations::data_movement::derive_effective_override_memory_config(
+            tensor_for_derive, result, override_memory_config.value(), stride_h, stride_w);
+        if (effective != result.memory_config()) {
+            result = ttnn::to_memory_config(result, effective, std::nullopt);
+        }
     }
 
-    const auto shape = processed_tensor.logical_shape();
-    const auto batch_size = shape[0];
-    const auto input_height = shape[1];
-    const auto input_width = shape[2];
-    const auto in_channels = shape[3];
-    const bool was_tiled = processed_tensor.layout() == Layout::TILE;
-
-    // The interleaved fold kernels operate on row-major data, so untilize first.
-    if (was_tiled) {
-        processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
-    }
-
-    auto output_tensor = ttnn::prim::fold(processed_tensor, stride_h, stride_w);
-
-    // Reshape output if input was tiled
-    if (was_tiled) {
-        const ttnn::Shape final_shape(
-            {batch_size, input_height / stride_h, input_width / stride_w, in_channels * stride_h * stride_w});
-        return ttnn::reshape(output_tensor, final_shape);
-    }
-
-    return output_tensor;
+    return result;
 }
 
 }  // namespace ttnn
