@@ -258,21 +258,23 @@ class KimiDeltaAttention:
         """Run KDA without any host tensor operation or implicit fallback."""
         batch, sequence = self._validate_forward(hidden_states, mode, chunk_size, valid_len)
         config, weights = self.config, self.weights
+        head_major = mode == "chunk" and sequence % ttnn.TILE_SIZE == 0
         memory_config = (
             ttnn.L1_MEMORY_CONFIG if batch * sequence * self._convolution_width <= 65536 else ttnn.DRAM_MEMORY_CONFIG
         )
 
         projected = ttnn.linear(
             hidden_states,
-            weights.input_projection,
+            weights.input_projection_prefill if head_major else weights.input_projection,
             memory_config=memory_config,
             compute_kernel_config=self.compute_config,
         )
         qkv = _slice_width(projected, 0, self._convolution_width)
+        output_gate_width = config.v_dim if head_major else config.head_v_dim
         auxiliary = _slice_width(
             projected,
             self._convolution_width,
-            self._convolution_width + config.head_k_dim + config.head_v_dim + config.num_heads,
+            self._convolution_width + config.head_k_dim + output_gate_width + config.num_heads,
         )
         if mode == "chunk" and batch == 1 and sequence >= ttnn.TILE_SIZE:
             qkv, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence)
@@ -307,15 +309,14 @@ class KimiDeltaAttention:
         output_gate_rank = _slice_width(
             auxiliary,
             config.head_k_dim,
-            config.head_k_dim + config.head_v_dim,
+            config.head_k_dim + output_gate_width,
         )
         beta = _slice_width(
             auxiliary,
-            config.head_k_dim + config.head_v_dim,
-            config.head_k_dim + config.head_v_dim + config.num_heads,
+            config.head_k_dim + output_gate_width,
+            config.head_k_dim + output_gate_width + config.num_heads,
         )
         beta = ttnn.sigmoid(beta, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        head_major = mode == "chunk" and sequence % ttnn.TILE_SIZE == 0
         if head_major:
             decay_bias = weights.decay_bias_flat
             decay_scale = weights.decay_scale_flat
@@ -356,12 +357,7 @@ class KimiDeltaAttention:
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
             new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)
         if head_major:
-            output_gate = ttnn.matmul(
-                output_gate_rank,
-                weights.output_gate_projection_batched,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_config,
-            )
+            output_gate = output_gate_rank
         else:
             output_gate = ttnn.linear(
                 output_gate_rank,
@@ -376,6 +372,9 @@ class KimiDeltaAttention:
             epsilon=config.norm_eps,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if head_major:
+            output = ttnn.reshape(output, (batch, config.num_heads, sequence, config.head_v_dim))
+            output = ttnn.experimental.nlp_concat_heads(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         output_gate = ttnn.sigmoid(output_gate)
         output = ttnn.multiply(
             output,
@@ -383,9 +382,6 @@ class KimiDeltaAttention:
             dtype=ttnn.float32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        if head_major:
-            output = ttnn.reshape(output, (batch, config.num_heads, sequence, config.head_v_dim))
-            output = ttnn.experimental.nlp_concat_heads(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.reshape(output, (batch, sequence, config.v_dim))
         fused_output_collective = (
             self.tensor_parallel_size > 1 and mode == "chunk" and config.v_dim >= 8 * ttnn.TILE_SIZE

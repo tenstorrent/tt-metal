@@ -673,3 +673,13 @@
 - Report: `/tmp/kda_tp_layer_t640_rm_cache_r10/reports/2026_07_23_12_07_07/ops_perf_results_2026_07_23_12_07_07.csv`; control: `/tmp/kda_tp_layer_t640_conv_rm_r10/reports/2026_07_23_12_00_29/ops_perf_results_2026_07_23_12_00_29.csv`.
 - Ten replays reduced median device span 0.70788 -> 0.69876 ms (1.29%), active time 0.67051 -> 0.66295 ms/device, and programs 38 -> 36/device/layer.
 - Mesh throughput is 84.73 TFLOP/s or 6.97% of peak. Prep/scan/fused-output medians remained 84.30/96.99/146.36 us.
+
+
+### 2026-07-23 12:13:23 UTC — Precompose the aligned-prefill output gate
+
+- Hypothesis: precomposing `g_b @ g_a` into output-sharded direct gate columns will make the fused input GEMM wider but remove the poorly utilized batched rank-128 gate GEMM and one program.
+- Exact shard-layout checks and full Blackhole regression passed: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 9/9 in 10.47 s. TP output/recurrent/convolution PCC was 0.999952/0.999903/0.999997.
+- Matched report: `/tmp/kda_tp_layer_t640_precomposed_gate_r10/reports/2026_07_23_12_13_23/ops_perf_results_2026_07_23_12_13_23.csv`; control: `/tmp/kda_tp_layer_t640_rm_cache_r10/reports/2026_07_23_12_07_07/ops_perf_results_2026_07_23_12_07_07.csv`.
+- Ten replays reduced median slowest-device span 698.758 -> 690.719 us (1.15%), active time 662.921 -> 657.757 us/device, and programs 36 -> 35/device/layer.
+- The fused input matmul grew from logical width 1796 to 2180 and cost 81.004 -> 87.713 us; removing the batched `128 -> 128` gate matmul saved 20.450 us, while extra slicing cost 6.661 us.
+- The retained path executes 67.594 GFLOP across the mesh and reaches 97.86 TFLOP/s or 8.04% of peak; conservative useful throughput from the original factorized 59.205 GFLOP is 85.71 TFLOP/s or 7.05%. Tensor ownership and core/CCL distribution are unchanged.

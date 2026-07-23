@@ -22,7 +22,8 @@ For TP=8, device `d` owns heads `[4d,4d+4)`.
 | Q/K/V projections | three `[2304,4096]` | output-sharded to three `[2304,512]` |
 | Fused QKV activation | `[1,T,12288]` | `[1,T,1536]` |
 | Conv taps/state | width 12288 | width 1536 |
-| `f_a` / `g_a` ranks | two `[1,T,128]` | replicated; required by local output shards |
+| `f_a` rank | `[1,T,128]` | replicated; required by local decay outputs |
+| Output gate | factorized `g_a/g_b` | aligned prefill precomposes `g_b @ g_a`, then output-shards `[1,T,4096]`; fallback keeps replicated rank |
 | Beta projection | `[1,T,32]` | output-sharded `[1,T,4]` |
 | `f_b` / `g_b` outputs | two `[1,T,4096]` | output-sharded to two `[1,T,512]` |
 | Decay/bias/norm | 32 heads | four whole-head slices |
@@ -31,10 +32,11 @@ For TP=8, device `d` owns heads `[4d,4d+4)`.
 | Output projection | `[4096,2304]` | row-sharded `[512,2304]` |
 | Output partial | `[1,T,2304]` | reduce-scatter or all-reduce input |
 
-The fused auxiliary projection is rebuilt per device as
-`[f_a(full 128), g_a(full 128), b(local 4)]`, width 260. Replicating the two
-low-rank results is cheaper and simpler than introducing two collectives before
-recurrence.
+The fallback fused auxiliary projection is rebuilt per device as
+`[f_a(full 128), g_a(full 128), b(local 4)]`, width 260. Aligned prefill uses
+`[f_a(full 128), (g_b @ g_a)(local 512), b(local 4)]`, width 644. Both avoid
+collectives before recurrence; the aligned form deliberately trades more
+well-utilized input-GEMM FLOPs for one fewer small gate program.
 
 ## On-chip mapping
 
@@ -183,6 +185,12 @@ The layer-owned convolution cache is row-major to match aligned prefill; the
 legacy FIR fallback alone adapts it to tile layout. This removes two more
 target-path programs and reduces traced latency 0.70788 -> 0.69876 ms without
 changing tensor ownership, prep/scan workers, or collective placement.
+
+Aligned prefill now precomposes `g_b @ g_a` on the host and output-shards the
+direct gate columns in the fused input weight. It reduces traced latency
+0.69876 -> 0.69072 ms and one program/device, while keeping each device's four
+whole heads and adding no communication. Retain the 80-core prep, 16-core scan,
+and 8x8 output/Ring reduce-scatter map.
 
 Sequence parallelism is rejected for this phase: prep would shard naturally,
 but scan would need ordered state handoff at every sequence partition. TP

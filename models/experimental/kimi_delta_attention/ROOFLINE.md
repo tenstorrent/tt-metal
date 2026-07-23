@@ -300,3 +300,28 @@ and program count falls 38 -> 36/device/layer. Mesh throughput is
 84.73 TFLOP/s or 6.97% of eight-chip HiFi4 peak. Prep, scan, and fused-output
 medians remain 84.30, 96.99, and 146.36 us, so the distribution remains
 unchanged.
+
+
+## Precomposed aligned-prefill output gate
+
+Profile:
+`/tmp/kda_tp_layer_t640_precomposed_gate_r10/reports/2026_07_23_12_13_23/ops_perf_results_2026_07_23_12_13_23.csv`.
+For aligned prefill, the host precomposes each head's `g_b @ g_a` and shards
+the resulting hidden-to-value projection with the existing fused input
+projection. Decode and unaligned paths retain the factorized rank-128 gate.
+
+Against the row-major-cache control, median slowest-device span falls
+698.758 -> 690.719 us (1.15%), median active time falls
+662.921 -> 657.757 us/device, and programs fall 36 -> 35/device/layer.
+The fused input matmul grows from logical width 1796 to 2180 and costs
+81.004 -> 87.713 us, while the removed batched `128 -> 128` gate matmul
+cost 20.450 us. Slice time rises 30.283 -> 36.944 us, leaving a measured
+8.039 us critical-path win.
+
+This trades FLOPs for utilization. The factorized path executes 59.205 GFLOP
+across the mesh; precomposition adds 8.389 GFLOP of online work, for
+67.594 GFLOP. The measured span therefore corresponds to 97.86 TFLOP/s or
+8.04% of the eight-chip HiFi4 peak. Using the unchanged factorized algorithmic
+work for a conservative useful-throughput comparison gives 85.71 TFLOP/s or
+7.05%. Both remain far below the 60% aspiration. Prep, scan, and collective
+ownership are unchanged; this result does not motivate a core redistribution.
