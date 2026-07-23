@@ -551,23 +551,21 @@ void kernel_main() {
         // final batch — there is no next batch to protect, and the reader gates receive-side completion.
         // input_tensor_B is a compile-time constant, so this whole block compiles away for B == 1.
         if (b + 1 < input_tensor_B) {
-            // multicast to entire ring of workers for both this dir and opposite dir
-            uint64_t batch_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(this_core_x, this_core_y, batch_ready_sem, 0);
-            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            // Per-link 1-hop handshake (same scheme as the barrier near the top of this kernel): a
+            // multi-hop multicast would break on a reshaped/bent ring. Each worker sends one 1-hop
+            // atomic-inc to the opposite-direction worker on its immediate ring neighbour and waits for
+            // one, so neighbouring workers agree the current batch is fully consumed before the next
+            // batch reuses the shared intermediate scratch / out_ready_sem. pkt_hdr_seminc is already
+            // configured for a distance-1 unicast atomic-inc above; only the dst address changes here.
+            uint64_t opposite_batch_ready_sem_noc_addr =
+                safe_get_noc_addr(opposite_core_x, opposite_core_y, batch_ready_sem, 0);
+            fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                 fabric_direction_connection,
-                pkt_hdr_mcastseminc,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
+                pkt_hdr_seminc,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_batch_ready_sem_noc_addr, 0});
             noc_obj.async_writes_flushed();
 
-            batch_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(opposite_core_x, opposite_core_y, batch_ready_sem, 0);
-            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                fabric_direction_connection,
-                pkt_hdr_mcastseminc,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
-            noc_obj.async_writes_flushed();
-
-            noc_semaphore_wait_min(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 2 * (ring_size - 1));
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 1);
             noc_semaphore_set(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);  // reset before next batch
         }
