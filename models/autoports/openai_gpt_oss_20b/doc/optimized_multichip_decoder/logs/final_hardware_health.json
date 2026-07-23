@@ -1,0 +1,13 @@
+{
+  "command": "timeout 60 tt-smi -ls --local",
+  "date_utc": "2026-07-23",
+  "exit_code": 0,
+  "local_devices": [
+    {"umd_chip_id": 0, "architecture": "Blackhole", "series": "p300c"},
+    {"umd_chip_id": 1, "architecture": "Blackhole", "series": "p300c"},
+    {"umd_chip_id": 2, "architecture": "Blackhole", "series": "p300c"},
+    {"umd_chip_id": 3, "architecture": "Blackhole", "series": "p300c"}
+  ],
+  "reset_performed": false,
+  "result": "All four target devices remained visible and reset-capable after final performance, endpoint, and watcher runs."
+}

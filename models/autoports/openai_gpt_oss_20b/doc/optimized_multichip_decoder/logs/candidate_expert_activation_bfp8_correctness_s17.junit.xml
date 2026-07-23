@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="2" time="26.784" timestamp="2026-07-23T08:10:18.411891+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_prefill_decode_matches_current_optimized[blackhole-1x4-12]" time="14.282"><properties><property name="start_timestamp" value="2026-07-23T08:10:19" /><property name="end_timestamp" value="2026-07-23T08:10:34" /></properties></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_multichip_decoder" name="test_real_weight_prefill_decode_matches_current_optimized[blackhole-1x4-13]" time="10.893"><properties><property name="start_timestamp" value="2026-07-23T08:10:34" /><property name="end_timestamp" value="2026-07-23T08:10:45" /></properties><failure message="AssertionError: real layer13 prefill versus optimized TTNN: 0.9898336402371065&#10;assert False">mesh_device = MeshDevice(1x4 grid, 4 devices), layer_idx = 13
+
+    @pytest.mark.parametrize("layer_idx", [SLIDING_LAYER, FULL_LAYER])
+    @parametrize_mesh_with_fabric([TARGET_MESH_SHAPE])
+    def test_real_weight_prefill_decode_matches_current_optimized(
+        mesh_device,
+        device_params,
+        layer_idx,
+    ):
+        del device_params
+        seq_len = 17
+        path = _real_reference_path(layer_idx)
+        if not path.is_file():
+            pytest.fail(
+                f"missing {path}; run test_capture_real_weight_current_single_chip_optimized_reference "
+                "in an isolated 1x1 process first"
+            )
+        reference = torch.load(path, weights_only=True)
+        with _functional_helpers_for_layer(layer_idx):
+            config = functional_test._config()
+            state = functional_test._real_state()
+            decoder = _decoder(
+                state,
+                config,
+                mesh_device,
+                layer_idx=layer_idx,
+                max_cache_len=128,
+                multichip_config=_multichip_candidate_config_from_env(),
+            )
+            key_cache, value_cache = decoder.create_kv_cache()
+            page_table = decoder.create_page_table([1, 0])
+            generator = torch.Generator().manual_seed(17000 + layer_idx)
+            hidden = torch.randn((1, 1, seq_len, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+            token = torch.randn((1, 1, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+            prefill = decoder.prefill_forward(
+                _replicated(hidden, mesh_device),
+                key_cache=key_cache,
+                value_cache=value_cache,
+                page_table=page_table,
+            )
+&gt;           _assert_pcc(
+                reference["prefill"],
+                _replicated_host(prefill),
+                0.99,
+                f"real layer{layer_idx} prefill versus optimized TTNN",
+            )
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:1949:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+reference = tensor([[[[-18.7500,  -1.7344, -14.0000,  ...,  28.5000,  -3.9375,  20.6250],
+          [ -9.8125, -28.7500,  -5.4062,...57.0000],
+          [ 38.7500,  24.3750,  16.3750,  ...,  -8.0000,  22.8750,   7.1562]]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[[-21.1250,  -2.6719, -14.2500,  ...,  29.8750,  -3.8750,  21.7500],
+          [-11.5000, -29.2500,  -4.0000,...59.2500],
+          [ 44.0000,  26.7500,  26.3750,  ...,   4.8438,  29.2500,  10.3125]]]],
+       dtype=torch.bfloat16)
+threshold = 0.99, label = 'real layer13 prefill versus optimized TTNN'
+
+    def _assert_pcc(reference: torch.Tensor, actual: torch.Tensor, threshold: float, label: str):
+        passed, message = comp_pcc(reference.float(), actual.float(), pcc=threshold)
+        print(f"{label}: {message}")
+&gt;       assert passed, f"{label}: {message}"
+E       AssertionError: real layer13 prefill versus optimized TTNN: 0.9898336402371065
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py:103: AssertionError</failure></testcase></testsuite></testsuites>

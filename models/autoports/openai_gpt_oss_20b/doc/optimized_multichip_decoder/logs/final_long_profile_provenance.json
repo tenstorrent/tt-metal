@@ -1,0 +1,42 @@
+{
+  "command": "RUN_MULTICHIP_DECODER_PERF=1 MULTICHIP_DECODER_PERF_SEQ=128 MULTICHIP_DECODER_PREFILL_REPEATS=1 MULTICHIP_DECODER_TRACE_REPLAYS=1 python -m tracy -r -p --check-exit-code -o <logs>/final_long_profile -m pytest -q <test>::test_multichip_decoder_perf",
+  "watcher_enabled": false,
+  "result": "2 passed",
+  "raw_op_csv": "final_long_profile/reports/2026_07_23_10_03_21/ops_perf_results_2026_07_23_10_03_21.csv",
+  "raw_op_csv_sha256": "ceba2dad739fcfd0b641d777d6cf6ba0dda25cc814972d5eebd5ad4c1051c76e",
+  "retention": "Duplicate 2 GB Tracy host/device intermediates were removed after report generation; the canonical op CSV, compact tables, summaries, PNGs, test log, JUnit, and hashes remain.",
+  "tt_perf_report": {
+    "ep_activity_source": "profile_ep_activity_layer{12,13}_seq128.json, exact profiler input seed and topology",
+    "modeling_policy": "Decode is one token and both layers use the measured critical-rank maximum K=2. Prefill has token- and rank-varying EP activity that the scalar --active-experts option cannot represent; prefill tables omit sparse DRAM/FLOP modeling and use the exact activity JSON as the manual control.",
+    "tables": {
+      "prefill_layer12": {
+        "csv": "final_long_profile/tt_perf_prefill_layer12_ep_variable.csv",
+        "sha256": "4de3b1a4990d0b110986cedecc5cf7a5ffaacfad527c89fc1e13571a34cff05c"
+      },
+      "prefill_layer13": {
+        "csv": "final_long_profile/tt_perf_prefill_layer13_ep_variable.csv",
+        "sha256": "644b94be13da7cd9c8ca650d2d4bae3678dc6df0188c2cd0a2492bfb520f5d7b"
+      },
+      "decode_layer12": {
+        "csv": "final_long_profile/tt_perf_decode_layer12_epmax2.csv",
+        "sha256": "132ad3b17fd79a680aafc49b3a4d3fd48cdb6ffc86e1d26e32259aa512931a90"
+      },
+      "decode_layer13": {
+        "csv": "final_long_profile/tt_perf_decode_layer13_epmax2.csv",
+        "sha256": "4201811a34fd8864f05016c4375863a8e847f0ef525ec499adf314b61b6d6432"
+      }
+    }
+  },
+  "signpost_wall_ms": {
+    "prefill_layer12": 23.052165,
+    "prefill_layer13": 27.34479,
+    "decode_layer12": 1.265914,
+    "decode_layer13": 1.25852
+  },
+  "authoritative_uninstrumented_ms": {
+    "prefill_layer12": 21.81267235428095,
+    "prefill_layer13": 25.292353541590273,
+    "decode_layer12": 1.0390307120978832,
+    "decode_layer13": 1.0237185321748257
+  }
+}

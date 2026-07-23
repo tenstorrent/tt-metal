@@ -1,0 +1,103 @@
+{
+  "roofline": {
+    "assumption": "Per-device decode critical path for the exact profiler input. BFP8 tile storage is 1088 bytes per 1024 elements and Blackhole DRAM peak is 512 GB/s, matching tt-perf-report. Global top-4 routing is EP4-partitioned; expert bytes use the measured maximum rank-local activity, never global top-4.",
+    "short_decode_common_compulsory_bytes": {
+      "short_decode_tp4_local_bfp8_qkv_weights": 3916800,
+      "short_decode_tp4_local_bfp8_o_weights": 3133440,
+      "replicated_bf16_router_weights": 184320,
+      "biases_and_two_norm_vectors": 580608,
+      "tp4_local_32_token_bfp8_kv_tile": 8704,
+      "total_excluding_expert_weights": 7823872
+    },
+    "long_decode_common_compulsory_bytes": {
+      "tp4_local_bf16_qkv_weights": 7372800,
+      "tp4_local_bf16_o_weights": 5898240,
+      "replicated_bf16_router_weights": 184320,
+      "biases_and_two_norm_vectors": 580608,
+      "tp4_local_32_token_bfp8_kv_tile": 8704,
+      "total_excluding_expert_weights": 14044672
+    },
+    "bfp8_gate_up_down_weight_bytes_per_rank_local_active_expert": 26438400,
+    "dram_peak_bytes_per_second": 512000000000,
+    "exact_decode_inputs": {
+      "seq17_layer12": {
+        "rank_local_active_experts": [1, 3, 0, 0],
+        "critical_rank_active_experts": 3,
+        "compulsory_bytes": 87139072,
+        "theoretical_dram_floor_ms": 0.1701935
+      },
+      "seq17_layer13": {
+        "rank_local_active_experts": [2, 2, 0, 0],
+        "critical_rank_active_experts": 2,
+        "compulsory_bytes": 60700672,
+        "theoretical_dram_floor_ms": 0.118556
+      },
+      "seq128_layer12": {
+        "rank_local_active_experts": [1, 1, 0, 2],
+        "critical_rank_active_experts": 2,
+        "compulsory_bytes": 66921472,
+        "theoretical_dram_floor_ms": 0.130706
+      },
+      "seq128_layer13": {
+        "rank_local_active_experts": [2, 1, 0, 1],
+        "critical_rank_active_experts": 2,
+        "compulsory_bytes": 66921472,
+        "theoretical_dram_floor_ms": 0.130706
+      }
+    },
+    "prefill_sparse_modeling": "tt-perf-report accepts only one integer active-experts value, but EP activity varies by token and rank. Final prefill tables intentionally omit sparse DRAM/FLOP modeling; profile_ep_activity_layer*_seq*.json records exact per-token histograms and unique rank-local experts instead."
+  },
+  "short_s17_raw_csv_sha256": "32e1a64bbb91d5f54bc569d577e6e15b8d66b8204d11d640bfdc601178952b35",
+  "layer12": {
+    "uninstrumented_500_replay_mean_ms": 0.5909199118614197,
+    "profiled_device_kernels_ms": 0.7027235,
+    "profiled_op_gaps_ms": 0.084767,
+    "profiled_kernels_plus_gaps_ms": 0.7874905,
+    "profiled_signpost_wall_ms": 0.815444,
+    "uninstrumented_over_theoretical_floor": 3.4720,
+    "profiled_device_over_theoretical_floor": 4.1290,
+    "profiled_total_over_uninstrumented_percent": 33.27,
+    "profiled_signpost_over_uninstrumented_percent": 38.00,
+    "signpost_over_profiled_total_percent": 3.55
+  },
+  "layer13": {
+    "uninstrumented_500_replay_mean_ms": 0.5223633162677288,
+    "profiled_device_kernels_ms": 0.5738625,
+    "profiled_op_gaps_ms": 0.086473,
+    "profiled_kernels_plus_gaps_ms": 0.6603355,
+    "profiled_signpost_wall_ms": 0.698863,
+    "uninstrumented_over_theoretical_floor": 4.4060,
+    "profiled_device_over_theoretical_floor": 4.8404,
+    "profiled_total_over_uninstrumented_percent": 26.41,
+    "profiled_signpost_over_uninstrumented_percent": 33.79,
+    "signpost_over_profiled_total_percent": 5.83
+  },
+  "long_s128_profile": {
+    "raw_csv_sha256": "ceba2dad739fcfd0b641d777d6cf6ba0dda25cc814972d5eebd5ad4c1051c76e",
+    "layer12_prefill": {
+      "uninstrumented_ms": 21.81267235428095,
+      "profiled_signpost_ms": 23.052165,
+      "merged_device_row_sum_ms": 23.2383305,
+      "merged_gap_row_sum_ms": 1.004059
+    },
+    "layer13_prefill": {
+      "uninstrumented_ms": 25.292353541590273,
+      "profiled_signpost_ms": 27.34479,
+      "merged_device_row_sum_ms": 29.4178885,
+      "merged_gap_row_sum_ms": 1.869121
+    },
+    "layer12_decode": {
+      "uninstrumented_ms": 1.0390307120978832,
+      "profiled_signpost_ms": 1.265914,
+      "merged_device_row_sum_ms": 0.9562645,
+      "merged_gap_row_sum_ms": 0.214974
+    },
+    "layer13_decode": {
+      "uninstrumented_ms": 1.0237185321748257,
+      "profiled_signpost_ms": 1.25852,
+      "merged_device_row_sum_ms": 0.9454575,
+      "merged_gap_row_sum_ms": 0.410688
+    }
+  },
+  "reconciliation": "The authoritative latencies are separate uninstrumented 20-prefill/500-trace measurements. Profiler signposts are one instrumented iteration; they include trace call, queue, and synchronization overhead. tt-perf-report merges four devices, and summed device rows are not a wall clock because asynchronous device intervals overlap, which is why the long prefill row sum can exceed signpost wall. Short-profile kernel/gap totals and long signposts are therefore accounting views of the same final default, not evidence of an untraced fallback."
+}

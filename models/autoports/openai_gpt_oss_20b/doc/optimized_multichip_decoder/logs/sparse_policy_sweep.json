@@ -1,0 +1,98 @@
+{
+  "target": "openai/gpt-oss-20b multichip decoder on MeshShape(1,4)",
+  "correctness_policy": "Every non-OOM candidate was checked on both sliding layer 12 and full layer 13 with real checkpoint weights; all listed performance candidates passed the accepted PCC gates.",
+  "decode_reference_ms": {
+    "layer12": 0.59106752,
+    "layer13": 0.522615216
+  },
+  "decode_candidates": [
+    {
+      "name": "compact_45_core_subblock2",
+      "gate_up": "5x9 cores, in0_block_w=45, subblock_w=2",
+      "down": "5x9 cores, in0_block_w=45, subblock_w=2",
+      "output_memory": "L1",
+      "layer12_ms": 0.613600102,
+      "layer13_ms": 0.529952017,
+      "decision": "reject: slower for both layer kinds"
+    },
+    {
+      "name": "selected_geometry_dram_output",
+      "gate_up": "9x10 cores, in0_block_w=45, subblock_w=1",
+      "down": "9x10 cores, in0_block_w=90, subblock_w=1",
+      "output_memory": "DRAM",
+      "layer12_ms": 0.619588228,
+      "layer13_ms": 0.549212881,
+      "decision": "reject: slower for both layer kinds"
+    },
+    {
+      "name": "swapped_k_blocks",
+      "gate_up": "9x10 cores, in0_block_w=90, subblock_w=1",
+      "down": "9x10 cores, in0_block_w=45, subblock_w=1",
+      "output_memory": "L1",
+      "layer12_ms": 0.592720322,
+      "layer13_ms": 0.524193284,
+      "decision": "reject: slower for both layer kinds"
+    },
+    {
+      "name": "selected",
+      "gate_up": "9x10 cores, in0_block_w=45, subblock_w=1",
+      "down": "9x10 cores, in0_block_w=90, subblock_w=1",
+      "output_memory": "L1",
+      "decision": "selected"
+    }
+  ],
+  "prefill_reference_ms_before_l1_policy": {
+    "seq17_layer12": 5.119264,
+    "seq17_layer13": 5.12924,
+    "seq128_layer12": 21.817896,
+    "seq128_layer13": 25.288609
+  },
+  "prefill_candidates": [
+    {
+      "name": "compact_45_core_subblock2",
+      "geometry": "5x9 cores, in0_block_w=45, subblock_w=2",
+      "output_memory": "DRAM",
+      "seq17_layer12_ms": 5.042155297,
+      "seq17_layer13_ms": 5.099516688,
+      "seq128_layer12_ms": 22.50276939,
+      "seq128_layer13_ms": 26.532988041,
+      "decision": "reject: short gain loses coherently at S=128"
+    },
+    {
+      "name": "k90",
+      "geometry": "9x10 cores, in0_block_w=90, subblock_w=1",
+      "output_memory": "DRAM",
+      "seq17_layer12_ms": 5.176125094,
+      "seq17_layer13_ms": 5.231181602,
+      "seq128_layer12_ms": 22.255763435,
+      "seq128_layer13_ms": 26.392827253,
+      "decision": "reject: slower for both lengths and layer kinds"
+    },
+    {
+      "name": "unbounded_l1_output",
+      "geometry": "9x10 cores, in0_block_w=45, subblock_w=1",
+      "seq17_layer12_ms": 4.133678298,
+      "seq17_layer13_ms": 4.146683658,
+      "m64_failure": "94,371,840-byte allocation; 858,112 bytes/bank requested while only 353,472-byte largest free block remained",
+      "m128_failure": "188,743,680-byte allocation; 1,716,224 bytes/bank requested versus 1,461,504-byte bank size",
+      "decision": "adapt into tile-bounded placement rather than reject"
+    },
+    {
+      "name": "selected_tile_bounded_l1",
+      "geometry": "9x10 cores, in0_block_w=45, subblock_w=1",
+      "output_memory": "L1 for internally padded M<=32; DRAM for M>=64",
+      "seq17_layer12_ms": 4.142141901,
+      "seq17_layer13_ms": 4.158728058,
+      "seq128_layer12_ms": 21.811075392,
+      "seq128_layer13_ms": 25.297751091,
+      "decision": "selected: captures the short-prefill gain without reducing valid length or context support"
+    }
+  ],
+  "subblock_legality": "The selected 90-core mapping produces one output tile per core, so subblock_w>1 is illegal there. The legal subblock_w=2 control was measured with 45 output cores.",
+  "artifacts": [
+    "sparse_decode_*",
+    "sparse_prefill_*",
+    "final_precision_after_l1_policy.junit.xml",
+    "final_default_after_l1_policy_layer{12,13}_seq{17,128}.json"
+  ]
+}

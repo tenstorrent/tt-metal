@@ -1,0 +1,73 @@
+{
+  "attention_math_fidelity": "hifi2",
+  "attention_weight_dtype": "bfloat16",
+  "baseline": {
+    "baseline": "current OptimizedDecoder",
+    "layer_idx": 13,
+    "layer_kind": "full",
+    "mesh": [
+      1,
+      1
+    ],
+    "prefill_ms": 3.7451183889061213,
+    "prefill_repeats": 20,
+    "seq_len": 17,
+    "trace_replays": 500,
+    "traced_decode_ms": 6.748191067948937
+  },
+  "decode_attention_weight_dtype": "bfloat8_b",
+  "decode_ccl_dtype": "bfloat16",
+  "decode_collective": "minimal_all_reduce",
+  "decode_down_cores": [
+    9,
+    10
+  ],
+  "decode_down_in0_block_w": 90,
+  "decode_down_subblock_w": 1,
+  "decode_efficiency": 2.8062930524851395,
+  "decode_expert_output_l1": true,
+  "decode_gate_up_cores": [
+    9,
+    10
+  ],
+  "decode_gate_up_in0_block_w": 45,
+  "decode_gate_up_subblock_w": 1,
+  "decode_speedup": 11.225172209940558,
+  "dram_attention_core_limit": 90,
+  "expert_activation_dtype": "bfloat16",
+  "expert_down_weight_dtype": "selected",
+  "expert_gate_up_weight_dtype": "selected",
+  "expert_math_fidelity": "lofi",
+  "expert_strategy": "ep",
+  "expert_weight_dtype": "bfloat8_b",
+  "fused_ag_matmul_payload_dtype": "bfloat16",
+  "fused_o_ag_pad_hidden": false,
+  "fused_o_projection_ag": false,
+  "fused_o_projection_rs": false,
+  "implementation": "TP4 attention + EP4 gate-selected active experts",
+  "layer_idx": 13,
+  "layer_kind": "full",
+  "long_decode_attention_math_fidelity": "selected",
+  "long_decode_attention_weight_dtype": "bfloat16",
+  "mesh": [
+    1,
+    4
+  ],
+  "multichip_prefill_ms": 5.6907497346401215,
+  "multichip_traced_decode_ms": 0.6011659279465675,
+  "prefill_efficiency": 0.16452658101046153,
+  "prefill_expert_cores": [
+    9,
+    10
+  ],
+  "prefill_expert_in0_block_w": 45,
+  "prefill_expert_output_l1": true,
+  "prefill_expert_output_l1_max_seq": 32,
+  "prefill_expert_subblock_w": 1,
+  "prefill_repeats": 1,
+  "prefill_speedup": 0.6581063240418461,
+  "seq_len": 17,
+  "short_decode_attention_weight_dtype": "bfloat8_b",
+  "trace_replays": 1,
+  "use_dram_sharded_decode_attention": false
+}

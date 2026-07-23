@@ -1,0 +1,37 @@
+{
+  "api": "ttnn.experimental.all_reduce_async persistent-buffer overload",
+  "source_binding": "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async_nanobind.cpp",
+  "cluster_axis": 1,
+  "topology": "Ring",
+  "num_links": 1,
+  "dtype": "BF16",
+  "input_output_layout": "L1 WIDTH_SHARDED, 90 shards of [32,128] per device",
+  "persistent_output_buffers": {
+    "count_per_decoder": 2,
+    "bytes_per_device_each": 737280,
+    "ping_pong_selection": "decoder-owned modulo-2 index, one buffer for attention O and one for expert output in a token"
+  },
+  "persistent_global_semaphores": {
+    "count_per_decoder": 2,
+    "coverage": "all 110 worker cores",
+    "initial_value": 0
+  },
+  "observed_worker_cores": 100,
+  "observed_worker_cores_source": "AllReduceAsyncDeviceOperation Cores column in both final S=17 decode tt-perf-report tables",
+  "num_preferred_links": 1,
+  "subdevice_id": null,
+  "use_noc1_only": false,
+  "use_optimal_ccl_for_llama": false,
+  "chunks_per_sync": {
+    "value": null,
+    "reason": "The selected persistent-buffer all_reduce_async Python/C++ overload does not expose this knob."
+  },
+  "num_buffers_per_channel": {
+    "value": null,
+    "reason": "The selected persistent-buffer all_reduce_async Python/C++ overload does not expose this knob."
+  },
+  "separate_persistent_intermediate": {
+    "value": false,
+    "reason": "The only model-supplied intermediate/output tensor is the persistent buffer_tensor above; the overload exposes no additional intermediate tensor."
+  }
+}

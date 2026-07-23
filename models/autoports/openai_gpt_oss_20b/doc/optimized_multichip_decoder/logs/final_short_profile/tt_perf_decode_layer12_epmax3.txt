@@ -1,0 +1,19 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'GPT_OSS_MULTICHIP_DECODE_LAYER12'.
+Using operations until 'GPT_OSS_MULTICHIP_DECODE_LAYER12_END'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to models/autoports/openai_gpt_oss_20b/doc/optimized_multichip_decoder/logs/final_short_profile/tt_perf_decode_layer12_epmax3.csv
+Overall DRAM roofline (modeled ops): 23.1% (118 GB/s)
+Warning: Unclassified operation 'RotaryEmbeddingHfDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SdpaDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ScatterDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'MeshPartitionDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllReduceAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/openai_gpt_oss_20b/doc/optimized_multichip_decoder/logs/final_short_profile/tt_perf_decode_layer12_epmax3_summary.csv
+Plotting PNG stacked report to models/autoports/openai_gpt_oss_20b/doc/optimized_multichip_decoder/logs/final_short_profile/tt_perf_decode_layer12_epmax3_summary.png

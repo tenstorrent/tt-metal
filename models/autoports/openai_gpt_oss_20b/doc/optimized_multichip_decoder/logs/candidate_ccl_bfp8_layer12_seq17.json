@@ -1,0 +1,37 @@
+{
+  "baseline": {
+    "baseline": "current OptimizedDecoder",
+    "layer_idx": 12,
+    "layer_kind": "sliding",
+    "mesh": [
+      1,
+      1
+    ],
+    "prefill_ms": 3.688408248126507,
+    "prefill_repeats": 20,
+    "seq_len": 17,
+    "trace_replays": 500,
+    "traced_decode_ms": 0.8736478500068188
+  },
+  "decode_collective": "minimal_all_reduce",
+  "decode_efficiency": 0.35069069187153706,
+  "decode_speedup": 1.4027627674861483,
+  "expert_strategy": "ep",
+  "fused_ag_matmul_payload_dtype": "bfloat16",
+  "fused_o_ag_pad_hidden": false,
+  "fused_o_projection_ag": false,
+  "implementation": "TP4 attention + EP4 gate-selected active experts",
+  "layer_idx": 12,
+  "layer_kind": "sliding",
+  "mesh": [
+    1,
+    4
+  ],
+  "multichip_prefill_ms": 5.119206150993705,
+  "multichip_traced_decode_ms": 0.6228051315993071,
+  "prefill_efficiency": 0.18012598727883514,
+  "prefill_repeats": 20,
+  "prefill_speedup": 0.7205039491153405,
+  "seq_len": 17,
+  "trace_replays": 500
+}

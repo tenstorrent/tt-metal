@@ -1,0 +1,61 @@
+{
+  "attention_math_fidelity": "hifi2",
+  "attention_weight_dtype": "bfloat16",
+  "baseline": {
+    "baseline": "current OptimizedDecoder",
+    "layer_idx": 12,
+    "layer_kind": "sliding",
+    "mesh": [
+      1,
+      1
+    ],
+    "prefill_ms": 3.688408248126507,
+    "prefill_repeats": 20,
+    "seq_len": 17,
+    "trace_replays": 500,
+    "traced_decode_ms": 0.8736478500068188
+  },
+  "decode_attention_weight_dtype": "bfloat8_b",
+  "decode_ccl_dtype": "bfloat16",
+  "decode_collective": "rs_ag_pad64",
+  "decode_down_cores": [
+    9,
+    10
+  ],
+  "decode_down_in0_block_w": 90,
+  "decode_down_subblock_w": 1,
+  "decode_efficiency": 0.347904030872724,
+  "decode_gate_up_cores": [
+    9,
+    10
+  ],
+  "decode_gate_up_in0_block_w": 45,
+  "decode_gate_up_subblock_w": 1,
+  "decode_speedup": 1.391616123490896,
+  "dram_attention_core_limit": 90,
+  "expert_activation_dtype": "bfloat16",
+  "expert_math_fidelity": "lofi",
+  "expert_strategy": "ep",
+  "expert_weight_dtype": "bfloat8_b",
+  "fused_ag_matmul_payload_dtype": "bfloat16",
+  "fused_o_ag_pad_hidden": false,
+  "fused_o_projection_ag": false,
+  "implementation": "TP4 attention + EP4 gate-selected active experts",
+  "layer_idx": 12,
+  "layer_kind": "sliding",
+  "long_decode_attention_math_fidelity": "selected",
+  "long_decode_attention_weight_dtype": "bfloat16",
+  "mesh": [
+    1,
+    4
+  ],
+  "multichip_prefill_ms": 5.115633155219257,
+  "multichip_traced_decode_ms": 0.6277937106788158,
+  "prefill_efficiency": 0.18025179563371277,
+  "prefill_repeats": 20,
+  "prefill_speedup": 0.7210071825348511,
+  "seq_len": 17,
+  "short_decode_attention_weight_dtype": "bfloat8_b",
+  "trace_replays": 500,
+  "use_dram_sharded_decode_attention": false
+}

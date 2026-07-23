@@ -61,9 +61,25 @@
     "page_table_contract": "Replicated INT32 logical-to-physical page mappings may be arbitrary permutations. Reverse mappings cross physical and logical page boundaries in correctness, trace, and endpoint tests.",
     "trace_contract": "Native short decode accepts mutable device position tensors across one captured graph. At and above position 127, sink-correct manual attention uses fixed 64-token trace banks, a device-mutable current-position tensor, and device-side causal/sliding masks. One warmed capture replays every token within a bank; recapture is required only at a 64-token page-bank boundary. Sequential reverse-page tests cover positions 128-131 and 191-193 with exact eager output and per-rank K/V writes.",
     "precision_contract": "Prefill preserves the optimized baseline's layer-aware policy: sliding uses BF16-output HiFi2 active experts; full S=128 uses exact TP-local FP32 attention; full prefill uses HiFi4 active experts. Decode uses LoFi experts, HiFi2 long projections for sliding attention, and HiFi4 long projections for full attention to preserve near-tied top-4 routing at the 131072 endpoint. Expert weights remain BFP8_B and execution remains gate-selected EP4.",
-    "real_weight_boundary_pcc": "Across positions 127-131, attention PCC is at least 0.999397 for sliding and 0.999051 for full attention; final decode PCC is at least 0.997467 and 0.997569 respectively against the current single-chip OptimizedDecoder. At S=128/129/2048, minimum prefill output PCC is 0.997193, minimum attention PCC is 0.999994, and following-decode PCC is at least 0.997193.",
-    "advertised_context_result": "PASS for both layer kinds: [2048,2,64,64] local K and V caches allocate on all four ranks and decode position 131071 updates reverse-mapped physical page 0 offset 63. Sliding/full final output PCC is 0.997989/0.999263 versus default-native OptimizedDecoder; full exact-manual attention/routing/final PCC is 0.999947/0.999994/0.999319 with exact top-4.",
+    "real_weight_boundary_pcc": "Across positions 127-131, attention PCC is at least 0.999397 for sliding and 0.999225 for full attention; final decode PCC remains above the accepted 0.995 threshold for both layer kinds against the current single-chip OptimizedDecoder. At S=128/129/2048, minimum prefill output PCC is 0.997231, minimum attention PCC is 0.999994, and following-decode PCC is at least 0.997504.",
+    "advertised_context_result": "PASS for both layer kinds: [2048,2,64,64] local K and V caches allocate on all four ranks and decode position 131071 updates reverse-mapped physical page 0 offset 63. Sliding/full final output PCC is 0.997990/0.999226 versus default-native OptimizedDecoder. Exact-manual attention/routing/final PCC is 0.999795/0.999967/0.998329 for sliding and 0.999948/0.999994/0.999280 for full, with exact top-4.",
     "capacity_change": "No reduction. KV-head TP4 lowers per-device cache storage and the full 131072-token HF-advertised capability remains supported."
+  },
+  "optimized_multichip_decoder_stage": {
+    "target_hardware": "four local Blackhole P300c devices in a fixed 1x4 FABRIC_1D_RING",
+    "public_residual_contract": "Replicated BF16 TILE DRAM [1,1,S,2880] enters and leaves every decoder layer. No gather, reshard, or all-reduce is required at the inter-layer boundary.",
+    "decode_collective": "Two BF16 width-sharded L1 minimal all-reduce operations per token, each using a model-owned persistent output buffer and global semaphore on the TP4 ring.",
+    "persistent_l1_change_per_device_bytes": 1475440,
+    "persistent_l1_change_detail": "Two 737280-byte BF16 minimal-all-reduce buffers (90 shards of [32,128]) plus two four-byte global semaphore words on each of 110 worker cores.",
+    "persistent_dram_change_per_device_bytes": 7050240,
+    "persistent_dram_change_detail": "Short-decode BFP8_B TP-local packed QKV and O projection copies are retained beside the BF16 prefill/long-decode weights. Positions below 127 use the BFP8_B copies; sink-correct long decode uses BF16 to preserve near-tied routing. BFP8_B tile storage is 1088 bytes per 32x32 tile.",
+    "cache_dtype": "BFP8_B",
+    "cache_layout": "per-rank TILE DRAM pages [ceil(max_cache_len/64),2,64,64]",
+    "activation_sharding": "Decode QKV input/output and both collective payloads use width-sharded L1. Sparse expert outputs use L1 for one-tile prefill chunks (logical S <= 32) and decode, and DRAM for larger prefill. The public residual stays replicated BF16 DRAM; sparse expert activations stay BF16 and gate-selected.",
+    "prefill_expert_output_policy": "The largest physically feasible direct L1 sparse-output tile is M=32. M=64 requires a 94,371,840-byte L1 allocation while only 353,472 bytes per bank remain at the allocation point, and M=128 requires 188,743,680 bytes against 1,461,504 bytes per bank. The decoder therefore selects L1 output for internally padded M<=32 and DRAM output above it.",
+    "real_weight_validated_prefill_contexts": [17, 128, 129, 2048],
+    "non_aligned_lengths": [17, 129],
+    "capacity_change": "No reduction. Extra persistent L1/DRAM state is fixed-size and independent of max_cache_len; the 131072-token public context and per-rank paged KV allocation remain unchanged."
   },
   "paths": {
     "prefill": {
@@ -99,7 +115,7 @@
   "dtype_policy": {
     "functional_baseline": "BF16 weights, activations, and cache; TILE layout; DRAM by default",
     "exception": "The emitted router promotes its activation and linear result to FP32 before BF16 top-k; decode heads use one workload-derived L1 height shard.",
-    "optimized_policy": "Hot decode uses BF16 activations/residuals/norms/router/attention weights, BFP8_B routed expert weights with LoFi sparse matmuls, and BFP8_B persistent K/V. Boundary decode projections use HiFi2. Sliding prefill uses BF16/HiFi2 sparse expert outputs; full prefill above S=128 uses bounded BF16/HiFi4 sparse chunks. Full-attention S=128 retains exact FP32 manual attention and decoder-local BF16 dense experts.",
+    "optimized_policy": "Hot decode uses BF16 activations/residuals/norms/router, BFP8_B attention weights below position 127, BF16 attention weights at and above position 127, BFP8_B routed expert weights with LoFi sparse matmuls, and BFP8_B persistent K/V. Short decode projections use HiFi2; long sliding/full projections preserve the selected HiFi2/HiFi4 policy. Sliding prefill uses BF16/HiFi2 sparse expert outputs; full prefill above S=128 uses bounded BF16/HiFi4 sparse chunks. Full-attention S=128 retains exact FP32 manual attention. The multichip decoder always uses EP4 gate-selected sparse experts; it has no dense all-expert execution path.",
     "deferred": "Complete full-model datatype-frontier selection remains a later datatype-sweep stage."
   }
 }

@@ -1,0 +1,9 @@
+{
+  "candidate": "minimal_matmul_strided_reduce_scatter_async",
+  "production_gate": "if \"blackhole\" in ttnn.get_arch_name(): return False",
+  "reason": "#46181: M_tiles=32 races on Blackhole; reduce-scatter can read matmul output before completion and produce nondeterministic garbage",
+  "scope": "upstream prefill M_tiles=32 only; not used to reject decode M_tiles=1",
+  "source": "models/demos/gpt_oss/tt/attention/operations.py",
+  "target_arch": "blackhole",
+  "verdict": "source-rejected"
+}
