@@ -612,7 +612,7 @@ import atexit as _atexit
 
 
 def _ttnn_cleanup():
-    """Release Python-side references to C++ operation wrappers before interpreter shutdown.
+    """Release Python-side references to C++ nanobind objects before interpreter shutdown.
 
     nanobind's leak checker fires before module dicts are fully cleared on some
     Python versions. Explicitly clearing REGISTERED_OPERATIONS ensures the
@@ -625,6 +625,37 @@ def _ttnn_cleanup():
     except Exception as e:
         # Best-effort cleanup: ignore errors during interpreter shutdown but log for diagnosis.
         logger.debug("Failed to clear ttnn REGISTERED_OPERATIONS during atexit cleanup: {}", e)
+
+    # Release the module-level nanobind *instance* constants bound into the `_ttnn.types`
+    # extension module (DRAM_MEMORY_CONFIG / L1_MEMORY_CONFIG). These are owned MemoryConfig
+    # instances created via `mod.attr(...) = nb::cast(...)` in ttnn-nanobind/types.cpp.
+    #
+    # CPython does not clear the __dict__ of PEP 489 multi-phase extension modules during
+    # finalization before the C-level Py_AtExit handlers run, and nanobind registers its
+    # leak checker via Py_AtExit. So these constants stay in `_ttnn.types.__dict__` and are
+    # reported as "leaked instances". Critically, nanobind only escalates to dumping *all*
+    # still-registered types and functions when at least one instance leaks (see nanobind
+    # src/nb_internals.cpp, where type/function reporting is gated on inst_leaks > 0), so
+    # these few constants are what turn a clean shutdown into the multi-hundred-line
+    # "leaked N types / leaked N functions" report.
+    #
+    # The Python-side re-exports (ttnn.DRAM_MEMORY_CONFIG, ttnn.types.*) are ordinary module
+    # globals that _PyImport_Cleanup clears before the Py_AtExit checker runs, so only the
+    # extension-module references need to be dropped here.
+    try:
+        from ttnn import _ttnn
+
+        _types_module = getattr(_ttnn, "types", None)
+        if _types_module is not None:
+            for _const_name in ("DRAM_MEMORY_CONFIG", "L1_MEMORY_CONFIG"):
+                try:
+                    delattr(_types_module, _const_name)
+                except Exception:
+                    # Attribute may be absent or read-only depending on build; ignore.
+                    pass
+    except Exception as e:
+        # Best-effort cleanup: ignore errors during interpreter shutdown but log for diagnosis.
+        logger.debug("Failed to release ttnn module-constant instances during atexit cleanup: {}", e)
 
 
 _atexit.register(_ttnn_cleanup)
