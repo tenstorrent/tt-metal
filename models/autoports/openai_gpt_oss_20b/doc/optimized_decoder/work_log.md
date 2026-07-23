@@ -12,9 +12,11 @@ work are out of scope.
 The initial stage-owned commit is `d3b34a9bf87` (`Optimize GPT-OSS 20B
 decoder`). The independent review of that commit returned more-work-needed;
 the first remediation commit is `82892545af1` (`Address GPT-OSS optimized
-decoder review`). A second independent review found the remaining S=128
-contract and performance-accounting gaps; its remediation and rereview are
-recorded below. Nothing was pushed.
+decoder review`). A second review's S=128 contract and accounting remediation
+is `6d71a30a876` (`Address optimized decoder rereview findings`). AutoFix then
+reopened the artificial S=128 context cap and the non-aligned S=129 decode
+boundary; the final repair and independent rereview are recorded below.
+Nothing was pushed.
 
 `tt-smi -s` showed four healthy local Blackhole P300c devices, DRAM status
 true, and no uncorrectable GDDR errors. Hardware commands were serialized.
@@ -135,7 +137,7 @@ partial capture.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `shard_advise/report.json` | 12,431 | `4042377b86bac479cbcc31c8fc7c006dd4fa361cb5cc9194b9eefad4663f7656` |
+| `shard_advise/report.json` | 12,432 | `462f3721264c2ce57345a248d98588d8515284a72529365862445bc9ef4fa597` |
 | `shard_advise/final_ir.mlir` | 27,874 | `581e8050b7b69cbe43e946c486ed404d74707a132c04b92b380e075b79c09ad2` |
 
 ### Recommendation disposition
@@ -161,11 +163,13 @@ partial capture.
 | DRAM-sharded BFP8_B/HiFi2 | L12/L13 0.997015/0.996686 | 3.83867 / 0.92138 ms | reject slower |
 | DRAM-sharded BF16/HiFi4 | L12/L13 0.997154/0.997141 | 3.83274 / 0.99585 ms | reject slower |
 | DRAM-sharded BF16/LoFi with final L1 experts | L12/L13 decode 0.995016/0.994374 | 4.01471 / 0.851718 ms | reject slower than advisor attention |
-| BF16 cache | functional baseline | slower/capacity-neutral control | replace |
+| BF16 cache | S=129 attention route still changed and final output remained below bar | diagnostic control | reject; BFP8 cache kept |
 | BFP8_B cache | both layer kinds and cache >0.99977 | selected | keep |
 | default SDPA | correct | about 0.8495 ms | replace |
 | 8x8/k64 SDPA | same PCC as k32 | 0.84682 ms adjacent | no benefit |
 | **8x8/k32 SDPA** | correct | selected | keep |
+| boundary QKV/O auto fidelity | S=129 sliding route changed expert 2 to 28; output 0.87409 | boundary only | reject |
+| boundary QKV/O HiFi2 | S=129 sliding output 0.996255; full layer 0.999360 | outside hot trace | keep at positions >=128 |
 
 At S=128, explicit 8x4 and 10x4 QKV/O programs produced real layer-12/13
 output PCC around 0.97469/0.97190. Automatic projection selection produced
@@ -200,23 +204,53 @@ boundary. Remediation:
 An AutoFix isolation pass verified that RoPE tables are bitwise identical at
 the boundary and that full-attention window semantics are correct.
 
-The second independent review rejected the then-claimed 131072-token support
-because only S=17 prefill was real-weight qualified and also required explicit
-roofline/device/end-to-end accounting. Remediation:
+The second independent review correctly rejected the then-unqualified
+131072-token claim and required explicit roofline/device/end-to-end
+accounting. Its first remediation qualified S=128 and temporarily reduced the
+contract to 128 based on an unchunked dense expert graph. A later review found
+that reduction invalid because the 72.48 GB estimate described an avoidable
+implementation, not a hard device limit. The final remediation:
 
-- layer-aware S=128 precision paths raise both real layer kinds above 0.99;
-- the optimized class now owns the dense advisor/control and full-layer
-  prefill graph instead of calling `FusedDecoder._moe_forward`;
-- `current_supported_context` is 128, while the HF provenance field remains
-  131072; the reduction records a hard 72,477,573,120-byte minimum-live-tensor
-  requirement against 34,178,731,008 allocator bytes at the target extent;
-- performance reports now use `--active-experts 4`, retain advice, print
-  same-run host wall time, and reconcile a byte roofline with device work,
-  dispatch gaps, profiled host wall, and uninstrumented repeated wall time.
+- bounds QKV/O projection, sparse-expert, and retained dense-control work in
+  128-token chunks and explicitly deallocates consumed intermediates;
+- uses standard 128x128-chunk TTNN SDPA for full-attention prefill above S=128;
+- progressively passes real-weight full-layer capacity at S=4096, 8192,
+  16384, 32768, 65536, and 131072, so the contract is restored to the HF
+  target instead of preserving the artificial cap;
+- real-weight qualifies both layer kinds through S=1024 with output, cache,
+  and following decode PCC at the functional bar;
+- performance reports use `--active-experts 4`, retain advice, print same-run
+  host wall time, and reconcile a byte roofline with device work, dispatch
+  gaps, profiled host wall, and uninstrumented repeated wall time.
 
-Final S=128 boundary results are 0.990790/0.990509 prefill output PCC and
-0.996168/0.994839 decode output PCC for layers 12/13, with K/V PCC above
-0.99982.
+Final aligned/non-aligned boundary results for layers 12/13 are:
+
+| Prefill length | Prefill output PCC | Decode output PCC | Decode K/V minimum |
+| --- | --- | --- | ---: |
+| S=128 | 0.991696 / 0.993322 | 0.996978 / 0.999349 | 0.999904 |
+| S=129 | 0.991753 / 0.995418 | 0.996255 / 0.999360 | 0.999902 |
+
+At S=1024, sliding/full prefill PCC is 0.992395/0.992225 and decode PCC is
+0.996869/0.996587; all reported cache PCC values are at least 0.995185.
+
+### AutoFix: non-aligned S=129 decode
+
+Adding S=129 boundary coverage exposed a sliding-layer output PCC of 0.87409.
+Two read-only AutoFix agents independently verified that the semantic window
+is keys 2 through 129, the absolute cache indexing and rounded k=32 reads are
+valid, and the new K/V rows remain above 0.9998 PCC. Native decode SDPA and a
+bounded manual attention implementation both reproduced the failure, while
+the attention residual itself remained at 0.99849 PCC.
+
+The failure was a numerical routing cliff: the HF top-4 experts were
+`[7, 13, 6, 2]`, while the lower-fidelity attention projection selected
+`[7, 13, 6, 28]`. BF16 persistent cache, sparse HiFi2, and the dense MLP
+control did not repair that upstream route change. Retrying attention QKV/O
+at HiFi2 raised final S=129 decode PCC to 0.996255. The selected fix therefore
+uses HiFi2 only for projection matmuls at positions `>=128`, together with
+bounded FP32 sink-aware attention; the traced S=17 fast path retains its
+measured automatic/LoFi projection policy. Permanent S=128 and S=129 tests
+cover both layer kinds.
 
 ## Final correctness
 
@@ -224,14 +258,18 @@ Real S=17 checkpoint coverage under the selected default:
 
 | Layer / kind | Prefill output | Prefill K / V | Decode output | Decode K / V |
 | --- | ---: | ---: | ---: | ---: |
-| 12 / sliding | 0.99195677 | 0.99991794 / 0.99992703 | 0.99563603 | 0.99981871 / 0.99980306 |
-| 13 / full | 0.99436448 | 0.99990794 / 0.99992701 | 0.99410810 | 0.99982619 / 0.99981078 |
+| 12 / sliding | 0.99854993 | 0.99996248 / 0.99997063 | 0.99605129 | 0.99981871 / 0.99980306 |
+| 13 / full | 0.99528336 | 0.99995273 / 0.99997160 | 0.99777805 | 0.99982619 / 0.99981078 |
 
 Additional coverage:
 
 - non-aligned S=3/17/33 and bitwise deterministic S=17 output/cache rerun;
 - synthetic and real S=128 output/cache PCC above 0.99 for both layer kinds;
-- real sliding/full decode at position 128 using a 256-entry BFP8 cache;
+- real sliding/full decode at positions 128 and non-aligned 129 using a
+  256-entry BFP8 cache;
+- real sliding/full prefill plus following decode qualified at S=256, 512,
+  and 1024; the S=1024 cache uses 2048 entries;
+- progressive real-weight full-layer finite-output capacity through S=131072;
 - batch-two compatibility through an optimized-owned dense prefill/decode
   graph;
 - repeated paged decode positions 3-18 with untouched cache tails;
@@ -244,10 +282,10 @@ The final same-process real-weight gate uses 20 warmed S=17 prefill runs and
 
 | Path | Prefill mean / median / min | Decode mean / median / min |
 | --- | ---: | ---: |
-| fused | 7.119405 / 7.102114 / 7.094515 ms | 6.051824 / 6.050705 / 6.038011 ms |
-| **selected optimized** | **3.953124 / 4.010050 / 3.740721 ms** | **0.834353 / 0.834215 / 0.827959 ms** |
+| fused | 7.291264 / 7.289830 / 7.099999 ms | 6.050883 / 6.050299 / 6.036739 ms |
+| **selected optimized** | **3.876243 / 3.783550 / 3.733284 ms** | **0.834763 / 0.834537 / 0.823852 ms** |
 
-The selected path reduces mean prefill by 44.5% and mean traced decode by
+The selected path reduces mean prefill by 46.8% and mean traced decode by
 86.2%. It also beats the best previous correct selected-path reproduction
 (0.846833 ms) and the historical optimized artifact (0.928144 ms).
 
@@ -255,15 +293,15 @@ Fresh Tracy was collected with real layer-12 weights and five bounded windows:
 
 | Window | Ops | Device | Gaps | Total |
 | --- | ---: | ---: | ---: | ---: |
-| fused S=17 prefill | 52 | 7,028.379 us | 260.515 us | 7,288.894 us |
-| optimized S=17 prefill | 60 | 3,513.175 us | 627.634 us | 4,140.809 us |
-| fused traced decode | 56 | 5,855.744 us | 49.913 us | 5,905.657 us |
-| optimized traced decode | 75 | 776.196 us | 77.466 us | 853.662 us |
-| optimized S=128 prefill | 54 | 12,327.276 us | 530.800 us | 12,858.076 us |
+| fused S=17 prefill | 52 | 7,026.588 us | 312.331 us | 7,338.919 us |
+| optimized S=17 prefill | 60 | 3,512.589 us | 458.704 us | 3,971.293 us |
+| fused traced decode | 56 | 5,855.783 us | 49.530 us | 5,905.313 us |
+| optimized traced decode | 75 | 775.810 us | 78.081 us | 853.891 us |
+| optimized S=128 prefill | 54 | 12,323.612 us | 288.933 us | 12,612.545 us |
 
-Optimized decode sparse rows are 116.101/117.231/110.231 us (343.563 us
-total) at 55.3-58.8% modeled DRAM bandwidth with active-experts=4. QKV/O are
-72.566/58.333 us at 79.4/79.0%, and SDPA is 9.919 us. The report's wider
+Optimized decode sparse rows are 116.067/116.044/110.391 us (342.502 us
+total) at 55.8-58.7% modeled DRAM bandwidth with active-experts=4. QKV/O are
+73.507/58.441 us at 78.4/78.8%, and SDPA is 9.762 us. The report's wider
 subblock advice is blocked on the selected 90-core sparse geometry because
 per-core-N=1; the legal 30-core/subblock-3 retry was 0.961806 ms. Reports show
 BFP8 cache writes, BFP8/LoFi sparse matmuls, and the selected sharded
@@ -292,11 +330,11 @@ Fresh same-run accounting is:
 | Quantity | Time | Reconciliation |
 | --- | ---: | --- |
 | theoretical DRAM floor | 0.311792 ms | compulsory stored bytes only |
-| device kernels | 0.776196 ms | 2.49x roofline; many small/routed ops |
-| op-to-op gaps | 0.077466 ms | traced dispatch/runtime gaps |
-| profiler total | 0.853662 ms | kernels + gaps |
-| same-replay host wall | 0.872583 ms | 0.018921 ms trace-call/signpost overhead |
-| uninstrumented 200-replay mean | 0.834353 ms | 2.3% below profiler total |
+| device kernels | 0.775810 ms | 2.49x roofline; many small/routed ops |
+| op-to-op gaps | 0.078081 ms | traced dispatch/runtime gaps |
+| profiler total | 0.853891 ms | kernels + gaps |
+| same-replay host wall | 0.873356 ms | 0.019465 ms trace-call/signpost overhead |
+| uninstrumented 200-replay mean | 0.834763 ms | 2.3% below profiler total |
 
 Kernels plus gaps account for 97.8% of the same profiled host wall. The 4.6%
 profiled-wall increase over the uninstrumented benchmark is profiler overhead
@@ -329,6 +367,13 @@ TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 \
 TTNN_CONFIG_OVERRIDES='{"throw_exception_on_fallback":true}' pytest -q \
 models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py \
 -k 'real_weight_layer_kind or repeated_paged_decode_stress or traced_decode_output_and_full_cache_integrity' -s
+
+OPTIMIZED_DECODER_BOUNDARY_SEQ_LEN=1024 \
+OPTIMIZED_DECODER_BOUNDARY_CACHE_LEN=2048 pytest -q \
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_layer_kind_boundary_beyond_emitted_cache -s
+
+OPTIMIZED_DECODER_CAPACITY_SEQ_LEN=131072 pytest -q \
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_full_layer_capacity_probe -s
 ```
 
 Final gate results after the first remediation (superseded by the 2026-07-23
@@ -349,7 +394,7 @@ Those earlier exact outputs are retained in
 `logs/run_20260722_review_watcher.log`, and its JUnit XML. The final 2026-07-23
 evidence replaces their headline numbers and is named `rereview_*`.
 
-Final 2026-07-23 rereview gates:
+Historical 2026-07-23 rereview gates, superseded by the post-AutoFix gates:
 
 - full suite: 10 passed, 2 intentional opt-in skips in 74.37 s;
 - watcher/fallback suite: 6 passed, 6 deselected in 74.88 s, with no device,
@@ -365,6 +410,31 @@ Final 2026-07-23 rereview gates:
 The exact final correctness and watcher outputs are retained in
 `logs/run_20260723_rereview_final_correctness.log`, its JUnit XML,
 `logs/run_20260723_rereview_watcher.log`, and its JUnit XML.
+
+Final post-AutoFix gates on the selected file:
+
+- full suite: 12 passed, 3 intentional opt-in skips in 94.27 s;
+- real S=1024 layer-kind boundary: 2 passed in 23.77 s;
+- real full-layer S=131072 capacity: finite first/last output tokens, 1 passed
+  in 34.93 s (32.79 s call);
+- warmed 20/200 performance gate: 1 passed, selected prefill/decode
+  3.876243/0.834763 ms versus fused 7.291264/6.050883 ms;
+- watcher/fallback suite: 8 passed, 7 deselected in 103.53 s, with no device,
+  NoC, kernel, or uninitialized-memory assertion in pytest output or
+  `generated/watcher/watcher.log`;
+- isolated Tracy profile: 1 passed, 14 deselected; final reports regenerated
+  from `reports/2026_07_23_02_08_27`;
+- fresh advisor: 39 modeled ops, 38 choices, 24 reshards, zero spills and zero
+  unfixable ops; `report.json` parses and `final_ir.mlir` contains five dense
+  matmul/linear ops;
+- context runner: target=131072, supported=131072 (full HF context);
+- post-run `tt-smi -s`: all four Blackhole devices report healthy DRAM, zero
+  corrected/uncorrected GDDR errors, live heartbeats, and normal temperatures.
+
+JUnit evidence is retained in
+`logs/run_20260723_post_autofix_final_correctness.junit.xml`,
+`logs/run_20260723_post_autofix_final_perf.junit.xml`, and
+`logs/run_20260723_post_autofix_final_watcher.junit.xml`.
 
 ## Optimize checklist
 
@@ -385,6 +455,9 @@ The exact final correctness and watcher outputs are retained in
 - [x] Large-prefill program configs evaluated; PCC-losing 2D configs rejected.
 - [x] Non-aligned, repeated, batch, layer-kind, long-boundary, trace, profiler,
   and watcher coverage present.
+- [x] Bounded long-context tensor lifetimes verified progressively through a
+  real-weight full-layer S=131072 capacity run; context contract restored to
+  the HF target.
 - [x] Before/after warmed prefill and 200-replay traced decode are comparable
   and final selected code beats the strongest correct baseline.
 - [x] No host fallback, unnecessary host tensor conversion, or collective in
@@ -392,14 +465,16 @@ The exact final correctness and watcher outputs are retained in
 
 ## Limitations
 
-- The supported context is 128, not the HF-advertised 131072. At the target
-  extent, the full-attention BF16 accuracy path's repeated input+gate+up live
-  tensors alone require 72.48 GB versus 34.18 GB allocator capacity. The HF
-  field is preserved as provenance, and the hard limit plus formula is in the
-  context contract.
+- Full output/cache/decode PCC is qualified through S=1024 for both layer
+  kinds. The full-layer S=131072 run is a real-weight finite-output capacity
+  qualification; an O(S^2) CPU golden at that extent is intentionally not
+  constructed. A diagnostic S=2048 full-layer run passed output PCC but its
+  value-cache PCC was 0.989215, 0.000785 below the strict cache bar; the
+  selected S=1024 qualification remains the last all-metrics PCC point.
 - The shared sparse expert implementation supports batch one. Batch two uses
   the optimized class's decoder-local dense compatibility graph and is not a
   measured optimized latency path.
 - Full-attention S=128 uses manual FP32 attention because the SDPA composite
-  candidate missed the real-weight bar. Sliding layers and all measured decode
-  continue to use TTNN SDPA composites.
+  candidate missed the real-weight bar. Decode positions below 128 use the
+  fast TTNN SDPA composite; positions at and above 128 use bounded FP32
+  sink-aware attention and HiFi2 QKV/O projections to keep routing stable.

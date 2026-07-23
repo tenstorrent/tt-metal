@@ -94,14 +94,17 @@ class OptimizationConfig:
     dram_attention_weight_dtype: str = "bfloat8_b"
     dram_attention_core_limit: int = 110
     attention_math_fidelity: str = "auto"
+    long_decode_attention_math_fidelity: str = "hifi2"
     use_sparse_experts: bool = True
     expert_weight_dtype: str = "bfloat8_b"
     expert_math_fidelity: str = "lofi"
     prefill_expert_math_fidelity: str = "hifi2"
+    full_prefill_expert_math_fidelity: str = "hifi4"
     prefill_expert_output_dtype: str = "bfloat16"
     use_precise_sparse_prefill: bool = True
     use_manual_prefill_attention: bool = True
     use_dense_long_prefill: bool = True
+    dense_prefill_chunk_size: int = EMITTED_CACHE_LENGTH
     expert_gate_up_cores: tuple[int, int] = (9, 10)
     expert_down_cores: tuple[int, int] = (9, 10)
     expert_gate_up_in0_block_w: int = 45
@@ -112,7 +115,9 @@ class OptimizationConfig:
     use_packed_sparse_gate_up: bool = False
     kv_cache_dtype: str = "bfloat8_b"
     prefill_matmul_config: str = "auto"
+    prefill_projection_chunk_size: int = EMITTED_CACHE_LENGTH
     prefill_sdpa_chunk_size: int | None = None
+    long_prefill_sdpa_chunk_size: int = EMITTED_CACHE_LENGTH
     explicit_sdpa_program_config: bool = True
     sdpa_grid: tuple[int, int] = (8, 8)
     sdpa_k_chunk_size: int = ttnn.TILE_SIZE
@@ -292,6 +297,18 @@ class OptimizedDecoder(FusedDecoder):
                 fp32_dest_acc_en=fidelity == "hifi4",
                 packer_l1_acc=True,
             )
+        )
+        long_decode_fidelity = self.optimization_config.long_decode_attention_math_fidelity
+        self.long_decode_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity={
+                "lofi": ttnn.MathFidelity.LoFi,
+                "hifi2": ttnn.MathFidelity.HiFi2,
+                "hifi4": ttnn.MathFidelity.HiFi4,
+            }[long_decode_fidelity],
+            math_approx_mode=long_decode_fidelity == "lofi",
+            fp32_dest_acc_en=long_decode_fidelity == "hifi4",
+            packer_l1_acc=True,
         )
         self.decode_qkv_weight = None
         self.decode_o_weight = None
@@ -555,9 +572,21 @@ class OptimizedDecoder(FusedDecoder):
             math_fidelity={
                 "lofi": ttnn.MathFidelity.LoFi,
                 "hifi2": ttnn.MathFidelity.HiFi2,
+                "hifi4": ttnn.MathFidelity.HiFi4,
             }[prefill_fidelity],
             math_approx_mode=prefill_fidelity == "lofi",
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=prefill_fidelity == "hifi4",
+            packer_l1_acc=True,
+        )
+        full_prefill_fidelity = self.optimization_config.full_prefill_expert_math_fidelity
+        self.full_prefill_expert_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity={
+                "hifi2": ttnn.MathFidelity.HiFi2,
+                "hifi4": ttnn.MathFidelity.HiFi4,
+            }[full_prefill_fidelity],
+            math_approx_mode=False,
+            fp32_dest_acc_en=full_prefill_fidelity == "hifi4",
             packer_l1_acc=True,
         )
 
@@ -746,6 +775,11 @@ class OptimizedDecoder(FusedDecoder):
         sparsity = ttnn.repeat(experts.prefill_sparsity, (1, 1, group_size, 1))
         gate_up_nnz = self.num_experts * group_size
         output_tile = ttnn.Tile([ttnn.TILE_SIZE, ttnn.TILE_SIZE])
+        prefill_compute_kernel_config = (
+            self.full_prefill_expert_compute_kernel_config
+            if self.attention_window is None
+            else self.prefill_expert_compute_kernel_config
+        )
 
         def project(input_tensor, weight, config, *, input_a_sparse=False, projection_sparsity=sparsity, nnz=None):
             return ttnn.sparse_matmul(
@@ -757,7 +791,7 @@ class OptimizedDecoder(FusedDecoder):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 output_tile=output_tile,
                 program_config=config,
-                compute_kernel_config=self.prefill_expert_compute_kernel_config,
+                compute_kernel_config=prefill_compute_kernel_config,
                 dtype=activation_dtype,
             )
 
@@ -822,11 +856,10 @@ class OptimizedDecoder(FusedDecoder):
             reduced_chunks.append(reduced)
 
         output = reduced_chunks[0]
-        for next_chunk in reduced_chunks[1:]:
-            concatenated = ttnn.concat([output, next_chunk], dim=2)
-            output.deallocate(True)
-            next_chunk.deallocate(True)
-            output = concatenated
+        if len(reduced_chunks) > 1:
+            output = ttnn.concat(reduced_chunks, dim=2)
+            for chunk in reduced_chunks:
+                chunk.deallocate(True)
         return ttnn.reshape(
             output,
             (1, batch_size, seq_len, self.hidden_size),
@@ -843,37 +876,29 @@ class OptimizedDecoder(FusedDecoder):
         routing_chunks = ttnn.split(routing_weights, chunk_size, dim=0)
         hidden_states.deallocate(True)
         routing_weights.deallocate(True)
-        output = None
+        outputs = []
         for hidden_chunk, routing_chunk in zip(hidden_chunks, routing_chunks):
-            next_chunk = self._sparse_prefill_chunk(hidden_chunk, routing_chunk)
-            if output is None:
-                output = next_chunk
-            else:
-                concatenated = ttnn.concat([output, next_chunk], dim=2)
-                output.deallocate(True)
-                next_chunk.deallocate(True)
-                output = concatenated
+            outputs.append(self._sparse_prefill_chunk(hidden_chunk, routing_chunk))
+        output = ttnn.concat(outputs, dim=2)
+        for chunk in outputs:
+            chunk.deallocate(True)
         return output
 
-    def _dense_reference_experts(self, hidden_states, seq_len: int):
-        """Run the decoder-local BF16 all-expert reference graph.
+    def _dense_reference_expert_chunk(self, hidden_states, routing_weights, seq_len: int, *, is_prefill: bool):
+        """Run one bounded decoder-local BF16 all-expert chunk."""
 
-        The advisor's dense attention+MLP control and the selected
-        full-attention S=128 accuracy path are both optimized-owned.  Decode
-        uses one packed gate/up projection; prefill uses two narrower
-        projections to avoid the packed output's strided extraction.
-        """
-
-        tokens = self.batch * seq_len
+        chunk_batch = hidden_states.shape[1]
+        tokens = chunk_batch * seq_len
         token_states = ttnn.reshape(hidden_states, [tokens, self.hidden_size])
-        routing_weights = self._route(hidden_states, seq_len)
         expert_input = ttnn.reshape(token_states, [1, tokens, self.hidden_size])
         expert_input = ttnn.repeat(
             expert_input,
             ttnn.Shape([self.num_experts, 1, 1]),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        if seq_len == 1:
+        if hasattr(hidden_states, "deallocate"):
+            hidden_states.deallocate(True)
+        if not is_prefill and self.gate_up_weight is not None:
             gate_up = ttnn.linear(
                 expert_input,
                 self.gate_up_weight,
@@ -896,6 +921,8 @@ class OptimizedDecoder(FusedDecoder):
                 [1, 1, 2],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            if hasattr(gate_up, "deallocate"):
+                gate_up.deallocate(True)
         else:
             gate = ttnn.linear(
                 expert_input,
@@ -926,7 +953,10 @@ class OptimizedDecoder(FusedDecoder):
         )
         if hasattr(activated, "deallocate"):
             activated.deallocate(True)
-        routing_weights = ttnn.permute(routing_weights, (1, 0), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        source_routing_weights = routing_weights
+        routing_weights = ttnn.permute(source_routing_weights, (1, 0), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if hasattr(source_routing_weights, "deallocate"):
+            source_routing_weights.deallocate(True)
         routing_weights = ttnn.reshape(routing_weights, [self.num_experts, tokens, 1])
         expert_output = ttnn.multiply(
             expert_output,
@@ -938,7 +968,72 @@ class OptimizedDecoder(FusedDecoder):
         if hasattr(routing_weights, "deallocate"):
             routing_weights.deallocate(True)
         reduced = ttnn.sum(expert_output, [0], False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.reshape(reduced, [1, self.batch, seq_len, self.hidden_size])
+        if hasattr(expert_output, "deallocate"):
+            expert_output.deallocate(True)
+        return ttnn.reshape(reduced, [1, chunk_batch, seq_len, self.hidden_size])
+
+    def _dense_reference_experts(self, hidden_states, seq_len: int):
+        """Run the decoder-local BF16 all-expert reference graph.
+
+        The advisor's dense attention+MLP control and the selected full-layer
+        accuracy path are both optimized-owned. Decode uses one packed gate/up
+        projection. Prefill uses two narrower projections and bounded token
+        chunks so its live expert tensors do not scale with public context.
+        """
+
+        routing_weights = self._route(hidden_states, seq_len)
+        chunk_size = self.optimization_config.dense_prefill_chunk_size
+        if seq_len <= chunk_size:
+            return self._dense_reference_expert_chunk(
+                hidden_states,
+                routing_weights,
+                seq_len,
+                is_prefill=seq_len > 1,
+            )
+
+        user_outputs = []
+        for user_id in range(self.batch):
+            chunks = []
+            for start in range(0, seq_len, chunk_size):
+                end = min(start + chunk_size, seq_len)
+                hidden_chunk = ttnn.slice(
+                    hidden_states,
+                    [0, user_id, start, 0],
+                    [1, user_id + 1, end, self.hidden_size],
+                    [1, 1, 1, 1],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                route_start = user_id * seq_len + start
+                route_end = user_id * seq_len + end
+                routing_chunk = ttnn.slice(
+                    routing_weights,
+                    [route_start, 0],
+                    [route_end, self.num_experts],
+                    [1, 1],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                chunks.append(
+                    self._dense_reference_expert_chunk(
+                        hidden_chunk,
+                        routing_chunk,
+                        end - start,
+                        is_prefill=True,
+                    )
+                )
+
+            user_output = ttnn.concat(chunks, dim=2)
+            for chunk in chunks:
+                chunk.deallocate(True)
+            user_outputs.append(user_output)
+        hidden_states.deallocate(True)
+        routing_weights.deallocate(True)
+
+        output = user_outputs[0]
+        if len(user_outputs) > 1:
+            output = ttnn.concat(user_outputs, dim=1)
+            for user_output in user_outputs:
+                user_output.deallocate(True)
+        return output
 
     def _route(self, hidden_states, seq_len: int):
         tokens = self.batch * seq_len
@@ -1038,7 +1133,7 @@ class OptimizedDecoder(FusedDecoder):
         if (
             self.optimization_config.use_dense_long_prefill
             and self.attention_window is None
-            and seq_len >= EMITTED_CACHE_LENGTH
+            and seq_len in (1, EMITTED_CACHE_LENGTH)
         ):
             expert_output = self._dense_reference_experts(normalized, seq_len)
             return ttnn.add(
@@ -1209,6 +1304,51 @@ class OptimizedDecoder(FusedDecoder):
         output = ttnn.add(residual, expert_output, memory_config=self.advisor_residual_config)
         return ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
 
+    def _bounded_prefill_linear(
+        self,
+        input_tensor,
+        weight,
+        bias,
+        seq_len: int,
+        program_config=None,
+    ):
+        """Apply a token-independent projection with a stable bounded M geometry."""
+
+        chunk_size = self.optimization_config.prefill_projection_chunk_size
+        if seq_len <= chunk_size:
+            output = ttnn.linear(
+                input_tensor,
+                weight,
+                bias=bias,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=program_config,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            input_tensor.deallocate(True)
+            return output
+
+        input_chunks = ttnn.split(input_tensor, chunk_size, dim=2)
+        outputs = [
+            ttnn.linear(
+                chunk,
+                weight,
+                bias=bias,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=program_config,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            for chunk in input_chunks
+        ]
+        for chunk in input_chunks:
+            chunk.deallocate(True)
+        input_tensor.deallocate(True)
+        output = ttnn.concat(outputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for chunk in outputs:
+            chunk.deallocate(True)
+        return output
+
     def _prefill_attention(self, hidden_states, key_cache, value_cache, seq_len: int):
         residual = hidden_states
         qkv_program_config = self.prefill_qkv_program_config if seq_len == 128 else None
@@ -1220,13 +1360,12 @@ class OptimizedDecoder(FusedDecoder):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
-        fused_qkv = ttnn.linear(
+        fused_qkv = self._bounded_prefill_linear(
             normed,
             self.qkv_weight,
-            bias=self.qkv_bias,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=qkv_program_config,
+            self.qkv_bias,
+            seq_len,
+            qkv_program_config,
         )
         fused_qkv = ttnn.reshape(
             fused_qkv,
@@ -1291,49 +1430,11 @@ class OptimizedDecoder(FusedDecoder):
             and seq_len == EMITTED_CACHE_LENGTH
         )
         if use_manual_accuracy_path:
-            if self.attention_mask is None:
-                raise ValueError("manual prefill attention requires the retained S=128 causal mask")
-            repeated_key = ttnn.repeat_interleave(key, self.num_heads // self.num_kv_heads, 1)
-            transposed_key = ttnn.permute(repeated_key, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            scores = ttnn.matmul(query, transposed_key, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            scores = ttnn.multiply(scores, self.scale, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            mask = ttnn.slice(
-                self.attention_mask,
-                [0, 0, 0, 0],
-                [1, 1, seq_len, seq_len],
-                [1, 1, 1, 1],
-            )
-            mask = ttnn.typecast(mask, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            scores = ttnn.add(scores, mask, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            sinks = ttnn.slice(
-                self.attention_sinks,
-                [0, 0, 0, 0],
-                [self.batch, self.num_heads, seq_len, 1],
-                [1, 1, 1, 1],
-            )
-            sinks = ttnn.typecast(sinks, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            probabilities = ttnn.softmax(
-                ttnn.concat([scores, sinks], 3, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-                3,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                numeric_stable=True,
-            )
-            probabilities = ttnn.slice(
-                probabilities,
-                [0, 0, 0, 0],
-                [self.batch, self.num_heads, seq_len, seq_len],
-                [1, 1, 1, 1],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            repeated_value = ttnn.repeat_interleave(value, self.num_heads // self.num_kv_heads, 1)
-            attention = ttnn.matmul(
-                probabilities,
-                repeated_value,
-                dtype=ttnn.float32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            attention = ttnn.typecast(attention, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attention = self._manual_prefill_attention(query, key, value, seq_len)
         else:
+            sdpa_chunk_size = self.optimization_config.prefill_sdpa_chunk_size
+            if self.attention_window is None and seq_len > EMITTED_CACHE_LENGTH:
+                sdpa_chunk_size = self.optimization_config.long_prefill_sdpa_chunk_size
             attention = ttnn.transformer.scaled_dot_product_attention(
                 query,
                 key,
@@ -1347,24 +1448,23 @@ class OptimizedDecoder(FusedDecoder):
                 program_config=(
                     ttnn.SDPAProgramConfig(
                         compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
-                        q_chunk_size=self.optimization_config.prefill_sdpa_chunk_size,
-                        k_chunk_size=self.optimization_config.prefill_sdpa_chunk_size,
+                        q_chunk_size=sdpa_chunk_size,
+                        k_chunk_size=sdpa_chunk_size,
                         exp_approx_mode=False,
                     )
-                    if self.optimization_config.prefill_sdpa_chunk_size is not None
+                    if sdpa_chunk_size is not None
                     else None
                 ),
                 attention_sink=self.prefill_sdpa_sink,
             )
         attention = ttnn.transformer.concatenate_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attention = ttnn.reshape(attention, [1, self.batch, seq_len, self.num_heads * self.head_dim])
-        attention = ttnn.linear(
+        attention = self._bounded_prefill_linear(
             attention,
             self.output_weight,
-            bias=self.output_bias,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=o_program_config,
+            self.output_bias,
+            seq_len,
+            o_program_config,
         )
         return ttnn.add(
             residual,
@@ -1374,8 +1474,65 @@ class OptimizedDecoder(FusedDecoder):
             output_tensor=attention,
         )
 
+    def _manual_prefill_attention(self, query, key, value, seq_len: int):
+        """Run the exact sink-aware full-attention S=128 accuracy path."""
+
+        if seq_len != EMITTED_CACHE_LENGTH or self.attention_mask is None:
+            raise ValueError("manual prefill attention requires the retained S=128 causal mask")
+        repeated_key = ttnn.repeat_interleave(key, self.num_heads // self.num_kv_heads, 1)
+        transposed_key = ttnn.permute(repeated_key, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        repeated_key.deallocate(True)
+        scores = ttnn.matmul(query, transposed_key, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        transposed_key.deallocate(True)
+        scores = ttnn.multiply(scores, self.scale, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        mask = ttnn.typecast(self.attention_mask, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scores = ttnn.add(scores, mask, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        mask.deallocate(True)
+        sinks = ttnn.slice(
+            self.attention_sinks,
+            [0, 0, 0, 0],
+            [self.batch, self.num_heads, seq_len, 1],
+            [1, 1, 1, 1],
+        )
+        sinks = ttnn.typecast(sinks, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        logits = ttnn.concat([scores, sinks], 3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scores.deallocate(True)
+        sinks.deallocate(True)
+        probabilities_with_sink = ttnn.softmax(
+            logits,
+            3,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            numeric_stable=True,
+        )
+        logits.deallocate(True)
+        probabilities = ttnn.slice(
+            probabilities_with_sink,
+            [0, 0, 0, 0],
+            [self.batch, self.num_heads, seq_len, seq_len],
+            [1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        probabilities_with_sink.deallocate(True)
+        repeated_value = ttnn.repeat_interleave(value, self.num_heads // self.num_kv_heads, 1)
+        attention = ttnn.matmul(
+            probabilities,
+            repeated_value,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        probabilities.deallocate(True)
+        repeated_value.deallocate(True)
+        output = ttnn.typecast(attention, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attention.deallocate(True)
+        return output
+
     def _decode_attention(self, hidden_states, key_cache, value_cache, current_pos: int):
         dram_attention = self.optimization_config.use_dram_sharded_attention
+        projection_compute_kernel_config = (
+            self.long_decode_compute_kernel_config
+            if current_pos >= EMITTED_CACHE_LENGTH
+            else self.decode_compute_kernel_config
+        )
         # The captured advisor graph is the emitted batch-one decode graph.
         # Its one-row norm/residual shard is invalid once decode height grows
         # with batch, so retain the fused interleaved attention contract there.
@@ -1419,7 +1576,7 @@ class OptimizedDecoder(FusedDecoder):
                 if advisor_layouts
                 else None
             ),
-            compute_kernel_config=self.decode_compute_kernel_config,
+            compute_kernel_config=projection_compute_kernel_config,
         )
         if dram_attention:
             fused_qkv = ttnn.add(fused_qkv, self.qkv_bias, memory_config=self.dram_qkv_output_config)
@@ -1466,28 +1623,31 @@ class OptimizedDecoder(FusedDecoder):
             share_cache=False,
             page_table=None,
         )
-        attention = ttnn.transformer.scaled_dot_product_attention_decode(
-            query,
-            key_cache,
-            value_cache,
-            is_causal=True,
-            attn_mask=None,
-            cur_pos_tensor=update_indices,
-            attention_sink=self.decode_attention_sinks,
-            scale=self.scale,
-            sliding_window_size=self.attention_window,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.decode_sdpa_program_config,
-        )
-        attention = ttnn.to_memory_config(attention, self.decode_heads_mem_config)
-        attention = ttnn.experimental.nlp_concat_heads_decode(attention, num_heads=self.num_heads)
-        attention = ttnn.slice(
-            attention,
-            [0, 0, 0, 0],
-            [1, 1, self.batch, self.num_heads * self.head_dim],
-            [1, 1, 1, 1],
-        )
-        attention = ttnn.reshape(attention, [1, self.batch, 1, self.num_heads * self.head_dim])
+        if current_pos >= EMITTED_CACHE_LENGTH:
+            attention = self._manual_full_decode_attention(query, key_cache, value_cache, current_pos)
+        else:
+            attention = ttnn.transformer.scaled_dot_product_attention_decode(
+                query,
+                key_cache,
+                value_cache,
+                is_causal=True,
+                attn_mask=None,
+                cur_pos_tensor=update_indices,
+                attention_sink=self.decode_attention_sinks,
+                scale=self.scale,
+                sliding_window_size=self.attention_window,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.decode_sdpa_program_config,
+            )
+            attention = ttnn.to_memory_config(attention, self.decode_heads_mem_config)
+            attention = ttnn.experimental.nlp_concat_heads_decode(attention, num_heads=self.num_heads)
+            attention = ttnn.slice(
+                attention,
+                [0, 0, 0, 0],
+                [1, 1, self.batch, self.num_heads * self.head_dim],
+                [1, 1, 1, 1],
+            )
+            attention = ttnn.reshape(attention, [1, self.batch, 1, self.num_heads * self.head_dim])
         if advisor_layouts:
             attention = ttnn.to_memory_config(attention, ttnn.L1_MEMORY_CONFIG)
         elif dram_attention:
@@ -1511,7 +1671,7 @@ class OptimizedDecoder(FusedDecoder):
                 if advisor_layouts
                 else None
             ),
-            compute_kernel_config=self.decode_compute_kernel_config,
+            compute_kernel_config=projection_compute_kernel_config,
         )
         if dram_attention:
             attention = ttnn.to_memory_config(attention, ttnn.DRAM_MEMORY_CONFIG)
@@ -1537,6 +1697,93 @@ class OptimizedDecoder(FusedDecoder):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tensor=attention,
         )
+
+    def _manual_full_decode_attention(self, query, key_cache, value_cache, current_pos: int):
+        """Run sink-aware decode attention past the emitted cache boundary."""
+
+        query_dram = ttnn.to_memory_config(query, ttnn.DRAM_MEMORY_CONFIG)
+        query_slice = ttnn.slice(
+            query_dram,
+            [0, 0, 0, 0],
+            [1, self.batch, self.num_heads, self.head_dim],
+            [1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        query = ttnn.permute(query_slice, (1, 2, 0, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        query_dram.deallocate(True)
+        valid_length = current_pos + 1
+        window_start = 0
+        if self.attention_window is not None:
+            window_start = max(0, valid_length - self.attention_window)
+        attention_length = valid_length - window_start
+        key_slice = ttnn.slice(
+            key_cache,
+            [0, 0, window_start, 0],
+            [self.batch, self.num_kv_heads, valid_length, self.head_dim],
+            [1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        value_slice = ttnn.slice(
+            value_cache,
+            [0, 0, window_start, 0],
+            [self.batch, self.num_kv_heads, valid_length, self.head_dim],
+            [1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        repeated_key = ttnn.repeat_interleave(key_slice, self.num_heads // self.num_kv_heads, 1)
+        repeated_value = ttnn.repeat_interleave(value_slice, self.num_heads // self.num_kv_heads, 1)
+        key_slice.deallocate(True)
+        value_slice.deallocate(True)
+        key = ttnn.permute(repeated_key, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        repeated_key.deallocate(True)
+        scores = ttnn.matmul(query, key, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        query.deallocate(True)
+        key.deallocate(True)
+        scores = ttnn.multiply(
+            scores,
+            self.scale,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tensor=scores,
+        )
+        sinks = ttnn.slice(
+            self.attention_sinks,
+            [0, 0, 0, 0],
+            [self.batch, self.num_heads, 1, 1],
+            [1, 1, 1, 1],
+        )
+        sinks = ttnn.typecast(sinks, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        logits = ttnn.concat([scores, sinks], 3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scores.deallocate(True)
+        sinks.deallocate(True)
+        probabilities_with_sink = ttnn.softmax(
+            logits,
+            3,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            numeric_stable=True,
+        )
+        logits.deallocate(True)
+        probabilities = ttnn.slice(
+            probabilities_with_sink,
+            [0, 0, 0, 0],
+            [self.batch, self.num_heads, 1, attention_length],
+            [1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        probabilities_with_sink.deallocate(True)
+        attention = ttnn.matmul(
+            probabilities,
+            repeated_value,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        probabilities.deallocate(True)
+        repeated_value.deallocate(True)
+        attention_bfloat16 = ttnn.typecast(attention, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attention.deallocate(True)
+        concatenated = ttnn.permute(attention_bfloat16, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attention_bfloat16.deallocate(True)
+        return ttnn.reshape(concatenated, [1, self.batch, 1, self.num_heads * self.head_dim])
 
     def create_kv_cache(self):
         """Allocate a cache matching the selected persistent-cache policy."""

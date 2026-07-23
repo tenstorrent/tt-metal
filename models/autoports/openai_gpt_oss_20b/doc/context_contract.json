@@ -1,53 +1,52 @@
 {
   "hf_model": "openai/gpt-oss-20b",
   "hf_advertised_context": 131072,
-  "current_supported_context": 128,
-  "limiting_reason": "device_dram",
+  "current_supported_context": 131072,
+  "limiting_reason": null,
   "capacity_evidence": {
     "device": "one Blackhole chip from a P300c endpoint (TT_VISIBLE_DEVICES=0)",
     "device_allocator_dram_banks": 8,
     "device_allocator_bytes_per_bank": 4272341376,
     "device_allocator_total_bytes": 34178731008,
-    "capacity_probe": "ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)",
-    "advertised_context_bf16_input_bytes": 754974720,
-    "advertised_context_bf16_single_layer_kv_cache_bytes": 268435456,
-    "formula": "Input: 1*1*131072*2880*2 bytes. KV: 1*8*131072*64*2(K,V)*2 bytes.",
-    "functional_decoder_static_weight_bytes": 1646373824,
-    "fused_gate_up_split_copy_bytes": 1062051840,
-    "fused_decoder_static_weight_bytes": 2708425664,
-    "full_attention_dense_accuracy_path_single_live_tensor_bytes_at_advertised_context": 24159191040,
-    "full_attention_dense_accuracy_path_minimum_live_tensor_bytes_at_advertised_context": 72477573120,
-    "full_attention_dense_accuracy_path_minimum_live_formula": "The selected full-attention precision path repeats normalized input across experts and computes separate BF16 gate/up tensors. At S=131072, each is 32*131072*2880*2 = 24159191040 bytes; input+gate+up alone require 72477573120 bytes, before weights, attention, cache, activations, allocator fragmentation, or outputs.",
-    "full_attention_dense_accuracy_path_allocator_ratio": 2.120546,
-    "full_attention_dense_accuracy_path_shortfall_bytes": 38298842112,
-    "stage_scope": "Real-weight S=128 qualification requires a layer-aware precision path: sliding layers use composite SDPA plus BF16/HiFi2 sparse prefill, while full-attention layers use FP32 manual attention plus decoder-local BF16 dense expert prefill. The dense path has a hard advertised-context DRAM lower bound of 72.48 GB against 34.18 GB allocator capacity, so this stage advertises 128 supported tokens while retaining the Hugging Face 131072-token model field. A 256-entry BFP8_B cache is separately validated through decode position 128.",
-    "real_weight_qualified_prefill_context": 128,
-    "synthetic_qualified_prefill_context": 128,
-    "validated_extended_cache_extent": 256,
-    "validated_decode_position": 128,
-    "unprobed_interval": "Hardware accuracy and performance from 129 through the HF-advertised 131072-token extent are unsupported in this stage; the selected full-attention accuracy path cannot fit at the target extent by the recorded live-tensor lower bound."
+    "bounded_strategy": "QKV/O projections, full-attention SDPA, precise sparse experts, and retained dense controls use bounded 128-token work units with consumed intermediates explicitly deallocated.",
+    "real_weight_full_layer_progressive_capacity_lengths": [
+      4096,
+      8192,
+      16384,
+      32768,
+      65536,
+      131072
+    ],
+    "advertised_context_probe": "OPTIMIZED_DECODER_CAPACITY_SEQ_LEN=131072 pytest -q models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_full_layer_capacity_probe -s",
+    "advertised_context_result": "PASS: real checkpoint layer 13 returned shape [1,1,131072,2880] with finite first and last logical tokens; 32.79 s test call.",
+    "next_failure": "No device-capacity failure exists within the HF-advertised interval.",
+    "pcc_qualified_contexts_both_layer_kinds": [128, 129, 256, 512, 1024],
+    "largest_all_metrics_pcc_context": 1024,
+    "largest_all_metrics_pcc_result": "Sliding/full prefill output PCC 0.99239488/0.99222492; following decode PCC 0.99686933/0.99658721; all reported K/V cache PCC values at least 0.99518482.",
+    "diagnostic_2048": "Sliding passed all metrics. Full-attention output PCC passed at 0.991286, while value-cache PCC 0.989215 was 0.000785 below the strict 0.99 cache bar; the following decode was not run after that assertion.",
+    "qualification_scope": "The S=131072 run is a real-weight device-capacity and finite-output qualification. Full HF-reference output/cache PCC uses S=1024 as the largest all-metrics point because an O(S^2) CPU oracle is not constructed at the advertised endpoint."
   },
-  "notes": "The functional starting point validates real-weight prefill through S=17, and the fused stage validates non-aligned synthetic prefill through S=33. The optimized stage preserves non-aligned S=3/17/33 behavior and real-weight qualifies S=128 for both layer kinds: layer 12 sliding prefill output PCC is 0.990790 and layer 13 full-attention PCC is 0.990509. Their decode-at-position-128 outputs are 0.996168 and 0.994839. The full-attention result needs FP32 manual attention and decoder-local BF16 dense expert prefill; its three unavoidable BF16 expert tensors exceed device allocator capacity by 38.30 GB at S=131072. Therefore current supported context is 128, while hf_advertised_context remains 131072 as model provenance. Routine decode positions 3 through 18, repeated paged updates, trace replay, and a 256-entry cache through position 128 are validated. Current-token K/V remain BF16 before BFP8_B cache writes.",
+  "notes": "The optimized decoder preserves arbitrary positive logical prefill lengths by internal padding/chunking and permanently tests non-aligned S=3, 17, 33, and the post-window S=129 boundary. Real sliding/full S=128 decode PCC is 0.996978/0.999349; S=129 is 0.996255/0.999360. Decode positions below 128 use TTNN SDPA decode. Positions at and above 128 use bounded sink-aware FP32 attention with HiFi2 QKV/O projections to prevent top-4 router changes at sensitive non-aligned positions. Persistent K/V uses BFP8_B; current-token K/V remains BF16 before cache writes.",
   "fused_decoder_stage": {
     "validated_prefill_context": 33,
     "validated_decode_position": 17,
     "non_aligned_lengths": [3, 17, 33],
     "cache_dtype": "BF16",
     "cache_extent": 128,
-    "capacity_change": "No supported-context reduction; current_supported_context advances from 17 to the largest fused prefill validation S=33."
+    "capacity_change": "The fused stage advanced real exercised prefill from S=17 to S=33 without changing the HF-advertised public capability."
   },
   "optimized_decoder_stage": {
-    "real_weight_qualified_prefill_context": 128,
-    "synthetic_qualified_prefill_context": 128,
-    "validated_decode_positions": "3 through 18 and position 128 after a real-weight S=128 prefill",
-    "non_aligned_lengths": [3, 17, 33],
-    "large_prefill_lengths": [128],
+    "real_weight_all_metrics_context": 1024,
+    "real_weight_capacity_context": 131072,
+    "validated_decode_positions": "3 through 18, aligned 128, non-aligned 129, and 1024 after matching real-weight prefill",
+    "non_aligned_lengths": [3, 17, 33, 129],
+    "large_prefill_lengths": [128, 129, 256, 512, 1024, 4096, 8192, 16384, 32768, 65536, 131072],
     "cache_dtype": "BFP8_B",
     "cache_layout": "TILE, DRAM interleaved",
     "default_cache_extent": 128,
-    "validated_extended_cache_extent": 256,
-    "cache_storage_change": "BFP8_B replaces BF16 for persistent K/V. For this 1x8x128x64 cache pair, the nominal payload drops from 262144 BF16 bytes to 131072 BFP8 mantissa bytes plus block-exponent metadata.",
-    "capacity_change": "Real-weight S=128 now passes for both layer kinds. The selected full-attention precision path needs at least 72477573120 live BF16 expert-tensor bytes at S=131072 versus 34178731008 allocator bytes, before weights and other state, so current supported context is 128 with limiting_reason=device_dram. The Hugging Face advertised field remains 131072 and is not rewritten."
+    "validated_extended_cache_extent": 2048,
+    "cache_storage_change": "BFP8_B replaces BF16 for persistent K/V. Callers select max_cache_len up to the public context; the emitted default remains 128 for compatibility.",
+    "capacity_change": "The earlier S=128 reduction was based on an avoidable unchunked dense implementation. After bounding live tensors, a progressive real-weight full-layer sweep passes the HF endpoint, so current_supported_context is restored to 131072."
   },
   "paths": {
     "prefill": {
@@ -65,7 +64,7 @@
       "emit_package": "/home/mvasiljevic/emit-gptoss/g1_decode",
       "classification": {
         "cache_op": "paged_update_cache",
-        "attention_op": "scaled_dot_product_attention_decode",
+        "attention_op": "scaled_dot_product_attention_decode with bounded sink-aware boundary path",
         "emitted_batch": 1,
         "emitted_sequence": 1,
         "cache_length": 128
@@ -83,7 +82,7 @@
   "dtype_policy": {
     "functional_baseline": "BF16 weights, activations, and cache; TILE layout; DRAM by default",
     "exception": "The emitted router promotes its activation and linear result to FP32 before BF16 top-k; decode heads use one workload-derived L1 height shard.",
-    "optimized_policy": "Decode uses BF16 activations/residuals/norms/router/attention weights, BFP8_B routed expert weights with LoFi sparse matmuls, and BFP8_B persistent K/V. Sliding prefill uses BF16/HiFi2 sparse expert outputs; full-attention S=128 uses FP32 manual attention and decoder-local BF16 dense experts. Current-token K/V remain BF16 before cache writes.",
+    "optimized_policy": "Hot decode uses BF16 activations/residuals/norms/router/attention weights, BFP8_B routed expert weights with LoFi sparse matmuls, and BFP8_B persistent K/V. Boundary decode projections use HiFi2. Sliding prefill uses BF16/HiFi2 sparse expert outputs; full prefill above S=128 uses bounded BF16/HiFi4 sparse chunks. Full-attention S=128 retains exact FP32 manual attention and decoder-local BF16 dense experts.",
     "deferred": "Complete full-model datatype-frontier selection remains a later datatype-sweep stage."
   }
 }

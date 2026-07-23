@@ -198,8 +198,12 @@ def test_optimized_runtime_is_distinct_and_has_no_host_fallback():
         OptimizedDecoder._sparse_decode_experts,
         OptimizedDecoder._sparse_prefill_chunk,
         OptimizedDecoder._sparse_prefill_experts,
+        OptimizedDecoder._dense_reference_expert_chunk,
         OptimizedDecoder._dense_reference_experts,
         OptimizedDecoder._optimized_moe_forward,
+        OptimizedDecoder._bounded_prefill_linear,
+        OptimizedDecoder._manual_prefill_attention,
+        OptimizedDecoder._manual_full_decode_attention,
         OptimizedDecoder._prefill_attention,
         OptimizedDecoder._decode_attention,
         OptimizedDecoder.prefill_forward,
@@ -231,21 +235,28 @@ def test_optimized_runtime_is_distinct_and_has_no_host_fallback():
     assert "nlp_concat_heads_decode(" in inspect.getsource(OptimizedDecoder._decode_attention)
 
 
+def _boundary_seq_lengths() -> tuple[int, ...]:
+    requested = os.environ.get("OPTIMIZED_DECODER_BOUNDARY_SEQ_LEN")
+    return (int(requested),) if requested is not None else (128, 129)
+
+
 @pytest.mark.parametrize("layer_idx,expected_window", [(SLIDING_LAYER, 128), (FULL_LAYER, None)])
+@pytest.mark.parametrize("prefill_len", _boundary_seq_lengths())
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_real_weight_layer_kind_boundary_beyond_emitted_cache(mesh_device, layer_idx, expected_window):
+def test_real_weight_layer_kind_boundary_beyond_emitted_cache(mesh_device, layer_idx, expected_window, prefill_len):
     """Cross the sliding-window boundary and the functional stage's cache extent."""
 
-    prefill_len = 128
+    cache_len = int(os.environ.get("OPTIMIZED_DECODER_BOUNDARY_CACHE_LEN", str(max(256, prefill_len + 1))))
     with _functional_helpers_for_layer(layer_idx):
         config = functional_test._config()
         state = functional_test._real_state()
-        decoder = _decoder(state, config, mesh_device, layer_idx=layer_idx, max_cache_len=256)
+        decoder = _decoder(state, config, mesh_device, layer_idx=layer_idx, max_cache_len=cache_len)
         reference_layer = functional_test._hf_layer(state, config)
         key_cache, value_cache = decoder.create_kv_cache()
-        generator = torch.Generator().manual_seed(16100 + layer_idx)
+        boundary_seed = int(os.environ.get("OPTIMIZED_DECODER_BOUNDARY_SEED", str(16100 + layer_idx)))
+        generator = torch.Generator().manual_seed(boundary_seed)
         hidden = torch.randn((1, 1, prefill_len, config.hidden_size), generator=generator, dtype=torch.bfloat16)
-        reference_prefill, reference_key, reference_value, _ = functional_test._reference_layer(
+        reference_prefill, reference_key, reference_value, reference_cache = functional_test._reference_layer(
             reference_layer,
             hidden,
             config,
@@ -276,30 +287,34 @@ def test_real_weight_layer_kind_boundary_beyond_emitted_cache(mesh_device, layer
             f"layer{layer_idx} prefill boundary value",
         )
 
-        assert decoder.max_cache_len == 256
+        assert decoder.max_cache_len == cache_len
         assert decoder.attention_window == expected_window
 
-        decode_hidden = torch.randn((1, 1, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16)
-        # Recompute the HF reference over the complete history. HF's dynamic
-        # sliding cache truncates to 128 entries, while this test intentionally
-        # crosses that boundary using a 256-entry paged TT cache.
+        decode_seed = int(os.environ.get("OPTIMIZED_DECODER_BOUNDARY_DECODE_SEED", "26014"))
+        decode_generator = torch.Generator().manual_seed(decode_seed)
+        decode_hidden = torch.randn((1, 1, 1, config.hidden_size), generator=decode_generator, dtype=torch.bfloat16)
+        # Full attention uses the incremental HF cache contract. Recompute the
+        # sliding reference so its 128-entry window is explicit at the boundary.
         reference_history = torch.cat((hidden, decode_hidden), dim=2)
-        reference_decode, decode_key, decode_value, _ = functional_test._reference_layer(
-            reference_layer,
-            reference_history,
-            config,
-        )
+        if expected_window is None:
+            reference_decode, decode_key, decode_value, _ = functional_test._reference_layer(
+                reference_layer,
+                decode_hidden,
+                config,
+                start_pos=prefill_len,
+                cache=reference_cache,
+            )
+        else:
+            reference_decode, decode_key, decode_value, _ = functional_test._reference_layer(
+                reference_layer,
+                reference_history,
+                config,
+            )
         actual_decode = decoder.decode_forward(
             functional_test._tt_tensor(decode_hidden, mesh_device),
             key_cache,
             value_cache,
             current_pos=prefill_len,
-        )
-        functional_test._assert_pcc(
-            reference_decode[:, :, -1:, :],
-            functional_test._to_host(actual_decode),
-            0.99,
-            f"layer{layer_idx} decode position={prefill_len}",
         )
         functional_test._assert_pcc(
             decode_key[:, :, -1:, :],
@@ -313,7 +328,57 @@ def test_real_weight_layer_kind_boundary_beyond_emitted_cache(mesh_device, layer
             0.99,
             f"layer{layer_idx} boundary value",
         )
+        functional_test._assert_pcc(
+            reference_decode[:, :, -1:, :],
+            functional_test._to_host(actual_decode),
+            0.99,
+            f"layer{layer_idx} decode position={prefill_len}",
+        )
         del decoder, reference_layer, state
+        gc.collect()
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_real_weight_full_layer_capacity_probe(mesh_device):
+    """Opt-in real-weight forward probe without an O(sequence^2) CPU oracle."""
+
+    raw_seq_len = os.environ.get("OPTIMIZED_DECODER_CAPACITY_SEQ_LEN")
+    if raw_seq_len is None:
+        pytest.skip("set OPTIMIZED_DECODER_CAPACITY_SEQ_LEN to run the hardware capacity probe")
+    seq_len = int(raw_seq_len)
+    if seq_len < 1:
+        raise ValueError(f"OPTIMIZED_DECODER_CAPACITY_SEQ_LEN must be positive, got {seq_len}")
+
+    with _functional_helpers_for_layer(FULL_LAYER):
+        config = functional_test._config()
+        state = functional_test._real_state()
+        decoder = _decoder(state, config, mesh_device, layer_idx=FULL_LAYER, max_cache_len=seq_len)
+        key_cache, value_cache = decoder.create_kv_cache()
+        generator = torch.Generator().manual_seed(28113)
+        hidden = torch.randn((1, 1, seq_len, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+        output = decoder.prefill_forward(
+            functional_test._tt_tensor(hidden, mesh_device),
+            key_cache,
+            value_cache,
+        )
+        ttnn.synchronize_device(mesh_device)
+        assert tuple(output.shape) == (1, 1, seq_len, config.hidden_size)
+        edge = ttnn.concat(
+            [
+                ttnn.slice(output, [0, 0, 0, 0], [1, 1, 1, config.hidden_size], [1, 1, 1, 1]),
+                ttnn.slice(
+                    output,
+                    [0, 0, seq_len - 1, 0],
+                    [1, 1, seq_len, config.hidden_size],
+                    [1, 1, 1, 1],
+                ),
+            ],
+            dim=2,
+        )
+        assert torch.isfinite(functional_test._to_host(edge)).all()
+        print(f"real-weight full-layer capacity S={seq_len}: PASS")
+        del decoder, state
         gc.collect()
 
 
