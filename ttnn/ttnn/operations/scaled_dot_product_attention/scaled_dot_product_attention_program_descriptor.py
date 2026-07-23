@@ -29,6 +29,23 @@ K_CHUNK_TILES = 4  # Sk_chunk_t upper bound (tiles of 32 key/value rows)
 KV_BUFFER_FACTOR = 2  # double-buffer K/V/mask to overlap DRAM read with compute
 Q_BUFFER_FACTOR = 1  # Q held resident across the whole KV loop
 
+# ---- Per-core L1 budget (Refinement 2) ----------------------------------------
+# The flash-attention CBs (Q/K/V/out + running-(m,l,O) accumulators) scale with
+# `sq_chunk_t·dht` / `sk_chunk_t·dht`; D is never split across cores, so as head_dim
+# grows the per-core footprint eventually exceeds L1. `sq_chunk_t`/`sk_chunk_t` are
+# the block-factor knobs the design's Blocking Model exposes — cap them to the
+# COARSEST divisor pair whose CB footprint fits the device L1 CB arena.
+#
+# The allocator lays CBs out as   grow_to = L1_CB_RESERVED + Σ(CB total_size)
+# and rejects the program when grow_to > L1_CB_CEILING. Both constants below were
+# measured exact-to-the-byte on device (Wormhole; see probes/probe_005/006) across
+# bf16/fp32/bf8b × {mask,no-mask}: grow_to always equals RESERVED + our own CB-size
+# sum. We keep a safety margin for any per-shape variation in the reserved region.
+L1_CB_CEILING = 1572864  # device max CB top address (bytes)
+L1_CB_RESERVED = 111360  # constant region below the CB arena (kernel bins / RT args)
+L1_CB_SAFETY = 32 * 1024  # headroom for reserved-region variation across configs
+L1_CB_BUDGET = L1_CB_CEILING - L1_CB_RESERVED - L1_CB_SAFETY
+
 # ---- CB indices (semantic) ----
 CB_Q_IN = 0
 CB_K_IN = 1
@@ -53,12 +70,64 @@ CB_SUM_SCALED = 9
 CB_OUT_SCALED = 10
 
 
-def _largest_divisor_leq(n, cap):
-    """Largest d in [1, cap] with n % d == 0."""
-    for d in range(min(n, cap), 0, -1):
-        if n % d == 0:
-            return d
-    return 1
+def _divisors_leq(n, cap):
+    """All divisors d of n with 1 <= d <= cap, ascending (keeps every chunk full —
+    no partial-tail chunk in Phase-1)."""
+    return [d for d in range(1, min(n, cap) + 1) if n % d == 0]
+
+
+def _cb_specs(sq, sk, dht, has_mask, in_df, out_df, interm_df, scaler_df):
+    """(index, num_pages, data_format) for every CB — the SINGLE source of truth
+    shared by the L1-footprint budget calc and the actual CB build below. Page
+    counts are functions of the block factors sq/sk and DHt (never the full S)."""
+    q_tiles = sq * dht
+    k_tiles = sk * dht
+    qk_tiles = sq * sk
+    o_tiles = sq * dht
+    specs = [
+        (CB_Q_IN, q_tiles * Q_BUFFER_FACTOR, in_df),
+        (CB_K_IN, k_tiles * KV_BUFFER_FACTOR, in_df),
+        (CB_V_IN, k_tiles * KV_BUFFER_FACTOR, in_df),
+        (CB_SCALER_MAX, 1, scaler_df),
+        (CB_SCALER_SUM, 1, scaler_df),
+        (CB_OUT, o_tiles * 2, out_df),
+        (CB_QK_SCORES, qk_tiles, interm_df),
+        (CB_MAX_A, sq, interm_df),  # running max (cb_m)
+        (CB_MAX_B, sq, interm_df),  # m_cur scratch (cb_max_cur)
+        (CB_MAX_NEW, sq, interm_df),
+        (CB_SUM_A, sq, interm_df),  # running sum (cb_l)
+        (CB_SUM_NEW, sq, interm_df),
+        (CB_SUM_SCALED, sq, interm_df),
+        (CB_EXP_MAX_DIFF, sq, interm_df),
+        (CB_OUT_A, o_tiles, interm_df),  # running output accumulator (cb_o)
+        (CB_OUT_NEW, o_tiles, interm_df),
+        (CB_OUT_SCALED, o_tiles, interm_df),
+    ]
+    if has_mask:
+        specs.append((CB_MASK_IN, qk_tiles * KV_BUFFER_FACTOR, in_df))
+    return specs
+
+
+def _cb_footprint_bytes(specs):
+    return sum(num_pages * ttnn.tile_size(df) for _, num_pages, df in specs)
+
+
+def _pick_chunks(sqt, skvt, dht, has_mask, in_df, out_df, interm_df, scaler_df):
+    """Coarsest (largest-footprint) block-factor pair (sq_chunk_t, sk_chunk_t)
+    whose per-core CB footprint fits the L1 budget. When the design-default pair
+    (Q_CHUNK_TILES, K_CHUNK_TILES) already fits (all D<=256 and the D=128 perf
+    shape), it is the max-footprint candidate and is chosen unchanged — so no
+    currently-passing cell regresses. Falls back to (1,1) if even that OOMs
+    (D-blocking is the next refinement's scope, not reached for D<=1024)."""
+    best = None  # (footprint, sq, sk)
+    for sq in _divisors_leq(sqt, Q_CHUNK_TILES):
+        for sk in _divisors_leq(skvt, K_CHUNK_TILES):
+            fp = _cb_footprint_bytes(_cb_specs(sq, sk, dht, has_mask, in_df, out_df, interm_df, scaler_df))
+            if fp <= L1_CB_BUDGET and (best is None or fp > best[0]):
+                best = (fp, sq, sk)
+    if best is None:
+        return 1, 1
+    return best[1], best[2]
 
 
 def _pick_subblock(m_tiles, n_tiles, dst_limit):
@@ -104,16 +173,32 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
     skvt = s_kv // 32
     dht = d // 32
 
-    sq_chunk_t = _largest_divisor_leq(sqt, Q_CHUNK_TILES)
-    sk_chunk_t = _largest_divisor_leq(skvt, K_CHUNK_TILES)
-    q_num_chunks = sqt // sq_chunk_t
-    k_num_chunks = skvt // sk_chunk_t
-
     has_mask = attn_mask is not None
     mask_broadcast_head = 1 if (has_mask and tuple(attn_mask.shape)[1] == 1) else 0
 
     fp32_dest_acc_en = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
     dst_limit = 4 if fp32_dest_acc_en else 8
+
+    # ---- Circular-buffer formats (dtype-derived; single source per role) ----
+    # (resolved here — before the block-factor pick — because the CB footprint,
+    #  hence the L1-budget cap on sq_chunk_t/sk_chunk_t, depends on the tile bytes
+    #  of the resolved dtype; float32's 2x tile size lowers the D at which OOM
+    #  strikes, so the budget must see the true tile size. See the CB build below
+    #  for the per-role rationale.)
+    in_df = query.dtype
+    out_df = output_tensor.dtype  # follows the input dtype (see entry point)
+    interm_df = ttnn.float32 if in_df == ttnn.float32 else ttnn.bfloat16
+    scaler_df = ttnn.bfloat16
+
+    # ---- L1-budget cap on the block factors (Refinement 2) ----
+    # sq_chunk_t/sk_chunk_t are the design's block-factor knobs; pick the coarsest
+    # divisor pair whose CB footprint fits L1. Knob-turn only — the kernel is
+    # already parameterized on (sq, sk, dht); shrinking the chunk just adds more
+    # (fully-full) Q/KV chunks to the flat work-list. D<=256 / the D=128 perf shape
+    # keep the (4,4) default (byte-identical to Phase-0); D∈{512,1024} shrink to fit.
+    sq_chunk_t, sk_chunk_t = _pick_chunks(sqt, skvt, dht, has_mask, in_df, out_df, interm_df, scaler_df)
+    q_num_chunks = sqt // sq_chunk_t
+    k_num_chunks = skvt // sk_chunk_t
 
     # Subblock decomposition for the two matmuls (block held in DEST, num_k_blocks=1).
     qk_sb_h, qk_sb_w, qk_in0_sb, qk_in1_sb = _pick_subblock(sq_chunk_t, sk_chunk_t, dst_limit)
@@ -141,29 +226,20 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
             assignment.append((core, start, per_core))
             start += per_core
 
-    # ---- Circular-buffer formats (dtype-derived; single source per role) ----
+    # ---- Circular buffers (built from the shared _cb_specs — single source) ----
+    # Per-role dtype rationale (formats resolved above, before the block-factor pick):
     #   * input CBs (Q/K/V/mask) carry the user input dtype — the reader byte-
     #     copies DRAM tiles into them, so the CB tile size must match.
-    #   * cb_out carries the bf16 output (op contract; writer byte-copies out).
+    #   * cb_out follows the input dtype (op contract; writer byte-copies out).
     #   * intermediates: fp32 ONLY for float32 INPUT. The online-softmax running
     #     (m,l,O) is parked in a CB and reloaded every KV-block; for a float32
     #     input the CB must carry fp32 or the park truncates the mantissa mid-
-    #     reduce and erases the point of the fp32 datapath (skill §4 — this is
-    #     the "float32 + fp32 intermediate CBs" lever the R1 verifier note names,
-    #     coupled to the float32 dtype, NOT to the bf16-input fp32_dest_acc_en=
-    #     True config). bf16 / bf8b inputs keep bf16 intermediates: this is byte-
-    #     identical to Phase-0, so the whole bf16 supported rectangle (incl. the
-    #     D=256 cells) keeps its exact Phase-0 L1 footprint and does not OOM —
-    #     widening those to fp32 was the R1 regression (doubled every bf16@True
-    #     intermediate CB). bf8b can't be an intermediate accumulator format;
-    #     bf16 is the correct upcast target and already dominates the bf8b error
-    #     budget, so DEST width is second-order there.
+    #     reduce and erases the point of the fp32 datapath (coupled to the float32
+    #     dtype, NOT to the bf16-input fp32_dest_acc_en=True config). bf16 / bf8b
+    #     inputs keep bf16 intermediates: byte-identical to Phase-0. bf8b can't be
+    #     an intermediate accumulator format; bf16 is the correct upcast target and
+    #     already dominates the bf8b error budget.
     #   * scalers stay bf16 (reader packs them via prepare_reduce_scaler).
-    in_df = query.dtype
-    out_df = output_tensor.dtype  # follows the input dtype (see entry point)
-    interm_df = ttnn.float32 if in_df == ttnn.float32 else ttnn.bfloat16
-    scaler_df = ttnn.bfloat16
-
     def cb(index, num_pages, data_format):
         t = ttnn.tile_size(data_format)
         return ttnn.CBDescriptor(
@@ -172,32 +248,12 @@ def create_program_descriptor(query, key, value, attn_mask, output_tensor, *, sc
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=data_format, page_size=t)],
         )
 
-    q_tiles = sq_chunk_t * dht
-    k_tiles = sk_chunk_t * dht
-    qk_tiles = sq_chunk_t * sk_chunk_t
-    o_tiles = sq_chunk_t * dht
-
     cbs = [
-        cb(CB_Q_IN, q_tiles * Q_BUFFER_FACTOR, in_df),
-        cb(CB_K_IN, k_tiles * KV_BUFFER_FACTOR, in_df),
-        cb(CB_V_IN, k_tiles * KV_BUFFER_FACTOR, in_df),
-        cb(CB_SCALER_MAX, 1, scaler_df),
-        cb(CB_SCALER_SUM, 1, scaler_df),
-        cb(CB_OUT, o_tiles * 2, out_df),
-        cb(CB_QK_SCORES, qk_tiles, interm_df),
-        cb(CB_MAX_A, sq_chunk_t, interm_df),  # running max (cb_m)
-        cb(CB_MAX_B, sq_chunk_t, interm_df),  # m_cur scratch (cb_max_cur)
-        cb(CB_MAX_NEW, sq_chunk_t, interm_df),
-        cb(CB_SUM_A, sq_chunk_t, interm_df),  # running sum (cb_l)
-        cb(CB_SUM_NEW, sq_chunk_t, interm_df),
-        cb(CB_SUM_SCALED, sq_chunk_t, interm_df),
-        cb(CB_EXP_MAX_DIFF, sq_chunk_t, interm_df),
-        cb(CB_OUT_A, o_tiles, interm_df),  # running output accumulator (cb_o)
-        cb(CB_OUT_NEW, o_tiles, interm_df),
-        cb(CB_OUT_SCALED, o_tiles, interm_df),
+        cb(index, num_pages, data_format)
+        for index, num_pages, data_format in _cb_specs(
+            sq_chunk_t, sk_chunk_t, dht, has_mask, in_df, out_df, interm_df, scaler_df
+        )
     ]
-    if has_mask:
-        cbs.append(cb(CB_MASK_IN, qk_tiles * KV_BUFFER_FACTOR, in_df))
 
     # ---- Reader kernel ----
     reader_ct = [

@@ -96,7 +96,7 @@ Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (respons
 ```
 
 **Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
-### [ ] Refinement 2 — Per-core L1 budget fit for large head_dim
+### [x] Refinement 2 — Per-core L1 budget fit for large head_dim
 
 **Goal**: bound the per-core CB footprint so the D∈{512,1024} shapes stop OOMing.
 Phase-0 sizes `cb_q_in`, `cb_k_in`, `cb_v_in`, `cb_out`, and the running-`O`

@@ -127,3 +127,46 @@
   pre-existing bf16-compute-path noise, the verifier's float32 lever can't reach them).
 - **Issues encountered**: None beyond the diagnosed root cause.
 - **Tests added**: None (reused the R1 test set + the golden suite as the regression net).
+
+## Refinement 2 — Per-core L1 budget fit for large head_dim
+- Date: 2026-07-23
+- What was done: Knob-turn on the block factors the design's Blocking Model already
+  exposes — cap `sq_chunk_t`/`sk_chunk_t` to the COARSEST divisor pair whose per-core
+  CB footprint fits the device L1 CB arena. **Program-descriptor only; zero kernel
+  changes** (the compute/reader/writer kernels are already parameterized on
+  (sq, sk, dht) — shrinking the chunk just adds more fully-full Q/KV chunks to the
+  flat work-list). Changes:
+  * Added an exact L1-footprint model in the program descriptor:
+    `grow_to = L1_CB_RESERVED(111360) + Σ(CB total_size)` must stay `<= L1_CB_CEILING
+    (1572864)`. Both constants measured **exact-to-the-byte on device** (Wormhole)
+    across bf16/fp32/bf8b × {mask,no-mask}: the allocator's reported `grow to N` equals
+    RESERVED + our own CB-size sum every time (see probes/probe_005/006). Budget keeps
+    a 32 KB safety margin for reserved-region variation.
+  * `_cb_specs()` is now the single source of truth for CB (index, num_pages, dtype);
+    BOTH the footprint calc and the actual CB build derive from it (DRY — the footprint
+    can't drift from the real allocation).
+  * `_pick_chunks()` iterates the divisor pairs `(sq<=Q_CHUNK_TILES, sk<=K_CHUNK_TILES)`
+    and selects the max-footprint pair that fits the budget. Footprint is monotone in
+    both factors, so when the (4,4) default fits it IS the max-footprint candidate and
+    is chosen unchanged → every currently-passing cell is byte-identical to Phase-0/R1b
+    (verified: D<=256 all dtypes and the D=128 perf shape keep (4,4)).
+  * Dtype/CB-format resolution moved above the chunk pick, because the footprint (hence
+    the cap) depends on the resolved tile size — float32's 2x tile bytes lower the D at
+    which OOM strikes, exactly as the R1 note foretold.
+  * Chosen chunks on the fixed OOM cells: bf16 D=1024→(2,2); fp32 D=256→(4,2),
+    D=512→(2,2), D=1024→(1,1); bf8b D=1024→(4,1); bf16 D=512+custom→(4,2). D-blocking on
+    QKᵀ (the note's optional lever) was NOT needed — (1,1) fits every target D<=1024.
+- Accuracy achieved: PCC >= 0.99961 on every fixed cell (D=256/512/1024 × bf16/fp32/bf8b
+  × {mask,no-mask}); fp32 cells PCC ~0.99996, bf8b ~0.99987, bf16 D=1024 ~0.99961.
+  rtol/atol: golden tolerances (0.99/0.12 for bf8b, tighter for bf16/fp32) all cleared.
+- Golden test progress: **1061 passed / 0 failed / 848 xfailed** (103s, no hang), up from
+  R1b's 1029 passed / 32 failed. All 32 previously-OOMing large-head-dim cells
+  (bf16 D∈{512-custom,1024}, fp32 D∈{256,512,1024}, bf8b D=1024) now pass; zero xpass
+  drift, zero regressions.
+- Issues encountered: The skill's quoted L1 budget (1499136) did not match this device;
+  measured the real ceiling (1572864) and the constant reserved base (111360) directly
+  on device before writing the cap — the "try cheap first / measure don't guess" path.
+  The changelog's earlier claim that bf16 D=512 OOMs was imprecise: bf16 D=256 and D=512
+  (no mask) already passed at (4,4); only bf16 D=1024 and D=512+custom OOMed for bf16.
+- Tests added: None (reused the R1 precision matrix + acceptance + golden suite as the
+  regression net; added exploratory probes probe_005/006 documenting the exact L1 model).
