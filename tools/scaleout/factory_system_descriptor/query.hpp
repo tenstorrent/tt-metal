@@ -21,6 +21,10 @@ class FsdQuery {
 public:
     explicit FsdQuery(const fsd::proto::FactorySystemDescriptor& fsd);
 
+    // Full instance_path segments of a host (root -> host).
+    std::vector<std::string> get_instance_path(uint32_t host_id) const;
+    std::vector<std::string> get_instance_path(const std::string& hostname) const;
+
     // Longest common prefix of the two hosts' instance_path segments.
     // host_id indexes hosts positionally (the i-th host has host_id i), matching connection endpoints.
     std::vector<std::string> longest_common_prefix(uint32_t host_id_a, uint32_t host_id_b) const;

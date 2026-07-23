@@ -34,6 +34,19 @@ FsdQuery::FsdQuery(const fsd::proto::FactorySystemDescriptor& fsd) : fsd_(fsd) {
     max_hierarchy_depth_ = hierarchy_tiers_.empty() ? 0 : hierarchy_tiers_.front();
 }
 
+std::vector<std::string> FsdQuery::get_instance_path(uint32_t host_id) const {
+    const auto num_hosts = static_cast<uint32_t>(fsd_.hosts().size());
+    if (host_id >= num_hosts) {
+        throw std::out_of_range(fmt::format("host_id out of range (id={}, num_hosts={})", host_id, num_hosts));
+    }
+    const auto& path = fsd_.hosts()[host_id].instance_path();
+    return std::vector<std::string>(path.begin(), path.end());
+}
+
+std::vector<std::string> FsdQuery::get_instance_path(const std::string& hostname) const {
+    return get_instance_path(host_id_for(hostname));
+}
+
 uint32_t FsdQuery::lcp_length(uint32_t host_id_a, uint32_t host_id_b) const {
     const auto num_hosts = static_cast<uint32_t>(fsd_.hosts().size());
     if (host_id_a >= num_hosts || host_id_b >= num_hosts) {

@@ -525,6 +525,20 @@ TEST(FsdQuery, ThrowsOnDuplicateHostname) {
     EXPECT_THROW(FsdQuery{fsd}, std::runtime_error);
 }
 
+TEST(FsdQuery, GetInstancePath) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"root", "sp_0", "node_0"}},
+        {"node1", {}},
+    });
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.get_instance_path(0u), (std::vector<std::string>{"root", "sp_0", "node_0"}));
+    EXPECT_EQ(query.get_instance_path("node0"), (std::vector<std::string>{"root", "sp_0", "node_0"}));
+    EXPECT_TRUE(query.get_instance_path(1u).empty());
+    EXPECT_THROW(query.get_instance_path(5u), std::out_of_range);
+    EXPECT_THROW(query.get_instance_path("missing"), std::runtime_error);
+}
+
 TEST(FsdQuery, HierarchyDepthIsCommonPrefixLength) {
     auto fsd = make_fsd_with_paths({
         {"node0", {"root", "sp_0", "node_0"}},
