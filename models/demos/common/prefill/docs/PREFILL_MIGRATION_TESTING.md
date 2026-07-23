@@ -1,13 +1,12 @@
 # Prefill KV-migration — test command reference
 
 How to validate a model's prefill KV-cache migration on a **single Blackhole galaxy**, no decode. The flow
-is model-agnostic: pick a model with `PREFILL_MODEL` and fill in its dimensions/paths below. Three gates,
+is model-agnostic: pick a model with `PREFILL_MODEL` and fill in its dimensions/paths below. Two gates,
 each stricter and more expensive than the last.
 
 | Gate | What it exercises | Needs |
 |------|-------------------|-------|
-| **0 — standalone PCC** | prefill writes correct KV (precondition for everything) | tt-metal tree only |
-| **1 — mock migration** | the KV-chunk **address table** is correct, read device-lessly | tt-metal tree only |
+| **1 — mock migration + KV PCC** | prefill writes correct KV (precondition for everything); the KV-chunk **address table** is correct, read device-lessly | tt-metal tree only |
 | **2 — loopback migration** | the real DRAM→transport→DRAM copy + migrated-KV accuracy | + tt-llm-engine binaries |
 
 ---
@@ -34,27 +33,15 @@ Constraints: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0` (ea
 
 ---
 
-## Gate 0 — Standalone KV PCC (precondition; no migration)
+## Gate 1 — KV PCC via mock migration + producer read-back (table addresses; no endpoint)
 
-Confirms prefill writes correct KV vs the golden trace before migration means anything.
-
-```bash
-env PREFILL_STANDALONE=1 PREFILL_STANDALONE_PCC=1 \
-    PREFILL_STANDALONE_NCHUNKS=$NCHUNKS PREFILL_STANDALONE_CHUNKED_NCHUNKS=$NCHUNKS \
-    $RUN
-```
-
-**Expect:** `[kv-pcc] min PCC across <L> layers … (overall …)` ≥ `PREFILL_STANDALONE_CHUNKED_PCC`.
-
----
-
-## Gate 1 — Mock migration + producer read-back (table addresses; no endpoint)
-
-The runner serializes the KV-chunk table + device map (`PREFILL_MOCK_MIGRATION=1`, no validation on the
-runner side); the producer reads each chunk **device-lessly** via `read_dram_umd` — the same UMD path the
-migration worker uses — and PCCs vs golden. This isolates "is `build_kv_chunk_table` correct?" with no
-migration endpoint, worker, or MPI. Requires the producer to implement a read-back for this model's cache
-layout (see `prefill_producer.py`).
+This is also the KV-correctness precondition: prefill must write correct KV before migration means
+anything. The runner serializes the KV-chunk table + device map (`PREFILL_MOCK_MIGRATION=1`, no
+validation on the runner side); the producer reads each chunk **device-lessly** via `read_dram_umd` —
+the same UMD path the migration worker uses — and PCCs vs golden. This isolates "is `build_kv_chunk_table`
+correct?" with no migration endpoint, worker, or MPI. Requires the producer to implement a read-back for
+this model's cache layout (see `prefill_producer.py`). `PREFILL_MAX_SEQ_LEN` must be ≥ `NCHUNKS*CHUNK_SIZE`
+(the shared setup sets it) or the runner asserts when a chunk overruns the cache.
 
 ```bash
 # Terminal 1 — runner (serialize table + device map only):

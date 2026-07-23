@@ -4,7 +4,7 @@
 """``MiniMaxM3PrefillAdapter`` — the MiniMax-M3 plug-in for the model-agnostic prefill runner.
 
 The prefill runner (``models/demos/common/prefill/runners/prefill_runner.py``) is model-agnostic: it
-owns rank topology, the H2D socket, and the request/standalone loops, and drives a model through a
+owns rank topology, the H2D socket, and the request serving loop, and drives a model through a
 ``PrefillModelAdapter`` (see ``models/demos/common/prefill/adapter.py``). This adapter is pure glue:
 it says where M3's config / weights / trace live and how to build its runtime; all operational behavior
 (running a chunk, the KV layout, PCC) lives on ``TtPrefillRuntime`` (``tt/tt_prefill_runtime.py``).
@@ -22,7 +22,7 @@ for the H2D producer (which reads only path/trace attributes).
 Env the operator sets (mirrors the rest of the M3 ecosystem):
   HF_MODEL / PREFILL_HF_MODEL   real MiniMax-M3 checkpoint dir (VL-wrapped config + bf16 safetensors)
   TT_CACHE_PATH                 tilized weight-cache root (defaults to the checkpoint dir)
-  PREFILL_TRACE_DIR             golden trace dir (metadata.json + kv_cache/) for PREFILL_STANDALONE_PCC
+  PREFILL_TRACE_DIR             golden trace dir (metadata.json + kv_cache/) for KV-PCC validation
 """
 
 from __future__ import annotations

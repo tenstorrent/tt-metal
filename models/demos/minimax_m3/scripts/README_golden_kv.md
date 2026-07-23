@@ -80,13 +80,12 @@ Once generated, use the trace in your prefill tests:
 
 ```bash
 export PREFILL_TRACE_DIR=/mnt/models/minimax-m3-cache/golden/longbook_full
-export PREFILL_STANDALONE_PCC=1
-
-# Run prefill runner with PCC check
-python3 models/demos/deepseek_v3_d_p/tt/runners/prefill_runner.py
 ```
 
-The runner's `kv_cache_pcc_check()` will validate your device KV cache against this golden reference.
+Validate the device KV cache against this golden with the producer's device-less read-back PCC: run the
+runner with `PREFILL_MOCK_MIGRATION=1` and the producer with `PREFILL_PRODUCER_CHECK_PCC=1` — see
+`models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md` Gate 1. (The old in-runner
+`PREFILL_STANDALONE_PCC` path was removed; KV PCC now goes through the producer read-back.)
 
 ## Options
 
@@ -186,10 +185,10 @@ nohup python3 models/demos/minimax_m3/scripts/generate_golden_kv_cache.py \
 # 4. Monitor progress
 tail -f generate_golden.log
 
-# 5. Use in tests
+# 5. Use in tests — point KV-PCC validation at this trace:
 export PREFILL_TRACE_DIR=$OUT_DIR/longbook_full
-export PREFILL_STANDALONE_PCC=1
-python3 models/demos/deepseek_v3_d_p/tt/runners/prefill_runner.py
+# KV PCC runs via the producer read-back: PREFILL_MOCK_MIGRATION=1 runner + PREFILL_PRODUCER_CHECK_PCC=1
+# producer (see common/prefill/docs/PREFILL_MIGRATION_TESTING.md Gate 1).
 ```
 
 ## Notes

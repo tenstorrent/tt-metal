@@ -6,7 +6,7 @@ every model:
 
 - rank topology and the per-rank contiguous layer split (pipeline parallel),
 - the H2D input socket (rank 0) and the D2D inter-rank activation sockets,
-- the request (unbounded, production) and standalone (bounded, bring-up) loops,
+- the request (unbounded, production) serving loop,
 - fabric-link lease/reclaim per chunk, per-layer LayerAck, and graceful shutdown
   (the producer/scheduler closes the request stream with an all -1 PrefillMetadata
   sentinel; each rank forwards it downstream and exits — SIGKILL is the hard fallback),
@@ -208,29 +208,28 @@ KV-migration validation; see `_apply_manifest_env`.)
 
 ## 4. Validate
 
-**Standalone + KV PCC** — single galaxy, golden-trace input, no external producer:
-
-```bash
-PREFILL_MODEL=my_model PREFILL_STANDALONE=1 PREFILL_STANDALONE_PCC=1 \
-  python -m models.demos.common.prefill.runners.prefill_runner
-```
-
-**Request mode + producer** — production path (request mode is the default). The
-runner builds the H2D service and exports its descriptor; the producer connects to it
-by `PREFILL_H2D_SERVICE_ID` and pushes token chunks. Run two terminals; the shared
-env (`PREFILL_MODEL`, `PREFILL_SP/TP`, `PREFILL_CHUNK_SIZE`, `PREFILL_NUM_USERS`,
-`PREFILL_H2D_SERVICE_ID`) must match so the byte layout agrees:
+**Request mode + producer** — request mode is the only serving path. The runner builds the H2D service
+and exports its descriptor; the producer (prefill_producer.py / the scheduler) connects by
+`PREFILL_H2D_SERVICE_ID` and pushes token chunks. The shared env (`PREFILL_MODEL`, `PREFILL_SP/TP`,
+`PREFILL_CHUNK_SIZE`, `PREFILL_NUM_USERS`, `PREFILL_MAX_SEQ_LEN`, `PREFILL_H2D_SERVICE_ID`) must match on
+both so the byte layout agrees, and `PREFILL_MAX_SEQ_LEN` must be ≥ `chunks * PREFILL_CHUNK_SIZE` or the
+runner asserts when a chunk overruns the per-user cache.
 
 ```bash
 # terminal A — runner (creates the H2D service, exports the descriptor, serves):
-PREFILL_MODEL=my_model PREFILL_SP=8 PREFILL_TP=4 PREFILL_H2D_SERVICE_ID=my_prefill \
+PREFILL_MODEL=my_model PREFILL_SP=8 PREFILL_TP=4 PREFILL_MAX_SEQ_LEN=56320 PREFILL_H2D_SERVICE_ID=my_prefill \
   python -m models.demos.common.prefill.runners.prefill_runner
 
-# terminal B — producer (pushes PREFILL_STANDALONE_NCHUNKS chunks from the golden trace):
+# terminal B — producer (pushes 11 chunks from the golden trace):
 PREFILL_MODEL=my_model PREFILL_SP=8 PREFILL_TP=4 PREFILL_H2D_SERVICE_ID=my_prefill \
-PREFILL_STANDALONE_NCHUNKS=11 \
+PREFILL_PRODUCER_CHUNKS=11 \
   python -m models.demos.common.prefill.runners.prefill_producer
 ```
+
+**KV PCC** — validate prefill writes correct KV. The producer reads the KV back device-lessly and PCCs
+vs the golden trace, which requires the runner to publish its KV chunk table + device map: run the runner
+with `PREFILL_MOCK_MIGRATION=1` and the producer with `PREFILL_PRODUCER_CHECK_PCC=1`. Full two-terminal
+recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. (This replaces the removed standalone PCC path.)
 
 **Single-rank migration** — `PREFILL_ENABLE_MIGRATION=1` on the runner (requires the
 migration endpoint up; see `deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).
@@ -244,4 +243,4 @@ migration endpoint up; see `deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).
 - [ ] No reference-modeling / heavy imports at module load (lazy inside methods).
 - [ ] Registered in `ADAPTER_PATHS` (`models/demos/common/prefill/adapter.py`).
 - [ ] Weight cache populated; golden trace staged.
-- [ ] Standalone PCC run passes; request + (if applicable) migration paths exercised.
+- [ ] Request-mode producer PCC run passes (`PREFILL_PRODUCER_CHECK_PCC=1`); request + (if applicable) migration paths exercised.
