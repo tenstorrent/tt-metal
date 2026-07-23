@@ -683,8 +683,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         brisc_e_t_cb_id,
         program,
         tilize_core_range_set,
-        // ceil: BRISC writes ceil(tokens/2) entries/expert; also avoids a 0-size CB (0%0 SIGFPE) at tokens=1 (tt-metal#50669)
-        tt::div_up(tokens, 2) * l1_alignment * experts_per_device,
+        tt::div_up(tokens, 2) * l1_alignment * experts_per_device,  // full buffer, ceil(tokens/2) 16B entries/expert
         1,
         tt::DataFormat::UInt32);
 
@@ -706,8 +705,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         brisc_expert_activation_cb_id,
         program,
         tilize_core_range_set,
-        // ceil: BRISC writes ceil(tokens/2) activated rows; also avoids a 0-size CB (0%0 SIGFPE) at tokens=1 (tt-metal#50669)
-        brisc_activation_row_size * tt::div_up(tokens, 2),
+        brisc_activation_row_size * tt::div_up(tokens, 2),  // full buffer in one page
         1,
         tt::DataFormat::UInt32);
 
