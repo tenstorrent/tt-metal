@@ -89,6 +89,36 @@ def build(device, torch_module):
             return t
         return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
+    def _wln(x, eps):
+        # grid/shard knob: this norm_out LN runs on a tiny default grid (single
+        # ragged tile-row). Spread it over a width-sharded row of cores with a
+        # tile-PADDED manual L1 spec (create_sharded_memory_config fails alignment
+        # on the ragged logical row). Same lever proven on the transformer block.
+        B, L, Cx = (int(d) for d in x.shape)
+        Mt = (B * L + 31) // 32
+        Nt = Cx // 32
+        gx = 8
+        while gx > 1 and Nt % gx != 0:
+            gx -= 1
+        shard_shape = [Mt * 32, (Nt // gx) * 32]
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, 0))})
+        spec = ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, spec)
+        xs = ttnn.to_memory_config(x, mem)
+        bw = Nt // gx
+        sw = min(bw, 3)  # fp32 mode requires subblock_w < 4 tiles
+        while sw > 1 and bw % sw != 0:
+            sw -= 1
+        pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(gx, 1),
+            subblock_w=sw,
+            block_h=Mt,
+            block_w=bw,
+            inplace=False,
+        )
+        y = ttnn.layer_norm(xs, epsilon=eps, program_config=pc, compute_kernel_config=compute_config)
+        return ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+
     def forward(x, conditioning_embedding=None, *args, **kwargs):
         if conditioning_embedding is None:
             if args:
@@ -114,9 +144,12 @@ def build(device, torch_module):
         scale = ttnn.reshape(scale, (b_dim, 1, embedding_dim))
         shift = ttnn.reshape(shift, (b_dim, 1, embedding_dim))
 
-        norm = ttnn.layer_norm(
-            x, epsilon=eps, weight=ttnn_norm_w, bias=ttnn_norm_b, compute_kernel_config=compute_config
-        )
+        if ttnn_norm_w is None and ttnn_norm_b is None:
+            norm = _wln(x, eps)  # non-affine: width-sharded (shard knob)
+        else:
+            norm = ttnn.layer_norm(
+                x, epsilon=eps, weight=ttnn_norm_w, bias=ttnn_norm_b, compute_kernel_config=compute_config
+            )
 
         # norm*(1+scale)+shift fused into one ternary launch (was add(mul(norm,·),shift)).
         out = ttnn.addcmul(shift, norm, ttnn.add(scale, 1.0))
