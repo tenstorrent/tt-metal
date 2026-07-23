@@ -21,7 +21,7 @@ using namespace ckernel::math;
 static constexpr char _llk_math_face_compressed_mm_code_sequence_[] = "niNinINIncNcnCNC";
 static_assert(
     sizeof(_llk_math_face_compressed_mm_code_sequence_) - 1 <= 16, "Code sequence length must not be greater than 16");
-static constexpr char _llk_math_face_compressed_mm_code_sequence_1_[] = "nrNrnRnRNrNRNRn";
+static constexpr char _llk_math_face_compressed_mm_code_sequence_1_[] = "ICNrnRnRNrNRNRnr";
 static_assert(
     sizeof(_llk_math_face_compressed_mm_code_sequence_1_) - 1 <= 16,
     "CT==1 code sequence length must not be greater than 16");
@@ -160,6 +160,8 @@ inline constexpr std::array<std::uint32_t, 64> _llk_math_face_compressed_mm_buil
         const std::uint32_t faces012 = (m >> 2) & 0b111;
         if (faces012 == 0b000) {
             table[m] = TT_OP_MOP(p_mop::MASK_LOOP, 0, 0);  // "nrn" encoded in the mop
+        } else if (faces012 == 0b100) {
+            table[m] = TT_OP_MOP(p_mop::MASK_LOOP, 0, 1);  // "nrN" encoded in the mop
         } else {
             table[m] = find(encode("nrn", faces012).data());  // always midRev
         }
@@ -169,11 +171,12 @@ inline constexpr std::array<std::uint32_t, 64> _llk_math_face_compressed_mm_buil
 
 inline constexpr std::array<std::uint32_t, 64> _llk_math_face_compressed_mm_build_one_l2_() {
     auto entry = [](std::uint32_t hdr, std::uint32_t face3) -> std::uint32_t {
+        constexpr auto find = [](const char* s) constexpr { return _llk_math_face_compressed_mm_find_one_(s); };
         switch (hdr | (face3 << 2)) {
             case 0b000: return TT_OP_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_1, 0xff);      // endInc zero face3 (i)
             case 0b001: return TT_OP_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);  // endClr zero face3 (c)
-            case 0b100: return TT_OP_MVMUL(p_setrwc::CLR_A, 1, ADDR_MOD_1, 0);                // endInc data face3 (I)
-            case 0b101: return TT_OP_MVMUL(p_setrwc::CLR_AB, 1, ADDR_MOD_2, 0);               // endClr data face3 (C)
+            case 0b100: return find("I");                                                     // endInc data face3 (I)
+            case 0b101: return find("C");                                                     // endClr data face3 (C)
             case 0b010: return TT_OP_NOP;                                                     // invalid
             case 0b011: return TT_OP_NOP;                                                     // invalid
             case 0b110: return TT_OP_NOP;                                                     // invalid
@@ -221,8 +224,7 @@ static_assert(
     _llk_math_face_compressed_mm_all_found_(_llk_math_face_compressed_mm_one_l2_table_),
     "face_compressed_mm (math): a CT==1 L2 fragment is not a substring of the code sequence");
 
-template <std::uint32_t ct_dim>
-inline void _llk_math_face_compressed_mm_addrmod_config_() {
+inline void _llk_math_face_compressed_mm_addrmod_config_(const std::uint32_t face_r_dim) {
     addr_mod_t{
         .srca = {.incr = 0, .clr = 0, .cr = 0},
         .srcb = {.incr = 0, .clr = 0, .cr = 0},
@@ -232,24 +234,42 @@ inline void _llk_math_face_compressed_mm_addrmod_config_() {
 
     addr_mod_t{
         .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 1, .clr = 0, .cr = 0},
-        .dest = {.incr = 0, .clr = 1, .cr = 0},
-    }
-        .set(ADDR_MOD_1);  // incB
-
-    addr_mod_t{
-        .srca = {.incr = 0, .clr = 0, .cr = 0},
         .srcb = {.incr = 0, .clr = 1, .cr = 0},
         .dest = {.incr = 0, .clr = 1, .cr = 0},
     }
         .set(ADDR_MOD_2);  // clrB
 
-    addr_mod_t{
-        .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 1, .clr = 0, .cr = 0},
-        .dest = {.incr = (1024 - 8), .clr = 0, .cr = 0},
+    if (face_r_dim == 1) {
+        addr_mod_t{
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 1, .clr = 0, .cr = 0},
+            .dest = {.incr = 0, .clr = 1, .cr = 0},
+        }
+            .set(ADDR_MOD_1);  // incB
+
+        addr_mod_t{
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 1, .clr = 0, .cr = 0},
+            .dest = {.incr = (1024 - 8), .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_3);  // revB
+    } else if (face_r_dim == 8) {
+        addr_mod_t{
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = 0, .clr = 1, .cr = 0},
+        }
+            .set(ADDR_MOD_1);  // incB
+
+        addr_mod_t{
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = (1024 - 8), .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_3);  // revB
+    } else {
+        LLK_ASSERT(false, "face_compressed_mm (math): unsupported face_r_dim");
     }
-        .set(ADDR_MOD_3);  // revB
 
     addr_mod_t{
         .srca = {.incr = 0, .clr = 0, .cr = 0},
@@ -260,23 +280,23 @@ inline void _llk_math_face_compressed_mm_addrmod_config_() {
 }
 
 template <std::uint32_t ct_dim>
-inline void _llk_math_face_compressed_mm_mop_config_() {
+inline void _llk_math_face_compressed_mm_mop_config_(const std::uint32_t face_r_dim) {
     constexpr std::size_t code_len_multi = sizeof(_llk_math_face_compressed_mm_code_sequence_) - 1;
     constexpr std::size_t code_len_one = sizeof(_llk_math_face_compressed_mm_code_sequence_1_) - 1;
     constexpr std::size_t code_len = (ct_dim == 1) ? code_len_one : code_len_multi;
     constexpr const char* code_sequence =
         (ct_dim == 1) ? _llk_math_face_compressed_mm_code_sequence_1_ : _llk_math_face_compressed_mm_code_sequence_;
 
-    auto instr_for_code = [](char code) {
+    auto instr_for_code = [face_r_dim](char code) {
         switch (code) {
             case 'n': TTI_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_0, 0xff); break;
-            case 'N': TTI_MVMUL(p_setrwc::CLR_A, 1, ADDR_MOD_0, 0); break;
+            case 'N': TT_MVMUL(p_setrwc::CLR_A, face_r_dim == 1, ADDR_MOD_0, 0); break;
             case 'i': TTI_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_1, 0xff); break;
-            case 'I': TTI_MVMUL(p_setrwc::CLR_A, 1, ADDR_MOD_1, 0); break;
+            case 'I': TT_MVMUL(p_setrwc::CLR_A, face_r_dim == 1, ADDR_MOD_1, 0); break;
             case 'c': TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD); break;
-            case 'C': TTI_MVMUL(p_setrwc::CLR_AB, 1, ADDR_MOD_2, 0); break;
+            case 'C': TT_MVMUL(p_setrwc::CLR_AB, face_r_dim == 1, ADDR_MOD_2, 0); break;
             case 'r': TTI_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_3, 0xff); break;
-            case 'R': TTI_MVMUL(p_setrwc::CLR_A, 1, ADDR_MOD_3, 0); break;
+            case 'R': TT_MVMUL(p_setrwc::CLR_A, face_r_dim == 1, ADDR_MOD_3, 0); break;
             default: LLK_ASSERT(false, "Invalid code for math instruction"); break;
         }
     };
@@ -293,9 +313,17 @@ inline void _llk_math_face_compressed_mm_mop_config_() {
     });
 
     constexpr std::uint32_t op0m = _llk_math_face_compressed_mm_find_("n");
-    constexpr std::uint32_t op1m = _llk_math_face_compressed_mm_find_("N");
+    constexpr std::uint32_t op0M = _llk_math_face_compressed_mm_find_("N");
     constexpr std::uint32_t op0s = _llk_math_face_compressed_mm_find_one_("nr");
     constexpr std::uint32_t op1s = _llk_math_face_compressed_mm_find_one_("n");
+    constexpr std::uint32_t op0S = _llk_math_face_compressed_mm_find_one_("nr");
+    constexpr std::uint32_t op1S = _llk_math_face_compressed_mm_find_one_("N");
+
+    // Every MOP operand must resolve to a real replay instruction; a 0 means its fragment
+    // is not a substring of the code sequence (otherwise silent until it breaks at runtime).
+    static_assert(
+        op0m != 0 && op0M != 0 && op0s != 0 && op1s != 0 && op0S != 0 && op1S != 0,
+        "face_compressed_mm (math): a MOP operand fragment is not a substring of the code sequence");
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
         ct_dim == 1,                // unpackB    = only for CT==1
@@ -304,17 +332,17 @@ inline void _llk_math_face_compressed_mm_mop_config_() {
         TT_OP_NOP,                  // A1    (unused)
         TT_OP_NOP,                  // A2    (unused)
         TT_OP_NOP,                  // A3    (unused)
-        op1m,                       // skipA (only for CT>1)
+        ct_dim == 1 ? op0S : op0M,  // skipA
         op1s,                       // B     (only for CT==1)
-        TT_OP_NOP                   // skipB (unused)
+        op1S                        // skipB (only for CT==1)
     );
     tmp.program();
 }
 
 template <std::uint32_t ct_dim = 1>
-inline void _llk_math_face_compressed_mm_init_() {
-    _llk_math_face_compressed_mm_addrmod_config_<ct_dim>();
-    _llk_math_face_compressed_mm_mop_config_<ct_dim>();
+inline void _llk_math_face_compressed_mm_init_(const std::uint32_t face_r_dim) {
+    _llk_math_face_compressed_mm_addrmod_config_(face_r_dim);
+    _llk_math_face_compressed_mm_mop_config_<ct_dim>(face_r_dim);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
@@ -333,7 +361,10 @@ inline constexpr std::array<const std::uint32_t*, 2> _llk_math_face_compressed_m
 
 template <std::uint32_t ct_dim = 1, bool finalize = true>
 inline void _llk_math_face_compressed_mm_(
-    const std::uint32_t base_address_meta, const std::uint32_t dst_index, const std::uint32_t kt_dim) {
+    const std::uint32_t base_address_meta,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t dst_index,
+    const std::uint32_t kt_dim) {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     const std::uint32_t iters = kt_dim * ct_dim;
@@ -390,6 +421,10 @@ inline void _llk_math_face_compressed_mm_(
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2a::MOV_4_ROWS, 8);
         TTI_MOVD2B(0, 8, ADDR_MOD_2, p_movd2a::MOV_4_ROWS, 8);
+        if (face_r_dim == 8) {
+            TTI_MOVD2B(0, 4, ADDR_MOD_0, p_movd2a::MOV_4_ROWS, 12);
+            TTI_MOVD2B(0, 12, ADDR_MOD_2, p_movd2a::MOV_4_ROWS, 12);
+        }
         TTI_ELWADD(0, 1, p_elwise::SRCB_NO_BCAST, ADDR_MOD_4, 0);
         TTI_ELWADD(p_setrwc::CLR_AB, 1, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 16);
     }
