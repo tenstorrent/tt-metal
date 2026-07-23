@@ -17,8 +17,7 @@ from models.experimental.kimi_delta_attention.reference import validate_referenc
 
 @dataclass(frozen=True)
 class KDAWeights:
-    qkv_projection: ttnn.Tensor
-    auxiliary_projection: ttnn.Tensor
+    input_projection: ttnn.Tensor
     decay_output_projection: ttnn.Tensor
     output_gate_projection: ttnn.Tensor
     output_gate_projection_batched: ttnn.Tensor
@@ -85,12 +84,10 @@ def load_kda_weights(
             grouped.append(torch.cat(device_weights, dim=0))
         return torch.cat(grouped, dim=0)
 
-    qkv = group_output_shards(
+    input_projection = group_output_shards(
         state_dict["q_proj.weight"],
         state_dict["k_proj.weight"],
         state_dict["v_proj.weight"],
-    ).T
-    auxiliary = group_output_shards(
         state_dict["f_a_proj.weight"].repeat(tensor_parallel_size, 1),
         state_dict["g_a_proj.weight"].repeat(tensor_parallel_size, 1),
         state_dict["b_proj.weight"],
@@ -126,8 +123,7 @@ def load_kda_weights(
     )
 
     return KDAWeights(
-        qkv_projection=device_tensor(qkv, "qkv_projection", shard_dim=-1),
-        auxiliary_projection=device_tensor(auxiliary, "auxiliary_projection", shard_dim=-1),
+        input_projection=device_tensor(input_projection, "input_projection", shard_dim=-1),
         decay_output_projection=device_tensor(
             state_dict["f_b_proj.weight"].T,
             "decay_output_projection",

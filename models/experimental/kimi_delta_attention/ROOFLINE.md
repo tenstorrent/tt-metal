@@ -196,3 +196,14 @@ The mesh sustains 66.50 TFLOP/s or 5.47% of eight-chip peak by device span;
 host-observed throughput is 64.06 TFLOP/s or 5.27%. Prep, scan, and fused
 output slowest-device medians remain 84.659, 96.535, and 148.238 us. Effective
 CCL utilization remains 34.8%.
+
+## Fused input-projection result
+
+Profile: `/tmp/kda_tp_layer_t640_fused_input_r10/reports/2026_07_23_11_13_49/ops_perf_results_2026_07_23_11_13_49.csv`.
+Grouping each device Q/K/V, replicated low-rank, and local beta columns into one
+projection reduced matmul active time by 51.3 us while adding 12.6 us slices.
+Median device latency falls 0.890 -> 0.874 ms (1.8%), host latency is
+0.913 ms/layer, and active kernels are 0.806-0.807 ms/device.
+
+Mesh throughput is 67.71 TFLOP/s or 5.57% of eight-chip peak by device span;
+host-observed throughput is 64.86 TFLOP/s or 5.33%.

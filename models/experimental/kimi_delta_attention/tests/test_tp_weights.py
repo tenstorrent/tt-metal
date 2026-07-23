@@ -42,8 +42,7 @@ def test_tp_weight_layout(mesh_device: ttnn.MeshDevice) -> None:
     weights = load_kda_weights(mesh_device, config, state_dict)
 
     assert weights.tensor_parallel_size == 8
-    qkv_shards = _host_shards(weights.qkv_projection)
-    auxiliary_shards = _host_shards(weights.auxiliary_projection)
+    input_shards = _host_shards(weights.input_projection)
     output_shards = _host_shards(weights.output_projection)
     tap_shards = _host_shards(weights.convolution_taps[0])
 
@@ -75,10 +74,8 @@ def test_tp_weight_layout(mesh_device: ttnn.MeshDevice) -> None:
             )
         ).reshape(1, 1, -1)
 
-        torch.testing.assert_close(qkv_shards[device_index], expected_qkv.to(torch.bfloat16), rtol=0, atol=0)
-        torch.testing.assert_close(
-            auxiliary_shards[device_index], expected_auxiliary.to(torch.bfloat16), rtol=0, atol=0
-        )
+        expected_input = torch.cat((expected_qkv, expected_auxiliary), dim=-1)
+        torch.testing.assert_close(input_shards[device_index], expected_input.to(torch.bfloat16), rtol=0, atol=0)
         torch.testing.assert_close(output_shards[device_index], expected_output.to(torch.bfloat16), rtol=0, atol=0)
         torch.testing.assert_close(tap_shards[device_index], expected_tap.to(torch.bfloat16), rtol=0, atol=0)
 
