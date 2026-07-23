@@ -124,3 +124,15 @@
 {"source":"run_safe_pytest","pid":452975,"started_at_ms":1784777103917,"wait_ms":2,"run_ms":139219,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
 {"source":"run_safe_pytest","pid":456370,"started_at_ms":1784777251964,"wait_ms":2,"run_ms":36535,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
 {"source":"run_safe_pytest","pid":458794,"started_at_ms":1784777432804,"wait_ms":3,"run_ms":484759,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"event": "phase", "phase": "refinement_4a", "state": "end", "at_ms": 1784778072216}
+{"event": "phase", "phase": "refinement_4a_golden", "state": "start", "at_ms": 1784778072596}
+{"source":"eval_test_runner","pid":470944,"started_at_ms":1784778072600,"wait_ms":3436,"run_ms":687076,"test_path":"eval/golden_tests/rms_norm/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"event": "phase", "phase": "refinement_4a_golden", "state": "end", "at_ms": 1784778763116}
+{"source":"run_safe_pytest","pid":499140,"started_at_ms":1784778769778,"wait_ms":2,"run_ms":28745,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"event": "phase", "phase": "refinement_4b", "state": "start", "at_ms": 1784778799024}
+{"source":"tt-probe","pid":504254,"started_at_ms":1784779880660,"wait_ms":221,"run_ms":46514,"test_path":"rms_norm","exit_code":1}
+{"source":"tt-probe","pid":504583,"started_at_ms":1784779949945,"wait_ms":190,"run_ms":47715,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":505280,"started_at_ms":1784780124766,"wait_ms":219,"run_ms":47746,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":508171,"started_at_ms":1784780983138,"wait_ms":204,"run_ms":49013,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":508650,"started_at_ms":1784781052746,"wait_ms":194,"run_ms":52410,"test_path":"rms_norm","exit_code":1}
+{"source":"tt-probe","pid":511015,"started_at_ms":1784781734096,"wait_ms":207,"run_ms":64574,"test_path":"rms_norm","exit_code":0}

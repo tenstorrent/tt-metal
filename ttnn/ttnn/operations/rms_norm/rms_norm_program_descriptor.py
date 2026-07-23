@@ -50,6 +50,10 @@ RESIDENT_X_DEPTH = 2
 L1_RESIDENT_BUDGET = 1_100_000
 
 
+def _ceildiv(a: int, b: int) -> int:
+    return -(-a // b)
+
+
 def _pick_block_size(Wt: int) -> int:
     """Largest divisor of Wt that is <= 8 (the double_buffer sweet spot; not 1).
 
@@ -446,10 +450,9 @@ def _create_sharded_xcore_descriptor(
     ml = mem.memory_layout
     ss = mem.shard_spec
     sh, sw = int(ss.shape[0]), int(ss.shape[1])
-    per_h_t = sh // TILE_DIM  # tile-rows this core holds
-    per_w_t = sw // TILE_DIM  # W-tiles this core holds
     grid = ss.grid
     cores = ttnn.corerange_to_cores(grid, None, True)  # row-major shard order
+    is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
 
     def _v(core):
         vc = device.worker_core_from_logical_core(ttnn.CoreCoord(core.x, core.y))
@@ -457,28 +460,78 @@ def _create_sharded_xcore_descriptor(
 
     # ---- Per-core group assignment (single source of truth for the topology) ----
     # entry: (core, slice_index, master_core, is_partial_holder, w_tile_start, vwt)
-    Ht_local = per_h_t
     entries = []
-    if ml == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        # One group; every core owns a W-slice of the full-height rows.
-        K = len(cores)
-        master = cores[0]
-        for i, c in enumerate(cores):
-            w_tile_start = i * per_w_t
-            vwt = max(0, min(per_w_t, Wt - w_tile_start))
-            entries.append((c, i, master, i == len(cores) - 1, w_tile_start, vwt))
-    else:  # BLOCK_SHARDED — one group per grid row
-        bb = grid.bounding_box()
-        x0, y0 = int(bb.start.x), int(bb.start.y)
-        x1 = int(bb.end.x)
-        nx = x1 - x0 + 1
-        K = nx
-        for c in cores:
-            xrel = int(c.x) - x0
-            master = ttnn.CoreCoord(x0, int(c.y))
-            w_tile_start = xrel * per_w_t
-            vwt = max(0, min(per_w_t, Wt - w_tile_start))
-            entries.append((c, xrel, master, xrel == nx - 1, w_tile_start, vwt))
+    rm_percore = None  # RM-input only: {(x,y): (valid_cols, valid_rows_total, reduce_partial_w)}
+    if is_rm:
+        # Refinement 4b — RM-input sharded: the resident W-slice is `sw` elements wide,
+        # an arbitrary multiple of the RM granule (8/4 el), NOT a whole number of tiles.
+        # The slice starts at element column w_offset, which is generally sub-tile. We
+        # PHASE-ALIGN it to the global 32-tile grid: g0 = w_offset//32 is the first
+        # global tile, phase = w_offset%32 is the leading offset inside tile 0. The
+        # reader loopback-writes x into cb_x_sticks at column `phase` (leading [0,phase)
+        # columns stay 0 -> contribute 0 to the SUM reduce), and the gamma W-slice is
+        # read at the tile-ALIGNED column (g0+wt)*32 (so the DRAM read is aligned — a
+        # sub-tile column offset faults). valid_end = phase+valid_cols; the reduce spans
+        # ceil(valid_end/32) tiles with the partial scaler masking valid_end%32. Ht_local
+        # ceil's the (possibly H-non-aligned) shard height; valid_rows_total clamps to
+        # the true collapsed row count so H tensor-padding is never written back.
+        Ht_local = _ceildiv(sh, TILE_DIM)  # tile-rows (last may be H-partial)
+        NCH = NC * origin_H  # true collapsed row count
+        rm_percore = {}
+        per_w_t = 1  # uniform tilize width = max over cores of ceil((phase+sw)/32)
+
+        def _rm_core(c, slice_index, master, w_offset, valid_rows_total):
+            nonlocal per_w_t
+            g0 = w_offset // TILE_DIM
+            phase = w_offset % TILE_DIM
+            valid_cols = max(0, min(sw, origin_W - w_offset))
+            valid_end = phase + valid_cols
+            vwt_reduce = _ceildiv(valid_end, TILE_DIM)
+            rpw = valid_end % TILE_DIM
+            per_w_t = max(per_w_t, _ceildiv(phase + sw, TILE_DIM))
+            entries.append((c, slice_index, master, rpw != 0, g0, vwt_reduce))
+            rm_percore[(int(c.x), int(c.y))] = (valid_cols, valid_rows_total, rpw, phase)
+
+        if ml == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            K = len(cores)
+            master = cores[0]
+            for i, c in enumerate(cores):
+                _rm_core(c, i, master, i * sw, sh)  # WIDTH: full-height rows
+        else:  # BLOCK_SHARDED — one group per grid row (W split within a row)
+            bb = grid.bounding_box()
+            x0, y0 = int(bb.start.x), int(bb.start.y)
+            x1 = int(bb.end.x)
+            nx = x1 - x0 + 1
+            K = nx
+            for c in cores:
+                xrel = int(c.x) - x0
+                yrel = int(c.y) - y0
+                master = ttnn.CoreCoord(x0, int(c.y))
+                _rm_core(c, xrel, master, xrel * sw, max(0, min(sh, NCH - yrel * sh)))
+    else:
+        per_h_t = sh // TILE_DIM  # tile-rows this core holds
+        per_w_t = sw // TILE_DIM  # W-tiles this core holds
+        Ht_local = per_h_t
+        if ml == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            # One group; every core owns a W-slice of the full-height rows.
+            K = len(cores)
+            master = cores[0]
+            for i, c in enumerate(cores):
+                w_tile_start = i * per_w_t
+                vwt = max(0, min(per_w_t, Wt - w_tile_start))
+                entries.append((c, i, master, i == len(cores) - 1, w_tile_start, vwt))
+        else:  # BLOCK_SHARDED — one group per grid row
+            bb = grid.bounding_box()
+            x0, y0 = int(bb.start.x), int(bb.start.y)
+            x1 = int(bb.end.x)
+            nx = x1 - x0 + 1
+            K = nx
+            for c in cores:
+                xrel = int(c.x) - x0
+                master = ttnn.CoreCoord(x0, int(c.y))
+                w_tile_start = xrel * per_w_t
+                vwt = max(0, min(per_w_t, Wt - w_tile_start))
+                entries.append((c, xrel, master, xrel == nx - 1, w_tile_start, vwt))
 
     # workers per master (for the master's broadcast list), keyed by (mx, my)
     workers_of = {}
@@ -506,7 +559,8 @@ def _create_sharded_xcore_descriptor(
         tile_gamma = tile_in
         gamma_elem = 0
 
-    # Sharded: x/out consumed/produced locally via zero-copy sharded CBs.
+    # Sharded: x/out consumed/produced locally via zero-copy sharded CBs. RM input
+    # (Refinement 4b) tilizes/untilizes the resident RM shard around the same combine.
     return _assemble_xcore_kernels(
         input_tensor,
         output_tensor,
@@ -535,6 +589,8 @@ def _create_sharded_xcore_descriptor(
         compute_kernel_config=compute_kernel_config,
         x_zero_copy=True,
         out_to_dram=False,
+        is_rm=is_rm,
+        rm_percore=rm_percore,
     )
 
 
@@ -698,6 +754,8 @@ def _assemble_xcore_kernels(
     compute_kernel_config,
     x_zero_copy,
     out_to_dram,
+    is_rm=False,
+    rm_percore=None,
 ):
     def _v(core):
         vc = device.worker_core_from_logical_core(ttnn.CoreCoord(core.x, core.y))
@@ -709,7 +767,12 @@ def _assemble_xcore_kernels(
     tile_fp32 = ttnn.tile_size(ttnn.float32)
     in_page = input_tensor.buffer_aligned_page_size()
     out_page = output_tensor.buffer_aligned_page_size()
+    # RM-input (Refinement 4b): element bytes drive the loopback repack byte math; the
+    # resident RM shard stick stride is the buffer's aligned page size. Not used on the
+    # tiled path (bf8b is TILE-only, so _elem_size never raises here).
+    in_elem = _elem_size(input_tensor) if is_rm else 0
 
+    CB_X_STICKS = 0
     CB_X_IN = 1
     CB_SCALER = 2
     CB_GAMMA = 3
@@ -717,7 +780,10 @@ def _assemble_xcore_kernels(
     CB_GATHER = 5
     CB_STAT_HANDOFF = 6
     CB_STAT_GLOBAL = 7
+    CB_SHARD_IN = 8
+    CB_SHARD_OUT = 9
     CB_OUT = 16
+    CB_OUT_STICKS = 17
     CB_XSQ = 24
     CB_STAT_LOCAL = 25
     CB_NORM = 26
@@ -734,20 +800,34 @@ def _assemble_xcore_kernels(
             )
         )
 
-    if x_zero_copy:
-        # zero-copy sharded input W-slice (consumed locally, no NoC read)
-        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X_IN, input_tensor))
-    else:
-        # logical split: reader reads this core's W/K slice from DRAM into cb_x_in.
-        add_cb(CB_X_IN, tile_in, shard_tiles, in_dtype)
-    if not out_to_dram:
-        # zero-copy sharded output W-slice (compute's pack finalizes it in place)
-        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor))
-    else:
-        # logical split: compute streams per-tile-row output; writer drains to DRAM.
+    if is_rm:
+        # RM-input sharded (Refinement 4b): the resident W-slice is row-major sticks.
+        # cb_shard_in/out zero-copy alias the resident shards (reader/writer loopback
+        # endpoints, no NoC re-fetch of remote data). cb_x_sticks / cb_out_sticks are
+        # tile-padded stick staging; cb_x_in / cb_out are the (allocated) tile CBs the
+        # compute tilize/untilize produce/consume — per_w_t = ceil(sw/32) padded tiles.
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_SHARD_IN, input_tensor))
+        add_cb(CB_X_STICKS, tile_in, 2 * per_w_t, in_dtype)
+        add_cb(CB_X_IN, tile_in, 2 * per_w_t, in_dtype)
         add_cb(CB_OUT, tile_out, 2 * per_w_t, out_dtype)
+        add_cb(CB_OUT_STICKS, tile_out, 2 * per_w_t, out_dtype)
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_SHARD_OUT, output_tensor))
+    else:
+        if x_zero_copy:
+            # zero-copy sharded input W-slice (consumed locally, no NoC read)
+            cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X_IN, input_tensor))
+        else:
+            # logical split: reader reads this core's W/K slice from DRAM into cb_x_in.
+            add_cb(CB_X_IN, tile_in, shard_tiles, in_dtype)
+        if not out_to_dram:
+            # zero-copy sharded output W-slice (compute's pack finalizes it in place)
+            cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor))
+        else:
+            # logical split: compute streams per-tile-row output; writer drains to DRAM.
+            add_cb(CB_OUT, tile_out, 2 * per_w_t, out_dtype)
 
-    add_cb(CB_SCALER, tile_bf16, 2 if has_partial_w else 1, ttnn.bfloat16)
+    # RM always emits full(tile0)+partial-or-full(tile1); tiled path is 2 iff has_partial_w.
+    add_cb(CB_SCALER, tile_bf16, 2 if (has_partial_w or is_rm) else 1, ttnn.bfloat16)
     # pass-1 squares the whole vwt-tile block before the single block-reduce, so
     # cb_xsq must hold a full W-slice block (2*per_w_t double-buffers it).
     add_cb(CB_XSQ, tile_in, 2 * per_w_t, in_dtype)
@@ -780,8 +860,11 @@ def _assemble_xcore_kernels(
         Ht_local,
         per_w_t,
         in_page,
+        1 if is_rm else 0,  # IS_RM
+        in_elem,  # ELEM (RM loopback byte math)
+        in_page,  # SHARD_STICK_BYTES (resident RM input shard stick stride)
     ]
-    # gamma accessor at idx 13; input accessor chained after it (logical path only).
+    # gamma accessor at idx 16; input accessor chained after it (logical path only).
     reader_ct.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
         if has_gamma
@@ -796,7 +879,8 @@ def _assemble_xcore_kernels(
     gamma_addr = gamma.buffer_address() if has_gamma else 0
     in_addr = input_tensor.buffer_address() if not x_zero_copy else 0
     for c, _si, _m, _iph, w_tile_start, vwt in entries:
-        reader_rt[c.x][c.y] = [gamma_addr, w_tile_start, vwt, in_addr]
+        vc, vrt, rpw, phase = rm_percore[(int(c.x), int(c.y))] if is_rm else (0, 0, 0, 0)
+        reader_rt[c.x][c.y] = [gamma_addr, w_tile_start, vwt, in_addr, vc, vrt, rpw, phase]
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_xcore_reader.cpp"),
         core_ranges=all_cores,
@@ -817,6 +901,9 @@ def _assemble_xcore_kernels(
         Wt,
         per_w_t,
         out_page,
+        1 if is_rm else 0,  # IS_RM
+        in_elem,  # ELEM (RM loopback byte math)
+        out_page,  # SHARD_STICK_BYTES (resident RM output shard stick stride)
     ]
     writer_ct.extend(
         ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
@@ -828,7 +915,9 @@ def _assemble_xcore_kernels(
     for c, slice_index, master, _iph, w_tile_start, vwt in entries:
         mvx, mvy = _v(master)
         is_master = 1 if slice_index == 0 else 0
-        row = [out_addr, w_tile_start, vwt, is_master, slice_index, mvx, mvy]
+        vc, vrt, _rpw, phase = rm_percore[(int(c.x), int(c.y))] if is_rm else (0, 0, 0, 0)
+        # fixed fields 0-9; num_workers at 10; worker coords from 11 (WORKER_COORDS_BASE).
+        row = [out_addr, w_tile_start, vwt, is_master, slice_index, mvx, mvy, vc, vrt, phase]
         if is_master:
             wl = workers_of.get((int(master.x), int(master.y)), [])
             row.append(len(wl))
@@ -856,6 +945,7 @@ def _assemble_xcore_kernels(
         eps_bits,
         1 if gamma_is_rm else 0,
         1 if x_zero_copy else 0,  # X_ZERO_COPY (self-arm cb_x_in)
+        1 if is_rm else 0,  # IS_RM (tilize resident RM shard, untilize output)
     ]
     compute_rt = ttnn.RuntimeArgs()
     for c, slice_index, _m, is_partial_holder, _wts, vwt in entries:

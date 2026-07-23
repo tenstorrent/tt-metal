@@ -133,18 +133,12 @@ EXCLUSIONS = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
     # Refinement 4a lands RM-gamma on the cross-core path (reader reads the gamma
     # W-slice as row-major sticks, compute tilizes them into cb_gamma before the
-    # pass-2 ·gamma) — the two {gamma_layout: ROW_MAJOR, memory_layout: *_SHARDED}
-    # exclusions are removed.
-    #
-    # RM-INPUT + sharded stays refused (Refinement 4b): the RM WIDTH/BLOCK auto-shard
-    # granule is 8 elements (bf16) / 4 (fp32), so a core's resident W-slice is
-    # sub-tile-wide (e.g. 8 or 16 of 32 columns) for the small/medium golden shapes.
-    # The tile-based cross-core reduce needs whole W-tiles per core; a sub-tile slice
-    # is a distinct per-core-partial-tile sub-scheme (every core a partial-holder with
-    # its own valid-column count), not the RM-gamma tilize knob-turn. See changelog /
-    # Refinement 4b for the exact next lever.
-    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED},
-    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED},
+    # pass-2 ·gamma). Refinement 4b lands RM-INPUT + WIDTH/BLOCK sharded: the reader
+    # loopback-repacks the resident RM shard's arbitrary-width sticks into ceil(sw/32)
+    # padded tiles, EVERY core zeros its last tile's sub-tile lanes via a per-core
+    # partial scaler, the shared cross-core combine sums the (associative) partials,
+    # and the writer untilizes back to the resident RM shard. Both sets of
+    # {gamma_layout/layout: ROW_MAJOR, memory_layout: *_SHARDED} exclusions are removed.
 ]
 
 

@@ -33,10 +33,12 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
 namespace {
+constexpr uint32_t cb_x_sticks = 0;  // RM input: tile-padded sticks (loopback repack) -> compute tilize
 constexpr uint32_t cb_x_in = 1;
 constexpr uint32_t cb_scaler = 2;
 constexpr uint32_t cb_gamma = 3;
 constexpr uint32_t cb_gamma_sticks = 4;
+constexpr uint32_t cb_shard_in = 8;  // RM input: zero-copy alias of the resident RM W-slice (stick pages)
 constexpr uint32_t TILE_DIM = 32;
 }  // namespace
 
@@ -54,23 +56,105 @@ void kernel_main() {
     constexpr uint32_t HT_LOCAL = get_compile_time_arg_val(10);  // tile-rows this core handles
     constexpr uint32_t PER_W_T = get_compile_time_arg_val(11);   // cb_x_in W-tiles per tile-row
     constexpr uint32_t in_page = get_compile_time_arg_val(12);
+    // IS_RM (Refinement 4b): the resident W-slice is ROW-MAJOR (arbitrary sub-tile
+    // width). This reader loopback-repacks the shard sticks into tile-padded cb_x_sticks
+    // and reads the gamma W-slice at an ELEMENT column offset (not a tile boundary).
+    constexpr bool IS_RM = get_compile_time_arg_val(13) != 0;
+    constexpr uint32_t ELEM = get_compile_time_arg_val(14);               // element bytes (RM loopback math)
+    constexpr uint32_t SHARD_STICK_BYTES = get_compile_time_arg_val(15);  // resident RM shard stick stride
 
-    constexpr auto gamma_args = TensorAccessorArgs<13>();
+    constexpr auto gamma_args = TensorAccessorArgs<16>();
     constexpr auto in_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
     const uint32_t gamma_addr = get_arg_val<uint32_t>(0);
-    const uint32_t w_tile_start = get_arg_val<uint32_t>(1);
-    const uint32_t vwt = get_arg_val<uint32_t>(2);
+    const uint32_t w_tile_start = get_arg_val<uint32_t>(1);  // IS_RM: g0 = first global tile (w_offset//32)
+    const uint32_t vwt = get_arg_val<uint32_t>(2);           // IS_RM: reduce tile count (ceil(valid_end/32))
     const uint32_t in_addr = get_arg_val<uint32_t>(3);
+    const uint32_t valid_cols = get_arg_val<uint32_t>(4);        // IS_RM: valid columns in this core's slice
+    const uint32_t valid_rows_total = get_arg_val<uint32_t>(5);  // IS_RM: valid rows in this core's shard
+    const uint32_t reduce_partial_w = get_arg_val<uint32_t>(6);  // IS_RM: valid_end % 32 (0 => no partial)
+    const uint32_t phase = get_arg_val<uint32_t>(7);             // IS_RM: w_offset % 32 (leading tile offset)
 
     // scaler = 1/origin_W so the SUM-reduce over the LOCAL slice yields the slice's
     // (1/W)-scaled partial; summing the K partials across cores gives mean(x^2).
     const float scaler_f = __builtin_bit_cast(float, inv_N_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
         scaler_f);  // tile 0: full scaler
-    if constexpr (HAS_PARTIAL_W) {
+    if constexpr (IS_RM) {
+        // RM: EVERY core's last reduce-tile is sub-tile-wide, so always emit tile 1.
+        // When this core has no partial (valid_cols % 32 == 0) tile 1 is a full scaler
+        // duplicate (unused — compute routes ReducePartialScaler::none()).
+        if (reduce_partial_w != 0) {
+            dataflow_kernel_lib::
+                prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                    scaler_f, reduce_partial_w);  // tile 1: partial scaler (zeros padded lanes)
+        } else {
+            dataflow_kernel_lib::
+                prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                    scaler_f);  // tile 1: full scaler duplicate
+        }
+    } else if constexpr (HAS_PARTIAL_W) {
         dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
             scaler_f, partial_w);  // tile 1: partial scaler (zeros padded lanes)
+    }
+
+    // ---- RM-input sharded (Refinement 4b): gamma W-slice + loopback x repack ----
+    if constexpr (IS_RM) {
+        constexpr uint32_t PADDED_ROW_BYTES = PER_W_T * TILE_DIM * ELEM;
+        const uint32_t phase_bytes = phase * ELEM;  // leading tile offset of this core's slice
+        if constexpr (HAS_GAMMA) {
+            // gamma (1,1,1,W) is interleaved DRAM. Read this core's `vwt` valid tiles at
+            // the tile-ALIGNED global column (g0+wt)*32 (w_tile_start = g0), so the DRAM
+            // read is aligned — a sub-tile column offset faults. Tile wt covers global
+            // columns [(g0+wt)*32, ...), matching x's local tile wt after phase-align.
+            const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, gamma_page);
+            for (uint32_t wt = 0; wt < vwt; ++wt) {
+                const uint32_t col0 = (w_tile_start + wt) * TILE_DIM;
+                uint32_t cols = (col0 < origin_W) ? (origin_W - col0) : 0;
+                if (cols > TILE_DIM) {
+                    cols = TILE_DIM;
+                }
+                dataflow_kernel_lib::read_sticks_for_tilize<cb_gamma_sticks>(
+                    gamma_accessor, /*total_num_rows=*/1, cols * gamma_elem, /*start_page=*/0, col0 * gamma_elem);
+            }
+        }
+
+        // Zero the cb_x_sticks backing ONCE. The loopback below writes only the valid
+        // columns [phase, phase+valid_cols) of each stick, so the leading [0,phase) and
+        // trailing pad columns stay 0 (nan-safe: leading zeros contribute 0 to the SUM
+        // reduce, trailing lanes are masked by the partial scaler). Pad rows of a partial
+        // last tile-row are never written -> stay 0 (harmless).
+        {
+            const uint32_t zbase = get_write_ptr(cb_x_sticks);
+            const uint32_t znbytes = get_local_cb_interface(cb_x_sticks).fifo_num_pages * get_tile_size(cb_x_sticks);
+            volatile tt_l1_ptr uint32_t* zp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zbase);
+            for (uint32_t k = 0; k < (znbytes >> 2); ++k) {
+                zp[k] = 0;
+            }
+        }
+        // Loopback-repack the resident RM shard (cb_shard_in, contiguous sticks at
+        // SHARD_STICK_BYTES stride) into tile-padded cb_x_sticks (PADDED_ROW_BYTES
+        // stride) at column offset `phase`, so the compute-side tilize consumes it
+        // exactly like the interleaved RM path. Reading only valid_cols*ELEM per stick
+        // keeps shard tensor-padding out of the reduce.
+        const uint32_t shard_base = get_read_ptr(cb_shard_in);
+        const uint32_t vc_bytes = valid_cols * ELEM;
+        for (uint32_t t = 0; t < HT_LOCAL; ++t) {
+            uint32_t valid_rows = (valid_rows_total > t * TILE_DIM) ? (valid_rows_total - t * TILE_DIM) : 0;
+            if (valid_rows > TILE_DIM) {
+                valid_rows = TILE_DIM;
+            }
+            cb_reserve_back(cb_x_sticks, PER_W_T);
+            const uint32_t dst = get_write_ptr(cb_x_sticks) + phase_bytes;
+            for (uint32_t s = 0; s < valid_rows; ++s) {
+                const uint32_t src = shard_base + (t * TILE_DIM + s) * SHARD_STICK_BYTES;
+                noc_async_read(
+                    get_noc_addr(my_x[noc_index], my_y[noc_index], src), dst + s * PADDED_ROW_BYTES, vc_bytes);
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_x_sticks, PER_W_T);
+        }
+        return;
     }
 
     // Logical W-split: read this core's W/K slice from interleaved DRAM into cb_x_in.

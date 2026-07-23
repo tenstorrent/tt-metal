@@ -24,11 +24,14 @@
 #include "api/dataflow/dataflow_api.h"
 
 namespace {
+constexpr uint32_t cb_shard_out = 9;  // RM output: zero-copy alias of the resident RM W-slice (stick pages)
 constexpr uint32_t cb_gather = 5;
 constexpr uint32_t cb_stat_handoff = 6;
 constexpr uint32_t cb_stat_global = 7;
 constexpr uint32_t cb_out = 16;
+constexpr uint32_t cb_out_sticks = 17;  // RM output: tile-padded sticks (compute untilize) -> loopback shard
 constexpr uint32_t cb_stat_local = 25;
+constexpr uint32_t TILE_DIM = 32;
 }  // namespace
 
 void kernel_main() {
@@ -48,8 +51,14 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
     constexpr uint32_t PER_W_T = get_compile_time_arg_val(8);
     constexpr uint32_t out_page = get_compile_time_arg_val(9);
+    // IS_RM (Refinement 4b): the resident output W-slice is ROW-MAJOR. After each
+    // tile-row's stat round this writer loopback-copies compute's untilized cb_out_sticks
+    // (tile-padded) into the resident RM output shard (cb_shard_out), valid columns only.
+    constexpr bool IS_RM = get_compile_time_arg_val(10) != 0;
+    constexpr uint32_t ELEM = get_compile_time_arg_val(11);               // element bytes (RM loopback math)
+    constexpr uint32_t SHARD_STICK_BYTES = get_compile_time_arg_val(12);  // resident RM shard stick stride
 
-    constexpr auto out_args = TensorAccessorArgs<10>();
+    constexpr auto out_args = TensorAccessorArgs<13>();
 
     // DRAM-write args first (fixed-position); the variable-length worker coords follow.
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
@@ -59,9 +68,12 @@ void kernel_main() {
     const uint32_t slice_index = get_arg_val<uint32_t>(4);
     const uint32_t master_vx = get_arg_val<uint32_t>(5);
     const uint32_t master_vy = get_arg_val<uint32_t>(6);
-    const uint32_t num_workers = get_arg_val<uint32_t>(7);  // master: K-1, worker: 0
+    const uint32_t valid_cols = get_arg_val<uint32_t>(7);        // IS_RM: valid output columns
+    const uint32_t valid_rows_total = get_arg_val<uint32_t>(8);  // IS_RM: valid rows in this core's shard
+    const uint32_t phase = get_arg_val<uint32_t>(9);             // IS_RM: w_offset % 32 (leading tile offset)
+    const uint32_t num_workers = get_arg_val<uint32_t>(10);      // master: K-1, worker: 0
     // master only: worker virtual coords follow as [vx, vy] * num_workers.
-    constexpr uint32_t WORKER_COORDS_BASE = 8;
+    constexpr uint32_t WORKER_COORDS_BASE = 11;
 
     volatile tt_l1_ptr uint32_t* sem_gather = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER));
     volatile tt_l1_ptr uint32_t* sem_bcast = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_BCAST));
@@ -135,6 +147,30 @@ void kernel_main() {
             }
             noc_async_write_barrier();
             cb_pop_front(cb_out, PER_W_T);
+        }
+
+        // ---- RM output (Refinement 4b): loopback compute's untilized sticks -> shard ----
+        // Compute untilized PER_W_T tile-padded stick tiles into cb_out_sticks. Copy the
+        // valid columns of each valid row into the resident RM output shard (cb_shard_out,
+        // contiguous sticks at SHARD_STICK_BYTES stride); the sub-tile pad columns / pad
+        // rows are tensor-padding (discarded on read-back), so they are not written.
+        if constexpr (IS_RM) {
+            constexpr uint32_t PADDED_ROW_BYTES = PER_W_T * TILE_DIM * ELEM;
+            uint32_t valid_rows = (valid_rows_total > t * TILE_DIM) ? (valid_rows_total - t * TILE_DIM) : 0;
+            if (valid_rows > TILE_DIM) {
+                valid_rows = TILE_DIM;
+            }
+            cb_wait_front(cb_out_sticks, PER_W_T);
+            const uint32_t src = get_read_ptr(cb_out_sticks) + phase * ELEM;  // valid columns start at `phase`
+            const uint32_t shard_base = get_write_ptr(cb_shard_out);
+            const uint32_t vc_bytes = valid_cols * ELEM;
+            for (uint32_t s = 0; s < valid_rows; ++s) {
+                const uint32_t dst = shard_base + (t * TILE_DIM + s) * SHARD_STICK_BYTES;
+                noc_async_write(
+                    src + s * PADDED_ROW_BYTES, get_noc_addr(my_x[noc_index], my_y[noc_index], dst), vc_bytes);
+            }
+            noc_async_write_barrier();
+            cb_pop_front(cb_out_sticks, PER_W_T);
         }
     }
     // Flush the semaphore-inc atomics (SEM_GATHER/SEM_DONE from workers, SEM_BCAST
