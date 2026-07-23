@@ -478,17 +478,35 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 
 ## Examples
 
-The repository ships one GRPO example today:
+Two BoolQ examples ship today. Both train the same policy on the
+same dataset (`google/boolq`, Yes/No correctness reward) with the
+same `GRPOTrainer`; they differ in where token generation runs.
 
-- [`tt-train/sources/examples/grpo/boolq/`](../sources/examples/grpo/boolq/)
-  — Llama-3.2-1B-Instruct trained on `google/boolq`. Uses a two-rank
-  deployment (policy on the trainer rank, generation worker on a peer
-  rank). See
-  [`boolq/README.md`](../sources/examples/grpo/boolq/README.md) for
-  the deployment-level details (topology, components, run
-  instructions).
+- [`tt-train/sources/examples/grpo/`](../sources/examples/grpo/)
+  — **Single-process, ttml-only.** Both the training forward/backward
+  and the rollout token generation run inside the same ttml process on
+  one device mesh. The completer (`LlamaGRPOCompleter` or
+  `Qwen3GRPOCompleter` under
+  [`utils/`](../sources/examples/grpo/utils/)) owns the ttml policy
+  model and drives generation itself. Entry point:
+  [`boolq_training_example.py`](../sources/examples/grpo/boolq_training_example.py)
+  (`--model llama` or `--model qwen3`, optional `--config <yaml>`).
+  Also ships an accuracy-eval sibling
+  ([`boolq_accuracy_example.py`](../sources/examples/grpo/boolq_accuracy_example.py))
+  and a plotting helper
+  ([`boolq_plot_example.py`](../sources/examples/grpo/boolq_plot_example.py)).
 
-A single-rank example does not ship today.
+- [`tt-train/sources/examples/grpo_remote_rollout/boolq/`](../sources/examples/grpo_remote_rollout/boolq/)
+  — **Two-rank MPI, ttml + tt-transformers.** Rollout generation is
+  offloaded to a peer rank running `tt-transformers.Transformer`
+  inside a captured ttnn trace (much faster than ttml decode). Rank 0
+  runs the ttml policy and `GRPOTrainer`; rank 1 runs generation
+  workers.
+
+Both examples plug into `GRPOTrainer` through the same
+`GRPOCompleter` abstraction — the trainer itself does not know which
+of the two deployments it's in.
+
 
 ---
 
