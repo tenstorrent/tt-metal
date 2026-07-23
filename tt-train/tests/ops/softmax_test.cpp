@@ -58,7 +58,7 @@ TEST_F(SoftmaxTest, DISABLED_SoftmaxTest_Batch) {
     ttnn::Tensor ttml_softmax = ttml::metal::softmax(input, dim);
     auto ttml_softmax_xtensor = core::to_xtensor(ttml_softmax);
 
-    tt::tt_metal::Tensor ttnn_softmax = ttnn_fixed::softmax(input, dim);
+    ttnn::Tensor ttnn_softmax = ttnn_fixed::softmax(input, dim);
     auto ttnn_softmax_xtensor = core::to_xtensor(ttnn_softmax);
 
     // Host side reference using FP32 and xtensor
@@ -172,7 +172,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Large_Values) {
     ttnn::Tensor ttml_softmax = ttml::metal::softmax(input, dim);
     auto ttml_softmax_xtensor = core::to_xtensor(ttml_softmax);
 
-    tt::tt_metal::Tensor ttnn_softmax = ttnn_fixed::softmax(input, dim);
+    ttnn::Tensor ttnn_softmax = ttnn_fixed::softmax(input, dim);
     auto ttnn_softmax_xtensor = core::to_xtensor(ttnn_softmax);
 
     // Host side reference using FP32 and xtensor

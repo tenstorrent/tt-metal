@@ -112,6 +112,9 @@ def create_tt_model(
             for decoder_id in range(tt_model_args.n_layers):
                 tt_model_args.optimizations.set_decoder_conf(decoder_id, gemma_text_perf)
             tt_model_args.model_config["DECODERS_OPTIMIZATIONS"] = tt_model_args.optimizations
+            if tt_model_args.num_devices == 1:
+                # Turn off fp32_dest_acc_en to not trigger L1 OOM
+                tt_model_args._force_sdpa_prefill_hifi4_fp16()
 
     # Avoid loading state_dict for every DP model
     if not state_dict:

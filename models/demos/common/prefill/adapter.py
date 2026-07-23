@@ -69,6 +69,9 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
+    # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
+    # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
+    sparse_kv_cache_format: Optional[object] = None
 
     @property
     def sp_factor(self) -> int:
@@ -124,6 +127,19 @@ class PrefillModelAdapter(ABC):
     def load_hf_config(self) -> "PretrainedConfig":
         """Load (and normalize) the HF config from PREFILL_HF_MODEL (falling back
         to ``hf_model_default``). The runner sets ``max_seq_len`` on the result."""
+
+    @property
+    def default_sparse_kv_cache_format(self) -> Optional[object]:
+        """Semantic primary-cache format used when the runner builds ``PrefillRunParams``.
+
+        Models with a format choice override this property. Direct module users can instead put
+        an explicit format in ``PrefillRunParams.sparse_kv_cache_format``.
+        """
+        return None
+
+    def resolve_sparse_kv_cache_format(self, requested: Optional[object]) -> Optional[object]:
+        """Return an explicit request, otherwise this adapter's model default."""
+        return self.default_sparse_kv_cache_format if requested is None else requested
 
     @abstractmethod
     def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
@@ -236,6 +252,8 @@ ADAPTER_PATHS = {
     "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
     "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
+    # Kimi-K2.7: same architecture as K2.6, new checkpoint (adapters/kimi_k2_7.py).
+    "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
 }
 

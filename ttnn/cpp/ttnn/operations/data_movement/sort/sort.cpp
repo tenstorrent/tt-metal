@@ -85,8 +85,8 @@ Tensor pre_sort_transform_tensor(
             const uint32_t new_h = (lshape_4d[2] + h_alignment - 1) / h_alignment * h_alignment;
             padded_tensor = ttnn::pad(
                 padded_tensor,
-                tt::tt_metal::Array4D({lshape_4d[0], lshape_4d[1], new_h, lshape_4d[3]}),
-                tt::tt_metal::Array4D({0, 0, 0, 0}),
+                ttnn::Array4D({lshape_4d[0], lshape_4d[1], new_h, lshape_4d[3]}),
+                ttnn::Array4D({0, 0, 0, 0}),
                 descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity(),
                 /*use_multicore=*/true);
         }
@@ -108,9 +108,8 @@ Tensor pre_sort_transform_tensor(
     const auto& padded_logical_shape = padded_tensor.logical_shape();
     return ttnn::pad(
         padded_tensor,
-        tt::tt_metal::Array4D(
-            {padded_logical_shape[0], padded_logical_shape[1], padded_logical_shape[2], padded_last_dim}),
-        tt::tt_metal::Array4D({0, 0, 0, 0}),
+        ttnn::Array4D({padded_logical_shape[0], padded_logical_shape[1], padded_logical_shape[2], padded_last_dim}),
+        ttnn::Array4D({0, 0, 0, 0}),
         descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity(),
         /*use_multicore=*/true);
 }

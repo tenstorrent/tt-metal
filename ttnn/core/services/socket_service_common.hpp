@@ -20,25 +20,28 @@
 namespace tt::tt_metal {
 
 // Zero-filled host tensor of size `spec`, used to feed the mapper at construction.
-inline Tensor make_zero_host_tensor(const TensorSpec& spec) {
+inline ttnn::Tensor make_zero_host_tensor(const tt::tt_metal::TensorSpec& spec) {
     const size_t bytes = spec.compute_packed_buffer_size_bytes();
     switch (spec.data_type()) {
         case DataType::BFLOAT16:
-            return Tensor::from_vector<bfloat16>(std::vector<bfloat16>(bytes / sizeof(bfloat16)), spec);
-        case DataType::FLOAT32: return Tensor::from_vector<float>(std::vector<float>(bytes / sizeof(float)), spec);
-        case DataType::INT32: return Tensor::from_vector<int32_t>(std::vector<int32_t>(bytes / sizeof(int32_t)), spec);
-        case DataType::UINT8: return Tensor::from_vector<uint8_t>(std::vector<uint8_t>(bytes / sizeof(uint8_t)), spec);
+            return ttnn::Tensor::from_vector<bfloat16>(std::vector<bfloat16>(bytes / sizeof(bfloat16)), spec);
+        case DataType::FLOAT32:
+            return ttnn::Tensor::from_vector<float>(std::vector<float>(bytes / sizeof(float)), spec);
+        case DataType::INT32:
+            return ttnn::Tensor::from_vector<int32_t>(std::vector<int32_t>(bytes / sizeof(int32_t)), spec);
+        case DataType::UINT8:
+            return ttnn::Tensor::from_vector<uint8_t>(std::vector<uint8_t>(bytes / sizeof(uint8_t)), spec);
         case DataType::UINT16:
-            return Tensor::from_vector<uint16_t>(std::vector<uint16_t>(bytes / sizeof(uint16_t)), spec);
+            return ttnn::Tensor::from_vector<uint16_t>(std::vector<uint16_t>(bytes / sizeof(uint16_t)), spec);
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
             // Block-float formats pack a shared exponent per group of datums, so the
             // packed byte count is NOT element_count * sizeof. from_vector requires a
             // buffer of exactly logical-volume elements and (per its contract) `float`
             // for block formats; it tilizes + quantizes internally.
-            return Tensor::from_vector<float>(std::vector<float>(spec.logical_shape().volume()), spec);
+            return ttnn::Tensor::from_vector<float>(std::vector<float>(spec.logical_shape().volume()), spec);
         case DataType::UINT32:
-            return Tensor::from_vector<uint32_t>(std::vector<uint32_t>(bytes / sizeof(uint32_t)), spec);
+            return ttnn::Tensor::from_vector<uint32_t>(std::vector<uint32_t>(bytes / sizeof(uint32_t)), spec);
         case DataType::FP8_E4M3: TT_THROW("StreamService: FP8_E4M3 is not supported");
         case DataType::INVALID: TT_THROW("StreamService: invalid global_spec data type");
     }
