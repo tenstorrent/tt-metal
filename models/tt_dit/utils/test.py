@@ -33,6 +33,8 @@ line_params_8k = {**line_params, "fabric_router_config": create_fabric_router_co
 ring_params_8k = {**ring_params, "fabric_router_config": create_fabric_router_config()}
 line_params_req_exact_devices = {**line_params, "require_exact_physical_num_devices": True}
 ring_params_req_exact_devices = {**ring_params, "require_exact_physical_num_devices": True}
+# Wide-ring quad (4x32 BH galaxy) needs the 8k fabric router config for its routers to complete
+ring_params_8k_req_exact_devices = {**ring_params_8k, "require_exact_physical_num_devices": True}
 
 
 def skip_if_unsupported_num_links(mesh_device, num_links):

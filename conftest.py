@@ -572,6 +572,7 @@ def mesh_device(request, silicon_arch_name, device_params):
         # number of physical devices, but that hasn't been the case when testing. TODO remove when such behavior is more widely supported.
         if (
             device_params.get("require_exact_physical_num_devices", False)
+            and not ttnn.using_distributed_env()  # otherwise it only sees the local host's chips
             and num_devices_requested != ttnn.get_num_devices()
         ):
             pytest.skip(

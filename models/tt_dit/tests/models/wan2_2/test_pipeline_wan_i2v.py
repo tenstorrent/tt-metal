@@ -17,7 +17,12 @@ from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConf
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
 
-from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
+from ....utils.test import (
+    line_params_req_exact_devices,
+    ring_params_8k_req_exact_devices,
+    ring_params_req_exact_devices,
+    skip_if_unsupported_num_links,
+)
 
 
 def create_fractal_image(width: int, height: int) -> Image.Image:
@@ -42,6 +47,7 @@ def create_fractal_image(width: int, height: int) -> Image.Image:
         [(2, 4), (2, 4), 1, 0, 2, True, line_params_req_exact_devices, ttnn.Topology.Linear, False],
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params_req_exact_devices, ttnn.Topology.Ring, True],
         [(4, 8), (4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params_8k_req_exact_devices, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1nl2_linear_is_fsdp1",
@@ -49,6 +55,7 @@ def create_fractal_image(width: int, height: int) -> Image.Image:
         "2x4sp1tp0nl2_linear_is_fsdp0",  # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
         "4x8sp1tp0nl4_ring_is_fsdp1",  # WH (ring) on 4x8
         "4x8sp1tp0nl2_linear_is_fsdp0",  # BH (linear) on 4x8
+        "4x32sp1tp0nl2_ring_is_fsdp0",  # BH (ring) on 4x32 quad galaxy
     ],
     indirect=["mesh_device", "device_params"],
 )
