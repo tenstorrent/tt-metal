@@ -79,11 +79,16 @@ static void run_writer() {
         const auto s_slot = TensorAccessor(meta_args, slot_idx_addr);
         noc.async_read(s_slot, cb_meta, kMetadataReadBytes, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+        // Metadata tensor is at a FIXED DRAM address reused every chunk; the RISC data cache may hold the
+        // prior chunk's value for this L1 line (barrier orders the DMA, volatile still reads cache). Force
+        // a refetch of the freshly-DMA'd value, else an intermittently stale read corrupts the write.
+        invalidate_l1_cache();
         slot_idx = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
 
         const auto s_kv = TensorAccessor(meta_args, kv_actual_global_addr);
         noc.async_read(s_kv, cb_meta, kMetadataReadBytes, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+        invalidate_l1_cache();  // same fresh-metadata refetch as above
         kv_actual_global_t = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0] / tile_height;
         cb_meta.push_back(1);
     } else {

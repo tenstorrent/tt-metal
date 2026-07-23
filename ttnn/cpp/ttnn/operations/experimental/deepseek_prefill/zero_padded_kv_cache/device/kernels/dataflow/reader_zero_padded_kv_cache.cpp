@@ -52,10 +52,15 @@ static void run_reader() {
         const auto s_slot = TensorAccessor(meta_args, slot_idx_addr);
         noc.async_read(s_slot, cb_meta, 4, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+        // Metadata tensor is at a FIXED DRAM address reused every chunk; the RISC data cache may hold the
+        // prior chunk's value for this L1 line (barrier orders the DMA, volatile still reads cache). Force
+        // a refetch of the freshly-DMA'd value, else an intermittently stale read corrupts the zero-pad.
+        invalidate_l1_cache();
         const uint32_t slot = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
         const auto s_valid = TensorAccessor(meta_args, valid_global_addr);
         noc.async_read(s_valid, cb_meta, 4, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+        invalidate_l1_cache();  // same fresh-metadata refetch as above
         const uint32_t valid_global = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
         cb_meta.push_back(1);
         w = zero_pad_compute_chip_work(slot, valid_global);
