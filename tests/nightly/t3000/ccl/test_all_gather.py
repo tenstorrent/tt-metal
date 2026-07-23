@@ -480,14 +480,14 @@ def test_all_gather(
     ],
 )
 @pytest.mark.parametrize(
-    "ag_input_dtype, layout, pcc_threshold",
+    "ag_input_dtype, layout",
     [
-        (ttnn.bfloat16, ttnn.TILE_LAYOUT, 1.0),
-        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1.0),
-        (ttnn.float32, ttnn.TILE_LAYOUT, 1.0),
-        (ttnn.uint32, ttnn.TILE_LAYOUT, 1.0),
-        (ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 0.9999),
-        (ttnn.bfloat4_b, ttnn.TILE_LAYOUT, 0.985),
+        (ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.float32, ttnn.TILE_LAYOUT),
+        (ttnn.uint32, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat4_b, ttnn.TILE_LAYOUT),
     ],
     ids=[
         "bfloat16_tile",
@@ -513,7 +513,6 @@ def test_all_gather_dtype(
     dim,
     ag_input_dtype,
     layout,
-    pcc_threshold,
     mem_config_input,
     mem_config_ag,
 ):
@@ -528,7 +527,6 @@ def test_all_gather_dtype(
         enable_trace=False,
         num_iters=1,
         use_persistent_buffers=True,
-        allowed_pcc=pcc_threshold,
     )
 
 

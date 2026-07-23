@@ -294,15 +294,15 @@ def test_all_gather_ring_nightly(
     ],
 )
 @pytest.mark.parametrize(
-    "ag_input_dtype, layout, pcc_threshold",
+    "ag_input_dtype, layout",
     [
-        (ttnn.bfloat16, ttnn.TILE_LAYOUT, 1.0),
-        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1.0),
-        (ttnn.float32, ttnn.TILE_LAYOUT, 1.0),
-        (ttnn.uint32, ttnn.TILE_LAYOUT, 1.0),
-        (ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 0.9999),
-        (ttnn.bfloat4_b, ttnn.TILE_LAYOUT, 0.985),
-        (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT, 0.999),
+        (ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.float32, ttnn.TILE_LAYOUT),
+        (ttnn.uint32, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat4_b, ttnn.TILE_LAYOUT),
+        # (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT),  # insufficient infra support (Issue #43909)
     ],
     ids=[
         "bfloat16_tile",
@@ -311,7 +311,7 @@ def test_all_gather_ring_nightly(
         "uint32_tile",
         "bfloat8_b_tile",
         "bfloat4_b_tile",
-        "fp8_e4m3_rm",
+        # "fp8_e4m3_rm",
     ],
 )
 @pytest.mark.parametrize("mem_config_input, mem_config_ag", [(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)])
@@ -330,7 +330,6 @@ def test_all_gather_dtype(
     dim,
     ag_input_dtype,
     layout,
-    pcc_threshold,
     mem_config_input,
     mem_config_ag,
     cluster_axis,
@@ -351,7 +350,6 @@ def test_all_gather_dtype(
         enable_trace=False,
         num_iters=3,
         cluster_axis=cluster_axis,
-        allowed_pcc=pcc_threshold,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
