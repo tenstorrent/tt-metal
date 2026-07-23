@@ -207,7 +207,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.experimental.indexer_score_msa">
-<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">indexer_score_msa</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_start_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_groups</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_size</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_batch_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kv_len</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster_axis</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.experimental.indexer_score_msa" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">indexer_score_msa</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_start_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_groups</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_size</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_batch_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kv_len</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_shard_axes</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.experimental.indexer_score_msa" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>MiniMax-M3 MSA lightning-indexer scorer.</p>
@@ -257,9 +257,9 @@ chunk_start_idx + Sq &lt;= kv_len. When block-max-pooling
 blocks are written). Re-applied each dispatch (a serving loop
 growing kv_len reuses one program). Only columns/blocks within
 the valid prefix are written.</p></li>
-<li><p><strong>cluster_axis</strong> – mesh axis that is the SP ring. On a mesh, device r uses
-chunk_start = chunk_start_idx + r*Sq, where r is its linearized
-index along this axis. None = linear device order.</p></li>
+<li><p><strong>seq_shard_axes</strong> – the mesh axes the query seq is sharded over. MSA has no
+TP sub-shard, so at most one axis: [] = linear device order, [sp] = SP
+ring (device r along it uses chunk_start = chunk_start_idx + r*Sq).</p></li>
 <li><p><strong>block_cyclic_chunk_local</strong> (<em>block_cyclic_sp_axis /</em>) – same semantics as
 indexer_score_dsa. block_cyclic_sp_axis = the MESH AXIS the K cache
 was striped over (sp derived from the mesh shape on that axis) and

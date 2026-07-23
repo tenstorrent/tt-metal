@@ -2036,7 +2036,7 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.split.html#ttnn.split" title="ttnn.split"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.split</span></code></a></p></td>
-<td><p>Returns a tensor that is in num_splits ways on dim.</p></td>
+<td><p>Splits <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> into chunks along dimension <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> and returns them as a list of tensors.</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.squeeze.html#ttnn.squeeze" title="ttnn.squeeze"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.squeeze</span></code></a></p></td>
@@ -2272,7 +2272,7 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.all_gather.html#ttnn.all_gather" title="ttnn.all_gather"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.all_gather</span></code></a></p></td>
-<td><p>All-gather operation across devices along a selected dimension and optional cluster axis.</p></td>
+<td><p>Performs an all-gather collective operation that gathers data from all devices into a new output tensor, concatenated along the specified <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.all_reduce.html#ttnn.all_reduce" title="ttnn.all_reduce"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.all_reduce</span></code></a></p></td>

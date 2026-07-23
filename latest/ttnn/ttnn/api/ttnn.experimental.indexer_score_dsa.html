@@ -207,7 +207,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.experimental.indexer_score_dsa">
-<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">indexer_score_dsa</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weights</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_start_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_batch_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kv_len</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster_axis</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_subshard_axis</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_cyclic_sp_axis</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_cyclic_chunk_local</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.experimental.indexer_score_dsa" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">indexer_score_dsa</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weights</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_start_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_batch_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kv_len</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_shard_axes</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_cyclic_sp_axis</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_cyclic_chunk_local</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.experimental.indexer_score_dsa" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>DeepSeek-V3.2 DSA / GLM-5 lightning-indexer scorer.</p>
@@ -225,10 +225,10 @@ raw-dot, per-GQA-group indexer, use <code class="docutils literal notranslate"><
 <li><p><strong>weights</strong> – [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale
 pre-folded)</p></li>
 <li><p><strong>chunk_start_idx</strong> – absolute global position of rank 0’s query row 0
-(rank 0 = lowest cluster_axis coord; causality: key t visible to
-query s iff t &lt;= chunk_start + s). OMIT on a mesh -&gt; deduced as
-T - sp_ring*Sq (sp_ring = mesh extent along cluster_axis, whole
-mesh if unset). Single device: set to history + rank*Sq per rank.</p></li>
+(rank 0 = lowest seq_shard_axes[0] (SP) coord; causality: key t
+visible to query s iff t &lt;= chunk_start + s). OMIT on a mesh -&gt;
+deduced as T - sp_ring*Sq (sp_ring = mesh extent along the SP axis,
+whole mesh if unset). Single device: set to history + rank*Sq per rank.</p></li>
 <li><p><strong>program_config</strong> – work-unit knobs (q_chunk_size, k_chunk_size,
 head_group_size; elements, tile-aligned). Defaults always fit
 L1; raise head_group_size (0 = all resident) for performance.</p></li>
@@ -245,18 +245,18 @@ the rest is masked out. Tile-aligned, in (0, T], with
 chunk_start_idx + Sq &lt;= kv_len. Re-applied each dispatch, so a
 serving loop growing kv_len (&lt;= T) reuses one program – no
 recompile. Only output columns [0, kv_len) are written.</p></li>
-<li><p><strong>cluster_axis</strong> – mesh axis that is the SP ring. On a mesh, device r uses
-chunk_start = chunk_start_idx + r*Sq, where r is its linearized
-index along this axis (Sq = q seq len). None = linear device order
-(1 on a single device, so chunk_start_idx is used as-is).</p></li>
-<li><p><strong>seq_subshard_axis</strong> – optional int, the SECOND mesh axis (TP) the query seq is
-block-cyclically sub-sharded over, on top of the SP block-cyclic layout.
-Set it alongside a named cluster_axis + block_cyclic when the query rows
-are further split across TP (block_cyclic_chunk_local == tp*q_isl): the
-exact geometry adds tp_rank*Sq to each device’s block-cyclic position, so
-the causal mask stays correct under rotated (mid-slab) starts — unlike the
-cluster_axis=None flat path, which is linear-approximate there. Requires a
-block-cyclic layout and an axis distinct from cluster_axis.</p></li>
+<li><p><strong>seq_shard_axes</strong> – the mesh axes the query seq is sharded over, outermost
+(SP ring) first: [] = linear device order (single device / whole-mesh
+ring, chunk_start_idx used as-is), [sp] = 1D SP ring, [sp, tp] = 2D SP
+ring + TP sub-shard. The SP axis (seq_shard_axes[0]) sets each device’s
+causal offset: device r along it uses chunk_start = chunk_start_idx +
+r*Sq (Sq = q seq len). The optional TP axis (seq_shard_axes[1]) is the
+SECOND axis the query seq is block-cyclically sub-sharded over; set it
+(with a block-cyclic layout, when block_cyclic_chunk_local == tp*q_isl)
+so the exact geometry adds tp_rank*Sq to each device’s block-cyclic
+position, keeping the causal mask correct under rotated (mid-slab) starts
+— unlike the flat [] path, which is linear-approximate there. The TP axis
+must be in range and distinct from the SP axis.</p></li>
 <li><p><strong>block_cyclic_sp_axis</strong> – optional int. The MESH AXIS the K cache was striped
 over (chunked prefill + SP all-gather leaves [B,1,T,D] k in per-SP-shard
 slab / block-cyclic physical order). <code class="docutils literal notranslate"><span class="pre">sp</span></code> is DERIVED from the mesh
@@ -269,11 +269,10 @@ with block_cyclic_chunk_local. Interface matches ttnn.transformer.sparse_sdpa.</
 The per-shard chunk length (chunk_size_global / sp). Cross-checked
 against q: must equal q_isl (Sq, seq sharded only on the SP axis) or
 tp*q_isl (tp = mesh_size/sp). The tp*q_isl case with tp&gt;1 (seq sharded
-across BOTH axes) has two forms: with cluster_axis=None it uses flat
-row-major linearization over all devices (linear-approximate under a
-mid-slab start); with a named cluster_axis it must also pass
-seq_subshard_axis naming the TP axis, which gives the rotation-exact 2D
-geometry (see seq_subshard_axis above).</p></li>
+across BOTH axes) has two forms: seq_shard_axes=[] uses flat row-major
+linearization over all devices (linear-approximate under a mid-slab
+start); seq_shard_axes=[sp, tp] names both axes, giving the rotation-exact
+2D geometry (see seq_shard_axes above).</p></li>
 </ul>
 </dd>
 </dl>
