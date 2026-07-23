@@ -1224,7 +1224,8 @@ HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec,
 
     CMAKE_UNIQUE_NAMESPACE::assert_packed_shard_sizes(transformed_buffer, working_spec);
 
-    HostTensor result = HostTensor::from_buffer(std::move(transformed_buffer), working_spec, tensor_topology(tensor));
+    HostTensor result =
+        host_tensor_from_buffer_with_topology(std::move(transformed_buffer), working_spec, get_tensor_topology(tensor));
 
     if (result.dtype() != dest_spec.data_type()) {
         result = to_dtype(result, dest_spec.data_type());
@@ -1234,7 +1235,7 @@ HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec,
         CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec),
         "to_tensor_spec: result does not satisfy exact-spec predicate against dest_spec");
     CMAKE_UNIQUE_NAMESPACE::assert_packed_shard_sizes(result.buffer(), dest_spec);
-    TT_FATAL(tensor_topology(result) == tensor_topology(tensor), "to_tensor_spec: topology must be preserved");
+    TT_FATAL(get_tensor_topology(result) == get_tensor_topology(tensor), "to_tensor_spec: topology must be preserved");
 
     return result;
 }
