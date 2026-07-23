@@ -68,9 +68,11 @@ protected:
         }
     }
 
-    // Runs the smoke kernel with the given scope define and returns the value the
-    // kernel read back from the semaphore after `iterations` increments.
-    uint32_t run_scope(const std::string& scope_define, bool with_down = false, bool via_token = false) {
+    // Runs the smoke kernel with the given host-baked scope and returns the value the
+    // kernel read back from the semaphore after `iterations` increments. The scope is set on
+    // the SemaphoreSpec; the kernel is scope-agnostic and picks it up via CTAD on the emitted
+    // sem::counter token.
+    uint32_t run_scope(SemaphoreScope scope, bool with_down = false) {
         // Zero the report scratch word.
         std::vector<uint32_t> zero(1, 0);
         tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, zero);
@@ -84,13 +86,11 @@ protected:
             .unique_id = experimental::SemaphoreSpecName{"counter_sem"},
             .target_nodes = core,
         };
+        counter_sem.scope = scope;  // host-baked mechanism; kernel deduces it via CTAD
 
-        std::map<std::string, std::string> defs{{scope_define, "1"}};
+        std::map<std::string, std::string> defs;
         if (with_down) {
             defs.emplace("SEM_SCOPE_UPDOWN", "1");  // kernel also does down(N) after up(N)
-        }
-        if (via_token) {
-            defs.emplace("SEM_TOKEN_CTAD", "1");  // construct via SemAccessor token + CTAD (Phase-2 S1)
         }
         experimental::KernelSpec::CompilerOptions::Defines defines_obj(defs);
 
@@ -140,7 +140,7 @@ protected:
     // Multi-DM concurrency proof (Quasar-only; roles gated by mhartid in the kernel).
     // num_dms threads share one bound Semaphore<scope>; mode picks CONCURRENT_UP or
     // PRODUCER_CONSUMER. Returns the value() the reporter/consumer read back.
-    uint32_t run_concurrent(const std::string& scope_define, const std::string& mode_define) {
+    uint32_t run_concurrent(SemaphoreScope scope, const std::string& mode_define) {
         std::vector<uint32_t> zero(1, 0);
         tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, zero);
 
@@ -153,8 +153,10 @@ protected:
             .unique_id = experimental::SemaphoreSpecName{"counter_sem"}, .target_nodes = core};
         experimental::SemaphoreSpec done_sem{
             .unique_id = experimental::SemaphoreSpecName{"done_sem"}, .target_nodes = core};
+        counter_sem.scope = scope;  // both semaphores share the host-baked mechanism
+        done_sem.scope = scope;
 
-        std::map<std::string, std::string> defs{{scope_define, "1"}, {mode_define, "1"}};
+        std::map<std::string, std::string> defs{{mode_define, "1"}};
         experimental::KernelSpec::CompilerOptions::Defines defines_obj(defs);
 
         const experimental::KernelSpecName DM_KERNEL{"sem_scope_concurrent_kernel"};
@@ -227,7 +229,7 @@ protected:
 // EXTERNAL scope: local up() is a self-targeted NoC atomic increment; value() reads
 // via the uncached alias. Single writer -> value() == iterations.
 TEST_F(SemScopeFixture, TestExternalScopeIncrement) {
-    const uint32_t observed = run_scope("SEM_SCOPE_EXTERNAL");
+    const uint32_t observed = run_scope(SemaphoreScope::EXTERNAL);
     log_info(LogTest, "EXTERNAL scope value(): {} (expected {})", observed, iterations);
     EXPECT_EQ(observed, iterations)
         << "Semaphore<EXTERNAL>::up()/value() did not produce the expected single-writer count.";
@@ -236,18 +238,17 @@ TEST_F(SemScopeFixture, TestExternalScopeIncrement) {
 // DM_LOCAL_CACHED scope: local up() is a 32-bit RISC-V AMO on the cached alias;
 // value() reads via the cached alias. Single writer -> value() == iterations.
 TEST_F(SemScopeFixture, TestDmLocalCachedScopeIncrement) {
-    const uint32_t observed = run_scope("SEM_SCOPE_DM_LOCAL_CACHED");
+    const uint32_t observed = run_scope(SemaphoreScope::DM_LOCAL_CACHED);
     log_info(LogTest, "DM_LOCAL_CACHED scope value(): {} (expected {})", observed, iterations);
     EXPECT_EQ(observed, iterations)
         << "Semaphore<DM_LOCAL_CACHED>::up()/value() did not produce the expected single-writer count.";
 }
 
-// LOCAL_NONATOMIC scope: the legacy default (plain L1 read-modify-write). The define
-// below is ignored by the kernel's scope ladder, so it falls through to
-// LOCAL_NONATOMIC. Single writer -> value() == iterations. This also confirms the
-// default path (used by existing DFB/CCL/SDPA callers) still compiles + works.
+// LOCAL_NONATOMIC scope: the legacy default (plain L1 read-modify-write). Single writer ->
+// value() == iterations. This also confirms the default path (used by existing DFB/CCL/SDPA
+// callers, and by every AUTO-resolved semaphore) still compiles + works after the token flip.
 TEST_F(SemScopeFixture, TestLocalNonatomicScopeIncrement) {
-    const uint32_t observed = run_scope("SEM_SCOPE_LEGACY");
+    const uint32_t observed = run_scope(SemaphoreScope::LOCAL_NONATOMIC);
     log_info(LogTest, "LOCAL_NONATOMIC scope value(): {} (expected {})", observed, iterations);
     EXPECT_EQ(observed, iterations)
         << "Semaphore<LOCAL_NONATOMIC>::up()/value() (legacy default) did not produce the expected count.";
@@ -257,33 +258,27 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeIncrement) {
 // exercises the atomic NoC decrement (INCR_GET of a negative value); for
 // DM_LOCAL_CACHED the AMO subtract; for LOCAL_NONATOMIC the legacy decrement.
 TEST_F(SemScopeFixture, TestExternalScopeUpDown) {
-    const uint32_t observed = run_scope("SEM_SCOPE_EXTERNAL", /*with_down=*/true);
+    const uint32_t observed = run_scope(SemaphoreScope::EXTERNAL, /*with_down=*/true);
     log_info(LogTest, "EXTERNAL up/down value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "Semaphore<EXTERNAL>::down() (atomic NoC decrement) did not return to 0.";
 }
 
 TEST_F(SemScopeFixture, TestDmLocalCachedScopeUpDown) {
-    const uint32_t observed = run_scope("SEM_SCOPE_DM_LOCAL_CACHED", /*with_down=*/true);
+    const uint32_t observed = run_scope(SemaphoreScope::DM_LOCAL_CACHED, /*with_down=*/true);
     log_info(LogTest, "DM_LOCAL_CACHED up/down value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() (AMO subtract) did not return to 0.";
 }
 
 TEST_F(SemScopeFixture, TestLocalNonatomicScopeUpDown) {
-    const uint32_t observed = run_scope("SEM_SCOPE_LEGACY", /*with_down=*/true);
+    const uint32_t observed = run_scope(SemaphoreScope::LOCAL_NONATOMIC, /*with_down=*/true);
     log_info(LogTest, "LOCAL_NONATOMIC up/down value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "Semaphore<LOCAL_NONATOMIC>::down() (legacy) did not return to 0.";
 }
 
-// Phase-2 S1: construct the Semaphore from a baked SemAccessor token so CTAD deduces the
-// scope (no explicit <>). Proves the token ctor + CTAD guide compile and route to the
-// deduced scope's up(). (Real bindings become tokens in S2; here the token is hand-built
-// over the bare sem:: id.)
-TEST_F(SemScopeFixture, TestTokenCtadDeduction) {
-    const uint32_t observed = run_scope("SEM_SCOPE_EXTERNAL", /*with_down=*/false, /*via_token=*/true);
-    log_info(LogTest, "token CTAD (EXTERNAL) value(): {} (expected {})", observed, iterations);
-    EXPECT_EQ(observed, iterations)
-        << "Semaphore built via SemAccessor token + CTAD did not deduce the baked scope / route to up().";
-}
+// NOTE: token-CTAD deduction (the S1 mechanism) is now exercised by EVERY test above and
+// below — after the S2b emitter flip, sem::counter IS a SemAccessor<id, baked-scope> token and
+// the kernels construct via plain `Semaphore s(sem::counter)`, so the standalone
+// TestTokenCtadDeduction became redundant and was removed.
 
 // ---- Concurrency proofs (Quasar-only): the single-writer tests above cannot tell an
 // atomic path from a non-atomic one; these do. ----
@@ -294,7 +289,7 @@ TEST_F(SemScopeFixture, TestExternalConcurrentUp) {
     if (!is_quasar) {
         GTEST_SKIP() << "concurrency proof gates DM roles by mhartid (Quasar-only)";
     }
-    const uint32_t observed = run_concurrent("SEM_SCOPE_EXTERNAL", "MODE_CONCURRENT_UP");
+    const uint32_t observed = run_concurrent(SemaphoreScope::EXTERNAL, "MODE_CONCURRENT_UP");
     const uint32_t expected = num_dms_ * concurrent_iterations;
     log_info(LogTest, "EXTERNAL concurrent up value(): {} (expected {})", observed, expected);
     EXPECT_EQ(observed, expected) << "Semaphore<EXTERNAL>::up() lost updates under concurrency (non-atomic route?).";
@@ -304,7 +299,7 @@ TEST_F(SemScopeFixture, TestDmLocalCachedConcurrentUp) {
     if (!is_quasar) {
         GTEST_SKIP() << "concurrency proof gates DM roles by mhartid (Quasar-only)";
     }
-    const uint32_t observed = run_concurrent("SEM_SCOPE_DM_LOCAL_CACHED", "MODE_CONCURRENT_UP");
+    const uint32_t observed = run_concurrent(SemaphoreScope::DM_LOCAL_CACHED, "MODE_CONCURRENT_UP");
     const uint32_t expected = num_dms_ * concurrent_iterations;
     log_info(LogTest, "DM_LOCAL_CACHED concurrent up value(): {} (expected {})", observed, expected);
     EXPECT_EQ(observed, expected) << "Semaphore<DM_LOCAL_CACHED>::up() lost updates under concurrency.";
@@ -317,7 +312,7 @@ TEST_F(SemScopeFixture, TestExternalProducerConsumer) {
     if (!is_quasar) {
         GTEST_SKIP() << "concurrency proof gates DM roles by mhartid (Quasar-only)";
     }
-    const uint32_t observed = run_concurrent("SEM_SCOPE_EXTERNAL", "MODE_PRODUCER_CONSUMER");
+    const uint32_t observed = run_concurrent(SemaphoreScope::EXTERNAL, "MODE_PRODUCER_CONSUMER");
     log_info(LogTest, "EXTERNAL producer/consumer value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "Semaphore<EXTERNAL>::down() lost a concurrent producer increment (non-atomic?).";
 }
@@ -326,7 +321,7 @@ TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
     if (!is_quasar) {
         GTEST_SKIP() << "concurrency proof gates DM roles by mhartid (Quasar-only)";
     }
-    const uint32_t observed = run_concurrent("SEM_SCOPE_DM_LOCAL_CACHED", "MODE_PRODUCER_CONSUMER");
+    const uint32_t observed = run_concurrent(SemaphoreScope::DM_LOCAL_CACHED, "MODE_PRODUCER_CONSUMER");
     log_info(LogTest, "DM_LOCAL_CACHED producer/consumer value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() lost a concurrent producer increment.";
 }

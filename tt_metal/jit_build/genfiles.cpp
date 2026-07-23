@@ -181,7 +181,10 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
         }
         if (!sem_entries.empty()) {
-            content << "#include <cstdint>\n";
+            // Defines SemAccessor<Id, SemScope> (and pulls in SemScope), the token each
+            // sem::<name> symbol is emitted as; the kernel's Semaphore ctor deduces the
+            // baked scope from it via CTAD.
+            content << "#include \"api/dataflow/semaphore_token.h\"\n";
         }
         if (!ta_entries.empty()) {
             // This header defines TensorBindingToken, a type which can be used
@@ -204,12 +207,15 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!sem_entries.empty()) {
-            // NOTE: scope is carried through the pipeline but the emit is still a bare id here
-            // (S2b-plumbing). The S2b-flip turns this into a `SemAccessor<id, scope>` token so the
-            // kernel picks the mechanism via CTAD.
+            // Emit each bound semaphore as a SemAccessor<id, baked-scope> token. The kernel
+            // writes `Semaphore s(sem::<name>)` and CTAD deduces Semaphore<TENSIX, baked-scope>,
+            // so the host-resolved mechanism (LOCAL_NONATOMIC / DM_LOCAL_CACHED / EXTERNAL) is
+            // selected with zero kernel-source change. scope is emitted numerically to avoid a
+            // host<->device enumerator-name dependency.
             content << "namespace sem {\n";
             for (const auto& entry : sem_entries) {
-                content << "constexpr std::uint32_t " << entry.name << " = " << entry.id << "u;\n";
+                content << "constexpr ::SemAccessor<" << entry.id << "u, static_cast<::SemScope>("
+                        << static_cast<int>(entry.scope) << ")> " << entry.name << "{};\n";
             }
             content << "}  // namespace sem\n";
         }
