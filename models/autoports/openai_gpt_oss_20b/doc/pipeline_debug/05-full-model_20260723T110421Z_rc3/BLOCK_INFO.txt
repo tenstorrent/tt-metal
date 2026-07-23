@@ -1,0 +1,4 @@
+rc=3
+terminal=stage_1_terminal_status=blocked
+run=/home/mvasiljevic/codex-runs/v2-openai-gpt-oss-20b-05-full-model-20260723T110421Z
+captured_at=2026-07-23T11:49:21Z
