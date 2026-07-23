@@ -49,6 +49,25 @@ tools:
   repo-memory: true # Persistent cross-run memory for cursor, deduplication, and CI run tracking
   bash: true # Required for running gh CLI commands (e.g. polling checks)
 
+mcp-servers:
+  # DeepWiki is Cognition Labs' public, unauthenticated, read-only remote MCP
+  # server (https://mcp.deepwiki.com/mcp). It answers grounded questions about
+  # public GitHub repos, which lets repo-assist reason across the sibling repos
+  # it cannot easily clone and grep in the agent runner:
+  #   - tenstorrent/tt-metal            (this repo)
+  #   - tenstorrent/tt-umd              (User Mode Driver)
+  #   - tenstorrent/tt-kmd              (Kernel Mode Driver)
+  #   - tenstorrent/tt-isa-documentation (ISA / hardware semantics docs)
+  # It is orientation-only and read-only; see "Using DeepWiki (cross-repo
+  # grounding)" in the body for the verify-before-asserting discipline. No new
+  # write permissions are granted — this is purely an additional read-only tool.
+  deepwiki:
+    url: "https://mcp.deepwiki.com/mcp"
+    allowed:
+      - read_wiki_structure
+      - read_wiki_contents
+      - ask_question
+
 safe-outputs:
   mentions: false
   add-comment:
@@ -121,6 +140,21 @@ tt-metal requires **specialized Tenstorrent runners** and a long, heavy build. Y
 
 Instead, to validate any code change you make, **open a PR that triggers `build-artifact.yaml` via the existing `pr-gate.yaml`**. See the **Validating changes via CI** section below. If you cannot validate a change through CI, open the ready-for-review PR anyway but clearly mark under **Test Status** that it is **unverified** and needs a maintainer to run CI.
 
+## Using DeepWiki (cross-repo grounding)
+
+You have a read-only **DeepWiki** MCP tool (`read_wiki_structure`, `read_wiki_contents`, `ask_question`). Use it to orient yourself on conceptual and cross-repo questions — especially about the sibling repos this workflow cannot easily clone and grep from the agent runner:
+
+- `tenstorrent/tt-metal` — this repo
+- `tenstorrent/tt-umd` — User Mode Driver
+- `tenstorrent/tt-kmd` — Kernel Mode Driver
+- `tenstorrent/tt-isa-documentation` — ISA / hardware semantics docs
+
+Good uses: *"how does tt-umd expose interrupts?"*, *"what does the ISA doc say about a given register?"*, *"which tt-umd layer does tt-metal call for device init?"* — the kind of question where local grep and `bash` are not enough because the answer lives in a separate repo or in hardware docs.
+
+**DeepWiki is for orientation, not ground truth.** Its content is generated from repositories and can lag their actual state, so treat every DeepWiki answer as a lead to confirm, never as a citable fact on its own. **Verify before you assert**: anything that goes into a PR diff, a bug root-cause, or a definitive-sounding comment must be checked against the *current* code via `bash`/`gh` (clone or fetch the relevant file, grep it, read it) — not asserted from DeepWiki alone. If you genuinely cannot verify a DeepWiki-sourced claim against real code, phrase it tentatively ("per DeepWiki, which may be out of date …") and say what would confirm it, rather than stating it as established.
+
+This does not change your permissions: DeepWiki is an additional read-only external tool. Your write surface is unchanged (read-only job plus the scoped safe-outputs above).
+
 ## Memory
 
 Use persistent repo memory to track:
@@ -135,6 +169,8 @@ Use persistent repo memory to track:
 Read memory at the **start** of every run; update it at the **end**.
 
 **Important**: Memory may be stale. Issues and PRs may have changed since the last run. Always verify memory against current repository state before acting.
+
+**Cache pointers, not frozen facts.** When you learn something useful via DeepWiki (see **Using DeepWiki** below) that looks reusable across runs, store a *pointer to how to re-derive it* — not the answer itself. For example, save "for tt-umd device-init issues, ask DeepWiki about tt-umd's init sequence; last checked 2026-07-23" rather than pasting DeepWiki's description of that sequence as a fixed fact. ISA docs and repo state drift, and a stale cached "fact" is worse than no cache — it invites confidently wrong comments. **Date every DeepWiki-derived note** so it is visibly re-verifiable, and re-verify against current code before relying on it again.
 
 ## Workflow
 
@@ -290,6 +326,7 @@ Only override the defaults above when the issue specifically requires it (e.g. a
 - **Small, focused PRs** — one concern per PR; always opened as ready-for-review so CI runs.
 - **Read `CONTRIBUTING.md` first**: follow tt-metal's coding standards, file structure, formatting, and CI/CD principles before opening any PR.
 - **Validate via CI, never locally**: for build-affecting C++/Python changes, open a PR to trigger `build-artifact.yaml` and report the result on a subsequent run. Documentation-only changes are exempt. Never claim a change is verified without a successful build run.
+- **DeepWiki is orientation, not proof**: use it to reason across `tt-metal`/`tt-umd`/`tt-kmd`/`tt-isa-documentation`, but verify anything load-bearing against current code before putting it in a diff or a definitive comment (see **Using DeepWiki**). Cache pointers, not facts, and date them.
 - **Respect existing style** — match tt-metal's C++ and Python formatting and naming conventions.
 - **AI transparency**: every comment, PR, and issue must include a Repo Assist disclosure with 🤖.
 - **Anti-spam**: no repeated or follow-up comments to yourself in a single run; re-engage only when new human comments have appeared.
