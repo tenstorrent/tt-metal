@@ -57,13 +57,13 @@ jobs:
         run: |
           case "$ARCHITECTURE" in
             all)
-              SKU_ALLOWLIST_ARGS=()
+              ENABLED_SKUS="ALL_SKUS_IN_TESTS"
               ;;
             wormhole)
-              SKU_ALLOWLIST_ARGS=(--sku-allowlist "wh_n150_civ2")
+              ENABLED_SKUS="wh_n150_civ2"
               ;;
             blackhole)
-              SKU_ALLOWLIST_ARGS=(--sku-allowlist "bh_p150b_civ2")
+              ENABLED_SKUS="bh_p150b_civ2"
               ;;
             *)
               echo "::error::Unsupported architecture '$ARCHITECTURE'"
@@ -73,9 +73,8 @@ jobs:
 
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "ALL_SKUS_IN_TESTS" \
-            ./.github/sku_config.yaml \
-            "${SKU_ALLOWLIST_ARGS[@]}"
+            "$ENABLED_SKUS" \
+            ./.github/sku_config.yaml
 
   compile-quasar-perf:
     if: ${{ inputs.architecture == 'all' || inputs.architecture == 'quasar' }}

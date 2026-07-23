@@ -19,7 +19,6 @@ on:
         type: number
 
 permissions:
-  checks: write
   contents: read
   packages: read
 
@@ -67,9 +66,8 @@ jobs:
           path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-quasar-compile.xml
 
       - name: Publish Test Results
-        uses: mikepenz/action-junit-report@v5
+        uses: mikepenz/action-junit-report@3585e9575db828022551b4231f165eb59a0e74e3 # v5.6.2
         if: always()
         with:
           report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-quasar-compile.xml
-          include_passed: true
           annotate_only: true
