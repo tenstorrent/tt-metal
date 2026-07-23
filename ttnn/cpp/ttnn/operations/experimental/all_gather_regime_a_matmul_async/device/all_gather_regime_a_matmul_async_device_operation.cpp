@@ -78,10 +78,10 @@ void AllGatherRegimeAMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
         "workers={})",
         operation_attributes.num_links,
         operation_attributes.num_workers_per_link);
-    // Need >= D+1 (per-shard) global semaphores (gather_ready + D shard_landed); factory validates exact count.
+    // Need >= 2*D global semaphores (D shard_ready + D shard_landed, per-shard local-first readiness).
     TT_FATAL(
-        operation_attributes.multi_device_global_semaphore.size() >= operation_attributes.d + 1,
-        "all_gather_regime_a_matmul_async needs >= D+1 global semaphores, got {} for D={}",
+        operation_attributes.multi_device_global_semaphore.size() >= 2u * operation_attributes.d,
+        "all_gather_regime_a_matmul_async needs >= 2*D global semaphores, got {} for D={}",
         operation_attributes.multi_device_global_semaphore.size(),
         operation_attributes.d);
 }

@@ -53,7 +53,7 @@ def run(mode, D, mesh_y, mesh_x, M, K, N, iters=30, warmup=5):
         b = ttnn.from_torch(t1, layout=ttnn.TILE_LAYOUT, device=md, dtype=ttnn.bfloat16, memory_config=wcfg,
                             mesh_mapper=repl)
         cfg = ttnn.RegimeAMatmulConfig(k_slices=3, n_slices=1, m_slices=1, k_block_tiles=4, n_subblock_tiles=6)
-        sems = [ttnn.create_global_semaphore(md, crs, 0) for _ in range(D + 1)]
+        sems = [ttnn.create_global_semaphore(md, crs, 0) for _ in range(2 * D)]
 
         def one():
             if mode == "unfused":

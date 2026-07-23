@@ -120,10 +120,10 @@ def _run_full_gather(D, mesh_shape, fabric_config, topology, shape=(32, 6144, 30
         ccl_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
         md.load_sub_device_manager(md.create_sub_device_manager([ttnn.SubDevice([ccl_crs])], 0))
         md.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
-        # D+1 GlobalSemaphores: [0] gather_ready (monotonic prefix; injector -> compute fan-out), [1+e]
-        # shard_landed[e] (device e marks its shard present everywhere). GlobalSemaphores (not program-local
+        # 2*D GlobalSemaphores: [0..D-1] shard_ready[s] (injector -> compute fan-out, per shard), [D..2D-1]
+        # shard_landed[s] (device s marks its shard present everywhere). GlobalSemaphores (not program-local
         # sems) so they can be reset between launches -> the streaming barrier stays correct on cache replay.
-        sems = [ttnn.create_global_semaphore(md, ccl_crs, 0) for _ in range(D + 1)]
+        sems = [ttnn.create_global_semaphore(md, ccl_crs, 0) for _ in range(2 * D)]
 
         a = ttnn.from_torch(
             t0,
@@ -150,12 +150,13 @@ def _run_full_gather(D, mesh_shape, fabric_config, topology, shape=(32, 6144, 30
         # cfg_kwargs=None -> config=None (auto-picker); else an explicit RegimeAMatmulConfig.
         cfg = None if cfg_kwargs is None else ttnn.RegimeAMatmulConfig(**cfg_kwargs)
 
-        # Two invocations: iteration 0 is a fresh program (cache miss), iteration 1 replays the cached program
-        # through override_runtime_arguments (exercises the custom compute_program_hash + arg relocation).
+        # Two invocations: iteration 0 is a fresh program (cache miss); iteration 1 replays the cached program
+        # through override_runtime_arguments. Iteration 1 deliberately allocates a FRESH semaphore set (distinct
+        # L1 addresses) so it exercises the override's GlobalSemaphore-address relocation — the exact cache-safety
+        # bug that stale baked-in addresses would trigger. (iter 0 uses `sems` created above.)
         out = None
         for _it in range(2):
-            for s in sems:
-                ttnn.reset_global_semaphore_value(s, 0)  # fresh barrier state each launch (cache replay safe)
+            iter_sems = sems if _it == 0 else [ttnn.create_global_semaphore(md, ccl_crs, 0) for _ in range(2 * D)]
             out = ttnn.experimental.all_gather_regime_a_matmul_async(
                 a,
                 b,
@@ -164,7 +165,7 @@ def _run_full_gather(D, mesh_shape, fabric_config, topology, shape=(32, 6144, 30
                 topology=topology,
                 num_links=1,
                 num_workers_per_link=1,
-                multi_device_global_semaphore=sems,
+                multi_device_global_semaphore=iter_sems,
             )
             ttnn.synchronize_device(md)
             # Output [M, N] is computed (replicated) on every device — each must match the full matmul.

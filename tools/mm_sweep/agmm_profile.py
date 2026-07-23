@@ -121,7 +121,7 @@ def main():
                             mesh_mapper=ttnn.create_mesh_mapper(md, ttnn.MeshMapperConfig(
                                 [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()], ttnn.MeshShape(1, D))))
         cfg = None  # auto-picker (config=None) so any corpus shape, incl. narrow-N, is handled
-        sems = [ttnn.create_global_semaphore(md, crs, 0) for _ in range(D + 1)]
+        sems = [ttnn.create_global_semaphore(md, crs, 0) for _ in range(2 * D)]
         out = None
         for _ in range(6):
             for s in sems:

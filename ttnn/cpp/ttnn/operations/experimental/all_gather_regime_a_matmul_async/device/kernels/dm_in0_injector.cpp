@@ -5,35 +5,36 @@
 // Fused all-gather + regime_a_matmul — Phase A in0 INJECTOR (fabric worker core, fabric mux v2).
 // (REGIME_A_AGMM_EXECUTION_PLAN.md Task 3; design: REGIME_A_AGMM_TASK3_BLUEPRINT.md.)
 //
-// Streaming producer. For every tile of this device's in0 K-shard: read it from DRAM, write it into the LOCAL
-// slice of this device's DRAM gather buffer (at the shard's global-K offset), and fabric-unicast it into every
-// other device's gather buffer at the SAME global offset (the gather buffer is a mesh tensor => identical NoC
-// address on all devices, reached via forward hops 1..num_dests on the ring).
+// Streaming producer with LOCAL-FIRST, per-shard readiness. For every tile of this device's in0 K-shard: read
+// it from DRAM, write it into the LOCAL slice of this device's DRAM gather buffer, and fabric-unicast it into
+// every other device's gather buffer at the SAME global offset (mesh tensor => identical NoC address; reached
+// via forward hops 1..num_dests on the ring).
 //
-// Readiness is PER-SHARD and progressive. Each device e increments its own shard-landed GlobalSemaphore
-// `shard_landed[e]` on every device (locally after its own write; over fabric on the others, ordered AFTER the
-// payload on the same mux channel). This device's injector then walks s = 0..D-1 in GLOBAL-K order, waits for
-// shard s to have landed locally, and fans out one increment of the monotonic `gather_ready` GlobalSemaphore to
-// every regime_a compute core. gather_ready therefore reaches value k once shards 0..k-1 are all present, so a
-// compute core can start reading in0 global K-tile kg as soon as gather_ready > kg/Kt_local — the matmul begins
-// before the full gather completes. (The full-gather-barrier diagnostic is just the reader waiting for D.)
+// Readiness is PER-SHARD and INDEPENDENT (no global-prefix ordering). Each device e marks its own shard present
+// everywhere via shard_landed[e] (local inc + fabric atomic-inc on peers, ordered AFTER the payload on the same
+// mux channel). This injector then, in ARRIVAL order:
+//   1. fans out shard_ready[device_index] to every compute core IMMEDIATELY (its own shard is already local), so
+//      the local-shard Pk band starts computing without waiting for any remote shard;
+//   2. polls the remaining shard_landed[s] and fans out shard_ready[s] as each lands.
+// The reader gates each in0 read of global tile kg on shard_ready[kg/Kt_local], so every device begins matmul
+// on its local K-region before the remote shards arrive.
 //
 // Runtime-arg contract (must match all_gather_regime_a_matmul_async_program_factory.cpp create_at()):
 //   a0  in0_shard_addr        DRAM base of this device's in0 shard [M, K_local]
 //   a1  gather_local_addr     DRAM base of this device's gather buffer [M, K_global]
 //   a2  Mt                    M tiles
-//   a3  Kt_local              K tiles owned locally
+//   a3  Kt_local              K tiles per device shard
 //   a4  Kt_global             K tiles of the gather buffer = row stride
 //   a5  k_tile_global_base    global K-tile offset of this device's shard (= device_index * Kt_local)
 //   a6  tile_bytes            bf16 tile = 2048
 //   a7  num_dests             # remote devices = D-1; reach each via forward hops 1..num_dests
 //   a8  D                     device count along the gather axis
 //   a9  device_index          this device's shard index (0..D-1)
-//   a10 inj_x                 injector core x (symmetric across devices; where shard_landed/gather_ready live)
+//   a10 inj_x                 injector core x (symmetric across devices; where shard_landed lives)
 //   a11 inj_y                 injector core y
-//   a12 gather_ready_addr     gather_ready GlobalSemaphore L1 address (monotonic prefix, fanned to compute)
-//   a13 num_compute_cores
-//   a14 .. a14+D-1            shard_landed[0..D-1] GlobalSemaphore L1 addresses
+//   a12 num_compute_cores
+//   a13 .. a13+D-1            shard_ready[0..D-1] GlobalSemaphore L1 addresses (compute-core fan-out targets)
+//   a13+D .. a13+2D-1         shard_landed[0..D-1] GlobalSemaphore L1 addresses (injector-core landing counters)
 //   then num_compute_cores * (x, y)
 //   then FabricMuxV2Sender::build_from_args() args (appended by the factory).
 //
@@ -59,11 +60,14 @@ void kernel_main() {
     const uint32_t device_index = get_arg_val<uint32_t>(a++);
     const uint32_t inj_x = get_arg_val<uint32_t>(a++);
     const uint32_t inj_y = get_arg_val<uint32_t>(a++);
-    const uint32_t ready_addr = get_arg_val<uint32_t>(a++);
     const uint32_t num_compute_cores = get_arg_val<uint32_t>(a++);
 
     constexpr uint32_t kMaxD = 8u;
+    uint32_t shard_ready_addr[kMaxD];
     uint32_t shard_landed_addr[kMaxD];
+    for (uint32_t s = 0; s < D; ++s) {
+        shard_ready_addr[s] = get_arg_val<uint32_t>(a++);
+    }
     for (uint32_t s = 0; s < D; ++s) {
         shard_landed_addr[s] = get_arg_val<uint32_t>(a++);
     }
@@ -89,6 +93,14 @@ void kernel_main() {
 
     auto sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(a);
     sender.open();
+
+    // fan out shard s readiness to every compute core (local NoC increments).
+    auto fanout = [&](uint32_t s) {
+        for (uint32_t i = 0; i < num_compute_cores; ++i) {
+            noc_semaphore_inc(get_noc_addr(cc_x[i], cc_y[i], shard_ready_addr[s]), 1);
+        }
+        noc_async_atomic_barrier();
+    };
 
     // Stream each local shard tile: DRAM shard -> L1 -> local gather slice + fabric unicast to every remote.
     for (uint32_t m = 0; m < Mt; ++m) {
@@ -118,7 +130,10 @@ void kernel_main() {
     }
     noc_async_write_barrier();  // this device's whole local shard has landed in the gather buffer
 
-    // Mark THIS device's shard present everywhere: locally now, and on each remote AFTER its payload flushed
+    // LOCAL-FIRST: our own shard is present locally now -> release the local Pk band immediately.
+    fanout(device_index);
+
+    // Mark THIS device's shard present on every device: locally, and on each remote AFTER its payload flushed
     // (same channel => ordered). Every device e increments shard_landed[e]; nobody else does.
     noc_semaphore_inc(get_noc_addr(inj_x, inj_y, shard_landed_addr[device_index]), 1);
     for (uint32_t h = 1; h <= num_dests; ++h) {
@@ -133,14 +148,23 @@ void kernel_main() {
     noc_async_write_barrier();
     sender.close();
 
-    // Progressive fan-out: as shard s (in GLOBAL-K order) lands locally, bump gather_ready on every compute
-    // core. gather_ready reaches k once shards 0..k-1 are all present, matching the reader's in-order K reads.
-    for (uint32_t s = 0; s < D; ++s) {
-        volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(shard_landed_addr[s]);
-        noc_semaphore_wait_min(landed, 1);
-        for (uint32_t i = 0; i < num_compute_cores; ++i) {
-            noc_semaphore_inc(get_noc_addr(cc_x[i], cc_y[i], ready_addr), 1);
+    // Release remaining shards to the compute readers as they arrive (order-independent, so the earliest-arriving
+    // remote shard is usable first — not forced into global 0..D-1 order).
+    bool released[kMaxD] = {false};
+    released[device_index] = true;
+    uint32_t remaining = num_dests;
+    while (remaining > 0) {
+        for (uint32_t s = 0; s < D; ++s) {
+            if (released[s]) {
+                continue;
+            }
+            volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(shard_landed_addr[s]);
+            invalidate_l1_cache();
+            if (*landed >= 1u) {
+                fanout(s);
+                released[s] = true;
+                --remaining;
+            }
         }
-        noc_async_atomic_barrier();
     }
 }

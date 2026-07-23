@@ -436,18 +436,20 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     const CoreCoord inj_logical = take_free_core();
     const CoreRangeSet inj_crs(CoreRange(inj_logical, inj_logical));
 
-    // Coordination uses D+1 GlobalSemaphores (multi_device_global_semaphore[0]=gather_ready, [1+e]=shard_landed
-    // for device e) rather than program-local CreateSemaphores: GlobalSemaphores can be reset host-side between
-    // launches, so the streaming barrier is correct on program-cache replay (a program-local semaphore keeps its
-    // accumulated value across launches and defeats the barrier). All live on the CCL sub-device CRS (all cores),
-    // so their address is valid on every compute core AND the injector core.
+    // Coordination uses 2*D GlobalSemaphores: [0..D-1] = shard_ready[s] (compute-core fan-out; reader waits),
+    // [D..2D-1] = shard_landed[s] (injector landing counters; device s increments on every device). They are
+    // GlobalSemaphores (not program-local CreateSemaphores) so the caller can reset them between launches —
+    // program-local semaphores keep their accumulated value across cache replays and defeat the barrier. All
+    // live on the CCL sub-device CRS (all cores), so each address is valid on every compute core AND the
+    // injector core. override_runtime_arguments() relocates these addresses on cache replay.
     TT_FATAL(
-        op.multi_device_global_semaphore.size() >= D + 1,
-        "all_gather_regime_a_matmul_async needs >= D+1 global semaphores (gather_ready + D shard_landed), got {} "
+        op.multi_device_global_semaphore.size() >= 2u * D,
+        "all_gather_regime_a_matmul_async needs >= 2*D global semaphores (D shard_ready + D shard_landed), got {} "
         "for D={}",
         op.multi_device_global_semaphore.size(),
         D);
-    const uint32_t gather_ready_addr = op.multi_device_global_semaphore.at(0).address();
+    auto shard_ready_addr = [&](uint32_t s) { return op.multi_device_global_semaphore.at(s).address(); };
+    auto shard_landed_addr = [&](uint32_t s) { return op.multi_device_global_semaphore.at(D + s).address(); };
 
     // Injector L1 scratch: payload tile CB (c_0) + packet-header CB (c_1).
     const uint32_t aligned_hdr = align_up((uint32_t)tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
@@ -545,9 +547,11 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             cp.valid_k,              // 14
             cp.valid_m,              // 15
             cp.valid_n,              // 16
-            gather_ready_addr,       // 17 gather_ready GlobalSemaphore L1 address
-            geo.Kt / D,              // 18 Kt_local (K tiles per device shard; shard of global tile = kg/Kt_local)
-            D};                      // 19 device count (streaming: gate kg on gather_ready>kg/Kt_local; full: ==D)
+            geo.Kt / D,              // 17 Kt_local (K tiles per device shard; shard of global tile = kg/Kt_local)
+            D};                      // 18 device count
+        for (uint32_t s = 0; s < D; ++s) {
+            wa.push_back(shard_ready_addr(s));  // 19..19+D-1 shard_ready[s] GlobalSemaphore addresses
+        }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
         std::vector<uint32_t> ca = {0u, geo.M_block_capacity, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u};
@@ -559,10 +563,14 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     const uint32_t Kt_global = geo.Kt;
     const uint32_t Kt_local = Kt_global / D;
     const uint32_t k_tile_global_base = device_index * Kt_local;
-    // injector core (symmetric across devices): where shard_landed + gather_ready live and where remote
-    // shard_landed atomic-incs are targeted.
+    // injector core (symmetric across devices): where shard_landed lives and where remote shard_landed
+    // atomic-incs are targeted. NOTE: this assumes identical logical->virtual worker mapping across the D
+    // devices (true under uniform harvesting, as on this galaxy). See F4/harvesting note in the op header.
     const CoreCoord inj_virtual = mesh_device->worker_core_from_logical_core(inj_logical);
 
+    // Record the injector-arg offset of the sem-address block so override_runtime_arguments can relocate the
+    // GlobalSemaphore addresses on a program-cache replay that supplies a fresh semaphore set.
+    const uint32_t inj_sem_base = 13u;  // a13.. = D shard_ready then D shard_landed
     std::vector<uint32_t> inj_rt = {
         in0_shard.buffer()->address(),  // a0 in0 shard base
         gather_addr,                    // a1 local gather base
@@ -576,13 +584,15 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         device_index,                  // a9 this device's shard index
         (uint32_t)inj_virtual.x,        // a10 injector core x
         (uint32_t)inj_virtual.y,        // a11 injector core y
-        gather_ready_addr,              // a12 gather_ready GlobalSemaphore L1 address (monotonic fan-out target)
-        geo.num_cores};                 // a13 number of compute cores to fan out to
-    // a14..a14+D-1: shard_landed[0..D-1] GlobalSemaphore L1 addresses.
+        geo.num_cores};                 // a12 number of compute cores to fan out to
+    // a13..a13+D-1: shard_ready[0..D-1] ; a13+D..a13+2D-1: shard_landed[0..D-1] GlobalSemaphore addresses.
     for (uint32_t s = 0; s < D; ++s) {
-        inj_rt.push_back(op.multi_device_global_semaphore.at(1u + s).address());
+        inj_rt.push_back(shard_ready_addr(s));
     }
-    // followed by each compute core's (x,y) for the gather_ready fan-out.
+    for (uint32_t s = 0; s < D; ++s) {
+        inj_rt.push_back(shard_landed_addr(s));
+    }
+    // followed by each compute core's (x,y) for the shard_ready fan-out.
     for (uint32_t i = 0; i < geo.num_cores; ++i) {
         auto p = phys(i);
         inj_rt.push_back(p.x);
@@ -610,18 +620,25 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             .writerB = writerB,
             .compute = compute,
             .injector_cores = {inj_logical},
-            .injector = injector}};
+            .injector = injector,
+            .d = D,
+            .writer_sem_base = 19u,      // writer arg 19.. = shard_ready[0..D-1]
+            .injector_sem_base = inj_sem_base}};  // injector arg 13.. = shard_ready[0..D-1] then shard_landed[0..D-1]
 }
 
 void AllGatherRegimeAMatmulAsyncProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const AllGatherRegimeAMatmulAsyncParams& /*operation_attributes*/,
+    const AllGatherRegimeAMatmulAsyncParams& op,
     const AllGatherRegimeAMatmulAsyncInputs& tensor_args,
     std::vector<Tensor>& output_tensors) {
     const uint32_t in1_addr = tensor_args.weight_tensor.buffer()->address();
     const uint32_t out_addr = output_tensors.at(0).buffer()->address();
     const uint32_t gather_addr = output_tensors.at(1).buffer()->address();
     const uint32_t in0_addr = tensor_args.input_tensor.buffer()->address();
+    // Fresh GlobalSemaphore addresses (the cache key does not include them, so a replay may supply a new set).
+    const uint32_t D = op.d;
+    auto sr = [&](uint32_t s) { return op.multi_device_global_semaphore.at(s).address(); };          // shard_ready
+    auto sl = [&](uint32_t s) { return op.multi_device_global_semaphore.at(D + s).address(); };       // shard_landed
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         auto& sv = cached_workload.shared_variables.at(range);
@@ -640,12 +657,20 @@ void AllGatherRegimeAMatmulAsyncProgramFactory::override_runtime_arguments(
             auto& wa = (*(b ? writerB_args : writerA_args))[core.x][core.y];
             wa[0] = gather_addr;
             wa[1] = out_addr;
+            for (uint32_t s = 0; s < sv.d; ++s) {  // relocate shard_ready[s] in the writer args
+                wa[sv.writer_sem_base + s] = sr(s);
+            }
         }
-        // injector: a0 in0 shard, a1 local gather base.
+        // injector: a0 in0 shard, a1 local gather base; shard_ready[0..D-1] then shard_landed[0..D-1].
         auto& inj_args = GetRuntimeArgs(program, sv.injector);
         const CoreCoord& ic = sv.injector_cores.at(0);
-        inj_args[ic.x][ic.y][0] = in0_addr;
-        inj_args[ic.x][ic.y][1] = gather_addr;
+        auto& ia = inj_args[ic.x][ic.y];
+        ia[0] = in0_addr;
+        ia[1] = gather_addr;
+        for (uint32_t s = 0; s < sv.d; ++s) {
+            ia[sv.injector_sem_base + s] = sr(s);
+            ia[sv.injector_sem_base + sv.d + s] = sl(s);
+        }
     }
 }
 
