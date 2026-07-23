@@ -15,13 +15,13 @@ import transformers
 
 import ttnn
 
-from ...layers.embeddings import Embedding
-from ...layers.linear import ColParallelLinear, RowParallelLinear
-from ...layers.module import Module, ModuleList
-from ...layers.normalization import RMSNorm
-from ...parallel.config import EncoderParallelConfig
-from ...parallel.manager import CCLManager
-from ...utils import cache, tensor
+from ....layers.embeddings import Embedding
+from ....layers.linear import ColParallelLinear, RowParallelLinear
+from ....layers.module import Module, ModuleList
+from ....layers.normalization import RMSNorm
+from ....parallel.config import EncoderParallelConfig
+from ....parallel.manager import CCLManager
+from ....utils import cache, tensor
 from .config import SmolLM3Config
 
 MAX_CHUNK_SIZE = 128

@@ -588,7 +588,7 @@ def test_fibo_encode_device_profile(*, mesh_device):
     ckpt = _fibo_local()
     ccl = CCLManager(mesh_device, num_links=_num_links(mesh_device), topology=ttnn.Topology.Linear)
     # tp on axis 0, sp on axis 1 (SP mandatory) -- matches the pipeline's encoder_parallel_config and
-    # test_fibo_wrapper_encode / tests/encoders/smollm3::test_smollm3_encoder_full_mesh.
+    # test_fibo_wrapper_encode / tests/models/bria_fibo/smollm3::test_smollm3_encoder_full_mesh.
     encoder = SmolLM3TextEncoderWrapper(
         ckpt,
         device=mesh_device,

@@ -128,7 +128,7 @@ class BriaFiboPipelineConfig:
         # on axis 0 (TP = mesh[0] = 4), on the whole mesh (same submesh as the DiT). The token sequence is
         # padded to a fixed 1024 bucket and sharded over the SP axis; SmolLM3Attention all-gathers K/V over
         # the SP axis and Q/K/V/O over the TP axis. PCC-validated by
-        # tests/encoders/smollm3/test_smollm3.py::test_smollm3_encoder_sp. On the 4x8 Galaxy this SP=8 x
+        # tests/models/bria_fibo/smollm3/test_smollm3.py::test_smollm3_encoder_sp. On the 4x8 Galaxy this SP=8 x
         # TP=4 layout measured ~12.5 s/encode vs ~23.8 s for SP=4 x TP=8 (test_fibo_encode_perf).
         enc_sp_axis, enc_tp_axis = 1, 0
         encoder_parallel_config = EncoderParallelConfig.from_tuples(

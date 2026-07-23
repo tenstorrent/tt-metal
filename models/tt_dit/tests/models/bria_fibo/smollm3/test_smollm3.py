@@ -8,9 +8,9 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_dit.encoders.smollm3.config import SmolLM3Config
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.pipelines.bria_fibo.smollm3.config import SmolLM3Config
 from models.tt_dit.utils import tensor as tt_tensor
 from models.tt_dit.utils.check import assert_quality
 
@@ -29,7 +29,7 @@ def test_encoder_parallel_config_from_tuples():
 
 
 def test_smollm3_rope_matches_hf():
-    from models.tt_dit.encoders.smollm3.model_smollm3 import create_rope_tensors
+    from models.tt_dit.pipelines.bria_fibo.smollm3.model_smollm3 import create_rope_tensors
 
     head_dim, rope_theta, batch, seq = 128, 5000000.0, 2, 40
     cos, sin = create_rope_tensors(batch, seq, head_dim, rope_theta)
@@ -93,7 +93,7 @@ def test_smollm3_encoder_sp(*, mesh_device, seq, sp_axis):
     gathered back over the same axis. PCC vs. HF proves the RoPE-shard-offset + rectangular
     causal-bias math for either axis assignment.
     """
-    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
+    from models.tt_dit.pipelines.bria_fibo.smollm3.model_smollm3 import SmolLM3TextEncoder
 
     torch.manual_seed(0)
     tp_axis = 1 - sp_axis
@@ -142,7 +142,7 @@ def test_fibo_wrapper_bucket_pick(*, expect_error):
 )
 def test_smollm3_sp_bias_cached(*, mesh_device):
     """The SP causal bias is built once per local seq length and reused across forwards."""
-    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
+    from models.tt_dit.pipelines.bria_fibo.smollm3.model_smollm3 import SmolLM3TextEncoder
 
     torch.manual_seed(0)
     sp_axis, tp_axis, seq = 1, 0, 512
@@ -299,7 +299,7 @@ def test_fibo_wrapper_encode_replay_stable(*, mesh_device):
 def test_smollm3_state_conversion():
     import torch as _torch
 
-    from models.tt_dit.encoders.smollm3.model_smollm3 import STATE_CONVERSION
+    from models.tt_dit.pipelines.bria_fibo.smollm3.model_smollm3 import STATE_CONVERSION
 
     # Full SmolLM3ForCausalLM-style dict: model.* prefix + lm_head + a rotary_emb buffer.
     full = {

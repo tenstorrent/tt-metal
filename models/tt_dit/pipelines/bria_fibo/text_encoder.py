@@ -22,9 +22,9 @@ from transformers import AutoTokenizer
 
 import ttnn
 
-from ...encoders.smollm3.model_smollm3 import SmolLm3Checkpoint
 from ...utils import tensor as tt_tensor
 from ...utils.tracing import Tracer
+from .smollm3.model_smollm3 import SmolLm3Checkpoint
 
 if TYPE_CHECKING:
     from ...parallel.config import EncoderParallelConfig
