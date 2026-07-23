@@ -25,67 +25,74 @@ CSV = f"{ROOT}/generated/profiler/.logs/profile_log_device.csv"
 FREQ = 1.35e9
 
 
+def _median(v):
+    v = sorted(v)
+    return v[len(v) // 2] if v else 0.0
+
+
 def parse_overlap():
+    import statistics
     rows = list(csv.reader(open(CSV)))
-    # per (device, core_x, core_y, risc, zone): list of (type, cycle)
+    # per (device, core_x, core_y, zone): ordered list of (start,end) pairs, one per profiled run.
     ev = defaultdict(list)
     for row in rows[2:]:
         if len(row) < 12 or not row[10].strip().endswith("-KERNEL"):
             continue
-        dev = row[0].strip()
-        ev[(dev, row[1].strip(), row[2].strip(), row[10].strip())].append((row[11].strip(), int(row[5])))
-    # last run's span per (dev,core,zone): (start, end)
-    spans = {}
+        ev[(row[0].strip(), row[1].strip(), row[2].strip(), row[10].strip())].append((row[11].strip(), int(row[5])))
+    runs = defaultdict(list)  # (dev,x,y,zone) -> [(start,end), ...] per run
     for k, l in ev.items():
         st = None
-        pairs = []
         for t, c in l:
             if t == "ZONE_START":
                 st = c
             elif t == "ZONE_END" and st is not None:
-                pairs.append((st, c))
+                runs[k].append((st, c))
                 st = None
-        if pairs:
-            spans[k] = pairs[-1]  # last (steady-state) run
-    # per device: injector BRISC end (max), earliest compute TRISC start (min), latest compute TRISC end
-    per_dev = defaultdict(lambda: {"inj_start": None, "inj_end": None, "comp_start": None, "comp_end": None,
-                                   "n_trisc": 0})
-    # heuristic: the injector is the lone BRISC-KERNEL core that is NOT also running a TRISC-KERNEL (compute
-    # cores run reader+compute; the injector core runs only the injector DM kernel). We approximate the injector
-    # as the BRISC core with the LATEST end that has no TRISC zone, and compute as all TRISC cores.
+    # number of steady-state runs to score (drop warmup run 0): min pairs across zones, capped.
+    nz = [len(p) for p in runs.values() if p]
+    nruns = min(nz) if nz else 0
+    if nruns <= 1:
+        run_ids = list(range(nruns))
+    else:
+        run_ids = list(range(1, nruns))  # drop warmup
+    # per device, per run: total span (max end - min start over all zones), compute span, injector span.
     trisc_cores = defaultdict(set)
-    for (dev, x, y, zone), (s, e) in spans.items():
+    for (dev, x, y, zone) in runs:
         if zone == "TRISC-KERNEL":
             trisc_cores[dev].add((x, y))
-    for (dev, x, y, zone), (s, e) in spans.items():
-        d = per_dev[dev]
-        if zone == "TRISC-KERNEL":
-            d["n_trisc"] += 1
-            d["comp_start"] = s if d["comp_start"] is None else min(d["comp_start"], s)
-            d["comp_end"] = e if d["comp_end"] is None else max(d["comp_end"], e)
-        elif zone == "BRISC-KERNEL" and (x, y) not in trisc_cores[dev]:
-            # candidate injector core (no compute on it)
-            if d["inj_end"] is None or e > d["inj_end"]:
-                d["inj_end"] = e
-                d["inj_start"] = s
-    # total device span = latest kernel end - earliest kernel start over ALL -KERNEL zones on that device.
-    dev_min = defaultdict(lambda: None)
-    dev_max = defaultdict(lambda: None)
-    for (dev, x, y, zone), (s, e) in spans.items():
-        dev_min[dev] = s if dev_min[dev] is None else min(dev_min[dev], s)
-        dev_max[dev] = e if dev_max[dev] is None else max(dev_max[dev], e)
+    devs = sorted({k[0] for k in runs})
     out = {}
-    for dev, d in per_dev.items():
-        if d["n_trisc"] == 0 or d["inj_end"] is None:
+    for dev in devs:
+        n_trisc = len(trisc_cores[dev])
+        if n_trisc == 0:
+            continue
+        totals, comps, injs = [], [], []
+        for r in run_ids:
+            allpairs = [runs[k][r] for k in runs if k[0] == dev and len(runs[k]) > r]
+            if not allpairs:
+                continue
+            tmin = min(s for s, _ in allpairs)
+            tmax = max(e for _, e in allpairs)
+            totals.append((tmax - tmin) / FREQ * 1e6)
+            cp = [runs[k][r] for k in runs if k[0] == dev and k[3] == "TRISC-KERNEL" and len(runs[k]) > r]
+            if cp:
+                comps.append((max(e for _, e in cp) - min(s for s, _ in cp)) / FREQ * 1e6)
+            ip = [runs[k][r] for k in runs
+                  if k[0] == dev and k[3] == "BRISC-KERNEL" and (k[1], k[2]) not in trisc_cores[dev]
+                  and len(runs[k]) > r]
+            if ip:  # injector core = BRISC with no TRISC; take the latest-ending such core's span
+                s0, e0 = max(ip, key=lambda p: p[1])
+                injs.append((e0 - s0) / FREQ * 1e6)
+        if not totals:
             continue
         out[dev] = {
-            "n_compute_cores": d["n_trisc"],
-            "inj_span_us": round((d["inj_end"] - d["inj_start"]) / FREQ * 1e6, 2),
-            "compute_span_us": round((d["comp_end"] - d["comp_start"]) / FREQ * 1e6, 2),
-            # total device span is the meaningful streaming-vs-full-gather A/B signal: full-gather serializes
-            # (whole gather then compute), streaming overlaps them, so on fabric-bound shapes streaming's total
-            # is smaller. (Per-kernel TRISC start can't isolate "first math" — the zone includes CB waits.)
-            "total_device_span_us": round((dev_max[dev] - dev_min[dev]) / FREQ * 1e6, 2),
+            "n_compute_cores": n_trisc,
+            "runs": len(totals),
+            "total_span_us_median": round(_median(totals), 2),
+            "total_span_us_min": round(min(totals), 2),
+            "total_span_us_max": round(max(totals), 2),
+            "compute_span_us_median": round(_median(comps), 2) if comps else None,
+            "injector_span_us_median": round(_median(injs), 2) if injs else None,
         }
     return out
 
@@ -123,7 +130,7 @@ def main():
         cfg = None  # auto-picker (config=None) so any corpus shape, incl. narrow-N, is handled
         sems = [ttnn.create_global_semaphore(md, crs, 0) for _ in range(2 * D)]
         out = None
-        for _ in range(6):
+        for _ in range(12):
             for s in sems:
                 ttnn.reset_global_semaphore_value(s, 0)
             out = ttnn.experimental.all_gather_regime_a_matmul_async(

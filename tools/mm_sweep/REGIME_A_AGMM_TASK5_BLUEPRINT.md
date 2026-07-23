@@ -1,10 +1,13 @@
 # AGMM Task 5 — Phase B: direct remote-L1 streaming (design blueprint)
 
 Goal (plan Task 5): receive remote A transport chunks into bounded **L1** slots and feed regime_a compute
-directly, instead of staging them through the DRAM gather buffer. Task 4 showed the fused compute span
-(~143 µs at 32x6144x3072, D=4) is ~55 µs above single-chip regime_a (~88 µs) because the gather buffer is a
-**second in0 DRAM read** competing with in1 bank BW. Removing that round-trip is the measured ceiling for
-Phase B. Keep the staged-DRAM path (Phase A) behind a selector for the A/B (Task 6).
+directly, instead of staging them through the DRAM gather buffer. Task 4 (re-measured) shows the DRAM-staged
+op is compute-bound at small M/N (gather hidden) but strongly **gather/fabric-bound at large M/N** (e.g.
+256x6144x768: injector/gather 366 µs vs single-chip matmul 44 µs). The Phase-B target is therefore to cut the
+**gather cost** on those fabric-bound shapes (remove the DRAM round-trip for remote A; fewer bytes on the
+critical path), NOT more overlap (already near-complete). A clean isolated ceiling is NOT available from the
+current kernel spans (they include gather waits — see the Task-4 report); measure Phase B directly against the
+same-config staged-DRAM path. Keep the staged-DRAM path (Phase A) behind a selector for the A/B (Task 6).
 
 ## What stays vs changes
 
@@ -64,5 +67,6 @@ with no correctness/hang/watcher/control regression; a hybrid needs a single exp
 
 - L1 pressure: slots compete with regime_a CBs; the host plan's ~L1/3 cap is the guard — validate against the
   actual per-core CB footprint at each config.
-- The overlap is ALREADY near-complete at Mt=1 corpus shapes (Task 4), so Phase B's win is mostly the removed
-  DRAM read, not more overlap; expect the biggest gains on compute/in1-bound shapes, and re-check narrow-N.
+- Overlap is already near-complete (Task 4), so Phase B's win is reduced gather cost, not more overlap. Expect
+  the biggest gains on the gather/fabric-bound shapes (large M/N, e.g. 256x6144x768 where gather ≈ 8x the
+  matmul); compute-bound small-M/N shapes already hide the gather and will gain little.
