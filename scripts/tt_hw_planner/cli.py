@@ -1690,15 +1690,21 @@ def _enforce_backend_match_quality_or_abort(
         return None
     model_type = ""
     pipeline_tag = None
+    architectures = None
     try:
         model_type = str(probe.raw_config.get("model_type") or "")
         pipeline_tag = getattr(probe, "pipeline_tag", None)
+        architectures = probe.raw_config.get("architectures") or None
     except Exception:
         pass
-    backend, quality = pick_backend_with_quality(
+    from .sibling_ranker import resolve_backend_with_quality
+
+    backend, quality = resolve_backend_with_quality(
+        model_id=model_id,
         category=probe.category,
         model_type=model_type,
         pipeline_tag=pipeline_tag,
+        architectures=architectures,
     )
     try:
         from .family_backends import rank_backends as _rank_backends
@@ -1730,6 +1736,14 @@ def _enforce_backend_match_quality_or_abort(
             f"  (no backend registered for category={probe.category!r} "
             f"and auto-onboard could not draft one; deferring to "
             f"scaffold's cold-start path)"
+        )
+        return None
+    if quality == "llm":
+        print(
+            f"  Backend match: LLM-RESOLVED  ({backend.name})  "
+            f"(deterministic keys did not exact-match model_type={model_type!r}; "
+            f"the registry-constrained LLM ranker chose this as the closest "
+            f"architectural sibling)"
         )
         return None
     if quality == "exact":

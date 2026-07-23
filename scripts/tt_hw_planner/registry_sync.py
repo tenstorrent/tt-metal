@@ -535,7 +535,12 @@ _PIPELINE_CATEGORY_HINTS = (
     ("sana", "Image"),
 )
 
-_PIPELINE_TAGS = {"Image": ["text-to-image"], "Video": ["text-to-video"], "TTS": ["text-to-audio"]}
+_PIPELINE_TAGS = {
+    "Image": ["text-to-image"],
+    "Video": ["text-to-video"],
+    "TTS": ["text-to-audio"],
+    "VLM": ["image-text-to-text"],
+}
 
 
 def _derive_family_roots_candidates(root: Path) -> List[dict]:
@@ -574,6 +579,14 @@ def _derive_family_roots_candidates(root: Path) -> List[dict]:
 
 
 _DEMO_CATEGORY_HINTS = (
+    ("_vl", "VLM"),
+    ("vl_", "VLM"),
+    ("llava", "VLM"),
+    ("paligemma", "VLM"),
+    ("idefics", "VLM"),
+    ("smolvlm", "VLM"),
+    ("mllama", "VLM"),
+    ("vlm", "VLM"),
     ("whisper", "STT"),
     ("speech", "STT"),
     ("wav2vec", "STT"),
@@ -623,19 +636,74 @@ def _list_upstream_demos(git_root: Path) -> List[str]:
     return names
 
 
-def _derive_demo_families(demo_names: List[str]) -> List[dict]:
-    """Derive low-confidence sibling family candidates from fetched demo dir
-    names (fixes-plan Point 2a) so a brand-new upstream demo is auto-proposed to
-    ``rank_backends`` without a hand-edit. Conservative: only when a category can
-    be inferred; ``model_type_keys`` = the dir name, so an exact model_type match
-    surfaces the demo, and it never overrides a curated entry (dropped on name/
+def _norm_slug(s: Optional[str]) -> str:
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def _read_model_type_configs(root: Path) -> Dict[str, dict]:
+    """Read the REAL HF ``config.json`` files shipped under synced ``model_params``
+    dirs and index them by normalized ``model_type``. Each value is
+    ``{"model_type", "architectures", "category"}`` where category comes from the
+    probe's model_type classifier (which knows e.g. ``qwen2_5_vl`` -> VLM), falling
+    back to the transformers registry. This is what lets the demo-family derivation
+    use the true model_type + category instead of guessing from the demo folder
+    name (whose slug drops the config's separators, e.g. folder ``qwen25_vl`` vs
+    config ``qwen2_5_vl``). Never raises; ``{}`` on any error."""
+    try:
+        from .probe import _category_from_model_type
+    except Exception:
+
+        def _category_from_model_type(_mt):  # type: ignore
+            return None
+
+    out: Dict[str, dict] = {}
+    for sub in _SYNCED_SUBTREES:
+        base = root / sub
+        if not base.is_dir():
+            continue
+        for cfg in sorted(base.rglob("model_params/*/config.json")):
+            try:
+                data = json.loads(cfg.read_text())
+            except Exception:
+                continue
+            mt = str(data.get("model_type") or "").strip().lower()
+            if not mt:
+                continue
+            nmt = _norm_slug(mt)
+            if nmt in out:
+                continue
+            try:
+                cat = _category_from_model_type(mt)
+            except Exception:
+                cat = None
+            out[nmt] = {"model_type": mt, "architectures": data.get("architectures") or [], "category": cat}
+    return out
+
+
+def _derive_demo_families(demo_names: List[str], root: Optional[Path] = None) -> List[dict]:
+    """Derive low-confidence sibling family candidates from fetched demo dir names
+    (fixes-plan Point 2a) so a brand-new upstream demo is auto-proposed to
+    ``rank_backends`` without a hand-edit. When a demo folder normalizes to a real
+    HF ``config.json`` model_type shipped under ``model_params`` (e.g. folder
+    ``qwen25_vl`` -> config ``qwen2_5_vl``), the TRUE model_type is used as the key
+    and the category is read from that config -- so the sibling is tagged with the
+    HF model_type + real category (VLM, not a name-guessed LLM). Falls back to the
+    demo-name category hints only when no config matches. Conservative: only when a
+    category can be inferred; never overrides a curated entry (dropped on name/
     model_type collision by the family overlay loader)."""
+    configs = _read_model_type_configs(Path(root)) if root is not None else {}
     out: List[dict] = []
     for name in demo_names:
         low = name.lower()
-        cat = next((c for k, c in _DEMO_CATEGORY_HINTS if k in low), None)
-        if not cat:
-            continue
+        real = configs.get(_norm_slug(name))
+        if real and real.get("category"):
+            cat = real["category"]
+            key = real["model_type"]
+        else:
+            cat = next((c for k, c in _DEMO_CATEGORY_HINTS if k in low), None)
+            key = low
+            if not cat:
+                continue
         out.append(
             {
                 "kind": "family",
@@ -644,8 +712,8 @@ def _derive_demo_families(demo_names: List[str]) -> List[dict]:
                 "demo_path": f"models/demos/{name}",
                 "routing_mode": "template",
                 "canonical_hf_id": None,
-                "model_type_keys": [low],
-                "pipeline_tags": [],
+                "model_type_keys": [key],
+                "pipeline_tags": _PIPELINE_TAGS.get(cat, []),
                 "notes": "auto-derived upstream demo (fixes-plan Point 2a); low-confidence sibling candidate ranked below curated entries.",
                 "source": "auto-derived-upstream",
             }
@@ -694,7 +762,7 @@ def refresh_registry(tree_root, sha: str = "LOCAL") -> dict:
     except Exception:
         pass
     try:
-        for f in _derive_demo_families(_list_upstream_demos(root)):
+        for f in _derive_demo_families(_list_upstream_demos(root), root):
             if f["name"] not in declared_family_names:
                 families.append(f)
     except Exception:

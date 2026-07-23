@@ -429,7 +429,16 @@ def _prepare_non_text_family(
 ) -> BringupPlan:
     pipeline_tag = getattr(probe, "pipeline_tag", None)
     model_type = (probe.raw_config or {}).get("model_type") if probe.raw_config else None
-    backend = pick_backend(category=probe.category, model_type=model_type, pipeline_tag=pipeline_tag)
+    architectures = ((probe.raw_config or {}).get("architectures") if probe.raw_config else None) or None
+    from .sibling_ranker import resolve_backend_with_quality
+
+    backend, _q = resolve_backend_with_quality(
+        model_id=model_id,
+        category=probe.category,
+        model_type=model_type,
+        pipeline_tag=pipeline_tag,
+        architectures=architectures,
+    )
     if backend is None:
         raise BringupError(
             f"{model_id} has category={probe.category} but no tt-metal demo backend "

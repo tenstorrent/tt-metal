@@ -268,6 +268,7 @@ def _emit_run_report_impl(
         _cat = _bs3.get("category") or next((b.category for b in all_backends() if b.name == _picked), None)
         if _cat:
             _use_llm = os.environ.get("TT_HW_PLANNER_LLM_SIBLINGS", "1") != "0"
+            _components = _bs3.get("components") or _bs3.get("modules") or None
             _ranked = rank_siblings(
                 model_id=_bs3.get("model_id") or model_id or "",
                 category=_cat,
@@ -277,6 +278,7 @@ def _emit_run_report_impl(
                 notes=_bs3.get("notes") or "",
                 top_n=3,
                 use_llm=_use_llm,
+                components=_components,
             )
             if _ranked:
                 lines.append("## Sibling candidates (ranked)")

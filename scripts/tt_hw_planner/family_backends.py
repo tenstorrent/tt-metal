@@ -1,7 +1,18 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
+
+
+def _norm_mt(s: Optional[str]) -> str:
+    """Normalize a model_type / registry key for matching: lowercase + strip all
+    non-alphanumerics, so separator / underscore / version-digit-grouping variants
+    of the SAME model collapse to one token (HF ``qwen2_5_vl`` == synced path-slug
+    key ``qwen25_vl``; ``qwen2-vl`` == ``qwen2_vl``). Fixes the auto-sync
+    slug!=model_type miss that otherwise drops these to the pipeline-tag / LLM
+    fallback and mis-routes to a wrong-arch template."""
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
 
 
 DEFAULT_TEMPLATE_PYTEST_EXCLUDE_K = (
@@ -371,16 +382,16 @@ def pick_backend_with_quality(
                                   opts in.
       - ``"none"``             -- no backend at all (no category match).
     """
-    mt = (model_type or "").lower()
+    nmt = _norm_mt(model_type)
     pt = (pipeline_tag or "").lower()
     candidates = backends_for_category(category)
 
     for b in candidates:
-        if mt and mt in {k.lower() for k in b.model_type_keys}:
+        if nmt and nmt in {_norm_mt(k) for k in b.model_type_keys}:
             return (b, "exact")
-    if mt:
+    if nmt:
         for b in all_backends():
-            if mt in {k.lower() for k in b.model_type_keys}:
+            if nmt in {_norm_mt(k) for k in b.model_type_keys}:
                 return (b, "exact")
 
     for b in candidates:
@@ -418,13 +429,14 @@ def rank_backends(
     Returns the top ``top_n`` (all if ``top_n`` is falsy), highest score first.
     """
     mt = (model_type or "").lower()
+    nmt = _norm_mt(model_type)
     pt = (pipeline_tag or "").lower()
     ranked: List[Tuple[FamilyBackend, int, str]] = []
     for b in all_backends():
         same_cat = b.category == category
-        mkeys = {k.lower() for k in b.model_type_keys}
+        mkeys = {_norm_mt(k) for k in b.model_type_keys}
         pkeys = {t.lower() for t in b.pipeline_tags}
-        if mt and mt in mkeys:
+        if nmt and nmt in mkeys:
             score = 100 if same_cat else 90
             reason = f"exact model_type '{mt}'" + ("" if same_cat else f" (cross-category {b.category})")
         elif pt and pt in pkeys:

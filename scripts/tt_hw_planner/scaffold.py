@@ -450,7 +450,16 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
 def _plan_demo_folder_scaffold(*, new_model_id: str, probe: Any) -> ScaffoldPlan:
     model_type = (probe.raw_config or {}).get("model_type")
     pipeline_tag = getattr(probe, "pipeline_tag", None)
-    backend = pick_backend(category=probe.category, model_type=model_type, pipeline_tag=pipeline_tag)
+    architectures = (probe.raw_config or {}).get("architectures") or None
+    from .sibling_ranker import resolve_backend_with_quality
+
+    backend, _q = resolve_backend_with_quality(
+        model_id=new_model_id,
+        category=probe.category,
+        model_type=model_type,
+        pipeline_tag=pipeline_tag,
+        architectures=architectures,
+    )
     if backend is None:
         raise ColdStartScaffoldError(
             new_model_id,
