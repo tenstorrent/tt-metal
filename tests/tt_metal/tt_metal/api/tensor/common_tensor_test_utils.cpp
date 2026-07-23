@@ -13,8 +13,9 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <internal/tensor/byte_based_data_transfer_apis.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
 namespace test_utils {
 
@@ -34,7 +35,7 @@ void test_tensor_on_device(
         host_data[i] = static_cast<std::byte>(i % random_prime_number);
     }
 
-    auto tensor = MeshTensor::allocate_on_device(device, TensorSpec(input_shape, layout), TensorTopology());
+    auto tensor = MeshTensor::allocate_on_device(device, TensorSpec(input_shape, layout));
 
     auto& cq = device.mesh_command_queue();
     enqueue_write_tensor(cq, host_data.data(), tensor);

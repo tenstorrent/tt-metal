@@ -24,7 +24,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -667,8 +667,8 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
     auto tensor_spec = TensorSpec(Shape{num_pages, 512}, tensor_layout);
 
-    MeshTensor input_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    MeshTensor output_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    MeshTensor input_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    MeshTensor output_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     // -------------------------------------------------------
     // Build ProgramSpec: 2 DM kernels + 1 DFB + 2 TensorParameters
@@ -792,7 +792,7 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
 
     // Single-shard L1 tensor on core (0,0): one 32x32 BFLOAT16 tile.
     auto tensor_param = MakeShardedTensorParameter("local_t", Shape{32, 32}, {32, 32}, /*num_cores=*/1);
-    MeshTensor local_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_param.spec, TensorTopology{});
+    MeshTensor local_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_param.spec);
 
     ProgramSpec spec;
     spec.name = "local_tensor_accessor_compute";
@@ -1027,7 +1027,7 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
     auto tensor_spec = TensorSpec(Shape{1, 512}, tensor_layout);
-    MeshTensor io_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    MeshTensor io_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     ProgramSpec spec;
     spec.name = "crta_all_four_sections";

@@ -15,7 +15,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape.hpp>
 

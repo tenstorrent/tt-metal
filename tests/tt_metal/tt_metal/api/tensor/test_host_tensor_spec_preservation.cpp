@@ -8,12 +8,16 @@
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <internal/tensor/host_pad_apis.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
@@ -65,7 +69,7 @@ TEST(HostTensorSpecPreservation, ToLayoutInterleavedRmTileRoundTrip) {
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(rm.tensor_spec(), expected_rm_spec));
     EXPECT_EQ(rm.memory_config().buffer_type(), BufferType::DRAM);
-    EXPECT_EQ(rm.tensor_topology(), tile_source.tensor_topology());
+    EXPECT_EQ(get_tensor_topology(rm), get_tensor_topology(tile_source));
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(rm);
 
     // RM PageConfig does not carry a non-default tile; restore TILE with explicit tile.
@@ -74,7 +78,7 @@ TEST(HostTensorSpecPreservation, ToLayoutInterleavedRmTileRoundTrip) {
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(tiled_back.tensor_spec(), expected_tile_spec));
     EXPECT_EQ(tiled_back.memory_config().buffer_type(), BufferType::DRAM);
-    EXPECT_EQ(tiled_back.tensor_topology(), tile_source.tensor_topology());
+    EXPECT_EQ(get_tensor_topology(tiled_back), get_tensor_topology(tile_source));
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(tiled_back);
 
     auto round_trip = tiled_back.to_vector<float>();
@@ -108,7 +112,7 @@ TEST(HostTensorSpecPreservation, ToLayoutShardedPreservesShardSpecAndPackedSizes
         distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<float>(data_0)); });
     distributed_buffer.emplace_shard(
         distributed::MeshCoordinate(0, 1), [&]() { return HostBuffer(std::vector<float>(data_1)); });
-    auto source = HostTensor::from_buffer(std::move(distributed_buffer), source_spec, topology);
+    auto source = host_tensor_from_buffer_with_topology(std::move(distributed_buffer), source_spec, topology);
 
     auto result = to_layout(source, Layout::ROW_MAJOR);
 
@@ -118,7 +122,7 @@ TEST(HostTensorSpecPreservation, ToLayoutShardedPreservesShardSpecAndPackedSizes
     EXPECT_TRUE(result.memory_config().shard_spec().has_value());
     EXPECT_EQ(result.memory_config().shard_spec(), memory_config.shard_spec());
     EXPECT_TRUE(experimental::per_core_allocation::is_per_core_allocation(result.memory_config()));
-    EXPECT_EQ(result.tensor_topology(), topology);
+    EXPECT_EQ(get_tensor_topology(result), topology);
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(result);
 
     auto coords = result.buffer().shard_coords();

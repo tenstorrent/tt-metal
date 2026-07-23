@@ -8,7 +8,6 @@
 
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 
 #include <tt_stl/optional_reference.hpp>
 
@@ -21,6 +20,7 @@ namespace tt::tt_metal {
 
 // Implementation details for MeshTensor
 class MeshTensorImpl;
+class TensorTopology;
 
 namespace distributed {
 class MeshDevice;
@@ -57,15 +57,14 @@ public:
     MeshTensor() = delete;
 
     /**
-     * Allocate a MeshTensor on the given device with the given spec and topology.
+     * Allocate a MeshTensor on the given device with the given spec.
      */
-    static MeshTensor allocate_on_device(
-        distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology);
+    static MeshTensor allocate_on_device(distributed::MeshDevice& mesh_device, const TensorSpec& spec);
 
     /**
      * Construct a MeshTensor that takes ownership of an already-allocated MeshBuffer.
      */
-    static MeshTensor from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology);
+    static MeshTensor from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec);
 
     /**
      * Release ownership of the underlying device memory.
@@ -125,11 +124,6 @@ public:
     const TensorSpec& tensor_spec() const;
 
     /**
-     * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
-     */
-    const TensorTopology& tensor_topology() const;
-
-    /**
      * Returns true if this MeshTensor was left in a moved-from state.
      *
      * A MeshTensor becomes valueless when it is the source of a move construction or move assignment.
@@ -167,11 +161,6 @@ public:
     Strides strides() const;
 
     /**
-     * Update the topology of the MeshTensor post construction.
-     */
-    void update_tensor_topology(TensorTopology tensor_topology);
-
-    /**
      * Access to the implementation.
      *
      * pre-condition: The MeshTensor must not be in a default constructed state.
@@ -180,6 +169,11 @@ public:
     const MeshTensorImpl& impl() const;
 
 private:
+    friend MeshTensor allocate_mesh_tensor_on_device_with_topology(
+        distributed::MeshDevice& mesh_device, TensorSpec spec, TensorTopology topology);
+    friend MeshTensor mesh_tensor_from_buffer_with_topology(
+        distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology);
+
     // Internal constructor for transition. Use the from_buffer factory or allocate_on_device
     // to build a MeshTensor.
     explicit MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology);

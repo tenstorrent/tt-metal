@@ -317,10 +317,10 @@ void run_single_core_reduce_program(
                                           : dims.single_tile_bytes;
     const uint32_t num_input_pages = dims.dram_buffer_size / dims.single_tile_bytes;
     const uint32_t num_output_pages = dims.output_size_bytes / dims.single_tile_bytes;
-    auto in_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(input_tile_bytes, num_input_pages), TensorTopology{});
+    auto in_tensor =
+        MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(input_tile_bytes, num_input_pages));
     auto out_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_output_pages), TensorTopology{});
+        *mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_output_pages));
 
     constexpr uint32_t num_buffer_tiles = 32;
     constexpr uint32_t num_output_buffer_tiles = 32;

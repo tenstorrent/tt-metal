@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
 #include "host_tensor_impl.hpp"
 
@@ -12,18 +13,14 @@ namespace tt::tt_metal {
 HostTensor::HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) :
     impl_(std::make_unique<HostTensorImpl>(std::move(buffer), std::move(spec), std::move(topology))) {}
 
-HostTensor HostTensor::from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) {
-    return HostTensor(std::move(buffer), std::move(spec), std::move(topology));
-}
-
-HostTensor HostTensor::from_buffer(HostBuffer buffer, TensorSpec spec, TensorTopology topology) {
+HostTensor HostTensor::from_buffer(HostBuffer buffer, TensorSpec spec) {
     auto distributed_buffer = DistributedHostBuffer::create(
         distributed::MeshShape(1, 1),
         distributed::MeshShape(1, 1),
         distributed::MeshCoordinate(0, 0),
         /*context=*/nullptr);
     distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
-    return HostTensor(std::move(distributed_buffer), std::move(spec), std::move(topology));
+    return HostTensor(std::move(distributed_buffer), std::move(spec), TensorTopology{});
 }
 
 HostTensor::HostTensor(const HostTensor& other) :
@@ -57,8 +54,6 @@ const HostTensorImpl& HostTensor::impl() const {
 }
 
 const TensorSpec& HostTensor::tensor_spec() const { return impl().spec(); }
-
-const TensorTopology& HostTensor::tensor_topology() const { return impl().topology(); }
 
 bool HostTensor::is_valueless_after_move() const { return impl_ == nullptr; }
 
@@ -103,11 +98,7 @@ Strides HostTensor::strides() const { return tensor_spec().tensor_layout().compu
 HostTensor HostTensor::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
     auto transformed_buffer =
         buffer().transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return HostTensor(std::move(transformed_buffer), tensor_spec(), tensor_topology());
-}
-
-void HostTensor::update_tensor_topology(TensorTopology tensor_topology) {
-    impl().update_topology(std::move(tensor_topology));
+    return HostTensor(std::move(transformed_buffer), tensor_spec(), impl().topology());
 }
 
 }  // namespace tt::tt_metal

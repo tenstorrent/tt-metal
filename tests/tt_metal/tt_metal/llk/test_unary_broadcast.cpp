@@ -293,10 +293,9 @@ void run_single_core_unary_broadcast_quasar(
     const uint32_t out_tile_size = tile_size(out_t);
     const uint32_t dfb_num_entries = block_size * 2;
 
-    auto in_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(in_tile_size, num_tiles), TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(out_tile_size, num_tiles), TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(in_tile_size, num_tiles));
+    auto out_tensor =
+        MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(out_tile_size, num_tiles));
 
     const experimental::DFBSpecName SRC_DFB{"src_dfb"};
     const experimental::DFBSpecName DST_DFB{"dst_dfb"};

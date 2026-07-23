@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/tile.hpp>
 
@@ -23,32 +24,6 @@ class MemoryConfig;
 }
 
 namespace tt::tt_metal {
-
-// ======================================================================================
-//                        Transfer classification
-// ======================================================================================
-
-// Returns true if a H2D between the HostTensor and target MeshDevice is uniform.
-// A transfer is uniform if the host shards cover the entire shape of the MeshDevice.
-//
-// Example of uniform transfer:
-// HostTensor with a DistributedHostBuffer of shards [0, 0], [0, 1], [1, 0], [1, 1] (shape 2x2).
-// MeshDevice of shape 2x2.
-// Here the shards map exactly to the shape of the MeshDevice.
-//
-// Example of non-uniform transfers:
-//
-// 1: one to many replicas
-// HostTensor with a single shard at [0,0].
-// MeshDevice of shape 2x2.
-// This is a replica-based non-uniform transfer.
-//
-// 2: partial coverage:
-// HostTensor with a DistributedHostBuffer of shards [0, 0], and [1, 0]
-// MeshDevice of shape 2x2.
-// This is a partial coverage non-uniform transfer.
-// Only opposite sides of the MeshDevice will receive new data.
-bool is_uniform_write(const HostTensor& host_tensor, const distributed::MeshDevice& device);
 
 // ======================================================================================
 //                   Uniform enqueue_read/write_tensor
@@ -69,56 +44,6 @@ MeshTensor enqueue_write_tensor(
 void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
 
 // ======================================================================================
-//                    Unit Tensor enqueue_read/write_tensor
-// ======================================================================================
-
-void enqueue_read_tensor(
-    distributed::MeshCommandQueue& queue,
-    const MeshTensor& device_tensor,
-    std::byte* dst,
-    const std::optional<BufferRegion>& region = std::nullopt,
-    bool blocking = true);
-
-void enqueue_write_tensor(
-    distributed::MeshCommandQueue& queue,
-    const std::byte* src,
-    MeshTensor& device_tensor,
-    const std::optional<BufferRegion>& region = std::nullopt);
-
-// ======================================================================================
-//                Non-uniform enqueue_read/write_tensor
-// ======================================================================================
-
-// Data movement for tensors whose shards don't cover the entire MeshDevice.
-// The host-side DistributedHostBuffer only populates a subset of MeshCoordinates,
-// so the resulting DeviceStorage must track which coordinates were actually written.
-namespace non_uniform_data_movement {
-
-HostTensor enqueue_read_tensor(
-    distributed::MeshCommandQueue& cq,
-    const MeshTensor& device_tensor,
-    std::span<const distributed::MeshCoordinate> coords,
-    bool blocking = true);
-
-void enqueue_read_tensor(
-    distributed::MeshCommandQueue& cq,
-    const MeshTensor& device_tensor,
-    HostTensor& host_tensor,
-    std::span<const distributed::MeshCoordinate> coords,
-    bool blocking = true);
-
-std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_tensor(
-    distributed::MeshCommandQueue& cq,
-    const HostTensor& host_tensor,
-    distributed::MeshDevice& mesh_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt);
-
-std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
-    distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
-
-}  // namespace non_uniform_data_movement
-
-// ======================================================================================
 //                                  .to_layout()
 // ======================================================================================
 
@@ -127,31 +52,10 @@ HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile);
 HostTensor to_row_major_layout(const HostTensor& tensor);
 
 // ======================================================================================
-//                                  .pad() and .unpad()
-// ======================================================================================
-
-HostTensor pad(
-    const HostTensor& tensor, const Shape& output_padded_shape, const Shape& input_tensor_start, float pad_value);
-
-HostTensor unpad(const HostTensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
-
-HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value);
-
-HostTensor unpad_from_tile(const HostTensor& input_tensor, const Shape& output_tensor_shape);
-
-// ======================================================================================
 //                                  .to_dtype()
 // ======================================================================================
 
 HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
-
-// Same convention as HostTensor::from_vector: no default T; pad_value defaults to 0.
-// T is the logical encode / pad element type.
-// Unlike from_vector (T deduced from the buffer), callers must supply T explicitly
-// (to_tensor_spec<float>(t, spec)) or pass a typed pad_value for deduction.
-// Explicit instantiations: float, bfloat16, int32_t, uint32_t, uint16_t, uint8_t (same as from_vector).
-template <typename T>
-HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec, T pad_value = 0);
 
 // ======================================================================================
 //                                  Utility functions
