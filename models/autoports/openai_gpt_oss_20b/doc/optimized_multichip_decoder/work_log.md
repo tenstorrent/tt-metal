@@ -442,5 +442,5 @@ found in the final profile directories. They were removed; no
 `*active4*` artifact remains, and all corrected `epmax`/`ep_variable`
 tables plus raw CSV hashes still match provenance.
 
-The local checkpoint SHA is recorded below after commit creation. No push
-is performed.
+The stage-owned implementation and evidence checkpoint is local commit
+`9c3db146e132df51d9a5f82b66cac0f09a23ccfd`. No push was performed.
