@@ -575,6 +575,9 @@ struct MatmulExpertCompressedDRAM {
                         noc_async_write_one_packet(src_addr, dst_noc, output_bytes);
                         uint64_t sem_noc =
                             get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, CTArgs::partial_sem_addr);
+                        // Drain the partial write out of L1 before the credit so the reducer's
+                        // partial_sem poll can't unblock ahead of the data (idiom: all_gather.hpp).
+                        noc_async_writes_flushed();
                         noc_semaphore_inc(sem_noc, 1);
 
                         // Pop out from the ncrisc side because it needs to perform wait front. Otherwise there is a
@@ -608,6 +611,9 @@ struct MatmulExpertCompressedDRAM {
                         noc_async_write_one_packet(src_addr, dst_noc, output_bytes);
                         uint64_t sem_noc =
                             get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, CTArgs::partial_sem_addr);
+                        // Drain the gather write out of L1 before the credit so the receiver's
+                        // partial_sem poll can't unblock ahead of the data (idiom: all_gather.hpp).
+                        noc_async_writes_flushed();
                         noc_semaphore_inc(sem_noc, 1);
                         // Reset to 0 so the next loop iter starts fresh.
                         unified_kernels::sem_atomic_dec(CTArgs::gather_sync_sem_addr, 1);
