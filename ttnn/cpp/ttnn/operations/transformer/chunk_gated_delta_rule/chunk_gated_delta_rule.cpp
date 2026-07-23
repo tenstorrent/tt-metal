@@ -399,6 +399,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     std::optional<float> scale_opt,
     const std::optional<ttnn::Tensor>& initial_state,
     bool output_final_state,
+    bool output_head_major,
     uint32_t chunk_size,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
@@ -526,6 +527,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     if (output_final_state) {
         final_state = ttnn::reshape(scan[1], ttnn::Shape({B, H, K, V}));
     }
+    if (output_head_major && pad == 0) {
+        return {ttnn::reshape(scan[0], ttnn::Shape({BH, T, V})), final_state};
+    }
+
     ttnn::Tensor output = ttnn::to_layout(scan[0], Layout::ROW_MAJOR);
     output = ttnn::reshape(output, ttnn::Shape({BH, L, V}));
     if (pad > 0) {

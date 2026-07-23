@@ -70,6 +70,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     std::optional<float> scale = std::nullopt,
     const std::optional<ttnn::Tensor>& initial_state = std::nullopt,
     bool output_final_state = false,
+    bool output_head_major = false,
     uint32_t chunk_size = 32,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
