@@ -2801,6 +2801,21 @@ void sdpa_ring_v2(
             }
         }
 
+        // Sparse-frames per-Q-chunk cb_signal accounting: for q_per_core > 1, the writer's Q-chunk
+        // loop does one cb_signal.wait_front(1) per Q chunk per ring iter (ring_joint_writer.cpp
+        // "!single_q_chunk" gate). Compute pushes cb_signal on is_last_k inside the processing
+        // branch (line 2542) — but a sparse iter where a Q chunk has NO processed K chunks
+        // (either fully drained real Q chunks in windowed patterns, or padded Q chunks with
+        // zero total attention) never enters the processing branch and so never pushes the
+        // signal. That deadlocks the writer. Ensure exactly one signal per Q chunk per iter by
+        // pushing here when the processing branch didn't run this iter.
+        if constexpr (sparse_frames_enabled) {
+            if (q_per_core > 1 && KV_chunks_processed == 0) {
+                CircularBuffer(cb_signal).reserve_back(1);
+                sdpa_cb_push_back_out_of_line(cb_signal, 1);
+            }
+        }
+
         // Sparse-frames zero-work Q chunk: this Q frame has zero allowed K frames across the
         // whole ring. All ring iters drained via try_skip_sparse_frames — no output was
         // pushed. The writer still expects a per-Q-chunk output tile to save (its region is
