@@ -22,12 +22,19 @@ import ttnn
 
 from models.experimental.xtts.reference.xtts_gpt_block import (
     HEAD_DIM,
+    HIDDEN_SIZE,
     LAYER_NORM_EPS,
     NUM_HEADS,
 )
 from models.common.lightweightmodule import LightweightModule
 
 NEG_INF = -1e30  # additive attention-mask fill for masked-out (future) positions
+
+# Per-weight block-float width for the decode matmuls (memory-bound: fewer weight bytes = faster).
+# bfloat4_b (4-bit) halves the DRAM stream vs bfloat8_b but is lower precision — only the weights
+# that keep the accuracy gates go here. Determined empirically (see the bfp4 sweep); the rest stay
+# bfloat8_b. Names are the c_attn / c_proj / mlp_c_fc / mlp_c_proj suffixes.
+_BFP4_WEIGHTS = {"attn.c_attn.weight", "attn.c_proj.weight"}
 L1 = ttnn.L1_MEMORY_CONFIG  # keep activations in L1 (weights stay in DRAM); the profiler flags the
 # decode matmuls' input-0 as DRAM-resident — an L1 activation avoids that per-matmul DRAM read.
 
@@ -42,16 +49,18 @@ def _to_device(torch_tensor, device):
     )
 
 
-def _to_device_w8(torch_tensor, device):
-    """torch -> ttnn bfloat8_b tile weight. The decode matmuls are batch-1 (M=32, one token padded
-    to a tile) so they are memory-bound — dominated by streaming the weight from DRAM. bfloat8_b
-    (block-float, ~half the bytes of bf16) roughly halves that load, and holds accuracy on these
-    GPT-2 weights (validated by the block-decode PCC/Frobenius gate)."""
+def _to_device_w8(torch_tensor, device, dtype=ttnn.bfloat8_b):
+    """torch -> ttnn block-float tile weight. The decode matmuls are batch-1 (M=32, one token padded
+    to a tile) so they are MEMORY-bound — the time is dominated by streaming the weight from DRAM,
+    not the (tiny) M=32 math — so shrinking the weight bytes directly shrinks the dominant cost.
+    ``dtype`` picks the block-float width per weight: bfloat8_b (8-bit) is the safe default; the
+    larger, less sensitive weights use bfloat4_b (4-bit, half the bytes) where accuracy still holds
+    (gated by the block-decode PCC/Frobenius test + the end-to-end exact-code-match test)."""
     return ttnn.from_torch(
         torch_tensor.to(torch.bfloat16),
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        dtype=ttnn.bfloat8_b,
+        dtype=dtype,
     )
 
 
@@ -66,11 +75,38 @@ def _mm_1d_config(device, m, k, n, fused_activation=None):
     """1D-multicast matmul program_config for the GPT linears (mcast the L1 activation, stream the
     DRAM weight per-core over N). Passing an explicit config is what lets ttnn fuse the bias (and,
     for c_fc, the GELU) into the epilogue for an L1 output — the auto path post-processes both as
-    separate ops. Built per-forward because prefill M (= seq len) varies; decode M = 1. Measured
-    faster than the auto config on these shapes and validated to PCC ~0.9998."""
+    separate ops. Built per-forward because prefill M (= seq len) varies; decode M = 1."""
     grid = device.compute_with_storage_grid_size()
     gx, gy = int(grid.x), int(grid.y)
-    mt, nt = math.ceil(m / 32), math.ceil(n / 32)
+    mt, kt, nt = math.ceil(m / 32), math.ceil(k / 32), math.ceil(n / 32)
+    if mt == 1:
+        # DECODE (single token, M=32): a memory-bound skinny matmul. A program-config sweep over the
+        # four GPT decode shapes showed the full-grid / one-N-tile-per-core layout is ~20-35% SLOWER
+        # than consolidating onto FEWER cores that each compute several N-tiles with a 2-wide output
+        # subblock — less activation-mcast fan-out and better weight-stream reuse dominate at M=32.
+        # Keep in0_block_w=4 (the pre-optimization value): it fixes the bfp8 K-accumulation grouping,
+        # so output is BIT-IDENTICAL to before (the grid/per_core_N/out_subblock_w changes only
+        # repartition output tiles, not the reduction order). ibw=8 is ~1% faster but shifts the
+        # accumulation enough to flip borderline greedy argmax picks in free-running decode
+        # (exact-match prefix regressed 16/16 -> 10/16), so ibw=4 preserves exact output.
+        ibw = next(b for b in (4, 2, 1) if kt % b == 0)
+        pcn = 2 if nt <= 32 else (3 if nt <= 64 else 4)
+        osw = 2 if pcn % 2 == 0 else 1
+        ncols = math.ceil(nt / pcn)
+        cx = min(gx, ncols)
+        cy = math.ceil(ncols / cx)
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(cx, cy),
+            in0_block_w=ibw,
+            out_subblock_h=1,
+            out_subblock_w=osw,
+            per_core_M=1,
+            per_core_N=pcn,
+            fuse_batch=True,
+            fused_activation=fused_activation,
+            mcast_in0=True,
+        )
+    # PREFILL (M = seq len): compute-bound, different regime — keep the full-grid layout.
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(gx, gy),
         in0_block_w=4,  # K-block (tiles); divides Kt for all GPT linears (Kt in {32, 128})
@@ -106,15 +142,41 @@ class TtXttsGptBlock(LightweightModule):
         # Attention/MLP weights in bfloat8_b (memory-bound decode matmuls — see _to_device_w8);
         # biases are bf16 [1, N] (see _to_device_bias) so they fuse into the matmul epilogue under
         # the explicit program_config used in the forwards.
-        self.attn_c_attn_weight = _to_device_w8(state_dict[prefix + "attn.c_attn.weight"], device)
+        def _w(name):  # bfloat4_b if the weight is in the bfp4 policy set, else bfloat8_b
+            dtype = ttnn.bfloat4_b if name in _BFP4_WEIGHTS else ttnn.bfloat8_b
+            return _to_device_w8(state_dict[prefix + name], device, dtype=dtype)
+
+        self.attn_c_attn_weight = _w("attn.c_attn.weight")
         self.attn_c_attn_bias = _to_device_bias(state_dict[prefix + "attn.c_attn.bias"], device)
-        self.attn_c_proj_weight = _to_device_w8(state_dict[prefix + "attn.c_proj.weight"], device)
+        self.attn_c_proj_weight = _w("attn.c_proj.weight")
         self.attn_c_proj_bias = _to_device_bias(state_dict[prefix + "attn.c_proj.bias"], device)
 
-        self.mlp_c_fc_weight = _to_device_w8(state_dict[prefix + "mlp.c_fc.weight"], device)
+        self.mlp_c_fc_weight = _w("mlp.c_fc.weight")
         self.mlp_c_fc_bias = _to_device_bias(state_dict[prefix + "mlp.c_fc.bias"], device)
-        self.mlp_c_proj_weight = _to_device_w8(state_dict[prefix + "mlp.c_proj.weight"], device)
+        self.mlp_c_proj_weight = _w("mlp.c_proj.weight")
         self.mlp_c_proj_bias = _to_device_bias(state_dict[prefix + "mlp.c_proj.bias"], device)
+
+        # Sharded layer-norm config for the DECODE layernorms (one-token, M padded to a single tile;
+        # hidden width-sharded over 8 cores). Bit-identical to the interleaved layer_norm (PCC 1.0)
+        # but ~48% faster INCLUDING the two reshards it needs (23.0 -> 12.0 us/LN measured) — the
+        # interleaved LN runs the whole 1024-wide reduction on too few cores; width-sharding
+        # parallelizes it. Prefill (large M) keeps the interleaved path (different block_h regime).
+        _LN_CORES = 8
+        _bw = HIDDEN_SIZE // _LN_CORES // 32  # width tiles per core
+        self._ln_shard_mc = ttnn.create_sharded_memory_config(
+            shape=(32, HIDDEN_SIZE // _LN_CORES),
+            core_grid=ttnn.CoreGrid(x=_LN_CORES, y=1),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self._ln_pcfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[_LN_CORES, 1],
+            subblock_w=_bw,
+            block_h=1,  # decode M = 1 token -> one tile row
+            block_w=_bw,
+            inplace=False,
+        )
 
     def _qkv(self, x):  # [b, s, hidden] -> q, k, v each [b, heads, s, head_dim]
         # Split the [b, s, 3*hidden] c_attn output (GPT-2 [Q|K|V] block layout) into per-head Q, K, V.
@@ -178,9 +240,35 @@ class TtXttsGptBlock(LightweightModule):
         ttnn.deallocate(h)
         return out
 
-    def _residual_ffn(self, x):
-        """Shared post-attention half: ``x + mlp(ln_2(x))``. Consumes and replaces ``x``."""
-        h = ttnn.layer_norm(x, weight=self.ln_2_weight, bias=self.ln_2_bias, epsilon=LAYER_NORM_EPS, memory_config=L1)
+    def _ln(self, x, weight, bias):
+        """DECODE layer-norm via the width-sharded kernel (see the config in __init__): reshard the
+        L1 activation to width-sharded, run the sharded LN, reshard the result back to interleaved L1
+        for the following matmul. Net ~48% faster than the interleaved LN and BIT-IDENTICAL (PCC 1.0).
+        Consumes ``x``."""
+        xs = ttnn.to_memory_config(x, self._ln_shard_mc)
+        h = ttnn.layer_norm(
+            xs,
+            weight=weight,
+            bias=bias,
+            epsilon=LAYER_NORM_EPS,
+            program_config=self._ln_pcfg,
+            memory_config=self._ln_shard_mc,
+        )
+        ttnn.deallocate(xs)
+        out = ttnn.to_memory_config(h, L1)
+        ttnn.deallocate(h)
+        return out
+
+    def _residual_ffn(self, x, sharded=False):
+        """Shared post-attention half: ``x + mlp(ln_2(x))``. Consumes and replaces ``x``.
+        ``sharded`` routes ln_2 through the width-sharded decode kernel (see ``_ln``)."""
+        h = (
+            self._ln(x, self.ln_2_weight, self.ln_2_bias)
+            if sharded
+            else ttnn.layer_norm(
+                x, weight=self.ln_2_weight, bias=self.ln_2_bias, epsilon=LAYER_NORM_EPS, memory_config=L1
+            )
+        )
         m = self._mlp(h)  # consumes h
         y = ttnn.add(x, m, memory_config=L1)
         ttnn.deallocate(x)
@@ -221,7 +309,7 @@ class TtXttsGptBlock(LightweightModule):
             ([1,1,MAX,1], 1 at the write row) — data-driven, so one capture replays at any position.
         Returns the FFN output."""
         # print(f"[TtXttsGptBlock.forward_decode] layer={self.layer_idx} x={list(x.shape)} write_idx={write_idx}")
-        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS, memory_config=L1)
+        h = self._ln(x, self.ln_1_weight, self.ln_1_bias)  # width-sharded decode LN (see _ln)
         q, k, v = self._qkv(h)  # each [1, heads, 1, head_dim]
         ttnn.deallocate(h)
         if write_idx is not None:
@@ -244,4 +332,4 @@ class TtXttsGptBlock(LightweightModule):
         xa = ttnn.add(x, ao, memory_config=L1)
         ttnn.deallocate(x)
         ttnn.deallocate(ao)
-        return self._residual_ffn(xa)
+        return self._residual_ffn(xa, sharded=True)  # decode: width-sharded ln_2
