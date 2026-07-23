@@ -75,7 +75,11 @@ Both goldens are **armed on `compile_ms_min`** (15% tolerance), set to the worst
 | SKU | golden `compile_ms_min` | fails above (~min × 1.15) |
 | --- | --- | --- |
 | `wh_n300_civ2` (wormhole_b0) | 50700 ms | ~58.3 s |
-| `bh_p150_perf` (blackhole)   | 19500 ms | ~22.4 s |
+| `bh_p150_perf` (blackhole)   | 44800 ms | ~51.5 s |
+
+> Blackhole compile is bimodal (~18–20 s with a warm host ccache vs ~43–45 s cold).
+> The golden is anchored to the worst **cold** min so it never false-fails on either
+> regime; a tighter gate needs the ccache bimodality removed (follow-up).
 
 `kernels_per_sec_max` stays `null` on both — the time gate is sufficient and
 throughput is just its inverse.
