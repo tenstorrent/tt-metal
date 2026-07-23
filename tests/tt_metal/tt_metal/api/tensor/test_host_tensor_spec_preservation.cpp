@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <internal/tensor/host_pad_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
