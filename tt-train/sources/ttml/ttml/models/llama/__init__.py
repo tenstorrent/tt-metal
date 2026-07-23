@@ -161,9 +161,6 @@ class Llama(AbstractModuleBase):
                 axis_name="tp",
             )
             if config.embedding_placement == EmbeddingPlacement.VocabParallel:
-                # Shard the embedding table on the vocab dim to mirror the LM head:
-                # each device keeps only its vocab slice instead of a full replicated
-                # table, and the matching layout allows a tied weight (below).
                 self.tok_emb = VocabParallelEmbedding(
                     self.padded_vocab_size,
                     config.hidden_size,
@@ -171,10 +168,6 @@ class Llama(AbstractModuleBase):
                     axis_name="tp",
                 )
             elif config.embedding_placement == EmbeddingPlacement.FeatureParallel:
-                # Shard the embedding table on the feature (hidden) dim: a fully
-                # local lookup plus an all-gather, no id masking. Its layout does
-                # not match the vocab-parallel LM head, so weight tying is
-                # unavailable (validated in LlamaConfig.__post_init__).
                 self.tok_emb = FeatureParallelEmbedding(
                     self.padded_vocab_size,
                     config.hidden_size,
@@ -182,10 +175,6 @@ class Llama(AbstractModuleBase):
                     axis_name="tp",
                 )
             else:
-                # Replicated (default): every device holds the full table. The
-                # lookup is fully local with no collective, and the replicated
-                # gradients already match across TP ranks (synchronize_gradients
-                # reduces only the DDP axis).
                 self.tok_emb = Embedding(
                     self.padded_vocab_size,
                     config.hidden_size,

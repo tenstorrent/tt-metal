@@ -166,8 +166,6 @@ class VocabParallelEmbedding(AbstractModuleBase):
         mask = ttnn.transpose(ttnn.to_layout(ttnn.typecast(in_range, ttnn.DataType.FLOAT32), ttnn.Layout.TILE), 2, 3)
         emb = ttml.ops.binary.mul(emb, ttml.autograd.create_tensor(mask, requires_grad=False))
 
-        # Each token is nonzero on exactly one device, so the sum reconstructs the full
-        # embedding, replicated across TP.
         return ttml.ops.distributed.all_reduce(emb, noop_backward=True, cluster_axis=self.cluster_axis)
 
 
@@ -267,14 +265,12 @@ class FeatureParallelEmbedding(AbstractModuleBase):
         """
         self._check_tp_replicated(x)
 
-        # Every id is valid on every device, so this is a plain local lookup on
-        # the hidden-dim shard: output [batch, 1, seq, embedding_dim/tp] (dim-3 sharded).
+        # Every id is valid on every device, so no masking — a plain local lookup on the hidden-dim shard.
         emb = ttml.ops.embedding.embedding(x, self.weight.tensor)
 
         if not self.gather_output:
             return emb
 
-        # All-gather the per-device hidden slices into the full replicated embedding.
         # GradOutputType.REPLICATED divides the backward reduce_scatter by tp_size
         # (output is replicated, consumed replicated), matching
         # ColumnParallelLinear(gather_output=True).

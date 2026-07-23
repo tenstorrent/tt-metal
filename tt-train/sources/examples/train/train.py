@@ -793,8 +793,6 @@ def main() -> None:
     if args.sequence_length is not None:
         model_cfg.max_sequence_length = args.sequence_length
     if args.embedding_placement is not None:
-        # Model-specific override: only the llama spec carries embedding_placement.
-        # isinstance narrows model_cfg.spec to _LlamaSpec (and rules out None).
         if not isinstance(model_cfg.spec, _LlamaSpec):
             raise SystemExit("error: --embedding-placement is only supported for model_type=llama")
         try:
