@@ -7,6 +7,7 @@
 
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 
 #include "page_config_impl.hpp"

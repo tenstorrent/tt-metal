@@ -19,6 +19,7 @@
 #include <tt-metalium/tile.hpp>
 #include <tt_stl/span.hpp>
 
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>

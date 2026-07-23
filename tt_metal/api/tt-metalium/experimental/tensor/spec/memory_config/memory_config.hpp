@@ -4,15 +4,10 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
-
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt_stl/span.hpp>
+#include <ostream>
+#include <tuple>
 
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
@@ -25,35 +20,27 @@ struct from_json_t;
 
 namespace tt::tt_metal {
 
-// Forward declarations for friended free functions in the experimental namespace.
-// These are used to access experimental config params, which are not part of the official public API.
-class MemoryConfig;
-namespace experimental::per_core_allocation {
-bool is_per_core_allocation(const MemoryConfig& config);
-void set_per_core_allocation(MemoryConfig& config, bool enable);
-}  // namespace experimental::per_core_allocation
+class MemoryConfigImpl;
 
 class MemoryConfig final {
 public:
-    MemoryConfig() = default;  // Interleaved DRAM
+    MemoryConfig();  // Interleaved DRAM
     explicit MemoryConfig(
         TensorMemoryLayout memory_layout,
         BufferType buffer_type = BufferType::DRAM,
         std::optional<ShardSpec> shard_spec = std::nullopt);
     explicit MemoryConfig(BufferType buffer_type, std::optional<NdShardSpec> nd_shard_spec = std::nullopt);
-    MemoryConfig(const MemoryConfig& other) = default;
-    MemoryConfig& operator=(const MemoryConfig& other) = default;
-    MemoryConfig(MemoryConfig&& other) noexcept = default;
-    MemoryConfig& operator=(MemoryConfig&& other) noexcept = default;
+    ~MemoryConfig();
+    MemoryConfig(const MemoryConfig& other);
+    MemoryConfig& operator=(const MemoryConfig& other);
+    MemoryConfig(MemoryConfig&& other) noexcept;
+    MemoryConfig& operator=(MemoryConfig&& other) noexcept;
 
-    TensorMemoryLayout memory_layout() const { return memory_layout_; }
-    BufferType buffer_type() const { return buffer_type_; }
-    const std::optional<ShardSpec>& shard_spec() const { return shard_spec_; }
-    const std::optional<NdShardSpec>& nd_shard_spec() const { return nd_shard_spec_; }
-    bool created_with_nd_shard_spec() const { return created_with_nd_shard_spec_; }
-    // per_core_allocation access is through experimental::per_core_allocation free functions
-    friend bool experimental::per_core_allocation::is_per_core_allocation(const MemoryConfig&);
-    friend void experimental::per_core_allocation::set_per_core_allocation(MemoryConfig&, bool);
+    TensorMemoryLayout memory_layout() const;
+    BufferType buffer_type() const;
+    const std::optional<ShardSpec>& shard_spec() const;
+    const std::optional<NdShardSpec>& nd_shard_spec() const;
+    bool created_with_nd_shard_spec() const;
 
     bool is_sharded() const;
     bool is_l1() const;
@@ -61,10 +48,13 @@ public:
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "memory_layout", "buffer_type", "shard_spec", "nd_shard_spec", "created_with_nd_shard_spec");
-    auto attribute_values() const {
-        return std::forward_as_tuple(
-            memory_layout_, buffer_type_, shard_spec_, nd_shard_spec_, created_with_nd_shard_spec_);
-    }
+    std::tuple<
+        const TensorMemoryLayout&,
+        const BufferType&,
+        const std::optional<ShardSpec>&,
+        const std::optional<NdShardSpec>&,
+        const bool&>
+    attribute_values() const;
 
     static MemoryConfig create_with_prepopulated_shard_specs(
         TensorMemoryLayout memory_layout,
@@ -75,6 +65,10 @@ public:
 
     friend std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
+    // pre-condition: the MemoryConfig must not be in a moved-from state.
+    MemoryConfigImpl& impl();
+    const MemoryConfigImpl& impl() const;
+
 private:
     MemoryConfig(
         TensorMemoryLayout memory_layout,
@@ -83,14 +77,9 @@ private:
         std::optional<NdShardSpec> nd_shard_spec,
         bool created_with_nd_shard_spec);
 
-    TensorMemoryLayout memory_layout_ = TensorMemoryLayout::INTERLEAVED;  // Interleave the data across multiple banks
-    BufferType buffer_type_ = BufferType::DRAM;                           // Can be either DRAM or L1
-    std::optional<ShardSpec> shard_spec_ = std::nullopt;
-    std::optional<NdShardSpec> nd_shard_spec_ = std::nullopt;
-    bool created_with_nd_shard_spec_ = false;
-    // per_core_allocation is experimental functionality
-    // access is through experimental::per_core_allocation free functions
-    bool per_core_allocation_ = false;
+    // impl_ may be nullptr if the MemoryConfig is in a moved-from state.
+    // Avoid using impl_ directly; use the impl() accessor instead.
+    std::unique_ptr<MemoryConfigImpl> impl_;
 };
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);

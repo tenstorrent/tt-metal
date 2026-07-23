@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
