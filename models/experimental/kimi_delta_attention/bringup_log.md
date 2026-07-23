@@ -246,3 +246,21 @@
   PCC values and fallback rejection enabled.
 - Phase 3 composed correctness oracle complete; target-shape and state-dtype
   validation starting.
+
+### 2026-07-23 07:12:31 UTC — Exact target-shape decode
+
+- Hypothesis: the composed implementation scales without a layout, memory, or
+  numerical failure to Kimi's exact decode geometry: hidden size 2304, 32
+  heads, K/V head dimensions 128, and three 4096-wide convolution streams.
+- Command:
+  `scripts/run_safe_pytest.sh
+  models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py::test_target_shape_decode_pcc
+  -q -s`.
+- Result: `SAFE_PYTEST_RESULT: PASS`; one test passed in 14.43 s cold.
+- Output PCC / max absolute error: `0.999955` / `2.698135e-02`.
+- Recurrent-state PCC / max absolute error:
+  `0.999964` / `1.624179e-02`.
+- Convolution-state PCC / max absolute error:
+  `0.999993` / `5.755138e-02`.
+- This proves exact-shape one-token correctness with fallback rejection. It
+  does not cover long-state accumulation, mesh distribution, or performance.
