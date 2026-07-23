@@ -116,12 +116,9 @@
 
 # --- Debug Tools (DPrint, Watcher, Inspector, Clean Init, NOC Debugging) ---
 - name: runtime_debug_tools
-  # 12 tests disabled. #44767 Group A (50 ETH-heartbeat tests) re-enabled: device init fixed by #45778;
-  # TestWatcherRingBufferTrisc0/1/2 fixed here (renamed colliding TRISC{n} kernel define).
-  # Remaining #44767: TensixTestWatcherSanitizeMulticastSemaphoreInc plus
-  # WatcherArgAsserts/WatcherStackUsage/WatcherAssert-IErisc.
-  # TestWatcherWaypointsEth + EthernetTestWatcherPause disabled by #50483.
-  disabled_debug_tools_filter: &disabled_debug_tools 'MeshWatcherFixture.TensixTestWatcherSanitizeMulticastSemaphoreInc:MeshWatcherFixture.TestWatcherWaypointsEth:MeshWatcherFixture.EthernetTestWatcherPause:WatcherAssertTests/WatcherAssertTest.TestWatcherAssert/IErisc:WatcherArgAsserts/RTAAssertTest.OutOfBoundsArgAccessDetection/RTA_DM0:WatcherArgAsserts/RTAAssertTest.OutOfBoundsArgAccessDetection/RTA_TRISC0:WatcherArgAsserts/RTAAssertTest.OutOfBoundsArgAccessDetection/CRTA_DM0:WatcherArgAsserts/RTAAssertTest.OutOfBoundsArgAccessDetection/CRTA_TRISC0:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage0:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage0_QuasarMultiKernel:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage16:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage16_QuasarMultiKernel'
+  # 2 tests disabled by #50483: TestWatcherWaypointsEth + EthernetTestWatcherPause.
+  # All #44767 debug-tools exclusions re-enabled.
+  disabled_debug_tools_filter: &disabled_debug_tools 'MeshWatcherFixture.TestWatcherWaypointsEth:MeshWatcherFixture.EthernetTestWatcherPause'
   cmd: |
     ./tests/scripts/run_tools_tests.sh
     ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='-{disabled_debug_tools_filter}'
