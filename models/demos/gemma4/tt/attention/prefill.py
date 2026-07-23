@@ -72,6 +72,93 @@ def _resolve_valid_seq_len_tensor(config, valid_seq_len, padded_seq_len, mesh_de
     )
 
 
+def _merge_bounded_boundary_fill(tt_x, valid_seq_len, modulo):
+    """Restore wrap-window rows into the newest tile's padding slots.
+
+    Kernel ``skip_tiles`` is tile-granular: when ``V % 32 != 0`` it commits
+    padding rows ``[V, ceil_tile)`` into the ring's newest slots and drops the
+    oldest ``V % 32`` in-window tokens. Splice those wrap-window rows into the
+    padding slots so the filled tile window matches ``[V - modulo, V)``.
+    """
+    if tt_x is None or valid_seq_len is None or modulo is None:
+        return tt_x
+    v = int(valid_seq_len)
+    mod = int(modulo)
+    s = int(tt_x.shape[-2])
+    if v <= 0 or v >= s or v % TILE_HEIGHT == 0 or mod <= 0:
+        return tt_x
+    pad_rows = TILE_HEIGHT - (v % TILE_HEIGHT)
+    tile_end = min(v + pad_rows, s)
+    pad_rows = tile_end - v
+    if pad_rows <= 0:
+        return tt_x
+    wrap_start = v - mod
+    if wrap_start < 0:
+        return tt_x
+    b, h, _, d = (int(tt_x.shape[i]) for i in range(4))
+    head = ttnn.slice(tt_x, [0, 0, 0, 0], [b, h, v, d])
+    wrap = ttnn.slice(tt_x, [0, 0, wrap_start, 0], [b, h, wrap_start + pad_rows, d])
+    parts = [head, wrap]
+    tail = None
+    if tile_end < s:
+        tail = ttnn.slice(tt_x, [0, 0, tile_end, 0], [b, h, s, d])
+        parts.append(tail)
+    out = ttnn.concat(parts, dim=2)
+    for t in (head, wrap, tail):
+        if t is not None:
+            t.deallocate(True)
+    return out
+
+
+def flush_deferred_bounded_fills(layers):
+    """Merge + ``paged_fill_cache`` for stashed bounded ring fills.
+
+    Must run after lm_head (never mid-layer / between layers and lm_head on TP).
+    Intermediate generator chunks leave the stash empty (they skip ring fill).
+    """
+    for layer in layers:
+        cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+        if cfg is None:
+            continue
+        pending = getattr(cfg, "_deferred_bounded_fill", None)
+        if not pending:
+            continue
+        cfg._deferred_bounded_fill = None
+        k_fill = pending["k_fill"]
+        v_fill = pending["v_fill"]
+        k_merged = k_fill
+        v_merged = v_fill
+        try:
+            k_merged = _merge_bounded_boundary_fill(k_fill, pending["valid_seq_len"], pending["modulo"])
+            v_merged = _merge_bounded_boundary_fill(v_fill, pending["valid_seq_len"], pending["modulo"])
+            ttnn.experimental.paged_fill_cache(
+                pending["k_cache"],
+                k_merged,
+                pending["page_table"],
+                batch_idx=pending["user_id"],
+                block_size=pending["block_size"],
+                **pending["paged_modulo_kwargs"],
+            )
+            ttnn.experimental.paged_fill_cache(
+                pending["v_cache"],
+                v_merged,
+                pending["page_table"],
+                batch_idx=pending["user_id"],
+                block_size=pending["block_size"],
+                **pending["paged_modulo_kwargs"],
+            )
+        finally:
+            seen = set()
+            for t in (k_fill, v_fill, k_merged, v_merged):
+                if t is None or id(t) in seen:
+                    continue
+                seen.add(id(t))
+                try:
+                    t.deallocate(True)
+                except Exception:
+                    pass
+
+
 def _prefill_forward_single(
     hidden_states,
     cos_cache,
@@ -121,8 +208,11 @@ def _prefill_forward_single(
     # including the first). Handled via the in-memory window tail below rather
     # than the full-prefix paged read used for full-attention layers.
     sliding_chunked = is_chunked and config.is_sliding and config.sliding_window is not None
-    if need_cross_chunk and shared_kv is not None:
-        raise NotImplementedError("Gemma4 KV-shared layer cross-chunk prefill not implemented yet (Stage A-hard).")
+    # KV-shared + generator multi-chunk: current-chunk K/V still arrive via
+    # ``shared_kv`` (source layer's keep_kv). Cross-chunk full-attention then
+    # reads the source's already-filled paged cache (``need_cross_chunk`` path);
+    # sliding layers use the in-memory window tail. Do not hard-error here —
+    # forcing single-chunk at 64k+ hangs E2B/E4B warmup on P150x8.
     # Fill the current chunk's K/V at its physical blocks. For a single chunk the
     # chunk table equals the (full) page_table, so behavior is unchanged.
     #
@@ -182,61 +272,107 @@ def _prefill_forward_single(
                 if config.cache_position_modulo is not None
                 else {}
             )
-            # Bounded sliding cache + padded single-chunk prefill: the prompt is
-            # padded up to the next power of 2, and writing those padding tokens
-            # into the modulo-slot circular cache WRAPS and overwrites the real
-            # recent window — so decode reads padding and emits garbage once the
-            # padding exceeds the window (real prompt < seq_len - window). Cap the
-            # bounded-cache fill to a block-aligned length >= the real (unpadded)
-            # prompt so the circular buffer ends on (mostly) real tokens. Full
-            # (unbounded) layers are unaffected: their padding lands at positions
-            # decode never reads. NOTE: a residual sub-tile boundary padding is a
-            # known >32k long-context limitation, tracked in
-            # docs/bounded_sliding_kv_cache_debug.md.
-            # Two ways to keep the bounded fill from wrapping padding over the real
-            # recent window:
-            #  (1) host-side slice: cap the input to a block-aligned fill_len >= the
-            #      real prompt before the fill. Works only when valid_seq_len (the
-            #      real length) is known here — i.e. eager prefill (get_last_token>=0).
-            #  (2) kernel-side cap: pass valid_seq_len as a device tensor; the writer
-            #      restricts the ring window to end there. Works under a captured
-            #      prefill trace too (get_last_token==-1), where valid_seq_len is None
-            #      but a per-request device tensor is refreshed outside the trace.
-            k_fill, v_fill = tt_k, tt_v
-            fill_kwargs = {}
-            valid_dev = _resolve_valid_seq_len_tensor(config, valid_seq_len, tt_k.shape[-2], k_cache.device())
-            if valid_dev is not None:
-                fill_kwargs["valid_seq_len_tensor"] = valid_dev
-            elif config.cache_position_modulo is not None and valid_seq_len is not None:
-                fill_len = ((min(valid_seq_len, tt_k.shape[-2]) + eff_bs - 1) // eff_bs) * eff_bs
-                if 0 < fill_len < tt_k.shape[-2]:
-                    k_fill = ttnn.slice(tt_k, [0, 0, 0, 0], [tt_k.shape[0], tt_k.shape[1], fill_len, tt_k.shape[3]])
-                    v_fill = ttnn.slice(tt_v, [0, 0, 0, 0], [tt_v.shape[0], tt_v.shape[1], fill_len, tt_v.shape[3]])
-            ttnn.experimental.paged_fill_cache(
-                k_cache,
-                k_fill,
-                fill_page_table,
-                batch_idx=user_id,
-                block_size=eff_bs,
-                **paged_modulo_kwargs,
-                **fill_kwargs,
-            )
-            ttnn.experimental.paged_fill_cache(
-                v_cache,
-                v_fill,
-                fill_page_table,
-                batch_idx=user_id,
-                block_size=eff_bs,
-                **paged_modulo_kwargs,
-                **fill_kwargs,
-            )
-            if k_fill is not tt_k:
-                k_fill.deallocate(True)
-            if v_fill is not tt_v:
-                v_fill.deallocate(True)
-            # Free the inline-built cap tensor; leave a persistent (config-owned) one.
-            if valid_dev is not None and valid_dev is not getattr(config, "prefill_valid_len_dev", None):
-                valid_dev.deallocate(True)
+            if config.cache_position_modulo is not None:
+                # Bounded ring fill: never merge/where/paged_fill mid-forward on TP
+                # (corrupts token-0). Eager last chunk (valid_seq_len known): stash
+                # a tile-ceil K/V clone; model flushes after lm_head. Intermediate
+                # chunks (valid_seq_len None + chunked): skip — last chunk overwrites
+                # the ring. Traced path (valid_seq_len None, non-chunked / kernel
+                # cap): may still kernel-cap-fill in-graph.
+                if valid_seq_len is not None:
+                    v = min(int(valid_seq_len), int(tt_k.shape[-2]))
+                    tile_end = ((v + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
+                    tile_end = min(tile_end, int(tt_k.shape[-2]))
+                    if tile_end <= 0:
+                        pass
+                    else:
+                        # Drop any prior stash (e.g. re-run) before cloning.
+                        old = getattr(config, "_deferred_bounded_fill", None)
+                        if old:
+                            for t in (old.get("k_fill"), old.get("v_fill")):
+                                if t is not None:
+                                    try:
+                                        t.deallocate(True)
+                                    except Exception:
+                                        pass
+                            config._deferred_bounded_fill = None
+                        if tile_end < int(tt_k.shape[-2]):
+                            k_slice = ttnn.slice(
+                                tt_k,
+                                [0, 0, 0, 0],
+                                [tt_k.shape[0], tt_k.shape[1], tile_end, tt_k.shape[3]],
+                            )
+                            v_slice = ttnn.slice(
+                                tt_v,
+                                [0, 0, 0, 0],
+                                [tt_v.shape[0], tt_v.shape[1], tile_end, tt_v.shape[3]],
+                            )
+                            k_stash = ttnn.clone(k_slice)
+                            v_stash = ttnn.clone(v_slice)
+                            k_slice.deallocate(True)
+                            v_slice.deallocate(True)
+                        else:
+                            k_stash = ttnn.clone(tt_k)
+                            v_stash = ttnn.clone(tt_v)
+                        config._deferred_bounded_fill = {
+                            "k_cache": k_cache,
+                            "v_cache": v_cache,
+                            "k_fill": k_stash,
+                            "v_fill": v_stash,
+                            "page_table": fill_page_table,
+                            "user_id": user_id,
+                            "block_size": eff_bs,
+                            "paged_modulo_kwargs": paged_modulo_kwargs,
+                            "valid_seq_len": v,
+                            "modulo": int(config.cache_position_modulo),
+                        }
+                elif not is_chunked:
+                    # Traced / single-chunk with get_last_token=-1: kernel-cap fill.
+                    k_fill, v_fill = tt_k, tt_v
+                    fill_kwargs = {}
+                    valid_dev = _resolve_valid_seq_len_tensor(config, valid_seq_len, tt_k.shape[-2], k_cache.device())
+                    if valid_dev is not None:
+                        fill_kwargs["valid_seq_len_tensor"] = valid_dev
+                    ttnn.experimental.paged_fill_cache(
+                        k_cache,
+                        k_fill,
+                        fill_page_table,
+                        batch_idx=user_id,
+                        block_size=eff_bs,
+                        **paged_modulo_kwargs,
+                        **fill_kwargs,
+                    )
+                    ttnn.experimental.paged_fill_cache(
+                        v_cache,
+                        v_fill,
+                        fill_page_table,
+                        batch_idx=user_id,
+                        block_size=eff_bs,
+                        **paged_modulo_kwargs,
+                        **fill_kwargs,
+                    )
+                    if valid_dev is not None and valid_dev is not getattr(config, "prefill_valid_len_dev", None):
+                        valid_dev.deallocate(True)
+                # else: intermediate multi-chunk — skip ring (last chunk overwrites)
+            else:
+                # Unbounded: previous in-forward fill.
+                k_fill, v_fill = tt_k, tt_v
+                ttnn.experimental.paged_fill_cache(
+                    k_cache,
+                    k_fill,
+                    fill_page_table,
+                    batch_idx=user_id,
+                    block_size=eff_bs,
+                    **paged_modulo_kwargs,
+                )
+                ttnn.experimental.paged_fill_cache(
+                    v_cache,
+                    v_fill,
+                    fill_page_table,
+                    batch_idx=user_id,
+                    block_size=eff_bs,
+                    **paged_modulo_kwargs,
+                )
         else:
             ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
