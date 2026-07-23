@@ -311,6 +311,13 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         return ttnn.reshape(x4, (B, L, Cx))
 
     def _row_linear(x, w, b):
+        # Single-device (tp=1): the all-reduce is a no-op, so fold the bias into the
+        # matmul epilogue (ttnn.linear) instead of a standalone dispatch-bound add.
+        # Removes one add launch per to_out / to_add_out / FF-down call (8/forward).
+        if not sharded:
+            if b is not None:
+                return ttnn.linear(x, w, bias=b, compute_kernel_config=compute_config)
+            return ttnn.matmul(x, w, compute_kernel_config=compute_config)
         y = ttnn.matmul(x, w, compute_kernel_config=compute_config)
         y = _all_reduce(y)
         if b is not None:
