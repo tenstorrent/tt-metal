@@ -356,3 +356,24 @@
 - Result: 11 passed in 1.96 s.
 - Post-format device regression repeated the full command above without `-s`.
 - Result: `SAFE_PYTEST_RESULT: PASS`; eight cases passed in 8.07 s.
+
+### 2026-07-23 07:29:54 UTC — Recurrent-device roofline
+
+- Profiled clean commit `03babc4b7fc` with 20 warm exact-shape calls:
+  `python_env/bin/python3 -m tracy -p -r -o /tmp/kda_recurrent_profile
+  --check-exit-code --op-support-count 1000 -t 5000
+  -a device_kernel_duration -m "pytest
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_recurrent_perf.py
+  -q -s"`.
+- Tracy report result: mean `33.077 us`, median `32.991 us`, minimum
+  `32.161 us`, maximum `34.803 us`, standard deviation `0.640 us`.
+- The FP32 recurrent state is `32*128*128*4 = 2,097,152` bytes. Reading and
+  writing it once moves at least 4 MiB per token, or `126.8 GB/s` at the
+  measured mean. This is `24.8%` of the repository's 512 GB/s Blackhole DRAM
+  ceiling (`ttnn/core/operation.cpp`).
+- Counting decay, two state-vector products, the rank-one update, and the
+  state add gives approximately 3,678,208 algorithmic FLOPs/token, or only
+  `0.111 TFLOP/s` at the measured mean. The fused recurrent op is therefore
+  state-traffic/dataflow bound, not compute bound.
+- Decision: preserve this T=1 kernel as the correctness/decode primitive, then
+  pursue the utilization target in a chunk-parallel KDA prefill op. The trusted
