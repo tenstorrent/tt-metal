@@ -164,7 +164,7 @@ def test_fibo_pipeline_vae_decode_on_device(*, mesh_device):
 
     Two assertions:
       1. ``force_device_decode=True`` must NOT raise -- i.e. the on-device weight-load + decode succeeds
-         (before the ``decoder_base_dim`` fix in ``vae_wan2_1.py`` this raised ``LoadingError`` at
+         (before the ``decoder_base_dim`` fix in ``vae_bria_fibo.py`` this raised ``LoadingError`` at
          ``decoder.conv_in.weight``: built (1728, 640) vs prepared (1728, 1024), on every mesh size).
       2. The on-device image matches the host-torch reference (``_host_decode_vae``, i.e. HF
          ``AutoencoderKLWan.decode``) at high PCC (~99.9%, matching the isolated residual decode).

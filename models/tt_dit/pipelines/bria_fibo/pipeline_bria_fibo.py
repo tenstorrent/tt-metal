@@ -142,7 +142,7 @@ class BriaFiboPipelineConfig:
         # all 4 devices. Verified to run on-device and produce a correct-range, non-degenerate 1024x1024
         # image (test_fibo_pipeline_smoke, force_device_decode=True); the golden PCC-vs-host-reference is
         # gated by test_fibo_pipeline_vae_decode_on_device (native res, run on-demand). Requires the
-        # ``decoder_base_dim`` weight-prep fix in ``vae_wan2_1.py`` (without it conv_in loaded (1728,640)
+        # ``decoder_base_dim`` weight-prep fix in ``vae_bria_fibo.py`` (without it conv_in loaded (1728,640)
         # vs (1728,1024) and fell back to host).
         vae_parallel_config = VaeHWParallelConfig.from_tuples(height=(tp_factor, tp_axis), width=(sp_factor, sp_axis))
 
@@ -679,7 +679,7 @@ class BriaFiboPipeline:
 
         The ``LoadingError`` fallback to the host reference ``AutoencoderKLWan.decode`` is now only a
         defensive net (the historical failure -- ``decoder.conv_in.weight`` (1728, 640) vs (1728, 1024)
-        -- was the adapter omitting ``decoder_base_dim``, fixed in ``vae_wan2_1.py``). Pass
+        -- was the adapter omitting ``decoder_base_dim``, fixed in ``vae_bria_fibo.py``). Pass
         ``force_device_decode=True`` to re-raise instead of falling back, proving the on-device path.
         Any non-``LoadingError`` failure (OOM, real device/shape bug) always propagates.
         """
