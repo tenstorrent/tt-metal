@@ -8,7 +8,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Negative
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // Logsigmoid
-#include "api/dataflow/circular_buffer.h"
 
 namespace ckl = compute_kernel_lib;
 

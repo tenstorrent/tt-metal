@@ -554,7 +554,7 @@ void kernel_main() {
             if constexpr (wh_dest_reuse_workaround_needed) {
                 tile_regs_commit();
 
-                const uint32_t cb_xmm_intermediate = get_named_compile_time_arg_val("cb_xmm");
+                constexpr uint32_t cb_xmm_intermediate = get_named_compile_time_arg_val("cb_xmm");
                 CircularBuffer cb_xmm_intermediate_obj(cb_xmm_intermediate);
                 pack_reconfig_data_format(cb_xmm_intermediate);
                 cb_xmm_intermediate_obj.reserve_back(block.full_block_size());

@@ -14,7 +14,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_rounding.hpp"    // Floor, Frac
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"        // Abs
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"        // Log
-#include "api/dataflow/circular_buffer.h"
 
 namespace ckl = compute_kernel_lib;
 

@@ -266,24 +266,17 @@ void kernel_main() {
 
     index_b_offset = 0;
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
-    uint32_t out_block_hw_normal = out_block_h_normal * block_w;
-    uint32_t num_out_blocks_padded = num_out_blocks;
-    uint32_t extra_out_block = false;
-    uint32_t out_block_h_last = out_block_h_normal;
-    uint32_t out_block_hw_last = out_block_hw_normal;
-    if constexpr (block_h % num_out_blocks != 0) {
-        extra_out_block = true;
-        uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
-        num_out_blocks_padded += (residual / out_block_h_normal + 1);
-        out_block_h_last = residual % out_block_h_normal;
-        out_block_hw_last = out_block_h_last * block_w;
-    }
-    uint32_t cb_ex_external_tiles_required =
-        num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes / single_tile_size_bytes;
-    if ((num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes) %
-        single_tile_size_bytes) {
-        cb_ex_external_tiles_required++;
-    }
+    constexpr uint32_t out_block_hw_normal = out_block_h_normal * block_w;
+    constexpr uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
+    constexpr bool extra_out_block = residual != 0;
+    constexpr uint32_t num_out_blocks_padded =
+        num_out_blocks + (extra_out_block ? (residual / out_block_h_normal + 1) : 0);
+    constexpr uint32_t out_block_h_last = extra_out_block ? residual % out_block_h_normal : out_block_h_normal;
+    constexpr uint32_t out_block_hw_last = out_block_h_last * block_w;
+    constexpr uint32_t cb_ex_external_bytes_required =
+        num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes;
+    constexpr uint32_t cb_ex_external_tiles_required =
+        (cb_ex_external_bytes_required + single_tile_size_bytes - 1) / single_tile_size_bytes;
 
     // Start Batch Loop
     for (uint32_t b = 0; b < batch; ++b) {
@@ -359,7 +352,7 @@ void kernel_main() {
                     ckl::ReduceInputPolicy::WaitAndPopPerTile,
                     ckl::ReduceDataFormatReconfigMode::NONE>(
                     ckl::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
-                if (num_cores_per_mcast_group > 1) {
+                if constexpr (num_cores_per_mcast_group > 1) {
                     cb_ex.reserve_back(1);
                     cb_ex.push_back(1);
                 }
@@ -441,7 +434,7 @@ void kernel_main() {
                     ckl::ReduceInputPolicy::WaitAndPopPerTile,
                     ckl::ReduceDataFormatReconfigMode::NONE>(
                     ckl::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
-                if (num_cores_per_mcast_group > 1) {
+                if constexpr (num_cores_per_mcast_group > 1) {
                     cb_ex2.reserve_back(1);
                     cb_ex2.push_back(1);
                 }

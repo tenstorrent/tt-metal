@@ -237,14 +237,9 @@ void kernel_main() {
     }
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
-    uint32_t num_out_blocks_padded = num_out_blocks;
-    uint32_t extra_out_block = false;
-    uint32_t out_block_h_last = out_block_h_normal;
-    if constexpr (block_h % num_out_blocks != 0) {
-        extra_out_block = true;
-        num_out_blocks_padded++;
-        out_block_h_last = (block_h % num_out_blocks);
-    }
+    constexpr bool extra_out_block = block_h % num_out_blocks != 0;
+    constexpr uint32_t num_out_blocks_padded = num_out_blocks + (extra_out_block ? 1 : 0);
+    constexpr uint32_t out_block_h_last = extra_out_block ? block_h % num_out_blocks : out_block_h_normal;
 
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, reciprocal_size>;

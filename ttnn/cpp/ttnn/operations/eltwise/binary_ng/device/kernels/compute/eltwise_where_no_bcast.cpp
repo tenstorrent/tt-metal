@@ -9,7 +9,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_special.hpp"   // Where
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"      // FillBitcast / FillInt
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
-#include "api/dataflow/circular_buffer.h"
 
 namespace ckl = compute_kernel_lib;
 

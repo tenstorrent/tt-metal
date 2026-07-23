@@ -8,7 +8,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // Hardsigmoid
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
-#include "api/dataflow/circular_buffer.h"
 
 namespace ckl = compute_kernel_lib;
 
