@@ -100,10 +100,11 @@
 # ~12.3 min on bh_p150b_civ2). Cost is genuine passing-test work (LLKMeshDeviceFixture reduce
 # family dominates); skipped Quasar-only tests are free (~130 ms total), not the cause.
 - name: runtime_llk
-  # 3 tests disabled by #44767. Top32RmDevPipelineCompletes re-enabled: fixed by #46344.
-  disabled_llk_filter: &disabled_llk 'LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3'
+  # No #44767 exclusions remain: Top32RmDevPipelineCompletes fixed by #46344; the 3 FP8e4m3
+  # tests (TensixComputePackUntilizeFp8e4m3/TensixComputeUnpackTilizeFp8e4m3/TensixFp8e4m3ToFp8e4m3)
+  # fixed by #49909 (BH packer input format Float16) + #49953 (dead unpacker writes).
   cmd: |
-    ./build/test/tt_metal/unit_tests_llk --gtest_filter='-{disabled_llk_filter}'
+    ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
     ./build/test/tt_metal/unit_tests_sfpi
   skus:
     wh_n150_civ2:
@@ -279,10 +280,9 @@
 
 # --- LLK Tests (SD) ---
 - name: runtime_sd_llk
-  # See #44767.
-  disabled_llk_filter: *disabled_llk
+  # No #44767 exclusions remain (see runtime_llk above).
   cmd: |
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_llk --gtest_filter='-{disabled_llk_filter}'
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
   skus:
     wh_n150_civ2:
       timeout: 10
