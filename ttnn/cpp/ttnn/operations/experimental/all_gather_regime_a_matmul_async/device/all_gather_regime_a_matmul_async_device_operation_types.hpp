@@ -28,7 +28,11 @@ struct AllGatherRegimeAMatmulAsyncParams {
     uint32_t num_workers_per_link = 1;
     uint32_t num_buffers_per_channel = 2;
 
-    // Transport-chunk / packet knobs (Task 3+; not public tuning knobs yet).
+    // Transport-chunk / packet knobs (Task 3+; not public tuning knobs yet). NOTE (Phase A): the injector
+    // currently sends ONE bf16 tile (2 KiB) per fabric packet because the destination gather buffer is
+    // interleaved DRAM (one tile == one bank == one NoC address), so packet_bytes is not yet honored; a 4 KiB
+    // baseline needs contiguous L1 slots (Phase B) or a non-interleaved gather layout. transport_c/slots are
+    // likewise Phase-B knobs (single-tile per-transport granularity today).
     uint32_t transport_c = 1;
     uint32_t transport_slots = 2;
     uint32_t packet_bytes = 4096;
@@ -36,6 +40,10 @@ struct AllGatherRegimeAMatmulAsyncParams {
     std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
     std::optional<tt::tt_metal::DataType> output_dtype;
     DeviceComputeKernelConfig compute_kernel_config;
+
+    // Same-binary full-gather-before-matmul diagnostic (no-overlap A/B). Captured from TT_AGMM_FULL_GATHER at
+    // invoke() so it is part of the (hashed) attributes — switching modes yields a distinct cached program.
+    bool full_gather_diagnostic = false;
 
     // CCL semaphores live in operation_attributes (NOT tensor_args): the device_operation framework runs a
     // count_object_of_type<Tensor> traversal over tensor_args that would recurse into GlobalSemaphore's
@@ -59,7 +67,8 @@ struct AllGatherRegimeAMatmulAsyncParams {
         "packet_bytes",
         "regime_a_config",
         "output_mem_config",
-        "output_dtype");
+        "output_dtype",
+        "full_gather_diagnostic");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -74,7 +83,8 @@ struct AllGatherRegimeAMatmulAsyncParams {
             this->packet_bytes,
             this->regime_a_config,
             this->output_mem_config,
-            this->output_dtype);
+            this->output_dtype,
+            this->full_gather_diagnostic);
     }
 };
 

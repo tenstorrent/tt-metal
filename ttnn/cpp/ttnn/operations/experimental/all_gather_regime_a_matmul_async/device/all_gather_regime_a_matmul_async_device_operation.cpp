@@ -4,6 +4,8 @@
 
 #include "all_gather_regime_a_matmul_async_device_operation.hpp"
 
+#include <cstdlib>
+
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -37,15 +39,58 @@ void AllGatherRegimeAMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(K_local > 0 && K_global % K_local == 0, "in1 K ({}) must be a multiple of in0 K ({})", K_global, K_local);
     TT_FATAL(operation_attributes.d == K_global / K_local, "D mismatch with K-shard ratio");
     TT_FATAL(operation_attributes.d > 1, "D must be > 1 here (D=1 delegates to regime_a_matmul)");
+    // Kernel arrays are fixed-size (shard_landed[8], compute-core coords[128]); enforce those bounds.
+    TT_FATAL(operation_attributes.d <= 8, "all_gather_regime_a_matmul_async supports D<=8 (got {})", operation_attributes.d);
     // in1 must be DRAM WIDTH_SHARDED across 8 banks (regime_a weight layout).
     const auto& wm = weight.memory_config();
     TT_FATAL(
         wm.buffer_type() == BufferType::DRAM && wm.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "all_gather_regime_a_matmul_async weight must be DRAM WIDTH_SHARDED (regime_a layout)");
+
+    // Output config: the writer emits bf16 (2 KiB) TILE tiles into an interleaved output. The public API accepts
+    // other dtypes/layouts, but the kernels hardcode bf16/HiFi2-fp32acc, so reject anything else rather than
+    // silently corrupting (e.g. an fp32 output would allocate fp32 storage while the writer emits bf16 tiles).
+    if (operation_attributes.output_dtype.has_value()) {
+        TT_FATAL(
+            operation_attributes.output_dtype.value() == DataType::BFLOAT16,
+            "all_gather_regime_a_matmul_async v1 only produces BFLOAT16 output (got {})",
+            static_cast<int>(operation_attributes.output_dtype.value()));
+    }
+    if (operation_attributes.output_mem_config.has_value()) {
+        const auto& om = operation_attributes.output_mem_config.value();
+        TT_FATAL(
+            om.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "all_gather_regime_a_matmul_async v1 only supports an INTERLEAVED output memory config");
+    }
+    // NOTE: compute_kernel_config is hashed (so distinct configs never alias in cache) but the compute kernel is
+    // always compiled with HiFi2 + fp32 dest accumulation (matching regime_a); a caller-supplied override is not
+    // honored in v1. This is documented on the public op rather than rejected (it cannot corrupt output).
+    // Not-yet-supported optional args: reject rather than silently ignore.
+    TT_FATAL(
+        !tensor_args.persistent_output_buffer.has_value(),
+        "all_gather_regime_a_matmul_async v1 does not support persistent_output_buffer yet");
+    TT_FATAL(
+        !operation_attributes.barrier_semaphore.has_value(),
+        "all_gather_regime_a_matmul_async v1 does not use barrier_semaphore");
+    TT_FATAL(
+        operation_attributes.num_links == 1 && operation_attributes.num_workers_per_link == 1,
+        "all_gather_regime_a_matmul_async v1 uses one fabric link and one injector worker (got links={}, "
+        "workers={})",
+        operation_attributes.num_links,
+        operation_attributes.num_workers_per_link);
+    // Need >= D+1 (per-shard) global semaphores (gather_ready + D shard_landed); factory validates exact count.
+    TT_FATAL(
+        operation_attributes.multi_device_global_semaphore.size() >= operation_attributes.d + 1,
+        "all_gather_regime_a_matmul_async needs >= D+1 global semaphores, got {} for D={}",
+        operation_attributes.multi_device_global_semaphore.size(),
+        operation_attributes.d);
 }
 
 tt::stl::hash::hash_t AllGatherRegimeAMatmulAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& op, const tensor_args_t& tensor_args) {
+    // Hash every field that changes codegen or geometry. GlobalSemaphore addresses are intentionally excluded
+    // (they are relocated on cache replay by override_runtime_arguments, not structural). Semaphore COUNT (=D+1)
+    // is covered by op.d. The full_gather_diagnostic flag is included so the two reader variants never alias.
     const auto& a = tensor_args.input_tensor.logical_shape();
     const auto& w = tensor_args.weight_tensor.logical_shape();
     const auto& cfg = op.regime_a_config;
@@ -57,6 +102,10 @@ tt::stl::hash::hash_t AllGatherRegimeAMatmulAsyncDeviceOperation::compute_progra
         op.num_links,
         op.num_workers_per_link,
         op.num_buffers_per_channel,
+        op.transport_c,
+        op.transport_slots,
+        op.packet_bytes,
+        op.full_gather_diagnostic,
         cfg.has_value(),
         cfg.has_value() ? cfg->k_slices : 0u,
         cfg.has_value() ? cfg->n_slices : 0u,
@@ -64,7 +113,11 @@ tt::stl::hash::hash_t AllGatherRegimeAMatmulAsyncDeviceOperation::compute_progra
         cfg.has_value() ? cfg->k_block_tiles : 0u,
         cfg.has_value() ? cfg->n_subblock_tiles : 0u,
         static_cast<uint32_t>(op.output_dtype.value_or(DataType::BFLOAT16)),
+        op.output_mem_config.value_or(MemoryConfig{}),
+        op.compute_kernel_config,
         static_cast<uint32_t>(tensor_args.input_tensor.dtype()),
+        tensor_args.input_tensor.memory_config(),
+        tensor_args.weight_tensor.memory_config(),
         a[-2],
         a[-1],
         w[-2],
@@ -141,6 +194,8 @@ AllGatherRegimeAMatmulAsyncDeviceOperation::invoke(
             .output_mem_config = memory_config,
             .output_dtype = dtype,
             .compute_kernel_config = ckc,
+            // Same-binary no-overlap A/B diagnostic, captured here so it is part of the hashed attributes.
+            .full_gather_diagnostic = (std::getenv("TT_AGMM_FULL_GATHER") != nullptr),
             .multi_device_global_semaphore = std::move(multi_device_global_semaphore),
             .barrier_semaphore = std::move(barrier_semaphore)},
         tensor_args_t{

@@ -21,9 +21,11 @@
 #include "all_gather_regime_a_matmul_async_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/tt_metal.hpp>
@@ -31,6 +33,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -121,7 +124,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     // (only the factory's ring/placement diagnostics do — which we deliberately skip here), so it is mesh-safe.
     auto planres = make_and_build_plan(mesh_device, gather, in1, op.regime_a_config);
     TT_FATAL(planres.ok(), "regime_a planner rejected config: {}", planres.error);
-    const ra::ExecutionPlan& P = *planres.plan;
+    ra::ExecutionPlan& P = *planres.plan;  // mutable: production IN1_NEAR placement + PARETO ring reorder below
     const ra::Geometry& geo = P.geo;
     const ra::CbSizes& cb = P.cb;
 
@@ -134,6 +137,179 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     const uint32_t Sm = cfg.m_slices ? cfg.m_slices : 1u;
     const uint32_t kb = cfg.k_block_tiles ? cfg.k_block_tiles : 1u;
     const uint32_t use_reduce = (Pk > 1u) ? 1u : 0u;
+
+    // ==== Restore production regime_a placement/ring optimizations (multi-device hop-distance overload) ========
+    // The single-chip factory re-places M-split slaves IN1_NEAR and reorders the in0 ring by PARETO before
+    // emitting kernels; both materially improve DRAM-BW utilization. Port the DEFAULT (non-diagnostic) paths
+    // here so the fused compute engine is placed identically to production and the fused-vs-single-chip gap is
+    // comparable. The only change vs regime_a is the hop-distance overload: use the MeshDevice+MeshCoordinate
+    // variant (per-chip harvesting-aware) instead of the unit-mesh one (which FATALs on a multi-device mesh).
+    namespace expd = tt::tt_metal::experimental::Device;
+    const uint32_t preaders = geo.num_cores / 8u;
+    auto hop = [&](const CoreCoord& s, const CoreCoord& d, NOC noc) {
+        return expd::get_worker_noc_hop_distance(mesh_device, mesh_coordinate, s, d, noc);
+    };
+    // ---- IN1_NEAR M-slave placement (Sm>1): mm==0 readers near their bank target, slaves at the free worker
+    // minimizing the directed reader->slave hop on the group's in1 NoC (mirrors regime_a lines 139-215). ----
+    if (Sm > 1u) {
+        const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
+        const auto opt0 = mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0);
+        const auto opt1 = mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_1);
+        std::set<std::pair<uint32_t, uint32_t>> used;
+        auto bank_tgt = [&](uint32_t b, uint32_t noc) { return noc ? opt1[b] : opt0[b]; };
+        auto find_near = [&](CoreCoord t) -> CoreCoord {
+            for (int d = 0; d < (int)(grid.x + grid.y); ++d) {
+                for (int dx = -d; dx <= d; ++dx) {
+                    const int rem = d - (dx < 0 ? -dx : dx);
+                    for (int sgn = 0; sgn <= 1; ++sgn) {
+                        const int dy = sgn ? -rem : rem;
+                        const int x = (int)t.x + dx, y = (int)t.y + dy;
+                        if (x < 0 || y < 0 || (uint32_t)x >= grid.x || (uint32_t)y >= grid.y) {
+                            continue;
+                        }
+                        const auto key = std::make_pair((uint32_t)x, (uint32_t)y);
+                        if (used.count(key)) {
+                            continue;
+                        }
+                        used.insert(key);
+                        return CoreCoord{(uint32_t)x, (uint32_t)y};
+                    }
+                }
+            }
+            return CoreCoord{t.x, t.y};
+        };
+        auto set_coord = [&](uint32_t i, CoreCoord c) {
+            P.cores[i].coord.x = c.x;
+            P.cores[i].coord.y = c.y;
+        };
+        for (uint32_t b = 0; b < 8u; ++b) {
+            for (uint32_t p = 0; p < preaders; ++p) {
+                const uint32_t i = b * preaders + p;
+                if (P.cores[i].mm == 0u) {
+                    set_coord(i, find_near(bank_tgt(b, P.cores[i].noc)));
+                }
+            }
+        }
+        for (uint32_t b = 0; b < 8u; ++b) {
+            for (uint32_t p = 0; p < preaders; ++p) {
+                const uint32_t i = b * preaders + p;
+                if (P.cores[i].mm == 0u) {
+                    continue;
+                }
+                const uint32_t ri = i - P.cores[i].mm;
+                const CoreCoord rc{P.cores[ri].coord.x, P.cores[ri].coord.y};
+                const NOC rnoc = P.cores[i].noc ? NOC::NOC_1 : NOC::NOC_0;
+                CoreCoord best{};
+                uint32_t bestd = 0xffffffffu;
+                bool found = false;
+                for (uint32_t y = 0; y < grid.y; ++y) {
+                    for (uint32_t x = 0; x < grid.x; ++x) {
+                        if (used.count(std::make_pair(x, y))) {
+                            continue;
+                        }
+                        const uint32_t dd = hop(rc, CoreCoord{x, y}, rnoc);
+                        if (!found || dd < bestd) {
+                            bestd = dd;
+                            best = CoreCoord{x, y};
+                            found = true;
+                        }
+                    }
+                }
+                used.insert(std::make_pair(best.x, best.y));
+                set_coord(i, best);
+            }
+        }
+    }
+    // ---- PARETO in0 ring ordering (mirrors regime_a lines 262-384, opt_pareto only). Per (kk,nn) group of Sm
+    // contiguous slices sharing a writer NoC: pick the ring permutation minimizing (worst directed edge, then
+    // summed hops) over all Sm mm-rings, subject to summed-hops <= the mm0-optimal budget. ----
+    {
+        auto ring_cost = [](const std::array<uint32_t, 8>& ord,
+                            const std::array<std::array<uint32_t, 8>, 8>& d) -> std::pair<uint32_t, uint32_t> {
+            uint32_t mx = 0, tot = 0;
+            for (uint32_t p = 0; p < 8u; ++p) {
+                const uint32_t e = d[ord[p]][ord[(p + 1u) % 8u]];
+                tot += e;
+                mx = std::max(mx, e);
+            }
+            return {mx, tot};
+        };
+        for (uint32_t base = 0; base < preaders; base += Sm) {
+            const NOC wnoc = (P.cores[base].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
+            std::vector<std::array<std::array<uint32_t, 8>, 8>> dm(Sm);
+            for (uint32_t mm = 0; mm < Sm; ++mm) {
+                auto lc = [&](uint32_t b) {
+                    const auto& c = P.cores[b * preaders + base + mm].coord;
+                    return CoreCoord{c.x, c.y};
+                };
+                for (uint32_t a = 0; a < 8u; ++a) {
+                    for (uint32_t b = 0; b < 8u; ++b) {
+                        dm[mm][a][b] = (a == b) ? 0u : hop(lc(a), lc(b), wnoc);
+                    }
+                }
+            }
+            struct Metrics {
+                uint32_t r0max, r0tot, aggmax, aggtot;
+            };
+            auto metrics = [&](const std::array<uint32_t, 8>& ord) -> Metrics {
+                Metrics m{0, 0, 0, 0};
+                for (uint32_t mm = 0; mm < Sm; ++mm) {
+                    const auto [rm, rt] = ring_cost(ord, dm[mm]);
+                    if (mm == 0) {
+                        m.r0max = rm;
+                        m.r0tot = rt;
+                    }
+                    m.aggmax = std::max(m.aggmax, rm);
+                    m.aggtot += rt;
+                }
+                return m;
+            };
+            auto lt2 = [](uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1) {
+                return a0 < b0 || (a0 == b0 && a1 < b1);
+            };
+            auto cand_of = [](const std::array<uint32_t, 7>& t) {
+                std::array<uint32_t, 8> c{};
+                c[0] = 0;
+                for (uint32_t i = 0; i < 7u; ++i) {
+                    c[i + 1u] = t[i];
+                }
+                return c;
+            };
+            const std::array<uint32_t, 8> bank = {0, 1, 2, 3, 4, 5, 6, 7};
+            std::array<uint32_t, 8> opt_mm0 = bank, opt_pareto = bank;
+            Metrics b_mm0{~0u, ~0u, ~0u, ~0u};
+            std::array<uint32_t, 7> tail = {1, 2, 3, 4, 5, 6, 7};
+            do {
+                const std::array<uint32_t, 8> cand = cand_of(tail);
+                const Metrics m = metrics(cand);
+                if (lt2(m.r0max, m.r0tot, b_mm0.r0max, b_mm0.r0tot)) {
+                    b_mm0 = m;
+                    opt_mm0 = cand;
+                }
+            } while (std::next_permutation(tail.begin(), tail.end()));
+            opt_pareto = opt_mm0;
+            Metrics b_pa = b_mm0;
+            const uint32_t budget = b_mm0.aggtot;
+            std::array<uint32_t, 7> tail2 = {1, 2, 3, 4, 5, 6, 7};
+            do {
+                const std::array<uint32_t, 8> cand = cand_of(tail2);
+                const Metrics m = metrics(cand);
+                if (m.aggtot <= budget && lt2(m.aggmax, m.aggtot, b_pa.aggmax, b_pa.aggtot)) {
+                    b_pa = m;
+                    opt_pareto = cand;
+                }
+            } while (std::next_permutation(tail2.begin(), tail2.end()));
+            for (uint32_t mm = 0; mm < Sm; ++mm) {
+                const uint32_t jj = base + mm;
+                for (uint32_t pos = 0; pos < 8u; ++pos) {
+                    const uint32_t ci = opt_pareto[pos] * preaders + jj;
+                    P.cores[ci].ring_pos = pos;
+                    P.cores[ci].ring_next_idx = opt_pareto[(pos + 1u) % 8u] * preaders + jj;
+                    P.cores[ci].ring_prev_idx = opt_pareto[(pos + 7u) % 8u] * preaders + jj;
+                }
+            }
+        }
+    }
 
     // Core range sets: all compute cores + split-NoC groups (g0 = noc 0, g1 = noc 1).
     std::set<CoreRange> all_set, g0_set, g1_set;
@@ -191,9 +367,10 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
 
     // ---- writer (COPIED gated in0 ring/reduce writer) compile args ----
     // Base layout identical to regime_a; the AGMM gate appends (gather_ready_addr, Kt_local, D) at the end.
-    // Default = AGMM_STREAM (per-shard progressive gate → matmul overlaps the gather). TT_AGMM_FULL_GATHER=1
-    // selects the same-binary full-gather-before-matmul diagnostic (reader waits gather_ready==D). Not public.
-    const bool full_gather_diag = std::getenv("TT_AGMM_FULL_GATHER") != nullptr;
+    // Default = AGMM_STREAM (per-shard progressive gate → matmul overlaps the gather). The full-gather-before-
+    // matmul diagnostic (reader waits for all shards) is selected by the hashed op attribute (from
+    // TT_AGMM_FULL_GATHER at invoke time), so the two reader variants never alias in the program cache.
+    const bool full_gather_diag = op.full_gather_diagnostic;
     std::map<std::string, std::string> wdefs;
     wdefs[full_gather_diag ? "AGMM_FULL_GATHER_BARRIER" : "AGMM_STREAM"] = "1";
     std::vector<uint32_t> wct = {

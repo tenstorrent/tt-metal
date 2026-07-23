@@ -131,6 +131,9 @@ inline AgmmPlan build_plan(const AgmmPlanConfig& c) {
     }
 
     // ---- core reservation: reserve fabric mux/worker cores BEFORE regime_a compute cores ----
+    // NOTE: this models the ASPIRATIONAL multi-link geometry (Task 8). The current program factory implements
+    // only the num_links==1 / num_workers_per_link==1 subset (1 mux + 1 injector) and validates that at the op
+    // level; the reservation below is a forward-looking sizing model, not what the factory allocates today.
     p.regime_a_cores = 8u * c.Pk * c.Ns * c.Sm;
     if (c.D == 1) {
         // D=1 delegates to single-chip regime_a: no fabric cores.
@@ -147,17 +150,18 @@ inline AgmmPlan build_plan(const AgmmPlanConfig& c) {
         err("core over-subscription: reserved_fabric(" + std::to_string(p.reserved_fabric_cores) +
             ") + regime_a(" + std::to_string(p.regime_a_cores) + ") > usable(" + std::to_string(p.usable_cores) + ")");
     }
-    // Collision: regime_a compute cores live in [kRegimeCoreBase, kRegimeCoreWindow); fabric cores are
-    // reserved from the grid tail (>= kRegimeCoreWindow) so they do not overlap the compute window.
-    // Collision iff regime_a needs more than the window OR fabric reservation reaches into the window.
-    const uint32_t window = kRegimeCoreWindow - kRegimeCoreBase;  // 88 compute-core slots
-    const bool regime_overflow = p.regime_a_cores > window;
-    const bool fabric_into_window = p.reserved_fabric_cores > (p.usable_cores - kRegimeCoreWindow);
-    p.core_collision = regime_overflow || (p.reserved_fabric_cores > 0 && fabric_into_window);
+    // Collision = regime_a needs more compute cores than its own maximum (kRegimeCoreWindow == regime_a's
+    // kMaxCores of 104), OR the fabric reservation plus regime_a cores don't fit the usable grid. There is NO
+    // artificial sub-104 window: regime_a's find_near placement + the fabric cores just have to co-fit the grid
+    // (the factory places fabric cores on free workers not used by the regime_a plan). A 96-core regime_a
+    // config (8*Pk*Ns*Sm == 96) is feasible and must NOT be rejected.
+    const bool regime_overflow = p.regime_a_cores > kRegimeCoreWindow;  // > 104 => regime_a itself would reject
+    const bool fabric_no_fit = p.reserved_fabric_cores > (p.usable_cores - p.regime_a_cores);
+    p.core_collision = regime_overflow || (p.reserved_fabric_cores > 0 && fabric_no_fit);
     if (p.core_collision) {
-        err("core placement collision: regime_a(" + std::to_string(p.regime_a_cores) + " vs window " +
-            std::to_string(window) + ") / fabric(" + std::to_string(p.reserved_fabric_cores) + " vs tail " +
-            std::to_string(p.usable_cores - kRegimeCoreWindow) + ")");
+        err("core placement collision: regime_a(" + std::to_string(p.regime_a_cores) + " vs max " +
+            std::to_string(kRegimeCoreWindow) + ") / fabric(" + std::to_string(p.reserved_fabric_cores) +
+            " vs free " + std::to_string(p.usable_cores - p.regime_a_cores) + ")");
     }
 
     // ---- L1 sizing (ingress transport buffering; independent of regime_a's own CBs) ----
