@@ -66,14 +66,16 @@ it stays robust to profiler CSV schema changes.
 
 ## Gating
 
-Every measured topology is printed for trending. A metric whose golden value is `null`
-is in **record mode** (printed, not gated), so the test can land before we have silicon
-numbers and the gate can be armed one topology at a time. The gate fails the job if a
-populated metric drifts outside its golden band (`tolerance_pct`).
+Every measured topology is printed for trending, and the gate fails the job if a
+populated metric drifts outside its golden band (`tolerance_pct`). A metric whose golden
+value is `null` is in **record mode** (printed, not gated), so new topologies can be
+added and armed one at a time.
 
-> **Goldens ship in record mode (all `null`).** They must be populated from a real
-> on-silicon CI run per arch (`get_noc_addr` cycles are hardware-specific), then re-armed.
-> See "Populating / updating the golden" below.
+> **Goldens are armed** from the (Runtime) Performance Tests scheduled runs, per arch
+> (`get_noc_addr` cycles are hardware-specific). Two consecutive scheduled runs agreed to
+> <0.05% on every metric, so `tolerance_pct` is 15% — ample headroom for board-to-board /
+> firmware drift while still catching real regressions. See "Populating / updating the
+> golden" below.
 
 ## Where it runs
 
@@ -100,7 +102,7 @@ export PYTHONPATH="${TT_METAL_HOME}/tools:${TT_METAL_HOME}:${PYTHONPATH}"
 TT_METAL_DEVICE_PROFILER=1 \
   python3 tests/tt_metal/tt_metal/perf_microbenchmark/tensor_accessor/accessor_postprocess.py
 
-# run + gate against the golden (record mode passes while values are null)
+# run + gate against the golden (compares each populated metric within tolerance_pct)
 TT_METAL_DEVICE_PROFILER=1 \
   python3 tests/tt_metal/tt_metal/perf_microbenchmark/tensor_accessor/accessor_postprocess.py \
   --golden tests/tt_metal/tt_metal/perf_microbenchmark/tensor_accessor/accessor_golden.json

@@ -1,15 +1,15 @@
 {
   "arch": "wormhole_b0",
-  "description": "TensorAccessor full-chip address-calculation (get_noc_addr) CI golden (Wormhole, wh_n300_civ2). Metric = average device cycles for get_noc_addr across the full Tensix grid, one pinned all-static config per tensor topology, keyed by GetNocAddr.<topology>. All values are null = record mode while the silicon baseline is collected on CI; re-arm once run-to-run spread is known.",
+  "description": "TensorAccessor full-chip address-calculation (get_noc_addr) CI golden (Wormhole, wh_n300_civ2). Metric = average device cycles for get_noc_addr across the full Tensix grid, one pinned all-static config per tensor topology, keyed by GetNocAddr.<topology>. Baseline captured from the (Runtime) Performance Tests scheduled runs on wh_n300_civ2; two consecutive scheduled runs agreed to <0.05% on every metric, so tolerance_pct is set to 15% (ample headroom for board-to-board / firmware drift while still catching real regressions).",
   "pinned_config": "unit_tests_ttnn_accessor AccessorFullChipBenchmarks.GetNocAddr, full compute grid, all-static config per topology, device profiler",
   "golden": {
-    "GetNocAddr.interleaved_l1": null,
-    "GetNocAddr.interleaved_dram": null,
-    "GetNocAddr.sharded_l1_1d": null,
-    "GetNocAddr.sharded_l1_2d": null,
-    "GetNocAddr.sharded_l1_nd": null,
-    "GetNocAddr.sharded_dram_2d": null,
-    "GetNocAddr.sharded_dram_nd": null,
+    "GetNocAddr.interleaved_l1": 29.13,
+    "GetNocAddr.interleaved_dram": 29.13,
+    "GetNocAddr.sharded_l1_1d": 20.02,
+    "GetNocAddr.sharded_l1_2d": 27.12,
+    "GetNocAddr.sharded_l1_nd": 256.04,
+    "GetNocAddr.sharded_dram_2d": 38.04,
+    "GetNocAddr.sharded_dram_nd": 273.98,
     "tolerance_pct": 15.0
   }
 }

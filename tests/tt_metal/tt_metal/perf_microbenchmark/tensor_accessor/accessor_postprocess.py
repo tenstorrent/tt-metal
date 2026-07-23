@@ -27,10 +27,9 @@ This module:
      gates it against a per-arch golden.
 
 The device-profiler cycle metric behaves identically on Wormhole and Blackhole
-(no realtime profiler dependency). Goldens ship in record mode (null) until
-populated on silicon, exactly like the op-to-op latency microbenchmark: a null
-golden value is printed and skipped (passes), so the gate can be armed one
-metric at a time.
+(no realtime profiler dependency). Goldens are armed from the scheduled CI baseline
+per arch; any metric left null is in record mode (printed and skipped, passes), so
+new topologies can be added and armed one metric at a time.
 """
 
 from __future__ import annotations

@@ -19,7 +19,7 @@
 # (interleaved L1/DRAM, 1D/2D/ND sharded L1, sharded DRAM). It then post-processes the
 # per-topology average device cycles and gates them against the per-arch golden. The
 # metric comes only from the standard device profiler so it behaves identically on
-# Wormhole and Blackhole. Goldens ship in record mode (null) until populated on silicon.
+# Wormhole and Blackhole. Goldens are armed from the scheduled CI baseline per arch.
 - name: runtime_perf_tensor_accessor
   cmd: |
     export TT_METAL_DEVICE_PROFILER=1
