@@ -21,8 +21,10 @@ from models.experimental.hunyuan_image_3_0.ref.model_config import (
     PRODUCTION_TEXT_PRE,
     TILE_SIZE,
     load_config,
+    max_seq_tile_aligned,  # noqa: F401 — re-export for sibling PCC tests
     production_image_infos,
     production_image_span,
+    transformer_cfg,  # noqa: F401 — re-export for sibling PCC tests
 )
 
 ROOT = Path(__file__).resolve().parents[5]
