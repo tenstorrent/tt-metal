@@ -88,18 +88,84 @@ def build_hf_shapes(config, tie_word_embeddings: bool) -> Dict[str, tuple]:
 
 
 def _build_inv_transforms(forward_transforms: dict) -> dict:
-    """Convert forward (HF→TTML) transforms to inverse (TTML→HF) transforms."""
+    """Convert forward (HF→TTML) transforms to inverse (TTML→HF) transforms.
+
+    The fused-KV forward transforms map ONLY the HF k_proj key to the single
+    ttml kv_proj param (v_proj is consumed by that transform, so it is absent
+    from the forward mapping). To reverse that on export we emit an inverse for
+    BOTH the k_proj and the v_proj HF names, each pointing at the same fused
+    kv_proj param but selecting a different half:
+
+      combine_kv     (single-device/FSDP): fused layout is [all-K ; all-V], a
+                     plain contiguous midpoint split. -> split_kv
+      combine_kv_tp  (ColumnParallel TP): fused layout is the per-shard
+                     interleave [K_s0,V_s0,K_s1,V_s1,...], so the split must
+                     de-interleave using tp_size. -> split_kv_tp
+
+    The extract loop uses the presence of a "*_kv*" inverse under the k_proj key
+    as the signal to gather the fused param once and emit both HF tensors.
+    """
     inv = {}
     for hf_name, tr in forward_transforms.items():
         if tr[0] == "unpermute_proj":
             inv[hf_name] = ("repermute_proj", tr[1])
         elif tr[0] == "unpermute_norm":
             inv[hf_name] = ("repermute_norm",)
+        elif tr[0] in ("combine_kv", "combine_kv_tp"):
+            # tr = (name, num_kv_heads, v_hf_name). The K half carries the RoPE
+            # row-permute (like q_proj/k_proj); the V half is used as-is.
+            split_name = "split_kv" if tr[0] == "combine_kv" else "split_kv_tp"
+            num_kv_heads, v_hf_name = tr[1], tr[2]
+            inv[hf_name] = (split_name, "k", num_kv_heads)
+            inv[v_hf_name] = (split_name, "v", num_kv_heads)
     return inv
 
 
-def _apply_inv_transform(weight: torch.Tensor, hf_name: str, inv_transforms: dict) -> torch.Tensor:
-    """Apply inverse permutation to convert TTML internal layout → HF layout."""
+def _split_fused_kv(weight: torch.Tensor, which: str, kv_out: int, tp_size: int, interleaved: bool) -> torch.Tensor:
+    """Select the K or V half of a fused kv_proj tensor and re-permute K back to HF.
+
+    ``weight`` is the full fused param, squeezed to 2-D (weight) or 1-D (bias).
+    ``kv_out`` is the true (config-derived) K/V output width = num_kv_heads *
+    head_dim; it is passed in rather than inferred from ``weight.shape[0]`` so the
+    split stays correct even when the gathered tensor still carries TILE padding
+    on the row dim (2*kv_out need not be a multiple of 32). ``which`` is "k"/"v".
+
+      interleaved=False (single-device/FSDP, combine_kv): rows are [all-K ; all-V],
+                        so K is the first kv_out rows and V the next kv_out.
+      interleaved=True  (ColumnParallel TP, combine_kv_tp): rows are the per-shard
+                        interleave [K_s0,V_s0,K_s1,V_s1,...]; slice off any tail
+                        padding to exactly 2*kv_out, then de-interleave via a
+                        [tp, 2, per, ...] reshape and take the K (0) or V (1) plane.
+
+    The de-interleaved/split K half still carries the RoPE row-permute (K is
+    unpermuted on load like q_proj/k_proj), so re-permute it back to HF layout;
+    the V half is never permuted.
+    """
+    plane = 0 if which == "k" else 1
+
+    if not interleaved:
+        return weight[:kv_out] if which == "k" else weight[kv_out : 2 * kv_out]
+
+    per = kv_out // tp_size
+    fused = weight[: 2 * kv_out]  # drop any TILE tail padding before de-interleave
+    if fused.dim() == 2:
+        dei = fused.reshape(tp_size, 2, per, fused.shape[1])
+        return dei[:, plane].reshape(kv_out, fused.shape[1])
+    dei = fused.reshape(tp_size, 2, per)  # bias
+    return dei[:, plane].reshape(kv_out)
+
+
+def _apply_inv_transform(
+    weight: torch.Tensor, hf_name: str, inv_transforms: dict, kv_out: int = 0, tp_size: int = 1
+) -> torch.Tensor:
+    """Apply inverse permutation to convert TTML internal layout → HF layout.
+
+    ``weight`` must already be squeezed. For split_kv/split_kv_tp it is the full
+    fused kv_proj param; this function carves out the K or V half (see
+    _split_fused_kv, using the config-derived ``kv_out`` so TILE padding on the
+    row dim is tolerated) and re-permutes the K half. ``tp_size`` is only
+    consulted for the split_kv_tp (ColumnParallel) case.
+    """
     if hf_name not in inv_transforms:
         return weight
     tr = inv_transforms[hf_name]
@@ -107,6 +173,13 @@ def _apply_inv_transform(weight: torch.Tensor, hf_name: str, inv_transforms: dic
         return repermute_proj_rows(weight, num_heads=tr[1])
     elif tr[0] == "repermute_norm":
         return repermute_norm_weights(weight)
+    elif tr[0] in ("split_kv", "split_kv_tp"):
+        # tr = (name, which, num_kv_heads)
+        _, which, num_kv_heads = tr
+        half = _split_fused_kv(weight, which, kv_out, tp_size, interleaved=(tr[0] == "split_kv_tp"))
+        if which == "k":
+            half = repermute_proj_rows(half, num_heads=num_kv_heads)
+        return half
     return weight
 
 
@@ -144,6 +217,29 @@ def _gather_distributed(param, shard_type: Optional[str], device, dp_size: int =
         val = ttnn.to_torch(val_tt, mesh_composer=composer).to(torch.float32)
         val = val[:1]
     return val
+
+
+def _derive_tp_size(mapping, shard_types, ttml_params, hf_shapes) -> int:
+    """Derive the tensor-parallel size from a col_w param's global vs local rows.
+
+    Uses a NON-fused col_w weight (q_proj) as the reference: its HF row count
+    (hf_shape[0]) is the full un-sharded output size, and its ttml per-device
+    shape (ttml_shape[2]) is the local shard, so tp = full // local. The fused
+    kv_proj is explicitly skipped -- its HF k_proj shape is k_dim while its
+    global rows are 2*k_dim, which would give a bogus (doubled) tp size.
+    """
+    for hf_name, ttml_name in mapping.items():
+        if shard_types.get(hf_name) != "col_w":
+            continue
+        if not hf_name.endswith(".q_proj.weight"):
+            continue  # skip fused kv_proj and any non-reference col_w param
+        actual = _resolve_ttml_name(ttml_name, ttml_params)
+        if actual is None or hf_name not in hf_shapes:
+            continue
+        ttml_shape = list(ttml_params[actual].shape())
+        if len(ttml_shape) >= 3 and ttml_shape[2]:
+            return max(1, hf_shapes[hf_name][0] // ttml_shape[2])
+    return 1
 
 
 def _resolve_ttml_name(ttml_name: str, ttml_params: dict) -> Optional[str]:
@@ -213,16 +309,25 @@ def extract_hf_state_dict(
         )
     else:
         mapping, fwd_transforms = build_weight_mapping_single(config, root_prefix, tie_word_embeddings)
+        shard_types = {}
 
     inv_transforms = _build_inv_transforms(fwd_transforms)
+    tp_size = _derive_tp_size(mapping, shard_types, ttml_params, hf_shapes) if distributed else 1
     hf_state_dict: Dict[str, torch.Tensor] = {}
+
+    def _emit(hf_name: str, raw_squeezed: torch.Tensor) -> None:
+        hf_shape = hf_shapes.get(hf_name)
+        if hf_shape is None:
+            return
+        # hf_shape[0] is the true K/V output width (= num_kv_heads*head_dim) for
+        # the k_proj/v_proj entries, which _apply_inv_transform uses as kv_out so
+        # the fused split tolerates TILE row-padding.
+        weight = _apply_inv_transform(raw_squeezed, hf_name, inv_transforms, kv_out=hf_shape[0], tp_size=tp_size)
+        hf_state_dict[hf_name] = _crop(weight, hf_shape).to(torch.bfloat16)
 
     for hf_name, ttml_name in tqdm(mapping.items(), desc="  Extracting weights", unit="w"):
         actual_name = _resolve_ttml_name(ttml_name, ttml_params)
         if actual_name is None:
-            continue
-        hf_shape = hf_shapes.get(hf_name)
-        if hf_shape is None:
             continue
 
         param = ttml_params[actual_name]
@@ -230,9 +335,19 @@ def extract_hf_state_dict(
             raw = _gather_distributed(param, shard_types.get(hf_name), device, dp_size)
         else:
             raw = _gather_single(param)
+        raw_squeezed = raw.squeeze()
 
-        weight = _apply_inv_transform(raw.squeeze(), hf_name, inv_transforms)
-        hf_state_dict[hf_name] = _crop(weight, hf_shape).to(torch.bfloat16)
+        # Fused KV: the mapping has only the k_proj key pointing at the fused
+        # kv_proj param. Emit BOTH the HF k_proj and v_proj tensors from the one
+        # gathered param (_apply_inv_transform carves out each half). The paired
+        # v_proj HF name is the third element of the forward transform tuple.
+        fwd = fwd_transforms.get(hf_name)
+        if fwd is not None and fwd[0] in ("combine_kv", "combine_kv_tp"):
+            v_hf_name = fwd[2]
+            _emit(hf_name, raw_squeezed)
+            _emit(v_hf_name, raw_squeezed)
+        else:
+            _emit(hf_name, raw_squeezed)
 
     if merge_lora and lora_config is not None:
         _merge_lora_inplace(
@@ -318,8 +433,14 @@ def _merge_lora_inplace(
 
             # delta is in TTML layout (same as the base weight before inv_transform)
             delta = (lora_B @ lora_A) * scaling
-            delta = _apply_inv_transform(delta, hf_wname, inv_transforms)
             hf_shape = hf_shapes[hf_wname]
+            # Pass kv_out=hf_shape[0] so that if a k_proj/v_proj target ever maps
+            # to a split_kv inverse the carve-out uses the true K/V width. (For the
+            # fused kv_proj model there is no separate k_proj/v_proj LoRA module,
+            # so those targets are skipped above at the lora_A/B presence check;
+            # this keeps the call correct if that ever changes. Non-fused targets
+            # ignore kv_out.)
+            delta = _apply_inv_transform(delta, hf_wname, inv_transforms, kv_out=hf_shape[0])
             delta = delta[: hf_shape[0], : hf_shape[1]]
             hf_state_dict[hf_wname] = (hf_state_dict[hf_wname].float() + delta.float()).to(torch.bfloat16)
 
@@ -440,15 +561,61 @@ def _load_hf_dict_into_ttml(
             continue
 
         weight = hf_state_dict[hf_name].float()
+        ttml_shape = list(ttml_params[actual_name].shape())
+        shard_type = shard_types.get(hf_name)
+
+        # For column-parallel params the sharded extent is tp_size * local shard;
+        # derive tp_size up front so the fused-KV combine below can build the
+        # per-shard interleaved layout (it needs tp before the padding step reads
+        # it). col_w shards the row dim (ttml_shape[2]); col_b (fused kv bias)
+        # shards the last dim (ttml_shape[-1]).
+        col_w_tp = 1
+        if distributed and device is not None:
+            local_extent = None
+            if shard_type == "col_w" and len(ttml_shape) >= 3:
+                local_extent = ttml_shape[2]
+            elif shard_type == "col_b" and len(ttml_shape) >= 1:
+                local_extent = ttml_shape[-1]
+            if local_extent:
+                # For the fused kv_proj the HF k_proj extent is half the fused
+                # extent, so the local fused per-shard size gives tp = 2*k/local;
+                # use the K-only count (weight.shape[0]) to keep tp right.
+                ref_extent = weight.shape[0]
+                if fwd_transforms.get(hf_name, (None,))[0] == "combine_kv_tp":
+                    ref_extent = 2 * weight.shape[0]  # fused extent = K + V
+                col_w_tp = max(1, ref_extent // local_extent)
+
         if hf_name in fwd_transforms:
             tr = fwd_transforms[hf_name]
             if tr[0] == "unpermute_proj":
                 weight = unpermute_proj_rows(weight, num_heads=tr[1])
             elif tr[0] == "unpermute_norm":
                 weight = unpermute_norm_weights(weight)
-
-        ttml_shape = list(ttml_params[actual_name].shape())
-        shard_type = shard_types.get(hf_name)
+            elif tr[0] in ("combine_kv", "combine_kv_tp"):
+                # Build the fused kv_proj weight from HF k_proj (this entry) and
+                # v_proj, mirroring the primary loaders (weights.py _prepare /
+                # model_qwen3_distributed combine_kv_tp). Without this the renamed
+                # base_layer kv_proj would get only the un-fused K weight.
+                num_kv_heads, v_hf_name = tr[1], tr[2]
+                if v_hf_name not in hf_state_dict:
+                    continue
+                k_w = unpermute_proj_rows(weight, num_heads=num_kv_heads)
+                v_w = hf_state_dict[v_hf_name].float()
+                if tr[0] == "combine_kv":
+                    weight = torch.cat([k_w, v_w], dim=0)
+                else:
+                    # Per-shard interleave [K_s0,V_s0,K_s1,V_s1,...] so a contiguous
+                    # col_w shard lands [K_local|V_local] on each device.
+                    kv_out = k_w.shape[0]
+                    per = kv_out // col_w_tp
+                    if k_w.dim() == 2:
+                        k_blk = k_w.reshape(col_w_tp, per, k_w.shape[1])
+                        v_blk = v_w.reshape(col_w_tp, per, v_w.shape[1])
+                        weight = torch.stack([k_blk, v_blk], dim=1).reshape(2 * kv_out, k_w.shape[1])
+                    else:
+                        k_blk = k_w.reshape(col_w_tp, per)
+                        v_blk = v_w.reshape(col_w_tp, per)
+                        weight = torch.stack([k_blk, v_blk], dim=1).reshape(2 * kv_out)
 
         if weight.dim() == 2:
             rows, cols = weight.shape
@@ -683,7 +850,10 @@ def save_optimizer_state(
 
     inv_transforms = _build_inv_transforms(fwd_transforms)
     hf_shapes = build_hf_shapes(config, tie_word_embeddings)
-    # Reverse lookup: ttml_name → hf_name (accounting for /base_layer/ in LoRA)
+    tp_size = _derive_tp_size(mapping, shard_types, ttml_params, hf_shapes) if distributed else 1
+    # Reverse lookup: ttml_name → hf_name (accounting for /base_layer/ in LoRA).
+    # For the fused kv_proj this records the K (k_proj) HF name; the paired V
+    # (v_proj) name is recovered from the forward transform tuple at save time.
     ttml_to_hf: Dict[str, str] = {}
     for hf_name, ttml_name in mapping.items():
         ttml_to_hf[ttml_name] = hf_name
@@ -699,20 +869,33 @@ def save_optimizer_state(
     tensors: Dict[str, torch.Tensor] = {}
     tensors["_steps"] = torch.tensor([step], dtype=torch.int64)
 
+    def _emit_base_moment(prefix, hf_name, raw_squeezed):
+        hf_shape = hf_shapes.get(hf_name)
+        if hf_shape is None:
+            return
+        weight = _apply_inv_transform(raw_squeezed, hf_name, inv_transforms, kv_out=hf_shape[0], tp_size=tp_size)
+        tensors[f"{prefix}/{hf_name}"] = _crop(weight, hf_shape).to(torch.bfloat16)
+
     def _save_base_moments(moment_map, prefix):
         for param_name, moment_ptr in tqdm(list(moment_map.items()), desc=f"  {prefix}", unit="w"):
             hf_name = ttml_to_hf.get(param_name)
             if hf_name is None:
                 continue  # LoRA param or not in base mapping
-            hf_shape = hf_shapes.get(hf_name)
-            if hf_shape is None:
-                continue
             if distributed:
                 raw = _gather_distributed(moment_ptr, shard_types.get(hf_name), device, dp_size)
             else:
                 raw = _gather_single(moment_ptr)
-            weight = _apply_inv_transform(raw.squeeze(), hf_name, inv_transforms)
-            tensors[f"{prefix}/{hf_name}"] = _crop(weight, hf_shape).to(torch.bfloat16)
+            raw_squeezed = raw.squeeze()
+
+            # Fused KV: the kv_proj moment maps to only the k_proj HF name; emit
+            # BOTH the K (k_proj) and V (v_proj) moment halves from it, mirroring
+            # extract_hf_state_dict so resume restores both projections' state.
+            fwd = fwd_transforms.get(hf_name)
+            if fwd is not None and fwd[0] in ("combine_kv", "combine_kv_tp"):
+                _emit_base_moment(prefix, hf_name, raw_squeezed)
+                _emit_base_moment(prefix, fwd[2], raw_squeezed)
+            else:
+                _emit_base_moment(prefix, hf_name, raw_squeezed)
 
     def _save_lora_moments(moment_map, prefix):
         for param_name, moment_ptr in moment_map.items():
