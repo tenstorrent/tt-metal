@@ -260,6 +260,30 @@ jobs:
             --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
             /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_superpod_short_running.yaml
 
+      # DC validation across the whole quad. run_fabric_tests.sh --image launches
+      # the pinned image via mpi-docker on ALL hosts, so every host's docker must
+      # be authenticated to GHCR (a login on the runner host alone is not enough).
+      - name: Log in to GHCR on all hosts (DC-validation image)
+        run: |
+          mpirun --pernode bash -lc 'echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin'
+
+      # Verbatim quad command from issue #50505; --image keeps the pinned image
+      # loaded. --hosts is the full 4-host list from the ttop hostfile, matching
+      # the 32x4 quad allocation and --config 4x32.
+      - name: DC validation (quad) - 2D Torus XY Neighbor Exchange (BH, pinned image)
+        timeout-minutes: 20
+        working-directory: /home/user/tt-metal
+        run: |
+          TTRUN_DIR=/etc/ttop
+          PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+          ./tools/scaleout/exabox/run_fabric_tests.sh \
+            --hosts "$PIPELINE_HOSTS" \
+            --image ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.76.0-dev20260719-4-g7361a7ac160 \
+            --config 4x32 \
+            --test-config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_neighbor_exchange.yaml \
+            --filter name.2DTorusXYNeighborExchange
+
   cleanup:
     name: Cleanup
     needs: [run, create-allocation]
