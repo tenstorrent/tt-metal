@@ -27,15 +27,13 @@ void DeepseekMoeGateDeviceOperation::validate_on_program_cache_miss(
     const auto& output_tensor = tensor_args.output_tensor;
     const auto& output_indices_tensor = tensor_args.output_indices_tensor;
 
-    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "input_tensor must be on device");
-    TT_FATAL(bias_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "bias_tensor must be on device");
+    TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "input_tensor must be on device");
+    TT_FATAL(bias_tensor.storage_type() == ttnn::StorageType::DEVICE, "bias_tensor must be on device");
     TT_FATAL(
-        input_indices_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
-        "input_indices_tensor must be on device");
-    TT_FATAL(output_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "output_tensor must be on device");
+        input_indices_tensor.storage_type() == ttnn::StorageType::DEVICE, "input_indices_tensor must be on device");
+    TT_FATAL(output_tensor.storage_type() == ttnn::StorageType::DEVICE, "output_tensor must be on device");
     TT_FATAL(
-        output_indices_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
-        "output_indices_tensor must be on device");
+        output_indices_tensor.storage_type() == ttnn::StorageType::DEVICE, "output_indices_tensor must be on device");
 
     TT_FATAL(input_tensor.device() == bias_tensor.device(), "All tensors must be on the same device");
     TT_FATAL(input_tensor.device() == input_indices_tensor.device(), "All tensors must be on the same device");

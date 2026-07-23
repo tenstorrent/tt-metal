@@ -15,6 +15,7 @@ ttnn::Tensor sparse_sdpa(
     const ttnn::Tensor& kv,
     const ttnn::Tensor& indices,
     uint32_t v_dim,
+    SparseKVFormat kv_format,
     std::optional<float> scale,
     uint32_t k_chunk_size,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
@@ -65,7 +66,7 @@ ttnn::Tensor sparse_sdpa(
         /*default_l1_acc=*/false);
 
     return ttnn::prim::sparse_sdpa(
-        q, kv, indices, resolved_scale, v_dim, k_chunk_size, kernel_config, cache_batch_idx, block_cyclic);
+        q, kv, indices, resolved_scale, v_dim, kv_format, k_chunk_size, kernel_config, cache_batch_idx, block_cyclic);
 }
 
 }  // namespace ttnn::transformer

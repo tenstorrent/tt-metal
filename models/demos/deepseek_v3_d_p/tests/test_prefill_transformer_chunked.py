@@ -50,7 +50,14 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_route
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.test_utils import (
+    cache_half_pccs,
+    gather_cache_tp0,
+    interleave_pe,
+    read_sharded_rows,
+    unrotate_cache_layer,
+)
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CHUNK = 5 * 1024  # 5120 tokens per chunk
@@ -105,6 +112,11 @@ LAYER_PCC_THRESHOLD = 0.88
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
 GATED_LAYER_DEPTH = 10
+# Floors for the deep KV / indexer-K cache PCC. Set at the observed L78 minimum (not below it) so a
+# future regression fails the test. KVPE nope bottoms ~0.86 (glm_5_2 @L75); indexer-K nope 0.952
+# (glm_5_1 @L52; glm_5_1 captures all 78 layers, glm_5_2's 0-2+every-4th subsample only reaches 0.980).
+KV_CACHE_PCC_THRESHOLD = 0.85
+INDEXER_K_PCC_THRESHOLD = 0.95
 
 # Per-chunk baseline medians (seconds) for the no-PCC perf gate, pulled from a known-good CI run. Keyed
 # by (num_layers, n_chunks, num_iters) so only the exact config we have a CI number for is gated; every
@@ -138,20 +150,6 @@ _LAYOUT_SINGLE_FILE = "single_file"
 _LAYOUT_CHUNKED_GROUP_A = "chunked_group_a_v1"
 
 
-def _read_sharded_rows(tensor_dir: Path, key: str, start: int, end: int) -> torch.Tensor:
-    """Read rows [start:end] of `key` from a chunked_group_a_v1 shard directory, concatenating the
-    rows_<s>_<e>.safetensors shards that overlap the range (partial read, natural order)."""
-    parts = []
-    for shard in sorted(tensor_dir.glob("rows_*.safetensors")):
-        s, e = (int(x) for x in shard.stem.split("_")[1:3])
-        if e <= start or s >= end:
-            continue
-        with safe_open(shard, framework="pt") as f:
-            parts.append(f.get_slice(key)[max(start, s) - s : min(end, e) - s].to(torch.float32))
-    assert parts, f"no shards overlap rows [{start}:{end}] in {tensor_dir}"
-    return torch.cat(parts, dim=0)
-
-
 def _load_layer_rows(
     trace_dir: Path, layout: str, group: str, layer: int, key: str, start: int, end: int
 ) -> torch.Tensor:
@@ -165,7 +163,7 @@ def _load_layer_rows(
             tensor_dir = trace_dir / "dsa" / key
         else:
             tensor_dir = trace_dir / "kv_cache" / f"layer_{layer}"
-        return _read_sharded_rows(tensor_dir, key, start, end)
+        return read_sharded_rows(tensor_dir, key, start, end)
     path = trace_dir / group / f"layer_{layer}.safetensors"
     with safe_open(path, framework="pt") as f:
         return f.get_slice(key)[start:end].to(torch.float32)
@@ -177,35 +175,61 @@ def _ref_layer_slice(trace_dir: Path, layout: str, layer: int, start: int, end: 
 
 
 def _record_kv_cache_pcc(
-    trace_dir, layout, tt_kvpe_cache, mesh_device, sp, num_layers, seq_len_cache, total_len, kvpe_dim, kv_lora
+    trace_dir, layout, tt_kvpe_cache, mesh_device, sp, num_layers, seq_len_cache, total_len, kv_lora
 ):
-    """Record-only: gather the device KV cache, un-rotate the block-cyclic layout, and PCC each
-    layer's valid region [:total_len] against the golden kv_post_transform trace. nope is compared
-    directly; the RoPE (pe) slice uses the Meta-interleaved basis (golden stores HF half-split).
-    Does NOT assert — mirrors the per-layer decoder_output record-only reporting."""
-    logger.info("Device KV cache vs golden kv_post_transform (record-only):")
-    # One gather: [num_layers, tp_replicas, seq_len_cache, kvpe] -> collapse TP replicas via [:, :1].
-    cache_full = ttnn.to_torch(
-        tt_kvpe_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.float32)[
-        :, :1
-    ]  # [num_layers, 1, seq_len_cache, kvpe]
+    """Gather the device KV cache, un-rotate the block-cyclic layout, and PCC each layer's valid region
+    [:total_len] against the golden kv_post_transform trace ([nope | pe], the pe half re-based to the
+    device Meta interleave via cache_half_pccs). Per-layer cache — slot == layer."""
+    logger.info("Device KV cache vs golden kv_post_transform:")
+    cache_full = gather_cache_tp0(tt_kvpe_cache, mesh_device)  # [num_layers, seq_len_cache, kvpe]
     p = blockcyclic_positions(sp, CHUNK, seq_len_cache)
     cache_min_pcc = {}
     for i in range(num_layers):
-        nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
-        nat[p] = cache_full[i, 0]  # un-rotate block-cyclic -> natural order
-        dev_cache = nat[:total_len]
+        dev_cache = unrotate_cache_layer(cache_full[i], p, total_len)
         g_post = _load_layer_rows(trace_dir, layout, "kv_cache", i, f"kv_post_transform_layer_{i}", 0, total_len)
-        _, pcc_nope = comp_pcc(g_post[:, :kv_lora], dev_cache[:, :kv_lora])
-        ref_pe = g_post[:, kv_lora:]
-        d = ref_pe.shape[-1]
-        ref_pe_int = torch.stack([ref_pe[:, : d // 2], ref_pe[:, d // 2 :]], dim=-1).reshape(-1, d)  # HF -> Meta
-        _, pcc_pe = comp_pcc(ref_pe_int, dev_cache[:, kv_lora:])
+        pcc_nope, pcc_pe = cache_half_pccs(g_post, dev_cache, kv_lora, pe_interleave=True)
         cache_min_pcc[i] = min(pcc_nope, pcc_pe)
         logger.info(f"  cache layer {i} PCC: nope={pcc_nope:.6f} pe(interleaved)={pcc_pe:.6f}")
-    logger.info(f"KV cache min PCC across layers: {min(cache_min_pcc.values()):.6f}")
+        if cache_min_pcc[i] < KV_CACHE_PCC_THRESHOLD:
+            logger.warning(f"  KV cache layer {i} PCC {cache_min_pcc[i]:.6f} below {KV_CACHE_PCC_THRESHOLD}")
+    kv_min = min(cache_min_pcc.values())
+    logger.info(f"KV cache min PCC across layers: {kv_min:.6f}")
+    assert kv_min >= KV_CACHE_PCC_THRESHOLD, f"KV cache min PCC {kv_min:.6f} < {KV_CACHE_PCC_THRESHOLD}"
+
+
+def _record_indexer_k_cache_pcc(
+    trace_dir, layout, tt_index_kv_cache, mesh_device, sp, num_layers, seq_len_cache, total_len, config
+):
+    """Gather the device DSA indexer-K cache, un-rotate the block-cyclic layout, and PCC each captured
+    layer's valid region [:total_len] against the golden dsa/indexer_k trace. The index_head_dim key is
+    [rope | nope] (rope = first half, indexed-RoPE; nope = second half, no rope); BOTH compare directly
+    because GLM's indexer RoPE is natively interleaved and the vLLM golden stores that same basis
+    (verified on device: the half-split reindex gives ~0 PCC, direct gives ~0.9999). Same gather/un-rotate
+    as the KVPE cache (caller-owned tensor, ConcatMesh2dToTensor dims=(2,1), blockcyclic_positions).
+    indexer_k is captured for a subset of layers (glm_5_1: all; glm_5_2: 0-2 + every 4th) — layers without
+    a golden are skipped. GLM DSA variants only."""
+    logger.info("Device indexer-K cache vs golden dsa/indexer_k:")
+    cache_full = gather_cache_tp0(tt_index_kv_cache, mesh_device)  # [num_full_indexer_layers or num_layers, T, D]
+    layers = [i for i in range(num_layers) if (trace_dir / "dsa" / f"indexer_k_layer_{i}").exists()]
+    if not layers:
+        logger.info("  (no indexer_k golden layers present -- skipping)")
+        return
+    p = blockcyclic_positions(sp, CHUNK, seq_len_cache)
+    rope = config.index_head_dim // 2  # [rope | nope]
+    idx_min_pcc = {}
+    for i in layers:
+        # Compact index cache (GLM-5.2 cross-layer reuse): layer i's slot is its full-indexer rank, not i
+        # (rank == i for glm_5_1, where every layer is full). Matches the indexer's own write addressing.
+        dev_cache = unrotate_cache_layer(cache_full[full_indexer_rank(config, i)], p, total_len)
+        g = _load_layer_rows(trace_dir, layout, "dsa", i, f"indexer_k_layer_{i}", 0, total_len)
+        pcc_rope, pcc_nope = cache_half_pccs(g, dev_cache, rope, pe_interleave=False)
+        idx_min_pcc[i] = min(pcc_nope, pcc_rope)
+        logger.info(f"  indexer cache layer {i} PCC: nope={pcc_nope:.6f} rope={pcc_rope:.6f}")
+        if idx_min_pcc[i] < INDEXER_K_PCC_THRESHOLD:
+            logger.warning(f"  indexer-K cache layer {i} PCC {idx_min_pcc[i]:.6f} below {INDEXER_K_PCC_THRESHOLD}")
+    idx_min = min(idx_min_pcc.values())
+    logger.info(f"Indexer-K cache min PCC across {len(layers)} captured layers: {idx_min:.6f}")
+    assert idx_min >= INDEXER_K_PCC_THRESHOLD, f"Indexer-K cache min PCC {idx_min:.6f} < {INDEXER_K_PCC_THRESHOLD}"
 
 
 def _preload_kvpe_prefix_from_trace(
@@ -244,14 +268,12 @@ def _preload_kvpe_prefix_from_trace(
     # x SEQ_CACHE_NOPCC the float32 tensor would be ~19 GB. Per-layer transients (randn/blockcyclic) are
     # freed each iteration, so the peak is this one bf16 tensor plus a single layer's working set.
     cache_host = torch.zeros(num_layers, 1, seq_len_cache, kvpe_dim, dtype=torch.bfloat16)
-    d = kvpe_dim - kv_lora
     gen = torch.Generator().manual_seed(1234)  # deterministic random tail
     for i in range(num_layers):
         kv_prior = torch.randn(preload_isl, kvpe_dim, generator=gen).to(torch.bfloat16)
         if real_len > 0:
             real = _load_layer_rows(trace_dir, layout, "kv_cache", i, f"kv_post_transform_layer_{i}", 0, real_len)
-            pe = real[:, kv_lora:]
-            real[:, kv_lora:] = torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(pe.shape[0], d)
+            real[:, kv_lora:] = interleave_pe(real[:, kv_lora:])
             kv_prior[:real_len] = real.to(torch.bfloat16)
         cache_host[i, 0] = blockcyclic_cache_host(kv_prior, sp, CHUNK, seq_len_cache, kvpe_dim)[0, 0]
     cache_shard_dims = [None, None]
@@ -262,7 +284,7 @@ def _preload_kvpe_prefix_from_trace(
         layout=host_layout,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=cache_shard_dims),
     )
-    ttnn.copy_host_to_device_tensor(cache_host_tt, tt_kvpe_cache)
+    ttnn.copy_host_to_device_tensor(cache_host_tt, tt_kvpe_cache.storage)
     ttnn.synchronize_device(mesh_device)
 
 
@@ -412,8 +434,9 @@ def run_chunked_transformer_padded(
     gc.collect()
     profiler.end("tt_transformer_creation")
 
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len_cache,
         mesh_shape=mesh_shape,
@@ -501,7 +524,6 @@ def run_chunked_transformer_padded(
         num_layers,
         seq_len_cache,
         total_len,
-        kvpe_dim,
         config.kv_lora_rank,
     )
 
@@ -525,6 +547,7 @@ def run_chunked_transformer(
     num_links,
     topology,
     routing_use_l1_small_for_semaphores=False,
+    preload_isl=0,
 ):
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
@@ -543,8 +566,12 @@ def run_chunked_transformer(
     assert (sp, tp) == (8, 4), f"this test targets mesh-8x4, got {mesh_shape}"
 
     chunk_local = CHUNK // sp  # 640
-    total_len = n_chunks * CHUNK
-    assert total_len <= SEQ_CACHE, f"{n_chunks} chunks ({total_len}) exceed cache {SEQ_CACHE}"
+    assert preload_isl % CHUNK == 0, f"preload_isl ({preload_isl}) must be a multiple of CHUNK ({CHUNK})"
+    measured_len = n_chunks * CHUNK
+    total_len = preload_isl + measured_len
+    assert (
+        total_len <= SEQ_CACHE
+    ), f"preload_isl {preload_isl} + {n_chunks} chunks ({measured_len}) = {total_len} exceed cache {SEQ_CACHE}"
 
     emb_dim = config.hidden_size
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
@@ -552,7 +579,7 @@ def run_chunked_transformer(
 
     logger.info(
         f"chunked transformer: num_layers={num_layers} mesh={mesh_shape} n_chunks={n_chunks} "
-        f"total_len={total_len} cache={SEQ_CACHE} chunk={CHUNK}"
+        f"preload_isl={preload_isl} total_len={total_len} cache={SEQ_CACHE} chunk={CHUNK}"
     )
 
     token_ids_full = _load_metadata_token_ids(trace_dir, total_len)
@@ -599,16 +626,16 @@ def run_chunked_transformer(
     # natively; mla.forward asserts) — NOT the init_kvpe_cache bfloat8_b/TILE default that dense
     # ring_mla wants. Match the cache format to the path.
     has_indexer = resolve_has_indexer(config)
-    kvpe_dtype_layout = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if has_indexer else {}
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    cache_format = MlaKvCacheFormat.BF16_RM if has_indexer else MlaKvCacheFormat.BFP8_TILE
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=cache_format,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_CACHE,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
         num_users=1,
-        **kvpe_dtype_layout,
     )
 
     # Sparse (DSA) layers read a block-cyclic indexer key cache that is caller-owned and passed into
@@ -635,6 +662,40 @@ def run_chunked_transformer(
             dtype=ttnn.bfloat8_b,
         )
 
+    if preload_isl > 0:
+        trace_native_len = token_ids_full.numel()
+        _preload_kvpe_prefix_from_trace(
+            tt_kvpe_cache,
+            trace_dir,
+            layout,
+            num_layers,
+            preload_isl,
+            trace_native_len,
+            sp,
+            SEQ_CACHE,
+            kvpe_dim,
+            config.kv_lora_rank,
+            mesh_device,
+            sp_axis,
+            kvpe_dtype_layout.get("dtype", ttnn.bfloat8_b),
+            kvpe_dtype_layout.get("layout", ttnn.TILE_LAYOUT),
+        )
+        if tt_index_kv_cache is not None:
+            _preload_indexer_k_prefix_from_trace(
+                tt_index_kv_cache,
+                trace_dir,
+                layout,
+                config,
+                num_layers,
+                preload_isl,
+                trace_native_len,
+                sp,
+                SEQ_CACHE,
+                config.index_head_dim,
+                mesh_device,
+                sp_axis,
+            )
+
     mesh_device.enable_program_cache()
 
     # min PCC per layer across chunks (for the summary)
@@ -642,7 +703,7 @@ def run_chunked_transformer(
 
     profiler.start("tt_forward")
     for c in range(n_chunks):
-        kv_actual = c * CHUNK  # chunk-aligned -> rotation degenerates
+        kv_actual = preload_isl + c * CHUNK  # chunk-aligned -> rotation degenerates
         positions = rotated_chip_positions(kv_actual, sp, chunk_local)
         flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
         local_pos = flat - kv_actual  # permutation of [0, CHUNK)
@@ -682,11 +743,9 @@ def run_chunked_transformer(
             ref = _ref_layer_slice(trace_dir, layout, i, kv_actual, kv_actual + CHUNK)
             _, pcc = comp_pcc(ref, natural)
             layer_min_pcc[i] = min(layer_min_pcc[i], pcc)
-            # Record-only mode: log every per-layer/per-chunk PCC, do not assert (deep-layer
-            # accumulation profiling). Flag sub-threshold values as warnings instead of failing.
             logger.info(f"  chunk {c} layer {i} PCC: {pcc:.6f}")
             if pcc < LAYER_PCC_THRESHOLD:
-                logger.warning(f"  chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD} (not asserted)")
+                logger.warning(f"  chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD}")
         logger.info(f"  chunk {c} done ({num_layers} layers)")
     profiler.end("tt_forward")
 
@@ -694,11 +753,8 @@ def run_chunked_transformer(
     for i in range(num_layers):
         logger.info(f"  layer {i}: {layer_min_pcc[i]:.6f}")
 
-    # Gate the shallow configs (measured >=0.99) so a real regression fails CI; the full-depth run's
-    # accumulation headroom is not yet pinned, so it stays record-only.
     overall_min = min(layer_min_pcc.values())
-    if num_layers <= GATED_LAYER_DEPTH:
-        assert overall_min >= LAYER_PCC_THRESHOLD, f"min per-layer PCC {overall_min:.6f} < {LAYER_PCC_THRESHOLD}"
+    assert overall_min >= LAYER_PCC_THRESHOLD, f"min per-layer PCC {overall_min:.6f} < {LAYER_PCC_THRESHOLD}"
 
     _record_kv_cache_pcc(
         trace_dir,
@@ -709,9 +765,20 @@ def run_chunked_transformer(
         num_layers,
         SEQ_CACHE,
         total_len,
-        kvpe_dim,
         config.kv_lora_rank,
     )
+    if tt_index_kv_cache is not None and (trace_dir / "dsa" / "indexer_k_layer_0").exists():
+        _record_indexer_k_cache_pcc(
+            trace_dir,
+            layout,
+            tt_index_kv_cache,
+            mesh_device,
+            sp,
+            num_layers,
+            SEQ_CACHE,
+            total_len,
+            config,
+        )
 
     profiler.end("total_test_time")
     logger.success(
@@ -941,7 +1008,11 @@ def test_kimi_prefill_transformer_chunked_padded(
 # override with PREFILL_TRACE_DIR).
 
 
-@pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
+@pytest.mark.parametrize(
+    "n_chunks, preload_isl",
+    [(1, 10 * CHUNK), (11, 0)],
+    ids=["warm_cache", "cold_cache"],
+)
 @pytest.mark.parametrize("num_layers", [1, 10, 78], ids=["L1", "L10", "L78"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -974,6 +1045,7 @@ def test_glm_prefill_transformer_chunked(
     weight_cache_path,
     num_layers,
     n_chunks,
+    preload_isl,
     num_links,
     topology,
 ):
@@ -988,6 +1060,7 @@ def test_glm_prefill_transformer_chunked(
         num_links,
         topology,
         routing_use_l1_small_for_semaphores=True,
+        preload_isl=preload_isl,
     )
 
 
@@ -1197,8 +1270,9 @@ def run_chunked_transformer_no_pcc(
     # default that dense ring_mla wants. Match the cache format to the path (dense variants keep the
     # default). Same distinction as run_chunked_transformer.
     kvpe_dtype_layout = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if resolve_has_indexer(config) else {}
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_CACHE_NOPCC,
         mesh_shape=mesh_shape,

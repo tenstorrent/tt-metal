@@ -13,7 +13,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include <tt-metalium/program.hpp>
 
 #include <optional>
 #include <variant>
@@ -33,7 +33,7 @@ namespace ttnn::prim {
 struct SliceDeviceOperation {
     using operation_attributes_t = SliceParams;
     using tensor_args_t = SliceInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         SliceRmProgramFactory,
@@ -55,13 +55,14 @@ struct SliceDeviceOperation {
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 
-    // #48928: opt the CB-bound height-sharded RM factory into the descriptor fast-path. Defined in
-    // slice_program_factory_rm_sharded.cpp so it can reuse that factory's per-core arg builder directly.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t&,
-        const tensor_args_t&,
-        tensor_return_value_t&,
-        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
+    // Cache-hit hook: re-derive ALL per-dispatch state (rt-args + tensor-backed CB addresses) from
+    // create_descriptor and re-apply to the cached program. Supersedes get_dynamic/resolve_bindings.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 SliceDeviceOperation::tensor_return_value_t slice(

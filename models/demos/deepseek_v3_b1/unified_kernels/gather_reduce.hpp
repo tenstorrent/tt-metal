@@ -93,7 +93,7 @@ struct GatherReduce {
     // number of 32x32 tiles so the half boundary is tile-aligned.
     // num_tiles is the 32x32 tile count per half (e.g. 2 for 56 rows).
     static inline void add_half_tiles(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
-        reconfig_data_format<false, true>(in_cb, in_cb);
+        reconfig_data_format<SrcOrder::Regular, true>(in_cb, in_cb);
         pack_reconfig_data_format<true>(out_cb);
         pack_block_contiguous_init(out_cb);
         add_tiles_init(in_cb, in_cb);

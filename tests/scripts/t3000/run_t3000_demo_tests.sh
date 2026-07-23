@@ -83,7 +83,7 @@ run_t3000_wan22_tests() {
 
   echo "LOG_METAL: Running run_t3000_wan22_tests"
 
-  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" VBENCH_CACHE_DIR="/mnt/MLPerf/vbench" TORCH_HOME="/mnt/MLPerf/vbench/torch_hub"
   NO_PROMPT=1 pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "2x4sp0tp1 and resolution_480p and not bf8_lofi" --timeout 1500; fail+=$?
 
   # Record the end time

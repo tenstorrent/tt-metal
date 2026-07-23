@@ -67,7 +67,7 @@ struct ResidualAdd {
 
             if constexpr (SkipAdd) {
                 // Pass-through: copy in0 to out, discard in1
-                reconfig_data_format<false, true>(args.in0_cb, args.in0_cb);
+                reconfig_data_format<SrcOrder::Regular, true>(args.in0_cb, args.in0_cb);
                 pack_reconfig_data_format<true>(args.out_cb);
                 pack_block_contiguous_init(args.out_cb);
                 copy_tile_to_dst_init_short(args.in0_cb);
@@ -84,7 +84,7 @@ struct ResidualAdd {
                 tile_regs_release();
             } else {
                 // Normal: matmul_out + shard(residual)
-                reconfig_data_format<false, true>(args.in0_cb, args.in1_cb);
+                reconfig_data_format<SrcOrder::Regular, true>(args.in0_cb, args.in1_cb);
                 pack_reconfig_data_format<true>(args.out_cb);
                 pack_block_contiguous_init(args.out_cb);
 

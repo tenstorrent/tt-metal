@@ -189,7 +189,8 @@ IndexedFillDeviceOperation::spec_return_value_t IndexedFillDeviceOperation::comp
     const auto resolved_mem_config =
         resolve_output_memory_config(input_tensor, input_tensor.padded_shape(), args.output_mem_config);
 
-    return TensorSpec(output_shape, TensorLayout(input_tensor.dtype(), PageConfig(output_layout), resolved_mem_config));
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(input_tensor.dtype(), PageConfig(output_layout), resolved_mem_config));
 }
 
 IndexedFillDeviceOperation::tensor_return_value_t IndexedFillDeviceOperation::create_output_tensors(

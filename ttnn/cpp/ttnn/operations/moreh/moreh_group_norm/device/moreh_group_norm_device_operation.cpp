@@ -77,23 +77,23 @@ MorehGroupNormOperation::spec_return_value_t MorehGroupNormOperation::compute_ou
     const auto num_groups = operation_attributes.num_groups;
     Shape mean_rstd_shape({1, 1, N, num_groups});
 
-    std::vector<std::optional<TensorSpec>> result;
+    std::vector<std::optional<tt::tt_metal::TensorSpec>> result;
     result.reserve(3);
 
     // output
     if (tensor_args.output.has_value()) {
         result.push_back(tensor_args.output->tensor_spec());
     } else {
-        result.push_back(
-            TensorSpec(output_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
+        result.push_back(tt::tt_metal::TensorSpec(
+            output_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
     }
 
     // mean
     if (tensor_args.mean.has_value()) {
         result.push_back(tensor_args.mean->tensor_spec());
     } else if (operation_attributes.are_required_outputs[1]) {
-        result.push_back(
-            TensorSpec(mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
+        result.push_back(tt::tt_metal::TensorSpec(
+            mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
     } else {
         result.push_back(std::nullopt);
     }
@@ -102,8 +102,8 @@ MorehGroupNormOperation::spec_return_value_t MorehGroupNormOperation::compute_ou
     if (tensor_args.rstd.has_value()) {
         result.push_back(tensor_args.rstd->tensor_spec());
     } else if (operation_attributes.are_required_outputs[2]) {
-        result.push_back(
-            TensorSpec(mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
+        result.push_back(tt::tt_metal::TensorSpec(
+            mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
     } else {
         result.push_back(std::nullopt);
     }

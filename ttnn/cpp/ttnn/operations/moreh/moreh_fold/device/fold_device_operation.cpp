@@ -75,7 +75,7 @@ MorehFoldOperation::spec_return_value_t MorehFoldOperation::compute_output_specs
         uint32_t C = input_tensor_shape[0] / kernel_size_product;
         return ttnn::Shape{C, operation_attributes.output_size[0], operation_attributes.output_size[1]};
     }();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             tensor_args.input.dtype(),
