@@ -1,0 +1,156 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'BOUNDARY_MANUAL_L13_P129'.
+Using operations until 'BOUNDARY_MANUAL_L13_P129_END'.
+Detected data from 1 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID     Total %  Bound  OP Code                                          Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs        FLOPs %  Math Fidelity
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 1054    0.0 %         InterleavedToShardedDeviceOperation                    0         1 μs                   10                                                       BF16 => BF16
+ 1055    0.2 %         LayerNormDeviceOperation                               0         7 μs          4 μs     10                                                 BF16, BF16 => BF16
+ 1056    0.0 %         ReshardDeviceOperation                                 0         2 μs          0 μs     45                                                       BF16 => BF16
+ 1057    1.0 %   DRAM  MatmulDeviceOperation 32 x 2880 x 5120                 0        73 μs          2 μs     80  405 GB/s  79.1 %  13.0 TFLOPs    5.9 %  HiFi2 BF16 x BF16 => BF16
+ 1058    0.0 %         ShardedToInterleavedDeviceOperation                    0         1 μs          1 μs     80                                                       BF16 => BF16
+ 1059    0.3 %         NLPCreateQKVHeadsDecodeDeviceOperation                 0        23 μs          1 μs      1                                                       BF16 => BF16
+ 1060    0.1 %         RotaryEmbeddingDeviceOperation                         0         4 μs          2 μs      1                                                 BF16, BF16 => BF16
+ 1061    0.1 %         RotaryEmbeddingDeviceOperation                         0         3 μs          2 μs      1                                                 BF16, BF16 => BF16
+ 1062    0.1 %         PagedUpdateCacheDeviceOperation                        0         8 μs          2 μs      1                                                 BFP8, BF16 => BFP8
+ 1063    0.1 %         PagedUpdateCacheDeviceOperation                        0         8 μs          2 μs      1                                                 BFP8, BF16 => BFP8
+ 1064    0.0 %         ShardedToInterleavedDeviceOperation                    0         1 μs          2 μs      1                                                       BF16 => BF16
+ 1065    0.1 %         PermuteDeviceOperation                                 0         9 μs          1 μs    110                                                       BF16 => BF16
+ 1066    0.0 %         SliceDeviceOperation                                   0         2 μs          1 μs     80                                                       BFP8 => BFP8
+ 1067    0.0 %         SliceDeviceOperation                                   0         2 μs          1 μs     80                                                       BFP8 => BFP8
+ 1068    0.0 %         TypecastDeviceOperation                                0         2 μs          1 μs     80                                                       BFP8 => BF16
+ 1069    0.2 %         UntilizeWithUnpaddingDeviceOperation                   0        11 μs          1 μs     40                                                       BF16 => BF16
+ 1070    0.4 %         ConcatDeviceOperation                                  0        31 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1071    0.2 %         TilizeWithValPaddingDeviceOperation                    0        17 μs          0 μs    107                                                       BF16 => BF16
+ 1072    0.1 %         TypecastDeviceOperation                                0         6 μs          0 μs    110                                                       BF16 => BFP8
+ 1073    0.0 %         TypecastDeviceOperation                                0         2 μs          1 μs     80                                                       BFP8 => BF16
+ 1074    0.2 %         UntilizeWithUnpaddingDeviceOperation                   0        10 μs          4 μs     40                                                       BF16 => BF16
+ 1075    0.5 %         ConcatDeviceOperation                                  0        34 μs          0 μs    110                                                 BF16, BF16 => BF16
+ 1076    0.3 %         TilizeWithValPaddingDeviceOperation                    0        17 μs          9 μs    107                                                       BF16 => BF16
+ 1077    0.1 %         TypecastDeviceOperation                                0         6 μs          1 μs    110                                                       BF16 => BFP8
+ 1078    0.1 %         TransposeDeviceOperation                               0         5 μs          1 μs    110                                                       BFP8 => BFP8
+ 1079    0.9 %   SLOW  MatmulDeviceOperation b={64} x 32 x 64 x 160           0        69 μs          1 μs      5   32 GB/s   6.3 %   0.6 TFLOPs    4.4 %  HiFi2 BF16 x BFP8 => FP32
+ 1080    0.1 %         BinaryNgDeviceOperation                                0         9 μs          1 μs    110                                                 FP32, FP32 => FP32
+ 1081    0.0 %         SliceDeviceOperation                                   0         2 μs          1 μs     64                                                       BF16 => BF16
+ 1082    0.0 %         TypecastDeviceOperation                                0         2 μs          0 μs     64                                                       BF16 => FP32
+ 1083    0.1 %         UntilizeWithUnpaddingDeviceOperation                   0         6 μs          1 μs     64                                                       FP32 => FP32
+ 1084    0.0 %         UntilizeWithUnpaddingDeviceOperation                   0         2 μs          1 μs     64                                                       FP32 => FP32
+ 1085    0.1 %         PermuteDeviceOperation                                 0         6 μs          0 μs    110                                                       FP32 => FP32
+ 1086    0.4 %         ConcatDeviceOperation                                  0        32 μs          0 μs    110                                                 FP32, FP32 => FP32
+ 1087    0.2 %         PermuteDeviceOperation                                 0        15 μs          0 μs    110                                                       FP32 => FP32
+ 1088    0.2 %         TilizeWithValPaddingDeviceOperation                    0        17 μs          1 μs     64                                                       FP32 => FP32
+ 1089    0.2 %         SoftmaxDeviceOperation                                 0        11 μs          1 μs    110                                                       FP32 => FP32
+ 1090    0.1 %         SliceDeviceOperation                                   0         7 μs          1 μs    110                                                       FP32 => FP32
+ 1091    3.9 %   SLOW  MatmulDeviceOperation b={64} x 32 x 160 x 64           0       288 μs          1 μs      2    9 GB/s   1.7 %   0.1 TFLOPs    2.6 %  HiFi2 FP32 x BFP8 => FP32
+ 1092    0.0 %         TypecastDeviceOperation                                0         3 μs          1 μs    110                                                       FP32 => BF16
+ 1093    0.0 %         TransposeDeviceOperation                               0         2 μs          1 μs    110                                                       BF16 => BF16
+ 1094    0.1 %         ReshapeViewDeviceOperation                             0         5 μs          1 μs    110                                                       BF16 => BF16
+ 1095    0.0 %         CopyDeviceOperation                                    0         3 μs          0 μs    110                                                       BF16 => BF16
+ 1096    0.8 %   DRAM  MatmulDeviceOperation 32 x 4096 x 2880                 0        58 μs          0 μs     90  405 GB/s  79.0 %  13.0 TFLOPs    5.2 %  HiFi2 BF16 x BF16 => BF16
+ 1097    0.0 %         InterleavedToShardedDeviceOperation                    0         1 μs          1 μs     90                                                       BF16 => BF16
+ 1098    0.0 %         BinaryNgDeviceOperation                                0         1 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1099    0.0 %         ReshardDeviceOperation                                 0         1 μs          1 μs     10                                                       BF16 => BF16
+ 1100    0.1 %         LayerNormDeviceOperation                               0         8 μs          1 μs     10                                                 BF16, BF16 => BF16
+ 1101    0.1 %         TypecastDeviceOperation                                0         4 μs          1 μs     90                                                       BF16 => FP32
+ 1102    0.1 %         ReshardDeviceOperation                                 0         3 μs          1 μs      1                                                       FP32 => FP32
+ 1103    0.1 %   SLOW  MatmulDeviceOperation 32 x 2880 x 32                   0         8 μs          2 μs      1   23 GB/s   4.6 %   0.8 TFLOPs   54.3 %  HiFi4 FP32 x BF16 => FP32
+ 1104    0.0 %         TypecastDeviceOperation                                0         1 μs          2 μs      1                                                       FP32 => BF16
+ 1105    0.0 %         ShardedToInterleavedDeviceOperation                    0         0 μs          2 μs      1                                                       BF16 => BF16
+ 1106    0.1 %         FillPadDeviceOperation                                 0         4 μs          2 μs      1                                                       BF16 => BF16
+ 1107    0.0 %         PadDeviceOperation                                     0         2 μs          2 μs      1                                                       BF16 => BF16
+ 1108    0.1 %         FillPadDeviceOperation                                 0         5 μs          1 μs      2                                                       BF16 => BF16
+ 1109    0.2 %         TopKDeviceOperation                                    0        14 μs          1 μs      1                                                       BF16 => BF16
+ 1110    0.0 %         SliceDeviceOperation                                   0         0 μs          2 μs      1                                                       BF16 => BF16
+ 1111    0.0 %         SliceDeviceOperation                                   0         0 μs          2 μs      1                                                   UINT16 => UINT16
+ 1112    0.1 %         SoftmaxDeviceOperation                                 0         6 μs          1 μs    110                                                       BF16 => BF16
+ 1113    0.0 %         ShardedToInterleavedDeviceOperation                    0         0 μs          2 μs      1                                                       BF16 => BF16
+ 1114    0.0 %         UnaryDeviceOperation                                   0         2 μs          1 μs    110                                                       BF16 => BF16
+ 1115    0.0 %         UntilizeWithUnpaddingDeviceOperation                   0         1 μs          2 μs      1                                                       BF16 => BF16
+ 1116    0.0 %         UntilizeWithUnpaddingDeviceOperation                   0         1 μs          1 μs      1                                                   UINT16 => UINT16
+ 1117    0.0 %         UntilizeWithUnpaddingDeviceOperation                   0         1 μs          1 μs      1                                                       BF16 => BF16
+ 1118    0.0 %         ScatterDeviceOperation                                 0         1 μs          2 μs      1                                               BF16, UINT16 => BF16
+ 1119    0.0 %         TilizeWithValPaddingDeviceOperation                    0         2 μs          2 μs      1                                                       BF16 => BF16
+ 1120    0.0 %         ShardedToInterleavedDeviceOperation                    0         0 μs          2 μs      1                                                       BF16 => BF16
+ 1121    0.0 %         ShardedToInterleavedDeviceOperation                    0         2 μs          1 μs     10                                                       BF16 => BF16
+ 1122    0.3 %         UntilizeWithUnpaddingDeviceOperation                   0         1 μs         23 μs     90                                                       BF16 => BF16
+ 1123    0.1 %         RepeatDeviceOperation                                  0         3 μs          4 μs    110                                                       BF16 => BF16
+ 1124    1.6 %         TilizeWithValPaddingDeviceOperation                    0        80 μs         35 μs     90                                                       BF16 => BF16
+ 1125   26.3 %   SLOW  MatmulDeviceOperation b={32} x 32 x 2880 x 2880        0     1,946 μs          0 μs     90  279 GB/s  54.5 %   8.7 TFLOPs    7.0 %  HiFi4 BF16 x BF16 => BF16
+ 1126    0.6 %         BinaryNgDeviceOperation                                0        41 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1127   26.3 %   SLOW  MatmulDeviceOperation b={32} x 32 x 2880 x 2880        0     1,946 μs          0 μs     90  279 GB/s  54.5 %   8.7 TFLOPs    7.0 %  HiFi4 BF16 x BF16 => BF16
+ 1128    0.6 %         BinaryNgDeviceOperation                                0        41 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1129    0.4 %         UnaryDeviceOperation                                   0        32 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1130    0.5 %         UnaryDeviceOperation                                   0        33 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1131    0.6 %         BinaryNgDeviceOperation                                0        43 μs          1 μs    110                                                       BF16 => BF16
+ 1132    0.6 %         BinaryNgDeviceOperation                                0        43 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1133    0.4 %         BinaryNgDeviceOperation                                0        30 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1134    0.6 %         BinaryNgDeviceOperation                                0        42 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1135   26.3 %   SLOW  MatmulDeviceOperation b={32} x 32 x 2880 x 2880        0     1,947 μs          0 μs     90  279 GB/s  54.4 %   8.7 TFLOPs    7.0 %  HiFi4 BF16 x BF16 => BF16
+ 1136    0.6 %         BinaryNgDeviceOperation                                0        42 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1137    0.0 %         TransposeDeviceOperation                               0         1 μs          1 μs    110                                                       BF16 => BF16
+ 1138    0.0 %         ReshapeViewDeviceOperation                             0         3 μs          1 μs     32                                                       BF16 => BF16
+ 1139    0.5 %         BinaryNgDeviceOperation                                0        35 μs          0 μs    110                                                 BF16, BF16 => BF16
+ 1140    0.5 %         FillPadDeviceOperation                                 0        33 μs          1 μs    110                                                       BF16 => BF16
+ 1141    0.2 %         FastReduceNCDeviceOperation                            0        16 μs          1 μs     90                                                       BF16 => BF16
+ 1142    0.0 %         SliceDeviceOperation                                   0         2 μs          1 μs     90                                                       BF16 => BF16
+ 1143    0.0 %         BinaryNgDeviceOperation                                0         3 μs          1 μs    110                                                 BF16, BF16 => BF16
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       100.0 %         90 device ops, 0 host ops, 0 signposts                       7,253 μs        149 μs         232 GB/s  45.4 %
+
+💡 Advice 💡
+============
+
+High Op-to-Op Gap
+----------------
+ 1076    0.3 %         TilizeWithValPaddingDeviceOperation                    0        17 μs          9 μs    107                                                       BF16 => BF16
+ 1122    0.3 %         UntilizeWithUnpaddingDeviceOperation                   0         1 μs         23 μs     90                                                       BF16 => BF16
+ 1124    1.6 %         TilizeWithValPaddingDeviceOperation                    0        80 μs         35 μs     90                                                       BF16 => BF16
+
+These ops have a >6 μs gap since the previous operation. Running with tracing could save 49 μs (0.7% of overall time)
+Alternatively ensure device is not waiting for the host. Experts can try moving runtime args in the kernels to compile-time args.
+
+Matmul Optimization
+-------------------
+ 1057    1.0 %   DRAM  MatmulDeviceOperation 32 x 2880 x 5120                 0        73 μs          2 μs     80  405 GB/s  79.1 %  13.0 TFLOPs    5.9 %  HiFi2 BF16 x BF16 => BF16
+- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+ 1079    0.9 %   SLOW  MatmulDeviceOperation b={64} x 32 x 64 x 160           0        69 μs          1 μs      5   32 GB/s   6.3 %   0.6 TFLOPs    4.4 %  HiFi2 BF16 x BFP8 => FP32
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+ 1091    3.9 %   SLOW  MatmulDeviceOperation b={64} x 32 x 160 x 64           0       288 μs          1 μs      2    9 GB/s   1.7 %   0.1 TFLOPs    2.6 %  HiFi2 FP32 x BFP8 => FP32
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=1 is small, try in0_block_w=2 or above
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+
+ 1096    0.8 %   DRAM  MatmulDeviceOperation 32 x 4096 x 2880                 0        58 μs          0 μs     90  405 GB/s  79.0 %  13.0 TFLOPs    5.2 %  HiFi2 BF16 x BF16 => BF16
+- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+ 1103    0.1 %   SLOW  MatmulDeviceOperation 32 x 2880 x 32                   0         8 μs          2 μs      1   23 GB/s   4.6 %   0.8 TFLOPs   54.3 %  HiFi4 FP32 x BF16 => FP32
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 is sufficient for BFP8 multiplication and has 2x the throughput of HiFi4
+
+ 1125   26.3 %   SLOW  MatmulDeviceOperation b={32} x 32 x 2880 x 2880        0     1,946 μs          0 μs     90  279 GB/s  54.5 %   8.7 TFLOPs    7.0 %  HiFi4 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+
+ 1127   26.3 %   SLOW  MatmulDeviceOperation b={32} x 32 x 2880 x 2880        0     1,946 μs          0 μs     90  279 GB/s  54.5 %   8.7 TFLOPs    7.0 %  HiFi4 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4
+
+ 1135   26.3 %   SLOW  MatmulDeviceOperation b={32} x 32 x 2880 x 2880        0     1,947 μs          0 μs     90  279 GB/s  54.4 %   8.7 TFLOPs    7.0 %  HiFi4 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4

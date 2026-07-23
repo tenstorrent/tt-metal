@@ -133,12 +133,16 @@ Result: 39 modeled ops, 38 final choices, 24 reshards, spill pass run with
 zero spills, and zero unfixable ops. `report.json` contains 39 summary entries
 while its `ops` array contains 45 records because six multi-result/structural
 records are retained separately; this is report schema accounting, not a
-partial capture.
+partial capture. The generated 80.8 MB decision trace is retained losslessly
+with gzip compression, and the report path is rewritten to that repo-relative
+`.json.gz` artifact so the report does not point at absent machine-local
+scratch.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `shard_advise/report.json` | 12,432 | `462f3721264c2ce57345a248d98588d8515284a72529365862445bc9ef4fa597` |
+| `shard_advise/report.json` | 12,337 | `537331de336b0bf36f34b44636a495714ea7de8ec77c7fcef716b0b23cf48b47` |
 | `shard_advise/final_ir.mlir` | 27,874 | `581e8050b7b69cbe43e946c486ed404d74707a132c04b92b380e075b79c09ad2` |
+| `shard_advise/decision_trace/decode_decision_trace.json.gz` | 1,637,001 | `29e5140a1d34444e5ae85dd40375f8a291e8afe33dace6e85b777697783ef9d0` |
 
 ### Recommendation disposition
 
@@ -169,7 +173,7 @@ partial capture.
 | 8x8/k64 SDPA | same PCC as k32 | 0.84682 ms adjacent | no benefit |
 | **8x8/k32 SDPA** | correct | selected | keep |
 | boundary QKV/O auto fidelity | S=129 sliding route changed expert 2 to 28; output 0.87409 | boundary only | reject |
-| boundary QKV/O HiFi2 | S=129 sliding output 0.996255; full layer 0.999360 | outside hot trace | keep at positions >=128 |
+| boundary QKV/O HiFi2 | final S=129 sliding/full output 0.996560/0.999379 | outside hot trace | keep from position 127 onward |
 
 At S=128, explicit 8x4 and 10x4 QKV/O programs produced real layer-12/13
 output PCC around 0.97469/0.97190. Automatic projection selection produced
@@ -227,8 +231,8 @@ Final aligned/non-aligned boundary results for layers 12/13 are:
 
 | Prefill length | Prefill output PCC | Decode output PCC | Decode K/V minimum |
 | --- | --- | --- | ---: |
-| S=128 | 0.991696 / 0.993322 | 0.996978 / 0.999349 | 0.999904 |
-| S=129 | 0.991753 / 0.995418 | 0.996255 / 0.999360 | 0.999902 |
+| S=128 | 0.991696 / 0.993322 | 0.996778 / 0.999416 | 0.999903 |
+| S=129 | 0.991753 / 0.995418 | 0.996560 / 0.999379 | 0.999902 |
 
 At S=1024, sliding/full prefill PCC is 0.992395/0.992225 and decode PCC is
 0.996869/0.996587; all reported cache PCC values are at least 0.995185.
@@ -246,11 +250,13 @@ The failure was a numerical routing cliff: the HF top-4 experts were
 `[7, 13, 6, 2]`, while the lower-fidelity attention projection selected
 `[7, 13, 6, 28]`. BF16 persistent cache, sparse HiFi2, and the dense MLP
 control did not repair that upstream route change. Retrying attention QKV/O
-at HiFi2 raised final S=129 decode PCC to 0.996255. The selected fix therefore
-uses HiFi2 only for projection matmuls at positions `>=128`, together with
-bounded FP32 sink-aware attention; the traced S=17 fast path retains its
-measured automatic/LoFi projection policy. Permanent S=128 and S=129 tests
-cover both layer kinds.
+at HiFi2 raised S=129 decode PCC above the functional bar. The later
+independent review required a final native-SDPA comparison. The selected fix
+therefore uses HiFi2 projection matmuls from position 127 onward, keeps a
+bounded FP32 sink-aware accuracy guard only at position 127, and uses native
+TTNN decode SDPA from position 128 onward. Permanent S=128/S=129 tests and
+five consecutive updates at positions 127-131 cover both layer kinds; the
+traced S=17 fast path retains its measured automatic/LoFi projection policy.
 
 ## Final correctness
 
@@ -268,7 +274,10 @@ Additional coverage:
 - real sliding/full decode at positions 128 and non-aligned 129 using a
   256-entry BFP8 cache;
 - real sliding/full prefill plus following decode qualified at S=256, 512,
-  and 1024; the S=1024 cache uses 2048 entries;
+  1024, and 2048; the S=2048 cache uses 2049 entries;
+- five consecutive decode updates at positions 127-131 for both layer kinds,
+  with minimum output PCC 0.994946/0.998354 and all appended K/V PCC above
+  0.99988;
 - progressive real-weight full-layer finite-output capacity through S=131072;
 - batch-two compatibility through an optimized-owned dense prefill/decode
   graph;
@@ -278,14 +287,14 @@ Additional coverage:
 ## Final performance and profiler evidence
 
 The final same-process real-weight gate uses 20 warmed S=17 prefill runs and
-200 traced decode replays:
+500 traced decode replays:
 
 | Path | Prefill mean / median / min | Decode mean / median / min |
 | --- | ---: | ---: |
-| fused | 7.291264 / 7.289830 / 7.099999 ms | 6.050883 / 6.050299 / 6.036739 ms |
-| **selected optimized** | **3.876243 / 3.783550 / 3.733284 ms** | **0.834763 / 0.834537 / 0.823852 ms** |
+| fused | 7.113153 / 7.096621 / 7.089853 ms | 5.898925 / 5.898392 / 5.884455 ms |
+| **selected optimized** | **3.688937 / 3.632208 / 3.614589 ms** | **0.811755 / 0.811888 / 0.801848 ms** |
 
-The selected path reduces mean prefill by 46.8% and mean traced decode by
+The selected path reduces mean prefill by 48.1% and mean traced decode by
 86.2%. It also beats the best previous correct selected-path reproduction
 (0.846833 ms) and the historical optimized artifact (0.928144 ms).
 
@@ -293,21 +302,19 @@ Fresh Tracy was collected with real layer-12 weights and five bounded windows:
 
 | Window | Ops | Device | Gaps | Total |
 | --- | ---: | ---: | ---: | ---: |
-| fused S=17 prefill | 52 | 7,026.588 us | 312.331 us | 7,338.919 us |
-| optimized S=17 prefill | 60 | 3,512.589 us | 458.704 us | 3,971.293 us |
-| fused traced decode | 56 | 5,855.783 us | 49.530 us | 5,905.313 us |
-| optimized traced decode | 75 | 775.810 us | 78.081 us | 853.891 us |
-| optimized S=128 prefill | 54 | 12,323.612 us | 288.933 us | 12,612.545 us |
+| fused S=17 prefill | 52 | 7,025 us | 245 us | 7,270 us |
+| optimized S=17 prefill | 60 | 3,511 us | 454 us | 3,965 us |
+| fused traced decode | 56 | 5,859 us | 49 us | 5,908 us |
+| optimized traced decode | 75 | 776 us | 79 us | 855 us |
+| optimized S=128 prefill | 54 | 12,357 us | 352 us | 12,708 us |
 
-Optimized decode sparse rows are 116.067/116.044/110.391 us (342.502 us
-total) at 55.8-58.7% modeled DRAM bandwidth with active-experts=4. QKV/O are
-73.507/58.441 us at 78.4/78.8%, and SDPA is 9.762 us. The report's wider
-subblock advice is blocked on the selected 90-core sparse geometry because
-per-core-N=1; the legal 30-core/subblock-3 retry was 0.961806 ms. Reports show
-BFP8 cache writes, BFP8/LoFi sparse matmuls, and the selected sharded
-norm/residual chain. Required routing layout changes are device operations;
-there is no `torch`, `from_torch`, `to_torch`, implicit functional forward,
-host golden fallback, or collective in the measured runtime methods.
+Optimized decode sparse rows are 118/117/110 us (345 us total) at
+54.9-58.8% modeled DRAM bandwidth with active-experts=4. QKV/O are 72/59 us,
+and SDPA is 10 us. Reports show BFP8 cache writes, BFP8/LoFi sparse matmuls,
+and the selected sharded norm/residual chain. Required routing layout changes
+are device operations; there is no `torch`, `from_torch`, `to_torch`,
+implicit functional forward, host golden fallback, or collective in the
+measured runtime methods.
 
 ### Decode performance accounting
 
@@ -330,13 +337,13 @@ Fresh same-run accounting is:
 | Quantity | Time | Reconciliation |
 | --- | ---: | --- |
 | theoretical DRAM floor | 0.311792 ms | compulsory stored bytes only |
-| device kernels | 0.775810 ms | 2.49x roofline; many small/routed ops |
-| op-to-op gaps | 0.078081 ms | traced dispatch/runtime gaps |
-| profiler total | 0.853891 ms | kernels + gaps |
-| same-replay host wall | 0.873356 ms | 0.019465 ms trace-call/signpost overhead |
-| uninstrumented 200-replay mean | 0.834763 ms | 2.3% below profiler total |
+| device kernels | 0.775859 ms | 2.49x roofline; many small/routed ops |
+| op-to-op gaps | 0.079352 ms | traced dispatch/runtime gaps |
+| profiler total | 0.855211 ms | kernels + gaps |
+| same-replay host wall | 0.875739 ms | 0.020528 ms trace-call/signpost overhead |
+| uninstrumented 500-replay mean | 0.811755 ms | 5.1% below profiler total |
 
-Kernels plus gaps account for 97.8% of the same profiled host wall. The 4.6%
+Kernels plus gaps account for 97.7% of the same profiled host wall. The 7.9%
 profiled-wall increase over the uninstrumented benchmark is profiler overhead
 and process/run variance, not an untraced model path.
 
@@ -351,7 +358,7 @@ pytest -q models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py -s
 
 RUN_OPTIMIZED_DECODER_PERF=1 \
 OPTIMIZED_DECODER_PREFILL_REPEATS=20 \
-OPTIMIZED_DECODER_TRACE_REPLAYS=200 \
+OPTIMIZED_DECODER_TRACE_REPLAYS=500 \
 pytest -q models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_optimized_beats_fused_warmed_prefill_and_traced_decode -s
 
 TT_VISIBLE_DEVICES=0 \
@@ -366,10 +373,10 @@ TT_MESH_GRAPH_DESC_PATH=tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_d
 TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 \
 TTNN_CONFIG_OVERRIDES='{"throw_exception_on_fallback":true}' pytest -q \
 models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py \
--k 'real_weight_layer_kind or repeated_paged_decode_stress or traced_decode_output_and_full_cache_integrity' -s
+-k 'real_weight_layer_kind or repeated_paged_decode_stress or traced_decode_output_and_full_cache_integrity or repeated_decode_across_emitted_boundary' -s
 
-OPTIMIZED_DECODER_BOUNDARY_SEQ_LEN=1024 \
-OPTIMIZED_DECODER_BOUNDARY_CACHE_LEN=2048 pytest -q \
+OPTIMIZED_DECODER_BOUNDARY_SEQ_LEN=2048 \
+OPTIMIZED_DECODER_BOUNDARY_CACHE_LEN=2049 pytest -q \
 models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_layer_kind_boundary_beyond_emitted_cache -s
 
 OPTIMIZED_DECODER_CAPACITY_SEQ_LEN=131072 pytest -q \
@@ -436,6 +443,193 @@ JUnit evidence is retained in
 `logs/run_20260723_post_autofix_final_perf.junit.xml`, and
 `logs/run_20260723_post_autofix_final_watcher.junit.xml`.
 
+## Pre-review completion pass — 2026-07-23 02:43-02:53 UTC
+
+This pass reran every hard gate against the selected files at
+`a90a00d630c`. The mandatory advisor first exposed a version-skew symbol error
+when the current tt-metal TTNN library was mixed with the advisor's pinned
+runtime. This was an environment error, not a rejected recommendation. The
+successful retry kept the required bootstrap shell and loaded the matching
+TTNN library from the advisor checkout:
+
+```bash
+export TTMLIR_ADVISOR_HOME=/home/mvasiljevic/tt-mlir
+source /home/mvasiljevic/tt-metal/.agents/skills/shard-advise/scripts/bootstrap.sh >/dev/null 2>&1
+export PYTHONPATH=/home/mvasiljevic:/home/mvasiljevic/tt-metal:${PYTHONPATH:-}
+export LD_LIBRARY_PATH=/home/mvasiljevic/tt-mlir/third_party/tt-metal/src/tt-metal/build_Release/lib:${LD_LIBRARY_PATH:-}
+ttnn-advise capture \
+  /home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/shard_advise/advise_gpt_oss.py:decode \
+  --tracer interception \
+  --out /home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/shard_advise
+```
+
+The capture completed in 13.7 s with 39 modeled ops, 38 final choices,
+24 reshards, zero spills, and zero unfixable ops. `final_ir.mlir` is
+byte-identical to the prior qualified graph and contains five dense
+matmul/linear operations. `report.json` differs from the prior artifact only
+by its terminal newline serialization. Those pre-review hashes are superseded
+by the final AutoFix capture and compressed decision trace in the advisor
+artifact table above. The recommendation disposition is unchanged:
+attention, norms, router, residual, and the continuous sparse L1 boundary
+were applied; the dense all-expert MLP and DRAM-returning variants were
+rejected by the device evidence above.
+
+The runner hard gate also passed with
+`MODEL_DIR=models/autoports/openai_gpt_oss_20b bash
+.agents/prompts/model_bringup_multigoal/02-optimized-decoder.check.sh`: the
+JSON parses, both required artifacts are non-empty, and the IR contains the
+rewritten matmul graph.
+
+All device pytest commands used device 0, the P150 mesh descriptor, and
+`TTNN_CONFIG_OVERRIDES='{"throw_exception_on_fallback":true}'`:
+
+- default suite: 12 passed, 3 intentional opt-in skips in 93.89 s;
+- warmed 20-prefill/200-trace performance gate: 1 passed in 14.79 s,
+  3.687073/0.811785 ms optimized versus 7.122479/5.908486 ms fused;
+- separate watcher run over both real layer kinds, repeated paged decode, and
+  trace/cache integrity: 8 passed, 7 deselected in 90.66 s; no device, NoC,
+  kernel, or uninitialized-memory assertion in pytest output or the watcher
+  log;
+- real sliding/full S=1024 boundary: 2 passed in 23.58 s, with prefill
+  0.992395/0.992225, decode 0.996869/0.996587, and every reported cache PCC
+  above 0.995;
+- real full-layer S=131072 capacity: 1 passed in 34.20 s, with finite
+  first/last output tokens and a 32.39 s call.
+
+Watcher and profiler remained separate. The isolated Tracy command used a
+temporary raw trace directory and `RUN_OPTIMIZED_DECODER_PROFILE=1`; it passed
+1 test with 14 deselected. Its wall measurements were 7.398183/5.939029 ms
+for fused prefill/decode and 4.094631/0.862184 ms for optimized
+prefill/decode. The final AutoFix pass below superseded these scratch JUnit
+and compact profiler artifacts, so only the final selected-source evidence is
+retained.
+
+The fresh optimized decode profile is 0.764 ms of device work plus 0.077 ms
+of gaps. Sparse gate/up/down remain the dominant family at 106/117/110 us,
+while QKV/O are 73/58 us and SDPA is 10 us. No untried single op above 15%
+remains: the DRAM-sharded projection advice, sparse core/block/subblock
+geometry, precision/fidelity, packed routed projections, and composite SDPA
+alternatives all have correctness and latency dispositions above.
+
+Post-run `tt-smi -s` showed all four Blackhole P300c devices with healthy
+DRAM, zero corrected and uncorrected GDDR errors, live heartbeats, and normal
+temperatures.
+
+## Final AutoFix repair pass — 2026-07-23 03:03-04:10 UTC
+
+The first fresh review of the completion pass returned more-work-needed on
+three blocking items: the S=2048 cache contradiction, the unprofiled manual
+decode path selected at every position `>=128`, and a missing wider-shard QKV
+trial. The review also noted that the advisor report referenced an absent
+decision trace and that ignored raw Tracy files had stale provenance. The
+AutoFix isolation loop addressed every item:
+
+- The S=2048 failure was not a dtype or capacity problem. A one-shot
+  multi-head `fill_cache` write used an input sequence stride of 64 tiles
+  against a cache stride of 65 tiles and crossed head boundaries. BF16 cache
+  and higher-precision norm controls reproduced the 0.989215 value-cache PCC.
+  Bounded 128-token `fill_cache(..., update_idx=start)` writes fixed the
+  placement. The repaired S=2048 sliding/full run passes prefill PCC
+  0.992899/0.991286, following-decode PCC 0.994725/0.999403, prefill K/V PCC
+  at least 0.999949, and appended-token K/V PCC at least 0.999897.
+- Native TTNN decode SDPA is now selected from position 128 onward. A bounded
+  FP32 sink-aware guard remains only at position 127, where native SDPA missed
+  the functional bar. Five consecutive updates at positions 127-131 pass for
+  both layer kinds. At position 129, 20-warmup/200-replay wall means were
+  1.286382/0.827732 ms manual/native for layer 12 and
+  7.396676/6.760018 ms for layer 13. Tracy device-plus-gap totals were
+  1.325845/0.869789 ms and 7.401749/6.772461 ms, respectively, so native was
+  retained with correctness and latency evidence.
+- The advisor QKV seed uses 45 input cores, block width 2. Legal wider-input
+  candidates 30/3, 18/5, 15/6, and 9/10 measured traced decode means
+  0.812395, 0.812845, 0.811533, and 0.812687 ms versus 0.811265 ms for the
+  adjacent selected control. The widest 9/10 endpoint also passed real
+  layer-kind correctness. The 45/2 seed remains selected.
+- The O-projection review follow-up tested the fewer-core family rather than
+  treating its required residual reshard as a paper blocker. With precision
+  locked, traced decode means were 0.812616 ms for 45 cores/block-8/subblock-2,
+  0.813712 ms for 45/32/2, 0.814129 ms for 30/8/3, and 0.816731 ms for
+  30/32/3, versus 0.811668 ms for the adjacent selected 90/8/1 control. The
+  fastest 45-core control and the extreme 30-core control both passed
+  real-weight prefill/decode and K/V-cache PCC for layers 12 and 13. Tracy
+  confirms the 45-core O row at 59.368 us plus a 1.490 us return reshard,
+  versus 58.721 us for selected 90-core O with no O-specific reshard. The
+  candidate's full profiled window (769.199 us device + 76.392 us gaps)
+  varied slightly below the independently captured selected window
+  (775.859 + 79.352 us), but that movement came from unrelated rows: the
+  changed O region itself regressed by 2.137 us and the 500-replay
+  uninstrumented target regressed by 0.948 us. The simpler 90/8/1 path remains
+  selected. Compact reports are in `tracy/o_geometry/`; candidate JUnit
+  evidence uses the `autofix_o_*` prefix.
+
+The O-family runs used the same real-weight harness and isolated one variable
+at a time:
+
+```bash
+for variant in o_p2_block8_subblock2 o_p2_block32_subblock2 \
+               o_p3_block8_subblock3 o_p3_block32_subblock3; do
+  RUN_OPTIMIZED_DECODER_PERF=1 \
+  OPTIMIZED_DECODER_PREFILL_REPEATS=20 \
+  OPTIMIZED_DECODER_TRACE_REPLAYS=500 \
+  OPTIMIZED_DECODER_PERF_VARIANT="$variant" \
+  pytest -q models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py \
+    -k test_optimized_beats_fused_warmed_prefill_and_traced_decode -s
+done
+
+for variant in o_p2_block8_subblock2 o_p3_block32_subblock3; do
+  OPTIMIZED_DECODER_CORRECTNESS_VARIANT="$variant" \
+  pytest -q models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py \
+    -k test_real_weight_layer_kind_prefill_and_decode -s
+done
+
+RUN_OPTIMIZED_DECODER_PROFILE=1 \
+OPTIMIZED_DECODER_PROFILE_VARIANT=o_p2_block8_subblock2 \
+python -m tracy -r -p --check-exit-code -o /tmp/gpt_oss_o_profile \
+  -n optimized_decoder_o_p2_b8 -m pytest -q \
+  models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py \
+  -k test_profile_optimized_warmed_windows -s
+```
+
+The first candidate Tracy invocation exposed a test-helper keyword mismatch;
+the profile test now passes the public `variant=` selector used by every other
+candidate harness. The corrected rerun is the retained profile.
+
+The final advisor capture was launched from `TTMLIR_ADVISOR_HOME` after
+bootstrap; an initial invocation from the tt-metal root was retried because
+that working directory shadowed the installed advisor `ttnn` package. The
+successful capture again produced 39 modeled ops, 38 choices, 24 reshards,
+zero spills, and five authoritative dense matmul/linear ops. The generated
+decision trace is retained losslessly as a 1.64 MB gzip artifact and
+`report.json` references that repo-relative path.
+
+Final selected-source gates after the O-geometry follow-up:
+
+- full suite with `throw_exception_on_fallback=true`: 14 passed, 5
+  intentional opt-in skips in 114.58 s;
+- real full-layer S=131072 capacity: 1 passed in 34.37 s (32.37 s call);
+- warmed 20-prefill/500-trace performance gate: selected
+  3.688937/0.811755 ms versus fused 7.113153/5.898925 ms;
+- watcher/fallback suite over both layer kinds, positions 127-131, repeated
+  paged decode, and traced cache integrity: 10 passed, 9 deselected in
+  112.99 s; the watcher log scan found no assertion, error, uninitialized
+  memory, timeout, or stuck signature;
+- isolated final Tracy: 1 passed, 18 deselected; compact reports regenerated
+  from one capture, with ignored raw `.logs` removed so no stale trace is
+  presented as final evidence;
+- mandatory advisor rerun: 39 modeled ops, 38 choices, 24 reshards, zero
+  spills; gzip integrity and JSON parsing passed;
+- optimized-decoder runner: passed; `report.json` parses, both hard-gate
+  artifacts are non-empty, `final_ir.mlir` contains the rewritten matmul
+  graph, and the compressed decision-trace path resolves;
+- post-run health: all four devices report healthy DRAM, zero corrected and
+  uncorrected GDDR errors, live heartbeats, and normal temperatures.
+
+The final JUnit files use the `autofix_final_o_search_*` prefix. Candidate
+evidence uses `autofix_qkv_*` and `autofix_o_*`; the repaired S=2048 result is
+`autofix_native_chunked_boundary_2048.junit.xml`, and the manual/native
+profile reports are under `tracy/boundary/`. The current watcher stdout is
+retained as `logs/autofix_final_o_search_watcher.log`.
+
 ## Optimize checklist
 
 - [x] Owned prefill/decode paths; batch-one dense tensors released; static
@@ -458,23 +652,23 @@ JUnit evidence is retained in
 - [x] Bounded long-context tensor lifetimes verified progressively through a
   real-weight full-layer S=131072 capacity run; context contract restored to
   the HF target.
-- [x] Before/after warmed prefill and 200-replay traced decode are comparable
+- [x] Before/after warmed prefill and 500-replay traced decode are comparable
   and final selected code beats the strongest correct baseline.
 - [x] No host fallback, unnecessary host tensor conversion, or collective in
   the measured single-device graph.
 
 ## Limitations
 
-- Full output/cache/decode PCC is qualified through S=1024 for both layer
-  kinds. The full-layer S=131072 run is a real-weight finite-output capacity
-  qualification; an O(S^2) CPU golden at that extent is intentionally not
-  constructed. A diagnostic S=2048 full-layer run passed output PCC but its
-  value-cache PCC was 0.989215, 0.000785 below the strict cache bar; the
-  selected S=1024 qualification remains the last all-metrics PCC point.
+- Full output/cache/following-decode PCC is qualified through S=2048 for both
+  layer kinds. The full-layer S=131072 run is a real-weight finite-output
+  capacity qualification; an O(S^2) CPU golden at that extent is
+  intentionally not constructed.
 - The shared sparse expert implementation supports batch one. Batch two uses
   the optimized class's decoder-local dense compatibility graph and is not a
   measured optimized latency path.
 - Full-attention S=128 uses manual FP32 attention because the SDPA composite
-  candidate missed the real-weight bar. Decode positions below 128 use the
-  fast TTNN SDPA composite; positions at and above 128 use bounded FP32
-  sink-aware attention and HiFi2 QKV/O projections to keep routing stable.
+  candidate missed the real-weight bar. Decode positions below 127 use the
+  fast TTNN SDPA composite, position 127 uses a bounded FP32 sink-aware
+  accuracy guard, and positions at and above 128 return to native TTNN SDPA.
+  HiFi2 QKV/O projections remain selected from position 127 onward to keep
+  routing stable.

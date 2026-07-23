@@ -95,6 +95,15 @@ class OptimizationConfig:
     dram_attention_core_limit: int = 110
     attention_math_fidelity: str = "auto"
     long_decode_attention_math_fidelity: str = "hifi2"
+    use_manual_long_decode_attention: bool = False
+    advisor_qkv_input_cores: int = 45
+    advisor_qkv_output_cores: int = 80
+    advisor_qkv_program_grid: tuple[int, int] = (11, 8)
+    advisor_qkv_in0_block_w: int = 2
+    advisor_qkv_out_subblock_w: int = 2
+    advisor_o_per_core_n: int = 1
+    advisor_o_in0_block_w: int = 8
+    advisor_o_out_subblock_w: int = 1
     use_sparse_experts: bool = True
     expert_weight_dtype: str = "bfloat8_b"
     expert_math_fidelity: str = "lofi"
@@ -168,34 +177,66 @@ class OptimizedDecoder(FusedDecoder):
             block_w=9,
             inplace=False,
         )
-        self.advisor_qkv_input_config = self._width_sharded_config(self.hidden_size, 45)
+        qkv_width = (self.num_heads + 2 * self.num_kv_heads) * self.head_dim
+        self.advisor_qkv_input_config = self._width_sharded_config(
+            self.hidden_size,
+            self.optimization_config.advisor_qkv_input_cores,
+        )
         self.advisor_qkv_output_config = self._width_sharded_config(
-            (self.num_heads + 2 * self.num_kv_heads) * self.head_dim,
-            80,
+            qkv_width,
+            self.optimization_config.advisor_qkv_output_cores,
         )
         self.advisor_residual_config = self._width_sharded_config(self.hidden_size, 90)
+        qkv_grid_x, qkv_grid_y = self.optimization_config.advisor_qkv_program_grid
+        qkv_output_tiles = qkv_width // ttnn.TILE_SIZE
+        qkv_per_core_n = math.ceil(qkv_output_tiles / (qkv_grid_x * qkv_grid_y))
+        qkv_subblock_w = self.optimization_config.advisor_qkv_out_subblock_w
+        if qkv_per_core_n % qkv_subblock_w != 0:
+            raise ValueError(f"advisor QKV out_subblock_w={qkv_subblock_w} must divide " f"per_core_N={qkv_per_core_n}")
         self.advisor_qkv_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(11, 8),
-            in0_block_w=2,
+            compute_with_storage_grid_size=ttnn.CoreCoord(qkv_grid_x, qkv_grid_y),
+            in0_block_w=self.optimization_config.advisor_qkv_in0_block_w,
             out_subblock_h=1,
-            out_subblock_w=2,
+            out_subblock_w=qkv_subblock_w,
             out_block_h=1,
-            out_block_w=2,
+            out_block_w=qkv_subblock_w,
             per_core_M=1,
-            per_core_N=2,
+            per_core_N=qkv_per_core_n,
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
         )
+        o_per_core_n = self.optimization_config.advisor_o_per_core_n
+        output_tiles = self.hidden_size // ttnn.TILE_SIZE
+        if output_tiles % o_per_core_n != 0:
+            raise ValueError(f"advisor O per_core_N={o_per_core_n} must divide output tiles={output_tiles}")
+        o_output_cores = output_tiles // o_per_core_n
+        self.advisor_o_output_config = self._width_sharded_config(
+            self.hidden_size,
+            o_output_cores,
+        )
+        o_subblock_w = self.optimization_config.advisor_o_out_subblock_w
+        if o_per_core_n % o_subblock_w != 0:
+            raise ValueError(f"advisor O out_subblock_w={o_subblock_w} must divide per_core_N={o_per_core_n}")
+        o_input_tiles = (self.num_heads * self.head_dim) // ttnn.TILE_SIZE
+        o_in0_block_w = self.optimization_config.advisor_o_in0_block_w
+        if o_input_tiles % o_in0_block_w != 0:
+            raise ValueError(f"advisor O in0_block_w={o_in0_block_w} must divide input tiles={o_input_tiles}")
+        device_grid = self.mesh_device.compute_with_storage_grid_size()
+        o_program_grid_y = math.ceil(o_output_cores / device_grid.x)
+        if o_program_grid_y > device_grid.y:
+            raise ValueError(
+                f"advisor O output cores={o_output_cores} exceed device grid " f"{device_grid.x}x{device_grid.y}"
+            )
         self.advisor_o_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(11, 9),
-            in0_block_w=8,
+            compute_with_storage_grid_size=ttnn.CoreCoord(device_grid.x, o_program_grid_y),
+            in0_block_w=o_in0_block_w,
             out_subblock_h=1,
-            out_subblock_w=1,
+            out_subblock_w=o_subblock_w,
             out_block_h=1,
-            out_block_w=1,
+            out_block_w=o_per_core_n,
             per_core_M=1,
-            per_core_N=1,
+            per_core_N=o_per_core_n,
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
@@ -452,6 +493,7 @@ class OptimizedDecoder(FusedDecoder):
             decoder.max_cache_len = max_cache_len
             decoder.prefill_rotary_views.clear()
             decoder.decode_position_views.clear()
+        decoder._configure_shard_advisor_candidate()
         decoder._configure_dram_attention_candidate()
         decoder._configure_attention_program_candidates()
         decoder.advisor_norm_weights = {}
@@ -1349,6 +1391,25 @@ class OptimizedDecoder(FusedDecoder):
             chunk.deallocate(True)
         return output
 
+    def _fill_prefill_cache(self, cache, values, *, batch_idx: int, seq_len: int) -> None:
+        """Write bounded tile-aligned chunks without crossing KV-head strides."""
+
+        chunk_size = EMITTED_CACHE_LENGTH
+        if seq_len <= chunk_size:
+            ttnn.fill_cache(cache, values, batch_idx=batch_idx)
+            return
+        for start in range(0, seq_len, chunk_size):
+            end = min(start + chunk_size, seq_len)
+            chunk = ttnn.slice(
+                values,
+                [0, 0, start, 0],
+                [1, self.num_kv_heads, end, self.head_dim],
+                [1, 1, 1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.fill_cache(cache, chunk, batch_idx=batch_idx, update_idx=start)
+            chunk.deallocate(True)
+
     def _prefill_attention(self, hidden_states, key_cache, value_cache, seq_len: int):
         residual = hidden_states
         qkv_program_config = self.prefill_qkv_program_config if seq_len == 128 else None
@@ -1404,8 +1465,8 @@ class OptimizedDecoder(FusedDecoder):
             cache_key = ttnn.typecast(key, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             cache_value = ttnn.typecast(value, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if self.batch == 1:
-            ttnn.fill_cache(key_cache, cache_key, 0)
-            ttnn.fill_cache(value_cache, cache_value, 0)
+            self._fill_prefill_cache(key_cache, cache_key, batch_idx=0, seq_len=seq_len)
+            self._fill_prefill_cache(value_cache, cache_value, batch_idx=0, seq_len=seq_len)
         else:
             for user_id in range(self.batch):
                 user_key = ttnn.slice(
@@ -1422,8 +1483,8 @@ class OptimizedDecoder(FusedDecoder):
                     [1, 1, 1, 1],
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-                ttnn.fill_cache(key_cache, user_key, user_id)
-                ttnn.fill_cache(value_cache, user_value, user_id)
+                self._fill_prefill_cache(key_cache, user_key, batch_idx=user_id, seq_len=seq_len)
+                self._fill_prefill_cache(value_cache, user_value, batch_idx=user_id, seq_len=seq_len)
         use_manual_accuracy_path = (
             self.optimization_config.use_manual_prefill_attention
             and self.attention_window is None
@@ -1530,7 +1591,7 @@ class OptimizedDecoder(FusedDecoder):
         dram_attention = self.optimization_config.use_dram_sharded_attention
         projection_compute_kernel_config = (
             self.long_decode_compute_kernel_config
-            if current_pos >= EMITTED_CACHE_LENGTH
+            if current_pos >= EMITTED_CACHE_LENGTH - 1
             else self.decode_compute_kernel_config
         )
         # The captured advisor graph is the emitted batch-one decode graph.
@@ -1623,9 +1684,15 @@ class OptimizedDecoder(FusedDecoder):
             share_cache=False,
             page_table=None,
         )
-        if current_pos >= EMITTED_CACHE_LENGTH:
+        use_manual_attention = current_pos == EMITTED_CACHE_LENGTH - 1 or (
+            current_pos >= EMITTED_CACHE_LENGTH and self.optimization_config.use_manual_long_decode_attention
+        )
+        if use_manual_attention:
             attention = self._manual_full_decode_attention(query, key_cache, value_cache, current_pos)
         else:
+            decode_window = (
+                self.attention_window if self.attention_window is None or current_pos >= self.attention_window else None
+            )
             attention = ttnn.transformer.scaled_dot_product_attention_decode(
                 query,
                 key_cache,
@@ -1635,7 +1702,7 @@ class OptimizedDecoder(FusedDecoder):
                 cur_pos_tensor=update_indices,
                 attention_sink=self.decode_attention_sinks,
                 scale=self.scale,
-                sliding_window_size=self.attention_window,
+                sliding_window_size=decode_window,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 program_config=self.decode_sdpa_program_config,
             )
@@ -1660,7 +1727,7 @@ class OptimizedDecoder(FusedDecoder):
             memory_config=(
                 self.dram_o_output_config
                 if dram_attention
-                else self.advisor_residual_config
+                else self.advisor_o_output_config
                 if advisor_layouts
                 else ttnn.DRAM_MEMORY_CONFIG
             ),
@@ -1677,6 +1744,8 @@ class OptimizedDecoder(FusedDecoder):
             attention = ttnn.to_memory_config(attention, ttnn.DRAM_MEMORY_CONFIG)
             attention = ttnn.add(attention, self.output_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if advisor_layouts:
+            if self.optimization_config.advisor_o_per_core_n != 1:
+                attention = ttnn.to_memory_config(attention, self.advisor_residual_config)
             residual = ttnn.to_memory_config(residual, self.advisor_residual_config)
             attention = ttnn.add(
                 residual,
@@ -1732,8 +1801,6 @@ class OptimizedDecoder(FusedDecoder):
         )
         repeated_key = ttnn.repeat_interleave(key_slice, self.num_heads // self.num_kv_heads, 1)
         repeated_value = ttnn.repeat_interleave(value_slice, self.num_heads // self.num_kv_heads, 1)
-        key_slice.deallocate(True)
-        value_slice.deallocate(True)
         key = ttnn.permute(repeated_key, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         repeated_key.deallocate(True)
         scores = ttnn.matmul(query, key, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)

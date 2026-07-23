@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="13.593" timestamp="2026-07-23T03:12:59.668436+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_optimized_decoder" name="test_real_weight_layer_kind_boundary_beyond_emitted_cache[blackhole-1-2048-13-None]" time="12.658"><properties><property name="start_timestamp" value="2026-07-23T03:13:00" /><property name="end_timestamp" value="2026-07-23T03:13:13" /></properties><failure message="AssertionError: layer13 prefill boundary value: 0.989215441336904&#10;assert False">mesh_device = MeshDevice(1x1 grid, 1 devices), layer_idx = 13
+expected_window = None, prefill_len = 2048
+
+    @pytest.mark.parametrize("layer_idx,expected_window", [(SLIDING_LAYER, 128), (FULL_LAYER, None)])
+    @pytest.mark.parametrize("prefill_len", _boundary_seq_lengths())
+    @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+    def test_real_weight_layer_kind_boundary_beyond_emitted_cache(mesh_device, layer_idx, expected_window, prefill_len):
+        """Cross the sliding-window boundary and the functional stage's cache extent."""
+
+        cache_len = int(os.environ.get("OPTIMIZED_DECODER_BOUNDARY_CACHE_LEN", str(max(256, prefill_len + 1))))
+        with _functional_helpers_for_layer(layer_idx):
+            config = functional_test._config()
+            state = functional_test._real_state()
+            decoder = _decoder(state, config, mesh_device, layer_idx=layer_idx, max_cache_len=cache_len)
+            reference_layer = functional_test._hf_layer(state, config)
+            key_cache, value_cache = decoder.create_kv_cache()
+            boundary_seed = int(os.environ.get("OPTIMIZED_DECODER_BOUNDARY_SEED", str(16100 + layer_idx)))
+            generator = torch.Generator().manual_seed(boundary_seed)
+            hidden = torch.randn((1, 1, prefill_len, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+            reference_prefill, reference_key, reference_value, reference_cache = functional_test._reference_layer(
+                reference_layer,
+                hidden,
+                config,
+            )
+            actual_prefill = decoder.prefill_forward(
+                functional_test._tt_tensor(hidden, mesh_device),
+                key_cache,
+                value_cache,
+            )
+            functional_test._assert_pcc(
+                reference_prefill,
+                functional_test._to_host(actual_prefill),
+                0.99,
+                f"layer{layer_idx} prefill S={prefill_len}",
+            )
+            reference_cache_len = reference_key.shape[-2]
+            cache_start = prefill_len - reference_cache_len
+            functional_test._assert_pcc(
+                reference_key,
+                functional_test._to_host(key_cache)[:, :, cache_start:prefill_len, :],
+                0.99,
+                f"layer{layer_idx} prefill boundary key",
+            )
+&gt;           functional_test._assert_pcc(
+                reference_value,
+                functional_test._to_host(value_cache)[:, :, cache_start:prefill_len, :],
+                0.99,
+                f"layer{layer_idx} prefill boundary value",
+            )
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py:297:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+reference = tensor([[[[-5.0537e-02, -2.2969e+00, -9.3359e-01,  ...,  1.5703e+00,
+            9.3750e+00,  1.2250e+01],
+          [...4.5312e+00,  1.2500e+00, -3.6133e-01,  ..., -1.9219e+00,
+            8.4766e-01, -1.7734e+00]]]], dtype=torch.bfloat16)
+actual = tensor([[[[-0.0625, -2.3125, -0.9375,  ...,  1.6250,  9.3750, 12.2500],
+          [ 4.3750,  2.2500, -1.1875,  ...,  9...,  0.3750,  ..., -0.9375,  1.6250,  0.0625],
+          [ 4.5000,  1.2500, -0.3750,  ..., -1.9375,  0.8750, -1.7500]]]])
+threshold = 0.99, label = 'layer13 prefill boundary value'
+
+    def _assert_pcc(reference, actual, threshold: float, label: str):
+        passed, message = comp_pcc(reference.float(), actual.float(), pcc=threshold)
+        print(f"{label}: {message}")
+&gt;       assert passed, f"{label}: {message}"
+E       AssertionError: layer13 prefill boundary value: 0.989215441336904
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_functional_decoder.py:225: AssertionError</failure></testcase></testsuite></testsuites>
