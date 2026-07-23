@@ -62,15 +62,11 @@ def _to_dev(t, device, dtype=DTYPE):
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
-def load_ttnn_weights(device, ckpt_path=DEFAULT_CKPT, dtype=DTYPE, matmul_dtype=None):
+def load_ttnn_weights(device, ckpt_path=DEFAULT_CKPT, dtype=DTYPE):
     """Convert the GPT-core checkpoint tensors to on-device ttnn tensors (HF Conv1D [in,out] as-is).
-    dtype=float32 (default) for the accuracy-first prefill path; bfloat16 for the fast decode path.
-    matmul_dtype (optional) sets a *separate* precision for the four big weight matrices only
-    (attn/proj/c_fc/c_proj) — bfloat8_b there halves the per-token weight DRAM traffic that dominates
-    decode, while layer-norm/bias stay at `dtype`. Defaults to `dtype` (uniform precision)."""
+    dtype=float32 (default) for the accuracy-first prefill path; bfloat16 for the fast decode path."""
     core = load_gpt_core_state(ckpt_path)  # keys: h.{i}.*, ln_f.*, final_norm.*
     to = lambda k: _to_dev(core[k].float(), device, dtype)
-    to_mm = lambda k: _to_dev(core[k].float(), device, matmul_dtype or dtype)  # weight matrices
     layers = []
     for i in range(N_LAYER):
         p = f"h.{i}."
@@ -78,15 +74,15 @@ def load_ttnn_weights(device, ckpt_path=DEFAULT_CKPT, dtype=DTYPE, matmul_dtype=
             {
                 "ln_1_w": to(p + "ln_1.weight"),
                 "ln_1_b": to(p + "ln_1.bias"),
-                "attn_w": to_mm(p + "attn.c_attn.weight"),  # [1024, 3072] (in,out)
+                "attn_w": to(p + "attn.c_attn.weight"),  # [1024, 3072] (in,out)
                 "attn_b": to(p + "attn.c_attn.bias"),
-                "proj_w": to_mm(p + "attn.c_proj.weight"),  # [1024, 1024]
+                "proj_w": to(p + "attn.c_proj.weight"),  # [1024, 1024]
                 "proj_b": to(p + "attn.c_proj.bias"),
                 "ln_2_w": to(p + "ln_2.weight"),
                 "ln_2_b": to(p + "ln_2.bias"),
-                "fc_w": to_mm(p + "mlp.c_fc.weight"),  # [1024, 4096]
+                "fc_w": to(p + "mlp.c_fc.weight"),  # [1024, 4096]
                 "fc_b": to(p + "mlp.c_fc.bias"),
-                "mproj_w": to_mm(p + "mlp.c_proj.weight"),  # [4096, 1024]
+                "mproj_w": to(p + "mlp.c_proj.weight"),  # [4096, 1024]
                 "mproj_b": to(p + "mlp.c_proj.bias"),
             }
         )
@@ -242,11 +238,7 @@ class TracedGPTDecoder:
 
     def __init__(self, device, ckpt_path=DEFAULT_CKPT, max_seq=128):
         self.device = device
-        # Faithful by default: bf16 everywhere (flash-decode/cache are bf16-only anyway).
-        # bfloat8_b on the four matmul weights buys ~7% (12.4->11.5 ms/token) by halving per-token
-        # weight DRAM traffic, with codes bit-identical and latents PCC 0.99931 — but it's a
-        # precision trade we're deferring until we can A/B *real audio* end-to-end. Enable with
-        # matmul_dtype=ttnn.bfloat8_b when that day comes.
+        # bf16 everywhere (flash-decode + paged cache are bf16-only anyway).
         self.layers, self.tail = load_ttnn_weights(device, ckpt_path, dtype=ttnn.bfloat16)
         # sdpa_decode is wrong when the cache length is an odd number of 32-tiles -> round to a multiple of 64.
         self.max_seq = ((max_seq + 63) // 64) * 64
