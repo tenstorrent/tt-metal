@@ -31,9 +31,13 @@ void kernel_main() {
 
     constexpr uint32_t cb_x = tt::CBIndex::c_0;
     constexpr uint32_t cb_one = tt::CBIndex::c_1;
+    DataflowBuffer dfb_one_obj(cb_one);
     constexpr uint32_t cb_decimal = tt::CBIndex::c_2;
+    DataflowBuffer dfb_decimal_obj(cb_decimal);
     constexpr uint32_t cb_recip_p_decimal = tt::CBIndex::c_3;
+    DataflowBuffer dfb_recip_p_decimal_obj(cb_recip_p_decimal);
     constexpr uint32_t cb_mask_w = tt::CBIndex::c_4;
+    DataflowBuffer dfb_mask_w_obj(cb_mask_w);
 
     constexpr uint32_t cb_y = tt::CBIndex::c_16;
 
@@ -57,16 +61,16 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    cb_wait_front(cb_one, onetile);
-    cb_wait_front(cb_decimal, onetile);
-    cb_wait_front(cb_recip_p_decimal, onetile);
+    dfb_one_obj.wait_front(onetile);
+    dfb_decimal_obj.wait_front(onetile);
+    dfb_recip_p_decimal_obj.wait_front(onetile);
 
     constexpr uint32_t TILE_W = 32;
     const bool do_mask_w = (origin_w % TILE_W) != 0;
     const auto mask_w = do_mask_w ? (origin_w % TILE_W) : TILE_W;
 
     if (do_mask_w) {
-        cb_wait_front(cb_mask_w, onetile);
+        dfb_mask_w_obj.wait_front(onetile);
     }
 
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; ++row_idx) {
@@ -99,10 +103,10 @@ void kernel_main() {
         power_tile_to_cb<cb_xpowsum, cb_xabs, cb_xpow, cb_recip_p_decimal, cb_logx, cb_y>(recip_p, recip_p_is_negative);
     }
 
-    cb_pop_front(cb_one, onetile);
-    cb_pop_front(cb_decimal, onetile);
-    cb_pop_front(cb_recip_p_decimal, onetile);
+    dfb_one_obj.pop_front(onetile);
+    dfb_decimal_obj.pop_front(onetile);
+    dfb_recip_p_decimal_obj.pop_front(onetile);
     if (do_mask_w) {
-        cb_pop_front(cb_mask_w, onetile);
+        dfb_mask_w_obj.pop_front(onetile);
     }
 }

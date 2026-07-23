@@ -4,6 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "api/dataflow/dataflow_buffer.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -13,8 +14,10 @@ void kernel_main() {
     uint32_t has_other_grad = get_arg_val<uint32_t>(1);
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(2);
 
+    DataflowBuffer dfb_c0(tt::CBIndex::c_0);
+
     compute_kernel_hw_startup(tt::CBIndex::c_2, tt::CBIndex::c_0, tt::CBIndex::c_16);
-    cb_wait_front(tt::CBIndex::c_0, onetile);
+    dfb_c0.wait_front(onetile);
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         if (has_input_grad) {
             ckl::mul<

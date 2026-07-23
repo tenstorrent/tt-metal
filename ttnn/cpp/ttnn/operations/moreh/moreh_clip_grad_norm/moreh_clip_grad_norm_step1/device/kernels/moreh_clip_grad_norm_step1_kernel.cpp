@@ -25,8 +25,11 @@ void kernel_main() {
 
     constexpr uint32_t cb_x = 0;
     constexpr uint32_t cb_one = 1;
+    DataflowBuffer dfb_one_obj(cb_one);
     constexpr uint32_t cb_decimal = 2;
+    DataflowBuffer dfb_decimal_obj(cb_decimal);
     constexpr uint32_t cb_mask_h_w = 3;
+    DataflowBuffer dfb_mask_h_w_obj(cb_mask_h_w);
 
     constexpr uint32_t cb_y = 16;
 
@@ -68,11 +71,11 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_logx, cb_decimal, cb_y);
 
-    cb_wait_front(cb_decimal, onetile);
-    cb_wait_front(cb_one, onetile);
+    dfb_decimal_obj.wait_front(onetile);
+    dfb_one_obj.wait_front(onetile);
 
     if (do_mask_h || do_mask_w) {
-        cb_wait_front(cb_mask_h_w, 2);
+        dfb_mask_h_w_obj.wait_front(2);
     }
 
     // Compute cb_xpowadd
@@ -107,9 +110,9 @@ void kernel_main() {
     // Compute cb_y - reduce single pre-accumulated tile to scalar
     ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_xpowadd, cb_one, cb_y>(ckl::ReduceInputBlockShape::single());
 
-    cb_pop_front(cb_decimal, onetile);
-    cb_pop_front(cb_one, onetile);
+    dfb_decimal_obj.pop_front(onetile);
+    dfb_one_obj.pop_front(onetile);
     if (do_mask_h || do_mask_w) {
-        cb_pop_front(cb_mask_h_w, 2);
+        dfb_mask_h_w_obj.pop_front(2);
     }
 }

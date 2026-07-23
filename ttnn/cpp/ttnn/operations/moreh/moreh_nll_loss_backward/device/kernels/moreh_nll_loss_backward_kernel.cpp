@@ -9,7 +9,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // unary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Recip
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Negative
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -19,8 +19,10 @@ void kernel_main() {
     using D = ckl::Dst;
     constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
     constexpr uint32_t cb_output_grad = tt::CBIndex::c_0;
+    DataflowBuffer dfb_output_grad_obj(cb_output_grad);
     constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
     constexpr uint32_t cb_tmp1 = tt::CBIndex::c_25;
+    DataflowBuffer dfb_tmp1_obj(cb_tmp1);
     constexpr uint32_t cb_tmp2 = tt::CBIndex::c_26;
     constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
 
@@ -30,8 +32,8 @@ void kernel_main() {
     ckl::unary<ckl::Recip<D::D0>, ckl::input(cb_divisor, ckl::InputLifecycle::Bulk), ckl::output(cb_tmp1)>(
         ckl::EltwiseShape::single());
 
-    cb_wait_front(cb_tmp1, 1);
-    cb_wait_front(cb_output_grad, 1);
+    dfb_tmp1_obj.wait_front(1);
+    dfb_output_grad_obj.wait_front(1);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         ckl::eltwise_chain(
@@ -51,10 +53,10 @@ void kernel_main() {
             compute_kernel_lib::BroadcastDim::Scalar>(compute_kernel_lib::EltwiseShape::single());
     }
 
-    cb_pop_front(cb_output_grad, 1);
-    cb_pop_front(cb_tmp1, 1);
+    dfb_output_grad_obj.pop_front(1);
+    dfb_tmp1_obj.pop_front(1);
 #else
-    cb_wait_front(cb_output_grad, 1);
+    dfb_output_grad_obj.wait_front(1);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         ckl::eltwise_chain(
@@ -68,6 +70,6 @@ void kernel_main() {
             ckl::PackTile<ckl::output(cb_input_grad)>{});
     }
 
-    cb_pop_front(cb_output_grad, 1);
+    dfb_output_grad_obj.pop_front(1);
 #endif
 }

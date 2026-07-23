@@ -29,8 +29,11 @@ void kernel_main() {
 
     constexpr uint32_t cb_x = tt::CBIndex::c_0;
     constexpr uint32_t cb_one = tt::CBIndex::c_1;
+    DataflowBuffer dfb_one_obj(cb_one);
     constexpr uint32_t cb_decimal = tt::CBIndex::c_2;
+    DataflowBuffer dfb_decimal_obj(cb_decimal);
     constexpr uint32_t cb_recip_p_decimal = tt::CBIndex::c_3;
+    DataflowBuffer dfb_recip_p_decimal_obj(cb_recip_p_decimal);
 
     constexpr uint32_t cb_y = tt::CBIndex::c_16;
 
@@ -52,9 +55,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    cb_wait_front(cb_one, onetile);
-    cb_wait_front(cb_decimal, onetile);
-    cb_wait_front(cb_recip_p_decimal, onetile);
+    dfb_one_obj.wait_front(onetile);
+    dfb_decimal_obj.wait_front(onetile);
+    dfb_recip_p_decimal_obj.wait_front(onetile);
 
     for (uint32_t outer_idx = 0; outer_idx < num_output_tiles_per_core; ++outer_idx) {
         for (uint32_t inner_idx = 0; inner_idx < num_reduced_tiles_along_dim; ++inner_idx) {
@@ -77,7 +80,7 @@ void kernel_main() {
         // Compute cb_y
         power_tile_to_cb<cb_xpowadd, cb_xabs, cb_xpow, cb_recip_p_decimal, cb_logx, cb_y>(recip_p, recip_p_is_negative);
     }
-    cb_pop_front(cb_one, onetile);
-    cb_pop_front(cb_decimal, onetile);
-    cb_pop_front(cb_recip_p_decimal, onetile);
+    dfb_one_obj.pop_front(onetile);
+    dfb_decimal_obj.pop_front(onetile);
+    dfb_recip_p_decimal_obj.pop_front(onetile);
 }

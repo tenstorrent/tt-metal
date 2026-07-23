@@ -10,7 +10,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp"  // UnaryNe
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"    // OptionalChainElement
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -23,8 +23,8 @@ void kernel_main() {
     constexpr uint32_t cb_x = tt::CBIndex::c_0;
     constexpr uint32_t cb_one = tt::CBIndex::c_1;
     constexpr uint32_t cb_mask_h = tt::CBIndex::c_2;
-    CircularBuffer cb_one_obj(cb_one);
-    CircularBuffer cb_mask_h_obj(cb_mask_h);
+    DataflowBuffer dfb_one_obj(cb_one);
+    DataflowBuffer dfb_mask_h_obj(cb_mask_h);
 
     constexpr uint32_t cb_y = tt::CBIndex::c_16;
 
@@ -36,13 +36,13 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
 
-    cb_one_obj.wait_front(onetile);
+    dfb_one_obj.wait_front(onetile);
 
     constexpr uint32_t TILE_H = 32;
     const bool do_mask_h = (origin_h % TILE_H) != 0;
 
     if (do_mask_h) {
-        cb_mask_h_obj.wait_front(onetile);
+        dfb_mask_h_obj.wait_front(onetile);
     }
 
 #ifdef MINUS_INF
@@ -94,8 +94,8 @@ void kernel_main() {
             ckl::PackTile<ckl::output(cb_y)>{});
     }
 
-    cb_one_obj.pop_front(onetile);
+    dfb_one_obj.pop_front(onetile);
     if (do_mask_h) {
-        cb_mask_h_obj.pop_front(onetile);
+        dfb_mask_h_obj.pop_front(onetile);
     }
 }

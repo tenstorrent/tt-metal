@@ -12,7 +12,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -23,27 +23,25 @@ void kernel_main() {
     constexpr uint32_t origin_H = get_compile_time_arg_val(3);
 
     constexpr auto cb_input = tt::CBIndex::c_0;
-    CircularBuffer cb_input_obj(cb_input);
     constexpr auto cb_scaler = tt::CBIndex::c_2;
-    CircularBuffer cb_scaler_obj(cb_scaler);
+    DataflowBuffer dfb_scaler_obj(cb_scaler);
     constexpr auto cb_mask_h = tt::CBIndex::c_3;
-    CircularBuffer cb_mask_h_obj(cb_mask_h);
+    DataflowBuffer dfb_mask_h_obj(cb_mask_h);
     constexpr auto cb_accum_dst = tt::CBIndex::c_24;
     constexpr auto cb_masked_input = tt::CBIndex::c_25;
-    CircularBuffer cb_masked_input_obj(cb_masked_input);
     constexpr auto cb_out = tt::CBIndex::c_16;
     constexpr bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
 
     compute_kernel_hw_startup(cb_input, cb_input, cb_out);
 
-    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
+    dfb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
     constexpr int onetile = 1;
     int reduce_dst_idx = 0;
     const uint32_t mask_dst_idx = reduce_dst_idx + 1;
 
     if constexpr (do_mask_h) {
-        cb_mask_h_obj.wait_front(onetile);
+        dfb_mask_h_obj.wait_front(onetile);
     }
 
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -86,7 +84,7 @@ void kernel_main() {
     }
 
     if constexpr (do_mask_h) {
-        cb_mask_h_obj.pop_front(onetile);
+        dfb_mask_h_obj.pop_front(onetile);
     }
-    cb_scaler_obj.pop_front(onetile);
+    dfb_scaler_obj.pop_front(onetile);
 }

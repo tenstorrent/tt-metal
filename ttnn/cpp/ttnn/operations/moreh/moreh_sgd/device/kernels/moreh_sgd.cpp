@@ -86,7 +86,8 @@ void kernel_main() {
 #else
 // have to pop cb_grad_tmp
 #if defined(MOMENTUM_INITIALIZED)
-        cb_pop_front(cb_grad_tmp, 1);
+        DataflowBuffer dfb_grad_tmp_obj(cb_grad_tmp);
+        dfb_grad_tmp_obj.pop_front(1);
 #else
 // not pop this case because `cb_momentum_tmp == cb_grad_tmp`
 #endif

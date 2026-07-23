@@ -33,9 +33,13 @@ void kernel_main() {
 
     constexpr uint32_t cb_x = tt::CBIndex::c_0;
     constexpr uint32_t cb_one = tt::CBIndex::c_1;
+    DataflowBuffer dfb_one_obj(cb_one);
     constexpr uint32_t cb_decimal = tt::CBIndex::c_2;
+    DataflowBuffer dfb_decimal_obj(cb_decimal);
     constexpr uint32_t cb_recip_p_decimal = tt::CBIndex::c_3;
+    DataflowBuffer dfb_recip_p_decimal_obj(cb_recip_p_decimal);
     constexpr uint32_t cb_mask_h = tt::CBIndex::c_4;
+    DataflowBuffer dfb_mask_h_obj(cb_mask_h);
 
     constexpr uint32_t cb_y = tt::CBIndex::c_16;
 
@@ -59,16 +63,16 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    cb_wait_front(cb_one, onetile);
-    cb_wait_front(cb_decimal, onetile);
-    cb_wait_front(cb_recip_p_decimal, onetile);
+    dfb_one_obj.wait_front(onetile);
+    dfb_decimal_obj.wait_front(onetile);
+    dfb_recip_p_decimal_obj.wait_front(onetile);
 
     constexpr uint32_t TILE_H = 32;
     const bool do_mask_h = (origin_h % TILE_H) != 0;
     const auto mask_h = do_mask_h ? (origin_h % TILE_H) : TILE_H;
 
     if (do_mask_h) {
-        cb_wait_front(cb_mask_h, onetile);
+        dfb_mask_h_obj.wait_front(onetile);
     }
 
     for (uint32_t col_idx = 0; col_idx < num_cols_per_core; ++col_idx) {
@@ -101,10 +105,10 @@ void kernel_main() {
         power_tile_to_cb<cb_xpowsum, cb_xabs, cb_xpow, cb_recip_p_decimal, cb_logx, cb_y>(recip_p, recip_p_is_negative);
     }
 
-    cb_pop_front(cb_one, onetile);
-    cb_pop_front(cb_decimal, onetile);
-    cb_pop_front(cb_recip_p_decimal, onetile);
+    dfb_one_obj.pop_front(onetile);
+    dfb_decimal_obj.pop_front(onetile);
+    dfb_recip_p_decimal_obj.pop_front(onetile);
     if (do_mask_h) {
-        cb_pop_front(cb_mask_h, onetile);
+        dfb_mask_h_obj.pop_front(onetile);
     }
 }

@@ -9,7 +9,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp"  // UnaryNe
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"    // OptionalChainElement
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -20,7 +20,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_x = tt::CBIndex::c_0;
     constexpr uint32_t cb_one = tt::CBIndex::c_1;
-    CircularBuffer cb_one_obj(cb_one);
+    DataflowBuffer dfb_one_obj(cb_one);
 
     constexpr uint32_t cb_y = tt::CBIndex::c_16;
 
@@ -31,7 +31,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
 
-    cb_one_obj.wait_front(onetile);
+    dfb_one_obj.wait_front(onetile);
 
 #ifdef MINUS_INF
     constexpr bool minus_inf = true;
@@ -72,5 +72,5 @@ void kernel_main() {
             ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
             ckl::PackTile<ckl::output(cb_y)>{});
     }
-    cb_one_obj.pop_front(onetile);
+    dfb_one_obj.pop_front(onetile);
 }
