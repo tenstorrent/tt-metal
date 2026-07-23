@@ -210,7 +210,7 @@ def test_vllm_adapter_trace_support_matches_gumbel_input_contract(monkeypatch, g
 
 
 @pytest.mark.parametrize("gumbel_mode", ["host", "device", "chunked"])
-def test_vllm_dynamic_gumbel_forces_single_step_trace(monkeypatch, gumbel_mode):
+def test_vllm_dynamic_gumbel_uses_single_step_early_halt_trace(monkeypatch, gumbel_mode):
     pytest.importorskip("vllm")
     from models.experimental.diffusion_gemma.tt import generator_vllm
 
@@ -218,6 +218,22 @@ def test_vllm_dynamic_gumbel_forces_single_step_trace(monkeypatch, gumbel_mode):
     model.data_parallel = 1
     model._gumbel_mode = gumbel_mode
     model._trace_enabled = True
+    monkeypatch.setenv("DG_DENOISE_EARLY_HALT", "1")
+    monkeypatch.setenv("DG_DENOISE_EARLY_HALT_WINDOW", "1")
+
+    assert model._select_session_denoise_block_fn() is generator_vllm.traced_early_halt_block
+
+
+@pytest.mark.parametrize("gumbel_mode", ["host", "device", "chunked"])
+def test_vllm_dynamic_gumbel_without_early_halt_uses_fixed_single_step_trace(monkeypatch, gumbel_mode):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    model = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    model.data_parallel = 1
+    model._gumbel_mode = gumbel_mode
+    model._trace_enabled = True
+    monkeypatch.setenv("DG_DENOISE_EARLY_HALT", "0")
     monkeypatch.setattr(
         generator_vllm,
         "select_traced_denoise_block_fn",
@@ -225,6 +241,21 @@ def test_vllm_dynamic_gumbel_forces_single_step_trace(monkeypatch, gumbel_mode):
     )
 
     assert model._select_session_denoise_block_fn() is generator_vllm.traced_denoise_block
+
+
+def test_vllm_dynamic_gumbel_rejects_grouped_early_halt_trace(monkeypatch, expect_error):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    model = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    model.data_parallel = 1
+    model._gumbel_mode = "chunked"
+    model._trace_enabled = True
+    monkeypatch.setenv("DG_DENOISE_EARLY_HALT", "1")
+    monkeypatch.setenv("DG_DENOISE_EARLY_HALT_WINDOW", "2")
+
+    with expect_error(ValueError, match="requires DG_DENOISE_EARLY_HALT_WINDOW=1"):
+        model._select_session_denoise_block_fn()
 
 
 def test_vllm_prefill_failure_resets_unregistered_session(expect_error):

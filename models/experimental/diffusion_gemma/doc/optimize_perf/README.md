@@ -45,14 +45,19 @@ Full 30-layer QB2 evidence:
 - `upfront_reuse_across_prompts.json`: 32→320→32 aligned prompt spans, A/B outputs differ, A is
   exact on repeat, and `capture_events` remains 1. The 320-token prefill also overwrites the mock
   commit span `[32:288]` (2-step deterministic mechanics gate).
-- `upfront_bit_exactness.json`: production chunked-Gumbel up-front, existing per-request reveal
-  trace, and eager committed SHA256 are identical (2-step deterministic decision gate).
+- `upfront_bit_exactness.json`: bounded-memory chunked-Gumbel up-front, existing per-request
+  reveal trace, and eager committed SHA256 are identical (2-step deterministic mechanics gate;
+  not a sampling-distribution gate).
 - `upfront_multi_request_smoke.json`: full K=48 tuned trace, A→B→A, one capture / 192 trace
   executions, exact A roundtrip, prompt-distinct output, coherent decoded text for both prompts,
   checkpoint chat-template metadata, and exact prompt-B equality to a fresh-process per-request
   reveal-trace control.
 - `upfront_earlyhalt_gpqa_20260722.{json,md}`: eight sequential real GPQA-Diamond requests with
-  traced early halt (K=10–43), one startup trace set, eight clean releases, and zero recapture.
+  traced argmax early halt (K=10–43), one startup trace set, eight clean releases, and zero
+  recapture.
+- `official_sampler_earlyhalt_20260722.md`: IID full-vocabulary Gumbel sampling plus one-step
+  traced early halt, full 30 layers, two sequential requests halting at K=17/19 while exactly
+  matching eager controls and reusing one 48-trace startup capture.
 
 These are direct wrapper/session runs on 4× Blackhole p300c; no Tracy or live-server profiling was
 used. Commands and the initial untuned timeout control are recorded in `work_log.md`.

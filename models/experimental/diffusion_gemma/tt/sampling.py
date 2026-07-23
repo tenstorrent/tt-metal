@@ -229,8 +229,10 @@ def gumbel_max_with_chunked_noise(
 
     Each vocab chunk computes local ``max`` and ``argmax`` for
     ``logits / T + Gumbel``; the per-chunk winners are reduced to the global
-    winner with elementwise masks. This is the production-noise fit path for
-    large canvases where a full ``[B, L, vocab]`` Gumbel tensor does not fit.
+    winner with elementwise masks. This is the bounded-memory fit path for large
+    canvases where a full ``[B, L, vocab]`` Gumbel tensor does not fit. The current
+    QB2 1024-wide RNG has a known distribution bias, so this path is not the
+    official-quality reference until that RNG issue is fixed.
     """
     if trace_noise is None:
         seed = _validate_ttnn_rand_seed(seed)

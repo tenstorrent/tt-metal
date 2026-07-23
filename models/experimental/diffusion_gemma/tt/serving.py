@@ -66,13 +66,12 @@ from models.experimental.diffusion_gemma.tt.generate import (
 )
 from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache, prefix_cache_enabled
 
-# Sampling modes exposed to the serving layer. "chunked" is the DEFAULT: the
-# no-materialize on-device Gumbel-max sampler (argmax(logits/T + Gumbel)) that is
-# distribution-faithful to the model's reference EntropyBoundSampler / HF
-# multinomial(softmax(logits/T)) AND fits full-depth 256K. "argmax" is the greedy
-# RUN-first path (no Gumbel materialization, also fits 256K) — kept as an opt-in
-# speed/determinism mode. "host"/"device" are seeded-Gumbel debug/reference paths
-# that materialize the full-vocab Gumbel (OOM at 256K), for token-exact validation.
+# Sampling modes exposed to the serving layer. "chunked" remains the bounded-memory
+# DEFAULT because it fits full-depth 256K, but QB2's current 1024-wide innermost-axis
+# RNG has a known distribution bias; do not use it as an official-quality reference.
+# "host" provides IID full-vocabulary Gumbel semantics where context memory permits.
+# "argmax" is the greedy RUN-first speed/determinism control. "device" uses the
+# permuted-vocabulary workaround but its padded full-vocabulary temporary can OOM.
 GUMBEL_MODES = ("chunked", "argmax", "host", "device")
 
 

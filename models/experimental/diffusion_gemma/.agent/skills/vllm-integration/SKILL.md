@@ -38,8 +38,9 @@ Never benchmark or judge quality from an implicit launch:
 - Set `DG_SPARSE_MOE=1`; it defaults off and otherwise denoise computes the dense 128-expert path.
 - Set `DG_DEDUP_ARGMAX=1` for argmax controls; it defaults off.
 - Set `DG_VLLM_MAX_DENOISE_STEPS` explicitly; unset means K=48.
-- Set `DG_VLLM_GUMBEL_MODE` explicitly (`argmax` is a fast/RUN control; `chunked` is the
-  production sampler).
+- Set `DG_VLLM_GUMBEL_MODE` explicitly. `argmax` is a fast/RUN control. `chunked` is the
+  bounded-memory 256K path but its current QB2 1024-wide RNG is distribution-biased; use
+  `host` for IID official sampling semantics at smaller validated contexts such as GPQA/4096.
 - Set `DG_VLLM_TRACE` explicitly. Unset is eager. Trace block 0 is capture-inclusive and current
   growing contiguous-prefix shapes recapture across blocks.
 - Pass `--generation-config vllm`; otherwise checkpoint config caps output at one 256-token block.

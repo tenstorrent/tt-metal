@@ -78,8 +78,11 @@ from models.experimental.diffusion_gemma.tt.generate import (
 from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 from models.experimental.diffusion_gemma.tt.traced_denoise import (
+    early_halt_window,
     reveal_mask_enabled,
     traced_denoise_block,
+    traced_early_halt_block,
+    traced_early_halt_enabled,
     upfront_capture_enabled,
 )
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
@@ -206,11 +209,11 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         self._tokenizer = tokenizer
         self._config = _with_vllm_max_denoise_steps(DiffusionConfig() if config is None else config)
         self.canvas_length = self._config.canvas_length
-        # Sampler at the served context. DEFAULT "chunked": the no-materialize on-device
-        # Gumbel-max sampler that is distribution-faithful to the model's reference
-        # EntropyBoundSampler (HF multinomial(softmax(logits/T))) AND fits full-depth 256K.
-        # "argmax" (greedy RUN-first, also fits 256K) is opt-in via DG_VLLM_GUMBEL_MODE; the
-        # full-vocab Gumbel ("host"/"device") OOMs at 256K (see doc/context_contract.json).
+        # DEFAULT "chunked" is the no-materialize bounded-memory Gumbel-max path that fits
+        # full-depth 256K, but its current QB2 1024-wide RNG has a known distribution bias.
+        # Official-quality runs at smaller served contexts explicitly select "host" for IID
+        # full-vocabulary Gumbel noise. "argmax" is the fast deterministic RUN control;
+        # full-vocabulary "host"/"device" modes do not fit the 256K memory envelope.
         self._gumbel_mode = os.environ.get("DG_VLLM_GUMBEL_MODE", gumbel_mode)
         # One active session per batch row. A single contiguous model cache backs
         # one active sequence today (see module docstring); the dict is keyed by
@@ -572,8 +575,18 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             return None
         if self._gumbel_mode in ("host", "device", "chunked"):
             # Dynamic Gumbel refreshes a full-noise input (host/device) or a device seed
-            # (chunked) between single-step replays. A grouped trace cannot refresh either
-            # input inside its window, so force the single-step traced controller here.
+            # (chunked) between replays. The early-halt controller supports this when its
+            # trace window is exactly one step: refresh seed/noise, replay one step, then
+            # read the halt scalar. Grouped dynamic-Gumbel traces remain invalid because
+            # they cannot refresh the stochastic input between steps inside the window.
+            if traced_early_halt_enabled():
+                window = early_halt_window()
+                if window != 1:
+                    raise ValueError(
+                        "dynamic Gumbel with traced early halt requires "
+                        f"DG_DENOISE_EARLY_HALT_WINDOW=1, got {window}"
+                    )
+                return traced_early_halt_block
             return traced_denoise_block
         return select_traced_denoise_block_fn()
 

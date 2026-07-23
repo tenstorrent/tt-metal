@@ -717,12 +717,41 @@ def test_device_upfront_multi_request_smoke_has_no_stale_cross_request_state(upf
     reason="up-front early-halt repro requires DG_UPFRONT_EARLY_HALT_TEST=1",
 )
 def test_device_upfront_early_halt_serves_two_sequential_requests(upfront_device_bundle):
+    from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_block as eager_denoise_block
+
+    prompts = [
+        _tokenize(upfront_device_bundle, "Give a friendly greeting."),
+        _tokenize(upfront_device_bundle, "Describe a black hole in one sentence. " * 4),
+    ]
+    config = DiffusionConfig(
+        canvas_length=256,
+        max_denoise_steps=int(os.environ.get("DG_UPFRONT_STEPS", "2")),
+    )
+    gumbel_mode = os.environ.get("DG_UPFRONT_GUMBEL_MODE", "argmax")
+
+    # Compile and record exact eager controls before traces become active. Both paths
+    # receive seed=0, so canvas init, per-step Gumbel seeds, and renoise tokens match.
+    eager_controls = []
+    for prompt in prompts:
+        session = serving.BlockDiffusionServingSession(
+            upfront_device_bundle.tt_model,
+            upfront_device_bundle.state_dict,
+            config=config,
+            tokenizer=upfront_device_bundle.tokenizer,
+            gumbel_mode=gumbel_mode,
+            seed=0,
+            stop_token_ids=[],
+            denoise_block_fn=eager_denoise_block,
+        )
+        try:
+            session.prefill(prompt)
+            emission = session.decode_block()
+            eager_controls.append((emission.tokens.clone(), emission.num_denoise_steps, emission.halted))
+        finally:
+            session.reset()
+
     wrapper = _make_upfront_wrapper(upfront_device_bundle)
     try:
-        prompts = [
-            _tokenize(upfront_device_bundle, "Give a friendly greeting."),
-            _tokenize(upfront_device_bundle, "Describe a black hole in one sentence. " * 4),
-        ]
         capture_events = None
         for request_idx, prompt in enumerate(prompts):
             print(f"DG_UPFRONT_EH_MARK request={request_idx} prefill_forward_begin", flush=True)
@@ -738,6 +767,10 @@ def test_device_upfront_early_halt_serves_two_sequential_requests(upfront_device
                 flush=True,
             )
             assert output.shape == (1, wrapper.canvas_length)
+            eager_tokens, eager_steps, eager_halted = eager_controls[request_idx]
+            assert torch.equal(output, eager_tokens)
+            assert steps == eager_steps
+            assert halted is eager_halted
             if request_idx == 0:
                 assert halted, "request 0 must halt early to exercise partial trace replay"
                 capture_events = stats["capture_events"]
