@@ -81,21 +81,24 @@ python models/experimental/vibevoice/demo/demo.py
 python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 32 --debug
 ```
 
-### Run with trace
+### Trace (default)
 
-`--trace` ttnn-captures the whole steady-state speech-diffusion frame (neg-LM + diffusion +
-post-diffusion + pos-LM) as one fully device-driven graph — the "llama shape": positions
-self-advance on device, RoPE is gathered on device, and the pos hidden is loop-carried — and
-replays it per frame. It gives **≈11–12 tok/s** steady-state decode vs ≈2.4 tok/s eager on the
-45-min climate demo, and opens the device with a ~1.4 GB trace region + 2 command queues.
+Fused-frame trace is **on by default** (`--trace` / `VV_TRACE_SEGMENT=1`): ttnn-captures the whole
+steady-state speech-diffusion frame (neg-LM + diffusion + post-diffusion + pos-LM) as one fully
+device-driven graph — the "llama shape": positions self-advance on device, RoPE is gathered on
+device, and the pos hidden is loop-carried — and replays it per frame. It gives **≈11–12 tok/s**
+steady-state decode vs ≈2.4 tok/s eager on the 45-min climate demo, and opens the device with a
+~1.4 GB trace region + 2 command queues. Pass `--no-trace` for eager decode.
 
 ```bash
-python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 32 --trace
+python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 32
+python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 32 --no-trace
 ```
 
 | Flag | Env var | Scope | Notes |
 |------|---------|-------|-------|
-| `--trace` | `VV_TRACE_SEGMENT=1` | whole segment, device-driven (llama shape) | fused frame replayed per frame; ~1.4 GB trace region + 2 CQs |
+| `--trace` (default) | `VV_TRACE_SEGMENT=1` | whole segment, device-driven (llama shape) | fused frame replayed per frame; ~1.4 GB trace region + 2 CQs |
+| `--no-trace` | `VV_TRACE_SEGMENT=0` | eager AR loop | for debugging / A/B |
 
 ## Speaker similarity (SIM) test
 
@@ -141,8 +144,24 @@ helpers live in `tests/pcc/pcc_helpers.py`; fixtures (`vv_config`, `lm_state`) a
   prefill path (acoustic tokenizer → connector → scatter into embeddings → LM prefill →
   `last_hidden_state`) plus per-layer KV cache, vs the bf16 HF Qwen2 reference; synthetic-input ISL
   sweep 2k … 64k, gated at `PCC >= 0.99`.
-- **Full decode chain:** `test_decode.py::test_decode_ref_cond_frame_pcc` — the
-  post-diffusion decode chain against pinned reference diffusion conditions.
+- **Full decode chain:** `test_decode.py::test_decode_ref_cond_frame_pcc` — **open-loop,
+  per-stage parity** of the whole decode vs the fp32 reference over a teacher-forced stream. Each
+  frame compares all three decode stages, each fed the *reference* input for that stage (open loop
+  → per-stage error is isolated and cannot accumulate → PCC-gate-able):
+  - **diffusion** — TT DPM sampler on the reference condition + shared noise vs the reference latent,
+  - **chain** — TT acoustic decode → semantic encode → connectors on the reference latent vs the
+    reference fused embed,
+  - **LM** — TT LM vs the reference hidden.
+
+  Chain and LM are strict per-frame `min PCC >= 0.99` (essentially exact on identical inputs). The
+  diffusion latent is *distribution*-gated (no frame below `DIFF_LATENT_FLOOR`, at most
+  `DIFF_LATENT_OUTLIER_FRAC` of frames below threshold): the DPM sampler is **separatrix-sensitive**
+  for a rare, perceptually-inert subset of conditions — a benign input can push the discrete bf16
+  trajectory across a contractive/expansive boundary — so a per-frame `min` would false-fail while
+  the distribution gate still catches a real regression. The *closed* decode loop is intentionally
+  not PCC-gated here (it's chaotic — a single separatrix frame cascades under feedback, latent PCC
+  0.999 → 0.16 over ~24 frames); whole-loop fidelity lives in the e2e/WER tests, and the diffusion
+  head/scheduler have their own PCC tests.
 
 ```bash
 # Decoder-layer regression (fast)
@@ -213,6 +232,31 @@ tt-perf-report "$CSV" --start-signpost start --end-signpost stop
 | Decode dump | `test_profile_single_step_decode.py` | `generated/profiler/vibevoice_lm_single_step_decode/` |
 
 Wall-clock demo timings (`VV_PROFILE=1` / `--debug`) are separate from these Tracy op dumps.
+
+### 4. E2E ISL sweep (`4p_climate_100min`)
+
+Wall-clock sweep (not Tracy): crop the demo prompt to each ISL after tokenization, warmup
+generate, then timed `max_new_tokens=None`. **Fused-frame trace is on by default** (same as
+demo `--trace`). Prints prefill time / tok/s, TTFT, decode tok/s, ms/tok, E2E, AR tokens.
+
+```bash
+# Default ISLs: 32,64,128,…,16384, then full tokenized length (~23k for 4p_climate_100min)
+# Trace on by default — set VV_TRACE_SEGMENT=0 for eager
+pytest models/experimental/vibevoice/tests/perf/test_e2e_isl_sweep_perf.py -q -s
+
+# Cap / override
+VV_ISL_SWEEP_MAX_ISL=1024 pytest models/experimental/vibevoice/tests/perf/test_e2e_isl_sweep_perf.py -q -s
+VV_ISL_SWEEP=32,64,128 VV_ISL_WARMUP_TOKENS=4 \
+  pytest models/experimental/vibevoice/tests/perf/test_e2e_isl_sweep_perf.py -q -s
+```
+
+Same knobs via demo CLI (trace on by default):
+
+```bash
+python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min \
+  --isl 1024 --warmup
+# omit --max_new_tokens for until-EOS / max_length_times×ISL (same as the sweep)
+```
 
 ## Porting notes
 
