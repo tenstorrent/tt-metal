@@ -97,7 +97,10 @@ public:
     /**
      * @brief Decrement the semaphore by the specified value, blocking until the semaphore is sufficient.
      *
-     * DM_LOCAL_CACHED: atomic AMO subtract after a coherent spin.
+     * DM_LOCAL_CACHED: atomic AMO subtract after a coherent spin. As with EXTERNAL, the
+     *   check-then-subtract pair is only single-consumer-safe (two consumers can both pass
+     *   the >=value spin and both subtract, underflowing); multi-consumer down must be
+     *   host-guarded (Phase-2) or use CAS.
      * EXTERNAL: the decrement is an ATOMIC self-targeted NoC RMW (INCR_GET with a negative
      *   increment; wrap=31 => 32-bit modular subtract), so it serializes with concurrent
      *   producer increments at the NIU — no lost update. (HW/emu-verified:

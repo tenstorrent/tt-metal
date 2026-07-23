@@ -142,7 +142,12 @@ TEST_F(NocAtomicOpsFixture, TestAtomicDecrementIncrGet) {
 }
 
 // Atomic decrement via a raw NOC_AT_INS_RISCV_AMO (AMOADD, operand -1).
+// The raw emit uses Quasar-only RoCC builtins / NOC_AT_* symbols, so it is Quasar-only
+// (Blackhole has a different NoC emit path). TestAtomicDecrementIncrGet stays portable.
 TEST_F(NocAtomicOpsFixture, TestAtomicDecrementAmo) {
+    if (!is_quasar) {
+        GTEST_SKIP() << "raw NoC RISCV_AMO emit is Quasar-only";
+    }
     const uint32_t start = num_dms_ * iterations;
     const uint32_t observed = run("PROBE_DECR_AMO", start);
     log_info(LogTest, "RISCV_AMO AMOADD decrement: {} (expected 0; started at {})", observed, start);
@@ -152,6 +157,9 @@ TEST_F(NocAtomicOpsFixture, TestAtomicDecrementAmo) {
 // 4-bit compare-and-swap via a raw NOC_AT_INS_CAS. Word starts at 5:
 // CAS(cmp=5,swap=9) succeeds -> 9; CAS(cmp=5,swap=2) fails (word is 9) -> unchanged.
 TEST_F(NocAtomicOpsFixture, TestAtomicCas) {
+    if (!is_quasar) {
+        GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
+    }
     const uint32_t observed = run("PROBE_CAS", 5u);
     log_info(LogTest, "CAS result: {} (expected 9: 5->9 on match, then no-op on mismatch)", observed);
     EXPECT_EQ(observed, 9u) << "Raw NOC_AT_INS_CAS did not compare-and-swap as expected.";

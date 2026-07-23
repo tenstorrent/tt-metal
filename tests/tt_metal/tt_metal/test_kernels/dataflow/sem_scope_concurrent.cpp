@@ -1,0 +1,75 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Concurrency proof for the scoped Semaphore class: verifies that up()/down() route to
+// the ATOMIC mechanism under real multi-DM contention (single-writer tests can't tell an
+// atomic path from a non-atomic one). Quasar-only (roles gated by mhartid).
+//
+// Modes (via -D), scope via SEM_SCOPE_EXTERNAL / SEM_SCOPE_DM_LOCAL_CACHED:
+//   MODE_CONCURRENT_UP     : all user DMs up(1)*iters a shared Semaphore, then signal a
+//                            'done' semaphore; the lowest DM waits for all, reports value().
+//                            Expect num_threads*iters. A non-atomic up() loses updates -> less.
+//   MODE_PRODUCER_CONSUMER : (num_threads-1) producers up(1)*iters; the lowest DM is the
+//                            single consumer, down(1)*((num_threads-1)*iters), reports value().
+//                            Expect 0. A non-atomic down() (losing a concurrent producer inc)
+//                            leaves fewer units than downs -> the consumer blocks (timeout).
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "experimental/kernel_args.h"
+
+#if defined(SEM_SCOPE_EXTERNAL)
+constexpr SemScope kScope = SemScope::EXTERNAL;
+#elif defined(SEM_SCOPE_DM_LOCAL_CACHED)
+constexpr SemScope kScope = SemScope::DM_LOCAL_CACHED;
+#else
+constexpr SemScope kScope = SemScope::LOCAL_NONATOMIC;
+#endif
+
+static inline void report_value(uint32_t report_addr, uint32_t v) {
+    volatile tt_l1_ptr uint32_t* r = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
+    *r = v;
+#if defined(ARCH_QUASAR)
+    flush_l2_cache_line(report_addr);  // make the report visible to the host readback of TL1
+#endif
+}
+
+void kernel_main() {
+    const uint32_t report_addr = get_arg(args::report_addr);
+    const uint32_t increment_times = get_arg(args::increment_times);
+    const uint32_t num_threads = get_arg(args::num_threads);
+
+    // Quasar user DM harts are 2..(2+num_threads-1); the lowest (2) is reporter/consumer.
+    uint64_t hart = 2;
+    asm volatile("csrr %0, mhartid" : "=r"(hart));
+    const bool is_lowest = (hart == 2);
+
+    Semaphore<ProgrammableCoreType::TENSIX, kScope> work(sem::counter);
+
+#if defined(MODE_PRODUCER_CONSUMER)
+    if (is_lowest) {
+        // Single consumer: drain every producer increment. Terminates at 0 iff the
+        // decrement is atomic vs the concurrent producer increments (else it blocks).
+        const uint32_t total = (num_threads - 1) * increment_times;
+        for (uint32_t i = 0; i < total; i++) {
+            work.down(1);
+        }
+        report_value(report_addr, work.value());  // expect 0
+    } else {
+        for (uint32_t i = 0; i < increment_times; i++) {
+            work.up(1);
+        }
+    }
+#else  // MODE_CONCURRENT_UP
+    Semaphore<ProgrammableCoreType::TENSIX, kScope> done(sem::done);
+    for (uint32_t i = 0; i < increment_times; i++) {
+        work.up(1);
+    }
+    done.up(1);
+    if (is_lowest) {
+        done.wait_min(num_threads);  // barrier: every thread finished its up() loop
+        report_value(report_addr, work.value());  // expect num_threads * increment_times
+    }
+#endif
+}
