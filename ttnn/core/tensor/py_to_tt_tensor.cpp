@@ -52,6 +52,9 @@ bool can_exec_ops_on_device(DataType type) {
         case DataType::UINT8:
             // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
             return false;
+        case DataType::FP8_E4M3:
+            // https://github.com/tenstorrent/tt-metal/issues/43909 (typecast uses TILE, but FP8_E4M3 is RM-only)
+            return false;
         default: return true;
     }
 };
