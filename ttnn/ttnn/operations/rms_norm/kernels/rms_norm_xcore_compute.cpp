@@ -42,6 +42,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/streaming_reduce_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -49,6 +50,7 @@ namespace {
 constexpr uint32_t cb_x_in = 1;          // sharded input W-slice (zero-copy, resident)
 constexpr uint32_t cb_scaler = 2;        // 1/W reduce scaler (+partial), bf16
 constexpr uint32_t cb_gamma = 3;         // gamma W-slice tiles (held)
+constexpr uint32_t cb_gamma_sticks = 4;  // RM-gamma stick input (tilized -> cb_gamma)
 constexpr uint32_t cb_gather = 5;        // master: K partials gathered (fp32)
 constexpr uint32_t cb_stat_handoff = 6;  // master: 1/RMS -> writer broadcast (fp32)
 constexpr uint32_t cb_stat_global = 7;   // 1/RMS received (fp32)
@@ -65,6 +67,10 @@ void kernel_main() {
     constexpr bool HAS_GAMMA = get_compile_time_arg_val(3) != 0;
     constexpr bool HAS_PARTIAL_W = get_compile_time_arg_val(4) != 0;
     constexpr uint32_t eps_bits = get_compile_time_arg_val(5);
+    // RM gamma -> compute tilizes cb_gamma_sticks (vwt one-tile-wide blocks) into
+    // cb_gamma before holding it resident. TILE gamma -> reader already filled
+    // cb_gamma (tilize skipped). Cross-core mirror of the interleaved knob-turn.
+    constexpr bool GAMMA_IS_RM = get_compile_time_arg_val(6) != 0;
 
     const uint32_t vwt = get_arg_val<uint32_t>(0);  // valid W-tiles (<= PER_W_T)
     const uint32_t is_partial_holder = get_arg_val<uint32_t>(1);
@@ -82,7 +88,13 @@ void kernel_main() {
     cb_wait_front(cb_x_in, shard_tiles);
 
     if constexpr (HAS_GAMMA) {
-        cb_wait_front(cb_gamma, vwt);  // gamma W-slice held (read once by the reader)
+        if constexpr (GAMMA_IS_RM) {
+            // Tilize the vwt one-tile-wide stick blocks the reader pushed into
+            // cb_gamma (BLOCK_SIZE=1 so num_blocks=vwt is a runtime count). This is
+            // the sole producer of cb_gamma on the RM-gamma path.
+            ckl::tilize<1, cb_gamma_sticks, cb_gamma>(vwt);
+        }
+        cb_wait_front(cb_gamma, vwt);  // gamma W-slice held (read/tilized once)
     }
 
     for (uint32_t t = 0; t < HT_LOCAL; ++t) {

@@ -416,6 +416,11 @@ def _create_sharded_xcore_descriptor(
     has_partial_w = partial_w != 0
 
     has_gamma = gamma is not None
+    # gamma layout is an independent knob (Refinement 2 / 4a): RM gamma -> reader
+    # reads the W-slice as row-major sticks + compute tilizes them into cb_gamma;
+    # TILE gamma -> reader reads whole tiles straight into cb_gamma. Mirrors the
+    # interleaved RM-gamma knob-turn on the cross-core path.
+    gamma_is_rm = has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
     in_dtype = input_tensor.dtype
     out_dtype = output_tensor.dtype
 
@@ -476,10 +481,12 @@ def _create_sharded_xcore_descriptor(
         gamma_dtype = gamma.dtype
         gamma_page = gamma.buffer_aligned_page_size()
         tile_gamma = ttnn.tile_size(gamma_dtype)
+        gamma_elem = _elem_size(gamma)  # RM stick-byte math only (col * elem)
     else:
         gamma_dtype = in_dtype
         gamma_page = input_tensor.buffer_aligned_page_size()
         tile_gamma = tile_in
+        gamma_elem = 0
 
     all_cores = grid
 
@@ -487,6 +494,7 @@ def _create_sharded_xcore_descriptor(
     CB_X_IN = 1
     CB_SCALER = 2
     CB_GAMMA = 3
+    CB_GAMMA_STICKS = 4
     CB_GATHER = 5
     CB_STAT_HANDOFF = 6
     CB_STAT_GLOBAL = 7
@@ -520,7 +528,13 @@ def _create_sharded_xcore_descriptor(
     add_cb(CB_STAT_GLOBAL, tile_fp32, 1, ttnn.float32)  # depth 1 -> fixed base for the mcast-back
     add_cb(CB_NORM, tile_in, 2, in_dtype)
     if has_gamma:
+        # cb_gamma holds tiles in both regimes; single producer per compiled
+        # program (reader for TILE gamma, compute-tilize for RM gamma).
         add_cb(CB_GAMMA, tile_gamma, per_w_t, gamma_dtype)
+        if gamma_is_rm:
+            # RM-gamma-only tilize input: the reader pushes the W-slice as sticks
+            # (one tile-wide page per read); compute tilizes vwt tiles into cb_gamma.
+            add_cb(CB_GAMMA_STICKS, tile_gamma, per_w_t, gamma_dtype)
 
     # ---- Reader (scaler + gamma W-slice) ----
     reader_ct = [
@@ -529,7 +543,11 @@ def _create_sharded_xcore_descriptor(
         1 if has_partial_w else 0,
         partial_w if has_partial_w else TILE_DIM,
         gamma_page,
+        1 if gamma_is_rm else 0,
+        gamma_elem,
+        origin_W,
     ]
+    # TensorAccessorArgs start after the 8 scalar CT args above (index 8).
     reader_ct.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
         if has_gamma
@@ -572,7 +590,15 @@ def _create_sharded_xcore_descriptor(
     )
 
     # ---- Compute (local reduce + master combine + normalize) ----
-    compute_ct = [per_w_t, Ht_local, K, 1 if has_gamma else 0, 1 if has_partial_w else 0, eps_bits]
+    compute_ct = [
+        per_w_t,
+        Ht_local,
+        K,
+        1 if has_gamma else 0,
+        1 if has_partial_w else 0,
+        eps_bits,
+        1 if gamma_is_rm else 0,
+    ]
     compute_rt = ttnn.RuntimeArgs()
     for c, slice_index, _m, is_partial_holder, _wts, vwt in entries:
         compute_rt[c.x][c.y] = [vwt, 1 if is_partial_holder else 0, 1 if slice_index == 0 else 0]
