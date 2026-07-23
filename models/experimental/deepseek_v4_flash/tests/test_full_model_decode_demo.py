@@ -42,7 +42,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (
     resolve_snapshot_dir,
 )
 
-_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark"
+_DEFAULT_MODEL_DIR = os.path.expanduser("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark")
 _DEFAULT_TEXT = "Tell me the name of the top 10 movies of all time. Also list out the top 10 worst movies of all time. Give me details of why you choose those movies. Try to make your response as humours as possible."
 if int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "2048")) < 10:
     _DEFAULT_TEXT = "Tell"
