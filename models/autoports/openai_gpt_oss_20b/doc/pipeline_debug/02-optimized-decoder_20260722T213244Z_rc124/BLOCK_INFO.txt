@@ -1,0 +1,4 @@
+rc=124
+terminal=
+run=/home/mvasiljevic/codex-runs/v2-openai-gpt-oss-20b-02-optimized-decoder-20260722T213244Z
+captured_at=2026-07-23T02:32:51Z

@@ -1,0 +1,15 @@
+started_at_utc=20260722T213245Z
+repo=/home/mvasiljevic/tt-metal
+codex_home=/home/mvasiljevic/codex-runs/v2-openai-gpt-oss-20b-02-optimized-decoder-20260722T213244Z/codex_home
+codex_bin=/home/mvasiljevic/.local/bin/codex
+hf_model=openai/gpt-oss-20b
+model_dir=models/autoports/openai_gpt_oss_20b
+runner=app-server
+approval_policy=never
+sandbox=danger-full-access
+prompt_files:
+- .agents/prompts/model_bringup_multigoal/02-optimized-decoder.txt
+stage_1_objective_chars=3546
+stage_1_skills=autofix,optimize,shard-advise,stage-review,tt-device-usage
+stage_1_missing_skills=
+stage_1_thread_id=019f8bbe-cf43-7e13-808c-7716adfb027a

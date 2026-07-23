@@ -1,0 +1,14 @@
+ M models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py
+ M models/autoports/openai_gpt_oss_20b/tt/optimized_decoder.py
+?? models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/logs/run_20260722_final_correctness.junit.xml
+?? models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/logs/run_20260723_final_correctness.junit.xml
+?? models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/logs/run_20260723_final_watcher.junit.xml
+?? models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/shard_advise/decision_trace/
+?? models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/tracy/final/.logs/
+?? models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/tracy/final/decode_summary.csv.png
+?? models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/tracy/final/fused_decode_summary.csv.png
+?? models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/tracy/final/fused_prefill_summary.csv.png
+?? models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/tracy/final/prefill_128_summary.csv.png
+?? models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/tracy/final/prefill_summary.csv.png
+?? models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/tracy/final/reports/
+?? models/autoports/openai_gpt_oss_20b/doc/pipeline_debug/02-optimized-decoder_20260722T213244Z_rc124/

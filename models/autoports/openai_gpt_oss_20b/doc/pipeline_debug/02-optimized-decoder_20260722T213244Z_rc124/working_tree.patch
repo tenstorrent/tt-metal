@@ -1,0 +1,97 @@
+diff --git a/models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py b/models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py
+index 52c09a077c2..e57127f19e1 100644
+--- a/models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py
++++ b/models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py
+@@ -82,6 +82,12 @@ def _optimization_config(variant: str | None = None) -> OptimizationConfig:
+             sdpa_k_chunk_size=64,
+         ),
+         "prefill_auto": base.with_changes(prefill_matmul_config="auto"),
++        "prefill_projection_64": base.with_changes(prefill_projection_chunk_size=64),
++        "prefill_projection_32": base.with_changes(prefill_projection_chunk_size=32),
++        "prefill_qkv_fp32_kv_bf16": base.with_changes(
++            prefill_qkv_output_dtype="float32",
++            kv_cache_dtype="bfloat16",
++        ),
+         "prefill_2d_8x4": base.with_changes(prefill_matmul_config="2d_8x4"),
+         "prefill_2d_10x4": base.with_changes(prefill_matmul_config="2d_10x4"),
+         "prefill_sdpa_32": base.with_changes(
+diff --git a/models/autoports/openai_gpt_oss_20b/tt/optimized_decoder.py b/models/autoports/openai_gpt_oss_20b/tt/optimized_decoder.py
+index b65eb9390a7..7961371deec 100644
+--- a/models/autoports/openai_gpt_oss_20b/tt/optimized_decoder.py
++++ b/models/autoports/openai_gpt_oss_20b/tt/optimized_decoder.py
+@@ -115,6 +115,7 @@ class OptimizationConfig:
+     use_packed_sparse_gate_up: bool = False
+     kv_cache_dtype: str = "bfloat8_b"
+     prefill_matmul_config: str = "auto"
++    prefill_qkv_output_dtype: str = "bfloat16"
+     prefill_projection_chunk_size: int = EMITTED_CACHE_LENGTH
+     prefill_sdpa_chunk_size: int | None = None
+     long_prefill_sdpa_chunk_size: int = EMITTED_CACHE_LENGTH
+@@ -1311,6 +1312,7 @@ class OptimizedDecoder(FusedDecoder):
+         bias,
+         seq_len: int,
+         program_config=None,
++        output_dtype=ttnn.bfloat16,
+     ):
+         """Apply a token-independent projection with a stable bounded M geometry."""
+ 
+@@ -1320,7 +1322,7 @@ class OptimizedDecoder(FusedDecoder):
+                 input_tensor,
+                 weight,
+                 bias=bias,
+-                dtype=ttnn.bfloat16,
++                dtype=output_dtype,
+                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                 program_config=program_config,
+                 compute_kernel_config=self.compute_kernel_config,
+@@ -1334,7 +1336,7 @@ class OptimizedDecoder(FusedDecoder):
+                 chunk,
+                 weight,
+                 bias=bias,
+-                dtype=ttnn.bfloat16,
++                dtype=output_dtype,
+                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                 program_config=program_config,
+                 compute_kernel_config=self.compute_kernel_config,
+@@ -1366,6 +1368,10 @@ class OptimizedDecoder(FusedDecoder):
+             self.qkv_bias,
+             seq_len,
+             qkv_program_config,
++            {
++                "bfloat16": ttnn.bfloat16,
++                "float32": ttnn.float32,
++            }[self.optimization_config.prefill_qkv_output_dtype],
+         )
+         fused_qkv = ttnn.reshape(
+             fused_qkv,
+@@ -1396,13 +1402,25 @@ class OptimizedDecoder(FusedDecoder):
+             [1, 1, 1, 1],
+             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+         )
++        if query.dtype == ttnn.float32:
++            # SDPA accepts BF16/BFP inputs. This diagnostic policy keeps the
++            # projection and rotary work in FP32, then rounds at the SDPA/cache
++            # boundary so its result can be compared with the selected BF16
++            # projection topology.
++            query = ttnn.typecast(query, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
++            key = ttnn.typecast(key, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
++            value = ttnn.typecast(value, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
++        cache_dtype = {
++            "bfloat8_b": ttnn.bfloat8_b,
++            "bfloat16": ttnn.bfloat16,
++        }[self.optimization_config.kv_cache_dtype]
+         cache_key = key
+         cache_value = value
+-        if self.optimization_config.kv_cache_dtype == "bfloat8_b":
+-            # The current-token BF16 tensors remain inputs to prefill SDPA;
+-            # quantize only the values written to persistent cache.
+-            cache_key = ttnn.typecast(key, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+-            cache_value = ttnn.typecast(value, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
++        if key.dtype != cache_dtype:
++            # Keep the current-token projection precision for prefill SDPA and
++            # convert only the tensors written to the persistent cache.
++            cache_key = ttnn.typecast(key, cache_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
++            cache_value = ttnn.typecast(value, cache_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+         if self.batch == 1:
+             ttnn.fill_cache(key_cache, cache_key, 0)
+             ttnn.fill_cache(value_cache, cache_value, 0)
