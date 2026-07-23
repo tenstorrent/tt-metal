@@ -36,7 +36,7 @@ void kernel_main() {
     constexpr bool has_divisor = false;
 #endif
 
-    binary_op_init_common(cb_tmp_weight, cb_tmp_input, cb_output);
+    compute_kernel_hw_startup(cb_tmp_weight, cb_tmp_input, cb_output);
 
     if constexpr (has_divisor) {
         ckl::unary<ckl::Recip<D::D0>, ckl::input(cb_divisor, ckl::InputLifecycle::Bulk), ckl::output(cb_divisor_recip)>(

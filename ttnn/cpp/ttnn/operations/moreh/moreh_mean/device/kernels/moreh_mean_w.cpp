@@ -41,7 +41,7 @@ void kernel_main() {
     constexpr bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     constexpr bool is_w_single_tile = Wt == 1;
 
-    binary_op_init_common(cb_input, cb_input, cb_out);
+    compute_kernel_hw_startup(cb_input, cb_input, cb_out);
 
     cb_scaler_obj.wait_front(1);  // scaler tile from the reader
 

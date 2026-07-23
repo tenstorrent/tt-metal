@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"     // BinaryFpu, DestReuseBinary, PackTile, eltwise_chain
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"      // Rsqrt
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
@@ -82,7 +83,7 @@ void kernel_main() {
     constexpr auto cb_weight = get_compile_time_arg_val(8);
     constexpr auto cb_bias = get_compile_time_arg_val(10);
 
-    binary_op_init_common(cb_input, cb_batch_mean, cb_output_0);
+    compute_kernel_hw_startup(cb_input, cb_batch_mean, cb_output_0);
 
     const uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     const uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;

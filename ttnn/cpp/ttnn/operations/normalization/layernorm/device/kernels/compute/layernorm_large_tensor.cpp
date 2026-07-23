@@ -105,16 +105,16 @@ void kernel_main() {
     CircularBuffer cb_accumulate_obj(cb_accumulate);
 
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(cb_in, cb_inb, cb_x);
+    compute_kernel_hw_startup(cb_in, cb_inb, cb_x);
 #else
     // Always call binary_op_init_common regardless of TILIZE_IN.
     // This initializes llk_pack_dest_init, which sets up the MATH-PACK DST semaphore
     // in the "available for MATH" state.  Without it, the first tilize_block call's
     // internal llk_math_wait_for_dest_available() spins forever (deadlock).
 #ifdef RMSNORM
-    binary_op_init_common(cb_in, cb_scaler, cb_xmm2);
+    compute_kernel_hw_startup(cb_in, cb_scaler, cb_xmm2);
 #else
-    binary_op_init_common(cb_in, cb_scaler, cb_ex);
+    compute_kernel_hw_startup(cb_in, cb_scaler, cb_ex);
 #endif
 #endif
     cb_eps_obj.wait_front(1);

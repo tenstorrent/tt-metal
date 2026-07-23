@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "api/compute/eltwise_binary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"  // MulUnary
@@ -37,7 +37,7 @@ void kernel_main() {
     constexpr auto cb_in2 = tt::CBIndex::c_2;
     constexpr auto cb_out = tt::CBIndex::c_3;
 
-    binary_op_init_common(cb_in1, cb_in2, cb_out);
+    compute_kernel_hw_startup(cb_in1, cb_in2, cb_out);
 
     run_addcmul(num_tiles, scalar_arg);
 }

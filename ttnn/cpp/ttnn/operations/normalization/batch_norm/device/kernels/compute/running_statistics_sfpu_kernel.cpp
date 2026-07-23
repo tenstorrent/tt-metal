@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // unary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
@@ -76,7 +76,7 @@ void kernel_main() {
     constexpr bool needs_mean_typecast = old_running_mean_has_value && stat_needs_typecast;
     constexpr bool needs_var_typecast = old_running_var_has_value && stat_needs_typecast;
 
-    unary_op_init_common(cb_batch_mean, cb_out0);
+    compute_kernel_hw_startup(cb_batch_mean, cb_out0);
     constexpr uint32_t onetile = 1;
 
     cb_wait_front(cb_momentum, 1);

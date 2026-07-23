@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 namespace ckl = compute_kernel_lib;
@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr auto cb_rhs = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_16;
 
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_lhs, cb_rhs, cb_out);
+    compute_kernel_hw_startup(cb_lhs, cb_rhs, cb_out);
 
 #ifdef BCAST_SCALAR
     constexpr auto rhs_lifecycle = ckl::InputLifecycle::HeldStream;

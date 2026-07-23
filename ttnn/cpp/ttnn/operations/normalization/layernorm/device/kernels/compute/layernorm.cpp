@@ -110,13 +110,13 @@ void kernel_main() {
     CircularBuffer cb_x_obj(cb_x);
 
 #ifdef TILIZE_IN
-    binary_op_init_common(cb_in_rm, cb_in_rm, cb_in);
+    compute_kernel_hw_startup(cb_in_rm, cb_in_rm, cb_in);
 #elif defined(FUSE_PRE_ADD)
-    binary_op_init_common(cb_in, cb_inb, cb_x);
+    compute_kernel_hw_startup(cb_in, cb_inb, cb_x);
 #elif defined(RMSNORM)
-    binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
+    compute_kernel_hw_startup(cb_xmm, cb_xmm, cb_xmm2);
 #else
-    binary_op_init_common(cb_x, cb_scaler, cb_ex);
+    compute_kernel_hw_startup(cb_x, cb_scaler, cb_ex);
 #endif
 
     cb_eps_obj.wait_front(1);  // comes from the reader

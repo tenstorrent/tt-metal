@@ -132,7 +132,7 @@ void kernel_main() {
     // Layernorm-specific CBs
     constexpr uint32_t cb_mean_squared = tt::CBIndex::c_7;  // E(x)**2
 
-    binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);
+    compute_kernel_hw_startup(cb_inp, cb_inp, cb_stats_reduced);
 
     cb_wait_front(cb_reduce, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader

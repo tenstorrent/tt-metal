@@ -52,7 +52,7 @@ void kernel_main() {
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
     const uint32_t tile_row_start = get_arg_val<uint32_t>(1);
 
-    binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);
+    compute_kernel_hw_startup(cb_inp, cb_inp, cb_stats_reduced);
 
     cb_wait_front(cb_eps, 1);
 

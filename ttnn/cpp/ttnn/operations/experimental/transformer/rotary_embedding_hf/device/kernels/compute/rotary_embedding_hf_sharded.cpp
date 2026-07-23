@@ -50,7 +50,7 @@ void kernel_main() {
     constexpr auto cos_output = bulk_output(cos_interm_cb);
     constexpr auto rotary_output = bulk_output(out_cb);
 
-    binary_op_init_common(in_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
+    compute_kernel_hw_startup(in_cb, sin_cb, sin_interm_cb);
 
     // Wait for the reader kernel (reader_rotary_embedding_hf_sharded.cpp) to
     // write -1.0 into the scalar CB and push it.

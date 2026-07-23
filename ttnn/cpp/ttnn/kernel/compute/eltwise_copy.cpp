@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
@@ -12,7 +12,7 @@ void kernel_main() {
     constexpr auto cb_in = tt::CBIndex::c_0;
     constexpr auto cb_out = tt::CBIndex::c_16;
 
-    unary_op_init_common(cb_in, cb_out);
+    compute_kernel_hw_startup(cb_in, cb_out);
 
     compute_kernel_lib::copy<
         compute_kernel_lib::input(

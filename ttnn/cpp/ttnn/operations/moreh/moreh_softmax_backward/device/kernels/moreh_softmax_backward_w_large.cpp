@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr auto cb_inter2 = tt::CBIndex::c_26;
     constexpr auto cb_add = tt::CBIndex::c_27;
 
-    binary_op_init_common(cb_y, cb_bcast_scaler, cb_dx);
+    compute_kernel_hw_startup(cb_y, cb_bcast_scaler, cb_dx);
 
     constexpr uint32_t N = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);

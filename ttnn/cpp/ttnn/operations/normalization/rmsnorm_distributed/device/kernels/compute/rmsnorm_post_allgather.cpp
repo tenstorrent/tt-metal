@@ -55,7 +55,7 @@ void kernel_main() {
     constexpr uint32_t cb_beta = tt::CBIndex::c_3;
     constexpr uint32_t cb_times_gamma_out = (do_gamma && do_beta) ? tt::CBIndex::c_13 : cb_out;
 
-    binary_op_init_common(cb_inp, cb_inp, cb_var);
+    compute_kernel_hw_startup(cb_inp, cb_inp, cb_var);
 
     cb_wait_front(cb_reduce, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader

@@ -82,7 +82,7 @@ void kernel_main() {
     cb_scalar_args_obj.wait_front(5);
     cb_one_obj.wait_front(onetile);
 
-    binary_op_init_common(cb_param_in, cb_scalar_args, cb_param_out);
+    compute_kernel_hw_startup(cb_param_in, cb_scalar_args, cb_param_out);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         // grad += grad + param * weight_decay;

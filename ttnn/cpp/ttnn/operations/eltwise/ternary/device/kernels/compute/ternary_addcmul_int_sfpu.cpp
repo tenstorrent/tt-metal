@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"  // FillInt
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_int.hpp"
@@ -21,7 +21,7 @@ void kernel_main() {
     constexpr auto cb_in2 = tt::CBIndex::c_2;
     constexpr auto cb_out = tt::CBIndex::c_3;
 
-    unary_op_init_common(cb_in0, cb_out);
+    compute_kernel_hw_startup(cb_in0, cb_out);
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles, num_tiles_per_cycle),

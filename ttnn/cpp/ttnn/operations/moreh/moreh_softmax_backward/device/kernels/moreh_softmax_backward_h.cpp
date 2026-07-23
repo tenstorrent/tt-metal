@@ -24,7 +24,7 @@ void kernel_main() {
     DataflowBuffer dfb_sum_obj(cb_sum);
     constexpr auto cb_inter2 = tt::CBIndex::c_26;
 
-    binary_op_init_common(cb_y, cb_bcast_scaler, cb_dx);
+    compute_kernel_hw_startup(cb_y, cb_bcast_scaler, cb_dx);
 
     constexpr uint32_t N = get_compile_time_arg_val(0);
     constexpr uint32_t Ht = get_compile_time_arg_val(1);

@@ -50,7 +50,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
     cb_wait_front(cb_one, onetile);
     cb_wait_front(cb_decimal, onetile);

@@ -28,7 +28,7 @@ void kernel_main() {
     DataflowBuffer cb_max_obj(cb_max);
     constexpr auto cb_tmp = tt::CBIndex::c_28;
 
-    binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_max_scaler, cb_out0);
 
     constexpr uint32_t onetile = 1;
 

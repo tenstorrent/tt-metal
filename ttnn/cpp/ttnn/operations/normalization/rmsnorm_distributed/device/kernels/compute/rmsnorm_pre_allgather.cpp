@@ -37,9 +37,9 @@ void kernel_main() {
     constexpr uint32_t cb_inp = FUSE_PRE_ADD ? tt::CBIndex::c_3 : cb_in0;
 
     if constexpr (FUSE_PRE_ADD) {
-        binary_op_init_common(cb_in0, cb_res, cb_inp);
+        compute_kernel_hw_startup(cb_in0, cb_res, cb_inp);
     } else {
-        binary_op_init_common(cb_inp, cb_reduce, cb_x2);
+        compute_kernel_hw_startup(cb_inp, cb_reduce, cb_x2);
     }
 
     constexpr auto squaring_shape = ckl::EltwiseShape::of(Wt / blk, blk);

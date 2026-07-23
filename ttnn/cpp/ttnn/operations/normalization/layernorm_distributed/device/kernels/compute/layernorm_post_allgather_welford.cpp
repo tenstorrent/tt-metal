@@ -113,7 +113,7 @@ void kernel_main() {
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(6) == 1;
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced_id);
+    compute_kernel_hw_startup(cb_inp, cb_inp, cb_stats_reduced_id);
 
     CircularBuffer cb_eps(cb_eps_id);
     CircularBuffer cb_stats(cb_stats_id);

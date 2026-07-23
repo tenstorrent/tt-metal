@@ -66,7 +66,7 @@ void kernel_main() {
     const auto ht = (origin_h + TILE_H - 1) / TILE_H;
     const auto wt = (origin_w + TILE_W - 1) / TILE_W;
 
-    binary_op_init_common(cb_logx, cb_decimal, cb_y);
+    compute_kernel_hw_startup(cb_logx, cb_decimal, cb_y);
 
     cb_wait_front(cb_decimal, onetile);
     cb_wait_front(cb_one, onetile);

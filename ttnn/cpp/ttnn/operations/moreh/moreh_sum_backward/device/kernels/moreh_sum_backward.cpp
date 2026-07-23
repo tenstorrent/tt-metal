@@ -23,7 +23,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
-    binary_op_init_common(cb_in1, cb_in0, cb_out0);
+    compute_kernel_hw_startup(cb_in1, cb_in0, cb_out0);
     cb_in1_obj.wait_front(onetile);
 
     constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;

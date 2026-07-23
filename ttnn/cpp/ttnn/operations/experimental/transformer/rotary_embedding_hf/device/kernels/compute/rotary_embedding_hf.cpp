@@ -39,7 +39,7 @@ void kernel_main() {
 
     cb_wait_front(scalar_cb, onetile);
 
-    binary_op_init_common(rotated_in_cb, scalar_cb, rotated_in_interm_cb);
+    compute_kernel_hw_startup(rotated_in_cb, scalar_cb, rotated_in_interm_cb);
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         for (uint32_t j = 0; j < Wt; ++j) {

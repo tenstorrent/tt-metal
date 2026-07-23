@@ -7,7 +7,7 @@
 
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
-#include "api/compute/eltwise_binary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -79,7 +79,7 @@ void kernel_main() {
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(cb_in0, cb_in1, cb_in);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_in);
     ckl::add<
         ckl::input(cb_in0, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
         ckl::input(cb_in1, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
@@ -90,7 +90,7 @@ void kernel_main() {
     pack_reconfig_data_format(cb_in, cb_x2);
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
 #else
-    binary_op_init_common(cb_in, cb_in, cb_x2);
+    compute_kernel_hw_startup(cb_in, cb_in, cb_x2);
 #endif
 
     ckl::square<
@@ -159,7 +159,6 @@ void kernel_main() {
     cb_pop_front(signaling_cb, 1);
     constexpr uint32_t post_dst0 = 0;
     constexpr uint32_t post_scaler0 = 0;
-    binary_op_init_common(cb_stats, post_cb_scaler_global, cb_var);
     index_subblock_w_offset = 0;
     index_h_offset = 0;
     index = 0;

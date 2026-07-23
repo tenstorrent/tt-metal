@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/eltwise_binary.h"                // binary_op_init_common (BIG init)
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"  // BinaryFpu, DestReuseBinary, PackTile
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
@@ -60,7 +60,7 @@ void kernel_main() {
     constexpr auto cb_momentum = get_compile_time_arg_val(9);              // momentum
     constexpr auto cb_one = get_compile_time_arg_val(10);                  // stores 1
 
-    binary_op_init_common(cb_batch_mean, cb_batch_var, cb_out0);
+    compute_kernel_hw_startup(cb_batch_mean, cb_batch_var, cb_out0);
     constexpr uint32_t onetile = 1;
 
     cb_wait_front(cb_one, 1);

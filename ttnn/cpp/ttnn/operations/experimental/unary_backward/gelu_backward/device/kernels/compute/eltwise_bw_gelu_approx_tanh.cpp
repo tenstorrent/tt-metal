@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"         // FillScalar
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Square, CopyDest
@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5f;
     constexpr float kKappa = 0.044715f;
 
-    unary_op_init_common(cb_grad_out, cb_grad_in);
+    compute_kernel_hw_startup(cb_grad_out, cb_grad_in);
 
     using D = ckl::Dst;
     ckl::eltwise_chain(
