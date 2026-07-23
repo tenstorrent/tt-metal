@@ -491,3 +491,12 @@
 - Full Blackhole regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 12/12 in 17.65 s. HiFi2 T=64 output/state PCC was 0.999919/0.999918.
 - Tracy report: `/tmp/kda_chunk_sfpu_reduce_profile/reports/2026_07_23_09_19_55/ops_perf_results_2026_07_23_09_19_55.csv`. Ten warm T=640 calls averaged 525.7882 us: transpose 1.8218 us, reshape 25.5303 us, prep 315.8257 us, scan 182.6104 us. Prep improved 5.3959 us or 1.68%; total improved 5.1092 us or 0.96% over the preceding SFPU-square profile.
 - The documented fast tf32/FPU reduction mode passed 5/5 with slightly better PCC, but regressed prep to 325.8470 us (`/tmp/kda_chunk_fast_reduce_profile/reports/2026_07_23_09_21_06/ops_perf_results_2026_07_23_09_21_06.csv`), so accurate SFPU remains selected. The retained path is 769.3818 us or 59.40% faster than the original 1295.1700 us baseline.
+
+
+### 2026-07-23 09:25:52 UTC — Target-shape full-layer profiler
+
+- Added a trace-stable full-layer profiler at the Kimi target shape B=1,T=640,hidden=2304,H=32,K=V=128. It uses random initialization, external recurrent/convolution state, one warmup, and a configurable measured repetition count.
+- Smoke command: `PERF_REPS=1 scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/perf/test_kda_layer_perf.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 1/1 in 12.18 s.
+- Tracy report: `/tmp/kda_layer_t640_baseline_profile/reports/2026_07_23_09_25_52/ops_perf_results_2026_07_23_09_25_52.csv`. Three warm iterations averaged `5870.5100 us` of serialized device-kernel time.
+- The largest groups were reshape/view `1835.592 us`, matmul `692.019 us`, slice `460.632 us`, untilize `442.856 us`, ternary `436.314 us`, tilize `425.282 us`, KDA prep `318.918 us`, and KDA scan `181.603 us`.
+- Profiler-model aggregate utilization across rows with valid ideal-cycle data was `18.69%`. This is an operation-weighted diagnostic, not yet the formal layer roofline: custom KDA prep/scan rows have no ideal-cycle model and the report does not expose complete DRAM/NoC traffic.
