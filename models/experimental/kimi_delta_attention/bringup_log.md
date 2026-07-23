@@ -309,3 +309,50 @@
 - Result: `SAFE_PYTEST_RESULT: PASS`; six cases passed in 7.25 s warm,
   including exact target decode, chunk/decode continuity, both external-state
   dtypes, address stability, and fallback rejection.
+
+### 2026-07-23 07:22:46 UTC — Fused recurrent KDA
+
+- Added a dedicated `ttnn.transformer.kda_recurrent_step` operation. It maps
+  one complete head to one Tensix core, keeps the 128×128 FP32 state and
+  scratch in local L1, broadcasts four decay-column tiles over state rows,
+  and fuses decay, state read, beta-scaled rank-one write, and query.
+- The private boundary accepts normalized/scaled q/k and exponentiated decay;
+  those preprocessing operations remain device-side and separately profiled.
+- `./build_metal.sh` completed successfully in Release mode, including TTNN
+  Python binding compilation, link, and install.
+- Direct operation command:
+  `scripts/run_safe_pytest.sh
+  models/experimental/kimi_delta_attention/tests/test_kda_recurrent.py -q -s`.
+- The direct tests invoke each shape twice with distinct data, covering the
+  program-cache runtime-address override as well as fallback rejection.
+- Minimal H=2,K=V=32 output/state PCC across both seeds:
+  `0.999985`/`0.999985` and `0.999998`/`0.999988`.
+- Exact H=32,K=V=128 output/state PCC across both seeds:
+  `0.999976`/`0.999983` and `0.999973`/`0.999985`.
+- First full-layer integration attempt failed before kernel dispatch:
+  validation reported `k_unit must be in DRAM`. Root cause was the trusted L2
+  helper's deliberate L1 result for short sequences. Explicit DRAM
+  materialization at the private fused boundary fixed that contract mismatch.
+- Second integration attempt dispatched but failed output PCC (`0.103570`).
+  Direct operation PCC remained correct, ruling out recurrence math. The layer
+  had reshaped tiled `[B,T,H,K]` directly to `[BH,1,K]`; this reinterpreted one
+  H×K tile matrix rather than materializing one matrix per head. Explicit
+  T/H permutes before flattening and the inverse output permute fixed it.
+- Exact target full-layer fused decode then passed with output/recurrent/conv
+  PCC `0.999939` / `0.999950` / `0.999993`.
+- Full regression command:
+  `scripts/run_safe_pytest.sh
+  models/experimental/kimi_delta_attention/tests/test_kda_recurrent.py
+  models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s`.
+- Result: `SAFE_PYTEST_RESULT: PASS`; eight cases passed in 9.47 s warm.
+- Coverage includes minimal and exact fused recurrence, program-cache replay,
+  exact full-layer decode, composed T=4 chunk, prefill-to-fused-decode state
+  continuity, FP32/BF16 external buffers, stable addresses, and no fallback.
+- This proves correctness, not utilization. Warm recurrence/full-layer timing,
+  graph trace replay, and preprocessing fusion remain performance gates.
+- Post-format CPU reference command:
+  `python -m pytest -q
+  models/experimental/kimi_delta_attention/tests/test_reference.py`.
+- Result: 11 passed in 1.96 s.
+- Post-format device regression repeated the full command above without `-s`.
+- Result: `SAFE_PYTEST_RESULT: PASS`; eight cases passed in 8.07 s.

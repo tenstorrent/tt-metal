@@ -13,7 +13,7 @@ import torch
 import ttnn
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.experimental.kimi_delta_attention.config import KDAConfig
-from models.experimental.kimi_delta_attention.tt.recurrence import composed_kda_recurrence
+from models.experimental.kimi_delta_attention.tt.recurrence import composed_kda_recurrence, fused_kda_recurrence
 from models.experimental.kimi_delta_attention.tt.weights import KDAWeights, load_kda_weights
 
 
@@ -218,7 +218,8 @@ class KimiDeltaAttention:
         gate = ttnn.multiply(weights.decay_scale, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         assert self.recurrent_state is not None
-        output, new_recurrent_state = composed_kda_recurrence(q, k, v, gate, beta, self.recurrent_state)
+        recurrence = fused_kda_recurrence if mode == "recurrent" else composed_kda_recurrence
+        output, new_recurrent_state = recurrence(q, k, v, gate, beta, self.recurrent_state)
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
             new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)
         output_gate = ttnn.linear(

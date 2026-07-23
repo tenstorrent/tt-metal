@@ -19,6 +19,7 @@ file(
     sdpa_decode/device/kernels/*.hpp
     gated_delta_attn/device/kernels/*.cpp
     chunk_gated_delta_rule/device/kernels/*.cpp
+    kda_recurrent/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_transformer
