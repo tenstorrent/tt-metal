@@ -71,7 +71,5 @@ jobs:
         if: always()
         with:
           report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-quasar-compile.xml
-          check_name: Quasar Performance Compile Tests
-          detailed_summary: true
           include_passed: true
-          fail_on_failure: false
+          annotate_only: true
