@@ -12,17 +12,32 @@ def enumerate_graduated(demo_dir) -> list:
     """Return bring-up components that graduated to standalone native ttnn.
 
     A component qualifies when its recorded best PCC is >= 0.99 and it is not on
-    the torch-fallback list. Decomposed / fallback components are excluded because
-    their stubs are torch references, so there is no ttnn implementation to
-    optimize. Reads the generic bring-up state, so it is model-agnostic."""
-    state = Path(demo_dir) / ".bringup_cc_state.json"
+    the torch-fallback list, OR its stub carries a graduated native/sharded
+    snapshot on disk (the tensor-parallel sharded graduation path writes
+    `.py.last_good_sharded` only once the gathered-PCC shard gate passes, but does
+    not persist a best_pcc number). Reusing the shared disk detector keeps this in
+    step with bring-up/categorization, which already recognise sharded graduation.
+    Decomposed / fallback components are excluded. Model-agnostic."""
+    demo_dir = Path(demo_dir)
+    state = demo_dir / ".bringup_cc_state.json"
     try:
         d = json.loads(state.read_text())
     except Exception:
-        return []
+        d = {}
     best = d.get("best_pcc", {}) or {}
     fallback = set(d.get("fallback", []) or [])
-    grad = [m for m, p in best.items() if isinstance(p, (int, float)) and p >= 0.99 and m not in fallback]
+    grad = {m for m, p in best.items() if isinstance(p, (int, float)) and p >= 0.99 and m not in fallback}
+    try:
+        from ..bringup_loop import _stub_has_graduated_any
+
+        for stub in (demo_dir / "_stubs").glob("*.py"):
+            comp = stub.stem
+            if comp.startswith("_") or comp == "perf_kernels" or comp in fallback:
+                continue
+            if _stub_has_graduated_any(stub):
+                grad.add(comp)
+    except Exception:
+        pass
     return sorted(grad)
 
 
