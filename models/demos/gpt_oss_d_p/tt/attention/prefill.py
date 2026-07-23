@@ -196,12 +196,40 @@ def attention_forward(
         # ttnn.transformer.scaled_dot_product_attention prefill entrypoint does not expose. This
         # branch is therefore a placeholder for the multi-chip wiring and is NOT exercised by the
         # single-chip PCC test; it must be validated (or replaced by the ring op) before SP>1 use.
+        # Gather-Q correctness-first stand-in for the SP>1 attention (replaces the broken
+        # sharded-Q(1280) vs full-K(5120) causal SDPA that TT_FATALs on Sq==Sk). AllGather Q as well
+        # as K/V across the SP axis so every rank holds the full sequence, run a plain causal SDPA
+        # (Sq==Sk==full), then reduce-scatter the (now identical on every rank) full output back to
+        # each rank's contiguous SP shard. Valid ONLY for the one-shot first chunk (cached_len==0):
+        # there the block-cyclic reorder is the identity, so SP shards are plain contiguous blocks and
+        # causal order is the natural global order. ~sp x redundant attention compute; the efficient
+        # SP-sharded path is the ring SDPA (P6). See the KNOWN LIMITATION note above.
+        assert cached_len == 0, "gather-Q SP stand-in is only valid for the one-shot first chunk"
+        sp = mesh_config.sp
+        full_seq_len = seq_len * sp
+        tt_q_full = mesh_config.allgather(tt_q, ccl_manager, axis=mesh_config.sp_axis, dim=2)
         tt_k_full = mesh_config.allgather(tt_k, ccl_manager, axis=mesh_config.sp_axis, dim=2)
         tt_v_full = mesh_config.allgather(tt_v, ccl_manager, axis=mesh_config.sp_axis, dim=2)
+        tt_q.deallocate(True)
         tt_k.deallocate(True)
         tt_v.deallocate(True)
-        tt_k, tt_v = tt_k_full, tt_v_full
-        tt_sdpa_out = _run_sdpa(tt_q, tt_k, tt_v, weights, config, program_config, mesh_device, seq_len)
+        tt_q, tt_k, tt_v = tt_q_full, tt_k_full, tt_v_full
+        tt_sdpa_out_full = _run_sdpa(tt_q, tt_k, tt_v, weights, config, program_config, mesh_device, full_seq_len)
+        # Re-shard: the full output is identical on every SP rank, so reduce-scatter over the SP axis
+        # gives each rank sp x its own contiguous seq chunk; scale by 1/sp to recover it exactly
+        # (sp is a power of two, so 1/sp is exact in bf16 -- no PCC loss).
+        tt_sdpa_out = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_sdpa_out_full,
+            dim=2,
+            multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
+            num_links=ccl_manager.num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ccl_manager.topology,
+            cluster_axis=mesh_config.sp_axis,
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        )
+        tt_sdpa_out_full.deallocate(True)
+        tt_sdpa_out = ttnn.multiply(tt_sdpa_out, 1.0 / sp)
     elif cached_len > 0:
         # Chunked cache-read (current chunk attends the accumulated prefix) is not implemented yet.
         # The KV-cache STORAGE + write is done and validated (test_kv_cache_vs_ref); reading it back
