@@ -847,7 +847,8 @@ static void emit_metal2_namespaces(
         f << "#include \"api/dataflow/dataflow_buffer.h\"\n";
     }
     if (!s.sem_accessors.empty()) {
-        f << "#include <cstdint>\n";
+        // SemAccessor<Id, SemScope> token header (pulls in SemScope); see genfiles.cpp.
+        f << "#include \"api/dataflow/semaphore_token.h\"\n";
     }
     if (!s.ta_accessors.empty()) {
         f << "#include \"api/tensor/tensor_binding_token.h\"\n";
@@ -897,11 +898,12 @@ static void emit_metal2_namespaces(
         f << "}  // namespace dfb\n";
     }
     if (!s.sem_accessors.empty()) {
-        // S2b-plumbing: scope is carried (cache key) but the emit is still a bare id. The
-        // S2b-flip turns this into a SemAccessor<id, scope> token (CTAD picks the mechanism).
+        // Emit each bound semaphore as a SemAccessor<id, baked-scope> token (see genfiles.cpp):
+        // the kernel's Semaphore ctor deduces the host-resolved mechanism via CTAD.
         f << "namespace sem {\n";
         for (const auto& [name, h] : s.sem_accessors) {
-            f << "constexpr std::uint32_t " << name << " = " << h.id << "u;\n";
+            f << "constexpr ::SemAccessor<" << h.id << "u, static_cast<::SemScope>("
+              << static_cast<int>(h.scope) << ")> " << name << "{};\n";
         }
         f << "}  // namespace sem\n";
     }
