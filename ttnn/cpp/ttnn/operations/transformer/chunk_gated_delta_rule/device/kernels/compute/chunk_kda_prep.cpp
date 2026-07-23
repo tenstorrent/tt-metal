@@ -114,6 +114,24 @@ void expc(uint32_t in, uint32_t o, uint32_t n) {
     cb_push_back(o, n);
 }
 
+void halfc(uint32_t in, uint32_t o, uint32_t n) {
+    cb_reserve_back(o, n);
+    pack_reconfig_data_format(o);
+    reconfig_data_format_srca(in);
+    copy_tile_to_dst_init_short(in);
+    for (uint32_t i = 0; i < n; i++) {
+        tile_regs_acquire();
+        copy_tile(in, i, 0);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, 0x3f000000);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, o, i);
+        tile_regs_release();
+    }
+    cb_push_back(o, n);
+}
+
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
 void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, uint32_t Nt) {
     cb_reserve_back(o, Mt * Nt);
@@ -419,19 +437,32 @@ void kernel_main() {
         WAIT(cb_kbeta, ck);
         POP(cb_beta, Ct);
 
-        // G = cumsum(g), exp(G), exp(-G), and exp(G_last) replicated over C rows.
+        // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
+        // exp(G-anchor) nor exp(anchor-G) spans the full chunk range. Their products are
+        // unchanged, while realistic KDA gates no longer overflow exp(-G).
         mm(cb_tril, cb_g, cb_decay, Ct, Ct, Kt, false);
         WAIT(cb_decay, ck);
-        expc(cb_decay, cb_decay_exp, ck);
+        expc(cb_decay, cb_decay_exp, ck);  // exp(G), for scan-facing q_decay/kd
         WAIT(cb_decay_exp, ck);
+
+        mm(cb_ones, cb_g, cb_scr1, Ct, Ct, Kt, false);  // replicated G_last
+        WAIT(cb_scr1, ck);
+        POP(cb_g, ck);
+        halfc(cb_scr1, cb_scr2, ck);  // anchor = G_last/2
+        WAIT(cb_scr2, ck);
+        ew(cb_decay, cb_scr2, cb_scr3, ck, 1);  // G-anchor
+        WAIT(cb_scr3, ck);
+        POP(cb_decay, ck);
+        expc(cb_scr3, cb_S, ck);  // exp(G-anchor)
+        WAIT(cb_S, ck);
 
         cb_reserve_back(cb_decayfac, ck);
         pack_reconfig_data_format(cb_decayfac);
-        reconfig_data_format_srca(cb_decay);
-        copy_tile_to_dst_init_short(cb_decay);
+        reconfig_data_format_srca(cb_scr3);
+        copy_tile_to_dst_init_short(cb_scr3);
         for (uint32_t i = 0; i < ck; i++) {
             tile_regs_acquire();
-            copy_tile(cb_decay, i, 0);
+            copy_tile(cb_scr3, i, 0);
             negative_tile_init();
             negative_tile(0);
             exp_tile_init();
@@ -441,51 +472,61 @@ void kernel_main() {
             pack_tile(0, cb_decayfac, i);
             tile_regs_release();
         }
-        cb_push_back(cb_decayfac, ck);
+        cb_push_back(cb_decayfac, ck);  // exp(anchor-G)
         WAIT(cb_decayfac, ck);
-        POP(cb_decay, ck);
+        POP(cb_scr3, ck);
 
-        mm(cb_ones, cb_g, cb_scr1, Ct, Ct, Kt, false);
-        WAIT(cb_scr1, ck);
-        POP(cb_g, ck);
-        expc(cb_scr1, cb_supd, ck);
-        WAIT(cb_supd, ck);  // exp(G_last), identical across the C rows
+        expc(cb_scr1, cb_decay, ck);  // exp(G_last), for state decay dl
+        WAIT(cb_decay, ck);
+        expc(cb_scr2, cb_supd, ck);  // exp(G_last/2), also exp(G_last-anchor)
+        WAIT(cb_supd, ck);
         POP(cb_scr1, ck);
+        POP(cb_scr2, ck);
 
-        // qd=q*exp(G), kd=beta*k*exp(G), kr=k*exp(-G).
+        // Preserve exact scan-facing factors, and use anchored factors only for pairwise products.
         ew(Q, cb_decay_exp, cb_qdecay, ck, 2);
         WAIT(cb_qdecay, ck);
+        ew(Q, cb_S, cb_s3, ck, 2);
+        WAIT(cb_s3, ck);  // q*exp(G-anchor)
         POP(Q, ck);
         ew(cb_kbeta, cb_decay_exp, cb_w, ck, 2);
         WAIT(cb_w, ck);
+        ew(cb_kbeta, cb_S, cb_s2, ck, 2);
+        WAIT(cb_s2, ck);  // beta*k*exp(G-anchor)
         POP(cb_kbeta, ck);
+        POP(cb_S, ck);
+        POP(cb_decay_exp, ck);
         ew(Kk, cb_decayfac, cb_scr1, ck, 2);
-        WAIT(cb_scr1, ck);  // kr
+        WAIT(cb_scr1, ck);  // k*exp(anchor-G)
         POP(Kk, ck);
         POP(cb_decayfac, ck);
 
-        // T_inv = (I + strictly_lower(kd @ kr^T))^-1.
-        mm(cb_w, cb_scr1, cb_scr2, Ct, Kt, Ct, true);
-        WAIT(cb_scr2, cc);
-        ew(cb_scr2, cb_tril, cb_lmask, cc, 2);  // lower(A), including diagonal
-        WAIT(cb_lmask, cc);
-        POP(cb_scr2, cc);
-        ew(cb_lmask, cb_eye, cb_scr3, cc, 2);  // diag(A)
-        WAIT(cb_scr3, cc);
-        ew(cb_scr3, cb_lmask, cb_scr2, cc, 1);  // -strictly_lower(A)
-        WAIT(cb_scr2, cc);
-        POP(cb_scr3, cc);
-        POP(cb_lmask, cc);
-        invert_block(cb_scr2, 0, cb_Tinv, cb_lmask, cb_scr3);
-        WAIT(cb_Tinv, cc);
-        POP(cb_scr2, cc);
-
-        // Aqk = tril(qd @ kr^T).
-        mm(cb_qdecay, cb_scr1, cb_scr2, Ct, Kt, Ct, true);
-        WAIT(cb_scr2, cc);
+        // Materialize both anchored pairwise products, then release cb_s2/cb_s3 before
+        // invert_block reuses those CBs as private scratch. Only the masked Aqk is published to
+        // writer-facing cb_intra; publishing the raw matrix creates a second consumer race.
+        mm(cb_s2, cb_scr1, cb_lmask, Ct, Kt, Ct, true);
+        WAIT(cb_lmask, cc);  // raw beta*k_i*k_j*exp(G_i-G_j)
+        POP(cb_s2, ck);
+        mm(cb_s3, cb_scr1, cb_scr2, Ct, Kt, Ct, true);
+        WAIT(cb_scr2, cc);  // raw q_i*k_j*exp(G_i-G_j)
+        POP(cb_s3, ck);
         ew(cb_scr2, cb_tril, cb_intra, cc, 2);
         WAIT(cb_intra, cc);
         POP(cb_scr2, cc);
+
+        // T_inv = (I + strictly_lower(Akk))^-1.
+        ew(cb_lmask, cb_tril, cb_scr2, cc, 2);  // lower(A), including diagonal
+        WAIT(cb_scr2, cc);
+        POP(cb_lmask, cc);
+        ew(cb_scr2, cb_eye, cb_scr3, cc, 2);  // diag(A)
+        WAIT(cb_scr3, cc);
+        ew(cb_scr3, cb_scr2, cb_lmask, cc, 1);  // -strictly_lower(A)
+        WAIT(cb_lmask, cc);
+        POP(cb_scr3, cc);
+        POP(cb_scr2, cc);
+        invert_block(cb_lmask, 0, cb_Tinv, cb_scr2, cb_scr3);
+        WAIT(cb_Tinv, cc);
+        POP(cb_lmask, cc);
 
         // k_dec_t = (kr * exp(G_last))^T.
         ew(cb_scr1, cb_supd, cb_scr2, ck, 2);
@@ -509,11 +550,11 @@ void kernel_main() {
         // dl [K,1] is the transpose of any replicated exp(G_last) row.
         cb_reserve_back(cb_dl, Kt);
         pack_reconfig_data_format(cb_dl);
-        reconfig_data_format_srca(cb_supd);
-        transpose_init(cb_supd);
+        reconfig_data_format_srca(cb_decay);
+        transpose_init(cb_decay);
         for (uint32_t ki = 0; ki < Kt; ki++) {
             tile_regs_acquire();
-            transpose_tile(cb_supd, ki, 0);
+            transpose_tile(cb_decay, ki, 0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, cb_dl, ki);
@@ -521,7 +562,7 @@ void kernel_main() {
         }
         cb_push_back(cb_dl, Kt);
         POP(cb_supd, ck);
-        POP(cb_decay_exp, ck);
+        POP(cb_decay, ck);
         // v_beta, kd, q_decay, intra, k_dec_t, dl, T_inv stay pushed for the writer.
     }
 }
