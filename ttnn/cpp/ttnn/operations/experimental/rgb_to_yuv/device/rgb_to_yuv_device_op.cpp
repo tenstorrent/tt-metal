@@ -75,6 +75,9 @@ RgbToYuvDeviceOperation::spec_return_value_t RgbToYuvDeviceOperation::compute_ou
     reject_unsupported_output_memory_config(attrs.output_memory_config);
 
     const auto& shape = tensor_args.input.logical_shape();
+    // The framework runs create_output_tensors (hence this) before validate, so
+    // the rank must be checked here before indexing the shape below.
+    TT_FATAL(shape.rank() == 4, "Input must be 4D (C, H, W, T), got rank {}", shape.rank());
     uint32_t H = shape[1], W = shape[2], T = shape[3];
 
     auto mem_cfg = attrs.output_memory_config;

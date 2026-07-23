@@ -34,6 +34,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "api/core_local_mem.h"
@@ -48,21 +49,23 @@ constexpr uint32_t PAGE_BYTES = TILE_H * TILE_W * 2;  // 2048: one row-major cha
 // the local MEM_ZEROS region -- far cheaper than a scalar RISC memset.  Barriers
 // before returning so the page is ready for the subsequent stick reads (and so
 // the zero-mode command buffer is restored before any further NOC op).
-FORCE_INLINE void zero_page(const Noc& noc, uint32_t cb_id) {
-    noc.async_write_zeros(CircularBuffer(cb_id), PAGE_BYTES);
+FORCE_INLINE void zero_page(const Noc& noc, const CircularBuffer& cb) {
+    noc.async_write_zeros(cb, PAGE_BYTES);
     noc.write_zeros_l1_barrier();
 }
 
 // Local L1->L1 copy via the NOC DMA engine (async; caller barriers before use).
 // Scalar RISC copies here are far too slow and make the reader the bottleneck.
-// Source is this core's own L1, expressed as a unicast NOC endpoint.
-FORCE_INLINE void local_read(const Noc& noc, uint32_t src_l1, uint32_t dst_l1, uint32_t nbytes) {
+// Source is this core's own L1 (a unicast NOC endpoint); destination is the
+// channel CB `cb` at byte offset `dst_off` (its write pointer).
+FORCE_INLINE void local_read(
+    const Noc& noc, uint32_t src_l1, const CircularBuffer& cb, uint32_t dst_off, uint32_t nbytes) {
     noc.async_read(
         UnicastEndpoint{},
-        CoreLocalMem<uint8_t>(dst_l1),
+        cb,
         nbytes,
         {.noc_x = my_x[noc_index], .noc_y = my_y[noc_index], .addr = src_l1},
-        {});
+        {.offset_bytes = dst_off});
 }
 
 void kernel_main() {
@@ -96,7 +99,7 @@ void kernel_main() {
 
     const auto src = TensorAccessor(src_tensor_args, src_addr);
     const uint32_t scratch_base = get_write_ptr(cb_scratch);
-    const uint32_t cb_ids[3] = {cb_R_rm, cb_G_rm, cb_B_rm};
+    CircularBuffer channel_cbs[3] = {CircularBuffer(cb_R_rm), CircularBuffer(cb_G_rm), CircularBuffer(cb_B_rm)};
     const Noc noc;
 
     for (uint32_t u = unit_start; u < unit_start + unit_count; u++) {
@@ -128,19 +131,19 @@ void kernel_main() {
             uint32_t sticks = (base + TILE_H <= y_sticks) ? TILE_H : (y_sticks - base);
             bool full = (sticks == TILE_H) && !is_last_t;
             for (uint32_t c = 0; c < 3; c++) {
-                cb_reserve_back(cb_ids[c], 1);
-                uint32_t l1 = get_write_ptr(cb_ids[c]);
+                CircularBuffer& cb = channel_cbs[c];
+                cb.reserve_back(1);
                 uint32_t src_base = scratch_base + (c * y_sticks + base) * FULL_TILE_BYTES;
                 if (full) {
-                    local_read(noc, src_base, l1, PAGE_BYTES);
+                    local_read(noc, src_base, cb, 0, PAGE_BYTES);
                 } else {
-                    zero_page(noc, cb_ids[c]);
+                    zero_page(noc, cb);
                     for (uint32_t s = 0; s < sticks; s++) {
-                        local_read(noc, src_base + s * FULL_TILE_BYTES, l1 + s * FULL_TILE_BYTES, read_bytes);
+                        local_read(noc, src_base + s * FULL_TILE_BYTES, cb, s * FULL_TILE_BYTES, read_bytes);
                     }
                 }
                 noc.async_read_barrier();
-                cb_push_back(cb_ids[c], 1);
+                cb.push_back(1);
             }
         }
 
@@ -154,11 +157,11 @@ void kernel_main() {
                 uint32_t sticks = (base + TILE_H <= W2) ? TILE_H : (W2 - base);
                 bool pad = (sticks < TILE_H) || is_last_t;
                 for (uint32_t c = 0; c < 3; c++) {
+                    CircularBuffer& cb = channel_cbs[c];
                     for (uint32_t corner = 0; corner < 4; corner++) {
-                        cb_reserve_back(cb_ids[c], 1);
-                        uint32_t l1 = get_write_ptr(cb_ids[c]);
+                        cb.reserve_back(1);
                         if (pad) {
-                            zero_page(noc, cb_ids[c]);
+                            zero_page(noc, cb);
                         }
                         uint32_t row = corner >> 1;  // local H-row within the 2-row group (0 or 1)
                         uint32_t woff = corner & 1;  // W offset within the 2x2 block (0 or 1)
@@ -167,10 +170,10 @@ void kernel_main() {
                             uint32_t col = 2 * w_uv + woff;
                             uint32_t scratch_idx = row * W + col;  // spatial within the 2 rows
                             uint32_t src_stick = scratch_base + (c * y_sticks + scratch_idx) * FULL_TILE_BYTES;
-                            local_read(noc, src_stick, l1 + s * FULL_TILE_BYTES, read_bytes);
+                            local_read(noc, src_stick, cb, s * FULL_TILE_BYTES, read_bytes);
                         }
                         noc.async_read_barrier();
-                        cb_push_back(cb_ids[c], 1);
+                        cb.push_back(1);
                     }
                 }
             }

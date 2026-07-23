@@ -143,14 +143,15 @@ class TestRgbToYuv:
             assert diff_cr.float().mean().item() < 0.5, f"Cr mean error too high: {diff_cr.float().mean().item()}"
 
     def test_program_cache_reuse(self, device, H, W, T):
-        """Second (cache-hit) run with a different input at a DIFFERENT address,
-        to verify override_runtime_arguments re-points the kernels to the new
-        buffers.
+        """Second (cache-hit) run with a different input AND different outputs, all
+        at DIFFERENT addresses, to verify override_runtime_arguments re-points the
+        reader (input) and the writer (Y/Cb/Cr outputs) to the new buffers.
 
-        The first input and a dummy are kept allocated across the second
-        invocation so the allocator cannot hand back the first input's address;
-        otherwise a stale-address bug in override_runtime_arguments would go
-        undetected (the second input would coincidentally reuse the same slot).
+        The first input, its three outputs, and a dummy are all kept allocated
+        across the second invocation so the allocator cannot hand back any of the
+        first run's addresses; otherwise a stale-address bug in
+        override_runtime_arguments would go undetected (a second buffer would
+        coincidentally reuse the same slot).
         """
         coefficients = ttnn.experimental.YUVCoefficients(y=list(_Y_COEFF), cb=list(_CB_COEFF), cr=list(_CR_COEFF))
 
@@ -160,23 +161,31 @@ class TestRgbToYuv:
             tt_in = ttnn.from_torch(cpu, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
             tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_in, coefficients=coefficients)
             ttnn.synchronize_device(device)
-            outs = (ttnn.to_torch(tt_Y), ttnn.to_torch(tt_Cb), ttnn.to_torch(tt_Cr))
-            return cpu, tt_in, outs
+            host = (ttnn.to_torch(tt_Y), ttnn.to_torch(tt_Cb), ttnn.to_torch(tt_Cr))
+            # Return the device tensors too so the caller can keep them alive and
+            # inspect their addresses.
+            return cpu, tt_in, (tt_Y, tt_Cb, tt_Cr), host
 
-        cpu1, in1, out1 = run(42)  # keep in1 alive across the second run
-        # Occupy space so the second input can't be handed the first's address.
+        # Keep in1 and its device outputs alive across the second run.
+        cpu1, in1, dev1, out1 = run(42)
+        # Occupy space so the second run's buffers can't be handed the first's addresses.
         dummy = ttnn.from_torch(
             torch.zeros(3, H, W, T, dtype=torch.bfloat16),
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        cpu2, in2, out2 = run(99)
+        cpu2, in2, dev2, out2 = run(99)
 
         assert in2.buffer_address() != in1.buffer_address(), (
             "second input reused the first input's DRAM address; this run would not "
-            "exercise override_runtime_arguments"
+            "exercise the reader's override_runtime_arguments"
         )
+        for name, a, b in [("Y", dev1[0], dev2[0]), ("Cb", dev1[1], dev2[1]), ("Cr", dev1[2], dev2[2])]:
+            assert a.buffer_address() != b.buffer_address(), (
+                f"second {name} output reused the first run's DRAM address; this run would "
+                f"not exercise the writer's override_runtime_arguments for {name}"
+            )
 
         for name, (Y, Cb, Cr), cpu in [("iter1", out1, cpu1), ("iter2", out2, cpu2)]:
             ref_Y, ref_Cb, ref_Cr = _host_yuv_reference(cpu)
@@ -184,7 +193,7 @@ class TestRgbToYuv:
             assert (Cb.squeeze(0).int() - ref_Cb.int()).abs().max().item() <= 2, f"{name} Cb mismatch"
             assert (Cr.squeeze(0).int() - ref_Cr.int()).abs().max().item() <= 2, f"{name} Cr mismatch"
 
-        del dummy, in1, in2
+        del dummy, in1, in2, dev1, dev2
 
     def test_extreme_values(self, device, H, W, T):
         """All-ones and all-negative-ones inputs: verify clamp prevents overflow."""
@@ -221,6 +230,17 @@ class TestYUVValidation:
 
         with expect_error(RuntimeError, "Sharded output is not supported"):
             ttnn.experimental.rgb_to_yuv(tt_in, coefficients=coefficients, memory_config=sharded_cfg)
+
+    def test_low_rank_input_rejected(self, device, expect_error):
+        # compute_output_specs runs (via create_output_tensors) before validate,
+        # so a non-4D input must be rejected with a clean rank error rather than
+        # crashing on an out-of-range shape index.
+        cpu = torch.rand(3, 4, 32, dtype=torch.bfloat16) * 2.0 - 1.0  # rank 3
+        tt_in = ttnn.from_torch(cpu, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        coefficients = ttnn.experimental.YUVCoefficients(y=list(_Y_COEFF), cb=list(_CB_COEFF), cr=list(_CR_COEFF))
+
+        with expect_error(RuntimeError, "must be 4D"):
+            ttnn.experimental.rgb_to_yuv(tt_in, coefficients=coefficients)
 
 
 class TestYUVColorSpaceAPI:

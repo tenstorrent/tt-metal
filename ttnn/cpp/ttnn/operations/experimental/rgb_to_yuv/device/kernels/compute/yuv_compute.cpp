@@ -28,6 +28,7 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/clamp.h"
@@ -42,69 +43,76 @@ namespace uc = compute_kernel_lib::untilize_config;
 static constexpr uint32_t BF16_ZERO_BITS = 0x00000000u;  // 0.0f
 static constexpr uint32_t BF16_255_BITS = 0x437F0000u;   // 255.0f
 
+// The LLK compute ops and the tilize/untilize helpers consume raw (compile-time)
+// CB ids, so the ids are kept for those calls; the CB flow-control (wait / pop /
+// reserve / push) uses the Device 2.0 CircularBuffer object API.
 FORCE_INLINE void mul_scalar_pack(uint32_t cb_tilized, uint32_t cb_scalar, uint32_t cb_dst) {
+    CircularBuffer tilized(cb_tilized), dst(cb_dst);
     tile_regs_acquire();
-    cb_wait_front(cb_tilized, 1);
+    tilized.wait_front(1);
     mul_tiles_bcast_scalar_init_short(cb_tilized, cb_scalar);
     mul_tiles_bcast_scalar(cb_tilized, cb_scalar, 0, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
-    cb_reserve_back(cb_dst, 1);
+    dst.reserve_back(1);
     pack_tile(0, cb_dst);
-    cb_push_back(cb_dst, 1);
+    dst.push_back(1);
     tile_regs_release();
-    cb_pop_front(cb_tilized, 1);
+    tilized.pop_front(1);
 }
 
 FORCE_INLINE void add_and_pack(uint32_t cb_a, uint32_t cb_b, uint32_t cb_dst) {
+    CircularBuffer a(cb_a), b(cb_b), dst(cb_dst);
     tile_regs_acquire();
-    cb_wait_front(cb_a, 1);
-    cb_wait_front(cb_b, 1);
+    a.wait_front(1);
+    b.wait_front(1);
     add_tiles_init(cb_a, cb_b);
     add_tiles(cb_a, cb_b, 0, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
-    cb_reserve_back(cb_dst, 1);
+    dst.reserve_back(1);
     pack_tile(0, cb_dst);
-    cb_push_back(cb_dst, 1);
+    dst.push_back(1);
     tile_regs_release();
-    cb_pop_front(cb_a, 1);
-    cb_pop_front(cb_b, 1);
+    a.pop_front(1);
+    b.pop_front(1);
 }
 
 FORCE_INLINE void offset_clamp_pack(uint32_t cb_in, uint32_t cb_off, uint32_t cb_sum) {
+    CircularBuffer in(cb_in), sum(cb_sum);
     tile_regs_acquire();
-    cb_wait_front(cb_in, 1);
+    in.wait_front(1);
     add_bcast_scalar_init_short(cb_in, cb_off);
     add_tiles_bcast_scalar(cb_in, cb_off, 0, 0, 0);
     clamp_tile_init();
     clamp_tile(0, BF16_ZERO_BITS, BF16_255_BITS);
     tile_regs_commit();
     tile_regs_wait();
-    cb_reserve_back(cb_sum, 1);
+    sum.reserve_back(1);
     pack_tile(0, cb_sum);
-    cb_push_back(cb_sum, 1);
+    sum.push_back(1);
     tile_regs_release();
-    cb_pop_front(cb_in, 1);
+    in.pop_front(1);
 }
 
 // SFPU typecast: bf16 -> uint8 on a row-major page (32x32 elements).
 FORCE_INLINE void typecast_and_pack(uint32_t cb_bf16, uint32_t cb_u8) {
+    CircularBuffer bf16(cb_bf16), u8(cb_u8);
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reconfig_remap(false)));
 #endif
     init_sfpu(cb_bf16, cb_u8);
     tile_regs_acquire();
-    cb_wait_front(cb_bf16, 1);
+    bf16.wait_front(1);
     copy_tile(cb_bf16, 0, 0);
     TYPECAST_LLK_INIT();
     TYPECAST_LLK(0);
     tile_regs_commit();
     tile_regs_wait();
-    cb_reserve_back(cb_u8, 1);
+    u8.reserve_back(1);
     pack_tile(0, cb_u8);
-    cb_push_back(cb_u8, 1);
-    cb_pop_front(cb_bf16, 1);
+    u8.push_back(1);
+    bf16.pop_front(1);
     tile_regs_release();
 }
 
@@ -153,7 +161,7 @@ void kernel_main() {
 
     // Wait once on all 12 resident scalar tiles; never popped.
     for (uint32_t k = 0; k < 12; k++) {
-        cb_wait_front(cb_scalar_base + k, 1);
+        CircularBuffer(cb_scalar_base + k).wait_front(1);
     }
 
     for (uint32_t unit = 0; unit < unit_count; unit++) {

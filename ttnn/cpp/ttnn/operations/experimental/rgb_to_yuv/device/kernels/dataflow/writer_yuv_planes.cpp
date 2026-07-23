@@ -20,6 +20,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/core_local_mem.h"
 
@@ -51,6 +52,7 @@ void kernel_main() {
     const auto su = TensorAccessor(u_args, u_addr);
     const auto sv = TensorAccessor(v_args, v_addr);
     const Noc noc;
+    CircularBuffer cb_out(cb_out_rm);
 
     // Drain `ntiles` output pages, writing `sticks_total` sticks starting at
     // output page `base_spatial`, at T-column offset `byte_off_out` (n_elems wide).
@@ -64,20 +66,19 @@ void kernel_main() {
             uint32_t base = tile * TILE_H;
             uint32_t sticks = (base + TILE_H <= sticks_total) ? TILE_H : (sticks_total - base);
 
-            cb_wait_front(cb_out_rm, 1);
-            const uint32_t page_l1 = get_read_ptr(cb_out_rm);
+            cb_out.wait_front(1);
             for (uint32_t s = 0; s < sticks; s++) {
                 uint32_t spatial = base_spatial + base + s;
-                uint32_t stick_l1 = page_l1 + s * TILE_W;
+                // Source is cb_out's read pointer at this stick's byte offset.
                 noc.async_write(
-                    CoreLocalMem<uint8_t>(stick_l1),
+                    cb_out,
                     dst,
                     n_elems,
-                    {},
+                    {.offset_bytes = s * TILE_W},
                     {.page_id = spatial, .offset_bytes = byte_off_out});
                 noc.async_writes_flushed();
             }
-            cb_pop_front(cb_out_rm, 1);
+            cb_out.pop_front(1);
         }
     };
 

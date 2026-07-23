@@ -7,7 +7,10 @@ set(TTNN_OP_EXPERIMENTAL_RGB_TO_YUV_SRCS
     rgb_to_yuv.cpp
 )
 
-set(TTNN_OP_EXPERIMENTAL_RGB_TO_YUV_API_HEADERS rgb_to_yuv.hpp)
+set(TTNN_OP_EXPERIMENTAL_RGB_TO_YUV_API_HEADERS
+    rgb_to_yuv.hpp
+    device/rgb_to_yuv_device_op_types.hpp
+)
 
 # Registered on the shared `ttnn` Python module target from
 # ttnn/cpp/ttnn/operations/experimental/rgb_to_yuv/CMakeLists.txt (see the `if(TARGET ttnn)` block there).

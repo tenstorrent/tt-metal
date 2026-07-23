@@ -10,10 +10,13 @@
 namespace ttnn::experimental::prim {
 
 // 3×4 coefficient matrix: each row is [weight_R, weight_G, weight_B, offset]
-// for one output channel (Y, Cb, Cr).  Coefficients must map bf16 input in
-// [-1, 1] directly to uint8 output in [0, 255]; no internal normalization.
+// for one output channel (Y, Cb, Cr).  The kernel applies this affine map
+// directly (out = wR*R + wG*G + wB*B + offset) and rounds to uint8 [0, 255];
+// there is no internal normalization.  The coefficients therefore fully define
+// the input range (e.g. [-1, 1] or [0, 1]) and output range (full or limited)
+// they were derived for — see yuv_coefficients() in rgb_to_yuv.hpp.
 //
-// BT.601 example for input ∈ [-1, 1]:
+// BT.601 example for input ∈ [-1, 1], limited-range output:
 //   Y  row: {32.74f,  64.28f,  12.48f, 125.5f}
 //   Cb row: {-18.90f, -37.10f, 56.00f, 128.0f}
 //   Cr row: {56.00f, -46.89f,  -9.11f, 128.0f}
