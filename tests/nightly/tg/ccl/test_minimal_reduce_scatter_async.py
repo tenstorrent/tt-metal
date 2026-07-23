@@ -272,15 +272,25 @@ def test_reduce_scatter_async_quad_host_mesh(
 
 
 @skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, cluster_axis",
+    [
+        ((8, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear, 1),
+        ((8, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, ttnn.Topology.Ring, None),
+    ],
+    indirect=["mesh_device", "device_params"],
+    ids=["linear", "ring"],
+)
+@pytest.mark.parametrize("batch", [1, 2], ids=["batch1", "batch2"])
 @pytest.mark.parametrize("use_barrier_semaphore", [False, True], ids=["no_barrier_sem", "barrier_sem"])
-def test_reduce_scatter_on_reshaped_submesh_linear(
-    *, mesh_device: ttnn.MeshDevice, use_barrier_semaphore: bool
+def test_reduce_scatter_on_reshaped_submesh(
+    *, mesh_device: ttnn.MeshDevice, topology: ttnn.Topology, cluster_axis, batch: int, use_barrier_semaphore: bool
 ) -> None:
-    # Regression for the line reduce-scatter device-side barrier on a submesh whose logical line is
-    # NOT a contiguous physical line: a 2x2 block reshaped to 1x4. The barrier must use only 1-hop
-    # per-link handshakes (not a multi-hop line-multicast), otherwise the barrier_sem path hangs.
+    # Regression for the reduce-scatter device-side barriers on a submesh whose logical line is NOT a
+    # contiguous physical line: a 2x2 block reshaped to 1x4. Covers {Linear, Ring} x {single-batch,
+    # multi-batch}; batch>1 additionally exercises the ring per-batch (batch-ready) barrier. The
+    # barriers must use only 1-hop per-link handshakes (not a multi-hop line-multicast), otherwise the
+    # barrier_sem path hangs on this non-physical line.
     submesh = mesh_device.create_submesh(ttnn.MeshShape(2, 2))
     submesh.reshape(ttnn.MeshShape(1, 4))
 
@@ -291,7 +301,7 @@ def test_reduce_scatter_on_reshaped_submesh_linear(
     rs_semaphores = [ttnn.create_global_semaphore(submesh, ccl_cores, 0) for _ in range(3)]
     barrier_semaphore = ttnn.create_global_semaphore(submesh, ccl_cores, 0)
 
-    torch_x = torch.randn(1, 1, 64, 1024, dtype=torch.bfloat16)
+    torch_x = torch.randn(batch, 1, 64, 1024, dtype=torch.bfloat16)
     x = ttnn.from_torch(
         torch_x,
         device=submesh,
@@ -306,9 +316,9 @@ def test_reduce_scatter_on_reshaped_submesh_linear(
     tt_out = ttnn.experimental.reduce_scatter_minimal_async(
         x,
         dim=3,
-        cluster_axis=1,
+        cluster_axis=cluster_axis,
         num_links=1,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
         multi_device_global_semaphore=rs_semaphores,
         barrier_semaphore=barrier_semaphore if use_barrier_semaphore else None,
     )
@@ -322,110 +332,4 @@ def test_reduce_scatter_on_reshaped_submesh_linear(
     golden = num_devices * torch_x.float()
 
     passing, pcc = comp_pcc(golden, torch_out)
-    assert passing, f"PCC check failed (cluster_axis=1, dim=3, num_devices={num_devices}): {pcc}"
-
-
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("mesh_device", [(8, 2)], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-@pytest.mark.parametrize("use_barrier_semaphore", [False, True], ids=["no_barrier_sem", "barrier_sem"])
-def test_reduce_scatter_on_reshaped_submesh_ring(*, mesh_device: ttnn.MeshDevice, use_barrier_semaphore: bool) -> None:
-    # Regression for the line reduce-scatter device-side barrier on a submesh whose logical line is
-    # NOT a contiguous physical line: a 2x2 block reshaped to 1x4. The barrier must use only 1-hop
-    # per-link handshakes (not a multi-hop line-multicast), otherwise the barrier_sem path hangs.
-    submesh = mesh_device.create_submesh(ttnn.MeshShape(2, 2))
-    submesh.reshape(ttnn.MeshShape(1, 4))
-
-    compute_grid = submesh.compute_with_storage_grid_size()
-    ccl_cores = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
-    )
-    rs_semaphores = [ttnn.create_global_semaphore(submesh, ccl_cores, 0) for _ in range(3)]
-    barrier_semaphore = ttnn.create_global_semaphore(submesh, ccl_cores, 0)
-
-    torch_x = torch.randn(1, 1, 64, 1024, dtype=torch.bfloat16)
-    x = ttnn.from_torch(
-        torch_x,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(submesh),
-    )
-
-    if not use_barrier_semaphore:
-        ttnn.synchronize_device(submesh)
-
-    tt_out = ttnn.experimental.reduce_scatter_minimal_async(
-        x,
-        dim=3,
-        cluster_axis=None,
-        num_links=1,
-        topology=ttnn.Topology.Ring,
-        multi_device_global_semaphore=rs_semaphores,
-        barrier_semaphore=barrier_semaphore if use_barrier_semaphore else None,
-    )
-
-    ttnn.synchronize_device(submesh)
-
-    # Input is replicated on every device, so reduce (sum over the cluster axis) == num_devices * torch_x,
-    # then scattered along dim=3. ConcatMeshToTensor reassembles the per-device shards into the full tensor.
-    num_devices = submesh.get_num_devices()
-    torch_out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=3))
-    golden = num_devices * torch_x.float()
-
-    passing, pcc = comp_pcc(golden, torch_out)
-    assert passing, f"PCC check failed (cluster_axis=1, dim=3, num_devices={num_devices}): {pcc}"
-
-
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("mesh_device", [(8, 2)], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-@pytest.mark.parametrize("use_barrier_semaphore", [False, True], ids=["no_barrier_sem", "barrier_sem"])
-def test_reduce_scatter_on_reshaped_submesh_ring_batched(
-    *, mesh_device: ttnn.MeshDevice, use_barrier_semaphore: bool
-) -> None:
-    # Regression for the line reduce-scatter device-side barrier on a submesh whose logical line is
-    # NOT a contiguous physical line: a 2x2 block reshaped to 1x4. The barrier must use only 1-hop
-    # per-link handshakes (not a multi-hop line-multicast), otherwise the barrier_sem path hangs.
-    submesh = mesh_device.create_submesh(ttnn.MeshShape(2, 2))
-    submesh.reshape(ttnn.MeshShape(1, 4))
-
-    compute_grid = submesh.compute_with_storage_grid_size()
-    ccl_cores = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
-    )
-    rs_semaphores = [ttnn.create_global_semaphore(submesh, ccl_cores, 0) for _ in range(3)]
-    barrier_semaphore = ttnn.create_global_semaphore(submesh, ccl_cores, 0)
-
-    torch_x = torch.randn(2, 1, 64, 1024, dtype=torch.bfloat16)
-    x = ttnn.from_torch(
-        torch_x,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(submesh),
-    )
-
-    if not use_barrier_semaphore:
-        ttnn.synchronize_device(submesh)
-
-    tt_out = ttnn.experimental.reduce_scatter_minimal_async(
-        x,
-        dim=3,
-        cluster_axis=None,
-        num_links=1,
-        topology=ttnn.Topology.Ring,
-        multi_device_global_semaphore=rs_semaphores,
-        barrier_semaphore=barrier_semaphore if use_barrier_semaphore else None,
-    )
-
-    ttnn.synchronize_device(submesh)
-
-    # Input is replicated on every device, so reduce (sum over the cluster axis) == num_devices * torch_x,
-    # then scattered along dim=3. ConcatMeshToTensor reassembles the per-device shards into the full tensor.
-    num_devices = submesh.get_num_devices()
-    torch_out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=3))
-    golden = num_devices * torch_x.float()
-
-    passing, pcc = comp_pcc(golden, torch_out)
-    assert passing, f"PCC check failed (cluster_axis=1, dim=3, num_devices={num_devices}): {pcc}"
+    assert passing, f"PCC failed (topology={topology}, cluster_axis={cluster_axis}, batch={batch}): {pcc}"
