@@ -1,6 +1,6 @@
 one_from_one:
   name: One from One
-  tags: [read, unicast, L1, single_core]
+  tags: [read, unicast, L1, single_core, virtual_channels]
   image: web_images/bad-one-from-one.svg
   faq:
     - q: What does the One from One test measure?
@@ -34,15 +34,15 @@ one_from_one:
 
 one_to_one:
   name: One to One
-  tags: [write, unicast, L1, single_core]
+  tags: [write, unicast, L1, single_core, virtual_channels]
 
 one_from_all:
   name: One from All
-  tags: [read, unicast, L1, multi_core]
+  tags: [read, unicast, L1, single_core, virtual_channels]
 
 one_to_all:
   name: One to All
-  tags: [write, unicast, multicast, L1, multi_core]
+  tags: [write, unicast, multicast, L1, single_core]
 
 one_packet:
   name: One Packet
@@ -86,7 +86,7 @@ dram_unary:
 
 interleaved:
   name: Interleaved
-  tags: [read, write, unicast, DRAM, L1, multi_core]
+  tags: [read, write, unicast, DRAM, L1, single_core]
 
 loopback:
   name: Loopback
@@ -94,7 +94,7 @@ loopback:
 
 noc_estimator_tests:
   name: Noc Estimator
-  tags: [read, write, unicast, multicast, L1, DRAM, multi_core]
+  tags: [read, write, unicast, multicast, L1, DRAM, single_core, multi_core]
 
 pcie_read_bw:
   name: PCIe Read
