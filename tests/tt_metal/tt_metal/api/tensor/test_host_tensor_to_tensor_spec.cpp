@@ -12,8 +12,11 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <internal/tensor/host_to_tensor_spec_apis.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
@@ -90,7 +93,7 @@ HostTensor make_host_tensor(std::vector<T> data, const TensorSpec& spec) {
     auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
     dist_buffer.emplace_shard(
         distributed::MeshCoordinate(0, 0), [data = std::move(data)]() mutable { return HostBuffer(std::move(data)); });
-    return HostTensor::from_buffer(std::move(dist_buffer), spec, TensorTopology{});
+    return host_tensor_from_buffer_with_topology(std::move(dist_buffer), spec, TensorTopology{});
 }
 
 bool exact_spec_match(const TensorSpec& a, const TensorSpec& b) {
