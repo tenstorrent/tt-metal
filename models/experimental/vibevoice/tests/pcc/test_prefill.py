@@ -314,7 +314,7 @@ def _load_ref_model():
     return ref_model
 
 
-@pytest.mark.timeout(0)
+@pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_full_prefill_chain_pcc(mesh_device, vv_config, lm_state):
