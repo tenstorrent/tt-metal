@@ -292,13 +292,18 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
         tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
     std::array<uint32_t, 2> axis_num_devices{1u, 1u};
     std::array<uint32_t, 2> axis_num_links{0u, 0u};
+    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
     for (uint32_t axis = 0; axis < 2; ++axis) {
         const bool is_axis_active = mesh_shape[axis] > 1 && cluster_axis.value_or(axis) == axis;
         if (!is_axis_active) {
             continue;
         }
         axis_topology[axis] = ::ttnn::ccl::get_axis_topology(input_tensor, fabric_config, axis);
-        axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
+        // A cluster-axis collective spans the parent mesh axis, while a 1D collective without
+        // cluster_axis spans only the coordinates carrying this tensor. This matters for replicated
+        // collectives on subsets, e.g. a 2-device all-reduce hosted by a 1x8 MeshDevice.
+        const std::optional<uint32_t> dimension_axis = fabric_is_2d ? std::optional<uint32_t>(axis) : cluster_axis;
+        axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, dimension_axis);
         axis_num_links[axis] = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
     }
     const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];  // devices partaking in the collective
