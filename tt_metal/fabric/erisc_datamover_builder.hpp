@@ -482,7 +482,7 @@ public:
     static size_t get_max_packet_payload_size_for_arch(tt::ARCH arch);
 
     FabricEriscDatamoverBuilder(
-        const CoreCoord& my_eth_core_logical,
+        const tt::tt_metal::CoreCoord& my_eth_core_logical,
         size_t my_noc_x,
         size_t my_noc_y,
         const FabricNodeId& local_fabric_node_id,
@@ -511,7 +511,7 @@ public:
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
-        const CoreCoord& ethernet_core,
+        const tt::tt_metal::CoreCoord& ethernet_core,
         const FabricNodeId& local_fabric_node_id,
         const FabricNodeId& peer_fabric_node_id,
         const FabricEriscDatamoverConfig& config,
@@ -529,7 +529,7 @@ public:
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
-        const CoreCoord& ethernet_core,
+        const tt::tt_metal::CoreCoord& ethernet_core,
         ChipId local_physical_chip_id,
         ChipId peer_physical_chip_id,
         const FabricEriscDatamoverConfig& config,
@@ -587,7 +587,7 @@ public:
     bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
 
     //    protected:
-    CoreCoord my_eth_core_logical;
+    tt::tt_metal::CoreCoord my_eth_core_logical;
     chan_id_t my_eth_channel;
 
     FabricEriscDatamoverConfig config;

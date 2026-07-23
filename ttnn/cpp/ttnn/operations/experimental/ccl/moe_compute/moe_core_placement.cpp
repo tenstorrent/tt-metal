@@ -28,7 +28,7 @@ constexpr uint32_t kMoEComputeMaxTilizeCores = 4;
 // Legacy moe_compute combine pool was 2 columns wide (e.g. x=5,6 on WH).
 constexpr uint32_t kMoEComputeCombineStripWidth = 2;
 
-CoreCoordPairSet core_coords_to_pair_set(const std::vector<CoreCoord>& cores) {
+CoreCoordPairSet core_coords_to_pair_set(const std::vector<tt::tt_metal::CoreCoord>& cores) {
     CoreCoordPairSet result;
     for (const auto& core : cores) {
         result.insert({core.x, core.y});
@@ -36,15 +36,15 @@ CoreCoordPairSet core_coords_to_pair_set(const std::vector<CoreCoord>& cores) {
     return result;
 }
 
-std::vector<CoreCoord> pick_worker_cores_row_major_avoiding(
-    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores, uint32_t max_y_inclusive) {
-    std::vector<CoreCoord> picked;
+std::vector<tt::tt_metal::CoreCoord> pick_worker_cores_row_major_avoiding(
+    const CoreCoordPairSet& avoid, const tt::tt_metal::CoreCoord& worker_grid, uint32_t num_cores, uint32_t max_y_inclusive) {
+    std::vector<tt::tt_metal::CoreCoord> picked;
     picked.reserve(num_cores);
 
     const uint32_t y_limit = std::min(max_y_inclusive + 1, static_cast<uint32_t>(worker_grid.y));
     for (uint32_t y = 0; y < y_limit && picked.size() < num_cores; ++y) {
         for (uint32_t x = 0; x < worker_grid.x && picked.size() < num_cores; ++x) {
-            CoreCoord candidate(x, y);
+            tt::tt_metal::CoreCoord candidate(x, y);
             if (!avoid.contains({candidate.x, candidate.y})) {
                 picked.push_back(candidate);
             }
@@ -54,14 +54,14 @@ std::vector<CoreCoord> pick_worker_cores_row_major_avoiding(
     return picked;
 }
 
-std::vector<CoreCoord> pick_tilize_cores_in_upper_rows(
-    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores, uint32_t min_y) {
-    std::vector<CoreCoord> picked;
+std::vector<tt::tt_metal::CoreCoord> pick_tilize_cores_in_upper_rows(
+    const CoreCoordPairSet& avoid, const tt::tt_metal::CoreCoord& worker_grid, uint32_t num_cores, uint32_t min_y) {
+    std::vector<tt::tt_metal::CoreCoord> picked;
     picked.reserve(num_cores);
 
     for (int y = static_cast<int>(worker_grid.y) - 1; y >= static_cast<int>(min_y) && picked.size() < num_cores; --y) {
         for (int x = static_cast<int>(worker_grid.x) - 1; x >= 0 && picked.size() < num_cores; --x) {
-            CoreCoord candidate(static_cast<uint32_t>(x), static_cast<uint32_t>(y));
+            tt::tt_metal::CoreCoord candidate(static_cast<uint32_t>(x), static_cast<uint32_t>(y));
             if (!avoid.contains({candidate.x, candidate.y})) {
                 picked.push_back(candidate);
             }
@@ -72,7 +72,7 @@ std::vector<CoreCoord> pick_tilize_cores_in_upper_rows(
 }
 
 std::optional<CoreRange> find_combine_strip_avoiding(
-    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t strip_height, uint32_t max_y_inclusive) {
+    const CoreCoordPairSet& avoid, const tt::tt_metal::CoreCoord& worker_grid, uint32_t strip_height, uint32_t max_y_inclusive) {
     if (kMoEComputeCombineStripWidth > worker_grid.x || strip_height == 0) {
         return std::nullopt;
     }
@@ -100,12 +100,12 @@ std::optional<CoreRange> find_combine_strip_avoiding(
     return std::nullopt;
 }
 
-std::vector<CoreCoord> pick_combine_cores_from_strip(const CoreRange& strip, uint32_t num_cores) {
+std::vector<tt::tt_metal::CoreCoord> pick_combine_cores_from_strip(const CoreRange& strip, uint32_t num_cores) {
     const CoreRangeSet strip_range_set(strip);
     return corerange_to_cores(strip_range_set, num_cores, /*row_wise=*/true);
 }
 
-std::optional<CoreRange> find_tilize_2x2_block_avoiding(const CoreCoordPairSet& avoid, const CoreCoord& worker_grid) {
+std::optional<CoreRange> find_tilize_2x2_block_avoiding(const CoreCoordPairSet& avoid, const tt::tt_metal::CoreCoord& worker_grid) {
     constexpr uint32_t kTilizeBlockWidth = 2;
     constexpr uint32_t kTilizeBlockHeight = 2;
 
@@ -134,15 +134,15 @@ std::optional<CoreRange> find_tilize_2x2_block_avoiding(const CoreCoordPairSet& 
     return std::nullopt;
 }
 
-std::vector<CoreCoord> pick_tilize_cores_from_2x2_legacy_order(const CoreRange& block, uint32_t num_cores) {
+std::vector<tt::tt_metal::CoreCoord> pick_tilize_cores_from_2x2_legacy_order(const CoreRange& block, uint32_t num_cores) {
     const uint32_t sx = block.start_coord.x;
     const uint32_t sy = block.start_coord.y;
 
-    const std::vector<CoreCoord> legacy_order = {
-        CoreCoord(sx + 1, sy + 1),
-        CoreCoord(sx + 1, sy),
-        CoreCoord(sx, sy + 1),
-        CoreCoord(sx, sy),
+    const std::vector<tt::tt_metal::CoreCoord> legacy_order = {
+        tt::tt_metal::CoreCoord(sx + 1, sy + 1),
+        tt::tt_metal::CoreCoord(sx + 1, sy),
+        tt::tt_metal::CoreCoord(sx, sy + 1),
+        tt::tt_metal::CoreCoord(sx, sy),
     };
 
     TT_FATAL(
@@ -151,7 +151,7 @@ std::vector<CoreCoord> pick_tilize_cores_from_2x2_legacy_order(const CoreRange& 
         num_cores,
         legacy_order.size());
 
-    return std::vector<CoreCoord>(legacy_order.begin(), legacy_order.begin() + num_cores);
+    return std::vector<tt::tt_metal::CoreCoord>(legacy_order.begin(), legacy_order.begin() + num_cores);
 }
 
 uint32_t compute_moe_compute_tilize_num_cores(uint32_t hidden_tiles) {
@@ -191,7 +191,7 @@ void add_bbox_cells(CoreCoordPairSet& avoid, const CoreRange& bbox) {
 // gives the best locality. When it collides with mux or leaves no disjoint combine/tilize room, the
 // caller relocates matmul to build_compact_matmul_cores() instead (see its note: the compact ring must
 // stay column-0-anchored, established experimentally — [3,0]-[9,1] hangs while [0,0]-[9,1] passes).
-std::vector<CoreCoord> build_matmul_ring_cores(
+std::vector<tt::tt_metal::CoreCoord> build_matmul_ring_cores(
     ttnn::MeshDevice* mesh_device, uint32_t ring_size, const CoreCoordPairSet& mux_pairs) {
     auto cores = mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
     const uint32_t num_banks = static_cast<uint32_t>(cores.size());
@@ -212,7 +212,7 @@ std::vector<CoreCoord> build_matmul_ring_cores(
     const auto try_add = [&](uint32_t x, uint32_t y) {
         const std::pair<uint32_t, uint32_t> p{x, y};
         if (!used.contains(p) && !mux_pairs.contains(p)) {
-            cores.push_back(CoreCoord(x, y));
+            cores.push_back(tt::tt_metal::CoreCoord(x, y));
             used.insert(p);
         }
     };
@@ -252,9 +252,9 @@ std::vector<CoreCoord> build_matmul_ring_cores(
 // [3,0]-[9,1] hangs, while [0,0]-[9,1] and [0,3]-[9,4] pass). We therefore only use rows whose
 // leftmost (x=0) cell is mux-free (skipping a whole row otherwise); mux cells in non-leftmost columns
 // are left as gaps inside the bbox (mux inside the matmul bbox is benign, verified).
-std::vector<CoreCoord> build_compact_matmul_cores(
-    const CoreCoord& worker_grid, uint32_t ring_size, const CoreCoordPairSet& mux_pairs, uint32_t y_start) {
-    std::vector<CoreCoord> cores;
+std::vector<tt::tt_metal::CoreCoord> build_compact_matmul_cores(
+    const tt::tt_metal::CoreCoord& worker_grid, uint32_t ring_size, const CoreCoordPairSet& mux_pairs, uint32_t y_start) {
+    std::vector<tt::tt_metal::CoreCoord> cores;
     cores.reserve(ring_size);
 
     const uint32_t x_limit = worker_grid.x > kMoEComputeCombineStripWidth
@@ -271,7 +271,7 @@ std::vector<CoreCoord> build_compact_matmul_cores(
         }
         for (uint32_t x = 0; x < x_limit && cores.size() < ring_size; ++x) {
             if (!mux_pairs.contains({x, y})) {
-                cores.push_back(CoreCoord(x, y));
+                cores.push_back(tt::tt_metal::CoreCoord(x, y));
             }
         }
     }
@@ -280,8 +280,8 @@ std::vector<CoreCoord> build_compact_matmul_cores(
 }
 
 struct PlacedWorkers {
-    std::vector<CoreCoord> combine_cores;
-    std::vector<CoreCoord> tilize_cores;
+    std::vector<tt::tt_metal::CoreCoord> combine_cores;
+    std::vector<tt::tt_metal::CoreCoord> tilize_cores;
     CoreRange combine_bounding_box;
     CoreRange tilize_bounding_box;
 };
@@ -301,7 +301,7 @@ struct PlacedWorkers {
 // value that is not a divisor. The divisibility check below skips those, ensuring the first
 // accepted count is always a divisor of hidden_tiles. 1 always divides, so the loop always succeeds.
 std::optional<PlacedWorkers> place_combine_and_tilize(
-    const CoreCoord& worker_grid,
+    const tt::tt_metal::CoreCoord& worker_grid,
     const CoreRange& matmul_bounding_box,
     const CoreCoordPairSet& mux_pairs,
     uint32_t num_combine_cores,
@@ -318,7 +318,7 @@ std::optional<PlacedWorkers> place_combine_and_tilize(
     const uint32_t combine_strip_height =
         (num_combine_cores + kMoEComputeCombineStripWidth - 1) / kMoEComputeCombineStripWidth;
 
-    std::vector<CoreCoord> combine_cores;
+    std::vector<tt::tt_metal::CoreCoord> combine_cores;
     const auto combine_strip_opt =
         find_combine_strip_avoiding(base_avoid, worker_grid, combine_strip_height, combine_max_y);
     if (combine_strip_opt.has_value()) {
@@ -346,7 +346,7 @@ std::optional<PlacedWorkers> place_combine_and_tilize(
         if (hidden_tiles % tilize_num_cores != 0) {
             continue;
         }
-        std::vector<CoreCoord> tilize_cores;
+        std::vector<tt::tt_metal::CoreCoord> tilize_cores;
         const auto tilize_block_opt = find_tilize_2x2_block_avoiding(tilize_avoid, worker_grid);
         if (tilize_block_opt.has_value()) {
             tilize_cores = pick_tilize_cores_from_2x2_legacy_order(tilize_block_opt.value(), tilize_num_cores);
@@ -430,7 +430,7 @@ MoEComputeCoreSelection select_moe_compute_cores(
             ring_size);
     }
 
-    const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
+    const tt::tt_metal::CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
     const uint32_t num_combine_cores = combine_token_parallel_cores * combine_data_parallel_cores;
     const uint32_t target_tilize_num_cores = compute_moe_compute_tilize_num_cores(hidden_tiles);
 
@@ -441,11 +441,11 @@ MoEComputeCoreSelection select_moe_compute_cores(
 
     // Prefer the DRAM-bank-adjacent ring; fall back to a column-0-anchored compact ring when it
     // collides with mux or leaves no disjoint combine/tilize room (WH ROW dispatch spans the grid).
-    std::vector<CoreCoord> matmul_cores;
+    std::vector<tt::tt_metal::CoreCoord> matmul_cores;
     std::optional<PlacedWorkers> placed;
     bool used_compact_matmul = false;
 
-    const std::vector<CoreCoord> dram_ring = build_matmul_ring_cores(mesh_device, ring_size, mux_pairs);
+    const std::vector<tt::tt_metal::CoreCoord> dram_ring = build_matmul_ring_cores(mesh_device, ring_size, mux_pairs);
     bool dram_ring_hits_mux = false;
     for (const auto& c : dram_ring) {
         if (mux_pairs.contains({c.x, c.y})) {
@@ -472,9 +472,9 @@ MoEComputeCoreSelection select_moe_compute_cores(
         // for a wide row-major combine group on short grids (WH 8x9 + deepseek's 16 combine cores),
         // which is the only way to get a combine bbox disjoint from the matmul bbox there. Keep the
         // first y_start that yields a fully-disjoint combine/tilize layout.
-        std::vector<CoreCoord> compact_ring;
+        std::vector<tt::tt_metal::CoreCoord> compact_ring;
         for (uint32_t y_start = 0; y_start < static_cast<uint32_t>(worker_grid.y); ++y_start) {
-            std::vector<CoreCoord> candidate = build_compact_matmul_cores(worker_grid, ring_size, mux_pairs, y_start);
+            std::vector<tt::tt_metal::CoreCoord> candidate = build_compact_matmul_cores(worker_grid, ring_size, mux_pairs, y_start);
             if (candidate.size() != ring_size) {
                 // Higher y_start can only fit fewer cores, so no point continuing.
                 break;
@@ -506,8 +506,8 @@ MoEComputeCoreSelection select_moe_compute_cores(
         used_compact_matmul = true;
     }
 
-    std::vector<CoreCoord> combine_cores = std::move(placed->combine_cores);
-    std::vector<CoreCoord> tilize_cores = std::move(placed->tilize_cores);
+    std::vector<tt::tt_metal::CoreCoord> combine_cores = std::move(placed->combine_cores);
+    std::vector<tt::tt_metal::CoreCoord> tilize_cores = std::move(placed->tilize_cores);
     const CoreRange combine_bounding_box = placed->combine_bounding_box;
     const CoreRange tilize_bounding_box = placed->tilize_bounding_box;
 
@@ -526,7 +526,7 @@ MoEComputeCoreSelection select_moe_compute_cores(
     // not hit mux, else compact ring skips mux cells; combine/tilize routed around mux), so this should
     // always hold — assert defensively so a bad layout fails loudly instead of hanging on device.
     if (!mux_pairs.empty()) {
-        const auto assert_disjoint_from_mux = [&](const std::vector<CoreCoord>& cs, const char* group) {
+        const auto assert_disjoint_from_mux = [&](const std::vector<tt::tt_metal::CoreCoord>& cs, const char* group) {
             for (const auto& c : cs) {
                 TT_FATAL(
                     !mux_pairs.contains({c.x, c.y}),
