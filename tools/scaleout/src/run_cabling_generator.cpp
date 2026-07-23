@@ -8,6 +8,7 @@
 #include <string>
 #include <stdexcept>
 #include <iostream>
+#include <vector>
 #include <google/protobuf/text_format.h>
 #include <cxxopts.hpp>
 
@@ -23,7 +24,31 @@ struct InputConfig {
     std::string output_name;
     bool loc_info = true;  // Default to detailed location info
     bool is_cabling_directory = false;
+    // Opt-in sub-cluster filter: each entry is a path of instance keys (e.g. {"bh_galaxy_sp_0"}).
+    std::vector<std::vector<std::string>> include_paths;
+    std::vector<std::vector<std::string>> exclude_paths;
 };
+
+// Split a slash-delimited instance path (e.g. "bh_galaxy_sp_0/bh_galaxy_node_2") into its keys.
+// Rejects empty segments (empty value, leading/trailing/double slash) rather than dropping them, so a
+// malformed --include/--exclude value errors instead of silently widening the output.
+std::vector<std::string> split_instance_path(const std::string& flag, const std::string& path) {
+    std::vector<std::string> keys;
+    size_t start = 0;
+    while (true) {
+        size_t slash = path.find('/', start);
+        std::string key = (slash == std::string::npos) ? path.substr(start) : path.substr(start, slash - start);
+        if (key.empty()) {
+            throw std::invalid_argument("Invalid --" + flag + " path '" + path + "': empty path segment");
+        }
+        keys.push_back(std::move(key));
+        if (slash == std::string::npos) {
+            break;
+        }
+        start = slash + 1;
+    }
+    return keys;
+}
 
 bool file_exists(const std::string& path) {
     return std::filesystem::exists(path) && std::filesystem::is_regular_file(path);
@@ -50,7 +75,18 @@ InputConfig parse_arguments(int argc, char** argv) {
         cxxopts::value<std::string>()->default_value(""))(
         "s,simple",
         "Generate simple CSV output (hostname-based) instead of detailed location information (rack, shelf, etc.)",
-        cxxopts::value<bool>()->default_value("false")->implicit_value("true"))("h,help", "Print usage information");
+        cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
+        "include",
+        "Opt-in sub-cluster filter: slash-delimited instance path selecting a node or subgraph to keep "
+        "(e.g. --include bh_galaxy_sp_0 --include bh_galaxy_sp_1/bh_galaxy_node_2). Repeatable. A path "
+        "matches any instance whose full path ends with those segments. Only connections whose endpoints "
+        "are both within the selection are emitted.",
+        cxxopts::value<std::vector<std::string>>())(
+        "exclude",
+        "Opt-in sub-cluster filter: slash-delimited instance path to drop (e.g. --exclude bh_galaxy_node_0). "
+        "Repeatable. Applied after --include (removes from the kept set; if no --include is given, keeps "
+        "everything except the excluded paths).",
+        cxxopts::value<std::vector<std::string>>())("h,help", "Print usage information");
 
     try {
         auto result = options.parse(argc, argv);
@@ -90,6 +126,16 @@ InputConfig parse_arguments(int argc, char** argv) {
         config.deployment_descriptor_path = result["deployment"].as<std::string>();
         config.output_name = result["output"].as<std::string>();
         config.loc_info = !result["simple"].as<bool>();
+        if (result.contains("include")) {
+            for (const auto& raw_path : result["include"].as<std::vector<std::string>>()) {
+                config.include_paths.push_back(split_instance_path("include", raw_path));
+            }
+        }
+        if (result.contains("exclude")) {
+            for (const auto& raw_path : result["exclude"].as<std::vector<std::string>>()) {
+                config.exclude_paths.push_back(split_instance_path("exclude", raw_path));
+            }
+        }
 
         // Check if cabling descriptor is a directory or file
         if (directory_exists(config.cabling_descriptor_path)) {
@@ -156,7 +202,25 @@ int main(int argc, char** argv) {
         std::cout << "  Output name suffix: " << config.output_name << std::endl;
 
         std::cout << "Loading descriptors and initializing generator..." << std::endl;
+        auto print_paths = [](const char* label, const std::vector<std::vector<std::string>>& paths) {
+            if (paths.empty()) {
+                return;
+            }
+            std::cout << "  " << label << ":" << std::endl;
+            for (const auto& path : paths) {
+                std::string joined;
+                for (const auto& key : path) {
+                    joined += joined.empty() ? key : "/" + key;
+                }
+                std::cout << "    - " << joined << std::endl;
+            }
+        };
+        print_paths("Include filter (sub-cluster)", config.include_paths);
+        print_paths("Exclude filter (sub-cluster)", config.exclude_paths);
         CablingGenerator cabling_generator(config.cabling_descriptor_path, config.deployment_descriptor_path);
+        if (!config.include_paths.empty() || !config.exclude_paths.empty()) {
+            cabling_generator.apply_instance_filter(config.include_paths, config.exclude_paths);
+        }
 
         std::string factory_output = "out/scaleout/factory_system_descriptor" + config.output_name + ".textproto";
         std::string cabling_output = "out/scaleout/cabling_guide" + config.output_name + ".csv";

@@ -10,7 +10,6 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-#include <cstdint>
 
 #include "attention_softmax/attention_softmax_nanobind.hpp"
 #include "concatenate_heads/concatenate_heads_nanobind.hpp"
@@ -27,13 +26,7 @@ namespace ttnn::operations::transformer {
 void py_module(nb::module_& mod) {
     nb::class_<SDPAProgramConfig>(mod, "SDPAProgramConfig")
         .def(
-            nb::init<
-                CoreCoord,
-                std::optional<CoreRangeSet>,
-                std::size_t,
-                std::size_t,
-                std::optional<bool>,
-                std::uint32_t>(),
+            nb::init<tt::tt_metal::CoreCoord, std::optional<CoreRangeSet>, std::size_t, std::size_t, std::optional<bool>, uint32_t>(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
             nb::arg("sub_core_grids") = nb::none(),

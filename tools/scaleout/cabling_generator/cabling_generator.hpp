@@ -174,6 +174,15 @@ public:
     const std::vector<Host>& get_deployment_hosts() const;
     const std::vector<LogicalChannelConnection>& get_chip_connections() const;
 
+    // In-place opt-in sub-cluster filter. Each include/exclude entry is an instance path matched as a
+    // suffix (relative): {"bh_galaxy_node_0"} matches under every parent, and matching an instance
+    // selects its whole subtree. Kept = (all nodes, or include-matched) minus exclude-matched; only
+    // connections with both endpoints kept survive, and survivors re-index to a dense 0..M-1 space.
+    // Throws on a path matching nothing or a filter keeping no nodes; no-op when both lists are empty.
+    void apply_instance_filter(
+        const std::vector<std::vector<std::string>>& include_paths,
+        const std::vector<std::vector<std::string>>& exclude_paths);
+
     // Method to emit factory system descriptor
     void emit_factory_system_descriptor(const std::string& output_path) const;
 
@@ -204,6 +213,7 @@ public:
 private:
     // Track which node_descriptors were explicitly present in source files (not inferred)
     std::unordered_set<std::string> explicit_node_descriptors_;
+
     // Common initialization logic for all constructors
     void initialize_cluster(
         const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
