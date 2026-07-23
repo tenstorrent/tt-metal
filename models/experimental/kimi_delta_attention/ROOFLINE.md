@@ -211,3 +211,19 @@ host-observed throughput is 64.86 TFLOP/s or 5.33%.
 The KDA-specific fused-output 1x3 subblock sweep was negative. Against the
 matched 1x1 profile above, median device span changed 0.87433 -> 0.87484 ms and
 slowest-chip fused time changed 146.778 -> 147.706 us. Retain 1x1.
+
+## Fused decay-bias result
+
+Profile:
+`/tmp/kda_tp_layer_t640_fused_decay_r10/reports/2026_07_23_11_26_27/ops_perf_results_2026_07_23_11_26_27.csv`.
+Passing the pre-expanded decay bias to the aligned chunk projection reduced the
+program count from 44 to 43 per device. Median device latency falls
+0.87433 -> 0.85469 ms (2.25%), host latency falls 0.91280 -> 0.89225 ms/layer,
+and active kernels are 0.799-0.802 ms/device.
+
+The profiler rejects the hypothesis that both following pointwise programs
+were eliminated: binary programs fall from 24 to 16 per layer across the mesh,
+while unary programs remain at 32. Thus the projection absorbs the bias add,
+but softplus remains a device program. Mesh throughput is 69.27 TFLOP/s or
+5.69% of eight-chip peak by device span; host-observed throughput is
+66.36 TFLOP/s or 5.45%.

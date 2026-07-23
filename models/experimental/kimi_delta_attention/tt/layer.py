@@ -301,22 +301,30 @@ class KimiDeltaAttention:
             config.head_k_dim + config.head_v_dim + config.num_heads,
         )
         beta = ttnn.sigmoid(beta, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        raw_gate = ttnn.linear(
-            decay_rank,
-            weights.decay_output_projection,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_config,
-        )
         head_major = mode == "chunk" and sequence % ttnn.TILE_SIZE == 0
         if head_major:
             decay_bias = weights.decay_bias_flat
             decay_scale = weights.decay_scale_flat
+            gate = ttnn.linear(
+                decay_rank,
+                weights.decay_output_projection,
+                bias=decay_bias,
+                activation="softplus",
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
         else:
+            raw_gate = ttnn.linear(
+                decay_rank,
+                weights.decay_output_projection,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
             raw_gate = ttnn.reshape(raw_gate, (batch, sequence, config.num_heads, config.head_k_dim))
             decay_bias = weights.decay_bias
             decay_scale = weights.decay_scale
-        gate = ttnn.add(raw_gate, decay_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        gate = ttnn.softplus(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            gate = ttnn.add(raw_gate, decay_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            gate = ttnn.softplus(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         gate = ttnn.multiply(decay_scale, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         assert self.recurrent_state is not None

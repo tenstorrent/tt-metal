@@ -625,3 +625,11 @@
 - The first mechanical A/B did not wire the parameter into the intended program and was discarded; its numbers are intentionally absent. A function-scoped diff was inspected before rerunning.
 - Corrected report: `/tmp/kda_tp_layer_t640_outsub3_actual_r10/reports/2026_07_23_11_22_50/ops_perf_results_2026_07_23_11_22_50.csv`. Against matched 1x1, median device span regressed 0.87433 -> 0.87484 ms, slowest-chip fused time regressed 146.778 -> 147.706 us, and active time was unchanged.
 - Restored 1x1. Qwen overlap diagnosis transfers to KDA; closing the CCL gap requires a different fused dataflow, not a wider matmul subblock.
+
+### 2026-07-23 11:26:27 UTC — Fuse aligned chunk decay bias
+
+- Hypothesis: supplying the pre-expanded decay bias and softplus activation to `ttnn.linear` will eliminate both following pointwise programs.
+- Report: `/tmp/kda_tp_layer_t640_fused_decay_r10/reports/2026_07_23_11_26_27/ops_perf_results_2026_07_23_11_26_27.csv`. Ten replays reduced median device span 0.87433 -> 0.85469 ms (2.25%), host time 0.91280 -> 0.89225 ms/layer, and active kernels to 0.799-0.802 ms/device.
+- Program counts partially reject the hypothesis: binary programs fell 24 -> 16 per layer across the mesh, while unary programs remained 32. The bias add is absorbed; softplus remains a device program.
+- Mesh throughput is 69.27 TFLOP/s or 5.69% of peak by device span; host-observed throughput is 66.36 TFLOP/s or 5.45%.
+- Full Blackhole regression: `scripts/run_safe_pytest.sh models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s` -> `SAFE_PYTEST_RESULT: PASS`, 9/9 in 10.88 s. TP output/recurrent/convolution PCC was 0.999953/0.999910/0.999997.
