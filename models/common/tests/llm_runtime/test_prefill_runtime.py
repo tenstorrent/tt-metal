@@ -3,21 +3,23 @@
 
 from __future__ import annotations
 
+import importlib
 import inspect
 from types import SimpleNamespace
 
 import pytest
 import torch
 
-import models.common.llm_runtime.prefill as prefill_module
+import models.common.llm_runtime.prefill.runtime as prefill_module
+import models.common.llm_runtime.prefill.sampling_helpers as sampling_helpers
 import models.common.llm_runtime.tensor_resources as tensor_resources_module
-from models.common.llm_runtime.prefill import (
+from models.common.llm_runtime.prefill.plan import _plan_prefill_requests
+from models.common.llm_runtime.prefill.runtime import (
     InvocationResult,
     PrefillDeviceInputs,
     PrefillPersistentInputs,
     PrefillPositionInputs,
     PrefillRuntime,
-    _plan_prefill_requests,
     _process_output_tokens,
 )
 from models.common.sampling import SamplingParams
@@ -95,7 +97,7 @@ def _plan(*, prompt_length, cached_tokens=0, token_width=None, page_width=256, s
 
 
 def test_sampling_values_keep_logical_prefill_user_contract_for_partial_batch():
-    values = prefill_module._formatted_sampling_values(
+    values = sampling_helpers._formatted_sampling_values(
         SamplingParams(temperature=1.0, top_k=32, top_p=0.08),
         1,
     )
@@ -107,7 +109,7 @@ def test_sampling_values_keep_logical_prefill_user_contract_for_partial_batch():
 
 
 def test_sampling_values_accept_vector_tensor_fields_for_full_batch():
-    values = prefill_module._formatted_sampling_values(
+    values = sampling_helpers._formatted_sampling_values(
         SamplingParams(
             temperature=torch.zeros(32),
             top_k=torch.ones(32, dtype=torch.int32),
@@ -661,3 +663,10 @@ def test_prefill_runtime_is_plain_orchestration_without_duplicate_config_surface
     assert not hasattr(PrefillRuntime, "from_config")
     assert "LightweightModule" not in source
     assert PrefillRuntime.__bases__ == (object,)
+
+
+def test_prefill_package_has_no_compatibility_barrel():
+    prefill_package = importlib.import_module("models.common.llm_runtime.prefill")
+    assert not hasattr(prefill_package, "PrefillRuntime")
+    assert not hasattr(prefill_package, "PrefillRequest")
+    assert not hasattr(prefill_package, "__all__")

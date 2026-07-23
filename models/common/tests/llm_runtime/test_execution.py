@@ -13,8 +13,8 @@ import ttnn
 from models.common.llm_runtime.decode import DecodeRuntime
 from models.common.llm_runtime.decode import InvocationResult as DecodeInvocationResult
 from models.common.llm_runtime.execution import EagerExecutor, TracedExecutor
-from models.common.llm_runtime.prefill import InvocationResult as PrefillInvocationResult
-from models.common.llm_runtime.prefill import PrefillRuntime
+from models.common.llm_runtime.prefill.runtime import InvocationResult as PrefillInvocationResult
+from models.common.llm_runtime.prefill.runtime import PrefillRuntime
 from models.common.llm_runtime.program_compiler import ProgramCompiler
 from models.common.llm_runtime.trace_compiler import TraceCompiler
 

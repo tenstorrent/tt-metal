@@ -15,7 +15,7 @@ from models.common.llm_runtime.decode import DecodeRuntime
 from models.common.llm_runtime.execution import EagerExecutor, TracedExecutor
 from models.common.llm_runtime.output_reader import OutputReader
 from models.common.llm_runtime.paged_kv_cache import PagedKVCacheManager
-from models.common.llm_runtime.prefill import PrefillRuntime
+from models.common.llm_runtime.prefill.runtime import PrefillRuntime
 from models.common.llm_runtime.program_compiler import ProgramCompiler
 from models.common.llm_runtime.tensor_resources import attach_cleanup_failures
 from models.common.llm_runtime.trace_compiler import TraceCompiler

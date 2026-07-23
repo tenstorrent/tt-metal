@@ -5,7 +5,11 @@ from dataclasses import dataclass
 
 from models.common.llm_runtime import tensor_resources
 from models.common.llm_runtime.decode import DecodeDeviceInputs, DecodePersistentInputs
-from models.common.llm_runtime.prefill import PrefillDeviceInputs, PrefillPersistentInputs, PrefillPositionInputs
+from models.common.llm_runtime.prefill.runtime import (
+    PrefillDeviceInputs,
+    PrefillPersistentInputs,
+    PrefillPositionInputs,
+)
 
 
 def test_owned_runtime_containers_release_aliased_tensors_once(monkeypatch):
