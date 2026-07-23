@@ -866,3 +866,37 @@
 - Tests added: `test_rms_norm_r6e.py` (two-phase correctness across multi-round BLOCK geometries: owned_max
   1 and 2, gamma/no-gamma, the 8×8 perf topology; soft PCC gate). The in-op ablation was run via temporary
   `ABLATE_STUB_*` kernel macros (reverted after measurement; numbers recorded above + in breadcrumbs).
+
+## Refinement 6f (debug) — Fix R6e gate violation: two-phase non-uniform-ownership nan
+- Date: 2026-07-23
+- What was done: fixed the hard completion-gate violation from Refinement 6e
+  (`test_rms_norm_r6_ablation.py::test_ablate[K28_HT16_512x224]` → `AssertionError: nan`).
+  - **Root cause**: the R6e two-phase (tile-index) distributed fold writes each folder's stat
+    partials into `cb_gather` using `get_write_ptr(cb_gather)` as a REMOTE-BASE PROXY. That proxy
+    is valid only when every core's write pointer wraps back to the same base each round (the
+    fixed-base convention documented in the xcore writer header). Each folder advanced the fifo by
+    `owned*K`, but `NUM_FOLDERS = min(C, K)` need not divide `C`. For `K28_HT16` (BLOCK 7×4:
+    per-group K=7, C=8, folders=7) folder 0 owned 2 rows and folders 1-6 owned 1, so their pushes
+    (14 vs 7) did not wrap the depth-14 `cb_gather` fifo to base uniformly → the gather-push landed
+    at wrong/out-of-bounds slots → corrupted Σx² → `rsqrt` of garbage → nan. R6e passed earlier only
+    because every tested topology (8×8 K=8/C=8; 4×4 K=4/C=8) has UNIFORM ownership.
+  - **Fix (host-only, `rms_norm_program_descriptor.py`)**: constrain `NUM_FOLDERS` to the LARGEST
+    divisor of `C` that is `<= min(C, K)`, and engage two-phase only when that divisor is `>= 2`.
+    This guarantees uniform ownership — every folder owns exactly `C/NUM_FOLDERS` rows — so each
+    folder advances `cb_gather` by `owned*K == depth` per round, the fifo always wraps to base, and
+    the fixed-base `get_write_ptr` proxy is valid. For `K28_HT16` this selects `NUM_FOLDERS=4`
+    (uniform, owned=2) instead of the broken 7. On the divisible cases the choice is identical to the
+    old `min(C,K)`: the 8×8 perf target keeps `NUM_FOLDERS=8`, so the two-phase 1.247× BLOCK win is
+    unchanged; every WIDTH single-round group (C=1) is unaffected (two-phase already gated off).
+  - Reused: the R4→R6e xcore kernels + transport are UNCHANGED — the fix is a single host-side
+    `num_folders` selection. No kernel edits, no forked files.
+- Accuracy achieved: PCC ≥ 0.99999 on the previously-nan K=7 geometries (`K28_HT16` 512×224,
+  `K28_HT32` 1024×224 BLOCK 7×4); PCC 1.001005 (byte-identical) on the divisible 8×8 target.
+- Golden test progress: full `test_golden.py` ran to completion against the fixed tree — **5056 passed
+  / 33918 skipped / 1365 xfailed / 0 failed / 0 xpassed** (238.14s, no hang). Golden
+  regression+translated 99 passed.
+- Issues encountered: None beyond the diagnosed root cause; the divisor fix passed on the first run
+  (`--dev` + non-dev).
+- Tests added: none new — `test_rms_norm_r6_ablation.py` already exercises the exact K∤C class
+  (`K28_HT16` C=8, `K28_HT32` C=8, BLOCK 7-wide) the gate caught; both now pass (7/7, `--dev`).
+  Full guard: unit dir 452 passed / 32 skipped, `test_rms_norm_r6e.py` 4/4.

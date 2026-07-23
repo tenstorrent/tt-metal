@@ -1348,24 +1348,35 @@ def _assemble_xcore_kernels(
         and (Ht_local % C == 0)
         and all(group_seg[key][0] > 0 for key in masters)  # every group mcast-able
     ):
-        num_folders = min(C, K)
-        # slice_index -> core, per group; folders are slice 0..num_folders-1
-        two_phase = True
-        for key, master in masters.items():
-            members = [master] + workers_of.get(key, [])
-            by_si = {}
-            for c, si, m, _iph, _wts, _vwt in entries:
-                if (int(m.x), int(m.y)) == key:
-                    by_si[si] = c
-            if any(f not in by_si for f in range(num_folders)):
-                two_phase = False  # a folder slice is missing -> bail (keep flat)
-                break
-            folder_coords[key] = [_v(by_si[f]) for f in range(num_folders)]
-        if two_phase:
-            for c, si, m, _iph, _wts, _vwt in entries:
-                is_f = si < num_folders
-                owned = (C - si + num_folders - 1) // num_folders if is_f else 0
-                tp_owned[(int(c.x), int(c.y))] = (1 if is_f else 0, owned)
+        # NUM_FOLDERS must DIVIDE C so every folder owns EXACTLY C/num_folders tile-rows
+        # and its cb_gather advances by owned*K == depth each round, WRAPPING back to the
+        # fixed cross-core-write base. min(C,K) is only safe when it divides C: when it does
+        # NOT (e.g. K=7 < C=8), folder 0 owns an extra row, so its cb_gather advances 2*K per
+        # round (wraps) while folders 1..K-1 advance K per round (do NOT wrap) — the per-folder
+        # write pointers desynchronize after round 0, the fixed-base gather-push lands partials
+        # in stale slots, the fold sums garbage, and rsqrt(negative) -> NaN (the R6e gate
+        # violation on BLOCK 7-wide). Take the LARGEST divisor of C that is <= min(C,K) so
+        # ownership is uniform; two-phase engages only when that divisor is >= 2 (num_folders==1
+        # degenerates to the single-master fold the byte-identical flat path already handles).
+        cap = min(C, K)
+        num_folders = max((d for d in range(cap, 0, -1) if C % d == 0), default=1)
+        if num_folders >= 2:
+            # slice_index -> core, per group; folders are slice 0..num_folders-1
+            two_phase = True
+            for key, master in masters.items():
+                by_si = {}
+                for c, si, m, _iph, _wts, _vwt in entries:
+                    if (int(m.x), int(m.y)) == key:
+                        by_si[si] = c
+                if any(f not in by_si for f in range(num_folders)):
+                    two_phase = False  # a folder slice is missing -> bail (keep flat)
+                    break
+                folder_coords[key] = [_v(by_si[f]) for f in range(num_folders)]
+            if two_phase:
+                for c, si, m, _iph, _wts, _vwt in entries:
+                    is_f = si < num_folders
+                    owned = (C - si + num_folders - 1) // num_folders if is_f else 0
+                    tp_owned[(int(c.x), int(c.y))] = (1 if is_f else 0, owned)
     max_owned = ((C - 0 + num_folders - 1) // num_folders) if two_phase else 0  # folder 0 owns the most
 
     cbs = []

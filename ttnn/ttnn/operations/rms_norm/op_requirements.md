@@ -818,6 +818,12 @@ ON the critical path (so the first "Done when" branch applies, not the R6f escap
   `test_op` BLOCK bf16 tile-aligned slice 500 passed / 0 failed / 0 xpassed; core+sharded unit 221; R6a
   batched-round + R6c two-stage 21; precision baseline + R6d ablation 23.
 
+**Correctness fix (see R6f-debug below)**: the initial R6e landing had a latent nan on BLOCK groups whose
+per-group `K` does NOT divide `C` (`NUM_FOLDERS = min(C,K)` → non-uniform folder ownership → `cb_gather`
+write-pointer divergence broke the remote-base proxy). Fixed host-side by constraining `NUM_FOLDERS` to the
+largest divisor of `C` that is `<= min(C,K)` (uniform ownership → fifo wraps to base); kernels unchanged,
+identical `NUM_FOLDERS` on the divisible 8×8 perf target. Full golden green post-fix.
+
 **Deferred to R6f** (the remaining residual, characterized at depth): after two-phase, BLOCK 8×8 is still
 **3.38× above achievable** and the ablation pins the residual to the **per-core compute floor (67.1 µs =
 62 % of the op)** — NOT the fold topology (two-phase closed that) and NOT the stat movement (1.6 µs). This
@@ -825,6 +831,44 @@ is a different lever family (compute), filed as R6f with the exact next levers.
 
 ---
 
+
+
+### [x] Refinement 6f — Sharded cross-core: two-phase (tile-index) reduce-mcast for the 1-D master bottleneck (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 6e so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 2 FAIL: acceptance/refinement tests failing:
+  - tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r6_ablation.py::test_ablate[K28_HT16_512x224] - AssertionError: nan
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+
+**Landed (fix `[x]`)** — root cause: the R6e two-phase gather writes each folder's stat partials to
+`cb_gather` via `get_write_ptr(cb_gather)` as a REMOTE-BASE PROXY, valid only when every core's
+write pointer wraps to the same base each round (the writer-header fixed-base convention). The host
+set `NUM_FOLDERS = min(C, K)`, which need NOT divide `C` — so for `K28_HT16` (BLOCK 7×4, per-group
+K=7, C=8, folders=7) folder 0 owned 2 rows while folders 1-6 owned 1. Each folder advanced the
+depth-`max_owned*K`=14 fifo by only `owned*K` (14 for folder 0, 7 for the rest), so the smaller
+folders' write pointers did NOT wrap to base; the gather-push then landed at wrong/OOB `cb_gather`
+slots → corrupted Σx² → `rsqrt` of garbage → **nan**. R6e passed earlier only because every prior
+tested topology (8×8 K=8/C=8; 4×4 K=4/C=8) happens to have uniform ownership.
+- **Fix (host-only, `rms_norm_program_descriptor.py`):** constrain `NUM_FOLDERS` to the LARGEST
+  divisor of `C` that is `<= min(C, K)`, engaging two-phase only when that divisor is `>= 2`. This
+  guarantees every folder owns exactly `C/NUM_FOLDERS` rows, so `owned*K == cb_gather` depth on
+  every folder and the fifo always wraps to base — the fixed-base proxy is valid. The R4→R6e xcore
+  kernels + transport are UNCHANGED (no kernel edit). For `K28_HT16` this picks `NUM_FOLDERS=4`
+  (uniform, owned=2) instead of the broken 7. On the divisible cases the choice is identical to the
+  old `min(C,K)` — the 8×8 perf target keeps `NUM_FOLDERS=8`, so the 1.247× BLOCK win is unchanged;
+  every WIDTH single-round group (C=1) is unaffected (two-phase already gated off there).
+- **Regression net:** `test_rms_norm_r6_ablation.py` already exercises the exact K∤C class — the
+  BLOCK 7-wide `K28_HT16` (C=8) and `K28_HT32` (C=8) geometries the gate caught — and both pass
+  under the divisor fix (num_folders=4).
+- **Gate green:** `test_rms_norm_r6_ablation.py` 7/7 (incl. `K28_HT16` and `K28_HT32`, `--dev`);
+  `test_rms_norm_r6e.py` 4/4; unit dir 452 passed / 32 skipped; **full golden `test_golden.py`
+  5056 passed / 33918 skipped / 1365 xfailed / 0 failed / 0 xpassed** (ran to completion, no hang).
 ### [ ] Refinement 6f — Sharded cross-core: shrink the per-core compute floor (pass-2 fusion + compute/round overlap)
 
 **Type**: perf
