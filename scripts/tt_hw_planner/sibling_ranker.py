@@ -38,6 +38,7 @@ Target model:
   category:      {category}
   architectures: {architectures}
   card notes:    {notes}
+  ARCH FINGERPRINT (structural): {target_arch}
 
 Observed module tree (the model's ACTUAL instantiated sub-modules -- use this as the
 architecture fingerprint, ESPECIALLY when model_type/config is absent, e.g. a
@@ -56,10 +57,21 @@ override this hint whenever a different backend is a closer architectural siblin
 You MUST choose ONLY from these registered backends (use the exact `name`):
 {backends}
 
+Backend ARCH FINGERPRINTS (structural — computed the same way as the target's; match
+the target's backbone to these, not the task/pipeline label):
+{backend_archs}
+
 Return a single JSON object, no prose, no markdown fences:
 {{"siblings": [{{"name": "<exact backend name from the list>", "score": <0-100 relevance>, "reason": "<why relevant / which sub-component it maps to>"}}]}}
 
 Rules:
+  - STRUCTURAL MATCH FIRST: compare the target's ARCH FINGERPRINT to each backend's
+    ARCH FINGERPRINT and rank by BACKBONE match (decoder-only<->decoder-only,
+    DiT<->DiT, encoder-decoder<->encoder-decoder, ViT<->ViT, CNN<->CNN). The rank-1
+    backend's backbone MUST match the target's backbone. Task / pipeline_tag
+    similarity NEVER overrides a backbone match (an autoregressive causal-LM that
+    emits images matches a decoder-only LM backend, NOT a diffusion backend, even
+    though its tag says text-to-image).
   - HIGHEST PRIORITY: if any backend's `model_type_keys` denote the SAME model as the
     target's model_type -- allowing for separator / underscore / case / version-digit
     grouping differences (e.g. key 'qwen25_vl' IS 'qwen2_5_vl'; 'qwen2-vl' IS
@@ -73,6 +85,13 @@ Rules:
     'qwen2_vl', 'qwen2_5_vl', 'qwen3_vl' are one Qwen-VL lineage; 'llama2'/'llama3'
     one Llama lineage) -- outranks an unrelated family's template, even a better-
     documented one, because same-lineage models share the most architecture.
+  - IDENTIFY THE BACKBONE: from the module tree, determine the model's GENERATIVE
+    BACKBONE -- the dominant, most-repeated core block (e.g. a timestep-conditioned
+    DiT/UNet trunk for a diffusion model, or the repeated decoder layer for a causal
+    LM) -- versus AUXILIARY parts (text/condition/lyric encoders, tokenizers, VAEs).
+    The rank-1 sibling MUST match the BACKBONE; auxiliary-part siblings rank BELOW it.
+    (A model whose trunk is a DiT ranks a diffusion/DiT backend first even if it also
+    contains a text-encoder sub-block; the text-LLM sibling is then rank 2+.)
   - Every "name" MUST be copied verbatim from the list above; never invent a name.
   - Rank most-relevant first; return up to {top_n} entries.
   - For composite models prefer siblings that match the target's SUB-architectures.
@@ -93,23 +112,35 @@ def _format_components_hint(components: Optional[List[dict]]) -> str:
     """Render the discovered module tree as a compact architecture fingerprint for
     the LLM prompt. This is the substitute for config.json on config-less models:
     the instantiated sub-module classes (+ repeat count / leaf-op size) tell the
-    LLM what the model actually is when there is no model_type to match on."""
+    LLM what the model actually is when there is no model_type to match on. When
+    size data (occurrences / leaf_op_count) is present the list is sorted biggest-
+    first and the dominant block is flagged as the likely backbone, so the ranker
+    weights the generative trunk over one-off auxiliary parts."""
     if not components:
         return "  (no module tree available)"
-    lines: List[str] = []
-    for c in components[:24]:
+    items = []
+    for c in components[:40]:
         nm = (c.get("class_name") or c.get("name") or "").strip()
         if not nm:
             continue
+        occ = c.get("occurrences") or 0
+        leaf = c.get("leaf_op_count") or 0
+        items.append(((occ or 1) * (leaf or 1), nm, occ, leaf))
+    if not items:
+        return "  (no module tree available)"
+    have_sizes = any(w > 1 for w, _, _, _ in items)
+    if have_sizes:
+        items.sort(key=lambda t: -t[0])
+    lines = []
+    for i, (_w, nm, occ, leaf) in enumerate(items[:24]):
         extra = []
-        occ = c.get("occurrences")
-        leaf = c.get("leaf_op_count")
         if occ:
             extra.append(f"x{occ}")
         if leaf:
             extra.append(f"{leaf} ops")
-        lines.append(f"  - {nm}" + (f"  ({', '.join(extra)})" if extra else ""))
-    return "\n".join(lines) or "  (no module tree available)"
+        tag = "  [largest — likely backbone]" if have_sizes and i == 0 else ""
+        lines.append(f"  - {nm}" + (f"  ({', '.join(extra)})" if extra else "") + tag)
+    return "\n".join(lines)
 
 
 def rank_backends_llm(
@@ -135,7 +166,20 @@ def rank_backends_llm(
     ``components`` is the discovered module tree, rendered as the architecture
     fingerprint -- the substitute for config on config-less models."""
     from .auto_onboard import _summarize_existing_backends
+    from .fingerprint import arch_descriptor
     from .llm_synth import extract_json_from_llm_output, invoke_llm_cli_one_shot
+
+    target_arch = arch_descriptor(
+        model_type=model_type,
+        architectures=architectures,
+        notes=notes,
+        components=components,
+        pipeline_tag=pipeline_tag,
+    )
+    backend_archs = "\n".join(
+        f"  - {b.name}: {arch_descriptor(model_type=(b.model_type_keys or [None])[0], notes=b.notes, pipeline_tag=(b.pipeline_tags or [None])[0])}"
+        for b in all_backends()
+    )
 
     prompt = _LLM_PROMPT.format(
         model_id=model_id,
@@ -144,9 +188,11 @@ def rank_backends_llm(
         category=category,
         architectures=architectures or [],
         notes=(notes or "")[:800],
+        target_arch=target_arch,
         components_hint=_format_components_hint(components),
         det_hint=_format_det_hint(det_hint or []),
         backends=_summarize_existing_backends(),
+        backend_archs=backend_archs,
         top_n=top_n,
     )
     try:

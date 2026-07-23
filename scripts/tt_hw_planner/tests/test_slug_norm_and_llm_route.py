@@ -116,6 +116,25 @@ def test_vl_demos_derive_as_vlm_with_tag():
     assert fams["whisper (auto-upstream)"]["category"] == "STT"
 
 
+def test_arch_fingerprint_backbone_families():
+    from scripts.tt_hw_planner.fingerprint import arch_descriptor
+
+    # structural backbone, derived the same way for target + backends
+    assert arch_descriptor(model_type="hunyuan", architectures=["HunyuanImage3ForCausalMM"]).startswith(
+        "decoder-only causal LM"
+    )
+    assert arch_descriptor(model_type="stable_diffusion") == "diffusion UNet+VAE"
+    assert arch_descriptor(model_type="acestep").startswith("DiT")
+    assert arch_descriptor(model_type="speecht5").startswith("encoder-decoder transformer")
+    assert arch_descriptor(model_type="whisper").startswith("encoder-decoder transformer")
+    assert arch_descriptor(model_type="qwen2_5_vl").startswith("VLM")
+    # a causal-LM that emits images must NOT read as a diffusion backbone
+    d = arch_descriptor(model_type="hunyuan", architectures=["HunyuanImage3ForCausalMM"])
+    assert "diffusion" not in d and "decoder-only" in d
+    # unknown model_type falls back to architectures-class inference
+    assert arch_descriptor(model_type="totallynovel", architectures=["FooForCausalLM"]).startswith("decoder-only")
+
+
 def test_derivation_reads_real_model_type_from_config(tmp_path):
     # a fetched tree that ships the real HF config under a synced model_params dir
     cfg_dir = tmp_path / "models" / "tt_transformers" / "model_params" / "Qwen2.5-VL-7B-Instruct"
