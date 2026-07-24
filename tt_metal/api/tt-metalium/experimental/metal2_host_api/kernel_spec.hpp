@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -148,8 +149,21 @@ struct KernelSpec {
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
     // The kernel constructs a Semaphore from the emitted id: Semaphore(sem::<accessor_name>)
     struct SemaphoreBinding {
+        // How this kernel accesses the semaphore. Drives the AUTO scope classifier
+        // (ResolveSemaphoreScope): the writer classes count toward concurrency; OBSERVE does not.
+        //   INCREMENT: up() / inc_multicast()        -- EXTERNAL makes these FULLY atomic
+        //   CONSUME:   down()                        -- EXTERNAL atomizes the decrement STEP, but
+        //                                               check-then-decrement is single-consumer-only
+        //   SET:       set() / set_multicast()       -- non-atomic destructive store under ALL scopes
+        //   OBSERVE:   wait() / wait_min() / value() -- pure reader, never RMWs
+        enum class AccessType { INCREMENT, CONSUME, SET, OBSERVE };
+
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
+        // Default INCREMENT (a writer): fail-safe for the AUTO classifier -- an unlabeled binding can
+        // only RAISE the writer count, i.e. push AUTO toward the always-correct EXTERNAL, never toward a
+        // wrong non-atomic LOCAL_NONATOMIC. Mark OBSERVE to opt a read-only binding into the cheap path.
+        AccessType access_type = AccessType::INCREMENT;
     };
     Group<SemaphoreBinding> semaphore_bindings;
 
@@ -229,11 +243,15 @@ struct KernelSpec {
 // These aliases lift commonly-used nested enums to the namespace level
 using DFBEndpointType = KernelSpec::DFBBinding::EndpointType;
 using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
+using SemaphoreAccessType = KernelSpec::SemaphoreBinding::AccessType;
 
 // These aliases lift the kernel resource-binding types to the namespace level
 using DFBBinding = KernelSpec::DFBBinding;
 using TensorBinding = KernelSpec::TensorBinding;
 using SemaphoreBinding = KernelSpec::SemaphoreBinding;
+// The AUTO classifier + the honesty FATALs rely on designated-init inertness of the added
+// access_type field, which requires SemaphoreBinding to stay an aggregate.
+static_assert(std::is_aggregate_v<SemaphoreBinding>);
 using ScratchpadBinding = KernelSpec::ScratchpadBinding;
 
 //------------------------------------------------
