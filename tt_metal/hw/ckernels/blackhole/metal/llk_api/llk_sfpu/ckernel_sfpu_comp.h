@@ -193,13 +193,16 @@ inline void calculate_comp_uint16() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_eqz_uint32() {
+    // UInt32 values occupy the full dest word; DataLayout::U32 loads/stores them
+    // directly (SFPLOAD/SFPSTORE mod = UINT32). eqz/nez are representation-agnostic
+    // (only a compare against the all-zero word), so a plain unsigned compare works.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
-        vInt result = 0;
-        v_if(v == 0) { result = 1; }
+        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
+        vUInt r = 0;
+        v_if(v == 0) { r = 1; }
         v_endif;
-        dst_reg[0].mode<sfpi::DataLayout::I32>() = result;
+        dst_reg[0].mode<sfpi::DataLayout::U32>() = r;
         dst_reg++;
     }
 }
@@ -208,11 +211,11 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_nez_uint32() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
-        vInt result = 0;
-        v_if(v != 0) { result = 1; }
+        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
+        vUInt r = 0;
+        v_if(v != 0) { r = 1; }
         v_endif;
-        dst_reg[0].mode<sfpi::DataLayout::I32>() = result;
+        dst_reg[0].mode<sfpi::DataLayout::U32>() = r;
         dst_reg++;
     }
 }
