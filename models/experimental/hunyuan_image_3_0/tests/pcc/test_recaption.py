@@ -3,12 +3,17 @@
 #
 # Consolidated recaption PCC tests:
 #   - On-device greedy AR vs host ref (backbone + lm_head)
+#   - Production 32L on 2×2 resident EP/TP/SP (demo config) vs host ref
 #   - KV trace replay vs eager KV
 #   - 2CQ vs 1CQ token stream + host ref
 #
 # Run (fast, requires instruct checkpoint):
 #   python_env/bin/python -m pytest \
 #     models/experimental/hunyuan_image_3_0/tests/pcc/test_recaption.py -m "not slow" -v
+#
+# Production (QuietBox 4-chip):
+#   HY_NUM_LAYERS=32 python_env/bin/python -m pytest \
+#     models/experimental/hunyuan_image_3_0/tests/pcc/test_recaption.py::test_recaption_production_greedy_tokens -s
 
 from __future__ import annotations
 
@@ -39,12 +44,14 @@ from models.experimental.hunyuan_image_3_0.tt.ar_dual_cq import (
 from models.experimental.hunyuan_image_3_0.tt.generate import make_backbone_logits_fn, make_recaption_logits_fn
 from models.experimental.hunyuan_image_3_0.tt.recaption import run_recaption_on_device
 from models.experimental.hunyuan_image_3_0.tt.wte import HunyuanTtWte
+from models.tt_dit.parallel.manager import CCLManager
 from recaption_helpers import (
     MAX_NEW,
     NUM_LAYERS,
     TRACE_REGION,
     attention_mask_fn,
     build_tt_backbone_lm,
+    build_tt_backbone_lm_mesh,
     greedy_config,
     has_weights,
     prepare_recaption_bundle,
@@ -54,6 +61,12 @@ from recaption_helpers import (
 from models.experimental.hunyuan_image_3_0.tests.pcc import i2i_helpers as h
 
 NUM_LAYERS_PRODUCTION = int(os.environ.get("HY_NUM_LAYERS", "32"))
+
+
+@pytest.fixture(scope="function")
+def device_params(request):
+    # Fabric required for 2×2 mesh production; unused by 1-chip fixtures below.
+    return {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}
 
 
 def _close_device(dev) -> None:
@@ -171,7 +184,7 @@ def _greedy_tt_sequences(device, *, dual_cq: ArDualCQCoordinator | None):
     return out["sequences"], dual_cq.steps if dual_cq is not None else None
 
 
-def _greedy_token_parity(device, *, use_recaption_fn: bool = False):
+def _greedy_token_parity(device, *, use_recaption_fn: bool = False, use_mesh: bool = False):
     """Device greedy AR vs host ref; optional run_recaption_on_device wrapper check."""
     tok, proc, bundle = prepare_recaption_bundle()
     wte = load_tensors(INSTRUCT_MODEL_DIR, ["model.wte.weight"])["model.wte.weight"]
@@ -188,7 +201,12 @@ def _greedy_token_parity(device, *, use_recaption_fn: bool = False):
         final_stop_tokens=params.final_stop_tokens,
     )
 
-    backbone, lm_head = build_tt_backbone_lm(device, c, wte, ln_f_w)
+    if use_mesh:
+        device.enable_program_cache()
+        ccl = CCLManager(device, num_links=1, topology=ttnn.Topology.Linear)
+        backbone, lm_head = build_tt_backbone_lm_mesh(device, ccl, c, wte, ln_f_w)
+    else:
+        backbone, lm_head = build_tt_backbone_lm(device, c, wte, ln_f_w)
     image_infos = [bundle.rope_image_info[0]] if bundle.rope_image_info else None
     forward_logits_fn = make_backbone_logits_fn(
         backbone,
@@ -236,11 +254,13 @@ def test_recaption_on_device_greedy_tokens(device):
 
 @pytest.mark.skipif(not has_weights(), reason="Hunyuan instruct checkpoint not available")
 @pytest.mark.slow
-def test_recaption_production_greedy_tokens(device):
-    """32L instruct recaption greedy token parity vs host ref (production slow CI)."""
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
+def test_recaption_production_greedy_tokens(mesh_device):
+    """32L instruct recaption on 2×2 resident EP/TP/SP (demo config) vs host ref."""
     if NUM_LAYERS != NUM_LAYERS_PRODUCTION:
         pytest.skip(f"requires HY_NUM_LAYERS={NUM_LAYERS_PRODUCTION}, got {NUM_LAYERS}")
-    _greedy_token_parity(device, use_recaption_fn=False)
+    _greedy_token_parity(mesh_device, use_recaption_fn=False, use_mesh=True)
 
 
 # ---------------------------------------------------------------------------
