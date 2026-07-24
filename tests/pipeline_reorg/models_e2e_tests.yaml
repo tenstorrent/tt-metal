@@ -840,7 +840,7 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-    export VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
+    export VBENCH_CACHE_DIR=/tmp/vbench TORCH_HOME=/tmp/vbench/torch_hub  # /mnt/MLPerf not writable on exabox workers (see #48682); use worker-local writable cache
     TTRUN_DIR=/etc/ttop
     PIPELINE_HOSTS=$(grep . "${TTRUN_DIR}/hostfile" | sed "s/[[:space:]].*//" | paste -sd,)
     MPI_ARGS="--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}"
@@ -861,7 +861,7 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-    export VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
+    export VBENCH_CACHE_DIR=/tmp/vbench TORCH_HOME=/tmp/vbench/torch_hub
     TTRUN_DIR=/etc/ttop
     PIPELINE_HOSTS=$(grep . "${TTRUN_DIR}/hostfile" | sed "s/[[:space:]].*//" | paste -sd,)
     MPI_ARGS="--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}"
