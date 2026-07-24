@@ -183,6 +183,14 @@ _BACKENDS: List[FamilyBackend] = [
         notes="Generic TTS backend; CPU eager runner. There is no template-routing TTS backend today, so this is the only path.",
     ),
     FamilyBackend(
+        category="AudioGen",
+        name="hf_eager universal (AudioGen / music)",
+        demo_path="models/demos/hf_eager/demo.py",
+        routing_mode="generic",
+        canonical_hf_id=None,
+        notes="Generic music / non-speech audio generation backend; CPU eager runner. Architecture is all-NEW (no template-routing AudioGen demo on tt-metal today), so this is the only path.",
+    ),
+    FamilyBackend(
         category="Image",
         name="hf_eager universal (Image / diffusion)",
         demo_path="models/demos/hf_eager/demo.py",

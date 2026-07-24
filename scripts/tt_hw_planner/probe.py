@@ -7,7 +7,6 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
-
 _HF_ID_PART = r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}"
 _HF_ID_PATTERN = re.compile(rf"^{_HF_ID_PART}(/{_HF_ID_PART})?$")
 
@@ -34,7 +33,6 @@ from .architecture import (
     select_model,
 )
 
-
 PIPELINE_CATEGORY = {
     "text-generation": "LLM",
     "text2text-generation": "LLM",
@@ -53,7 +51,9 @@ PIPELINE_CATEGORY = {
     "audio-to-audio": "STT",
     "audio-classification": "STT",
     "text-to-speech": "TTS",
-    "text-to-audio": "TTS",
+    "text-to-audio": "AudioGen",
+    "text-to-music": "AudioGen",
+    "music-generation": "AudioGen",
     "feature-extraction": "Embed",
     "sentence-similarity": "Embed",
     "image-classification": "CNN",
@@ -173,7 +173,7 @@ def _arch_override_category(category: str, cfg: dict) -> str:
     return category
 
 
-_VALID_CATEGORIES = ("LLM", "VLM", "Image", "Video", "STT", "TTS", "Embed", "CNN", "NLP", "Unknown")
+_VALID_CATEGORIES = ("LLM", "VLM", "Image", "Video", "STT", "TTS", "AudioGen", "Embed", "CNN", "NLP", "Unknown")
 _LLM_CATEGORY_CACHE: dict = {}
 _AGENT_CATEGORY_CACHE: dict = {}
 
@@ -214,8 +214,12 @@ def _agent_classify_category(model_id: str, cfg: dict, card_text: str = "") -> O
             f"Allowed categories: {', '.join(_VALID_CATEGORIES)}.\n"
             "Guidance: classify by the model's PRIMARY input->output. VLM needs BOTH vision and "
             "language; a vision-only model (classification/detection/segmentation/depth) is CNN; a "
-            "text-only embedder/retriever/reranker is Embed; Image/Video/TTS are for models that "
-            "SYNTHESIZE that media (not analyze it); a model that is not a text/vision/audio deep "
+            "text-only embedder/retriever/reranker is Embed; Image/Video/TTS/AudioGen are for models "
+            "that SYNTHESIZE that media (not analyze it). Within audio SYNTHESIS, split by what is "
+            "produced: a model that synthesizes SPEECH (a spoken voice reading text, voice cloning, "
+            "text->spoken-word) is TTS; a model that synthesizes MUSIC or general non-speech audio "
+            "(songs, instrumental/ambient tracks, sound effects, foley) is AudioGen. A model that is "
+            "not a text/vision/audio deep "
             "network (tabular, classical non-neural ML like trees/boosting, time-series forecasting, "
             "graph, or a pure control/RL policy) is Unknown -- BUT a vision-language-action (robot "
             "policy) model built on a vision+language transformer backbone is VLM (classify by that "
@@ -231,8 +235,9 @@ def _agent_classify_category(model_id: str, cfg: dict, card_text: str = "") -> O
             "contrastive dual-encoder, which stays Embed). CRITICAL (autoregressive token generators): "
             "a model whose architecture ends in *ForCausalLM / *ForCausalMM (a causal / autoregressive "
             "LM trunk) that produces images or audio by emitting TOKENS is classified by that trunk -- "
-            "LLM (or VLM if it also has a vision ENCODER) -- never Image/TTS. Image/Video/TTS are ONLY "
-            "for diffusion / GAN media synthesizers that have NO autoregressive LM trunk. So a "
+            "LLM (or VLM if it also has a vision ENCODER) -- never Image/TTS/AudioGen. Image/Video/TTS/"
+            "AudioGen are ONLY for diffusion / GAN media synthesizers that have NO autoregressive LM "
+            "trunk. So a "
             "*ForCausalLM model tagged text-to-image is still LLM: classify by the transformer trunk, "
             "never send it to a diffusion path.\n"
             f"model_id: {model_id}\n"
@@ -426,9 +431,10 @@ def _llm_resolve_category(model_id: str, cfg: dict, pipeline_tag: Optional[str],
             "Classify this Hugging Face model into exactly ONE hardware bring-up category.\n"
             f"Allowed categories: {', '.join(_VALID_CATEGORIES)}.\n"
             "Decide by the model's PRIMARY input/output, in this order:\n"
-            "1. Does it SYNTHESIZE new media? new images/video -> Image/Video; speech/music/audio "
-            "(incl. neural audio codecs) -> TTS. (Producing masks, boxes, depth or embeddings is "
-            "NOT synthesis -- keep going.)\n"
+            "1. Does it SYNTHESIZE new media? new images/video -> Image/Video; SPEECH synthesis (a "
+            "spoken voice reading text, voice cloning) or a neural speech codec -> TTS; MUSIC or "
+            "general non-speech audio synthesis (songs, instrumental/ambient, sound effects) -> "
+            "AudioGen. (Producing masks, boxes, depth or embeddings is NOT synthesis -- keep going.)\n"
             "2. Speech/audio -> text (transcription/recognition) -> STT.\n"
             "3. Vision task with NO language output (image classification, detection, SEGMENTATION/"
             "masks incl. Segment-Anything, depth, keypoints, matting, super-resolution) -> CNN.\n"
@@ -529,6 +535,10 @@ def _classify_category(pipeline_tag: Optional[str], tags: List[str], library: Op
         return "STT"
     if "text-to-speech" in tag_str or "tts" in tag_str:
         return "TTS"
+    if any(
+        t in tag_str for t in ["text-to-music", "music-generation", "musicgen", "text-to-audio", "audio-generation"]
+    ):
+        return "AudioGen"
     if any(t in tag_str for t in ["resnet", "vit", "convnext", "mobilenet", "efficientnet"]):
         return "CNN"
     if "transformers" in lib:

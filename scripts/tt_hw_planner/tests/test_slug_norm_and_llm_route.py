@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Two-layer routing fix for the auto-sync slug!=model_type miss (e.g. Qwen2.5-VL):
 
-  1. Deterministic matcher normalizes separators so HF ``qwen2_5_vl`` exact-matches
-     the synced path-slug key ``qwen25_vl`` (free, 100% reliable) -- and never
-     collides distinct models.
-  2. ``resolve_backend_with_quality`` short-circuits on that exact match (no LLM),
-     and otherwise defers the family choice to the LLM-first ranker, degrading to
-     deterministic when the LLM is gated off / unavailable / unconfident.
-  3. The sync derivation classifies a ``*_vl`` / llava / paligemma demo as VLM with
-     the image-text-to-text tag (not an impoverished LLM entry with no tags).
+1. Deterministic matcher normalizes separators so HF ``qwen2_5_vl`` exact-matches
+   the synced path-slug key ``qwen25_vl`` (free, 100% reliable) -- and never
+   collides distinct models.
+2. ``resolve_backend_with_quality`` short-circuits on that exact match (no LLM),
+   and otherwise defers the family choice to the LLM-first ranker, degrading to
+   deterministic when the LLM is gated off / unavailable / unconfident.
+3. The sync derivation classifies a ``*_vl`` / llava / paligemma demo as VLM with
+   the image-text-to-text tag (not an impoverished LLM entry with no tags).
 """
+
 import json
 
 import scripts.tt_hw_planner.family_backends as fb
@@ -165,6 +166,49 @@ def test_low_confidence_category_only_for_ambiguous_tags():
     assert _is_low_confidence_category("text-to-speech", None, False) is False  # Kokoro (real TTS)
     assert _is_low_confidence_category("text-to-audio", "TTS", False) is False  # model_type confirms
     assert _is_low_confidence_category("text-to-audio", None, True) is False  # arch confirms
+
+
+def test_audiogen_category_splits_music_from_speech():
+    # issue #8 (scope resolution): music / general non-speech audio synthesis (ACE-Step, MusicGen,
+    # Stable Audio, AudioLDM) used to collapse into TTS -- the only audio-OUTPUT bucket. AudioGen is
+    # a distinct modality-CLASS so speech->TTS and music/general-audio->AudioGen. The agent decides
+    # membership by structural reasoning (no model names); this guards the vocabulary + tag map +
+    # routing + the name-free prompt split.
+    import inspect
+
+    from scripts.tt_hw_planner import probe as P
+    from scripts.tt_hw_planner.family_backends import backends_for_category, pick_backend_with_quality
+
+    # (a) AudioGen is a first-class category, distinct from TTS
+    assert "AudioGen" in P._VALID_CATEGORIES and "TTS" in P._VALID_CATEGORIES
+
+    # (b) music/audio-gen tags map to AudioGen; the SPEECH tag stays TTS
+    assert P.PIPELINE_CATEGORY["text-to-audio"] == "AudioGen"
+    assert P.PIPELINE_CATEGORY["text-to-music"] == "AudioGen"
+    assert P.PIPELINE_CATEGORY["music-generation"] == "AudioGen"
+    assert P.PIPELINE_CATEGORY["text-to-speech"] == "TTS"
+    # free-tag offline fallback splits the same way
+    assert P._classify_category(None, ["musicgen", "music"], "transformers") == "AudioGen"
+    assert P._classify_category(None, ["text-to-speech"], "transformers") == "TTS"
+
+    # (c) AudioGen routes to its OWN backend (never cross-matched to a TTS/Image backend); a real
+    # speech model still lands TTS. No music demo exists yet, so the AudioGen backend is all-NEW.
+    ag = backends_for_category("AudioGen")
+    assert ag and all(b.category == "AudioGen" for b in ag)
+    b, _q = pick_backend_with_quality(category="AudioGen", model_type="acestep", pipeline_tag="text-to-audio")
+    assert b is not None and b.category == "AudioGen"
+    b2, _q2 = pick_backend_with_quality(category="TTS", model_type="xtts", pipeline_tag="text-to-speech")
+    assert b2 is not None and b2.category == "TTS"
+
+    # (d) the agent prompt carries the STRUCTURAL speech-vs-music split and names ZERO models
+    for fn in (P._agent_classify_category,):
+        src = inspect.getsource(fn)
+        assert "AudioGen" in src and "SPEECH" in src and "MUSIC" in src.upper()
+        for _name in ("ACE-Step", "ACEStep", "MusicGen", "AudioLDM", "Stable Audio", "Riffusion", "Bark"):
+            assert _name not in src, f"agent classifier names a model ({_name}) -- keep it structural"
+
+    # (e) text-to-audio stays low-confidence (speech-vs-music is genuinely ambiguous from the tag alone)
+    assert P._is_low_confidence_category("text-to-audio", None, False) is True
 
 
 def test_local_safetensors_header_dtype(tmp_path):
