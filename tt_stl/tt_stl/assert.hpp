@@ -146,6 +146,28 @@ inline void tt_assert(
         tt_throw(file, line, assert_type, condition_str, fmt, args...);
     }
 }
+
+// Unconditionally logs a critical message and calls abort(). Use when an
+// unrecoverable error is detected and throwing an exception is not appropriate
+// (e.g. inside destructors, or when the process must terminate immediately
+// without giving callers a chance to catch).
+[[noreturn]] inline void tt_abort(const char* file, int line) {
+    log_critical(tt::LogAlways, "TT_ABORT @ {}:{}", file, line);
+    abort();
+}
+
+template <typename... Args>
+[[noreturn]] void tt_abort(
+    const char* file, int line, fmt::format_string<const Args&...> fmt, const Args&... args) {
+    // Wrap formatting/logging in try/catch so that a formatter exception or
+    // allocation failure cannot escape — abort() is reached unconditionally.
+    try {
+        log_critical(tt::LogAlways, "TT_ABORT @ {}:{}: {}", file, line, fmt::format(fmt, args...));
+    } catch (...) {
+        log_critical(tt::LogAlways, "TT_ABORT @ {}:{} (message formatting failed)", file, line);
+    }
+    abort();
+}
 }  // namespace detail
 }  // namespace tt::assert
 
@@ -179,4 +201,15 @@ inline void tt_assert(
             __builtin_unreachable();                                                                  \
         }                                                                                             \
     } while (0)  // NOLINT(cppcoreguidelines-macro-usage)
+#endif
+
+// TT_ABORT: unconditionally log a critical message and terminate the process
+// via abort(). Unlike TT_THROW/TT_FATAL, this macro cannot be caught and is
+// not affected by the TT_ASSERT_ABORT environment variable — it always aborts.
+//
+// Usage:
+//   TT_ABORT();                          // no message
+//   TT_ABORT("reason: {}", detail);      // with fmt-style message
+#ifndef TT_ABORT
+#define TT_ABORT(...) tt::assert::detail::tt_abort(__FILE__, __LINE__, ##__VA_ARGS__)  // NOLINT(cppcoreguidelines-macro-usage)
 #endif
