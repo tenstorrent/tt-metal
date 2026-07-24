@@ -229,6 +229,7 @@ void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord&
     auto start = make_marker(record, record.start_timestamp, tracy::TTDeviceMarkerType::ZONE_START, file_str);
     auto end = make_marker(record, record.end_timestamp, tracy::TTDeviceMarkerType::ZONE_END, file_str);
 
+    std::lock_guard<std::mutex> lock(mutex_);
     TracyTTPushStartMarker(ctx, start);
     TracyTTPushEndMarker(ctx, end);
 #endif
@@ -269,6 +270,7 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
     end_marker.timestamp = end_timestamp;
     end_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_END;
 
+    std::lock_guard<std::mutex> lock(mutex_);
     TracyTTPushStartMarker(ctx, start_marker);
     TracyTTPushEndMarker(ctx, end_marker);
 #endif
@@ -287,6 +289,7 @@ void RealtimeProfilerTracyHandler::CalibrateDevice(
     if (!ctx) {
         return;
     }
+    std::lock_guard<std::mutex> lock(mutex_);
     TracyTTContextCalibrate(ctx, host_time, static_cast<double>(device_timestamp), frequency);
 #endif
 }

@@ -722,16 +722,20 @@ void device_module(nb::module_& m_device) {
             PyObject* raw_cb = callback.ptr();
             Py_INCREF(raw_cb);
 
-            auto handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
-                [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
-                    PythonProgramRealtimeRecordBatch py_batch{
-                        .records = std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>(
-                            batch.records.begin(), batch.records.end()),
-                        .dropped = batch.dropped,
-                    };
-                    nb::gil_scoped_acquire gil;
-                    (nb::handle(raw_cb))(nb::cast(std::move(py_batch), nb::rv_policy::move));
-                });
+            uint64_t handle = 0;
+            {
+                nb::gil_scoped_release release;
+                handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
+                    [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
+                        PythonProgramRealtimeRecordBatch py_batch{
+                            .records = std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>(
+                                batch.records.begin(), batch.records.end()),
+                            .dropped = batch.dropped,
+                        };
+                        nb::gil_scoped_acquire gil;
+                        (nb::handle(raw_cb))(nb::cast(std::move(py_batch), nb::rv_policy::move));
+                    });
+            }
 
             python_realtime_callback_refs[handle] = raw_cb;
             return handle;
