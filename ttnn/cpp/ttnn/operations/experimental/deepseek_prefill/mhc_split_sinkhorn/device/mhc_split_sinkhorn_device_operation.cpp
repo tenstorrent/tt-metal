@@ -30,8 +30,7 @@ void MhcSplitSinkhornDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(mixes.is_allocated() && consts.is_allocated(), "mixes and consts must be allocated on device");
     TT_FATAL(
-        mixes.storage_type() == tt::tt_metal::StorageType::DEVICE &&
-            consts.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        mixes.storage_type() == StorageType::DEVICE && consts.storage_type() == StorageType::DEVICE,
         "mixes and consts must be device tensors");
     TT_FATAL(mixes.device() == consts.device(), "mixes and consts must be on the same device");
     // T is read from logical_shape[-2] while token-tiles come from physical_volume/TILE_HW, so the
