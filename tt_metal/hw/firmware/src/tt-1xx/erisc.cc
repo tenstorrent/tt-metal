@@ -10,6 +10,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
+#include "internal/ethernet/eth_fw_stage.h"
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -82,6 +83,7 @@ void iram_setup() {
 
 void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
+    set_eth_fw_stage(ETH_FW_STAGE_FW_INIT);
 
     // Not using do_crt1 since it is copying to registers???
     // bss already cleared in entry code.
@@ -114,6 +116,7 @@ void __attribute__((noinline)) Application(void) {
 
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     DeviceProfilerInit();
+    set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
         uint8_t go_message_signal = mailboxes->go_messages[0].signal;
@@ -132,12 +135,14 @@ void __attribute__((noinline)) Application(void) {
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
             if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0))) {
                 WAYPOINT("R");
+                set_eth_fw_stage(ETH_FW_STAGE_KERNEL);
                 firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, internal_::get_hw_thread_idx());
 #if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
                 iram_setup();
 #endif
                 extern void kernel_init();
                 kernel_init();
+                set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
                 WAYPOINT("D");
             }
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
@@ -166,5 +171,6 @@ void __attribute__((noinline)) Application(void) {
             internal_::risc_context_switch();
         }
     }
+    set_eth_fw_stage(ETH_FW_STAGE_BASE_FW);
     internal_::disable_erisc_app();
 }

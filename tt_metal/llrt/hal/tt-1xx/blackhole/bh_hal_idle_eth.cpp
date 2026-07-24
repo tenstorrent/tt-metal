@@ -57,6 +57,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
         tt::align(MEM_AERISC_MAP_END + MEM_ERISC_KERNEL_CONFIG_SIZE, max_alignment);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_IERISC_MAILBOX_ADDRESS_HOST(core_info);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FW_STAGE)] = MEM_IERISC_FW_STAGE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_IERISC_MAILBOX_ADDRESS_HOST(go_messages);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] =
         GET_IERISC_MAILBOX_ADDRESS_HOST(go_message_index);
@@ -72,6 +73,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_IERISC_MAILBOX_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FW_STAGE)] = MEM_ERISC_FW_STAGE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(DevicePrintMemoryLayout);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     // TODO: this is wrong, need eth specific value. For now use same value as idle
@@ -114,6 +116,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
     std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 2};
 
     static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
+    // The FW_STAGE breadcrumb is carved from the tail of the mailbox region; mailboxes_t must not overlap it.
+    static_assert(MEM_IERISC_MAILBOX_BASE + sizeof(mailboxes_t) <= MEM_IERISC_FW_STAGE_BASE);
     return {
         HalProgrammableCoreType::IDLE_ETH,
         CoreType::ETH,

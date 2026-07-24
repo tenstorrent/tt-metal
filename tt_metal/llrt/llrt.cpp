@@ -7,6 +7,7 @@
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -320,12 +321,20 @@ void print_aerisc_training_status(tt::ChipId device_id, const tt::tt_metal::Core
 
     const uint32_t heartbeat_end = read_u32(heartbeat_addr);
 
+    // Always-on Metal firmware stage breadcrumbs (independent of watcher). Distinguishes whether the
+    // core is in base FW, Metal application FW, or a launched kernel when it stalled.
+    const std::string fw_stage_erisc0 = eth_fw_stage_to_string(
+        read_eth_fw_stage(device_id, virtual_core, tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, 0));
+    const std::string fw_stage_erisc1 = eth_fw_stage_to_string(
+        read_eth_fw_stage(device_id, virtual_core, tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, 1));
+
     log_critical(
         tt::LogMetal,
         "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}, "
         "Train status: {:#x}, PCS status: {:#x}, SerDes reset status: {:#x}, Postcode: {:#x}, "
         "ERISC0 reset PC: {:#x}, ERISC1 reset PC: {:#x}, RISC soft reset: {:#x}, "
-        "Heartbeat start: {:#x}, Heartbeat end: {:#x}, Heartbeat changed: {}",
+        "Heartbeat start: {:#x}, Heartbeat end: {:#x}, Heartbeat changed: {}, "
+        "Metal FW stage (erisc0): {}, Metal FW stage (erisc1): {}",
         device_id,
         virtual_core.str(),
         port_status,
@@ -340,10 +349,44 @@ void print_aerisc_training_status(tt::ChipId device_id, const tt::tt_metal::Core
         risc_soft_reset,
         heartbeat_start,
         heartbeat_end,
-        heartbeat_start != heartbeat_end);
+        heartbeat_start != heartbeat_end,
+        fw_stage_erisc0,
+        fw_stage_erisc1);
 }
 
 }  // namespace
+
+std::string eth_fw_stage_to_string(uint32_t stage) {
+    switch (stage) {
+        case tt::tt_metal::dev_msgs::ETH_FW_STAGE_UNKNOWN: return "UNKNOWN/BASE_FW";
+        case tt::tt_metal::dev_msgs::ETH_FW_STAGE_BASE_FW: return "BASE_FW";
+        case tt::tt_metal::dev_msgs::ETH_FW_STAGE_FW_INIT: return "APP_FW_INIT";
+        case tt::tt_metal::dev_msgs::ETH_FW_STAGE_FW_LOOP: return "APP_FW";
+        case tt::tt_metal::dev_msgs::ETH_FW_STAGE_KERNEL: return "KERNEL";
+        default: break;
+    }
+    // Unrecognized value: render the packed ASCII bytes (if printable) alongside the raw hex.
+    std::string ascii;
+    for (int i = 0; i < 4; i++) {
+        char c = static_cast<char>((stage >> (8 * i)) & 0xff);
+        ascii += (std::isprint(static_cast<unsigned char>(c)) ? c : '.');
+    }
+    return fmt::format("0x{:08x} ('{}')", stage, ascii);
+}
+
+uint32_t read_eth_fw_stage(
+    ChipId device_id,
+    const CoreCoord& virtual_core,
+    tt_metal::HalProgrammableCoreType core_type,
+    uint32_t processor_index) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const uint64_t addr =
+        hal.get_dev_noc_addr(core_type, tt_metal::HalL1MemAddrType::FW_STAGE) + processor_index * sizeof(uint32_t);
+    uint32_t stage = 0;
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        &stage, sizeof(stage), tt_cxy_pair(device_id, virtual_core), addr);
+    return stage;
+}
 
 std::optional<std::string> get_watcher_error_message_in_test_mode(ChipId device_id) {
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();

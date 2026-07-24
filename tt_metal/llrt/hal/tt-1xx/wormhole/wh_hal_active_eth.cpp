@@ -55,6 +55,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         is_base_routing_fw_enabled ? eth_l1_mem::address_map::ROUTING_ENABLED_ERISC_L1_UNRESERVED_BASE
                                    : eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_ETH_MAILBOX_ADDRESS_HOST(core_info);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FW_STAGE)] = MEM_AERISC_FW_STAGE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_ETH_MAILBOX_ADDRESS_HOST(go_messages);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] =
         GET_ETH_MAILBOX_ADDRESS_HOST(go_message_index);
@@ -89,6 +90,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FW_STAGE)] = MEM_ERISC_FW_STAGE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(DevicePrintMemoryLayout);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] =
@@ -135,6 +137,8 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 1};
 
     static_assert(sizeof(mailboxes_t) <= eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
+    // The FW_STAGE breadcrumb is carved from the tail of the mailbox region; mailboxes_t must not overlap it.
+    static_assert(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + sizeof(mailboxes_t) <= MEM_AERISC_FW_STAGE_BASE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,

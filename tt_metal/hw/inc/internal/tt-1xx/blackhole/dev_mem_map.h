@@ -285,6 +285,12 @@
 #define MEM_IERISC_MAILBOX_BASE (MEM_ERISC_RESERVED1 + MEM_ERISC_RESERVED1_SIZE)
 #define MEM_IERISC_MAILBOX_SIZE MEM_ERISC_MAILBOX_SIZE
 #define MEM_IERISC_MAILBOX_END (MEM_IERISC_MAILBOX_BASE + MEM_IERISC_MAILBOX_SIZE)
+// Always-on ethernet firmware execution-stage breadcrumb (see EthFwStage in dev_msgs.h). One 32-bit
+// slot per ethernet processor, carved from the tail of the mailbox region so it needs no separate
+// reserved area and never shifts other regions. mailboxes_t must fit below this (static_asserted in
+// the eth HALs).
+#define MEM_ERISC_FW_STAGE_SIZE 8
+#define MEM_IERISC_FW_STAGE_BASE (MEM_IERISC_MAILBOX_END - MEM_ERISC_FW_STAGE_SIZE)
 #define MEM_IERISC_L1_INLINE_BASE MEM_IERISC_MAILBOX_END
 #define MEM_IERISC_L1_INLINE_END (MEM_IERISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)
 #define MEM_IERISC_FIRMWARE_BASE MEM_IERISC_L1_INLINE_END
@@ -370,6 +376,9 @@
 #define MEM_AERISC_MAILBOX_BASE (MEM_ERISC_RESERVED1 + MEM_ERISC_RESERVED1_SIZE)
 #define MEM_AERISC_MAILBOX_SIZE MEM_ERISC_MAILBOX_SIZE
 #define MEM_AERISC_MAILBOX_END (MEM_AERISC_MAILBOX_BASE + MEM_AERISC_MAILBOX_SIZE)
+// Always-on ethernet firmware execution-stage breadcrumb (see MEM_ERISC_FW_STAGE_SIZE above and
+// EthFwStage in dev_msgs.h), carved from the tail of the active eth mailbox region.
+#define MEM_AERISC_FW_STAGE_BASE (MEM_AERISC_MAILBOX_END - MEM_ERISC_FW_STAGE_SIZE)
 #define MEM_AERISC_L1_INLINE_BASE MEM_AERISC_MAILBOX_END
 #define MEM_AERISC_L1_INLINE_END (MEM_AERISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)
 
