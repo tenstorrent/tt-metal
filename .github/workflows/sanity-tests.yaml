@@ -22,7 +22,7 @@ on:
         required: false
         type: boolean
         default: true
-        description: "Use the fast in-place wheel (no 2nd compile). Nightly canary passes false to build the real manylinux wheel."
+        description: "Use Ubuntu instead of manylinux for the wheel build."
       with-retries:
         required: false
         type: boolean
@@ -122,7 +122,7 @@ on:
         required: false
         default: true
         type: boolean
-        description: "Use the fast in-place wheel (no 2nd compile). Nightly canary passes false to build the real manylinux wheel."
+        description: "Use Ubuntu instead of manylinux for the wheel build."
       run-ttnn-sanity-tests:
         required: false
         default: true
