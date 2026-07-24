@@ -68,6 +68,17 @@ GROUP_NORM_NO_INPUT_MASK_DRAM_SHAPES = [
     (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
 ]
 
+# Non-tile-aligned flattened height (N*H*W not a multiple of the tile height, 32).
+# Pre-fix, the fused kernel silently reduced over the tile-padding rows and produced wrong
+# per-group statistics (tt-metal #50682); PCC stayed ~1.0 so the discriminator is max abs
+# error vs torch, which scaled with the padding fraction (e.g. H*W=200 -> ~0.36).
+# (N, C, H, W, num_groups)
+GROUP_NORM_NON_TILE_ALIGNED_DRAM_SHAPES = [
+    (1, 1024, 1, 200, 32),  # issue #50682 repro (H*W=200 -> padded 224, 10.7% padding)
+    (1, 1024, 1, 269, 32),  # XTTS-v2 conditioning encoder (~269 mel frames)
+    (1, 512, 1, 100, 32),  # larger padding fraction (H*W=100 -> padded 128, 21.9%)
+]
+
 SDXL_BASE_GROUP_NORM_SPLIT_SHAPES = [
     # (1, 256, 1024, 1024, 32, 32), # does not fit -> input is [16384, 8] per core (~260kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in)
     (
@@ -325,6 +336,71 @@ def test_group_norm_no_input_mask_DRAM(
         use_input_mask=False,
         specify_grid=specify_grid,
     )
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", GROUP_NORM_NON_TILE_ALIGNED_DRAM_SHAPES)
+def test_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups):
+    # Regression for tt-metal #50682: the fused interleaved (two-pass) group_norm must match
+    # torch.nn.functional.group_norm even when the flattened height (N*H*W) is not a multiple
+    # of the tile height. Uses auto grid selection and legacy (non-Welford) mode.
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip()
+
+    assert (N * H * W) % 32 != 0, "shape must be non-tile-aligned to exercise the fix"
+
+    grid_for_params = ttnn.determine_expected_group_norm_dram_grid_size(
+        device=device,
+        num_channels=C,
+        num_groups=num_groups,
+        input_nhw=N * H * W,
+        num_batches=N,
+    )
+
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias, eps=1e-12
+    )
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    input_tensor_row_major = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
+
+    [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
+        [torch_weight, torch_bias], C, num_groups, device, core_grid=grid_for_params, return_mask=True
+    )
+
+    output_tensor = ttnn.group_norm(
+        input_tensor_tilized,
+        num_groups=num_groups,
+        input_mask=input_mask_tensor,
+        weight=gamma_t,
+        bias=beta_t,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_layout=ttnn.TILE_LAYOUT,
+        core_grid=None,
+        inplace=False,
+        use_welford=False,
+    )
+    ttnn.synchronize_device(device)
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    # PCC is invariant to the per-group affine drift this bug caused, so assert max abs error
+    # directly. Pre-fix values were >= ~0.36; the fused kernel must now match torch within the
+    # same bfloat16 tolerance the tile-aligned cases use.
+    max_abs_err = (output_tensor.float() - torch_output_tensor.float()).abs().max().item()
+    logger.info(f"non-tile-aligned H*W={W * H} max_abs_err={max_abs_err}")
+    assert max_abs_err < 0.08, f"max abs error {max_abs_err} too high for non-tile-aligned H*W={W * H} (see #50682)"
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
