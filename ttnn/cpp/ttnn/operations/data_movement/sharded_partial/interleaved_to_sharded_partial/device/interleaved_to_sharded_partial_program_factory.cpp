@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "interleaved_to_sharded_partial_program_factory.hpp"
+#include "interleaved_to_sharded_partial_op.hpp"
 
 #include <cmath>
 
@@ -428,6 +429,20 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
     }
 
     return desc;
+}
+
+void InterleavedToShardedPartialDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const Tensor& input_tensor,
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Cache-hit fast path: re-derive the full descriptor (the single source of truth) and re-apply its
+    // per-core reader/writer args + tensor-backed CB addresses to the cached program. This re-covers the
+    // slice_index-dependent starting_idx_h (reader arg 7, and DRAM writer arg 7) AND all buffer addresses
+    // for the current tensors, correct by construction. Replaces get_dynamic_runtime_args.
+    auto desc = InterleavedToShardedPartialProgramFactory::create_descriptor(operation_attributes, input_tensor, output);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::prim
