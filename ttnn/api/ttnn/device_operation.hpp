@@ -6,6 +6,7 @@
 
 #include <concepts>
 #include <exception>
+#include <future>
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -378,14 +379,20 @@ void launch_operation_with_adapter(
 
     auto is_program_cache_enabled = program_cache.is_enabled();
     if (is_program_cache_enabled) {
+        // The hash and the canonical key are independent read-only reductions over the same inputs
+        auto canonical_future = std::async(std::launch::async, [&]() {
+            return mesh_device_operation_t::compute_mesh_workload_canonical_key(
+                mesh_device,
+                ttsl::get_type_name<typename mesh_device_operation_t::device_operation_t>(),
+                operation_attributes,
+                tensor_args);
+        });
+
         // Use device_operation's compute_program_hash if available
         program_key.hash =
             mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
-        program_key.canonical = mesh_device_operation_t::compute_mesh_workload_canonical_key(
-            mesh_device,
-            ttsl::get_type_name<typename mesh_device_operation_t::device_operation_t>(),
-            operation_attributes,
-            tensor_args);
+        program_key.canonical = canonical_future.get();
+
         program_cache_hit = program_cache.contains(program_key);
         if (!program_cache_hit && !program_cache.cache_misses_allowed()) {
             auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
