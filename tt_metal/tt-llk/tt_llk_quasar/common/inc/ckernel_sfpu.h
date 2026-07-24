@@ -13,7 +13,6 @@
 #include "cmath_common.h"
 #include "llk_defs.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_sqrt.h"
