@@ -12,6 +12,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "groupnorm_zero_fill.hpp"
+#include "groupnorm_reader_rm.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 
 void kernel_main() {
@@ -206,6 +207,11 @@ void kernel_main() {
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
     constexpr uint32_t cb_x_id = tt::CBIndex::c_24;
     constexpr uint32_t cb_reread_out_id = tt::CBIndex::c_23;
+#ifdef UNTILIZE_OUT
+    // Row-major reread scratch CB (c_20): gathered ROW_MAJOR output rows for the shared tiles, tilized
+    // on-core by the compute kernel into cb_reread_out (c_23) for cross-group accumulation.
+    constexpr uint32_t cb_reread_rm_id = tt::CBIndex::c_20;
+#endif
 
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_ex2_partial(cb_ex2_partial_id);
@@ -217,6 +223,9 @@ void kernel_main() {
     CircularBuffer cb_repack_out(cb_repack_out_id);
     CircularBuffer cb_out0(cb_out0_id);
     CircularBuffer cb_reread_out(cb_reread_out_id);
+#ifdef UNTILIZE_OUT
+    CircularBuffer cb_reread_rm(cb_reread_rm_id);
+#endif
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     const DataFormat out_data_format = get_dataformat(cb_out0_id);
@@ -325,6 +334,24 @@ void kernel_main() {
                         }
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
+#ifdef TILIZE_IN
+                        // ROW_MAJOR input: gather rows into cb_in0 for the compute kernel to tilize on-core.
+                        // The group stays resident in L1 across all three passes, so gather only on the first.
+                        if (cur_read_iteration == 0) {
+                            const auto src_a = TensorAccessor(src0_args, src_addr);
+                            groupnorm_gather_rm_block<tile_width, tile_height, block_w, datum_size_bytes>(
+                                noc,
+                                src_a,
+                                cb_in0,
+                                start_id,
+                                out_block_start_id_offset,
+                                index_b_offset,
+                                index_g_offset,
+                                num_channels_tiles,
+                                out_block_h_actual,
+                                out_block_hw_normal);
+                        }
+#else
                         const uint32_t src0_tile_bytes = get_tile_size(cb_in0_id);
                         const auto src_a = TensorAccessor(src0_args, src_addr);
                         uint32_t l1_write_addr;
@@ -344,6 +371,7 @@ void kernel_main() {
                             }
                         }
                         cb_in0.push_back(out_block_hw_normal);
+#endif
 #endif
                         if (cur_read_iteration== 0 || cur_read_iteration== 1) {
                             if (cur_read_iteration== 0) {
@@ -422,6 +450,21 @@ void kernel_main() {
                             uint32_t block_w_curr =
                                 index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
+#ifdef UNTILIZE_OUT
+                            // ROW_MAJOR output: re-read the already-written rows into cb_reread_rm (c_20) with the
+                            // same gather as the input; compute tilizes c_20 into cb_reread_out (c_23) for the add.
+                            groupnorm_gather_rm_block<tile_width, tile_height, block_w, datum_size_bytes>(
+                                noc,
+                                dst_a,
+                                cb_reread_rm,
+                                out_start_id,
+                                out_block_start_id_offset,
+                                index_b_offset,
+                                index_g_offset,
+                                num_channels_tiles,
+                                out_block_h_actual,
+                                out_block_hw_normal);
+#else
                             const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out_id);
                             uint32_t l1_write_addr;
                             l1_write_addr = cb_reread_out.get_write_ptr();
@@ -441,6 +484,7 @@ void kernel_main() {
                                 }
                             }
                             cb_reread_out.push_back(out_block_hw_normal);
+#endif
                         }
                         out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                     }

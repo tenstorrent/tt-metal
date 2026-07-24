@@ -67,6 +67,17 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.padded_shape()[2],
         tile_height);
 
+    // ROW_MAJOR (interleaved) input/output is only supported on the legacy (non-Welford) group_norm path.
+    if (args.use_welford && !a.is_sharded()) {
+        const Layout output_layout =
+            std::visit([](const auto& config) -> Layout { return config.output_layout; }, args.program_config);
+        TT_FATAL(
+            a.layout() == Layout::TILE && output_layout == Layout::TILE,
+            "group_norm: ROW_MAJOR interleaved input/output is not supported on the Welford path yet. "
+            "Use TILE layout for both input and output, or use the legacy (non-Welford) path "
+            "(use_welford=false).");
+    }
+
     if (a.is_sharded()) {
         const auto& shard_spec = a.shard_spec().value();
         const auto bbox = shard_spec.grid.bounding_box();

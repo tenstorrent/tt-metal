@@ -192,7 +192,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t block_ht_group_1 = per_core_Mt_group_1 / num_batches_per_core_group_1;
     uint32_t subblock_wt = get_max_subblock(block_wt, 8);
     uint32_t num_subblocks_w = block_wt / subblock_wt;
-    bool block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
+    uint32_t block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
 
     TT_FATAL(
         block_ht_group_1 > 0,
@@ -224,6 +224,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     bool reader_repack_output = (per_core_N % tile_width) != 0;
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
+
+    // ROW_MAJOR output with tile-straddling groups (block_w_last != block_w) requires out_block_h == 1;
+    // cross-group untilize corrupts mt > 0 tile-rows otherwise.
+    if (!use_welford && untilize_out && block_wt_last != block_wt) {
+        log_warning(
+            tt::LogOp,
+            "group_norm: ROW_MAJOR output with tile-straddling groups requires out_block_h==1; overriding "
+            "requested num_out_blocks={} with {}.",
+            num_out_blocks,
+            block_ht_group_1);
+        num_out_blocks = block_ht_group_1;
+    }
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -311,6 +323,17 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     if (use_welford) {
         x_CB_size_group_1 = single_tile_size * 1;
         xmm_CB_size_group_1 = single_tile_size * 3;
+    }
+
+    // c_30 (untilize output) and c_20 (row-major reread) scratch for the ROW_MAJOR-output path.
+    uint32_t rm_untilize_CB_size_group_1 = in_CB_size_group_1;
+
+    // Legacy ROW_MAJOR input: cb_in_resident (c_17) holds the whole per-core group tilized once, reused across
+    // the mean/variance/normalize passes. The host op only dispatches a ROW_MAJOR input here when it fits L1.
+    uint32_t in_tilized_CB_size_group_1 = 0;
+    if (!use_welford && tilize_in) {
+        in_tilized_CB_size_group_1 =
+            groupnorm_tilized_group_tiles(block_ht_group_1, num_out_blocks, block_wt) * in_single_tile_size;
     }
 
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
@@ -448,6 +471,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"per_core_N", per_core_Nt},
         {"per_core_N_bytes", per_core_N_bytes_padded},
         {"per_core_N_bytes_with_stride", per_core_Nt * tile_width * datum_size_bytes},
+        {"datum_size_bytes", datum_size_bytes},
         {"per_core_M", per_core_Mt_group_1},
         {"TILE_HEIGHT", tile_height},
         {"TILE_WIDTH", tile_width},
@@ -568,12 +592,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "writer_unary_gn_rm_gb.cpp");
 
+    std::map<std::string, std::string> writer_defines;
+    if (untilize_out) {
+        writer_defines["UNTILIZE_OUT"] = "1";
+    }
+
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = writer_kernel;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores_group_1;
     writer_desc.compile_time_args = writer_mcast_sender_compile_time_args_group_1;
     writer_desc.named_compile_time_args = to_named_args_mcast(writer_named_compile_time_args_group_1);
+    writer_desc.defines = KernelDescriptor::Defines(writer_defines.begin(), writer_defines.end());
     writer_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = writer_noc,
@@ -786,10 +816,24 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         }}},
     });
 
+    // Resident tilized per-core group (c_17); see in_tilized_CB_size_group_1 above.
+    if (in_tilized_CB_size_group_1 > 0) {
+        constexpr uint32_t in_tilized_cb_index = tt::CBIndex::c_17;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in_tilized_CB_size_group_1,
+            .core_ranges = all_cores_group_1,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in_tilized_cb_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            }}},
+        });
+    }
+
     if (untilize_out) {
         constexpr uint32_t out_cb_index = tt::CBIndex::c_30;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = in_CB_size_group_1,
+            .total_size = rm_untilize_CB_size_group_1,
             .core_ranges = all_cores_group_1,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(out_cb_index),
@@ -797,6 +841,21 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                 .page_size = in_single_tile_size,
             }}},
         });
+
+        // The c_20 reread scratch is only used by the legacy compute path (cross-group output
+        // accumulation); the welford path combines stats via mcast instead and never reads it.
+        if (!use_welford) {
+            constexpr uint32_t reread_rm_cb_index = tt::CBIndex::c_20;
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = in_CB_size_group_1,
+                .core_ranges = all_cores_group_1,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
+                    .data_format = in_data_format,
+                    .page_size = in_single_tile_size,
+                }}},
+            });
+        }
     }
 
     constexpr uint32_t in2_cb_index = tt::CBIndex::c_2;
