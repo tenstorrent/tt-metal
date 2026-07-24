@@ -123,6 +123,15 @@ def _close_device_quietly() -> None:
         pass
 
 
+def _close_device_mesh_quietly() -> None:
+    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
+    swallowing errors so teardown never masks a real failure."""
+    try:
+        ttml.close_device_mesh()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _mesh_shape_from_env() -> Tuple[int, ...]:
     raw = os.environ.get("SAMPLE_SEEDING_MESH", _DEFAULT_MESH)
     return tuple(int(x) for x in raw.replace(" ", "").split(","))
@@ -152,13 +161,7 @@ def seeding_mesh():
     ttml.autograd.AutoContext.get_instance().set_seed(SEED)
     yield shape
 
-    _close_device_quietly()
-    try:
-        import ttml._mesh as _mesh_mod  # type: ignore[import-not-found]
-
-        _mesh_mod._mesh = None
-    except Exception:  # noqa: BLE001
-        pass
+    _close_device_mesh_quietly()
     _restore_mgd_path(previous_mgd)
 
 

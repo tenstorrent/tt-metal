@@ -14,7 +14,7 @@
     set -euo pipefail
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto -x \
-      -m "$PYTEST_MARKERS" \
+      --dist=worksteal -m "$PYTEST_MARKERS" \
       --timeout=60 \
       --junitxml=pytest-report-wormhole.xml .
   skus:
@@ -22,16 +22,35 @@
       timeout: 15
   owner_id: U07J3K6KS1K # LLK team
 
-- name: llk_smoke_blackhole
+- name: llk_smoke_blackhole group 1/2
+  split_group: 1
   team: llk
   coverage: false
   cmd: |
     set -euo pipefail
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto -x \
-      -m "$PYTEST_MARKERS" \
+      --dist=worksteal -m "$PYTEST_MARKERS" \
+      --splits 2 --group 1 \
       --timeout=60 \
-      --junitxml=pytest-report-blackhole.xml .
+      --junitxml=pytest-report-blackhole-1.xml .
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 15
+  owner_id: U07J3K6KS1K # LLK team
+
+- name: llk_smoke_blackhole group 2/2
+  split_group: 2
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    pytest -q --override-ini=log_cli=false -n auto -x \
+      --dist=worksteal -m "$PYTEST_MARKERS" \
+      --splits 2 --group 2 \
+      --timeout=60 \
+      --junitxml=pytest-report-blackhole-2.xml .
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15

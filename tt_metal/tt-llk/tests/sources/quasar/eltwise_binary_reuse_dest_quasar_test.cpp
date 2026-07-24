@@ -164,7 +164,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
     _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1);
 
     const int output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;

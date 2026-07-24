@@ -120,7 +120,7 @@ void kernel_main() {
                 // (is_tile_dim_reconfig_en=true): the default reconfig keeps the prior element
                 // stride, so after a bf16 tilize the fp32 cb_tile would be read with a 2-byte
                 // stride and copy_tile would misread it (corrupting the amax for bf16 input).
-                reconfig_data_format_srca<false, true>(cb_tile_id);
+                reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(cb_tile_id);
                 pack_reconfig_data_format(cb_abs_id);
                 copy_tile_init(cb_tile_id);
                 cb_abs.reserve_back(block_wt);

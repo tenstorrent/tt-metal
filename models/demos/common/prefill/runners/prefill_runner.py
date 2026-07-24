@@ -716,6 +716,7 @@ def main() -> None:
         # this (single-rank inherits it); PREFILL_KV_ONLY_LAST_LAYER can force it off.
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
+        sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
     )
 
     runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)

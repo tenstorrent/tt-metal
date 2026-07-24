@@ -30,7 +30,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 20
+      timeout: 8
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -53,7 +53,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 20
+      timeout: 16
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -70,7 +70,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 10
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -155,7 +155,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 15
+      timeout: 7
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -175,7 +175,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 35
+      timeout: 15
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -298,7 +298,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 35
+      timeout: 15
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -378,5 +378,45 @@
       # Job takes under 20 minutes; 40 minute timeout provides buffer for variance and machines with less power.
       timeout: 40
   owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
+- name: "Blaze - Chunked GLM (code_debug 55k)"
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
+    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc[blackhole-glm52-mesh-8x4-L78-preload0-chunks_eleven-ten_iters] -xvs
+    '
+  test_type: glm_chunked
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 45
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  sp_config: sc1
+
+- name: "Blaze - Chunked GLM Accuracy (code_debug 55k)"
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
+    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and 8x4 and L78 and warm_cache" -xvs
+    '
+  test_type: glm_chunked_accuracy
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 40
+  owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1

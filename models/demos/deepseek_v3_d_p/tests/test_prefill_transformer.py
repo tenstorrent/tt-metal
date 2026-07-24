@@ -45,7 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
 from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
@@ -441,21 +441,16 @@ def run_model(
     profiler.end("tt_transformer_creation")
 
     # --- Create external KVPE cache ---
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    # Sparse MLA (DSA: v3.2 / GLM) reads the KVPE cache natively in sparse_sdpa and requires it
-    # uncompressed (bf16 ROW_MAJOR — mla.py asserts); dense MLA keeps the bfloat8_b/TILE cache.
     has_indexer = resolve_has_indexer(config)
-    kvpe_dtype = ttnn.bfloat16 if has_indexer else ttnn.bfloat8_b
-    kvpe_layout = ttnn.ROW_MAJOR_LAYOUT if has_indexer else ttnn.TILE_LAYOUT
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
+    cache_format = MlaKvCacheFormat.BF16_RM if has_indexer else MlaKvCacheFormat.BFP8_TILE
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=cache_format,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=isl_total,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
-        dtype=kvpe_dtype,
-        layout=kvpe_layout,
     )
 
     # Sparse single-shot is folded onto the block-cyclic path, so (like chunked) it needs the caller-owned,
@@ -516,7 +511,7 @@ def run_model(
             torch.manual_seed(0)
             first_token_id, _, tt_intermediates = transformer(
                 tt_tokens,
-                tt_kvpe_cache,
+                tt_kvpe_cache.storage,
                 actual_isl=number_of_non_padded_tokens,
                 return_intermediates=True,
                 read_profiler=False,
@@ -676,7 +671,7 @@ def run_model(
         # Per-layer KVPE PCC comparison — read back from external cache
         if do_return_kv and ref_kvpe_list is not None:
             tt_kvpe_all = ttnn.to_torch(
-                tt_kvpe_cache,
+                tt_kvpe_cache.storage,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
             ).to(torch.bfloat16)
             # Shape: [num_layers, tp_factor, seq_total, head_dim] — take first TP replica
