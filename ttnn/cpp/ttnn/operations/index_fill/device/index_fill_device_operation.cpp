@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "index_fill_device_operation.hpp"
+#include "tt-metalium/buffer_types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -103,7 +104,11 @@ IndexFillOperation::spec_return_value_t IndexFillOperation::compute_output_specs
             old_spec.tensor_layout().get_data_type(),
             old_spec.tensor_layout().get_page_config(),
             operation_attributes.memory_config,
-            old_spec.tensor_layout().get_alignment()));
+            operation_attributes.memory_config.memory_layout() != old_spec.memory_config().memory_layout() &&
+                    (operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+                     operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED)
+                ? tt::tt_metal::Alignment({})
+                : old_spec.tensor_layout().get_alignment()));
 }
 IndexFillOperation::tensor_return_value_t IndexFillOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
