@@ -216,6 +216,20 @@ class MATH_OP(TemplateParameter):
 
 
 @dataclass
+class GMG_UNGROUPED_TOP8(TemplateParameter):
+    """Select the generalized_moe_gate path (ungrouped global top-k vs grouped DeepSeek).
+
+    Emits ``#define GMG_UNGROUPED_TOP8 <0|1>`` consumed by the Compute-API-mirrored
+    ``generalized_moe_gate_test.cpp`` (1 = ungrouped global top-k, 0 = grouped DeepSeek).
+    """
+
+    ungrouped: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return f"#define GMG_UNGROUPED_TOP8 {1 if self.ungrouped else 0}"
+
+
+@dataclass
 class SFPU_TERNARY_OP(TemplateParameter):
     """Select the ternary SFPU op at compile time.
 
@@ -618,6 +632,42 @@ class TILE_COUNT(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t TILE_CNT;", "I"
+
+
+@dataclass
+class GMG_EPS(RuntimeParameter):
+    """generalized_moe_gate normalization epsilon as a raw fp32 bit pattern (runtime)."""
+
+    eps_bits: int = 0x00000000
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t GMG_EPS;", "I"
+
+
+@dataclass
+class GMG_SCALE(RuntimeParameter):
+    """generalized_moe_gate routed scaling factor as a raw fp32 bit pattern (runtime)."""
+
+    scale_bits: int = 0x3F800000  # 1.0f
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t GMG_SCALE;", "I"
+
+
+@dataclass
+class GMG_TOPK(TemplateParameter):
+    """generalized_moe_gate top-k to keep (compile-time; must be 4, 6, or 8)."""
+
+    topk: int = 8
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t GMG_TOPK = {self.topk};"
 
 
 @dataclass
