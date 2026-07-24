@@ -76,10 +76,7 @@ hunyuan_image_3_0/
 │   └── vision/       # SigLIP2 encoder, cond-vision injection, I2I pipeline
 ├── tests/        # PCC / parity / perf gates for every block
 │   ├── pcc/          # Per-block PCC tests vs ref/
-│   ├── perf/         # Performance benchmarks
-│   ├── tokenizer/    # Tokenizer parity tests
-│   ├── vae/          # VAE decode pipeline tests
-│   └── vision/       # Vision / injection tests
+│   └── perf/         # Performance benchmarks
 └── scripts/      # Helper / utility scripts
 ```
 
@@ -194,59 +191,25 @@ PyTorch `ref/` path; perf tests profile device timing via tracy.
 | `test_logit_stack.py` | 32L teacher-forced / chained last-token logit PCC |
 | `test_pipeline.py` | Single denoise step + e2e latent/RGB pipeline PCC |
 | `test_denoise.py` | Multi-step `denoise_loop` PCC (timestep, Euler, CFG) |
-| `test_scheduler.py` | Flow-matching scheduler deterministic ref match |
-| `test_noise.py` | On-device `ttnn.randn` init-noise parity |
 | `test_teacher_forced.py` | Teacher-forced final PCC + per-layer bf16/bf8 precision audit |
 | `test_kv_cache_prefill.py` | KV-cache prefill correctness |
 | `test_kv_cache_decode.py` | KV-cache incremental single-token decode |
 | `test_prefill_sp2_pcc.py` | Prefill under sequence-parallel (`sp=2`) |
-| `test_generate.py` | Host sampling loop + stage-forcing unit tests (mock logits) |
-| `test_generate_device.py` | Device-backed AR generation path |
-| `test_device_sampling.py` | On-device `topk` / `sampling` op parity |
 | `test_recaption.py` | Recaption/think AR orchestration (greedy token parity) |
-
-### VAE (`tests/vae/`)
-
-| Test file | Detail |
-|-----------|--------|
-| `test_encoder.py` | VAE encoder block PCC |
-| `test_decoder.py` | VAE decoder block PCC |
-| `test_decode_pipeline.py` | Full `decode_latent` glue + spatial decode vs fp32 ref |
-| `test_spatial_hw.py` | H/W-spatial-parallel decode across the 2×2 mesh |
-| `test_conv3d_chunk.py` | Chunked Conv3D correctness |
-| `test_conv3d_sharded.py` | Sharded Conv3D correctness |
-| `test_resnet_conv_pair.py` | ResNet conv-pair PCC |
-| `test_group_mean_pcc.py` | Fused channel group-mean used by DCAE shortcuts |
-| `test_d2s_chunk.py` | Depth-to-space chunk equivalence |
-
-### Vision / I2I (`tests/vision/`)
-
-| Test file | Detail |
-|-----------|--------|
+| `test_vae_encoder.py` | VAE encoder block PCC |
+| `test_vae_decoder.py` | VAE decoder block PCC |
+| `test_vae_decode_pipeline.py` | Full `decode_latent` glue + spatial decode vs fp32 ref |
 | `test_siglip2_ttnn.py` | SigLIP2 encoder + aligner PCC |
 | `test_siglip2_full_dim.py` | Full 27L vision @ S=1024 (32×32 patches) vs fp32 ref |
-| `test_image_processor.py` | Image processor (`vit_process_image`, gen-image info) |
-| `test_cond_image_preprocess.py` | Cond-image preprocess bitwise-equal to upstream |
-| `test_cond_vision_inject.py` | Cond-vision sequence injection (contiguous / multi / host scatter) |
-
-### Tokenizer / inputs (`tests/tokenizer/`)
-
-| Test file | Detail |
-|-----------|--------|
-| `test_model_inputs.py` | T2I/I2I `prepare_model_inputs` build + tokenizer parity, attention layout, CFG |
-| `test_cond_vae_encode.py` | I2I cond-image VAE/ViT encode + image-token instantiation + distill scatter |
-| `test_recaption_inputs.py` | Recaption/think AR bundle build, stage params, CoT decode/sanitize |
 
 ### Performance (`tests/perf/`)
 
 | Test file | Detail |
 |-----------|--------|
 | `test_denoise_perf_tracy.py` | End-to-end denoise-step device profile |
-| `test_denoise_scatter_perf.py` | Sequence-scatter op timing |
 | `test_encoder_perf_tracy.py` / `test_vae_decode_perf.py` | VAE encode / decode device profile |
 | `test_siglip2_perf_tracy.py` | SigLIP2 vision device profile |
-| `test_recaption_*_perf.py` | Recaption AR / prefill / decode timing |
-| `*_sweep.py` | Matmul / expert / gate / RMSNorm / conv3d / lm-head config sweeps |
+| `test_recaption_*_perf.py` | Recaption AR / prefill timing |
 
 ## PCC Results
 
@@ -301,12 +264,6 @@ The following PCCs were measured against the PyTorch reference implementation.
 | | Denoise Loop resident mesh | 0.999900 |
 | | I2I Denoise Step | 0.99994084 |
 | | I2I Denoise Loop CFG | 0.99821097 |
-| `test_scheduler.py` | Schedule Match | exact (1e-6 / 1e-3) |
-| | Denoising Loop smoke 8×8 | ≥0.99 |
-| | CFG Combine smoke 8×8 | ≥0.99 |
-| | Denoising Loop full latent 64×64 | 1.00000000 |
-| | CFG Combine full latent 64×64 | 1.00000000 |
-| `test_noise.py` | Initial Noise | |
 | `test_teacher_forced.py` | All-layers production decode S=1 (32L, worst) | 0.979821 |
 | | All-layers production prefill S=4160 (32L, worst) | 0.999790 |
 | | Final production decode S=1 (32L) | 0.99995817 |
@@ -316,30 +273,14 @@ The following PCCs were measured against the PyTorch reference implementation.
 | `test_kv_cache_decode.py` | Decode ISL=512 (step 8) | 0.999782 / 0.999713 |
 | | Decode ISL=22800 (step 1) | 0.995632 / 0.997369 |
 | `test_prefill_sp2_pcc.py` | Sequence Parallel Prefill | |
-| `test_generate.py` | Host Sampling | |
-| | Stage Forcing | |
-| `test_generate_device.py` | Device AR Generation | |
-| `test_device_sampling.py` | Device Top-k Sampling | |
 | `test_recaption.py` | Recaption / Think | |
-| `test_encoder.py` | VAE Encoder | |
-| `test_decoder.py` | VAE Decoder | |
-| `test_decode_pipeline.py` | VAE Decode Pipeline | |
-| `test_spatial_hw.py` | Spatial HW Decode | |
-| `test_conv3d_chunk.py` | Chunked Conv3D | |
-| `test_conv3d_sharded.py` | Sharded Conv3D | |
-| `test_resnet_conv_pair.py` | ResNet Conv Pair | |
-| `test_group_mean_pcc.py` | Group Mean | |
-| `test_d2s_chunk.py` | Depth-to-Space Chunk | |
+| `test_vae_encoder.py` | VAE Encoder | |
+| `test_vae_decoder.py` | VAE Decoder | |
+| `test_vae_decode_pipeline.py` | VAE Decode Pipeline | |
 | `test_siglip2_ttnn.py` | SigLIP2 Encoder | |
 | | Vision Aligner | |
 | `test_siglip2_full_dim.py` | Full-Dimension SigLIP2 | |
-| `test_image_processor.py` | Image Processor | |
-| `test_cond_image_preprocess.py` | Conditioning Image Preprocess | |
-| `test_cond_vision_inject.py` | Conditioning Vision Injection | |
-| `test_model_inputs.py` | Model Input Preparation | |
-| | Tokenizer Parity | |
-| `test_cond_vae_encode.py` | Conditioning VAE Encode | |
-| `test_recaption_inputs.py` | Recaption Input Builder | |
+
 ## Performance Summary
 
 ### Base (Text-to-Image, 50 Steps)
