@@ -17,6 +17,26 @@ from .conftest import DEVICE_PARAMS
 pytestmark = [run_for_blackhole(), pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)]
 
 
+def test_l2_norm_memory_config_contract(device):
+    """L2 normalization inherits placement unless the caller requests an output placement."""
+    from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import l2_norm_ttnn
+
+    torch.manual_seed(0)
+    x = torch.randn(1, 32, 1, 32, dtype=torch.float32)
+    ref = torch.nn.functional.normalize(x, dim=-1)
+
+    for input_mc in (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG):
+        x_tt = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_mc)
+        inherited = l2_norm_ttnn(x_tt, dim=-1)
+        assert inherited.memory_config() == input_mc
+        assert compute_pcc(ref, ttnn.to_torch(inherited)) > 0.999
+
+    x_l1 = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    in_dram = l2_norm_ttnn(x_l1, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert in_dram.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    assert compute_pcc(ref, ttnn.to_torch(in_dram)) > 0.999
+
+
 def test_deltanet_pcc(device, setup, request):
     """Compare TTNN deltanet against the torch reference for layer 0."""
     args, sd, raw = setup
