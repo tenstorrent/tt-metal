@@ -310,32 +310,6 @@ PagedUpdateCacheDeviceOperation::tensor_return_value_t PagedUpdateCacheDeviceOpe
     return tensor_args.cache_tensor;
 }
 
-ttsl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    // Exclude runtime-only parameters from hash:
-    // - update_idxs: values are runtime-only (used only in runtime args), size is validated to match input tensor shape
-    // (already in tensor_args)
-    // - batch_offset: validated to be 0, doesn't affect program structure
-    // Include parameters that affect program structure:
-    // - compute_kernel_config: affects compile-time args (fp32_dest_acc_en)
-    // - share_cache: affects program structure (semaphore setup)
-    // - mesh_coords: affects program factory selection
-    // - block_size_override: enters compile-time args
-    // - num_kv_heads_override: enters compile-time args
-    // - cache_position_modulo: enters compile-time args
-    return operation::hash_operation<PagedUpdateCacheDeviceOperation>(
-        args.compute_kernel_config,
-        args.share_cache,
-        args.mesh_coords,
-        args.block_size_override,
-        args.num_kv_heads_override,
-        args.cache_position_modulo,
-        tensor_args,
-        program_factory.index());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
