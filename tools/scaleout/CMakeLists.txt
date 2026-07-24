@@ -161,6 +161,27 @@ target_link_libraries(
         cxxopts::cxxopts
 )
 
+add_executable(generate_hostfile src/generate_hostfile.cpp)
+
+set_target_properties(
+    generate_hostfile
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${Metalium_BINARY_DIR}/tools/scaleout
+)
+
+add_dependencies(generate_hostfile scaleout_generated_protos)
+
+target_include_directories(generate_hostfile SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(
+    generate_hostfile
+    PRIVATE
+        scaleout_tools
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)
+
 add_executable(run_regen_descriptors src/run_regen_descriptors.cpp)
 
 set_target_properties(
