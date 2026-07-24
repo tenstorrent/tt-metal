@@ -92,10 +92,15 @@ def has_weights(model_dir: Path) -> bool:
     return is_checkpoint_complete(model_dir)
 
 
-def _hf_download(repo_id: str) -> None:
-    """Download ``repo_id`` into the HF hub cache (``snapshot_download`` / ``hf download``)."""
+def _hf_download(repo_id: str, local_dir: Path | None = None) -> None:
+    """Download ``repo_id`` via ``snapshot_download`` / ``hf download``.
+
+    When ``local_dir`` is set (e.g. ``HUNYUAN_MODEL_DIR``), files land there so CI
+    paths stay stable across runs. Otherwise the HF hub cache under ``HF_HOME`` is used.
+    """
     if os.environ.get("HY_SKIP_WEIGHT_DOWNLOAD", "0") == "1":
-        raise FileNotFoundError(f"Checkpoint for {repo_id!r} not found and HY_SKIP_WEIGHT_DOWNLOAD=1")
+        where = f" (expected at {local_dir})" if local_dir is not None else ""
+        raise FileNotFoundError(f"Checkpoint for {repo_id!r} not found{where} and HY_SKIP_WEIGHT_DOWNLOAD=1")
 
     try:
         from huggingface_hub import snapshot_download
@@ -103,19 +108,36 @@ def _hf_download(repo_id: str) -> None:
         snapshot_download = None  # type: ignore[misc, assignment]
 
     if snapshot_download is not None:
-        print(f"[weights] downloading {repo_id} via huggingface_hub → {_hub_cache_dir()} ...", flush=True)
-        snapshot_download(repo_id)
+        if local_dir is not None:
+            local_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[weights] downloading {repo_id} via huggingface_hub → {local_dir} ...", flush=True)
+            snapshot_download(repo_id, local_dir=str(local_dir))
+        else:
+            print(f"[weights] downloading {repo_id} via huggingface_hub → {_hub_cache_dir()} ...", flush=True)
+            snapshot_download(repo_id)
         return
 
     hf = shutil.which("hf") or shutil.which("huggingface-cli")
     if hf is None:
         raise RuntimeError(f"Install huggingface_hub or put `hf` on PATH to download {repo_id!r}")
 
-    print(f"[weights] downloading {repo_id} → {_hub_cache_dir()} ...", flush=True)
-    proc = subprocess.run([hf, "download", repo_id])
+    if local_dir is not None:
+        local_dir.mkdir(parents=True, exist_ok=True)
+        dest = str(local_dir)
+        print(f"[weights] downloading {repo_id} → {dest} ...", flush=True)
+        proc = subprocess.run([hf, "download", repo_id, "--local-dir", dest])
+    else:
+        print(f"[weights] downloading {repo_id} → {_hub_cache_dir()} ...", flush=True)
+        proc = subprocess.run([hf, "download", repo_id])
     if proc.returncode == 0:
         return
     # ``hf download`` often prints "Download complete" then exits 1 (click Exit quirk).
+    if local_dir is not None and is_checkpoint_complete(local_dir):
+        print(
+            f"[weights] hf exited {proc.returncode} but checkpoint is complete at {local_dir}",
+            flush=True,
+        )
+        return
     snap = find_hf_snapshot(repo_id)
     if snap is not None and is_checkpoint_complete(snap):
         print(
@@ -156,31 +178,50 @@ def resolve_base_model_dir() -> Path:
 
 
 def ensure_checkpoint(*, env_var: str, repo_id: str) -> Path:
-    """Like ``resolve_checkpoint``, downloading from HuggingFace when missing or incomplete."""
-    path: Path | None = None
+    """Like ``resolve_checkpoint``, downloading from HuggingFace when missing or incomplete.
+
+    If ``env_var`` (e.g. ``HUNYUAN_MODEL_DIR``) is set, the snapshot is written there so
+    the first CI run can populate the shared path and later runs reuse it.
+    """
     try:
         path = resolve_checkpoint(env_var=env_var, repo_id=repo_id)
         if is_checkpoint_complete(path):
             return path
-        missing = missing_weight_shards(path)
-        print(
-            f"[weights] incomplete checkpoint at {path}: "
-            f"missing {len(missing)} shard(s) (e.g. {missing[:3]}). Resuming download ...",
-            flush=True,
-        )
+        if not (path / _WEIGHT_INDEX).is_file():
+            reason = f"missing {_WEIGHT_INDEX}"
+        else:
+            missing = missing_weight_shards(path)
+            reason = f"missing {len(missing)} shard(s) (e.g. {missing[:3]})"
+        print(f"[weights] incomplete checkpoint at {path}: {reason}. Downloading ...", flush=True)
     except FileNotFoundError:
         path = None
+        print(f"[weights] no local checkpoint for {repo_id!r}. Downloading ...", flush=True)
 
-    _hf_download(repo_id)
+    # Prefer the env override path (CI / HUNYUAN_*_MODEL_DIR); else HF hub cache.
+    local_dir = Path(os.environ[env_var]) if os.environ.get(env_var) else None
+    _hf_download(repo_id, local_dir=local_dir)
+
     path = resolve_checkpoint(env_var=env_var, repo_id=repo_id)
+    if is_checkpoint_complete(path):
+        print(f"[weights] using {path}", flush=True)
+        return path
+
+    # Env override still empty but hub cache got the snapshot (e.g. read-only local_dir).
+    if local_dir is not None:
+        snap = find_hf_snapshot(repo_id)
+        if snap is not None and is_checkpoint_complete(snap):
+            print(f"[weights] env path still incomplete; using hub snapshot {snap}", flush=True)
+            return snap
+
     missing = missing_weight_shards(path)
-    if missing:
-        raise RuntimeError(
-            f"Download finished but {len(missing)} weight shard(s) still missing under {path} "
-            f"(e.g. {missing[:5]}). Re-run: hf download {repo_id}"
-        )
-    print(f"[weights] using {path}", flush=True)
-    return path
+    index_ok = (path / _WEIGHT_INDEX).is_file()
+    hint = f" --local-dir {local_dir}" if local_dir is not None else ""
+    raise RuntimeError(
+        f"Download finished but checkpoint still incomplete under {path}: "
+        f"index={'ok' if index_ok else 'MISSING'}, "
+        f"missing {len(missing)} shard(s) (e.g. {missing[:5]}). "
+        f"Re-run: hf download {repo_id}{hint}"
+    )
 
 
 def ensure_base_weights() -> Path:
