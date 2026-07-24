@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import gc
 import os
+import time
 
 import torch
 import ttnn
@@ -118,14 +119,23 @@ def _forward_ref_layers(
     stream_layers: bool,
 ) -> torch.Tensor:
     """Run ref decoder layers, optionally loading one MoE layer at a time to bound host RAM."""
+    s = int(h.shape[1])
+    t_all = time.time()
     for li in range(num_layers):
         if stream_layers:
+            # Progress is intentional: 32L @ S=4160 is ~5–10 min with no other stdout,
+            # so a quiet loop looks hung after "[backbone ref] stream_layers=True".
+            t0 = time.time()
+            print(f"[ref layers] {li + 1}/{num_layers} S={s} load+fwd...", flush=True)
             layer = _make_ref_layer(c, li)
             h = layer(h, attention_mask=mask_add, custom_pos_emb=(cos, sin))
             del layer
+            gc.collect()
+            print(f"[ref layers] {li + 1}/{num_layers} done in {time.time() - t0:.1f}s", flush=True)
         else:
             h = cached_ref_layer(c, li)(h, attention_mask=mask_add, custom_pos_emb=(cos, sin))
     if stream_layers:
+        print(f"[ref layers] all {num_layers} done in {time.time() - t_all:.1f}s", flush=True)
         gc.collect()
     return h
 
