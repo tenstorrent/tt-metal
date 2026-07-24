@@ -149,6 +149,7 @@ class Gemma4DecoderLayer:
             ccl_manager=ccl_manager,
             dtype=shared_mlp_dtype,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/mlp" if tensor_cache_path else None,
+            layer_idx=layer_idx,
         )
 
         # MoE block (router + routed experts) — split dtypes between the two

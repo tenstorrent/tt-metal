@@ -77,12 +77,13 @@ def create_tt_model(
     if state_dict is None:
         state_dict = Gemma4ModelArgs.load_state_dict(model_path, dummy_weights=False)
 
-    tensor_cache_path = str(model_args.weight_cache_path(dtype))
-
     # Resolve per-module dtype overrides from precision_overrides.json. The
     # mesh shape is the worker grid (rows x cols); a 1x1 mesh on a multi-device
-    # system still gets the 1x1 entry.
+    # system still gets the 1x1 entry. Also qualify the weight tensor cache by
+    # mesh geometry (TP=4 on 1x4 vs 2x4 must not share tensorbins).
     mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    model_args.cluster_shape = mesh_shape
+    tensor_cache_path = str(model_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
     precision = Gemma4Precision.load(model_path, mesh_shape)
 
     model = Gemma4Model(
@@ -149,7 +150,9 @@ def create_assistant_model(
     if state_dict is None:
         state_dict = Gemma4AssistantArgs.load_state_dict(assistant_path, dummy_weights=False)
 
-    tensor_cache_path = str(assistant_args.weight_cache_path(dtype))
+    mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    assistant_args.cluster_shape = mesh_shape
+    tensor_cache_path = str(assistant_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
 
     model = Gemma4AssistantModel(
         mesh_device=mesh_device,

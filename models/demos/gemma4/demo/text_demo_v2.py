@@ -14,8 +14,11 @@ mirroring how Gemma3 / tt_transformers models are run:
 Differences from the Gemma3 demo (Gemma4-specific):
   * Single model instance, no data-parallel submeshes (Gemma4 runs batch=1 per
     submesh today, so the demo focuses on the latency / long-context configs).
-  * Host sampling (greedy argmax / top-p): Gemma4 does not expose on-device
-    sampling through the demo path, so logits are read back and sampled on host.
+  * Host sampling by default (``GEMMA4_HOST_SAMPLE=1``) so decode Metal Trace
+    stays coherent — on-device sample can allocate after an active decode
+    trace and corrupt generation. Opt into device sampling with
+    ``GEMMA4_HOST_SAMPLE=0`` once sampling buffers are captured before
+    decode-trace (TP>1, vocab shard ≤64K).
   * No decode warmup (``warmup_model_decode`` is Gemma3-generator specific); the
     first decode iteration serves as the compile step and is excluded from the
     reported steady-state perf (matching the benchmark warmup convention).
@@ -47,6 +50,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.demo.sampling_utils import (
+    build_device_sampling_params,
+    log_sampling_mode,
+    model_can_sample_on_device,
+)
 from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import should_auto_enable_bounded_sliding
 from models.demos.utils.llm_demo_utils import create_benchmark_data
@@ -55,6 +63,45 @@ from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_in
 from models.tt_transformers.tt.model_config import determine_device_name
 
 _CONTEXT_CACHE_DIR = Path("models/tt_transformers/demo/context_cache")
+
+_MESH_DEVICE_SHAPES = {
+    # Logical SKU names (same mapping as tt_transformers / gemma3 demos).
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+    "TG": (8, 4),
+    "P150": (1, 1),
+    "P300": (1, 2),
+    "P150x4": (1, 4),
+    "P300x2": (1, 4),
+    "P300X2": (1, 4),
+    "P150x8": (1, 8),
+    "BHGLX": (8, 4),
+}
+
+
+def _mesh_device_param():
+    """Resolve mesh shape from ``MESH_DEVICE`` as a hardcoded (rows, cols) tuple.
+
+    Named SKUs map explicitly (so ``2x4`` / ``BHGLX`` stay DP layouts). Unset /
+    unknown → ``(1, N)`` over all visible devices so a LoudBox opens full 1×8
+    TP instead of a 4-chip subset. Set ``MESH_DEVICE`` for non-line meshes.
+    """
+    env = os.environ.get("MESH_DEVICE")
+    if env in _MESH_DEVICE_SHAPES:
+        return _MESH_DEVICE_SHAPES[env]
+    if env and "x" in env.lower():
+        try:
+            rows, cols = env.lower().split("x", 1)
+            return (int(rows), int(cols))
+        except ValueError:
+            pass
+    try:
+        n = len(ttnn.get_device_ids())
+    except Exception:
+        n = 4
+    return (1, max(1, n))
 
 
 def _model_path():
@@ -142,21 +189,67 @@ def _host_sample(logits, temperature, top_p):
     return torch.gather(sorted_idx, -1, choice)
 
 
-def _device_params():
-    """Blackhole needs a larger trace region; keep a single command queue (host sampling).
+def _default_ccl_packet_bytes():
+    """Ideal Fabric packet for dense Gemma4 width-sharded CCL pages (4×page).
 
-    The batch-32 decode trace is the largest (~228 MB at capture), so the
-    Blackhole trace region is sized above that with margin. ``GEMMA4_TRACE_REGION_SIZE``
-    overrides it for configs that need a different budget.
+    Matches ``validate_packet_size`` guidance: 31B pages are 1344 B → 5376;
+    12B pages are 960 B → 3840. Other models leave Fabric's default.
     """
+    model = os.environ.get("HF_MODEL", "").lower()
+    if "31b" in model:
+        return 5376
+    if "12b" in model:
+        return 3840
+    return None
+
+
+def _device_params():
+    """Blackhole needs a larger trace region; CQ count is env-tunable.
+
+    Default ``num_command_queues=1`` (safe with host or on-device sampling).
+    Set ``GEMMA4_NUM_CQS=2`` for serving/H2D-bound workloads once sampling stays
+    on-device (Phase D3); measure batched users, not single-stream 128k TTFT.
+    ``GEMMA4_TRACE_REGION_SIZE`` overrides the BH trace budget.
+
+    CCL residual knobs (set before pytest collection):
+      ``GEMMA4_FABRIC=ring`` → ``FABRIC_1D_RING`` (default ``1d``; ring
+        regressed TTFT ~28.8s→~30.9s on 31B/P150x8 — leave off).
+      ``GEMMA4_CCL_PACKET_BYTES`` → FabricRouterConfig max payload.
+        BH defaults: 5376 (31B) / 3840 (12B) to match CCL page packing.
+        Set ``0`` / ``none`` / ``default`` to keep Fabric's default.
+    ``l1_small_size`` is set so all_gather semaphores land in L1_SMALL (avoids
+    fragmenting the main L1 pool).
+    """
+    num_cqs = max(1, int(os.environ.get("GEMMA4_NUM_CQS", "1")))
+    fabric_env = os.environ.get("GEMMA4_FABRIC", "1d").strip().lower()
+    if fabric_env in ("ring", "1d_ring", "fabric_1d_ring"):
+        fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
+    else:
+        fabric_config = ttnn.FabricConfig.FABRIC_1D
+
+    params = {
+        "fabric_config": fabric_config,
+        "num_command_queues": num_cqs,
+        # CCL all_gather allocates semaphores in L1_SMALL when this is > 0.
+        "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
+    }
     if is_blackhole():
-        trace_region_size = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 256_000_000))
-        return {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": trace_region_size,
-            "num_command_queues": 1,
-        }
-    return {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30_000_000, "num_command_queues": 1}
+        params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 256_000_000))
+    else:
+        params["trace_region_size"] = 30_000_000
+
+    pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
+    if pkt_env is None:
+        pkt_bytes = _default_ccl_packet_bytes() if is_blackhole() else None
+    elif pkt_env.strip().lower() in ("0", "none", "default", ""):
+        pkt_bytes = None
+    else:
+        pkt_bytes = max(4352, int(pkt_env))
+    if pkt_bytes is not None:
+        router = ttnn.FabricRouterConfig()
+        router.max_packet_payload_size_bytes = pkt_bytes
+        params["fabric_router_config"] = router
+    return params
 
 
 # Parameters mirror the Gemma3 demo layout (subset): a latency config, a long-context
@@ -191,7 +284,10 @@ def _device_params():
             False,
             True,
         ),
-        (  # batch-32 (max throughput) — 32 concurrent users (decode batch ceiling)
+        (  # batch-32 (max throughput) — 32 concurrent users (decode batch ceiling).
+            # max_seq_len=1024 (short prompts; matches batch-8). Prefill is micro-
+            # batched at ≤4 users (GEMMA4_MAX_BATCHED_PREFILL_USERS): true B≥8
+            # wedges on P150x8 after the first all_gather. See generator.py.
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
             True,
             4096,
@@ -306,17 +402,8 @@ def _device_params():
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P300x2": (1, 4),
-            "P300X2": (1, 4),
-            "P150x8": (1, 8),
-            "T3K": (1, 8),
-        }.get(os.environ.get("MESH_DEVICE"), (1, 4))
+        # MESH_DEVICE → (rows, cols); unset → (1, N) over all visible devices.
+        _mesh_device_param()
     ],
     indirect=True,
 )
@@ -353,6 +440,11 @@ def test_demo_text(
     # Batch sweep hook: GEMMA4_BATCH overrides the config's batch_size so the
     # same config can probe batch-1 / 8 / 32 to find the QB2 ceiling.
     batch_size = int(os.environ.get("GEMMA4_BATCH", batch_size))
+    # Prefetcher bring-up: GEMMA4_DECODE_TRACE=0 disables Metal Trace capture.
+    _decode_trace = os.environ.get("GEMMA4_DECODE_TRACE")
+    if _decode_trace is not None:
+        enable_trace = _decode_trace.lower() in ("1", "true", "yes")
+        logger.info(f"GEMMA4_DECODE_TRACE override: enable_trace={enable_trace}")
 
     # ── Speculative-decoding dispatch ────────────────────────────────────────
     # `--speculative` reroutes the demo through the it-assistant drafter +
@@ -472,23 +564,34 @@ def test_demo_text(
         logger.info(f"Bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
 
     # ── Warmup (prefill compile + optional trace) ──────────────────────────
-    # Prefill tracing buys ~nothing (prefill runs only a handful of times) and its
-    # trace buffers scale with chunk_size×batch, overflowing the trace region at
-    # long context (≥4K) with no perf gain. Gate prefill tracing off above a
-    # threshold (decode stays traced); GEMMA4_PREFILL_TRACE_MAX_SEQ overrides.
+    # Prefill tracing buys ~nothing for single full-ISL runs (trace buffers
+    # scale with chunk×batch). Gate off above GEMMA4_PREFILL_TRACE_MAX_SEQ
+    # unless traced multi-chunk is on (GEMMA4_CHUNKED_PREFILL_TRACE=1): then
+    # we still capture the 4k sp0/sp1 buckets used by long-ISL chunk replay.
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and max_seq_len < prefill_trace_max
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     if enable_trace and not prefill_enable_trace:
         logger.info(
             f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
-            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ to override."
+            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
+            f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
         )
+    # Default host sample: device sample + decode Metal Trace can allocate
+    # mid-trace and corrupt tokens. Opt in with GEMMA4_HOST_SAMPLE=0.
+    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "1").lower() in ("1", "true", "yes")
+    can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
+    device_sampling_params = build_device_sampling_params(sampling_params, can_sample=can_sample)
+    greedy_only = temperature <= 0
+    log_sampling_mode(can_sample, sampling_params)
+
     logger.info("Warming up prefill...")
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache,
         enable_trace=prefill_enable_trace,
-        can_sample_on_device=False,
-        greedy_only=True,
+        can_sample_on_device=can_sample,
+        greedy_only=greedy_only,
     )
     logger.info("Warmup complete")
 
@@ -505,15 +608,20 @@ def test_demo_text(
 
     logger.info("Starting prefill...")
     profiler.start("inference_prefill")
-    prefill_logits = generator.prefill_forward_text(
+    prefill_out = generator.prefill_forward_text(
         input_tokens_prefill_pt,
         page_table=page_table,
         kv_cache=tt_kv_cache,
         prompt_lens=decoding_pos,
         warmup_prefill=False,
         enable_trace=prefill_enable_trace,
+        sampling_params=device_sampling_params,
     )
-    prefilled_token = _host_sample(prefill_logits, temperature, top_p)
+    if device_sampling_params is not None:
+        prefill_tokens, _ = prefill_out
+        prefilled_token = prefill_tokens.long()
+    else:
+        prefilled_token = _host_sample(prefill_out, temperature, top_p)
     profiler.end("inference_prefill")
     logger.info("Prefill finished")
 
@@ -533,15 +641,18 @@ def test_demo_text(
     profiler.start("inference_decode")
     while users_decoding:
         profiler.start(f"inference_decode_time_{iteration}")
-        logits, _ = generator.decode_forward(
+        decode_out, _ = generator.decode_forward(
             out_tok,
             current_pos,
             enable_trace=enable_trace,
             page_table=page_table,
             kv_cache=tt_kv_cache,
-            sampling_params=None,  # host sampling
+            sampling_params=device_sampling_params,
         )
-        out_tok = _host_sample(logits, temperature, top_p)
+        if device_sampling_params is not None:
+            out_tok = decode_out.long().view(batch_size, 1)
+        else:
+            out_tok = _host_sample(decode_out, temperature, top_p)
         profiler.end(f"inference_decode_time_{iteration}")
 
         current_pos += 1
@@ -697,9 +808,12 @@ def _run_spec_decode(
     page_table = create_tt_page_table(batch_size, paged_attention_config)
 
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
-    # (≥4K); gate it off above a threshold (decode/spec traces stay on).
+    # (≥4K); gate it off above a threshold (decode/spec traces stay on), unless
+    # traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and max_seq_len < prefill_trace_max
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
     )
@@ -890,9 +1004,12 @@ def _run_spec_decode_batched(
     page_table = create_tt_page_table(B, paged_attention_config)  # [B, blocks_per_user]
 
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
-    # (≥4K); gate it off above a threshold (the batched decode trace stays on).
+    # (≥4K); gate it off above a threshold (the batched decode trace stays on),
+    # unless traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and max_seq_len < prefill_trace_max
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
     )
@@ -1000,19 +1117,7 @@ def _run_spec_decode_batched(
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P300x2": (1, 4),
-            "P300X2": (1, 4),
-            "P150x8": (1, 8),
-            "T3K": (1, 8),
-        }.get(os.environ.get("MESH_DEVICE"), (1, 4))
-    ],
+    [_mesh_device_param()],
     indirect=True,
 )
 def test_demo_spec_decode(mesh_device, reset_seeds):
