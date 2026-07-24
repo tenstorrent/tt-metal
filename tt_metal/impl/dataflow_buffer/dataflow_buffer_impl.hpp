@@ -129,34 +129,12 @@ public:
     ::dfb::PackedTileCounter allocate(const CoreCoord& core, uint8_t tensix_id, bool use_t6_only = false);
     void reset() { next_tc_id_.clear(); }
 
-    // [#48552] LIFETIME-AWARE physical-counter isolation (gated by TT_METAL_QSR_TC_ISOLATE=1). Physical tile
-    // counters are a shared HW resource (per (core,tensix): DM pool [0,16), Tensix-only pool [16,32)). This
-    // allocator (a per-ProgramImpl member) reserves counters from a process-global physical pool at finalize
-    // and RETURNS them on destruction, so only concurrently-LIVE programs ever hold a given physical counter —
-    // no reuse-while-live and no wrap-around. If a (core,tensix) pool is genuinely exhausted the allocation
-    // FATALs (visible) rather than silently aliasing. Move-only: ProgramImpl is move-only, and a moved-from
-    // allocator owns no counters (frees nothing on destruction).
-    TileCounterAllocator() = default;
-    ~TileCounterAllocator();
-    TileCounterAllocator(TileCounterAllocator&&) = default;
-    TileCounterAllocator& operator=(TileCounterAllocator&&) = default;
-    TileCounterAllocator(const TileCounterAllocator&) = delete;
-    TileCounterAllocator& operator=(const TileCounterAllocator&) = delete;
-
 private:
     struct PerCoreCounters {
         std::array<uint8_t, 4> dm_next     = {};  // next available TC id in [0, NUM_TENSIX_TILE_COUNTERS_FOR_DM)
         std::array<uint8_t, 4> t6_only_next = {};  // next available TC id offset from TC_TENSIX_POOL_START
     };
     std::unordered_map<CoreCoord, PerCoreCounters> next_tc_id_;
-
-    // [#48552] Physical counters this program reserved from the global pool, returned on destruction.
-    struct OwnedTc {
-        CoreCoord core;
-        uint8_t tensix_id;
-        uint8_t tc_id;
-    };
-    std::vector<OwnedTc> owned_physical_tcs_;
 };
 
 class RemapperIndexAllocator {
