@@ -18,21 +18,22 @@ from typing import Any
 
 import pandas as pd
 
-
 REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_CSVS = {
-    "t640": Path(
-        "/tmp/kda_perf_report_491dddde4fc_t640_r10/reports/2026_07_23_14_08_30/"
-        "ops_perf_results_2026_07_23_14_08_30.csv"
-    ),
-    "t5120": Path(
-        "/tmp/kda_perf_report_491dddde4fc_t5120_r10/reports/2026_07_23_14_09_48/"
-        "ops_perf_results_2026_07_23_14_09_48.csv"
-    ),
+    "t640": Path("generated/profiler/reports/2026_07_24_16_17_28/ops_perf_results_2026_07_24_16_17_28.csv"),
+    "t5120": Path("generated/profiler/reports/2026_07_24_16_24_06/ops_perf_results_2026_07_24_16_24_06.csv"),
+}
+CONTROL_CSVS = {
+    "t640": Path("generated/profiler/reports/2026_07_24_15_49_24/ops_perf_results_2026_07_24_15_49_24.csv"),
+    "t5120": Path("generated/profiler/reports/2026_07_24_16_22_50/ops_perf_results_2026_07_24_16_22_50.csv"),
 }
 EXPECTED_SHA256 = {
-    "t640": "30b5d9293e95a6c087025cbfa322eda4aabf03e11557bc50a8c2af9a88934cf1",
-    "t5120": "a8762fd8d67bb78779f0689a0bda7caac20a567498dc3f8e96bfa99ccf96cba4",
+    "t640": "09d6eebffdd8a38346e3c35bb65d4061f05d9a438aebc5d3052df42979adb873",
+    "t5120": "b3fd2c8ff3df64fecdb5d2b977858fb56c12a8cc58271b0ce37e7fe687f98a02",
+}
+CONTROL_SHA256 = {
+    "t640": "106c501e09f50fc185046b96d0263c7f2107a49fdf446fdc5669a54748293976",
+    "t5120": "25759170be81e5186552a43dc7f531c13223b16c6307a29880c3886d1a3ac2c3",
 }
 EXPECTED_CALLS = {"t640": 30, "t5120": 35}
 TOKENS = {"t640": 640, "t5120": 5120}
@@ -153,14 +154,12 @@ EDGES = [
 COMMANDS = {
     scenario: (
         f"PERF_TRACE=1 PERF_SEQ={TOKENS[scenario]} PERF_REPS=10 "
-        "python_env/bin/python3 -m tracy -p -r "
-        f"-o /tmp/kda_perf_report_491dddde4fc_{scenario}_r10 "
-        "--check-exit-code --op-support-count 10000 -t 5007 "
-        '-a device_kernel_duration -m "pytest '
-        'models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s"'
+        "scripts/run_safe_pytest.sh --profile "
+        "models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s"
     )
     for scenario in TOKENS
 }
+CONTROL_COMMANDS = {scenario: f"QWEN_KDA_PREP_BF16_MASK=0 {command}" for scenario, command in COMMANDS.items()}
 
 
 @dataclass(frozen=True)
@@ -199,6 +198,8 @@ def parse_trace(scenario: str, csv: Path) -> Trace:
     sha256 = file_sha256(csv)
     if csv == DEFAULT_CSVS[scenario]:
         assert sha256 == EXPECTED_SHA256[scenario], (sha256, EXPECTED_SHA256[scenario])
+    if csv == CONTROL_CSVS[scenario]:
+        assert sha256 == CONTROL_SHA256[scenario], (sha256, CONTROL_SHA256[scenario])
     columns = [
         "OP CODE",
         "GLOBAL CALL COUNT",
@@ -285,23 +286,25 @@ def parse_trace(scenario: str, csv: Path) -> Trace:
     return Trace(csv, sha256, rows, calls, replay_spans_ns, replay_active_ns, block_timing_ns, typical_device_ns)
 
 
-def build_payload(traces: dict[str, Trace]) -> dict[str, Any]:
+def build_payload(traces: dict[str, Trace], controls: dict[str, Trace]) -> dict[str, Any]:
     blocks = []
     for block in BLOCKS:
         enriched = dict(block)
         enriched["snippet"] = source_snippet(block["file"], block["lines"])
         blocks.append(enriched)
     scenarios: dict[str, Any] = {}
-    # ROOFLINE.md:321-323 establishes 67.594 GFLOP at T=640 for the
-    # retained precomposed path; online work scales linearly with T.
     flops_per_token = 67_594_000_000 / 640
     peak_flops = 8 * 152.064e12
     for scenario, trace in traces.items():
+        control = controls[scenario]
         span = pd.Series(trace.replay_spans_ns)
         active = pd.Series(trace.replay_active_ns)
+        control_span = pd.Series(control.replay_spans_ns)
+        control_active = pd.Series(control.replay_active_ns)
         tokens = TOKENS[scenario]
         executed_flops = tokens * flops_per_token
         latency_ns = float(span.median())
+        control_latency_ns = float(control_span.median())
         mrs_ns = trace.typical_device_ns[MRS_OP]
         ccl_payload_bytes = tokens * 2304 * 4 * 7 / 8
         scenarios[scenario] = {
@@ -326,13 +329,28 @@ def build_payload(traces: dict[str, Trace]) -> dict[str, Any]:
             "csv_sha256": trace.sha256,
             "csv_rows": len(trace.rows),
             "command": COMMANDS[scenario],
+            "control": {
+                "latency_ns": control_latency_ns,
+                "active_ns": float(control_active.median()),
+                "graph_total_ns": sum(control.block_timing_ns.values()),
+                "block_timing_ns": control.block_timing_ns,
+                "compute_util": executed_flops / (control_latency_ns / 1e9) / peak_flops,
+                "csv": str(control.csv),
+                "csv_sha256": control.sha256,
+                "csv_rows": len(control.rows),
+                "command": CONTROL_COMMANDS[scenario],
+            },
+            "wall_delta_ns": latency_ns - control_latency_ns,
+            "wall_delta_pct": latency_ns / control_latency_ns - 1,
+            "recurrence_delta_ns": trace.block_timing_ns["recurrence"] - control.block_timing_ns["recurrence"],
+            "recurrence_delta_pct": trace.block_timing_ns["recurrence"] / control.block_timing_ns["recurrence"] - 1,
         }
     return {
-        "title": "Kimi Linear KDA · performance dossier",
+        "title": "Kimi Linear KDA · mixed-storage performance dossier",
         "branch": "mvasilijevic/codex/kimi-linear-kda",
-        "profile_commit": "491dddde4fc7c2c41f7cef9233c7ef8933578c77",
-        "profile_tree_clean": True,
-        "profile_date": "2026-07-23",
+        "profile_commit": "b60f25012aafd10ac0d0800e4751a40ef65ec88d",
+        "profile_tree_clean": False,
+        "profile_date": "2026-07-24",
         "hardware": "LoudBox · 8× Blackhole · 1×8 mesh · FABRIC_1D",
         "software": "firmware 19.5.0 · KMD 2.4.1",
         "method": (
@@ -340,11 +358,21 @@ def build_payload(traces: dict[str, Trace]) -> dict[str, Any]:
             "firmware span. Graph calls use max duration across devices, except fused matmul/reduce-scatter "
             "uses the device mean. Session 1 is warm-up."
         ),
-        "baseline": (
-            "origin/main at merge-base 6a84cd727e2 contains no KDA layer, so no like-for-like mainline "
-            "baseline exists. Historical branch traces are excluded from headline comparisons because "
-            "they lack immutable run manifests."
+        "provenance_note": (
+            "The KDA harness predates run manifests. CSV hashes, exact commands, hardware, and source-equivalent "
+            "commit are recorded. Profiling preceded the final documentation commit; implementation behavior matches "
+            "b60f25012aa, while report/log files were dirty."
         ),
+        "baseline": (
+            "The before state is the matched all-FP32 prep/scan storage control selected with "
+            "QWEN_KDA_PREP_BF16_MASK=0. The after state stores kd, q_decay, and dl in BF16 (mask 0x26). "
+            "Arithmetic accumulation, intra, t_inv, recurrent state, and public outputs remain FP32."
+        ),
+        "dtype_policy": {
+            "mask": "0x26",
+            "bf16": ["kd", "q_decay", "dl"],
+            "fp32": ["v_beta", "k_dec_t", "intra", "t_inv", "state", "outputs"],
+        },
         "blocks": blocks,
         "edges": EDGES,
         "scenarios": scenarios,
@@ -388,7 +416,8 @@ footer{{margin-top:55px;border-top:2px solid var(--ink);padding:18px 0;color:var
 </style></head><body><main class="wrap">
 <header><div><div class="eyebrow">Tracy-backed · source verified · TP8 Blackhole</div><h1>KDA<br>performance dossier</h1><p class="lede">A measured map of the Kimi Linear KDA layer: where time goes, how work is distributed, and how far the current implementation is from the 60% compute / 40% CCL aspiration.</p></div><div class="meta" id="meta"></div></header>
 <div class="controls"><div class="seg" id="scenarioSeg"><button data-s="t640" aria-pressed="true">T=640</button><button data-s="t5120" aria-pressed="false">T=5,120</button></div><div class="seg" id="viewSeg"><button data-v="semantic" aria-pressed="true">semantic</button><button data-v="ops" aria-pressed="false">operations</button></div></div>
-<section><div class="kicker">Measured outcome</div><div class="cards" id="cards"></div></section>
+<section><div class="kicker">Measured outcome · selected mixed storage</div><div class="cards" id="cards"></div></section>
+<section><h2>FP32 control → mixed-storage result</h2><div class="split"><div class="panel" id="dtypeDelta"></div><div class="panel"><div class="kicker">Selected boundary policy</div><p><b>BF16 storage:</b> kd · q_decay · dl</p><p><b>FP32 retained:</b> v_beta · k_dec_t · intra · t_inv · recurrent state · public outputs</p><p class="note">This changes storage traffic across prep → scan. It does not change the TP=8 partition or fused output collective.</p></div></div></section>
 <section><h2>Replay stability and scaling</h2><div class="split"><div class="panel"><svg id="spark" class="spark" viewBox="0 0 680 220" role="img" aria-label="Measured wall latency by Tracy replay session"></svg><p class="legend">Ten measured replay spans. Axes show replay session and measured wall latency; hover or keyboard-focus a point for its exact value.</p></div><div class="panel" id="scaling"></div></div></section>
 <section><h2>Source-verified dataflow</h2><p class="note">Node time is collapsed active kernel time, not wall time. Click a semantic node for its source proof; double-click to expand its exact Tracy calls. Drag to pan and use the controls to zoom.</p><div class="graph-shell"><svg id="graph" viewBox="0 0 1420 620"></svg><div class="zoom"><button data-z="in">+</button><button data-z="out">−</button><button data-z="reset">reset</button></div></div><p class="legend" id="graphLegend"></p></section>
 <section><h2>Ordered operation ledger</h2><div class="call-grid"><table><thead><tr><th data-sort="order">#</th><th data-sort="label">Tracy operation</th><th data-sort="block">semantic block</th><th class="num" data-sort="duration_ns">median µs</th><th class="num" data-sort="p10_ns">p10</th><th class="num" data-sort="p90_ns">p90</th><th class="num" data-sort="cores">cores</th></tr></thead><tbody id="opRows"></tbody></table></div></section>
@@ -405,11 +434,15 @@ function staticDraw(){{
  $('meta').innerHTML=`<div><b>profile commit</b>${{P.profile_commit.slice(0,12)}}</div><div><b>branch</b>${{esc(P.branch)}}</div><div><b>platform</b>${{esc(P.hardware)}}</div><div><b>software</b>${{esc(P.software)}}</div>`;
  $('sources').innerHTML=P.blocks.map(b=>`<details><summary>${{esc(b.label)}} · ${{esc(b.file)}}:${{b.lines[0]}}-${{b.lines[1]}}</summary><pre>${{esc(b.snippet)}}</pre></details>`).join('');
  $('fullCalls').innerHTML=Object.values(P.scenarios).map(s=>`<h3>${{s.label}}</h3><div class="call-grid"><table><thead><tr><th>#</th><th>op</th><th>block</th><th class="num">median µs</th><th>program hash</th></tr></thead><tbody>${{s.calls.map(c=>`<tr><td>${{c.order}}</td><td>${{esc(c.op)}}</td><td>${{esc(c.block)}}</td><td class="num">${{(c.duration_ns/1000).toFixed(3)}}</td><td class="mono">${{esc(c.program_hash)}}</td></tr>`).join('')}}</tbody></table></div>`).join('');
- $('provenance').innerHTML=Object.values(P.scenarios).map(s=>`<h3>${{s.label}}</h3><p><b>CSV</b> <span class="mono">${{esc(s.csv)}}</span><br><b>SHA-256</b> <span class="mono">${{s.csv_sha256}}</span><br><b>measured rows</b> ${{s.csv_rows.toLocaleString()}}</p><pre>${{esc(s.command)}}</pre>`).join('')+`<p><b>Profile tree:</b> commit ${{P.profile_commit}}, explicitly verified clean before both runs. The harness does not emit run_manifest.json, so the report records the equivalent command, commit, clean-tree assertion, CSV hash, hardware, and software metadata here.</p><p>${{esc(P.method)}}</p><p class="note">${{esc(P.baseline)}}</p>`;
+ $("provenance").innerHTML=Object.values(P.scenarios).map(s=>`<h3>${{s.label}}</h3><p><b>Selected mixed-storage CSV</b> <span class="mono">${{esc(s.csv)}}</span><br><b>SHA-256</b> <span class="mono">${{s.csv_sha256}}</span><br><b>measured rows</b> ${{s.csv_rows.toLocaleString()}}</p><pre>${{esc(s.command)}}</pre><p><b>FP32 control CSV</b> <span class="mono">${{esc(s.control.csv)}}</span><br><b>SHA-256</b> <span class="mono">${{s.control.csv_sha256}}</span><br><b>measured rows</b> ${{s.control.csv_rows.toLocaleString()}}</p><pre>${{esc(s.control.command)}}</pre>`).join("")+`<p><b>Source-equivalent profile commit:</b> ${{P.profile_commit}}.</p><p>${{esc(P.provenance_note)}}</p><p>${{esc(P.method)}}</p><p class="note">${{esc(P.baseline)}}</p>`;
 }}
 function drawCards(){{
  const s=P.scenarios[scenario],cards=[['wall latency',fmtNs(s.latency_ns),`${{fmtNs(s.latency_min_ns)}}–${{fmtNs(s.latency_max_ns)}} across ten replays`],['compute utilization',pct(s.compute_util),`executed ${{(s.executed_flops/1e9).toFixed(1)}} GFLOP / 8-chip HiFi4 peak`,s.compute_util/P.aspiration.compute_util,'cool'],['CCL utilization',pct(s.ccl_util),`${{s.ccl_effective_gbps.toFixed(1)}} GB/s effective payload / 100 GB/s target`,s.ccl_util/P.aspiration.ccl_util,''],['collapsed active',fmtNs(s.graph_total_ns),`${{s.calls.length}} calls · graph share denominator`]];
  $('cards').innerHTML=cards.map(c=>`<article class="card"><div class="kicker">${{c[0]}}</div><div class="value">${{c[1]}}</div><div>${{c[2]}}</div>${{c[3]!==undefined?`<div class="bar ${{c[4]||''}}"><i style="width:${{Math.min(100,c[3]*100)}}%"></i></div>`:''}}</article>`).join('');
+}}
+function drawDtypeDelta(){{
+ const s=P.scenarios[scenario],c=s.control,wallWin=-s.wall_delta_pct,recWin=-s.recurrence_delta_pct;
+ $("dtypeDelta").innerHTML=`<div class="kicker">${{s.label}} measured A/B</div><p style="font:700 42px/1 Georgia,serif">${{pct(wallWin)}} faster</p><p>Wall: <b>${{fmtNs(c.latency_ns)}} → ${{fmtNs(s.latency_ns)}}</b> (${{fmtNs(s.wall_delta_ns)}}).</p><p>Recurrence: <b>${{fmtNs(c.block_timing_ns.recurrence)}} → ${{fmtNs(s.block_timing_ns.recurrence)}}</b> (${{pct(recWin)}} faster).</p><p>Fixed-work compute utilization: <b>${{pct(c.compute_util)}} → ${{pct(s.compute_util)}}</b>.</p>`;
 }}
 function drawSpark(){{
  const vals=P.scenarios[scenario].replay_spans_ns.map(v=>v/1000),rawLo=Math.min(...vals),rawHi=Math.max(...vals),pad=Math.max((rawHi-rawLo)*.15,.05),lo=rawLo-pad,hi=rawHi+pad,left=72,right=650,top=20,bottom=168,y=v=>bottom-(v-lo)/(hi-lo)*(bottom-top),pts=vals.map((v,i)=>[left+i*(right-left)/(vals.length-1),y(v)]),ticks=[hi,(hi+lo)/2,lo];
@@ -430,7 +463,7 @@ function drawGraph(){{
 function openDrawer(id){{const b=P.blocks.find(x=>x.id===id),s=P.scenarios[scenario],calls=s.calls.filter(c=>c.block===id);$('drawerBody').innerHTML=`<div class="kicker">${{fmtNs(s.block_timing_ns[id])}} · ${{pct(s.block_timing_ns[id]/s.graph_total_ns)}}</div><h2>${{esc(b.label)}}</h2><p>${{esc(b.desc)}}</p><p><b>tensor contract</b><br>${{esc(b.shape)}}</p><p><b>distribution</b><br>${{esc(b.distribution)}}</p><p><b>Tracy calls</b><br>${{calls.map(c=>c.order+' '+esc(c.label)+' '+fmtNs(c.duration_ns)).join('<br>')}}</p><p><b>${{esc(b.file)}}:${{b.lines[0]}}-${{b.lines[1]}}</b></p><pre>${{esc(b.snippet)}}</pre>`;$('drawer').classList.add('open');}}
 function drawTable(){{const calls=[...P.scenarios[scenario].calls].sort((a,b)=>{{let x=a[sortKey]??0,y=b[sortKey]??0;return (typeof x==='string'?x.localeCompare(y):x-y)*sortDir;}});$('opRows').innerHTML=calls.map(c=>`<tr><td>${{c.order}}</td><td title="${{esc(c.op)}}">${{esc(c.label)}}</td><td>${{esc(c.block)}}</td><td class="num">${{(c.duration_ns/1000).toFixed(3)}}</td><td class="num">${{(c.p10_ns/1000).toFixed(3)}}</td><td class="num">${{(c.p90_ns/1000).toFixed(3)}}</td><td class="num">${{c.cores??'—'}}</td></tr>`).join('');}}
 function drawRoofline(){{const s=P.scenarios[scenario],computeGap=P.aspiration.compute_util/s.compute_util,cclGap=P.aspiration.ccl_util/s.ccl_util;$('roofline').innerHTML=`<h3>${{s.label}}</h3><p>Executed-work estimate: <b>${{(s.executed_flops/1e9).toFixed(3)}} GFLOP</b>. Against the 8-chip HiFi4 peak of 1,216.512 TFLOP/s and measured wall latency, this is <b>${{pct(s.compute_util)}}</b> utilization. Reaching 60% requires about <b>${{computeGap.toFixed(1)}}×</b> the present useful-FLOP rate.</p><p>The fused output collective moves a minimum FP32 ring payload of <b>${{(s.ccl_payload_bytes/1e6).toFixed(2)}} MB</b>. Dividing by its typical-device Tracy median gives <b>${{s.ccl_effective_gbps.toFixed(1)}} GB/s</b>, or <b>${{pct(s.ccl_util)}}</b> of the 100 GB/s planning target; the 40% aspiration is ${{cclGap.toFixed(2)}}× away. This is a lower-bound payload model because Tracy exposes the fused kernel, not isolated link occupancy.</p><p>The source and trace together identify recurrence and fused output as the dominant optimization surfaces.</p>`;}}
-function draw(){{sync();drawCards();drawSpark();drawGraph();drawTable();drawRoofline();}}
+function draw(){{sync();drawCards();drawDtypeDelta();drawSpark();drawGraph();drawTable();drawRoofline();}}
 document.querySelectorAll('#scenarioSeg button').forEach(b=>b.onclick=()=>{{scenario=b.dataset.s;expanded.clear();scale=1;tx=0;ty=0;draw();}});document.querySelectorAll('#viewSeg button').forEach(b=>b.onclick=()=>{{view=b.dataset.v;expanded.clear();draw();}});
 document.querySelectorAll('th[data-sort]').forEach(h=>h.onclick=()=>{{if(sortKey===h.dataset.sort)sortDir*=-1;else{{sortKey=h.dataset.sort;sortDir=1;}}drawTable();}});document.querySelectorAll('.zoom button').forEach(b=>b.onclick=()=>{{if(b.dataset.z==='in')scale*=1.18;else if(b.dataset.z==='out')scale/=1.18;else{{scale=1;tx=0;ty=0;}}drawGraph();}});
 $('drawerClose').onclick=()=>$('drawer').classList.remove('open');const svg=$('graph');svg.onmousedown=e=>drag={{x:e.clientX,y:e.clientY,tx,ty}};window.onmousemove=e=>{{if(drag){{tx=drag.tx+e.clientX-drag.x;ty=drag.ty+e.clientY-drag.y;drawGraph();}}}};window.onmouseup=()=>drag=null;
@@ -442,10 +475,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--t640-csv", type=Path, default=DEFAULT_CSVS["t640"])
     parser.add_argument("--t5120-csv", type=Path, default=DEFAULT_CSVS["t5120"])
-    parser.add_argument("--output", type=Path, default=Path(__file__).with_name("kda_perf_report.html"))
+    parser.add_argument("--t640-control-csv", type=Path, default=CONTROL_CSVS["t640"])
+    parser.add_argument("--t5120-control-csv", type=Path, default=CONTROL_CSVS["t5120"])
+    parser.add_argument("--output", type=Path, default=Path(__file__).with_name("codex-kda_perf_report.html"))
     args = parser.parse_args()
     traces = {"t640": parse_trace("t640", args.t640_csv), "t5120": parse_trace("t5120", args.t5120_csv)}
-    payload = build_payload(traces)
+    controls = {
+        "t640": parse_trace("t640", args.t640_control_csv),
+        "t5120": parse_trace("t5120", args.t5120_control_csv),
+    }
+    payload = build_payload(traces, controls)
     args.output.write_text(render_html(payload) + "\n")
     print(f"wrote {args.output} ({args.output.stat().st_size:,} bytes)")
     for scenario, result in payload["scenarios"].items():

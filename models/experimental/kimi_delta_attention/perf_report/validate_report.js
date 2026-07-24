@@ -1,8 +1,8 @@
-// Headless interaction and data-integrity harness for kda_perf_report.html.
+// Headless interaction and data-integrity harness for codex-kda_perf_report.html.
 const fs = require("fs");
 const vm = require("vm");
 const path = require("path");
-const report = fs.readFileSync(path.join(__dirname, "kda_perf_report.html"), "utf8");
+const report = fs.readFileSync(path.join(__dirname, "codex-kda_perf_report.html"), "utf8");
 const payloadMatch = report.match(/<script id="payload" type="application\/json">([\s\S]*?)<\/script>/);
 const scripts = [...report.matchAll(/<script(?: [^>]*)?>([\s\S]*?)<\/script>/g)];
 if (!payloadMatch || scripts.length < 2) throw new Error("report scripts not found");
@@ -95,6 +95,8 @@ for (const key of ["t640", "t5120"]) {
       throw new Error("active attribution does not close");
     }
     if (!(scenario.latency_ns > 0 && scenario.compute_util > 0 && scenario.ccl_util > 0)) throw new Error("non-positive metric");
+    if (!(scenario.control.latency_ns > scenario.latency_ns)) throw new Error("mixed storage must beat FP32 control");
+    if (!(scenario.recurrence_delta_ns < 0 && scenario.wall_delta_ns < 0)) throw new Error("dtype deltas must be improvements");
   });
   check(key + " toggle and render", () => click(scenarios.find(button => button.dataset.s === key)));
   check(key + " replay chart axes, values, and tooltips", () => {
@@ -112,6 +114,11 @@ for (const key of ["t640", "t5120"]) {
     if (!document.getElementById("graph").innerHTML.includes('class="opnode"')) throw new Error("no operation nodes");
   });
 }
+check("dtype A/B panel", () => {
+  api.setScenario("t5120");
+  const panel = document.getElementById("dtypeDelta").innerHTML;
+  if (!panel.includes("3,681.53 µs") || !panel.includes("3,584.95 µs") || !panel.includes("2.6% faster")) throw new Error("matched dtype comparison absent");
+});
 check("node expand", () => {
   api.setScenario("t640"); api.setView("semantic"); api.expanded.add("convolution"); api.drawGraph();
   if (!document.getElementById("graph").innerHTML.includes('class="opnode"')) throw new Error("expanded calls absent");
