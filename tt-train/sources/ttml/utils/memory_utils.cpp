@@ -4,6 +4,13 @@
 
 #include "memory_utils.hpp"
 
+#include <fmt/format.h>
+
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer_types.hpp>
+
+#include "autograd/auto_context.hpp"
+
 namespace ttml::utils {
 using namespace ttnn::graph;
 
@@ -160,5 +167,71 @@ void clear() {
 }
 
 }  // namespace MemoryUsageTracker
+
+namespace DramFootprintTracker {
+
+namespace {
+bool is_tracking_active = false;
+
+// The allocator reports per-bank; per-device bytes = value * num_banks (the same convention as ttnn's
+// get_memory_view / get_available_device_memory_in_bytes).
+DramFootprint to_device(const tt::tt_metal::DramFootprint& per_bank) {
+    const auto& allocator = autograd::ctx().get_device().allocator();
+    const auto num_banks = static_cast<uint64_t>(allocator->get_num_banks(tt::tt_metal::BufferType::DRAM));
+    return {
+        .peak_allocated_bytes = per_bank.peak_allocated_bytes * num_banks,
+        .min_largest_free_bytes = per_bank.min_largest_free_bytes * num_banks,
+    };
+}
+}  // namespace
+
+void begin() {
+    if (is_tracking_active) {
+        throw std::runtime_error("DramFootprintTracker: tracking is already active (begin called twice; not nestable)");
+    }
+    autograd::ctx().get_device().allocator()->begin_dram_footprint_tracking();
+    is_tracking_active = true;
+}
+
+DramFootprint footprint() {
+    if (!is_tracking_active) {
+        return {};
+    }
+    return to_device(autograd::ctx().get_device().allocator()->get_dram_footprint());
+}
+
+DramFootprint end() {
+    if (!is_tracking_active) {
+        fmt::print("WARNING: DramFootprintTracker::end() called while tracking is not active\n");
+        return {};
+    }
+    const auto result = to_device(autograd::ctx().get_device().allocator()->end_dram_footprint_tracking());
+    is_tracking_active = false;
+    return result;
+}
+
+}  // namespace DramFootprintTracker
+
+DramFootprintScope::DramFootprintScope() {
+    DramFootprintTracker::begin();
+}
+DramFootprintScope::~DramFootprintScope() {
+    DramFootprintTracker::end();
+}
+DramFootprint DramFootprintScope::footprint() const {
+    return DramFootprintTracker::footprint();
+}
+
+uint64_t dram_reserved_bytes() {
+    const auto& allocator = autograd::ctx().get_device().allocator();
+    const auto num_banks = static_cast<uint64_t>(allocator->get_num_banks(tt::tt_metal::BufferType::DRAM));
+    return static_cast<uint64_t>(allocator->get_dram_reserved_bytes()) * num_banks;
+}
+
+uint64_t dram_arena_bytes() {
+    const auto& allocator = autograd::ctx().get_device().allocator();
+    const auto num_banks = static_cast<uint64_t>(allocator->get_num_banks(tt::tt_metal::BufferType::DRAM));
+    return static_cast<uint64_t>(allocator->get_bank_size(tt::tt_metal::BufferType::DRAM)) * num_banks;
+}
 
 }  // namespace ttml::utils

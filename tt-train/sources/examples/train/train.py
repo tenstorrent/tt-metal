@@ -61,6 +61,7 @@ from model_builders import (
 )
 from callbacks import (
     AverageLossCallback,
+    DramFootprintCallback,
     MemoryTrackerCallback,
     MoECallback,
     ThroughputCallback,
@@ -508,6 +509,10 @@ def run_training(
     callbacks.append(ThroughputCallback(flops_per_token, peak_tflops, log_interval=1))
     avg_loss_cb = AverageLossCallback()
     callbacks.append(avg_loss_cb)
+
+    # Peak DRAM footprint over the first few steps, which cover the peak. Near-zero overhead, always on;
+    # prints the footprint during training once its window closes.
+    callbacks.append(DramFootprintCallback())
 
     # Diagnostics.
     if args.track_memory:
