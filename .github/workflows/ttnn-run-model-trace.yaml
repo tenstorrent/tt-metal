@@ -356,10 +356,6 @@ jobs:
           HF_MODEL: ${{ matrix.hf_model }}
           TEST_PATH: ${{ matrix.test_path }}
           EXTRA_ARGS: ${{ matrix.extra_args }}
-          # Opt-in device profiling (single-card only). Kept as a plain true/false flag; the
-          # cmd is only wrapped in the Tracy profiler below when this is true, so the
-          # default path is byte-identical to before.
-          RESHARD_PROFILE: ${{ inputs.run-reshard-analysis && (inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P100a' || inputs.runner-label == 'P150b') }}
         run: |
           TRACER_OUTPUT_DIR="model_tracer/traced_operations"
 
@@ -376,19 +372,6 @@ jobs:
               python3 -c 'import os, shlex, sys; [sys.stdout.write(a + "\0") for a in shlex.split(os.environ["EXTRA_ARGS"])]'
             )
             cmd+=("${extra[@]}")
-          fi
-
-          # A bare TT_METAL_DEVICE_PROFILER=1 only turns on device-side capture; nothing
-          # converts that into ops_perf_results*.csv unless something explicitly runs the
-          # report-generation step. `python -m tracy -r` is that step (see
-          # tools/tracy/__main__.py's generate_report call and scripts/run_safe_pytest.sh's
-          # --profile mode, which uses the same pattern for a plain pytest invocation) --
-          # it launches the target as a child process (setting TT_METAL_DEVICE_PROFILER=1
-          # itself), waits for it to finish, and then runs process_ops_logs to write the CSV.
-          # --check-exit-code makes sure a real tracer failure still fails this step instead
-          # of being masked by the wrapper.
-          if [[ "$RESHARD_PROFILE" == "true" ]]; then
-            cmd=(python3 -m tracy -p -r --check-exit-code "${cmd[@]:1}")
           fi
 
           "${cmd[@]}"
@@ -420,6 +403,33 @@ jobs:
           if [[ -n "$TRACE_UID" ]]; then
             echo "trace_uid=$TRACE_UID" >> $GITHUB_OUTPUT
           fi
+
+      - name: Run reshard profiling pass (opt-in, single-card only)
+        id: reshard_profile
+        if: >-
+          always() && steps.trace.outcome == 'success'
+          && inputs.run-reshard-analysis
+          && (inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P100a' || inputs.runner-label == 'P150b')
+        timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
+        env:
+          TEST_PATH: ${{ matrix.test_path }}
+        run: |
+          # A second, dedicated pass purely for Tracy device profiling -- separate from the
+          # "Run model trace" step above, which captures op configs via generic_ops_tracer.py.
+          #
+          # Why a second pass instead of wrapping generic_ops_tracer.py itself in `python -m
+          # tracy`: generic_ops_tracer.py runs pytest as a CHILD subprocess (subprocess.run),
+          # not in-process. Tracy's host-side op-name/zone capture attaches to the process it
+          # directly launches; ttnn's op zones fire one process further down, across that
+          # subprocess boundary, so tracy never sees them as named ops. The result (verified
+          # against a real run) is process_ops_logs.py falling back to its device-only report
+          # path (raw hardware timing keyed by GLOBAL CALL COUNT, no OP CODE/INPUTS/OUTPUTS --
+          # see get_device_data_generate_report's docstring: "no host metadata") instead of the
+          # rich merged report analyze_reshard_tax.py needs. Every working `python -m tracy -r`
+          # example in this repo wraps pytest DIRECTLY (`-m pytest <test>`), so we do the same
+          # here for the profiling-only pass, at the cost of running the test's device work
+          # twice on this leg. Opt-in and single-card only, so this is bounded.
+          python3 -m tracy -p -r --check-exit-code -m pytest "$TEST_PATH" -v -s --timeout=0
 
       - name: Write pytest results to job summary
         if: always()
@@ -615,10 +625,10 @@ jobs:
           retention-days: 1
 
       - name: Upload profiler CSV (reshard analysis)
-        # Only when reshard analysis was requested on a single-card runner. if-no-files-found:warn
+        # Only when the dedicated profiling pass ran and succeeded. if-no-files-found:warn
         # so a leg that produced no device ops does not fail the whole job.
         if: >-
-          always() && steps.trace.outcome == 'success'
+          always() && steps.reshard_profile.outcome == 'success'
           && inputs.run-reshard-analysis
           && (inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P100a' || inputs.runner-label == 'P150b')
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
