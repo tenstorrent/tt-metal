@@ -121,11 +121,14 @@ def test_backend_category_matches_pipeline_tag():
     # consistent with its pipeline_tags (a text-to-speech backend can't be category STT)
     from scripts.tt_hw_planner.family_backends import all_backends
 
+    # ONLY unambiguous tags: text-to-image / text-to-audio / any-to-any legitimately span
+    # categories (an AR-LLM is tagged text-to-image but is category LLM — the #3 lesson),
+    # so they must NOT be asserted here or this guard false-fails on a valid backend.
     cat_of_tag = {
         "text-to-speech": "TTS",
         "automatic-speech-recognition": "STT",
-        "text-to-image": "Image",
         "image-classification": "CNN",
+        "feature-extraction": "Embed",
     }
     mismatches = []
     for b in all_backends():
