@@ -42,6 +42,7 @@ from matrix_runner_config import (
     get_mesh_test_group_map,
     get_runner_config,
     get_test_group_name_for_hardware_group,
+    get_timeout_for,
 )
 
 DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/sweep_matrix.json"
@@ -426,6 +427,13 @@ def main():
         suite_name = None if run_type == "comprehensive" else run_type  # "nightly" or None
         include_entries, batches, ccl_batches = compute_standard_matrix(modules, batch_size, suite_name)
 
+    # Stamp the per-job timeout (minutes) onto every matrix entry so the workflow
+    # enforces it at the GitHub job level (timeout-minutes). Source of truth is
+    # tests/pipeline_reorg/ttnn_sweep_tests.yaml keyed by (target=run_type, sku),
+    # the same file verify_time_budget.py checks against .github/time_budget.yaml.
+    for entry in include_entries:
+        entry["timeout"] = get_timeout_for(run_type, entry.get("sku"))
+
     # Validate GitHub Actions limits
     for label, count in [("batch", len(batches)), ("matrix entry", len(include_entries))]:
         if count > 256:
@@ -454,9 +462,18 @@ def main():
 
     print("matrix=" + json.dumps(result, **compact))
 
+    active_hw = []
     for hw_key, group_names in HW_GROUP_MATRIX_KEYS.items():
         hw_entries = [e for e in include_entries if e.get("test_group_name", "") in group_names]
         print(f"{hw_key}-matrix=" + json.dumps({"include": hw_entries}, **compact))
+        if hw_entries:
+            active_hw.append(hw_key)
+
+    # Hardware groups that actually have at least one batch this run. The dispatcher
+    # fans out one reusable-workflow leg per active group (strategy.matrix over this
+    # list), so empty groups are never scheduled and no leg is ever handed an empty
+    # matrix — replacing the seven hand-maintained per-hardware caller jobs.
+    print("active-hw=" + json.dumps(active_hw, **compact))
 
 
 if __name__ == "__main__":
