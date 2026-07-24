@@ -10,6 +10,7 @@ import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
+    ApproximationMode,
     DataCopyType,
     DestAccumulation,
     DestSync,
@@ -34,6 +35,7 @@ from helpers.stimuli_generator import (
 )
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    APPROX_MODE,
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
@@ -338,6 +340,13 @@ def prepare_inputs_for_operation(
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Clamp:
+        # Clamp bounds are fixed to [-1, 1]; span past both to exercise the lower/upper/pass-through
+        # cases (mirrors sfpu_domains' Clamp spec).
+        min_val = -2.0
+        max_val = 2.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
     elif mathop == MathOperation.Neg:
         # Negation is exact for any representable value; span both signs (mirrors sfpu_domains' Neg spec).
         min_val = -10.0
@@ -589,6 +598,7 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Sigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
 ] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_OPS]
@@ -657,6 +667,13 @@ def generate_sfpu_unary_combinations():
     """
     combinations = []
     for cfg in OP_CONFIGS:
+        # Ops that expose both a non-approximate and an approximate kernel are swept over both
+        # ApproximationMode values; every other op has a single implementation (ApproximationMode.No).
+        approx_modes = (
+            (ApproximationMode.No, ApproximationMode.Yes)
+            if cfg.mathop == MathOperation.Exp
+            else (ApproximationMode.No,)
+        )
         for fmt in formats_for_op(cfg):
             in_fmt = fmt.input_format
 
@@ -685,17 +702,19 @@ def generate_sfpu_unary_combinations():
                         ImpliedMathFormat.No,
                         ImpliedMathFormat.Yes,
                     ]:
-                        for input_dimensions in cfg.input_dims:
-                            combinations.append(
-                                (
-                                    cfg.mathop,
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    implied_math_format,
-                                    runtime(input_dimensions),
+                        for approx_mode in approx_modes:
+                            for input_dimensions in cfg.input_dims:
+                                combinations.append(
+                                    (
+                                        cfg.mathop,
+                                        fmt,
+                                        dest_acc,
+                                        dest_sync,
+                                        implied_math_format,
+                                        approx_mode,
+                                        runtime(input_dimensions),
+                                    )
                                 )
-                            )
 
     return combinations
 
@@ -714,9 +733,15 @@ def test_eltwise_unary_sfpu_quasar(
     UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
     every other op sweeps the shared format matrix.
     """
-    mathop, formats, dest_acc, dest_sync, implied_math_format, input_dimensions = (
-        mathop_formats_dest_acc_sync_implied_math_input_dims[0]
-    )
+    (
+        mathop,
+        formats,
+        dest_acc,
+        dest_sync,
+        implied_math_format,
+        approx_mode,
+        input_dimensions,
+    ) = mathop_formats_dest_acc_sync_implied_math_input_dims[0]
 
     is_typecast = mathop == MathOperation.Typecast
 
@@ -773,6 +798,7 @@ def test_eltwise_unary_sfpu_quasar(
         formats,
         templates=[
             MATH_OP(mathop=mathop),
+            APPROX_MODE(approx_mode),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
