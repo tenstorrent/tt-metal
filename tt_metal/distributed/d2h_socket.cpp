@@ -75,13 +75,26 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     connector_state_offset_ = align(total_buffer_size_bytes, alignof(HDSocketConnectorState));
     size_t alloc_size = align(connector_state_offset_ + sizeof(HDSocketConnectorState), page_size);
 
-    shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
-    void* aligned_ptr = shm_->ptr();
+    void* aligned_ptr = nullptr;
+    if (process_scope_ == ProcessScope::InProcess) {
+        void* p = mmap(nullptr, alloc_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        TT_FATAL(
+            p != MAP_FAILED,
+            "Anonymous mmap failed for D2H socket buffer ({} B): {}",
+            alloc_size,
+            std::strerror(errno));
+        aligned_ptr = p;
+        host_buffer_ = std::shared_ptr<uint32_t[]>(
+            static_cast<uint32_t*>(p), [alloc_size](uint32_t* ptr) { munmap(ptr, alloc_size); });
+    } else {
+        shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
+        aligned_ptr = shm_->ptr();
+        // NamedShm::create zero-initializes the region; no explicit memset needed.
+        host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
+    }
     TT_FATAL(
         reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,
         "System Memory Allocation Error: D2H socket buffer must be aligned to the PCIe alignment.");
-    // NamedShm::create zero-initializes the region; no explicit memset needed.
-    host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
     bytes_sent_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
 
     tt::tt_metal::HostBuffer host_buffer_view(
@@ -264,12 +277,10 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     MeshCoordinateRangeSet sender_device_range_set;
     sender_device_range_set.merge(MeshCoordinateRange(sender_core_.device_coord));
 
-    const auto& cluster = MetalContext::instance().get_cluster();
-    const auto& hal = MetalContext::instance().hal();
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
-    bool can_use_pinned_memory = cluster.is_iommu_enabled() || hal.get_supports_64_bit_pcie_addressing();
+    bool can_use_pinned_memory = !d2h_uses_hugepage_fallback(MetalContext::instance());
 
     PinnedBufferInfo data_info;
     PinnedBufferInfo bytes_sent_info;
@@ -285,13 +296,15 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
         // Map the persistent connector-state struct living past the pinned region.
         // NamedShm::create zero-initialized the page; we stamp the version and set
         // clean_shutdown=1 so the first connect() sees "no prior crash" (the owner
-        // side has nothing to recover from). Hugepage fallback does not create an
-        // SHM region and cannot be exported, so connector_state_ stays null in
-        // that path.
-        connector_state_ =
-            reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
-        connector_state_->version = kHDSocketConnectorStateVersion;
-        connector_state_->clean_shutdown = 1;
+        // side has nothing to recover from). Paths without a named SHM region
+        // (anonymous backing, hugepage fallback) cannot be exported, so
+        // connector_state_ stays null there.
+        if (shm_) {
+            connector_state_ =
+                reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
+            connector_state_->version = kHDSocketConnectorStateVersion;
+            connector_state_->clean_shutdown = 1;
+        }
     } else {
         data_info = init_host_buffer_hugepage(mesh_device);
 
@@ -314,10 +327,14 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
 }
 
 D2HSocket::D2HSocket(
-    const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size) :
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoreCoord& sender_core,
+    uint32_t fifo_size,
+    ProcessScope scope) :
     sender_core_(sender_core),
     fifo_size_(fifo_size),
     pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    process_scope_(scope),
     mesh_device_(mesh_device.get()) {
     init_config_buffer(mesh_device);
     init_common(mesh_device);
@@ -327,10 +344,12 @@ D2HSocket::D2HSocket(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoreCoord& sender_core,
     uint32_t fifo_size,
-    ExternalConfigBuffer external_config) :
+    ExternalConfigBuffer external_config,
+    ProcessScope scope) :
     sender_core_(sender_core),
     fifo_size_(fifo_size),
     pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    process_scope_(scope),
     mesh_device_(mesh_device.get()) {
     TT_FATAL(external_config.address != 0, "External config buffer address must be non-zero.");
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
