@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -72,6 +73,12 @@ struct LlamaAllGatherMatmulAsyncParams {
             attrs.emplace_back("cluster_axis", cluster_axis.value());
         }
         return attrs;
+    }
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("dim", "num_links", "ring_size", "output_memory_config", "topology", "cluster_axis");
+    auto attribute_values() const {
+        return std::make_tuple(dim, num_links, ring_size, std::cref(output_memory_config), topology, cluster_axis);
     }
 };
 

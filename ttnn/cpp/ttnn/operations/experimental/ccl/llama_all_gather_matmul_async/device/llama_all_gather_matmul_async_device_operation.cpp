@@ -88,47 +88,6 @@ LlamaAllGatherMatmulAsyncDeviceOperation::create_output_tensors(
     return LlamaAllGatherMatmulAsyncResult{.mm = matmul_output_tensor, .aggregated = aggregated_tensor};
 }
 
-ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input0 = tensor_args.input0;
-    const auto& input1 = tensor_args.input1;
-
-    auto input0_shape = input0.padded_shape();
-    auto input0_memory_layout = input0.layout();
-    auto input0_dtype = input0.dtype();
-    auto input0_memory_config = input0.memory_config();
-
-    auto input1_shape = input1.padded_shape();
-    auto input1_memory_layout = input1.layout();
-    auto input1_dtype = input1.dtype();
-    auto input1_memory_config = input1.memory_config();
-
-    auto intermediate_shape = input1.padded_shape();
-    auto intermediate_memory_layout = input1.layout();
-    auto intermediate_dtype = input1.dtype();
-    auto intermediate_memory_config = input1.memory_config();
-
-    return tt::tt_metal::operation::hash_operation<LlamaAllGatherMatmulAsyncDeviceOperation>(
-        args.dim,
-        args.num_links,
-        args.ring_size,
-        args.output_memory_config,
-        args.topology,
-        args.cluster_axis,
-        input0_shape,
-        input0_memory_layout,
-        input0_dtype,
-        input0_memory_config,
-        input1_shape,
-        input1_memory_layout,
-        input1_dtype,
-        input1_memory_config,
-        intermediate_shape,
-        intermediate_memory_layout,
-        intermediate_dtype,
-        intermediate_memory_config);
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
