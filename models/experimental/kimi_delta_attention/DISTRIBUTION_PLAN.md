@@ -314,3 +314,14 @@ for a 32-leaf padded prefix tree but must not perturb the 80 group owners.
 ### Measured generic-prefix distribution
 
 The correctness oracle assigns the 20 group transforms/head to the batch dimension of five Hillis-Steele stages. Although each stage exposes up to 80 independent matrices, it materializes every shifted input and output through DRAM: 10 matmuls plus 52 slice/add/concat/correction calls cost `3120.528 us`. The retained distribution target remains 80 group cores in one persistent program, with direct distance-1/2/4/8/16 neighbor exchange and local A/B ping-pong.
+
+
+Long aligned prefill now replaces the native convolution and three Q/K/V slice
+programs with one direct-output custom program. One worker owns one 32-token
+block; T=5,120 exposes 160 independent blocks and distributes them round-robin
+over all 110 compute cores, so 50 cores process two blocks and 60 process one.
+Each worker owns the complete 2,176-channel local QKV width for its token block,
+preserving TP=8 whole-head ownership and requiring no inter-chip communication.
+The writer partitions the completed width into Q/K/V DRAM tile ranges directly.
+This map reduces matched wall `3380.644 -> 3334.239 us` and calls `24 -> 21`;
+retain it. It does not validate the rejected cross-core tiled-prefix input map.

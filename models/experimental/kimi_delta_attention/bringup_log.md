@@ -1622,3 +1622,41 @@
   Preserve the already-correct row-major custom convolution as the viable next
   route; make its writer emit Q/K/V directly so the measured `~94.5 us` three-
   slice boundary is eliminated before reassessing wall latency.
+
+
+### 2026-07-24 23:10 UTC — Retain direct-output row-major convolution
+
+- Hypothesis: the numerically correct row-major custom four-tap convolution
+  missed the wall gate because three post-convolution Q/K/V slices remained.
+  Writing Q/K/V tiles directly should recover their approximately `94.5 us`
+  boundary without taking on the rejected tiled-prefix protocol.
+- Implementation: one work item owns one 32-token block. Up to all 110 compute
+  cores read four row-major activation windows and the four tap rows, perform
+  row-broadcast multiply/add plus SiLU, and write Q, K, and V tiles directly to
+  separate DRAM outputs. The layer retains native convolution for
+  `sequence <= 640`; long aligned prefill uses the custom program.
+- Root-cause correction: the recovered prototype initially used ordinary tile
+  multiply and produced per-shard PCC near `0.17`. A direct Q/K/V oracle proved
+  the error was inside convolution, not the writer. Restoring
+  `mul_tiles_bcast_rows` matched the channel-wise tap semantics and raised all
+  local Q/K/V shard PCCs to `0.999988-0.999990`.
+- Host build: `./build_metal.sh --build-tests --build-type Release` -> PASS.
+- Long correctness: `KDA_TP_TEST_SEQ=5120
+  scripts/run_safe_pytest.sh --run-all
+  models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc
+  -q -s` -> PASS with output/recurrent/convolution PCC
+  `0.999958/0.999890/0.999997`. The T=672 gate also passed at
+  `0.999958/0.999912/0.999997`.
+- Performance: `PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10
+  scripts/run_safe_pytest.sh --profile
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py
+  -q -s` -> PASS. CSV
+  `generated/profiler/reports/2026_07_24_23_07_40/ops_perf_results_2026_07_24_23_07_40.csv`,
+  SHA-256 `7293b8cdd6daa99d868c16b4192587d6682e105e9c7559e8033695902110adf4`.
+- Result: calls/device/replay fell `24 -> 21`; the custom convolution median
+  was `413.165 us`. Slowest-device replay spans were `[3330.362, 3330.574,
+  3334.687, 3333.137, 3337.141, 3340.451, 3339.620, 3334.622, 3333.856,
+  3330.698] us`, median `3334.239 us`. Against the matched `3380.644 us`
+  control, wall improves `46.405 us` (`1.37%`).
+- Verdict: retain. This validates direct multi-output production but not tiled
+  projection consumption; the input QKV crop/untilize boundary remains.

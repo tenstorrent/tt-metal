@@ -164,8 +164,8 @@ class KimiDeltaAttention:
         self,
         qkv: ttnn.Tensor,
         sequence: int,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Run trace-safe native depthwise convolution over QKV and its carry."""
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Run depthwise convolution and emit Q/K/V without post-convolution slices."""
         assert self.convolution_state is not None
         config = self.config
         channels = self._convolution_width
@@ -191,6 +191,19 @@ class KimiDeltaAttention:
                 self.convolution_state.layout,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+        if sequence > 640:
+            q, k, v = ttnn.transformer.kda_causal_conv1d_split(
+                qkv_row_major,
+                state_row_major,
+                *self.weights.convolution_taps,
+                config.q_dim,
+                config.k_dim,
+                config.v_dim,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
+            return q, k, v, new_state
+
         conv_input = ttnn.concat(
             [state_row_major, qkv_row_major],
             dim=1,
@@ -253,7 +266,11 @@ class KimiDeltaAttention:
         output = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.reshape(output, (1, sequence, channels))
         output = ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.silu(output, memory_config=ttnn.DRAM_MEMORY_CONFIG), new_state
+        output = ttnn.silu(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q = _slice_width(output, 0, config.q_dim)
+        k = _slice_width(output, config.q_dim, config.q_dim + config.k_dim)
+        v = _slice_width(output, config.q_dim + config.k_dim, channels)
+        return q, k, v, new_state
 
     def forward(
         self,
@@ -280,7 +297,7 @@ class KimiDeltaAttention:
         output_gate_width = config.v_dim if head_major else config.head_v_dim
         auxiliary_start = self._convolution_width
         if mode == "chunk" and batch == 1 and sequence >= ttnn.TILE_SIZE:
-            qkv, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence)
+            q, k, v, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence)
         else:
             convolution_state = self.convolution_state
             if convolution_state.layout != ttnn.TILE_LAYOUT:
@@ -299,13 +316,12 @@ class KimiDeltaAttention:
                 conv_state=convolution_state,
                 weight_taps=weights.convolution_taps,
             )
-        q = _slice_width(qkv, 0, config.q_dim)
-        k = _slice_width(qkv, config.q_dim, config.q_dim + config.k_dim)
+            q = _slice_width(qkv, 0, config.q_dim)
+            k = _slice_width(qkv, config.q_dim, config.q_dim + config.k_dim)
+            v = _slice_width(qkv, config.q_dim + config.k_dim, self._convolution_width)
         if mode == "recurrent" or sequence % ttnn.TILE_SIZE != 0:
             q = ttnn.reshape(q, (batch, sequence, config.num_heads, config.head_k_dim))
             k = ttnn.reshape(k, (batch, sequence, config.num_heads, config.head_k_dim))
-        v = _slice_width(qkv, config.q_dim + config.k_dim, self._convolution_width)
-        if mode == "recurrent" or sequence % ttnn.TILE_SIZE != 0:
             v = ttnn.reshape(v, (batch, sequence, config.num_heads, config.head_v_dim))
 
         decay_rank = _slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim)

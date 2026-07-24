@@ -89,4 +89,18 @@ ttnn::Tensor kda_gated_rms_norm(
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
+/** Four-tap KDA convolution with direct tiled Q/K/V outputs. */
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> kda_causal_conv1d_split(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& state,
+    const ttnn::Tensor& tap0,
+    const ttnn::Tensor& tap1,
+    const ttnn::Tensor& tap2,
+    const ttnn::Tensor& tap3,
+    uint32_t q_width,
+    uint32_t k_width,
+    uint32_t v_width,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
 }  // namespace ttnn::transformer

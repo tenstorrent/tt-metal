@@ -16,8 +16,8 @@ keeps failed experiments visible so they are not repeated unchanged.
 - Prepared tensors now remain interleaved in distributed L1 between prep and
   scan. `QWEN_KDA_PREP_DRAM=1` preserves the measured DRAM control.
 - T=640 wall: `643.623 -> 619.594 us` (`-3.73%`).
-- T=5,120 wall: `3681.529 -> 3385.003 us` (`-8.05%` versus the matched FP32
-  DRAM control).
+- T=5,120 wall: `3681.529 -> 3334.239 us` (`-9.43%` versus the matched FP32
+  DRAM control; direct-output convolution endpoint).
 - T=5,120 recurrence: `1023.411 -> 807.181 us` (`-21.13%` versus control).
 - T=5,120 selected block times: projection `524.798 us`, convolution
   `601.588 us`, decay transform `108.106 us`, recurrence `807.181 us`, and
@@ -45,7 +45,7 @@ overlap, so they must not be added.
    the smaller phase, a `9.05%` wall ceiling. The retained distributed-L1
    endpoint proves residency is useful; it does not yet prove that ordered
    consumers can avoid starvation and backpressure.
-3. **Direct tiled projection-to-convolution-to-Q/K/V program.** The retained
+3. **Direct tiled projection-to-convolution-to-Q/K/V program.** The former
    route spends `86.093 us` cropping QKV, `95.591 us` untilizing it, and about
    `94.533 us` on three post-convolution Q/K/V slices. Consuming projected
    tiles by offset and writing Q/K/V plus the three-row carry directly can
@@ -56,7 +56,10 @@ overlap, so they must not be added.
    alternate face ordering remained wrong, and full previous-tile staging with
    either separate or reused untilize CBs deadlocked. Do not retry partial-row
    tiled-prefix gathers. The viable lower-ceiling follow-up is the correct
-   row-major custom kernel writing Q/K/V directly.
+   row-major custom kernel writing Q/K/V directly. That lower-ceiling path is
+   now retained: it reduced matched wall `3380.644 -> 3334.239 us` (`-1.37%`)
+   and calls `24 -> 21`. The remaining tiled-input ceiling is the pre-conv
+   crop/untilize boundary only.
 
 ## Current execution queue
 
@@ -395,6 +398,13 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
       160 width slices cannot fit doubled activation CBs in the available
       `1,434,496 B` L1 budget, so auto slicing fails before execution.
 50. Produce tiled Q/K/V directly when that avoids a later layout conversion.
+    - Retained result, 2026-07-24: the correct row-major custom convolution now
+      writes three tiled Q/K/V outputs directly. At T=5,120 it reduced
+      calls/device/replay `24 -> 21` and matched slowest-device wall
+      `3380.644 -> 3334.239 us` (`-1.37%`). The custom op median was
+      `413.165 us`; replay spans were `3330.362-3340.451 us`. Full TP PCC at
+      T=5,120 was output/state/conv
+      `0.999958/0.999890/0.999997`. Retain this boundary.
 
 ### F. Projection and epilogue
 
