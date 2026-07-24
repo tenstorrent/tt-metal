@@ -51,16 +51,17 @@ overlap, so they must not be added.
    tiles by offset and writing Q/K/V plus the three-row carry directly can
    remove up to `276.217 us`, an `8.16%` traffic/launch ceiling before custom
    kernel overhead. The row-major-input prototype proved correctness but not
-   speed; the tiled-input boundary is the active experiment.
+   speed. The first tiled-input boundary was fast but incorrect at multi-block
+   lengths, so any retry must first prove padded-stride and cross-core prefix
+   semantics with the permanent long-sequence PCC gate.
 
 ## Current execution queue
 
-1. Finish the direct tiled projection-to-convolution experiment because it has
-   the strongest evidence-to-risk ratio and directly fixes the measured
-   failure mode of the row-major prototype.
-2. Fuse prep and scan into a bounded producer/consumer pipeline.
-3. Prototype the distributed-L1 two-level affine prefix only if its explicit
+1. Prototype the distributed-L1 two-level affine prefix only if its explicit
    L1 and NOC traffic model beats the `500.685 us` serial scan.
+2. Fuse prep and scan into a bounded producer/consumer pipeline.
+3. Revisit direct tiled convolution only with the T=672 PCC gate enabled from
+   the first implementation step.
 
 The affine-prefix experiment proved the algebra and FP32 numerics, but rejected
 a DRAM-backed implementation: its estimated memory floor exceeds the current
@@ -279,6 +280,16 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
       `426.786 us`; retained QKV crop plus external untilize still cost
       `181.952 us`. Reject this boundary. The next viable version must consume
       tiled projection output directly and eliminate those two prep programs.
+    - Tiled-input correction, 2026-07-24: withdraw the apparent T=5,120
+      `3385.003 -> 3204.486 us` speedup. The only PCC control used T=32 and
+      bypassed the `T > 640` route. A new T=672 gate measured output/state/conv
+      PCC `0.048428/-0.001323/-0.005458`. Native control passed
+      `0.999967/0.999920/0.999997`. The first proven bug was floor-dividing the
+      non-tile-aligned projection width (`609/32=19` instead of 20 tiles; target
+      `2180/32=68` instead of 69). Ceiling division repaired state PCC but left
+      output PCC `0.951851`, localizing a second error to multi-block prefix
+      handling. Reject and revert the custom path; do not cite its latency as a
+      valid endpoint.
 45. Reduce T=5,120 DRAM slicing overhead.
 46. Implement numerically exact SiLU in the convolution output kernel.
     - Experiment result, 2026-07-24: `Conv1dConfig.activation=SILU` is ignored

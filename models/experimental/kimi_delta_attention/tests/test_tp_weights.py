@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Eight-device whole-head KDA weight-layout tests."""
 
+import os
+
 import pytest
 import torch
 
@@ -111,7 +113,10 @@ def test_tp_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
         norm_eps=1e-5,
     )
     state_dict = random_weights(config)
-    hidden = torch.randn(1, 32, config.hidden_size, generator=torch.Generator().manual_seed(911)).to(torch.bfloat16)
+    sequence = int(os.getenv("KDA_TP_TEST_SEQ", "32"))
+    hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(911)).to(
+        torch.bfloat16
+    )
     golden_output, golden_state = kda_forward_reference(hidden, state_dict, config)
 
     layer = KimiDeltaAttention(mesh_device, config, state_dict, tt_ccl=TT_CCL(mesh_device))
@@ -153,6 +158,7 @@ def test_tp_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
         (golden_state.q_convolution, golden_state.k_convolution, golden_state.v_convolution), dim=-1
     )
 
+    results = []
     for name, golden, actual in (
         ("output", golden_output, actual_output),
         ("recurrent state", golden_state.recurrent, actual_recurrent),
@@ -160,4 +166,6 @@ def test_tp_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
     ):
         passed, pcc = comp_pcc(golden, actual, pcc=0.98)
         print(f"TP=8 {name}: PCC={pcc:.6f}")
+        results.append((name, passed, pcc))
+    for name, passed, pcc in results:
         assert passed, f"TP=8 {name} PCC {pcc:.6f} < 0.98"

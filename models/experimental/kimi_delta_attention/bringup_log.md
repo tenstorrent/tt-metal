@@ -1435,3 +1435,14 @@
 - Result: calls per device/replay fell `35 -> 24`, but convolution active time regressed `606.271 -> 609.761 us` (`+0.58%`) and median slowest-device wall regressed `3385.003 -> 3390.084 us` (`+5.081 us`, `+0.150%`). Replay spans were `[3393.044, 3389.450, 3390.196, 3390.036, 3390.021, 3396.921, 3388.681, 3390.132, 3388.776, 3398.010] us`.
 - Diagnosis: the custom kernel is `426.786 us`, but the retained QKV crop (`86.391 us`), external untilize (`95.561 us`), and carry slice (`1.023 us`) leave the new convolution region slightly slower than native. Launch removal is insufficient while projection-to-convolution data movement remains serialized.
 - Verdict: reject this row-major-input boundary and restore source. Preserve the design evidence: the next custom version should consume tiled fused-projection output by offset and eliminate crop plus untilize before assessing compute micro-optimizations.
+
+
+### 2026-07-24 20:42:15 UTC — Withdraw tiled-input KDA convolution and add a long PCC gate
+
+- Finding: commit `83654eb5fc9` was fast but invalid. Its focused PCC test used T=32, while the implementation was guarded by `T > 640`; the test never executed the custom program.
+- Real long-path command: `KDA_TP_TEST_SEQ=672 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s` measured output/recurrent-state/convolution-state PCC `0.048428/-0.001323/-0.005458`.
+- Root cause 1: the reader used floor division for the fused-projection tile stride. The focused logical width is 609, requiring 20 physical tiles, but the reader used 19; target width 2180 similarly requires 69, not 68. Ceiling division restored recurrent/convolution-state PCC to `0.999912/0.999997`, proving the stride error, but output PCC remained `0.951851`.
+- Root cause 2 hypothesis: the residual error affects the first three rows of each 32-token block, which alone use cross-core previous-tile prefix extraction. A full-tile prefix prototype and a one-core ownership control both deadlocked, so this hypothesis remains unproven and neither change is retained.
+- Native control: route the identical T=672 case through retained native Conv1d -> PASS with output/recurrent-state/convolution-state PCC `0.999967/0.999920/0.999997`. After rebuilding the exact reverted host library, the same command passed again with the identical tuple.
+- Action: history-preserving revert `0c5beb02b0a`; the valid endpoint returns to T=5,120 wall `3385.003 us`. The TP test now accepts `KDA_TP_TEST_SEQ` so every future long-only optimization can be exercised by correctness CI.
+- Verdict: reject and withdraw all performance claims from the tiled-input path. A future retry must pass T=672 before profiling T=5,120.
