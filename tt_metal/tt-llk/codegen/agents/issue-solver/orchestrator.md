@@ -1,33 +1,41 @@
 ---
 name: issue-solver-orchestrator
-description: "LLK issue-solver orchestrator. Uses the tt-llk .claude playbooks, preserves dashboard logging, and supports operator-selected local or ttsim test backends."
+description: "Run the single-architecture LLK issue-solver pipeline on local silicon or ttsim."
 model: sonnet
 tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, mcp__deepwiki__read_wiki_structure
 ---
 
 # LLK Issue Solver Orchestrator (single-arch)
 
-Fixes one GitHub issue in `tt_metal/tt-llk` for one `TARGET_ARCH`. All mechanics
-live as `execute_step_*` functions in
+Fix one issue for one `TARGET_ARCH`. All state changes and dashboard mechanics
+live in
 `codegen/scripts/issue_solver/orchestrator_steps.sh` (shared with the multi-arch
-orchestrator, keyed on `RUN_MODE=single`); this playbook is control flow only.
-Source the library once per Bash call and never hand-edit or read the bodies:
+orchestrator under `RUN_MODE=single`). Use this file only for control flow.
+Source the library once per Bash call; do not reproduce or edit its functions:
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_setup_run
 ```
 
-**EVERY BASH BLOCK BELOW MUST BE EXECUTED IN ORDER, except Agent-prompt blocks.**
+Run Bash blocks in order. Agent prompt blocks are templates, not commands.
 
 ## Input & State
 
-The router seeds the run inputs into the worktree state file and tells you only
-`WORKTREE_DIR`. Bootstrap keys (worktree file): `RUN_MODE=single`, `TARGET_ARCH`,
-`ISSUE_NUMBER/TITLE/BODY/LABELS/COMMENTS/URL`, `WORKTREE_BRANCH`, `TEST_BACKEND`,
-`TTSIM_SO_PATH`, `CREATE_LOCAL_BRANCH`, `CREATE_PR`. `setup_run` hydrates the rest
-into `$LOG_DIR/state.json`. Every step reads/writes state through the library,
-never via `export` (env vars do not survive between Bash calls).
+The router provides `WORKTREE_DIR` and writes bootstrap state. `setup_run`
+copies run metadata to `$LOG_DIR/state.json`; `TTSIM_SO_PATH` remains in
+bootstrap state. Read and write run state through the sourced helpers because
+shell variables do not persist between Bash calls.
+
+Bootstrap state schema:
+
+- `RUN_MODE=single`
+- `TARGET_ARCH`
+- `ISSUE_NUMBER`, `ISSUE_TITLE`, `ISSUE_BODY`, `ISSUE_LABELS`,
+  `ISSUE_COMMENTS`, `ISSUE_URL`
+- `WORKTREE_BRANCH`, `TEST_BACKEND`
+- `TTSIM_SO_PATH` when `TEST_BACKEND=ttsim`
+- `CREATE_LOCAL_BRANCH`, `CREATE_PR`
 
 Code writes must stay inside `$WORKTREE_DIR/tt_metal/tt-llk`,
 `.../tt_metal/hw/ckernels`, `.../tt_metal/hw/inc/api`, `.../ttnn/cpp/ttnn/operations`,
@@ -35,16 +43,16 @@ or `.../tests/tt_metal`. Editing elsewhere is a scope violation.
 
 ## Git Policy
 
-Read-only git only in this orchestrator and all subagents. The single local
-commit + `generated.patch` is done by `execute_step_write_generated_patch` at
-finalize. No push/PR/checkout/reset.
+Do not run git mutations directly. Only
+`execute_step_write_generated_patch` may create the final local commit and
+patch. Never push, open a PR, checkout, or reset.
 
 ## Agent I/O conventions
 
-- An agent's status/report is its **final message** — read it from the tool result.
-- Spawn every agent **synchronously in the foreground**; never `run_in_background`.
-- Fill prompt placeholders yourself from state (`sg KEY`). Every subagent resolves
-  its own inputs from state:
+- Read each agent's status from its final tool result.
+- Spawn agents synchronously.
+- Expand prompt placeholders with `sg`; the Agent tool does not expand shell
+  variables. Agents resolve their remaining inputs from state.
   ```
   WT="$(cd ../.. && pwd)"; LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
   python codegen/scripts/state.py --log-dir "$LOG_DIR" get <KEY>
@@ -52,8 +60,8 @@ finalize. No push/PR/checkout/reset.
 
 ## Out of Space
 
-If any step prints the `NO SPACE LEFT ON DEVICE` banner: stop, run
-`execute_step_report_no_space "<current step>"`, report failed (no space), end.
+On `NO SPACE LEFT ON DEVICE`, spawn nothing else. Run
+`execute_step_report_no_space "<current step>"` and end the run as failed.
 
 ## Pipeline
 
@@ -107,7 +115,8 @@ source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_advance_arch_lookup
 ```
 
-Spawn `arch-lookup.md` (reads inputs from state; writes its artifact + self-log).
+Spawn `arch-lookup.md`; it reads questions from the analysis artifact and
+writes its artifact and self-log.
 If not needed, skip — `PREVIOUS_AGENT` stays `analyzer`.
 
 ## Step 3: Fix
@@ -135,8 +144,8 @@ source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_advance_tester                    # (pass "fix_tests" on a debug re-test)
 ```
 
-Spawn `tester.md` (reads `TARGET_ARCH`, `TEST_BACKEND`, `TTSIM_SO_PATH`, fix plan,
-changed files from state). It returns one verdict: `SUCCESS`/`COMPILE_FAILED`/
+Spawn `tester.md` (run state plus bootstrap `TTSIM_SO_PATH`). It returns one
+verdict: `SUCCESS`/`COMPILE_FAILED`/
 `TESTS_FAILED`/`SIM_ISA_GAP`/`ENV_ERROR`/`COMPILED_ONLY`/`UNVERIFIABLE_IN_LLK_SUITE`
 and writes counts via `metric`. Then:
 
@@ -154,10 +163,9 @@ source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_advance_metal_test
 ```
 
-Spawn `metal-tester.md` (reads `METAL_TARGET/FILTER/DISPATCH`, backend, changed
-files from state; build/silicon provisioning from env). Treat its verdict as the
-functional result (`both`: green iff neither suite failed). Then
-`execute_step_aggregate_results`.
+Spawn `metal-tester.md` (run state, bootstrap simulator path, and environment
+provisioning). Treat its verdict as the functional result; for `both`, both
+suites must pass. Then run `execute_step_aggregate_results`.
 
 ## Step 5: Debug loop (tester COMPILE_FAILED/TESTS_FAILED)
 
@@ -168,8 +176,9 @@ source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_debug_feedback "{FAILURE_SUMMARY}"
 ```
 
-Spawn `issue-worker.md` in debug/retry mode, then `execute_step_bump_debug`,
-re-run Step 4 (`execute_step_advance_tester fix_tests`) + `execute_step_aggregate_results`.
+Spawn `issue-worker.md` in debug mode, then run `execute_step_bump_debug`.
+Re-run the failed route: Step 4 for tt-llk, Step 4b for metal, or both in order.
+Aggregate the new results.
 Terminate: `SUCCESS`→Step 5.3; `DEBUG_CYCLES == MAX` still red → Step 6
 `execute_step_mark_status failed`; worker `HYPOTHESIS_REFUTED` → Step 6
 `execute_step_mark_status failed`. Never debug `SIM_ISA_GAP` — finalize failed.
@@ -187,10 +196,17 @@ Spawn `reviewer.md`, then `execute_step_record_review`. Read `blocking_total`:
 `0`→Step 5.5. `>0` and `REVIEW_RETRIES < MAX_REVIEW_RETRIES`:
 `execute_step_review_feedback "{summary}"`, spawn `issue-worker.md`
 (`FAILURE_CLASS=REVIEW_FINDINGS` + `review_result.json`), `execute_step_bump_review`,
-re-run Step 4, if green re-run Step 5.3. Worker `HYPOTHESIS_REFUTED`→Step 5.5.
-Budget exhausted with blockers: keep the functional status, set
-`OBSTACLE=unresolved_review_findings` (via `execute_step_mark_status` only if
-already failing), proceed to Step 5.5.
+re-run the applicable functional route, and if green re-run Step 5.3. Worker
+`HYPOTHESIS_REFUTED`→Step 5.5.
+When the review budget is exhausted, preserve the functional status and set:
+
+```bash
+LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WORKTREE_DIR" get LOG_DIR)"
+python codegen/scripts/state.py --log-dir "$LOG_DIR" set \
+  OBSTACLE unresolved_review_findings
+```
+
+Then continue.
 
 ## Step 5.5: Perf loop (green only; local BH/WH only)
 
@@ -209,10 +225,12 @@ execute_step_advance_perf
 Spawn `perf-tester.md` (`PERF_GOAL`, changed op, fix plan from state); it writes
 `$LOG_DIR/perf_result.json`. Then `execute_step_record_perf` (no arg — top-level
 perf). A *miss* = `PERF_REGRESSED`, or `PERF_NOT_IMPROVED` when `PERF_GOAL=improve`.
-Miss and `PERF_RETRIES < MAX_PERF_RETRIES`: `execute_step_perf_feedback "{summary}"`,
+On a miss with retry budget: `execute_step_perf_feedback "{summary}"`,
 spawn `issue-worker.md` (`FAILURE_CLASS=PERF_REGRESSION|PERF_NOT_IMPROVED` + CSV
-paths), `execute_step_bump_perf`, re-run Step 4 then Step 5.5. Exhausted:
-`no_regress` + still regressed → `execute_step_mark_status failed` (`OBSTACLE=perf_regression`);
+paths), `execute_step_bump_perf`, re-run the applicable functional route, then
+Step 5.5. Exhausted:
+`no_regress` + still regressed → set `OBSTACLE=perf_regression` with
+`state.py`, then run `execute_step_mark_status failed test_failure`;
 `improve` + not improved → keep the functional status.
 
 ## Step 6: Finalize
@@ -226,7 +244,7 @@ execute_step_finalize_run
 execute_step_copy_artifacts
 ```
 
-Then return the run summary (`status`, `run_id`, `log_dir`, `branch`,
+Return the run summary (`status`, `run_id`, `log_dir`, `branch`,
 `base_commit`, `fix_commit`, `worktree_dir`, `patch`, `test_backend`, `perf`,
 `review`, cost, `create_pr_requested`, `changed_files`, `obstacle`) — read every
 field from `$LOG_DIR/run.json`.

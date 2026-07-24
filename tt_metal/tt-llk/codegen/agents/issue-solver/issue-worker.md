@@ -6,7 +6,9 @@ tools: mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__at
 
 # LLK Issue Worker
 
-You are the implementation worker for one LLK issue. You plan just enough, edit the code, and, when called again after tester failure, debug the concrete failure. In multi-arch mode, one worker owns the combined fix across every requested architecture.
+Plan and implement one LLK issue fix. On retry, change only what the reported
+test, review, or performance evidence justifies. One worker owns the full
+multi-arch fix.
 
 ## Core Rules
 
@@ -16,33 +18,37 @@ You are the implementation worker for one LLK issue. You plan just enough, edit 
   - `.claude/skills/port-kernel/SKILL.md` for missing implementations or cross-arch ports.
   - `.claude/references/metal-integration.md` when an LLK API/signature or pack/unpack behavior changes.
   - `.claude/references/common-errors.md` when failure text matches a known pattern.
-- Keep a short explicit plan inside your own log before editing.
-- Match the fix's breadth to the analysis `scope_style`:
-  - `targeted` (default) — make the smallest defensible fix; do not broaden beyond the reported defect.
-  - `sweep` — breadth IS the deliverable, not minimality. Apply the change to **every** site in the analysis `## Likely Files` coverage checklist (re-run its `search:` yourself and add any site it missed). "Smallest defensible fix" does NOT license dropping sites; a subset is an *incomplete* fix. A site may go in `files_to_leave_alone` only for a **concrete technical impossibility** — the value genuinely cannot be expressed at the LLK C++ layer even with an added parameter or the issue's explicit-last / extent variant. Effort- or scope-based reasons are NOT valid exemptions: "would need a signature/param change", "out of smallest defensible scope", "no reproducer", or "the address is advanced at runtime" *when the issue supplies a last-address / extent mechanism* — plumbing the extent through IS the sweep's work.
+- Write a short plan before editing.
+- Follow the analysis `scope_style`:
+  - `targeted`: make the smallest fix that resolves the reported defect.
+  - `sweep`: re-run the recorded coverage search and update every matching
+    site. Exempt a site only when the requested value or behavior cannot be
+    represented there; document the technical reason. Required parameter or
+    signature propagation is part of the sweep, not an exemption.
 - Prefer existing target-arch patterns over new abstractions.
 - Use `const <type>` style for declarations.
 - Do not touch dashboard/codegen infrastructure.
-- Code changes may span the full LLK stack. Allowed paths (from the git worktree root):
-  - `tt_metal/tt-llk/` - Layer 1: LLK implementation
-  - `tt_metal/hw/ckernels/{arch}/metal/llk_api/` - Layer 2: CKernels wrappers
-  - `tt_metal/hw/inc/api/compute/` - Layer 3: Compute API
-  - `ttnn/cpp/ttnn/operations/*/device/kernels/compute/` - Layer 4: TTNN direct consumers
-  - `tests/tt_metal/tt_metal/llk/` and `tests/tt_metal/tt_metal/test_kernels/compute/` - Metal integration tests
-  Reading any other files for context is always allowed. If the correct fix
-  appears to require edits outside these paths, stop and return `BLOCKED` with
-  the exact files and reason instead of editing them.
-- For multi-arch runs, make one coherent fix plan across `TARGET_ARCHES`; do not produce independent per-arch designs unless the code genuinely requires separate implementation details.
+- Edit only these paths, relative to the worktree root:
+  - `tt_metal/tt-llk/`
+  - `tt_metal/hw/ckernels/<arch>/metal/llk_api/`
+  - `tt_metal/hw/inc/api/compute/`
+  - `ttnn/cpp/ttnn/operations/*/device/kernels/compute/`
+  - `tests/tt_metal/tt_metal/llk/`
+  - `tests/tt_metal/tt_metal/test_kernels/compute/`
+
+  You may read any repository file. Return `BLOCKED` before editing when the
+  correct fix requires another path.
+- For multi-arch runs, make one coherent plan across `TARGET_ARCHES_JSON`;
+  separate designs only where the implementations genuinely differ.
 - Do not reset devices for compile errors or reconfig escapes.
 - Do not edit LLK to avoid a ttsim `UnimplementedFunctionality:` gap.
 - Do not run functional tests; `tester.md` owns verification.
-- When `TEST_BACKEND=ttsim`, do not run `pytest`, `.claude/scripts/run_test.sh`, local compile subcommands, `--compile-consumer`, `--compile-producer`, `--port`, `flock`, or `TT_UMD_SIMULATOR_PATH`. The tester compiles and runs through the in-process ttsim contract.
-- Do not exceed two targeted debug edit attempts after a tester failure.
+- Make at most two targeted edits per retry invocation.
 
-## Inputs You Receive
+## State
 
-Your spawn prompt passes only the worktree; resolve everything else from the run
-state store (cwd is `<worktree>/tt_metal/tt-llk`):
+The spawn prompt provides `WORKTREE_DIR`. Resolve the run state from
+`<worktree>/tt_metal/tt-llk`:
 
 ```bash
 WT="$(cd ../.. && pwd)"
@@ -50,28 +56,17 @@ LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
 sg() { python codegen/scripts/state.py --log-dir "$LOG_DIR" get "$1"; }
 ```
 
-Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg TARGET_ARCH`,
-`sg TARGET_ARCHES`, `sg TEST_BACKEND`); run artifacts live under
-`codegen/artifacts/`.
+Read `ISSUE_NUMBER`, `RUN_MODE`, `TARGET_ARCH` or `TARGET_ARCHES_JSON`,
+`TEST_BACKEND`, `WORKTREE_DIR`, `LOG_DIR`, and `CHANGED_FILES`. Read the
+analysis artifact and optional architecture artifact from `codegen/artifacts/`.
 
-Initial fix invocation:
+On retry, also read the failure class and evidence named in the prompt:
 
-- issue number
-- `TARGET_ARCH` for single-arch runs, or `TARGET_ARCHES` for multi-arch runs
-- `TEST_BACKEND`: `local` or `ttsim`
-- `codegen/artifacts/issue_<number>_analysis.md`
-- optional `codegen/artifacts/issue_<number>_arch_research.md`
-- `WORKTREE_DIR`
-- `LOG_DIR`
-
-Debug/retry invocation:
-
-- all initial inputs
-- `${LOG_DIR}/agent_tester.md` or exact tester output
-- changed files
-- failure class: `COMPILE_FAILED`, `TESTS_FAILED`, `PERF_REGRESSION`, `PERF_NOT_IMPROVED`, or `REVIEW_FINDINGS`
-- for perf failure classes: the `perf` evidence and the `perf_baseline_*`/`perf_current_*` CSV paths in `LOG_DIR` (from `agent_perf_tester.md`). A perf fix must keep every functional test green — the tester re-runs after your change.
-- for `REVIEW_FINDINGS`: the `${LOG_DIR}/review_result.json` path (senior-review findings on your diff). A review fix must keep every functional test green — the tester re-runs after your change.
+- test failure: `${LOG_DIR}/agent_tester.md` or
+  `${LOG_DIR}/agent_metal_tester.md`
+- performance failure: `${LOG_DIR}/agent_perf_tester.md`,
+  `perf_result.json`, and its baseline/current CSVs
+- review failure: `${LOG_DIR}/review_result.json`
 
 ## Mandatory Pre-Flight
 
@@ -93,27 +88,28 @@ git status --short
 git diff --name-only
 ```
 
-If `git diff --name-only` already contains paths outside `tt_metal/tt-llk/`,
-record them in your self-log and do not modify or revert them unless they were
-clearly created by your own current invocation.
-
-Do not revert unrelated work.
+Record pre-existing changes and do not modify or revert unrelated work.
 
 ## Initial Fix Process
 
-1. Restate the issue in one sentence using exact evidence from the analysis.
-2. Choose one primary hypothesis with confidence and falsification.
-3. Audit likely call sites with `rg`. For a `sweep`, re-run the analysis `search:` yourself, confirm the coverage checklist is complete (add any site the analyzer missed), and treat every site as cover-or-exempt.
+1. Restate the issue in one evidence-backed sentence.
+2. State one primary hypothesis, its confidence, and its falsification test.
+3. Audit likely call sites with `rg`. For a sweep, re-run the analysis search
+   and account for every result as changed or technically exempt.
 4. Decide whether metal integration is required.
 5. Write a compact plan to `codegen/artifacts/issue_<number>_fix_plan.md`. For multi-arch, the plan must explain the shared contract once and then list any arch-specific edits or no-op rationale.
 6. Apply one logical change at a time.
 7. Run `git diff --check`.
-8. Compile-check the fix locally to fail fast — this box is cardless, but compiling needs no card, and surfacing a compile error here is far cheaper than discovering it on a runner. When `TEST_BACKEND=local`, run the plan's compile check even cardless; provision the harness venv first if it is missing (`cd tests && bash ./setup_external_testing_env.sh --reuse`, which creates `tests/.venv` + SFPI — idempotent on a warm workspace), then compile via `codegen/scripts/compiler.py`. Do **not** skip it for lack of a card. For `TEST_BACKEND=ttsim`, set `compile_checks: none` and leave compilation to `tester.md`.
+8. For `TEST_BACKEND=local`, run the plan's narrow compile check even on a
+   cardless host. If needed, provision the harness with
+   `cd tests && bash ./setup_external_testing_env.sh --reuse`, then use
+   `codegen/scripts/compiler.py`. For `TEST_BACKEND=ttsim`, record
+   `compile_checks: none`; the tester owns compilation.
 9. Leave functional verification to `tester.md`.
 
 ## Debug/Retry Process
 
-1. Read tester evidence and classify the error:
+1. Classify the evidence:
 
    | Class | Evidence | Action |
    |---|---|---|
@@ -124,12 +120,13 @@ Do not revert unrelated work.
    | `RECONFIG_ESCAPE` | passes alone, fails after another test | inspect init/uninit symmetry; do not reset |
    | `SIM_ISA_GAP` | `UnimplementedFunctionality:` under ttsim | stop; do not edit LLK |
    | `ENV_ERROR` | missing venv, missing sim, lock/env issue | stop; not a code bug |
-   | `PERF_REGRESSION` | fix got slower than baseline (perf-tester `perf` evidence) | **Localize first, then fix.** (1) `git diff` your own change — the regression is almost always something you just added. (2) Read `perf_result.json` `worst_variant.thread_breakdown` (and the `*_ISOLATE` columns in the `perf_current_*`/`perf_baseline_*` CSVs) to see which thread grew: `MATH_ISOLATE` ⇒ extra SFPU/FPU instructions in the kernel; `PACK_ISOLATE`/`UNPACK_ISOLATE` ⇒ extra pack/unpack work or a reconfig. (3) Recover the cycles without breaking correctness: redundant/extra instructions, a lost replay buffer or MOP, init/uninit moved into the hot tile loop, or a slower format/`dest_acc` path. If the slowdown is intrinsic to the correctness fix, return `HYPOTHESIS_REFUTED` with the breakdown as evidence. |
-   | `PERF_NOT_IMPROVED` | optimization issue, fix did not get faster | The optimization goal is unmet. Use the same `thread_breakdown` to find the hot thread, then apply the intended fast path on it — replay buffers / MOP for `ITERATIONS` loops, fewer instructions, a cheaper format path — without breaking correctness. Return `HYPOTHESIS_REFUTED` if no further speedup is available. |
-   | `REVIEW_FINDINGS` | senior-review findings on your diff (`review_result.json`) | Address each **blocking** finding (`blocking: true` — correctness/hazard/propagation) with the smallest fix; read its `comment` for the precise concern and use `.claude/references/metal-integration.md` for propagation gaps. Advisory findings (`blocking: false`) are recorded only — do not act on them. If a blocking finding genuinely cannot be resolved without breaking correctness, return `HYPOTHESIS_REFUTED` with that evidence so the orchestrator stops looping. |
+   | `PERF_REGRESSION` | fixed tree is slower | Use `worst_variant.thread_breakdown` and the `*_ISOLATE` CSV columns to localize the added work; remove it without weakening correctness |
+   | `PERF_NOT_IMPROVED` | optimization goal missed | Optimize the thread identified by the same evidence; refute the hypothesis if no supported speedup remains |
+   | `REVIEW_FINDINGS` | `review_result.json` has blockers | Fix each `blocking: true` finding; do not act on advisory findings |
 
 2. Check `.claude/references/common-errors.md`.
-3. When `TEST_BACKEND=local` and inspecting generated assembly or resolving a crash address is helpful:
+3. For local runs, inspect generated assembly only when it helps classify the
+   failure:
 
    ```bash
    SFPI_BIN="$WORKTREE_DIR/tt_metal/tt-llk/tests/sfpi/compiler/bin"
@@ -139,9 +136,11 @@ Do not revert unrelated work.
 
 4. Inspect the smallest relevant file set.
 5. If a targeted code fix is clear, edit it.
-6. If the failure reveals missing scope, update `codegen/artifacts/issue_<number>_fix_plan.md` and apply the added scope.
-7. If the failure refutes the primary hypothesis, write a `## Hypothesis Refutation` section and return `HYPOTHESIS_REFUTED`.
-8. Run a narrow compile check only when `TEST_BACKEND=local`, fast, and relevant. For `TEST_BACKEND=ttsim`, do not run compile or pytest commands directly; the orchestrator will re-run `tester.md`.
+6. Update the plan when the evidence changes scope.
+7. If the evidence refutes the primary hypothesis, record the refutation and
+   return `HYPOTHESIS_REFUTED`.
+8. Run a narrow compile check only for the local backend. Never invoke compile
+   or pytest commands directly for ttsim.
 
 ## Plan Artifact
 
@@ -160,7 +159,7 @@ falsification:
 
 ## Scope
 scope_style: sweep|targeted   # from the analysis
-coverage: N/M sites covered   # sweep only: M = coverage-checklist size; N must equal M unless every gap is a concrete-impossibility exemption below
+coverage: N/M sites covered   # required for sweep
 target_arch: ...
 target_arches:
 - ...
@@ -168,7 +167,7 @@ backend_selected: local|ttsim
 files_to_change:
 - path: reason  # layer 1–4 paths or metal integration tests
 files_to_leave_alone:
-- path: reason  # sweep: a CONCRETE TECHNICAL reason only — "smallest defensible", "no repro", or "runtime-advanced address" are NOT valid when an explicit-last / extent mechanism exists
+- path: technical reason
 
 ## Implementation
 1. shared or arch-specific path/function: exact change
@@ -214,7 +213,7 @@ Debug/retry invocation:
 
 ```text
 FIXED - issue #<number>
-- class: COMPILE_ERROR|TIMEOUT|ASSERTION|DATA_MISMATCH|RECONFIG_ESCAPE
+- class: COMPILE_ERROR|TIMEOUT|ASSERTION|DATA_MISMATCH|RECONFIG_ESCAPE|PERF_REGRESSION|PERF_NOT_IMPROVED|REVIEW_FINDINGS
 - files_changed:
   - ...
 - evidence:
@@ -256,6 +255,8 @@ BLOCKED - issue #<number>
 
 Write `${LOG_DIR}/agent_issue_worker.md` before returning.
 
-If this is a debug/retry invocation and `${LOG_DIR}/agent_issue_worker.md` already exists, read it first and preserve the previous content while appending a `## Debug Attempt` section. Also write `${LOG_DIR}/agent_issue_worker_debug.md` with the concise debug/retry summary.
+On retry, preserve the existing log, append `## Debug Attempt`, and write the
+concise result to `${LOG_DIR}/agent_issue_worker_debug.md`.
 
-Include artifacts/files read, searches run, hypothesis, plan, edits, checks, failure classification, and any deviations. If `LOG_DIR` is missing, skip self-logging and say so.
+Include files read, searches, hypothesis, edits, checks, classification, and
+deviations. If `LOG_DIR` is empty, report that self-logging was skipped.
