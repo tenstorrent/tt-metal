@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-07-14-v1"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-07-24-v1"
 UNKNOWN_RUNNER = "(unknown runner)"
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
@@ -130,6 +130,12 @@ ERROR_SIGNATURES = (
             r"disk\s+usage\s+is\s+(?:9\d|100)\s*%|"
             r"disk\s+usage\s+is\s+high)"
         ),
+        case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="FAILED_RESET_FOUND",
+        label="Failed reset",
+        needle="Unable to reset board successfully",
         case_sensitive=False,
     ),
 )

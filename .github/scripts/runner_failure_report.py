@@ -66,6 +66,11 @@ def parse_args() -> argparse.Namespace:
         help="Path to write the Markdown report.",
     )
     parser.add_argument(
+        "--triggering-failures-json",
+        type=Path,
+        help="Optional JSON array of triggering failures from the scan workflow.",
+    )
+    parser.add_argument(
         "--api-base-url",
         default=os.environ.get("RUNNER_FAILURE_API_BASE_URL", API_BASE_URL),
         help=("API Gateway route base URL for data-db-main " "(or RUNNER_FAILURE_API_BASE_URL)."),
@@ -132,6 +137,7 @@ def build_runner_markdown_report(
     job_source: str,
     runner_jobs: list[RecentJob],
     scan_results: list[JobScanResult],
+    triggering_jobs_added: int,
 ) -> str:
     failures = [result for result in scan_results if result.signature_labels]
     lines = [
@@ -142,6 +148,7 @@ def build_runner_markdown_report(
         f"- Window: last `{hours}` hour(s), since `{format_utc(since)}`",
         f"- Job source: `{job_source}`",
         f"- Recent jobs on runner: `{len(runner_jobs)}`",
+        f"- Triggering jobs added: `{triggering_jobs_added}`",
         f"- Scanned jobs: `{sum(1 for result in scan_results if result.log_checked)}`",
         f"- Runner-failure jobs: `{len(failures)}`",
         "",
@@ -183,6 +190,8 @@ def build_runner_json_report(
     job_source: str,
     runner_jobs: list[RecentJob],
     scan_results: list[JobScanResult],
+    triggering_jobs: list[JobScanResult],
+    triggering_jobs_added: int,
 ) -> dict[str, Any]:
     failures = [result for result in scan_results if result.signature_labels]
     return {
@@ -196,12 +205,15 @@ def build_runner_json_report(
         "workflows": [],
         "counts": {
             "runner_jobs": len(runner_jobs),
+            "triggering_jobs": len(triggering_jobs),
+            "triggering_jobs_added": triggering_jobs_added,
             "scanned_jobs": len(scan_results),
             "log_checked_jobs": sum(1 for result in scan_results if result.log_checked),
             "runner_failure_jobs": len(failures),
         },
         "signature_counts": signature_counts(failures),
         "recent_jobs": [job_to_dict(job) for job in runner_jobs],
+        "triggering_jobs": [result_to_dict(result) for result in triggering_jobs],
         "scan_results": [result_to_dict(result) for result in scan_results],
         "runner_log_table_results": [result_to_dict(result) for result in scan_results],
     }
@@ -469,6 +481,91 @@ def recent_job_from_runner_api_row(
     )
 
 
+def job_from_dict(value: dict[str, Any]) -> RecentJob:
+    return RecentJob(
+        owner_repo=str(value.get("owner_repo") or ""),
+        workflow=str(value.get("workflow") or ""),
+        workflow_id=str(value.get("workflow_id") or ""),
+        run_id=str(value.get("run_id") or ""),
+        run_attempt=str(value.get("run_attempt") or ""),
+        run_url=str(value.get("run_url") or ""),
+        job_id=str(value.get("job_id") or ""),
+        name=str(value.get("name") or ""),
+        runner_name=str(value.get("runner_name") or ""),
+        status=str(value.get("status") or ""),
+        conclusion=str(value.get("conclusion") or ""),
+        html_url=str(value.get("html_url") or ""),
+        started_at=str(value.get("started_at") or ""),
+        completed_at=str(value.get("completed_at") or ""),
+    )
+
+
+def scan_result_from_dict(value: dict[str, Any]) -> JobScanResult:
+    raw_signatures = value.get("signatures")
+    signatures: tuple[str, ...] = ()
+    if isinstance(raw_signatures, list):
+        signatures = tuple(str(item) for item in raw_signatures if item)
+    return JobScanResult(
+        job=job_from_dict(value),
+        log_status=str(value.get("log_status") or ""),
+        log_checked=bool(value.get("log_checked")),
+        signature_labels=signatures,
+        fabric_missing_links=str(value.get("fabric_missing_links") or ""),
+    )
+
+
+def load_triggering_failures_json(path: Path | None) -> list[JobScanResult]:
+    if path is None:
+        return []
+
+    try:
+        raw_values = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RuntimeError(f"Unable to read triggering failures JSON {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Unable to parse triggering failures JSON {path}: {exc}") from exc
+
+    if not isinstance(raw_values, list):
+        raise RuntimeError(f"Triggering failures JSON {path} must contain a list.")
+
+    return [scan_result_from_dict(value) for value in raw_values if isinstance(value, dict)]
+
+
+def triggering_results_for_runner(results: list[JobScanResult], runner_name: str) -> list[JobScanResult]:
+    expected_runner = runner_name.casefold()
+    return [result for result in results if result.job.runner_name.casefold() == expected_runner]
+
+
+def merge_triggering_jobs(
+    runner_jobs: list[RecentJob], triggering_results: list[JobScanResult]
+) -> tuple[list[RecentJob], int]:
+    merged_jobs = list(runner_jobs)
+    seen_job_keys = {job_state_key(job) for job in runner_jobs if job.job_id}
+    added_jobs = 0
+
+    for result in triggering_results:
+        job = result.job
+        if not job.job_id:
+            continue
+
+        key = job_state_key(job)
+        if key in seen_job_keys:
+            continue
+
+        seen_job_keys.add(key)
+        merged_jobs.append(job)
+        added_jobs += 1
+
+    return (
+        sorted(
+            merged_jobs,
+            key=lambda runner_job: parse_github_time(runner_job.started_at),
+            reverse=True,
+        ),
+        added_jobs,
+    )
+
+
 def list_runner_jobs_from_api(
     *,
     runner_name: str,
@@ -521,9 +618,16 @@ def runner_report_results(
     runner_jobs: list[RecentJob],
     gh_timeout: int,
     log_workers: int,
+    known_results: list[JobScanResult] | None = None,
 ) -> list[JobScanResult]:
-    jobs_to_scan = [job for job in runner_jobs if should_scan_log_for_full_table(job)]
-    checked_results_by_key: dict[str, JobScanResult] = {}
+    checked_results_by_key: dict[str, JobScanResult] = {
+        job_state_key(result.job): result for result in known_results or [] if result.job.job_id and result.log_checked
+    }
+    jobs_to_scan = [
+        job
+        for job in runner_jobs
+        if should_scan_log_for_full_table(job) and job_state_key(job) not in checked_results_by_key
+    ]
 
     if jobs_to_scan:
         for result in scan_jobs(
@@ -574,12 +678,23 @@ def build_runner_report(args: argparse.Namespace) -> int:
         timeout=args.api_timeout,
         owner_repo=args.owner_repo,
     )
+    triggering_results = triggering_results_for_runner(
+        load_triggering_failures_json(args.triggering_failures_json),
+        runner_name,
+    )
+    runner_jobs, triggering_jobs_added = merge_triggering_jobs(runner_jobs, triggering_results)
+    if triggering_results:
+        print(
+            f"Received {len(triggering_results)} triggering failure(s) for {runner_name!r}; "
+            f"added {triggering_jobs_added} missing job(s) to the runner report."
+        )
     print(f"Found {len(runner_jobs)} job(s) on runner " f"{runner_name!r} in the last {args.hours} hour(s).")
 
     scan_results = runner_report_results(
         runner_jobs=runner_jobs,
         gh_timeout=args.gh_timeout,
         log_workers=args.log_workers,
+        known_results=triggering_results,
     )
     report_json = build_runner_json_report(
         generated_at=generated_at,
@@ -589,6 +704,8 @@ def build_runner_report(args: argparse.Namespace) -> int:
         job_source=args.api_route,
         runner_jobs=runner_jobs,
         scan_results=scan_results,
+        triggering_jobs=triggering_results,
+        triggering_jobs_added=triggering_jobs_added,
     )
     report_md = build_runner_markdown_report(
         generated_at=generated_at,
@@ -598,6 +715,7 @@ def build_runner_report(args: argparse.Namespace) -> int:
         job_source=args.api_route,
         runner_jobs=runner_jobs,
         scan_results=scan_results,
+        triggering_jobs_added=triggering_jobs_added,
     )
     write_reports(
         report_json_path=args.report_json,
