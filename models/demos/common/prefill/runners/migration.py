@@ -22,6 +22,7 @@ scheduler can issue migrations. The ``_migration_client`` extension lives in tt-
 imported LAZILY so the runner still works standalone when migration is opted out.
 """
 
+import glob
 import os
 import socket
 import sys
@@ -89,23 +90,20 @@ def _attach_migration_client():
     return client, cmd_q, table_q, resp_q
 
 
-def _deliver_local_device_map(device_map, rank: int, attach_timeout_s: float = 30.0) -> None:
-    """Deliver THIS rank's FNID->UMD device map to its co-located migration worker(s).
+def _deliver_local_device_map(device_map, rank: int, timeout_s: float = 30.0) -> None:
+    """Push THIS rank's local FNID->UMD device map to its co-located host migration worker(s).
 
-    POSIX shmem is host-local and the endpoint's orchestrator relays the map ONLY to the A/B workers
-    on its master host -- it does NOT forward the map to subordinate worker ranks on other hosts, and
-    the worker does not MPI-broadcast it (endpoint_orchestrator.cpp forward_device_map -> client_a/b;
-    control_thread.cpp reads it from the rank's OWN shmem). So on a multi-host pipeline endpoint every
-    worker rank must be fed its own host's map directly.
+    Direct port of tt-blaze's ``_deliver_local_device_map``. The migration endpoint spawns TWO
+    internal device workers per host -- an "A" master/sender and a "B" loopback receiver -- each with
+    its OWN shmem queues named ``/ep_<pid>_{a,b}_{cmd,table,resp}`` (endpoint_orchestrator.cpp::
+    run_loopback); a subordinate rank adds a ``_r<rank>`` suffix. BOTH the A worker and the B receiver
+    need the map, so we deliver to every match.
 
-    Each worker rank exposes a deterministic shmem trio ``/ep_<endpoint_id>_{a,b}_{cmd,table,resp}``
-    (rank 0 has no suffix; rank r>0 adds ``_r<r>``). The base is ``/ep_<endpoint_id>`` since the
-    getpid()->endpoint_id rename (tt-llm-engine b64f8dee) -- so we can construct the exact name from
-    (endpoint_id, rank) with NO ``/dev/shm/ep_*`` glob, keeping the determinism / no-stale-race the
-    static-queue delivery was after while still working across hosts. Deliver to BOTH the A sender and
-    the B loopback receiver -- both need the map. The static ``PREFILL_MIGRATION_*_QUEUE``
-    (``/mig_ep<id>_*``) stays the master-only SET_TABLE / WORKER_READY control channel (see
-    :func:`publish_serialized_table_and_wait_ready`).
+    The device map does NOT go to the outward control queues (``PREFILL_MIGRATION_*_QUEUE``, e.g.
+    ``/mig_ep1_*``) -- those are a DIFFERENT, master-only channel used for SET_TABLE/WORKER_READY. We
+    discover the worker queues by globbing ``/dev/shm/ep_*_{a,b}_cmd*`` on THIS host (POSIX shm is
+    host-local, so the glob finds exactly the worker(s) co-located with this rank), exactly like blaze
+    -- NOT the ``mig_ep*`` control name, which never matches a device-map queue.
     """
     mod = _import_migration_client()
 
