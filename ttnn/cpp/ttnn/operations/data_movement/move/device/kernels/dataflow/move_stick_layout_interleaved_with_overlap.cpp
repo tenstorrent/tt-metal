@@ -93,4 +93,8 @@ void kernel_main() {
         l1_read_addr += aligned_page_size;
     }
     dfb.pop_front(num_pages);
+
+    // Drain the sem.up()/set_multicast handshake atomics before returning, so no non-posted atomic
+    // is in flight at kernel exit (per-write async_write_barrier already drained the dst writes).
+    noc.async_atomic_barrier();
 }
