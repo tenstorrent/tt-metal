@@ -1137,6 +1137,114 @@ Repro (negative-zone check, decode layer, no Tracy):
 then stack-pair per lane in `tracy_captures/realprof.csv` (expect 0 negatives, 550 distinct lanes).
 Capture: `./build_Release/bin/tracy-capture -o OUT.tracy -f &` then the same run with `--tracy TRACY_NO_EXIT=1` instead of `--csv`.
 
+## §24 — Host-side back-pressure + node scaling (1→2→4 L2CPU) + per-cluster hart zones (bh-11, 2026-07-24)
+
+Vehicle: `test_x280_realprof --nodes N --nread 2 --nmarkers 3000 --proddelay D --tracy --hartzones --mqcap 10000`
+(`TT_METAL_DEVICE_PROFILER=1 TT_METAL_NO_RT_PROFILER=1`). All runs lossless (≥3.3M markers). Host-pipeline
+CPU zones added this session so back-pressure is *visible* on the same timeline as device zones.
+
+**Host-pipeline zone scoping (commits `a7bf2db05f4`, `97b5029a929`, `4d17a82b754`, local).** Instrumented
+every host stage: flusher `sock-read` (read D2H pages) + `decode` + `sock-idle` (empty-FIFO poll) + `mq-push-block`
+(MPMC full); consumer `mq-pop-wait` (starved) + `tracy-emit` (push to Tracy), with `ctx-create` broken out of
+tracy-emit. Findings under `--tracy`:
+- **The Tracy sink (`tracy-emit`) is the wall**, ~200–240× slower than device production: device produces in
+  ~20–40 ms, the host processes over ~6 s. `tracy-emit`'s **startup spike = `ctx-create`**: ~110 GPU contexts
+  are created lazily on the first batch (PreCreateContexts was dropped when the anchor moved to first-marker).
+- At `--mqcap 10000` the MPMC **never blocks** (push-blocks 0, peak ~810/10000) and the consumer starves
+  **exactly once** (one long `mq-pop-wait` waiting for the first batch) — the fully-decoupled regime. Shrinking
+  `--mqcap` re-couples: 640 → ~155 push-blocks, 4 → ~292.
+
+**★ D2H socket FIFO is the real back-pressure source at high mqcap.** With the MPMC effectively infinite, the
+device still HOST-WAITs. New `D2H FIFO high-water` report shows why: at 1 and 2 nodes the socket FIFO pins
+**100% full** (65468/65536 pages) while the MPMC sits idle. So the wall is the **flusher drain rate**
+(sock-read + decode < relay write rate), NOT buffer depth. `sock-idle` is ~absent (flusher never starved →
+FIFO always full → confirms it). Lever = fewer/fatter reads or faster decode, not more MPMC.
+
+**★ The "126 zones between stalls" is the WORKER RING CAPACITY, not the reader round-robin.** Each RISC writes
+into its own **512-word L1 SPSC ring** (`RING_CAP`); a zone = START+END ≈ 4 words → **512/4 ≈ 128, minus TIMER
+stickies ≈ 126**. The producer fills its ring, stalls (`X280-STALL`, id 0x7FFF), the reader drains it whole,
+repeat → the period is a fixed buffer depth, identical at 1/2/4 nodes by construction. The reader count sets
+stall *frequency*, never the zones-between-stalls. Corollary: under the uniform (lockstep) benchmark every
+ring-fill stalls exactly once, so **#stalls ≈ #zones / ring_cap** = `(550 riscs × 3000) / 126 ≈ 13,100`,
+node-independent — which is why the count is *identical* until a reader can pre-empt fills.
+
+**Node scaling @ mqcap 10000, proddelay 300 (heavy):**
+
+| | 1 node (2 fl) | 2 nodes (4 fl) | 4 nodes (8 fl) |
+|---|---|---|---|
+| X280-STALL | 12,590 | 12,498 | **10,655** |
+| stall period | ~126 | ~126 | ~126 |
+| **device span** | 40.0 ms | 27.3 ms | **12.6 ms** |
+| D2H FIFO high-water | 100% | 100% | **15–81%** |
+| MPMC peak / push-blocks | 811 / 0 | 813 / 0 | 815 / 0 |
+
+Three things move only at 4 nodes: (1) stall **count** finally drops below the `#zones/126` floor — 8 readers
+over 110 cores (~14/reader) revisit fast enough to drain some rings *before* they fill; (2) **span** collapses
+40→27→12.6 ms (the clean ~3.2× throughput win — same stalls, but *shorter* each because the reader is close by);
+(3) **D2H back-pressure is relieved** — 8 flushers finally out-drain the relays (2 nodes/4 flushers was not
+enough). Period stays 126 throughout (ring depth is invariant). **Span is the true scale-out metric; count and
+period are structural invariants that hide the win.**
+
+**★ Load-dependent crossover — contention vs. capacity (mqcap 10000):**
+
+| config | X280-STALL | device span |
+|---|---|---|
+| 1-node, delay 300 | 12,590 | 40.0 ms |
+| 1-node, delay 1000 | **1,114** | 42.8 ms |
+| 4-node, delay 300 | 10,655 | 12.6 ms |
+| 4-node, delay 1000 | 3,100 | 23.3 ms |
+
+At **light load (delay 1000) 1 node has FEWER stall events than 4 nodes** (1,114 vs 3,100) — a reversal. Cause:
+**1 node is drain-limited** (span pinned ~40–43 ms at *both* delays — the 2-reader drain of 110 cores IS the
+bottleneck; slowing production just turns many short stalls into few long ones). **4 nodes is
+production-limited** (span tracks proddelay). But 4 concurrent clusters **contend on NoC reads** (column-8
+convergence) → each read slower → rings fill slightly more often → more *brief* stall events. Net: 4 nodes
+stalls more *often* yet finishes ~1.8× faster (23 vs 43 ms). So **stall count and span disagree at light
+load** — count = frequency, span = total time; span is the one that matters.
+
+**★ Per-cluster hart-zone asymmetry at 4 nodes (delay 1000) — NoC geometry, not noise.** Readers are all busy
+~the whole run (~20–22 ms) but settle into wildly different per-drain durations and relay loads:
+
+| node (tile, plane, rows) | reader busy | drain-zones | per-drain | relay busy | bulk? |
+|---|---|---|---|---|---|
+| node0 (8,3, NoC0, r0-2) | 20.7 ms | ~5,160 | ~4.0 µs | 7.7 ms | no |
+| node1 (8,5, NoC1, r3-5) | 22.2 ms | ~844 | **~26 µs** | **19.7 ms** | **yes** |
+| node2 (8,7, NoC0, r6-8) | 20.6 ms | ~6,188 | **~3.3 µs** | 3.5 ms | no |
+| node3 (8,9, NoC1, r9) | 20.9 ms | ~1,474 | ~14 µs | 1.2 ms | no |
+
+The one differing variable is **NoC read latency to each band** (each cluster reads a different row band from
+its column-8 L2CPU over a different plane: node0/2 NoC0, node1/3 NoC1). It cascades: low-latency band (node2)
+stays **per-risc** — many tiny drains (~3.3 µs), idle relay; high-latency band (node1) can't return before the
+ring hits ≥4×RING_CAP → adaptive escalates to **BULK** — few large drains (~26 µs), near-saturated relay
+(19.7 ms). node1 is the *only* cluster doing bulk = the signature of the slowest-to-read band. So the row-split
++ `read_noc=node&1` assignment gives each cluster a different (plane, distance, direction) triple → a real
+per-cluster load imbalance, visible per-lane in the hart contexts. (node3 also light — got the leftover 1 row.)
+
+**★ Multi-node X280 hart-zone fetch — BOTH clusters' drainers now captured (commit `7fec932def1`, local).**
+`--hartzones` under `--nodes N` had only ever fetched node0's harts (`hz_raw` sized to node0.nharts, every
+node's flusher wrote `hz_raw[0..3]` → collision + garbage busy; teardown pushed one context). Fix: `NodeCtx.hart_base`
+gives each node a disjoint `hz_raw` range; the teardown loops over nodes, each reading ITS OWN cluster's
+`rdcycle→Tensix` calib from its LIM and pushing to its own context `X280 (x,y)` at its L2CPU tile (lane
+RiscType/color from the node-LOCAL hart idx). Result: N contexts, 4 lanes each (rd0/rd1/relay0/relay1).
+- **Two rebase-origin bugs that collapsed whole X280 lanes to dur=0 in multi-node, both fixed:**
+  1. The Tracy anchor was the first-*consumed* RISC marker, which under mqcap decoupling is NOT the earliest
+     (a band's early markers arrive in a late-consumed batch; a warmup-over-first-N-batches min still misses
+     them). Now the **flushers track the true global-min ts as they DECODE** (drain order ~ production order,
+     settles before the first batch is consumed); consumer anchors on that. Filtered to ts ≥ 2^32 to reject a
+     pre-STICKY_TIMER bogus min.
+  2. **Per-cluster calib-domain offset (~8 ms).** Each cluster's FW `calibrate()` reads `MBOX_COORDS` core 0 =
+     ITS OWN band's core 0, whose raw Tensix wall clock is offset from the RISC timeline by a CONSTANT (the
+     linear-fit intercept differs per reference core). Measured: node0 X280 min sat ~11.3M ticks (~8 ms) BELOW
+     the global-min RISC ts — impossible if same clock (drain ts > the RISC ts it drained), proving a calib
+     shift, not a race. Fix (host-only, no FW): rebase EACH node's X280 zones on that node's own min mapped ts,
+     cancelling the constant offset (holds to within the sub-ms drain lag). Single-node never saw it (its
+     core-0 == the RISC origin). Expect 4 contexts each self-rebased at 4 nodes; the offset is intrinsic (diff
+     reference cores) so per-node origin is the correct design, not a node0 hack.
+
+Captures: `tracy_captures/rp_{1,2,4}node_mq10k.tracy`, `rp_{1,4}node_d1000.tracy`, `rp_2node_x280.tracy`,
+`rp_d2h_waits.tracy`, `rp_emit_breakdown.tracy`. Inspect X280 contexts with
+`tools/x280_bm/tracy_ctx_inspect/tracy_ctx_inspect <cap>` (grep `X280 (`).
+
 ## Gotchas (saved time → don't relearn)
 
 - **`tt-smi -r` does NOT clear LIM SRAM** → a re-run of the same FW sees the prior
@@ -1148,6 +1256,15 @@ Capture: `./build_Release/bin/tracy-capture -o OUT.tracy -f &` then the same run
 - The box's `cmake` is `~/.local/bin/cmake` (4.2.3); `/usr/bin/cmake` is absent.
   A stale `build_Release` from a different commit causes Tracy-version / ABI
   mismatches — rebuild consistently for the current branch.
+- **`test_x280_realprof` needs `TT_METAL_DEVICE_PROFILER=1 TT_METAL_NO_RT_PROFILER=1`** or the producer's
+  `DeviceZoneScopedN` are no-ops → 0 markers on ALL nodes. A bare `--nodes N` draining 0 looks like a
+  multi-node boot failure but is just the missing env vars.
+- **LIM ECC prime persists across `tt-smi -r`** (only a cold power-cycle clears it), so multi-node needs no
+  re-prime between runs once each cluster has been primed (`prime_lim_ecc.py --l2cpu-mask 0xF --prime-bytes 0x60000`).
+- **Node-scaling metrics disagree — use `device span`, not `X280-STALL count`.** Stall period (=ring depth,
+  ~126) and count (≈ #zones/ring_cap under uniform load) are structural invariants that don't reflect the
+  scale-out win; span does (§24). At light load the count even *reverses* (1 node < 4 nodes) due to NoC
+  contention while 4 nodes still finishes faster.
 
 ---
 
