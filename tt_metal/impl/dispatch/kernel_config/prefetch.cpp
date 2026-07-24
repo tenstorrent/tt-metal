@@ -143,7 +143,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.my_upstream_cb_sem_id = 0;
         dependent_config_.upstream_cb_sem_id = 0;
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        static_config_.cmddat_q_blocks = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 
         uint32_t dispatch_s_buffer_base = 0xff;
         if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
@@ -203,7 +202,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.prefetch_d_buffer_pages(), GetCoreType());
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        static_config_.cmddat_q_blocks = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 
         // PREFETCH_H has no DISPATCH_S
         static_config_.dispatch_s_buffer_base = 0;
@@ -239,7 +237,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.my_upstream_cb_sem_id =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        static_config_.cmddat_q_blocks = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 
         uint32_t dispatch_s_buffer_base = 0xff;
         {  // Just to make it match previous implementation
@@ -494,7 +491,6 @@ void PrefetchKernel::CreateKernel() {
         {"MY_UPSTREAM_CB_SEM_ID", std::to_string(static_config_.my_upstream_cb_sem_id.value())},
         {"UPSTREAM_CB_SEM_ID", std::to_string(dependent_config_.upstream_cb_sem_id.value())},
         {"CMDDAT_Q_LOG_PAGE_SIZE", std::to_string(static_config_.cmddat_q_log_page_size.value())},
-        {"CMDDAT_Q_BLOCKS", std::to_string(static_config_.cmddat_q_blocks.value())},
         {"DISPATCH_S_BUFFER_BASE", std::to_string(static_config_.dispatch_s_buffer_base.value())},
         {"MY_DISPATCH_S_CB_SEM_ID", std::to_string(static_config_.my_dispatch_s_cb_sem_id.value())},
         {"DOWNSTREAM_DISPATCH_S_CB_SEM_ID", std::to_string(dependent_config_.downstream_dispatch_s_cb_sem_id.value())},

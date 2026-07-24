@@ -110,8 +110,6 @@ public:
 
     static constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
 
-    static constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
-
     static constexpr uint32_t EVENT_PADDED_SIZE = 16;
 
     // When page size of buffer to write/read exceeds the max prefetch command size, the PCIe-aligned page size is
