@@ -1525,3 +1525,15 @@
   `176.932 us` wall while the original scan remains. Assuming the measured
   `70.869 us` grouped final scan, prefix must be below `210.978 us` for a 1%
   whole-layer win. Proceed to the summary-prefix kernel.
+
+### 2026-07-24 21:16 UTC — Reject generic-op affine prefix as a performance path
+
+- Hypothesis: a five-stage Hillis-Steele inclusive scan assembled from existing batched matmul, add, slice, and concat operations can validate the full grouped algorithm and might fit the `210.978 us` prefix budget.
+- Correctness: `QWEN_KDA_GROUP_PREFIX=1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s -k '512 and 4 and 128'` -> PASS. Two groups/head reproduce the serial output/final state at PCC `0.999991/0.999993` (max abs `9.182990e-4/9.382606e-3`). This validates composition order, entry-state shifting, grouped output layout, and final-state selection.
+- First target failure: L1-backed intermediates collided with scan CBs (`681,728 B` allocation while the static CB region ended at `701,312 B`). This is allocator evidence, not a compute failure. Moving only the generic prefix temporaries to DRAM removed the collision.
+- Target command: `QWEN_KDA_GROUP_PREFIX=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> test PASS. CSV `generated/profiler/reports/2026_07_24_21_15_28/ops_perf_results_2026_07_24_21_15_28.csv`, SHA-256 `a01dc4385d35643dd00233a1ee0f51dd1df5aab28f25afe3f28123e987e667de`.
+- Profiler qualification: device marker buffers overflowed late. Sessions 2-8 are complete at 101 calls/device; sessions 9-11 are incomplete and excluded. Complete-session slowest-device spans are `[6275.149, 6261.050, 6276.779, 6293.264, 6267.061, 6271.001, 6288.919] us`, median `6275.149 us`.
+- Attribution: summary scans/subtraction cost `70.748 + 91.930 + 13.469 = 176.147 us`; the 62 generic prefix/correction ops cost `3120.528 us`; the final eight-chunk grouped scan costs `88.898 us`. Whole-layer wall regresses `2894.505 us` (`85.62%`) from the matched `3380.644 us` control.
+- Diagnosis: ten separately materialized matrix multiplies plus 52 staging/data-movement operations dominate. The arithmetic formulation is correct, but general tensor operators neither retain affine pairs in core-local ping-pong buffers nor fuse the five dependency stages.
+- Exact-source recheck: the focused prefix command retained PCC `0.999991/0.999993`; the default `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s` regression passed `7/7`.
+- Verdict: reject generic operators as the performance implementation. Retain the private opt-in path only as a device correctness oracle. The performance path must be a persistent five-stage program with one group/core, CB-local A/B ping-pong, direct inter-core transfer, and fused composition/correction.

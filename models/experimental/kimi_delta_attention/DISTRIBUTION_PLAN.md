@@ -310,3 +310,7 @@ The measured two scans plus subtraction cost 184.487 us. A same-shape grouped
 scan costs 70.869 us, so the summary-prefix phase must stay below 210.978 us to
 clear the 1% whole-layer retention gate. The remaining 30 cores are available
 for a 32-leaf padded prefix tree but must not perturb the 80 group owners.
+
+### Measured generic-prefix distribution
+
+The correctness oracle assigns the 20 group transforms/head to the batch dimension of five Hillis-Steele stages. Although each stage exposes up to 80 independent matrices, it materializes every shifted input and output through DRAM: 10 matmuls plus 52 slice/add/concat/correction calls cost `3120.528 us`. The retained distribution target remains 80 group cores in one persistent program, with direct distance-1/2/4/8/16 neighbor exchange and local A/B ping-pong.

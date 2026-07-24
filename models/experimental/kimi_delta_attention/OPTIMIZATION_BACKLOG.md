@@ -441,3 +441,5 @@ against the 40% aspiration.
 
 Rejected ideas may be revisited only when the new mechanism directly addresses
 the measured failure mode.
+
+- Device evidence for the prefix step: the generic five-stage Hillis-Steele oracle is correct at two groups/head (`0.999991/0.999993` output/state PCC), but its 62 prefix/correction ops cost `3120.528 us` and produce `6275.149 us` T=5120 wall. General matmul/slice/concat is rejected. The next implementation is one persistent five-stage program with core-local A/B ping-pong; its unchanged acceptance bound is `<210.978 us` for a 1% whole-layer win.

@@ -555,3 +555,7 @@ break-even, `241.403 us` for a gain above 0.1% whole-layer noise, and
 `4.698 GFLOP` in `162.781 us`, roughly `28.86 TFLOP/s` or `18.98%` chip peak.
 This measured efficiency validates the parallel-core premise; prefix latency is
 now the decisive unknown.
+
+### Generic-prefix measurement
+
+The five-stage generic Hillis-Steele oracle executes the correct work but takes `3120.528 us` for prefix/correction alone, versus the `210.978 us` 1%-win budget. Its effective rate is therefore dominated by 62 materializing launches and DRAM staging, not the `2.315 GFLOP` affine-composition roofline. This rejects general tensor composition and strengthens the requirement for a persistent CB-local prefix kernel.

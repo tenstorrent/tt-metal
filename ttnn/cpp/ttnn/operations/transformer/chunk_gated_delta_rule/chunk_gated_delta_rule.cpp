@@ -86,6 +86,64 @@ struct ConstTiles {
     ttnn::Tensor eye, tril, ones, masks;
 };
 
+ttnn::Tensor slice_group_axis(
+    const ttnn::Tensor& tensor, uint32_t start, uint32_t end, const tt::tt_metal::MemoryConfig& memory_config) {
+    const auto& shape = tensor.logical_shape();
+    TT_FATAL(shape.rank() == 4, "group-axis slice expects a rank-4 tensor");
+    return ttnn::slice(
+        tensor,
+        ttnn::SmallVector<int32_t>{0, static_cast<int32_t>(start), 0, 0},
+        ttnn::SmallVector<int32_t>{
+            static_cast<int32_t>(shape[0]),
+            static_cast<int32_t>(end),
+            static_cast<int32_t>(shape[2]),
+            static_cast<int32_t>(shape[3])},
+        ttnn::SmallVector<int32_t>{1, 1, 1, 1},
+        memory_config);
+}
+
+std::pair<ttnn::Tensor, ttnn::Tensor> inclusive_affine_prefix(
+    ttnn::Tensor transform_a,
+    ttnn::Tensor transform_b,
+    uint32_t groups_per_head,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
+    // Hillis-Steele scan: at each power-of-two distance, T[i] becomes
+    // T[i] composed after the prefix ending at i-distance.
+    for (uint32_t distance = 1; distance < groups_per_head; distance *= 2) {
+        auto leading_a = slice_group_axis(transform_a, 0, distance, memory_config);
+        auto leading_b = slice_group_axis(transform_b, 0, distance, memory_config);
+        auto after_a = slice_group_axis(transform_a, distance, groups_per_head, memory_config);
+        auto after_b = slice_group_axis(transform_b, distance, groups_per_head, memory_config);
+        auto before_a = slice_group_axis(transform_a, 0, groups_per_head - distance, memory_config);
+        auto before_b = slice_group_axis(transform_b, 0, groups_per_head - distance, memory_config);
+        auto composed_a = ttnn::matmul(
+            after_a,
+            before_a,
+            false,
+            false,
+            memory_config,
+            DataType::FLOAT32,
+            std::nullopt,
+            std::nullopt,
+            compute_kernel_config);
+        auto composed_b = ttnn::matmul(
+            after_a,
+            before_b,
+            false,
+            false,
+            memory_config,
+            DataType::FLOAT32,
+            std::nullopt,
+            std::nullopt,
+            compute_kernel_config);
+        composed_b = ttnn::add(composed_b, after_b, std::nullopt, memory_config);
+        transform_a = ttnn::concat({leading_a, composed_a}, 1, memory_config);
+        transform_b = ttnn::concat({leading_b, composed_b}, 1, memory_config);
+    }
+    return {transform_a, transform_b};
+}
+
 // Three 32x32 quadrant masks packed into one [1,1,32,96] tile-row (tile 0 = top-left,
 // tile 1 = bottom-right, tile 2 = bottom-left). Used by the prep kernel's 16x16 sub-blocked
 // WY inverse to isolate the four 16-quadrants of each 32x32 diagonal block.
@@ -545,13 +603,16 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         flat_g,
         true,
         prep_bf16_mask);
-    std::optional<ttnn::Tensor> summary_reconstructed_state;
+    std::optional<std::vector<ttnn::Tensor>> grouped_scan;
     // Experimental affine-summary construction: eight contiguous chunks become one
     // independent pseudo-head. Running the proven recurrence from zero gives B; running
     // from I gives A+B. State-only mode drains token outputs without materializing them.
     constexpr uint32_t group_chunks = 8;
-    if (std::getenv("QWEN_KDA_GROUP_SUMMARY") != nullptr && NC % group_chunks == 0 && K == V) {
-        const uint32_t group_heads = BH * (NC / group_chunks);
+    const bool build_group_summaries =
+        std::getenv("QWEN_KDA_GROUP_SUMMARY") != nullptr || std::getenv("QWEN_KDA_GROUP_PREFIX") != nullptr;
+    if (build_group_summaries && NC % group_chunks == 0 && K == V) {
+        const uint32_t groups_per_head = NC / group_chunks;
+        const uint32_t group_heads = BH * groups_per_head;
         auto grouped = prep;
         grouped[0] = ttnn::reshape(grouped[0], ttnn::Shape({group_heads, group_chunks, C, V}));
         grouped[1] = ttnn::reshape(grouped[1], ttnn::Shape({group_heads, group_chunks, C, K}));
@@ -592,17 +653,59 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
             true,
             eye_c);
         auto summary_a = ttnn::subtract(summary_a_plus_b[1], summary_b[1], std::nullopt, prep_mem);
-        if (NC == group_chunks) {
-            TT_FATAL(s0.has_value(), "one-group summary validation requires initial state");
-            auto transformed_state = ttnn::matmul(
-                summary_a, *s0, false, false, prep_mem, DataType::FLOAT32, std::nullopt, std::nullopt, kernel_cfg);
-            summary_reconstructed_state = ttnn::add(transformed_state, summary_b[1], std::nullopt, prep_mem);
+        if (std::getenv("QWEN_KDA_GROUP_PREFIX") != nullptr) {
+            TT_FATAL(s0.has_value(), "group-prefix scan requires initial state");
+            const auto prefix_mem = ttnn::DRAM_MEMORY_CONFIG;
+            summary_a = ttnn::reshape(summary_a, ttnn::Shape({BH, groups_per_head, K, K}));
+            auto summary_b_grouped = ttnn::reshape(summary_b[1], ttnn::Shape({BH, groups_per_head, K, V}));
+            auto [prefix_a, prefix_b] =
+                inclusive_affine_prefix(summary_a, summary_b_grouped, groups_per_head, prefix_mem, kernel_cfg);
+            auto initial = ttnn::reshape(*s0, ttnn::Shape({BH, 1, K, V}));
+            auto repeated_initial = ttnn::repeat_interleave(initial, groups_per_head, 1, prefix_mem);
+            auto group_end_states = ttnn::matmul(
+                prefix_a,
+                repeated_initial,
+                false,
+                false,
+                prefix_mem,
+                DataType::FLOAT32,
+                std::nullopt,
+                std::nullopt,
+                kernel_cfg);
+            group_end_states = ttnn::add(group_end_states, prefix_b, std::nullopt, prefix_mem);
+            auto group_initial_states = initial;
+            if (groups_per_head > 1) {
+                group_initial_states = ttnn::concat(
+                    {initial, slice_group_axis(group_end_states, 0, groups_per_head - 1, prefix_mem)}, 1, prefix_mem);
+            }
+            group_initial_states = ttnn::reshape(group_initial_states, ttnn::Shape({group_heads, K, V}));
+            grouped_scan = ttnn::prim::chunk_gdn_scan(
+                grouped[0],
+                grouped[1],
+                grouped[2],
+                grouped[3],
+                grouped[4],
+                grouped[5],
+                grouped[6],
+                group_initial_states,
+                C,
+                true,
+                out_mem,
+                kernel_cfg,
+                true);
+            (*grouped_scan)[0] = ttnn::reshape((*grouped_scan)[0], ttnn::Shape({BH, NC, C, V}));
+            auto all_final_states = ttnn::reshape((*grouped_scan)[1], ttnn::Shape({BH, groups_per_head, K, V}));
+            (*grouped_scan)[1] = ttnn::reshape(
+                slice_group_axis(all_final_states, groups_per_head - 1, groups_per_head, prefix_mem),
+                ttnn::Shape({BH, K, V}));
         }
     }
-    auto scan = ttnn::prim::chunk_gdn_scan(
-        prep[0], prep[1], prep[2], prep[3], prep[4], prep[5], prep[6], s0, C, true, out_mem, kernel_cfg, true);
-    if (summary_reconstructed_state.has_value()) {
-        scan[1] = *summary_reconstructed_state;
+    std::vector<ttnn::Tensor> scan;
+    if (grouped_scan.has_value()) {
+        scan = *grouped_scan;
+    } else {
+        scan = ttnn::prim::chunk_gdn_scan(
+            prep[0], prep[1], prep[2], prep[3], prep[4], prep[5], prep[6], s0, C, true, out_mem, kernel_cfg, true);
     }
 
     std::optional<ttnn::Tensor> final_state;
