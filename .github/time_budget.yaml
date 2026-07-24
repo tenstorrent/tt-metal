@@ -237,7 +237,7 @@ runtime:
     bh_p150b_civ2: 214
     bh_p300: 69
     bh_p150b_civ2_viommu: 5
-    bh_p100a_civ2_viommu: 74
+    bh_p100a_civ2_viommu: 79
     bh_loudbox: 20
     wh_galaxy: 35
   integration:
