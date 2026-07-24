@@ -14,7 +14,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 from models.experimental.xtts.reference.xtts_gpt_block import LAYER_NORM_EPS, NUM_LAYERS
-from models.experimental.xtts.tt.xtts_gpt_block import NEG_INF, TtXttsGptBlock, _to_device
+from models.experimental.xtts.tt.xtts_gpt_block import NEG_INF, TtXttsGptBlock, _to_device, sharded_decode_ln
 
 
 class TtXttsGptStack(LightweightModule):
@@ -60,18 +60,25 @@ class TtXttsGptStack(LightweightModule):
         # le -> (1-le) -> *NEG_INF, 5 ops); mathematically identical.
         # NOTE: add_mask must stay in DRAM — ttnn SDPA hard-asserts the attention mask is DRAM-resident
         # (sdpa_device_operation.cpp: mask.buffer_type() == DRAM), so it can't be moved to L1.
-        gt = ttnn.typecast(ttnn.gt(self.arange, pos), ttnn.bfloat16)  # [1,1,1,MAX] 1 for future positions
-        add_mask = ttnn.multiply(gt, NEG_INF)  # 0 cached, -inf ahead
+        # NOTE: add_mask must stay in DRAM — ttnn SDPA hard-asserts the attention mask is DRAM-resident
+        # (sdpa_device_operation.cpp: mask.buffer_type() == DRAM). These small per-step mask tensors are
+        # left interleaved/DRAM: moving them to L1 gives no measurable win (they're tiny + decode is
+        # latency-bound) and breaks trace capture of the one-hot write path.
+        gt = ttnn.typecast(
+            ttnn.gt(self.arange, pos), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+        )  # [1,1,1,MAX] 1 for future positions
+        add_mask = ttnn.multiply(gt, NEG_INF, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # 0 cached, -inf ahead
         onehot = None
         if write_idx is None:  # traced path needs the data-driven one-hot write selector
-            onehot_row = ttnn.typecast(ttnn.eq(self.arange, pos), ttnn.bfloat16)  # [1,1,1,MAX] 1 at col=pos
-            onehot = ttnn.reshape(onehot_row, (1, 1, self.max_seq, 1))  # [1,1,MAX,1]
+            onehot_row = ttnn.typecast(
+                ttnn.eq(self.arange, pos), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+            )  # [1,1,1,MAX] 1 at col=pos
+            onehot = ttnn.reshape(
+                onehot_row, (1, 1, self.max_seq, 1), memory_config=ttnn.L1_MEMORY_CONFIG
+            )  # [1,1,MAX,1]
         for block, (k, v) in zip(self.blocks, kv):
             x = block.forward_decode(x, k, v, onehot, add_mask, write_idx)  # k, v updated in place
-        y = ttnn.layer_norm(
-            x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        ttnn.deallocate(x)
+        y = sharded_decode_ln(x, self.ln_f_weight, self.ln_f_bias, self.device)  # width-sharded decode ln_f
         return y
 
     def forward(self, x):
