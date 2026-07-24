@@ -685,6 +685,25 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             "(GUIDELINES/08 §7), verify_tp_fracture(M,K,N,best_tp) to PROVE PCC, then commit; ALWAYS "
             "record_kernel_attempt(...,'tp-fracture',...) even on a no-gain result",
         )
+    # BOX (2.5) STRUCTURAL / ALGORITHMIC — moved AHEAD of the kernel rungs. The cheap knobs are
+    # exhausted but a MATERIAL GAP REMAINS. An algorithmic restructure (KV-cache for a recompute
+    # decode, gather for a sparse/MoE matmul that loads experts it never fires, fusion/trace for a
+    # dispatch-bound chain) is usually a BIGGER and CHEAPER win than a hand-written kernel -> try it
+    # BEFORE tt-lang/C++, so a long ladder can't burn the whole iteration budget on kernels and never
+    # reach it. Cleared once a measured 'structural' attempt is on file (a 'none: <evidence>' counts).
+    _STRUCTURAL = {"structural", "gather", "fusion", "fuse", "sparse", "cache", "kv-cache"}
+    if not (kinds & _STRUCTURAL):
+        return (
+            False,
+            "structural",
+            "knobs exhausted (grid+fidelity+dtype+shard) but a gap remains -> try an ALGORITHMIC "
+            "restructure BEFORE authoring a kernel. INVESTIGATE this model's architecture/source for "
+            "REDUCIBLE WORK (bound_by is a HINT: recompute across steps -> cache, e.g. a KV-cache + "
+            "single-token decode_step; a sparse/MoE matmul loading experts that never fire -> gather; "
+            "dispatch-bound -> fuse adjacent ops / trace the region). Improvise the restructure for THIS "
+            "model, measure it, and record_kernel_attempt(...,'structural', note=<what you found + did>). "
+            "If there is genuinely no reducible work, record 'structural' with note='none: <evidence>'.",
+        )
     if _is_kernel_able(op_code):
         _tr = _trace_on()
         _suffix = _ISOLATE_FIRST if _tr else _EAGER_NOTE
@@ -735,32 +754,12 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
                 "tt-lang measured; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it."
                 + _suffix,
             )
-    # BOX (4) STRUCTURAL (ALWAYS ON, GENERAL — no model/architecture knowledge) — the per-op ladder
-    # above (grid+dtype+tt-lang+C++) is exhausted but a MATERIAL GAP REMAINS (this op is in the
-    # blocking set, so its gap >= the material threshold). That is the universal, config-free signal
-    # that the op-level levers PROVABLY can't reach the floor -> the residual bottleneck is STRUCTURAL.
-    # The gate does NOT name the fix (no MoE/gather/fusion hardcoding); it REQUIRES the LLM to
-    # investigate THIS model's architecture for reducible work and record an attempt. The LLM finds +
-    # improvises the restructure (gather / fusion / cache / ... ) for whatever architecture it is; a
-    # recorded 'structural' attempt (with evidence) clears the op (measured=tried, bounded).
-    _STRUCTURAL = {"structural", "gather", "fusion", "fuse", "sparse", "cache", "kv-cache"}
-    if not (kinds & _STRUCTURAL):
-        return (
-            False,
-            "structural",
-            "per-op ladder exhausted but a gap remains -> the residual bottleneck is STRUCTURAL. "
-            "INVESTIGATE this model's architecture/source for REDUCIBLE WORK (use bound_by as a HINT, "
-            "not a rule: memory-bound -> are these bytes reducible? e.g. a sparse/MoE matmul loading "
-            "experts that don't fire -> gather; recompute across steps -> cache. dispatch-bound -> fuse "
-            "adjacent ops / trace the region). Improvise the restructure for THIS model, measure it, and "
-            "record_kernel_attempt(...,'structural', note=<what you found + did>). If there is genuinely no "
-            "reducible work, record 'structural' with note='none: <evidence you checked>' to mark it tried.",
-        )
-    # every box ticked -> genuine irreducible residual -> DONE for this op
+    # every box ticked (knobs + structural + tt-lang + C++) -> genuine irreducible residual -> DONE.
+    # STRUCTURAL is asserted ABOVE (before the kernel rungs), so reaching here means it is already tried.
     return (
         True,
         "done",
-        "checklist complete (grid+fidelity+dtype+shard+tt-lang+C++ + structural assessment) -> irreducible",
+        "checklist complete (grid+fidelity+dtype+shard+structural+tt-lang+C++) -> irreducible",
     )
 
 
