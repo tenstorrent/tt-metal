@@ -312,7 +312,7 @@ models:
     bh_p150: 27
     bh_quietbox_2: 195
     bh_galaxy: 78
-    bh_sc4-mgd: 70
+    bh_sc4-mgd: 70  # WAN 2.2 T2V + I2V quad e2e (perf + CLIP/VBench accuracy); 2 legs x 35 timeout
   e2e_tier2:
     wh_llmbox_perf: 266
     wh_n150: 30
