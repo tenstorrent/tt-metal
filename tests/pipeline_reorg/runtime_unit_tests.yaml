@@ -264,8 +264,10 @@
 
 # --- Debug Tools, Device, Dispatch (SD) ---
 - name: runtime_sd_debug_tools_device_dispatch
-  # See #44767.
-  disabled_debug_tools_filter: *disabled_debug_tools
+  # Base #50483 exclusions plus StackUsage0/16: those two fail only under slow dispatch on
+  # eth-capable boards (test appends a legacy idle-ETH kernel to a Metal 2.0 program already
+  # compiled by MakeProgramFromSpec); they pass in fast dispatch (runtime_debug_tools).
+  disabled_debug_tools_filter: 'MeshWatcherFixture.TestWatcherWaypointsEth:MeshWatcherFixture.EthernetTestWatcherPause:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage0:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage16'
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='-{disabled_debug_tools_filter}'
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_inspector
