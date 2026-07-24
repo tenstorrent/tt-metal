@@ -10,8 +10,11 @@
 namespace ttnn::prim {
 
 bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats) {
+    // Only Float32 CBs need the extra reconfig_data_format path. Do not use
+    // `!= Float16_b`: Bfp8_b masks (common in SDXL/VAE sharded group_norm) are also
+    // non-Float16_b and must keep the legacy bf16 reconfig behavior.
     return std::any_of(reconfig_formats.begin(), reconfig_formats.end(), [](tt::DataFormat format) {
-        return format != tt::DataFormat::Float16_b;
+        return format == tt::DataFormat::Float32;
     });
 }
 
