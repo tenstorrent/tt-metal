@@ -5,7 +5,6 @@
 #include "dram_prefetcher_validator.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt_stl/reflection.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -52,24 +51,6 @@ DramPrefetcherValidatorDeviceOperation::compute_output_specs(const operation_att
 DramPrefetcherValidatorDeviceOperation::tensor_return_value_t
 DramPrefetcherValidatorDeviceOperation::create_output_tensors(const operation_attributes_t&, const tensor_args_t&) {
     return std::vector<ttnn::Tensor>{};
-}
-
-ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // GlobalCircularBuffer / Tensor aren't reflection-hashable here; pick the bits that
-    // determine Program shape: scalar attrs, GCB identity, the source tensor's DRAM
-    // address (compile-time arg via TensorAccessorArgs), and its dataformat.
-    const auto* tensor_buffer = tensor_args.source_tensor.buffer();
-    const tt::DataFormat dataformat = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.source_tensor.dtype());
-    return ttsl::hash::hash_objects_with_default_seed(
-        ttsl::hash::type_hash<DramPrefetcherValidatorDeviceOperation>,
-        attrs.num_layers,
-        attrs.print_stride,
-        attrs.streaming,
-        attrs.rotation,
-        static_cast<uint64_t>(attrs.global_cb->config_address()),
-        static_cast<uint64_t>(tensor_buffer != nullptr ? tensor_buffer->address() : 0),
-        static_cast<uint32_t>(dataformat));
 }
 
 ttnn::device_operation::CachedProgram<DramPrefetcherValidatorDeviceOperation::ProgramFactory::shared_variables_t>
@@ -271,7 +252,7 @@ void test_dram_prefetcher_validator(
         .streaming = streaming,
         .rotation = rotation,
     };
-    OperationType::tensor_args_t tensor_args{.source_tensor = source_tensor};
+    OperationType::tensor_args_t tensor_args{source_tensor};
     ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
 
