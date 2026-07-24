@@ -48,6 +48,24 @@ core a contiguous tile-**column** range, capped by a `WT_CHUNK` constant so per-
 Same reader/compute/writer kernels; only the per-core `(start_page, num_pages)` and the active-core
 count change.
 
+## ⭐⭐ T2 — [`distribution_gate`](distribution_gate/README.md)
+**Concept:** work distribution — a fixed split axis fills the grid for one aspect ratio and strands
+the other; **gate** the specialized axis so fixing one regime does not regress the other.
+**Situation:** a height (tile-row) split strands **wide-short** tensors on ~1 core; a width
+(tile-column) split strands **tall-narrow** tensors on ~1 core — the trap is symmetric. The tempting
+"fix" for wide-short is to switch wholesale to a width split, but that switch **regresses every
+tall-narrow shape** the height split already handled.
+**Measured win:** each fixed split collapses on its bad regime — height_split is **7.25× slower** on
+`32×4096` (1 core), width_split is **6.15× slower** on `2048×32` (1 core) (WH B0, 64-core grid, bf16,
+relu). The **gated** variant (height by default, divert to width only when height under-fills) fills
+the grid on **both** regimes, and on shapes the height split already saturated (`2048×2048`, `2048×32`)
+it is **byte-identical to height_split** — a measured no-regression: gated 90665 ns vs height 90666 ns.
+**Gist:** don't switch a distribution scheme wholesale to fix one regime. Keep the conventional split
+as the default and divert to the specialized one **only behind a utilization predicate** (e.g. "the
+default fills ≤ 1/K of the grid"); when the gate doesn't trip the default path is untouched, so the
+shapes it already handled cannot regress. Same kernels; only the per-core tile rectangle / active-core
+count change.
+
 ## ⭐⭐ T2 — [`double_buffer`](double_buffer/README.md)
 **Concept:** keeping bytes in flight on the NoC for a DRAM reader→compute→writer pipeline, via three
 levers — outstanding reads per barrier (`block`), double-buffered CBs, and transfer size (dtype).
