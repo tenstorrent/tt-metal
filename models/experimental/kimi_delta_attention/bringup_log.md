@@ -895,3 +895,29 @@
   time improves `637.981 -> 633.222 us`, and recurrence improves
   `183.096 -> 178.550 us`. Reject as a retained default because this bandwidth
   win changes the persistent state beyond the selected fidelity guard.
+
+
+### 2026-07-24 16:08:43 UTC — Store kd in BF16
+
+- Hypothesis: `kd` has the same tile volume as `q_decay`; despite participating
+  in the state correction, its BF16 pack/unpack may preserve the effective
+  recurrence numerics because its source products are already BF16-limited.
+  Mask bit 1 (`0x2`) selects `kd` only.
+- Direct correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x2 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 5/5 in 22.42 s. Every HiFi4 output/state PCC
+  matches the FP32 control to six decimals; the HiFi2 case is
+  `0.999920/0.999921`.
+- TP=8 layer correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x2 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1 in 7.17 s; output/recurrent/convolution
+  PCC exactly matches control at `0.999964/0.999903/0.999997`.
+- Measurement command:
+  `QWEN_KDA_PREP_BF16_MASK=0x2 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1.
+- Report:
+  `generated/profiler/reports/2026_07_24_16_08_43/ops_perf_results_2026_07_24_16_08_43.csv`
+  (SHA-256 `27b27fa049287b66bc91e831edf9e68e90d5f4f395d6e59aa75ac90658cb9d62`).
+  Median wall improves `659.024 -> 652.986 us` (`-6.039 us`, `-0.92%`), active
+  time improves `637.981 -> 631.827 us`, and recurrence improves
+  `183.096 -> 177.339 us`. Retain `kd` as an accepted BF16-storage candidate.
