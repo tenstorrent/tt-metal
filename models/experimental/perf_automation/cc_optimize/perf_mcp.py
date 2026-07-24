@@ -2142,10 +2142,19 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
     # clear it — trace removes dispatch gaps, not recompute. Bounded by PERF_MCP_MAX_KV_ATTEMPTS so a
     # genuinely infeasible cache cannot loop forever: after N real kv-cache attempts the gate yields.
     _kv_kinds = ("structural-decode", "kv-cache")
-    kv_attempts = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _kv_kinds]
-    kv_won = any(a.get("beat_baseline") for a in kv_attempts)
+    kv_clean = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _kv_kinds]
+    kv_won = any(a.get("beat_baseline") for a in kv_clean)
+    # A KV-cache attempt that WEDGED the device is auto-recorded (_autorecord_wedge) with
+    # kernel_detected_in_source=False, so termination_check's detected-filter drops it from the
+    # `attempts` passed here. Count those wedges from the full log toward the cap: a KV-cache that
+    # crashes every time must be treated as "tried" so this gate yields instead of ordering the
+    # same wedging rewrite forever — mirroring how a wedged tt-lang/C++ kernel retires its rung
+    # (_rung_state). A clean measured win still clears immediately.
+    kv_wedged = sum(
+        1 for a in _load_attempts() if (a.get("kernel_kind") or "").lower() in _kv_kinds and a.get("wedged")
+    )
     max_kv = int(os.environ.get("PERF_MCP_MAX_KV_ATTEMPTS", "3") or "3")
-    if kv_won or len(kv_attempts) >= max_kv:
+    if kv_won or (len(kv_clean) + kv_wedged) >= max_kv:
         return None
     reason = (
         "MANDATORY kv-cache — a lever SEPARATE from trace/2CQ. decode is repeat_prefill: it re-runs the "

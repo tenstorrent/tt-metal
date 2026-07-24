@@ -77,3 +77,45 @@ def test_host_ladder_asks_for_trace_not_structural_and_avoids_irreducible():
     )
     assert done2
     assert "kv-cache" in reason2.lower()
+
+
+# --- wedge tolerance: a KV-cache attempt that WEDGES the device must count as "tried" ------------
+# A wedged kv-cache attempt is auto-recorded with kernel_detected_in_source=False, so it is dropped
+# from the `attempts` the gate is handed; the gate counts such wedges from the full attempt log so a
+# KV-cache that crashes every time yields (like a wedged tt-lang/C++ kernel) instead of looping.
+
+
+def _wedge(kind="structural-decode"):
+    return {"kernel_kind": kind, "beat_baseline": False, "wedged": True, "kernel_detected_in_source": False}
+
+
+def test_wedged_kv_attempts_count_toward_cap(monkeypatch):
+    monkeypatch.setenv("PERF_MCP_MAX_KV_ATTEMPTS", "3")
+    # 3 device wedges, none surfaced in the (detected-filtered) `attempts` list
+    monkeypatch.setattr(perf_mcp, "_load_attempts", lambda: [_wedge(), _wedge(), _wedge()])
+    assert perf_mcp._decode_gate(_prof(), []) is None, "3 wedged kv-cache attempts must retire the gate"
+
+
+def test_below_cap_wedges_still_block(monkeypatch):
+    monkeypatch.setenv("PERF_MCP_MAX_KV_ATTEMPTS", "3")
+    monkeypatch.setattr(perf_mcp, "_load_attempts", lambda: [_wedge(), _wedge()])
+    assert perf_mcp._decode_gate(_prof(), []) is not None, "below the cap, wedges keep blocking"
+
+
+def test_mixed_clean_and_wedged_reach_cap(monkeypatch):
+    monkeypatch.setenv("PERF_MCP_MAX_KV_ATTEMPTS", "3")
+    # 1 clean (surfaced) + 2 wedged (from the log) == cap
+    monkeypatch.setattr(perf_mcp, "_load_attempts", lambda: [_wedge(), _wedge()])
+    assert perf_mcp._decode_gate(_prof(), [_kv(False)]) is None
+
+
+def test_wedge_of_a_different_rung_does_not_count(monkeypatch):
+    monkeypatch.setenv("PERF_MCP_MAX_KV_ATTEMPTS", "3")
+    # a matmul grid wedge is NOT a kv-cache attempt and must not advance the kv cap
+    monkeypatch.setattr(perf_mcp, "_load_attempts", lambda: [_wedge("grid"), _wedge("grid"), _wedge("grid")])
+    assert perf_mcp._decode_gate(_prof(), []) is not None
+
+
+def test_clean_win_clears_even_with_wedges(monkeypatch):
+    monkeypatch.setattr(perf_mcp, "_load_attempts", lambda: [_wedge()])
+    assert perf_mcp._decode_gate(_prof(), [_kv(True)]) is None, "a measured win still clears immediately"
