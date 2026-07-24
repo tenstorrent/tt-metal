@@ -981,6 +981,11 @@ int main(int argc, char** argv) {
         nc.fl_stall.assign(ndh, 0);
         nc.fl_pages.assign(ndh, 0);  // --socket: total pages the host read from this socket (reliable)
     }
+    // --hartzones (option B): X280 hart zones ride IN-BAND in the drain stream (readers inject into STAGE,
+    // relays into the socket). The flusher decodes PP_X280_ZONE packets here and appends their timestamps to
+    // hz_raw[hart] (START,END,START,END... per hart) -- no separate poller, no extra cluster reads. Each hart
+    // is written by exactly one flusher (its drain path), so the per-hart vectors need no lock.
+    std::vector<std::vector<uint64_t>> hz_raw(nharts);
     // Flusher for node nc's socket h: drain ring/FIFO h IN ORDER, demux (dispatch bulk/per-risc) + decode into
     // fully-resolved device records + per-lane seq verify (this socket owns its band's lanes), push record
     // batches to the ONE shared MPMC. Demux MUST live here (sticky-src is in-order per stream); records are
@@ -1179,6 +1184,16 @@ int main(int argc, char** argv) {
                         cur_hi[cur_lane] = pp_timer_hi(w0);
                     }
                     p += 1;
+                } else if (pp_is_x280(w0)) {  // 3 words: X280 hart zone (rdcycle) -> route to the per-X280 context
+                    if (p + 2 >= sz) {
+                        break;
+                    }
+                    uint32_t hart = pp_x280_hart(w0);
+                    uint64_t rdc = ((uint64_t)buf[p + 2] << 32) | buf[p + 1];
+                    if (hart < hz_raw.size()) {
+                        hz_raw[hart].push_back(rdc);  // START,END alternate; teardown pairs (2i,2i+1)
+                    }
+                    p += 3;
                 } else {  // 2 words: PROG / marker (emit resolves)
                     if (p + 1 >= sz) {
                         break;
@@ -1347,13 +1362,6 @@ int main(int argc, char** argv) {
     };
 #endif
 
-    // --hartzones: per-hart raw marker buffers (interleaved [ts, tag] as u64), filled LIVE by a poller thread
-    // that empties each hart's circular LIM ring during the run (LIM is too small to hold a whole run). Mapped
-    // + pushed to Tracy at teardown. hz_lost counts markers dropped if the poller ever fell >ring behind.
-    std::vector<std::vector<uint64_t>> hz_raw(nharts);
-    std::atomic<uint64_t> hz_lost{0};
-    std::thread hz_poller;
-
     std::vector<std::thread> flushers, mconsumers;  // --mpmc threads
 
     // One host thread PER ring (default) -> ring 1 is never ack-starved by ring 0's servicing. --rrconsumer
@@ -1366,48 +1374,6 @@ int main(int argc, char** argv) {
             for (uint64_t h = 0; h < ndh; h++) {
                 flushers.emplace_back(flusher, std::ref(node[n]), h);
             }
-        }
-        // --hartzones poller: drain each hart's circular zone ring (node[0]) into hz_raw until device_done, then
-        // one final pass. Low-rate, so a 500 us poll easily outpaces the harts (ring = kProfzoneHZoneCap markers).
-        if (do_hartzones) {
-            hz_poller = std::thread([&]() {
-                const uint64_t CAP = pz::kProfzoneHZoneCap;
-                std::vector<uint64_t> tail(nharts, 0), buf;
-                bool last = false;
-                for (;;) {
-                    bool done = device_done.load();
-                    for (uint64_t h = 0; h < nharts; h++) {
-                        uint64_t hb = pz::kProfzoneHZoneBase + h * pz::kProfzoneHZoneStride;
-                        uint64_t prod = drv.lim_rd_u64(hb);
-                        if (prod <= tail[h]) {
-                            continue;
-                        }
-                        uint64_t avail = prod - tail[h];
-                        if (avail > CAP) {  // poller lapped -> lost the oldest (avail-CAP) markers
-                            hz_lost.fetch_add(avail - CAP);
-                            tail[h] = prod - CAP;
-                            avail = CAP;
-                        }
-                        uint64_t s = tail[h] % CAP;
-                        uint64_t first = std::min<uint64_t>(avail, CAP - s);
-                        buf.resize(avail * 2);  // 2 u64/marker (ts, tag|pad)
-                        drv.read_block(buf.data(), (uint32_t)(first * 16), hb + 16 + s * 16);
-                        if (avail > first) {
-                            drv.read_block(buf.data() + first * 2, (uint32_t)((avail - first) * 16), hb + 16);
-                        }
-                        hz_raw[h].insert(hz_raw[h].end(), buf.begin(), buf.begin() + (size_t)(avail * 2));
-                        tail[h] = prod;
-                    }
-                    if (last) {
-                        break;
-                    }
-                    if (done) {
-                        last = true;  // one more full drain pass after the device is done, then stop
-                    } else {
-                        std::this_thread::sleep_for(std::chrono::microseconds(500));
-                    }
-                }
-            });
         }
         if (do_pin) {
             for (size_t f = 0; f < flushers.size(); f++) {
@@ -1641,10 +1607,7 @@ int main(int argc, char** argv) {
         wall_end = std::chrono::steady_clock::now();  // drain done -> close the concurrent-window wall clock
         mq.close();  // then signal consumers no more batches are coming
         for (auto& t : mconsumers) {
-            t.join();
-        }
-        if (hz_poller.joinable()) {
-            hz_poller.join();  // device_done is set -> poller does its final drain pass, then exits
+            t.join();  // flushers already decoded the in-band X280 zones into hz_raw during the drain
         }
         if (do_csv) {
             // POST-drain CSV write, off the hot path: format rows into a reused buffer and fwrite in ~1 MB
@@ -1730,9 +1693,6 @@ int main(int argc, char** argv) {
                 a,
                 (uint32_t)l2t.x,
                 (uint32_t)l2t.y);
-            if (hz_lost.load()) {
-                printf("  [warn] poller fell behind: %llu markers dropped\n", (unsigned long long)hz_lost.load());
-            }
             for (uint64_t h = 0; h < nharts; h++) {
                 const char* role = (h < nread) ? "READ" : "RELAY";
                 // Per-hart zone name so each lane self-identifies by role+index (the lane HEADER itself is
@@ -1740,16 +1700,15 @@ int main(int argc, char** argv) {
                 // BRISC=rd0, NCRISC=rd1, TRISC_0=relay0, TRISC_1=relay1.
                 std::string hname =
                     (h < nread) ? ("X280-rd" + std::to_string(h)) : ("X280-relay" + std::to_string(h - nread));
-                const std::vector<uint64_t>& mk = hz_raw[h];  // poller-collected [ts, tag] pairs (full run)
-                uint64_t cnt = mk.size() / 2;                 // markers
-                if (cnt == 0) {
-                    printf("  hart%llu (%s): 0 markers\n", (unsigned long long)h, role);
+                const std::vector<uint64_t>& mk = hz_raw[h];  // in-band [start,end,start,end,...] rdcycle stamps
+                if (mk.empty()) {
+                    printf("  hart%llu (%s): 0 zones\n", (unsigned long long)h, role);
                     continue;
                 }
                 uint64_t busy_ns = 0;
                 uint32_t nz = 0;
-                for (uint64_t i = 0; i + 1 < cnt; i += 2) {
-                    uint64_t ts0 = map_ts(mk[i * 2 + 0]), ts1 = map_ts(mk[(i + 1) * 2 + 0]);
+                for (size_t i = 0; i + 1 < mk.size(); i += 2) {  // pair consecutive START,END rdcycle stamps
+                    uint64_t ts0 = map_ts(mk[i]), ts1 = map_ts(mk[i + 1]);
                     busy_ns += (uint64_t)((double)(ts1 - ts0) / (aiclk_mhz / 1000.0));
                     nz++;
 #if defined(TRACY_ENABLE)

@@ -116,18 +116,13 @@
 #define WALLCLOCK_REG_L 0xFFB121F0ULL /* RISCV_DEBUG_REG_WALL_CLOCK_L (reading L atomically latches H) */
 #define WALLCLOCK_REG_H 0xFFB121F8ULL /* RISCV_DEBUG_REG_WALL_CLOCK_1_AT (latched high half) */
 
-#define kNonceHartZones (1ull << 19) /* P_NONCE bit19: harts emit busy/idle spans (+ hart0 inline calib at start) */
-/* Per-hart zone buffer: HZONE_BASE + hartid*HZONE_STRIDE. [+0]=marker count (u64), then markers of 16 B
- * {u64 rdcycle_ts, u32 tag, u32 pad}. tag = state | (bit31 = START, else END). 16 KiB/hart -> harts 0..3 at
- * 0x08040000..0x08050000 (free when <=2 readers use STAGE 0x08020000/0x08030000; within the ECC-primed 0x60000).
- * Bounded to a start-of-run WINDOW (LIM is small): busy/idle spans are emitted only on STATE CHANGE, so a steady
- * drain is a few long spans, not per-pass -- low volume, covers a useful stretch. */
-#define HZONE_BASE 0x08040000ULL
-#define HZONE_STRIDE 0x4000ULL
-#define HZ_CAP 1000u /* markers/hart ((16 KiB - 16)/16 ~= 1023) */
-#define HZ_BUSY 1u
-#define HZ_IDLE 2u
-static uint32_t g_hartzones = 0; /* set in main() from nonce bit19; read by reader_run (defined below w64) */
+#define kNonceHartZones (1ull << 19) /* P_NONCE bit19: harts emit per-drain zones IN-BAND (+ hart0 inline calib) */
+#define PP_X280_ZONE 2u              /* in-band X280 hart-zone packet (3 words); MUST match prof_packet.h */
+static uint32_t g_hartzones = 0;     /* set in main() from nonce bit19; read by reader_run/relay */
+/* word0 for an X280-zone packet: type | (hart<<1) | is_start */
+static inline uint32_t hz_w0(uint32_t hart, uint32_t is_start) {
+    return (PP_X280_ZONE << 27) | ((hart & 0x3Fu) << 1) | (is_start & 1u);
+}
 /* socket h config @ base + h*stride. MUST be in the core-readable low mailbox region (between COORDS-end
  * 0x08011570 and HEADS 0x08013000): the X280 core reads 0x0801A000 (the manager's addr) as ZERO -- that
  * range is a hole in the core's LIM view even though it's NoC-writable. See FINDINGS / the takeover note. */
@@ -143,27 +138,46 @@ static inline uint32_t r32(uint64_t a) { return *(volatile uint32_t*)a; }
 static inline void w32(uint64_t a, uint32_t v) { *(volatile uint32_t*)a = v; }
 static inline uint64_t r64(uint64_t a) { return *(volatile uint64_t*)a; }
 static inline void w64(uint64_t a, uint64_t v) { *(volatile uint64_t*)a = v; }
-
-/* Append a {START,END} span for `state` spanning [t0,t1] (X280 rdcycle) to this hart's zone ring. The ring is
- * CIRCULAR (HZ_CAP slots) and drained LIVE by the host: *prod is the running total marker count, published to
- * base[0] each span; the host reads [tail,prod) and advances. Unbounded coverage as long as the host keeps up
- * (hart markers are low-rate); if it falls >HZ_CAP behind, the host detects the lap and reports loss. */
-static inline void hz_span(uint64_t base, uint32_t* prod, uint32_t state, uint64_t t0, uint64_t t1) {
-    uint32_t p = *prod;
-    uint64_t o0 = base + 16 + (uint64_t)(p % HZ_CAP) * 16;
-    w64(o0, t0);
-    w32(o0 + 8, state | 0x80000000u); /* START */
-    w32(o0 + 12, 0);
-    uint32_t q = p + 1;
-    uint64_t o1 = base + 16 + (uint64_t)(q % HZ_CAP) * 16;
-    w64(o1, t1);
-    w32(o1 + 8, state); /* END */
-    w32(o1 + 12, 0);
-    *prod = p + 2;
-    w64(base, (uint64_t)(p + 2)); /* publish running count for the host poller */
-}
 static inline void fence_(void) { __asm__ volatile("fence iorw, iorw"); }
 static inline void cpu_pause(void) { __asm__ volatile("nop"); }
+
+/* Inject an X280 hart DRAIN zone [t0,t1] as {START,END} (6 words) into a LIM STAGE ring at *prodp, waiting
+ * for SPSC room. Used by the READER harts -- the relay forwards it to the host in-band with the worker data
+ * (no separate side-channel). Caller publishes PROD as usual, so these ride the existing drain transport. */
+static inline void hz_stage(
+    uint64_t sbase,
+    uint32_t stage_words,
+    uint32_t swm,
+    uint32_t* prodp,
+    uint64_t cons_addr,
+    uint32_t hart,
+    uint64_t t0,
+    uint64_t t1) {
+    while ((uint32_t)(stage_words - (*prodp - r32(cons_addr))) < 6u) {
+        cpu_pause();
+    }
+    uint32_t p = *prodp;
+    w32(sbase + (uint64_t)((p + 0) & swm) * 4, hz_w0(hart, 1));
+    w32(sbase + (uint64_t)((p + 1) & swm) * 4, (uint32_t)t0);
+    w32(sbase + (uint64_t)((p + 2) & swm) * 4, (uint32_t)(t0 >> 32));
+    w32(sbase + (uint64_t)((p + 3) & swm) * 4, hz_w0(hart, 0));
+    w32(sbase + (uint64_t)((p + 4) & swm) * 4, (uint32_t)t1);
+    w32(sbase + (uint64_t)((p + 5) & swm) * 4, (uint32_t)(t1 >> 32));
+    *prodp = p + 6;
+}
+
+/* Inject an X280 hart DRAIN zone [t0,t1] (6 words) directly into the socket FIFO at the current bytes_sent
+ * position (wrap-aware). Used by the RELAY harts -- they own the socket write, so their zones ride out with
+ * the data they just copied. Caller publishes bytes_sent after. */
+static inline void hz_fifo(uint64_t fbase, uint32_t fifo_w, uint32_t* bsentp, uint32_t hart, uint64_t t0, uint64_t t1) {
+    uint32_t words[6] = {
+        hz_w0(hart, 1), (uint32_t)t0, (uint32_t)(t0 >> 32), hz_w0(hart, 0), (uint32_t)t1, (uint32_t)(t1 >> 32)};
+    uint32_t dw = (*bsentp / 4u) % fifo_w;
+    for (uint32_t k = 0; k < 6u; k++) {
+        w32(fbase + (uint64_t)((dw + k) % fifo_w) * 4, words[k]);
+    }
+    *bsentp += 24u;
+}
 
 /* copy `n` 32-bit words src->dst via wide RVV loads. e32/m8 (8 vector regs) => one vle32.v moves up to
  * VLEN*8/32 words and streams many NoC read requests pipelined, amortizing the NoC round-trip latency
@@ -261,10 +275,9 @@ static void reader_run(
     uint64_t t_copy = 0, t_wait = 0; /* PROFILE: cycles in the copy (NoC read+LIM write) vs SPSC-full wait */
     uint64_t visits = 0, polls = 0;  /* PROFILE: drains (tail!=head) vs total tail reads -> avg run = words/visits */
     uint64_t t0 = rdcycle();
-    /* hart per-drain zones (--hartzones): emit a DRAIN zone spanning each core-visit that actually moves data
-     * (prod advanced) -- shows the reader stepping core to core. Bounded to a start-of-run window (LIM is small). */
-    uint64_t hzb = HZONE_BASE + hartid * HZONE_STRIDE;
-    uint32_t hzn = 0;
+    /* hart per-drain zones (--hartzones): inject a DRAIN zone [t0,t1] spanning each core-visit that moves data
+     * IN-BAND into this reader's STAGE ring -- the relay forwards it to the host with the worker data (no
+     * side-channel poll). hz_t = visit start; injected before the per-core PROD publish so it rides out. */
     for (;;) {
         uint64_t pending = 0;
         for (uint64_t c = lo; c < hi; c++) {
@@ -349,7 +362,10 @@ static void reader_run(
                     w32(cbase + r * 4, tails[r]); /* advance heads -> producers unblock */
                 }
                 t_copy += rdcycle() - tc;
-                fence_();                /* frame + raw visible before PROD advances */
+                if (g_hartzones) { /* inject the drain zone BEFORE the publish so it rides out with this core */
+                    hz_stage(sbase, stage_words, swm, &prod, CONS(hartid), (uint32_t)hartid, hz_t, rdcycle());
+                }
+                fence_();                /* frame + raw + zone visible before PROD advances */
                 w32(PROD(hartid), prod); /* ONE publish for the whole core */
                 pending = 1;
                 visits++;
@@ -415,20 +431,17 @@ static void reader_run(
                 heads[L] = tail;
                 w32(cbase + r * 4, tail); /* advance worker head -> producer unblocks (kept per-risc) */
             }
-            if (prod != prod_core0) {    /* published once per core: amortizes the fence across all 5 riscs */
-                fence_();                /* all riscs' data + stickies visible before PROD advances */
-                w32(PROD(hartid), prod); /* ONE batched publish for the whole core */
+            if (g_hartzones && prod != hz_prod0) { /* this visit drained -> inject the zone before publishing */
+                hz_stage(sbase, stage_words, swm, &prod, CONS(hartid), (uint32_t)hartid, hz_t, rdcycle());
             }
-            if (g_hartzones && prod != hz_prod0) { /* this visit drained -> a DRAIN zone */
-                hz_span(hzb, &hzn, HZ_BUSY, hz_t, rdcycle());
+            if (prod != prod_core0) {    /* published once per core: amortizes the fence across all 5 riscs */
+                fence_();                /* all riscs' data + stickies + zone visible before PROD advances */
+                w32(PROD(hartid), prod); /* ONE batched publish for the whole core */
             }
         }
         if (r64(P_STOP) && (!pending || fullread)) { /* fullread: pending is always 1 -> stop on P_STOP alone */
             break;
         }
-    }
-    if (g_hartzones) {
-        w64(hzb, hzn); /* publish marker count */
     }
     uint64_t t_total = rdcycle() - t0;
     w64(RES_SLOT(hartid) + RES_TOTAL, total * 4ULL);
@@ -661,9 +674,8 @@ static void relay_run_socket(
 
     uint64_t total = 0, t_copy = 0, hostfull = 0, idle = 0;
     uint64_t t0 = rdcycle();
-    /* hart per-drain zones (--hartzones): a DRAIN zone spanning each LIM->host copy this relay does. */
-    uint64_t hzb = HZONE_BASE + hartid * HZONE_STRIDE;
-    uint32_t hzn = 0;
+    /* hart per-drain zones (--hartzones): inject a DRAIN zone [tc,now] for each LIM->host copy directly into
+     * the socket FIFO this relay owns -- rides out in-band with the data (no side-channel). */
     for (;;) {
         uint64_t pending = 0;
         for (uint64_t h = rlo; h < rhi; h++) {
@@ -677,9 +689,12 @@ static void relay_run_socket(
             uint32_t avail = prod - cn; /* whole frames (reader publishes PROD at frame boundaries) */
             uint32_t need_b = avail * 4u;
             uint32_t acked = r32(cfg_backed[h]);
-            if (fifo_bytes[h] - (bytes_sent[h] - acked) < need_b) {
+            /* reserve room for the in-band X280 zone (24 B) we append after the copy, so bytes_sent never
+             * races past the acked window -- without this the relay chronically hostfull-stalls (25x slower). */
+            uint32_t need_room = need_b + (g_hartzones ? 24u : 0u);
+            if (fifo_bytes[h] - (bytes_sent[h] - acked) < need_room) {
                 hostfull++;
-                continue; /* not enough FIFO room for the whole snapshot yet */
+                continue; /* not enough FIFO room for the whole snapshot (+ zone) yet */
             }
             uint64_t tc = rdcycle();
             uint32_t fifo_w = fifo_bytes[h] / 4u;
@@ -704,12 +719,12 @@ static void relay_run_socket(
             cons[h] = cn;
             bytes_sent[h] += need_b;
             total += avail;
-            fence_();                      /* payload lands before bytes_sent is published (posted order) */
+            if (g_hartzones) { /* inject the drain zone into the FIFO BEFORE publishing so it rides out */
+                hz_fifo(fbase[h], fifo_bytes[h] / 4u, &bytes_sent[h], (uint32_t)hartid, tc, rdcycle());
+            }
+            fence_();                      /* payload + zone land before bytes_sent is published (posted order) */
             w32(CONS(h), cn);              /* free reader SPSC */
             w32(bsbase[h], bytes_sent[h]); /* publish bytes_sent to host sysmem (amortized per batch) */
-            if (g_hartzones) {             /* DRAIN zone: this relay moved a snapshot to host */
-                hz_span(hzb, &hzn, HZ_BUSY, tc, rdcycle());
-            }
         }
         if (!pending) {
             idle++;
@@ -756,9 +771,6 @@ static void relay_run_socket(
             fence_();
             w32(bsbase[h], bytes_sent[h]);
         }
-    }
-    if (g_hartzones) {
-        w64(hzb, hzn); /* publish this relay's zone count */
     }
     uint64_t t_total = rdcycle() - t0;
     w64(RES_SLOT(hartid) + RES_TOTAL, total * 4ULL);

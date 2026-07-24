@@ -75,6 +75,14 @@
  * over-read past tail is present but the host takes only `run`), then decode as that lane's packet stream. */
 #define PP_BULK_CORE 5u
 
+/* X280_ZONE: an X280 DRAIN-HART's own profiling zone (reader/relay activity), injected IN-BAND into the same
+ * linearized stream as the worker data (readers inject into their LIM STAGE, relays into the socket) so the
+ * host gets hart zones for FREE over the existing transport -- no separate side-channel poller. 3 WORDS:
+ *   [0] word0 = pp_x280_w0(hart, is_start)   [1] rdcycle_lo   [2] rdcycle_hi
+ * low27 of word0 = (hart << 1) | is_start. The host routes these to the per-X280 Tracy context (hart = lane),
+ * mapping rdcycle -> Tensix via the calibration. They never enter the worker-marker/emit path. */
+#define PP_X280_ZONE 2u
+
 /* --- word0 fields --- */
 #define PP_TYPE_SHIFT 27
 #define PP_TYPE_MASK 0x1Fu       /* 5 bits */
@@ -122,8 +130,22 @@ static inline uint32_t pp_timer_hi(uint32_t w0) { return pp_low27(w0); }
  * that advances by this length stays in sync. */
 static inline uint32_t pp_packet_words(uint32_t w0) {
     uint32_t t = pp_type(w0);
-    return (t == PP_STICKY_SRC || t == PP_STICKY_TIMER) ? 1u : 2u;
+    if (t == PP_STICKY_SRC || t == PP_STICKY_TIMER) {
+        return 1u;
+    }
+    if (t == PP_X280_ZONE) {
+        return 3u;  // word0 + rdcycle_lo + rdcycle_hi
+    }
+    return 2u;
 }
+
+/* ----- X280_ZONE (in-band hart zone) ----- */
+static inline uint32_t pp_x280_w0(uint32_t hart, uint32_t is_start) {
+    return pp_word0(PP_X280_ZONE, ((hart & 0x3Fu) << 1) | (is_start & 1u));
+}
+static inline int pp_is_x280(uint32_t w0) { return pp_type(w0) == PP_X280_ZONE; }
+static inline uint32_t pp_x280_hart(uint32_t w0) { return (pp_low27(w0) >> 1) & 0x3Fu; }
+static inline uint32_t pp_x280_is_start(uint32_t w0) { return pp_low27(w0) & 1u; }
 
 /* reader-injected source sticky: lane_id = core*NRISC + risc, carried in both words. */
 static inline uint32_t pp_src_w0(uint32_t lane_id) { return pp_word0(PP_STICKY_SRC, lane_id); }
