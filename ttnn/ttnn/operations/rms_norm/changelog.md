@@ -1108,3 +1108,108 @@ by same-session A/B + golden green). pass2 remains the dominant stage (28.5µs) 
 row-batch is the top Perf-2 candidate.
 - Tests added: 4 isolated micro-benches under `perf_experiments/<slug>/` (durable artifacts,
   committed). Reused `test_rms_norm_perf_r6.py` for whole-op device-ns + soft-PCC.
+
+## Perf 2 — Cross-core compute floor: pass-1 batched reduce + pass-2 row-batch
+- Date: 2026-07-24
+- Type: perf tournament (round 2 of 2; no SUPPORTED change; `verify_supported` categories unchanged).
+- Focus shape (perf-flagged loose case, its EXACT config, UNCHANGED from Perf 1): **BLOCK_SHARDED
+  (1,1,8192,1024), 8×8 grid, bf16 input + bf16 TILE gamma, HiFi2, fp32_dest_acc_en=False** —
+  achievable_ns=25640. Still the worst offender after Perf 1 (1.68× above achievable), the mandatory
+  primary target.
+
+### Measured breakdown (Step 1 — re-measured on the now-instrumented, partly-optimized op)
+- Re-profiled the focus shape (blackhole_p150b, `--profile`, median of trials 2–8) with the Perf-1
+  graduations (PASS1_FUSED + PASS2_RECONFIG_SKIP) in place. Per-stage device-ns/trial on the critical
+  core (zones `xc_pass1/pass2/fold`, `xc_wr_round`, `xc_rd_gamma`); whole-op = **43033 ns**:
+  | stage | ns/trial | % of compute | note |
+  |---|---|---|---|
+  | pass2 (x·rstd + ·gamma) | ~29,377 | 68% | DOMINANT (still), even after Perf-1 reconfig-skip |
+  | pass1 (fused square + reduce) | ~13,440 | 31% | Perf-1 fused; reduce called C=8×/round |
+  | fold | ~781 | ~2% | tiny (two-phase distributed) |
+  | writer round (transport) | ~38,890 (wall) | — | HIDDEN under compute (< 42.9µs); compute-gated |
+  | reader gamma | ~2,346 | — | tiny |
+- **Verdict: still COMPUTE-BOUND** (zero-copy sharded → no DRAM; writer round tracks below compute).
+  The critical path did NOT change stages across Perf 1 → round 2 re-targets the same **pass2 (68%)**
+  then **pass1 (31%)**. Reader/writer/cross-core levers are off the critical path (not floated).
+
+### Portfolio floated (4 ideas; deliberate pass-2 overlap + one pass-1 idea; sized to T2 headroom)
+1. `pass2_batch_rows` (A) — batch pass-2's two chains across the C tile-rows/round (compute_block_size
+   lever). The deferred Perf-1 candidate. Improve-pass2.
+2. `pass2_fuse_skip_norm` (B) — eliminate the `cb_norm` round-trip: pre-replicate gamma to full tiles,
+   fuse x·rstd·gamma in DEST (DEST-reuse / SFPU-combine menu + PCC). Fuse-A+B.
+3. `pass2_batch_and_fuse` (C) — the combination: batched-AND-fused (supersedes A & B if it composes).
+4. `pass1_batch_fused` (D) — compose the GRADUATED fused-FPU with a C-row batched reduce (round 1
+   tested fused & batch as ALTERNATIVES; never composed). Improve-pass1.
+Each fanned out to a `blocking-perf-part-optimizer` building an isolated single-core micro-bench in
+`ttnn/ttnn/operations/rms_norm/perf_experiments/<slug>/`.
+
+### Per-idea verdicts (isolated single-core Blackhole bench; precision contract held)
+| idea | best variant | isolated result | PCC | L1 | raw-LLK | disposition |
+|---|---|---|---|---|---|---|
+| pass1_batch_fused (D) | **batch_fused** (C fused squares → ONE reduce of(C,1,1)) | **1.476× on pass 1** (10264→6956 ns @C=8,vwt=4) | 0.999844 (byte-identical to PASS1_FUSED) | +12 KB cb_xsq (0 at focus) | no (pure helper) | **GRADUATED** |
+| pass2_batch_rows (A) | **batch_both** (2 chains/round, grid(C,PER_W_T)) | **1.049× on pass 2** (14304→13639 ns) — the round-1 "1.41×" was reconfig-skip (already shipped); the C-batch adds ~+5% on top | 0.99999 (byte-identical) | +48 KB cb_norm | no | **GRADUATED** |
+| pass2_fuse_skip_norm (B) | replicated-gamma FPU DEST-reuse | **0.876× @focus (REGRESSION)** — DEST→srcA reload costs ~10% MORE than the cb_norm pack+unpack it removes; SFPU-combine 0.17× catastrophic; only wins per_w_t≤2 but dominated by row-batching there | 0.99998 | −8 KB | (moot) | **NULL** — confirms `examples/master.md` compute_fusion (FPU dest-reuse loses) |
+| pass2_batch_and_fuse (C) | batch+fuse | **0.944× @focus (REGRESSION)** — batching does NOT change the fusion economics; batch_only strictly dominates batch_fuse | 0.99999 | 0 (no cb_norm) | no | **NULL** — corroborates A (take batch_only, drop fusion) |
+
+### Graduated (predicate-guarded fast paths, widened to their measured winning domain)
+Both live in `rms_norm_xcore_compute.cpp`, routed via two new CT flags (idx 19/20) from a single host
+source of truth in the xcore program factory. Byte-identical math (chain-granularity reshaping only),
+so everything outside the predicate keeps the byte-identical Perf-1 path (no regression by
+construction). Both are pure `kernel_lib` helpers (no raw-LLK bypass). A debug master switch
+`RMS_PERF2_FASTPATH` (env; default ON) force-disables both for same-session A/B.
+- **PASS1_BATCH_REDUCE (compute idx 19).** Run the round's C_this fused square-DEST-accumulates first
+  (buffer C_this summed x² tiles in `cb_xsq`), then ONE `reduce<SUM,REDUCE_ROW>(of(C_this,1,1))` that
+  streams (WaitAndPopPerTile) the C_this tiles in row order and reserve+pack+pushes C_this finalized
+  Σx²·(1/W) partials to `cb_stat_local` — vs the per-row 1-tile reduce called C_this×/round. Pays the
+  reduce setup (init + format reconfig + scaler-wait + pipeline fill/drain) ONCE per cross-core round.
+  Byte-identical to PASS1_FUSED (each row's DEST-accumulate order + finalize unchanged; PCC 0.999844
+  @vwt4, the vwt≤4 cap UNSHIFTED). Predicate: `pass1_fused and C > 1` (a strict subset of PASS1_FUSED's
+  domain; degenerates byte-identically to the per-row reduce at C=1). `cb_xsq` deepened to
+  `max(2*per_w_t, C)` (0 growth at the focus where 2*per_w_t==C==8).
+- **PASS2_BATCH_ROWS (compute idx 20).** Collapse pass-2's C_this per-row chain pairs into ~2 chains/
+  round: ONE x·rstd over `grid(C_this, PER_W_T)` (Col rstd base 0 — the round's C_this 1/RMS tiles are
+  at cb_stat_global's front; the grid walk advances the Col index by the row), then ONE ·gamma over
+  `grid(C_this, PER_W_T)` (Block norm Bulk-resident, Row gamma). Amortizes per-chain init/reconfig/
+  fill-drain over the round. Byte-identical (same x·rstd·gamma per tile). Predicate:
+  `pass2_reconfig_skip and Ht_local % C == 0` (non-RM, gamma, tile-aligned, C>1; the %-gate guarantees
+  every round is full C_this==C, so the grid-across-C chain never sees a partial-C block). `cb_norm`
+  deepened `2*per_w_t → C*per_w_t` (+48 KB at focus; the L1 C-gate reserves the worst-case
+  STAT_BATCH_ROWS*per_w_t up front so the C solve never over-commits — C stays 8 at the focus).
+
+### Whole-op result (blackhole_p150b, `--profile`, exact perf config)
+- **Focus BLOCK_SHARDED (1,1,8192,1024) 8×8: 43033 → 36593 ns end-to-end (staged: 43033 →D→ 38990
+  →A→ 36593).** Per-stage after: pass1 13.4→9.5µs (D, ~1.40× on stage), pass2 29.4→26.9µs (A, ~1.08×
+  on stage), writer round 38.9→32.9µs (tracks compute down — still hidden). **1.68× → 1.43× above
+  achievable** (25640). Combined vs Perf-1 baseline: **1.176× whole-op**.
+- Guard-set NO-REGRESSION proven by **same-session A/B** (`RMS_PERF2_FASTPATH` 0 vs 1, median trials
+  2–8 — controls for cross-session drift):
+  | case | Perf-2 OFF (Perf-1 path) | Perf-2 ON | speedup | verdict |
+  |---|---|---|---|---|
+  | BLOCK 8×8 (focus) | 42529 | 36593 | **1.162×** | WIN (both PCC 1.001004, byte-identical) |
+  | WIDTH 8×1 / 9×1 / 8×4 / 7×4 (Ht_local=1 → C=1) | — | — | flags OFF → byte-identical | no change |
+  | decode 32×{1024,2304,5120,7168} (interleaved) | — | — | different kernel → unaffected | no change |
+
+### Golden green (correctness — a faster wrong answer is a regression)
+- Focus BLOCK PCC 1.001004 == the Perf-1 byte-identical baseline (both flags on).
+- Guard-set perf cases (`test_rms_norm_perf_r6.py`) 9/9 PASS, PCC 0.99998–1.001 (4 decode interleaved +
+  4 WIDTH + 1 BLOCK).
+- Cross-core correctness (`test_rms_norm_r6e.py` + `test_rms_norm_perf_r6a.py`) 18/18 PASS, PCC
+  ≥ 0.99999 — covers the **Perf-2 edge cases**: `block_416x256_ht13` (Ht_local=13, C=8, 13%8=5 → a
+  SHORT last round C_this=5 exercising PASS1_BATCH_REDUCE's partial round; PASS2_BATCH_ROWS correctly
+  OFF there), `block_96x512_ht3` / `block_160x512_ht5` (small divisible C → both levers), gamma /
+  no-gamma (PASS2_BATCH_ROWS gated to gamma), and varied grids.
+- Only the BLOCK_SHARDED Ht_local>1 tiled cross-core cells activate Perf 2; all other cells (interleaved,
+  HEIGHT, RM, single-tile-row WIDTH/decode) keep the flags OFF → byte-identical.
+
+### Summary
+All 4 ideas measured; **2 graduated** (pass1 batched-reduce 1.476× isolated → whole-op driver; pass2
+row-batch 1.049× isolated), 2 null/regression (both pass-2 fusion variants — re-confirmed the
+`compute_fusion` catalog finding that FPU DEST-reuse loses vs pack-to-L1, now measured with the new
+replicated-gamma twist round 1 hadn't tried). **Op faster on the focus BLOCK 8×8 by 1.176× whole-op
+(1.68× → 1.43× above achievable), no regression anywhere else** (same-session A/B + golden green). Both
+graduations are byte-identical math on the compute floor — no precision trade. pass2 remains the
+dominant residual stage (26.9µs) but its per-call overhead is now amortized; further pass-2 gains would
+need a structural change the two fusion nulls show the FPU/pack floor resists.
+- Tests: 4 isolated micro-benches under `perf_experiments/<slug>/` (durable artifacts, committed).
+  Reused `test_rms_norm_perf_r6.py` / `test_rms_norm_r6e.py` / `test_rms_norm_perf_r6a.py` for
+  whole-op device-ns, guard-set, and edge-case correctness.

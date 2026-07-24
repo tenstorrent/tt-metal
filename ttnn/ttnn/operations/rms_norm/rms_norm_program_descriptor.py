@@ -40,6 +40,14 @@ import ttnn
 # does NOT change which cells are supported; it is a measurement/debug aid only. Default: ON.
 _PERF1_FASTPATH = os.environ.get("RMS_PERF1_FASTPATH", "1") != "0"
 
+# ---- Perf 2 fast-path master switch (debug/A-B knob; default ON) ----
+# The Perf-2 tournament compute levers (PASS1_BATCH_REDUCE, PASS2_BATCH_ROWS) are predicate-guarded
+# fast paths layered on the Perf-1 ones. This env knob force-disables BOTH so a same-session
+# baseline-vs-graduated A/B can be measured (RMS_PERF2_FASTPATH=0 -> the Perf-1 compute path, i.e.
+# per-row fused reduce + per-row batched pass 2, everywhere). It does NOT change which cells are
+# supported; it is a measurement/debug aid only. Default: ON.
+_PERF2_FASTPATH = os.environ.get("RMS_PERF2_FASTPATH", "1") != "0"
+
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
 DEPTH = 2  # per-streaming-CB double-buffer depth (op_design.md §1)
@@ -1326,8 +1334,18 @@ def _assemble_xcore_kernels(
     batch_rows = 1
     if x_zero_copy and (not is_rm) and (not out_to_dram) and Ht_local > 1:
         shard_l1 = shard_tiles * (tile_in + tile_out)  # zero-copy resident in+out shards
-        fixed_cb = (2 * per_w_t) * tile_in  # cb_xsq
-        fixed_cb += norm_depth * tile_in  # cb_norm (R6g: 2*per_w_t when pass2_batch, else 2)
+        # cb_xsq: 2*per_w_t normally; Perf-2 PASS1_BATCH_REDUCE may deepen it to hold C summed tiles.
+        # Reserve the worst case max(2*per_w_t, STAT_BATCH_ROWS) here (C-independent upper bound) so the
+        # C solve below never picks a C the deepened cb_xsq can't hold. Only bites when 2*per_w_t < 8.
+        _pass1_batchable = _PERF1_FASTPATH and _PERF2_FASTPATH and (not has_partial_w) and (2 <= per_w_t <= 4)
+        fixed_cb = (max(2 * per_w_t, STAT_BATCH_ROWS) if _pass1_batchable else (2 * per_w_t)) * tile_in  # cb_xsq
+        # cb_norm: 2*per_w_t (pass2_batch). Perf-2 PASS2_BATCH_ROWS deepens it to C*per_w_t (the whole
+        # round's x·rstd staged before the batched ·gamma). Reserve the worst case STAT_BATCH_ROWS*per_w_t
+        # (C-independent upper bound) so the C solve below never picks a C the deepened cb_norm can't hold.
+        _pass2_batchable = _PERF1_FASTPATH and _PERF2_FASTPATH and has_gamma and (not has_partial_w)
+        fixed_cb += (
+            max(norm_depth, STAT_BATCH_ROWS * per_w_t) if _pass2_batchable else norm_depth
+        ) * tile_in  # cb_norm
         fixed_cb += (2 if has_partial_w else 1) * tile_bf16  # cb_scaler
         if has_gamma:
             fixed_cb += per_w_t * tile_gamma  # cb_gamma
@@ -1360,6 +1378,30 @@ def _assemble_xcore_kernels(
     #     is a net ~1-2% LOSS (measured), so those stay on the byte-identical per-chain path.
     pass1_fused = _PERF1_FASTPATH and (not is_rm) and (not has_partial_w) and (2 <= per_w_t <= 4)
     pass2_reconfig_skip = _PERF1_FASTPATH and pass2_batch and has_gamma and (not has_partial_w) and (C > 1)
+
+    # ---- Perf 2: pass-1 batched reduce + pass-2 row-batch (measured Blackhole; see changelog Perf 2) ----
+    # Two more compute-side per-call-overhead levers on the cross-core compute floor, layered on the
+    # Perf-1 fast paths. Both are byte-identical-math, predicate-guarded, and WIDENED to their measured
+    # winning domain (every case outside keeps the Perf-1 path -> no regression by construction):
+    #   * PASS1_BATCH_REDUCE (1.476× on pass 1 @C=8,vwt=4): compose the graduated fused square-DEST-
+    #     accumulate with a C-row BATCHED reduce — run the C_this fused squares first (buffer C_this
+    #     summed x² tiles in cb_xsq), then ONE REDUCE_ROW of(C_this,1,1) instead of C_this per-row
+    #     1-tile reduces. Pays the reduce setup once/round. Byte-identical to PASS1_FUSED (PCC 0.999844
+    #     @vwt4). Winning domain == PASS1_FUSED's (it only matters when the round batches C>1 rows; at
+    #     C=1 it degenerates to the per-row reduce), so it is gated on `pass1_fused` directly.
+    #   * PASS2_BATCH_ROWS (1.049× on pass 2 @C=8,vwt=4): batch pass-2's two chains across the C rows
+    #     of a round (grid(C,PER_W_T) walks) instead of per-row, amortizing the per-chain init over the
+    #     round. Byte-identical. Needs cb_norm deepened 2*per_w_t -> C*per_w_t. Winning domain ==
+    #     PASS2_RECONFIG_SKIP's (non-RM, gamma, tile-aligned, C>1), and requires Ht_local % C == 0 (the
+    #     grid-across-C chain has no partial-C-block form) — which the round-batch C gate already
+    #     guarantees on this path (C = min(Ht_local, 8, ...) divides Ht_local for the tiled BLOCK path).
+    pass1_batch_reduce = _PERF2_FASTPATH and pass1_fused and (C > 1)
+    pass2_batch_rows = _PERF2_FASTPATH and pass2_reconfig_skip and (Ht_local % C == 0)
+    # PASS2_BATCH_ROWS stages the whole round's x·rstd (C*per_w_t tiles) in cb_norm before the batched
+    # ·gamma, so deepen cb_norm 2*per_w_t -> C*per_w_t on that path (the gate above already reserved the
+    # worst-case STAT_BATCH_ROWS*per_w_t, so this never exceeds the budgeted L1). Single source: norm_depth.
+    if pass2_batch_rows:
+        norm_depth = C * per_w_t
 
     # ---- R6c two-stage (hierarchical) gather topology ----
     # `masters` maps each group's master (mx,my) -> master core; derived once here (single
@@ -1472,8 +1514,13 @@ def _assemble_xcore_kernels(
     # RM always emits full(tile0)+partial-or-full(tile1); tiled path is 2 iff has_partial_w.
     add_cb(CB_SCALER, tile_bf16, 2 if (has_partial_w or is_rm) else 1, ttnn.bfloat16)
     # pass-1 squares the whole vwt-tile block before the single block-reduce, so
-    # cb_xsq must hold a full W-slice block (2*per_w_t double-buffers it).
-    add_cb(CB_XSQ, tile_in, 2 * per_w_t, in_dtype)
+    # cb_xsq must hold a full W-slice block (2*per_w_t double-buffers it). Perf 2
+    # (PASS1_BATCH_REDUCE): the C_this fused summed x² tiles of a round must ALL buffer
+    # before the single batched reduce drains them (else the same-kernel packer/unpacker
+    # deadlock), so deepen to max(2*per_w_t, C) on that path. At the focus (per_w_t=4,
+    # C=8) 2*per_w_t==C==8 -> no growth; only per_w_t<C/2 grows it (a few KB).
+    xsq_depth = max(2 * per_w_t, C) if pass1_batch_reduce else (2 * per_w_t)
+    add_cb(CB_XSQ, tile_in, xsq_depth, in_dtype)
     # Stat CBs scale with the round-batch factor C (R6a). cb_gather / cb_stat_global are
     # cross-core-written at a FIXED base, so their depth must be EXACTLY the per-round count
     # (K*C / C) — full rounds wrap the fifo back to base so every core's get_write_ptr matches.
@@ -1685,6 +1732,8 @@ def _assemble_xcore_kernels(
         1 if pass2_batch else 0,  # PASS2_BATCH (R6g lever 1; idx 16)
         1 if pass1_fused else 0,  # PASS1_FUSED (Perf 1; idx 17)
         1 if pass2_reconfig_skip else 0,  # PASS2_RECONFIG_SKIP (Perf 1; idx 18)
+        1 if pass1_batch_reduce else 0,  # PASS1_BATCH_REDUCE (Perf 2; idx 19)
+        1 if pass2_batch_rows else 0,  # PASS2_BATCH_ROWS (Perf 2; idx 20)
     ]
     compute_rt = ttnn.RuntimeArgs()
     for c, slice_index, _m, is_partial_holder, _wts, vwt in entries:

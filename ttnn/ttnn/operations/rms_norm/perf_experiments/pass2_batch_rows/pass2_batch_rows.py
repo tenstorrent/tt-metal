@@ -5,7 +5,15 @@
 
 Perf idea under test (owner: pass2_batch_rows): BATCH pass-2 across the C tile-rows of a
 cross-core round instead of issuing it per-tile-row. Pass 2 dominates the cross-core compute
-kernel on the perf-flagged BLOCK_SHARDED (1,1,8192,1024) 8x8 case (~63% of the critical core).
+kernel on the perf-flagged BLOCK_SHARDED (1,1,8192,1024) 8x8 case.
+
+ROUND-2 CHANGE (the honest baseline): the CURRENT graduated op (Perf-1) runs pass 2 with
+RECONFIG-SKIP — establish srcA (cb_x_in) + pack (cb_out) ONCE at pass-2 entry, then every chain
+uses BinaryDataFormatReconfig::SrcB + PackTileReconfig::None (srcB genuinely alternates fp32 rstd
+<-> bf16 gamma; srcA and pack are constant). The round-1 bench compared C-batching against a
+baseline WITHOUT reconfig-skip, so its 1.41x conflated two wins. This bench adds a `reconfig_skip`
+knob to EVERY variant so the C-batching delta is measured against the true reconfig-skip baseline
+(the composed gain), and also lets us reproduce the round-1 no-skip numbers for reconciliation.
 
 Everything but the pass-2 chain structure is held constant (see the concept-isolation table):
 the rstd (1/RMS) tiles are PRE-SUPPLIED resident in cb_stat_global (no pass-1, no cross-core
@@ -16,25 +24,22 @@ compute pipeline, and the delta between variants is attributable to the chain st
 Precision contract (FIXED — identical for every variant): bf16 x + bf16 TILE gamma, fp32 rstd,
 HiFi2, fp32_dest_acc_en=False, math_approx_mode=False. Never tuned for speed.
 
-Variants (the menu):
-  baseline    : per-tile-row PASS2_BATCH (the op's CURRENT approach) — for each of the C_this
-                tile-rows: ONE x*rstd chain over PER_W_T tiles (Block x, Col rstd) then ONE
-                gamma chain over PER_W_T tiles (Scalar norm streamed, Row gamma). = 2*C_this
-                chains/round. cb_norm depth = 2*PER_W_T.
-  batch_gamma : per-row x*rstd (C_this chains, all landing in a deep cb_norm) then ONE gamma
-                chain over the whole round's C_this*PER_W_T tiles (Block norm, Row gamma) —
-                amortizes only gamma's init across the C rows. cb_norm depth = C_ROWS*PER_W_T.
-  batch_both  : ONE x*rstd chain over the whole round as a 2D grid(C_this, PER_W_T) with the
-                per-row rstd as a Col operand (index = ht) + ONE gamma chain grid(C_this,
-                PER_W_T) (Block norm, Row gamma). = 2 chains/round. cb_norm = C_ROWS*PER_W_T.
-                This is the interleaved resident block-form (rms_norm_compute.cpp) extended
-                from a 1D per-row walk to a 2D walk over the batched tile-rows.
-  batch_both_blk : batch_both with EltwiseShape block_size = PER_W_T (widen the DST batch: each
-                outer iter processes a whole tile-row's W across PER_W_T DEST lanes). A/B on
-                whether widening the DST batch helps or hits the DEST budget (bf16 DEST here).
+Chain-structure variants:
+  baseline    : per-tile-row (the op's CURRENT approach) — for each of the C_this tile-rows: ONE
+                x*rstd chain over PER_W_T tiles (Block x, Col rstd) then ONE gamma chain over
+                PER_W_T tiles (Scalar norm streamed, Row gamma). = 2*C_this chains/round.
+                cb_norm depth = 2*PER_W_T.
+  batch_gamma : per-row x*rstd (C_this chains, into a deep cb_norm) then ONE gamma chain over the
+                whole round's C_this*PER_W_T tiles (Block norm, Row gamma) — amortizes only
+                gamma's init across the C rows. cb_norm depth = C_ROWS*PER_W_T.
+  batch_both  : ONE x*rstd chain over the whole round as grid(C_this, PER_W_T) with the per-row
+                rstd as a Col operand (index = ht) + ONE gamma chain grid(C_this, PER_W_T)
+                (Block norm, Row gamma). = 2 chains/round. cb_norm depth = C_ROWS*PER_W_T.
+                This is the interleaved resident block-form extended to a 2D walk over the round.
 
-All variants compute IDENTICAL math (same Mul ops, same Col/Row broadcast semantics), so they
-should be numerically equivalent; PCC is reported vs a torch reference for x*rstd*gamma.
+Each variant runs at reconfig_skip in {True, False}; the CURRENT op == (baseline, skip=True), and
+the CANDIDATE == (batch_both, skip=True). All variants compute IDENTICAL math (same Mul ops, same
+Col/Row broadcast); PCC is reported vs a torch reference for x*rstd*gamma.
 """
 
 import ttnn
@@ -50,14 +55,10 @@ CB_STAT_GLOBAL = 7  # resident fp32 1/RMS tiles, one per tile-row (zero-copy)
 CB_OUT = 16  # resident bf16 output W-slice (zero-copy)
 CB_NORM = 26  # pass-2 intermediate x*rstd (scratch)
 
-# batch_both_blk (DST-batch widening via EltwiseShape block_size on the broadcast+Bulk pass-2
-# chain) DEADLOCKS on device — the block_size lever is not expressible on these chains, so it is
-# excluded from the run set. The kernel branch (variant 3) is kept for the record; the batching
-# win therefore comes purely from reducing chain COUNT, not from widening the DST-lane batch.
 VARIANTS = ("baseline", "batch_gamma", "batch_both")
 BASELINE = "baseline"
 
-_VARIANT_ID = {"baseline": 0, "batch_gamma": 1, "batch_both": 2, "batch_both_blk": 3}
+_VARIANT_ID = {"baseline": 0, "batch_gamma": 1, "batch_both": 2}
 
 
 def cb_norm_depth_for(variant, per_w_t, c_rows):
@@ -73,19 +74,19 @@ def variant_is_valid(variant, per_w_t, c_rows, ht_local):
         return False
     if per_w_t < 1 or c_rows < 1 or ht_local < 1:
         return False
-    # batch_both_blk widens the DST batch to a whole tile-row (PER_W_T lanes); only meaningful
-    # when PER_W_T > 1 (else it degenerates to batch_both).
     return True
 
 
 # =============================================================================
-# Compute kernel — one source for every variant. The variant selector + geometry are
-# compile-time args; only the pass-2 chain structure changes between variants.
-# CT args: [variant_id, PER_W_T, HT_LOCAL, C_ROWS, HAS_GAMMA, kernel_iters]
+# Compute kernel — one source for every variant. The variant selector + geometry + the
+# reconfig-skip flag are compile-time args; only the pass-2 chain structure / reconfig
+# policy changes between variants.
+# CT args: [variant_id, PER_W_T, HT_LOCAL, C_ROWS, HAS_GAMMA, KERNEL_ITERS, RECONFIG_SKIP]
 # =============================================================================
 _COMPUTE_KERNEL = r"""
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
@@ -106,9 +107,19 @@ void kernel_main() {
     constexpr uint32_t C_ROWS = get_compile_time_arg_val(3);
     constexpr bool HAS_GAMMA = get_compile_time_arg_val(4) != 0;
     constexpr uint32_t KERNEL_ITERS = get_compile_time_arg_val(5);
+    // RECONFIG_SKIP (Perf-1): the true op baseline. Establish srcA (cb_x_in) + pack (cb_out) ONCE
+    // at each pass-2 (round) entry, then every chain uses BinaryDataFormatReconfig::SrcB (srcB
+    // alternates fp32 rstd <-> bf16 gamma) + PackTileReconfig::None (pack target constant bf16).
+    // OFF = per-chain Input/Output reconfig (the pre-Perf-1 / round-1 baseline).
+    constexpr bool RECONFIG_SKIP = get_compile_time_arg_val(6) != 0;
 
     constexpr uint32_t shard_tiles = HT_LOCAL * PER_W_T;
     constexpr uint32_t num_rounds = (HT_LOCAL + C_ROWS - 1) / C_ROWS;
+
+    // Reconfig policy shared by every chain (mirrors the op's do_pass2 P2_RC / P2_PRC).
+    constexpr auto P2_RC =
+        RECONFIG_SKIP ? ckl::BinaryDataFormatReconfig::SrcB : ckl::BinaryDataFormatReconfig::Input;
+    constexpr auto P2_PRC = RECONFIG_SKIP ? ckl::PackTileReconfig::None : ckl::PackTileReconfig::Output;
 
     // srcA <- cb_x_in (bf16), srcB <- cb_stat_global (fp32), packer <- cb_out (bf16).
     compute_kernel_hw_startup(cb_x_in, cb_stat_global, cb_out);
@@ -136,6 +147,14 @@ void kernel_main() {
                 C_this = C_ROWS;
             }
 
+            // Perf-1 reconfig-skip: re-establish srcA + pack ONCE per round (the op does this at
+            // each do_pass2 entry because pass 1 / fold left the unpacker+packer on other formats;
+            // here it makes the SrcB-only chains below legal). No-op cost when RECONFIG_SKIP=0.
+            if constexpr (RECONFIG_SKIP) {
+                reconfig_data_format(cb_x_in, cb_x_in);
+                pack_reconfig_data_format(cb_out);
+            }
+
             if constexpr (VARIANT == 0) {
                 // ---- baseline: per-tile-row (2 chains per tile-row) ----
                 for (uint32_t cc = 0; cc < C_this; ++cc) {
@@ -146,10 +165,10 @@ void kernel_main() {
                         ckl::BinaryFpu<
                             cb_x_in, cb_stat_global, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col,
                             ckl::InputLifecycle::CallerManaged, ckl::InputLifecycle::CallerManaged,
-                            ckl::BinaryDataFormatReconfig::Input, ckl::Dst::D0,
+                            P2_RC, ckl::Dst::D0,
                             ckl::OperandKind::Block, ckl::OperandKind::Col,
                             ckl::TileOffset::Set, ckl::TileOffset::Set>{t * PER_W_T, t},
-                        ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                        ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, P2_PRC>{});
                     if constexpr (HAS_GAMMA) {
                         // norm*gamma: Scalar norm (streamed, front-walked by pops), Row gamma.
                         ckl::eltwise_chain(
@@ -157,10 +176,10 @@ void kernel_main() {
                             ckl::BinaryFpu<
                                 cb_norm, cb_gamma, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Row,
                                 ckl::InputLifecycle::Streaming, ckl::InputLifecycle::CallerManaged,
-                                ckl::BinaryDataFormatReconfig::Input, ckl::Dst::D0,
+                                P2_RC, ckl::Dst::D0,
                                 ckl::OperandKind::Scalar, ckl::OperandKind::Row,
                                 ckl::TileOffset::Unset, ckl::TileOffset::Set>{0, 0},
-                            ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                            ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, P2_PRC>{});
                     } else {
                         ckl::copy<cb_norm, cb_out>(ckl::EltwiseShape::of(1, PER_W_T));
                     }
@@ -174,10 +193,10 @@ void kernel_main() {
                         ckl::BinaryFpu<
                             cb_x_in, cb_stat_global, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col,
                             ckl::InputLifecycle::CallerManaged, ckl::InputLifecycle::CallerManaged,
-                            ckl::BinaryDataFormatReconfig::Input, ckl::Dst::D0,
+                            P2_RC, ckl::Dst::D0,
                             ckl::OperandKind::Block, ckl::OperandKind::Col,
                             ckl::TileOffset::Set, ckl::TileOffset::Set>{t * PER_W_T, t},
-                        ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                        ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, P2_PRC>{});
                 }
                 if constexpr (HAS_GAMMA) {
                     // ONE gamma chain over the whole round: Block norm (Bulk: wait all, pop at end),
@@ -187,39 +206,36 @@ void kernel_main() {
                         ckl::BinaryFpu<
                             cb_norm, cb_gamma, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Row,
                             ckl::InputLifecycle::Bulk, ckl::InputLifecycle::CallerManaged,
-                            ckl::BinaryDataFormatReconfig::Input, ckl::Dst::D0,
+                            P2_RC, ckl::Dst::D0,
                             ckl::OperandKind::Block, ckl::OperandKind::Row,
                             ckl::TileOffset::Unset, ckl::TileOffset::Unset>{0, 0},
-                        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, P2_PRC>{});
                 } else {
                     ckl::copy<cb_norm, cb_out>(ckl::EltwiseShape::of(1, C_this * PER_W_T));
                 }
             } else {
-                // ---- batch_both / batch_both_blk: ONE x*rstd + ONE gamma chain per round ----
-                // block_size = PER_W_T for batch_both_blk (widen the DST batch to a tile-row),
-                // else 1. The chain clamps block_size to fit DEST.
-                constexpr uint32_t BLK = (VARIANT == 3) ? PER_W_T : 1;
+                // ---- batch_both: ONE x*rstd + ONE gamma chain per round ----
                 // x*rstd over the whole round as a 2D grid: Block x @ base_t*PER_W_T (index
                 // ht*PER_W_T + wt), Col rstd @ base_t (index = ht -> the per-row 1/RMS).
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::grid(C_this, PER_W_T, BLK),
+                    ckl::EltwiseShape::grid(C_this, PER_W_T, 1),
                     ckl::BinaryFpu<
                         cb_x_in, cb_stat_global, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Col,
                         ckl::InputLifecycle::CallerManaged, ckl::InputLifecycle::CallerManaged,
-                        ckl::BinaryDataFormatReconfig::Input, ckl::Dst::D0,
+                        P2_RC, ckl::Dst::D0,
                         ckl::OperandKind::Block, ckl::OperandKind::Col,
                         ckl::TileOffset::Set, ckl::TileOffset::Set>{base_t * PER_W_T, base_t},
-                    ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                    ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, P2_PRC>{});
                 if constexpr (HAS_GAMMA) {
                     ckl::eltwise_chain(
-                        ckl::EltwiseShape::grid(C_this, PER_W_T, BLK),
+                        ckl::EltwiseShape::grid(C_this, PER_W_T, 1),
                         ckl::BinaryFpu<
                             cb_norm, cb_gamma, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Row,
                             ckl::InputLifecycle::Bulk, ckl::InputLifecycle::CallerManaged,
-                            ckl::BinaryDataFormatReconfig::Input, ckl::Dst::D0,
+                            P2_RC, ckl::Dst::D0,
                             ckl::OperandKind::Block, ckl::OperandKind::Row,
                             ckl::TileOffset::Unset, ckl::TileOffset::Unset>{0, 0},
-                        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, P2_PRC>{});
                 } else {
                     ckl::copy<cb_norm, cb_out>(ckl::EltwiseShape::of(1, C_this * PER_W_T));
                 }
@@ -261,7 +277,9 @@ def _scratch_cb(cb_id, num_tiles):
     return ttnn.CBDescriptor(total_size=BF16_TILE * num_tiles, core_ranges=_single_core(), format_descriptors=[fmt])
 
 
-def create_program_descriptor(x, rstd, gamma, out, *, variant, per_w_t, ht_local, c_rows, has_gamma, kernel_iters=1):
+def create_program_descriptor(
+    x, rstd, gamma, out, *, variant, per_w_t, ht_local, c_rows, has_gamma, reconfig_skip=True, kernel_iters=1
+):
     if variant not in _VARIANT_ID:
         raise ValueError(f"variant must be one of {VARIANTS}, got {variant!r}")
     if x.dtype != ttnn.bfloat16 or x.layout != ttnn.TILE_LAYOUT:
@@ -278,6 +296,7 @@ def create_program_descriptor(x, rstd, gamma, out, *, variant, per_w_t, ht_local
         c_rows,
         int(has_gamma),
         kernel_iters,
+        int(reconfig_skip),
     ]
 
     compute = ttnn.KernelDescriptor(
@@ -308,7 +327,7 @@ def create_program_descriptor(x, rstd, gamma, out, *, variant, per_w_t, ht_local
     return ttnn.ProgramDescriptor(kernels=[compute], semaphores=[], cbs=cbs), tensors
 
 
-def run_op(x, rstd, gamma, *, variant, per_w_t, ht_local, c_rows, has_gamma, kernel_iters=1):
+def run_op(x, rstd, gamma, *, variant, per_w_t, ht_local, c_rows, has_gamma, reconfig_skip=True, kernel_iters=1):
     """Allocate the resident output shard and run one pass-2 variant."""
     m = ht_local * TILE
     n = per_w_t * TILE
@@ -329,6 +348,7 @@ def run_op(x, rstd, gamma, *, variant, per_w_t, ht_local, c_rows, has_gamma, ker
         ht_local=ht_local,
         c_rows=c_rows,
         has_gamma=has_gamma,
+        reconfig_skip=reconfig_skip,
         kernel_iters=kernel_iters,
     )
     return ttnn.generic_op(tensors, descriptor)

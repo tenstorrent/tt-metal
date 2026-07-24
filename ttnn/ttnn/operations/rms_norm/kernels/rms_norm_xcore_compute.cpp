@@ -160,6 +160,29 @@ void kernel_main() {
     // tiled cross-core path with gamma present and NO partial W (so the pad-copy path — which does
     // its own reconfig — is not interleaved). PASS2_RECONFIG_SKIP=0 is byte-identical to R6g.
     constexpr bool PASS2_RECONFIG_SKIP = get_compile_time_arg_val(18) != 0;
+    // PASS1_BATCH_REDUCE (Perf 2): COMPOSE the graduated PASS1_FUSED square-DEST-accumulate with a
+    // C-row BATCHED reduce. The fused square (BinaryFpu<Mul, DestAccumulation::Enabled>) is unchanged
+    // — it collapses the vwt x-tiles of each tile-row into ONE summed x² tile packed to cb_xsq. The
+    // change: run the C_this fused squares FIRST (buffering C_this summed tiles in cb_xsq), then ONE
+    // batched REDUCE_ROW of(C_this,1,1) that pops the C_this tiles (streaming, in row order) and packs
+    // C_this finalized partials to cb_stat_local — paying the reduce setup (init + format reconfig +
+    // scaler-wait + pipeline fill/drain) ONCE per cross-core round instead of C_this times. Byte-
+    // identical math (each row's DEST-accumulate order and finalize are unchanged; PCC == PASS1_FUSED,
+    // 0.999844 @vwt4), so it inherits PASS1_FUSED's exact winning domain — host-gated the SAME as
+    // PASS1_FUSED and only matters when C_this>1 (degenerates to one 1-tile reduce at C_this=1).
+    // Measured 1.476× on pass 1 at the focus (C=8, vwt=4; isolated Blackhole bench; see changelog
+    // Perf 2). Requires cb_xsq deep enough to buffer C_this summed tiles (host sizes it max(2*PER_W_T,C)).
+    constexpr bool PASS1_BATCH_REDUCE = get_compile_time_arg_val(19) != 0;
+    // PASS2_BATCH_ROWS (Perf 2): batch pass-2 across the C tile-rows of a round too. PASS2_BATCH
+    // already batches x·rstd (+ ·gamma) over the PER_W_T W-slice per tile-row (one chain/row/op);
+    // this collapses the C per-row chains into ~2 chains/round — one x·rstd over grid(C_this,PER_W_T)
+    // (the Col rstd operand advancing per row within the block) and one ·gamma over grid(C_this,vwt)
+    // — amortizing the per-chain init/reconfig/pipeline fill-drain over the whole round. Byte-
+    // identical math (same x·rstd·gamma per tile). Needs cb_norm deepened 2*PER_W_T -> C*PER_W_T
+    // (the batch buffer), so host-gated to the non-RM tile-aligned path with C>1 (same as
+    // PASS2_RECONFIG_SKIP). Measured 1.049× on pass 2 at the focus (isolated Blackhole; changelog
+    // Perf 2). PASS2_BATCH_ROWS=0 keeps the per-row batched pass 2 (byte-identical).
+    constexpr bool PASS2_BATCH_ROWS = get_compile_time_arg_val(20) != 0;
 
     const uint32_t vwt = get_arg_val<uint32_t>(0);  // valid W-tiles (<= PER_W_T)
     const uint32_t is_partial_holder = get_arg_val<uint32_t>(1);
@@ -353,8 +376,49 @@ void kernel_main() {
     // The partial-holder routes the partial scaler to the block's last tile. A lambda so the
     // round/compute pipeline (R6b lever 2) can issue the NEXT round's pass 1 before the current
     // round's fold/pass 2 — overlapping this compute with the writer's synchronous transport.
+    // Perf 2: the fused square-DEST-accumulate of ONE tile-row t — Σ_w x_w²·(reused by both the
+    // per-row PASS1_FUSED reduce and the PASS1_BATCH_REDUCE batched reduce). Collapses the vwt tiles
+    // into ONE summed x² tile in DEST (A==B==cb_x_in Block-walk from t*PER_W_T), packed once to cb_xsq.
+    auto fused_square = [&](uint32_t t) {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(vwt),
+            ckl::BinaryFpu<
+                cb_x_in,
+                cb_x_in,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::CallerManaged,
+                ckl::InputLifecycle::CallerManaged,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::Dst::D0,
+                ckl::OperandKind::Block,
+                ckl::OperandKind::Block,
+                ckl::TileOffset::Set,
+                ckl::TileOffset::Set,
+                ckl::DestAccumulation::Enabled>{t * PER_W_T, t * PER_W_T},
+            ckl::PackTile<
+                cb_xsq,
+                ckl::OutputLifecycle::DestAccumulation,
+                ckl::PackTileReconfig::Output,
+                ckl::Dst::D0>{});
+    };
+
     auto do_pass1 = [&](uint32_t base_t, uint32_t C_this) {
         MaybeDeviceZoneScope("xc_pass1");
+        if constexpr (PASS1_BATCH_REDUCE) {
+            // ---- Perf 2: batched-reduce fast path (implies PASS1_FUSED; host-gated identically) ----
+            // Run all C_this fused square-accumulates first (each pushes ONE summed x² tile to cb_xsq),
+            // then a SINGLE REDUCE_ROW over the C_this-tile block. Default WaitAndPopPerTile streams:
+            // each of the C_this outputs pops its 1 summed tile (front-relative, so row order) and
+            // reserve+pack+pushes one finalized Σx²·(1/W) partial to cb_stat_local — exactly the C_this
+            // partials the per-row path produces, but the reduce setup is paid once/round not C_this×.
+            for (uint32_t cc = 0; cc < C_this; ++cc) {
+                fused_square(base_t + cc);
+            }
+            ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_stat_local>(
+                ckl::ReduceInputBlockShape::of(C_this, 1, 1));
+            return;
+        }
         for (uint32_t cc = 0; cc < C_this; ++cc) {
             const uint32_t t = base_t + cc;
             if constexpr (PASS1_FUSED) {
@@ -366,27 +430,9 @@ void kernel_main() {
                 // shrinks from vwt tiles to 1. Same Σx²·(1/W) partial into cb_stat_local. No partial
                 // scaler on this path (gated to full-scaler W); vwt<=4 keeps bf16-DEST accum above the
                 // soft-PCC gate. This is the isolated-bench "fused_fpu" winner (1.51× on pass 1).
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(vwt),
-                    ckl::BinaryFpu<
-                        cb_x_in,
-                        cb_x_in,
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::None,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::BinaryDataFormatReconfig::Input,
-                        ckl::Dst::D0,
-                        ckl::OperandKind::Block,
-                        ckl::OperandKind::Block,
-                        ckl::TileOffset::Set,
-                        ckl::TileOffset::Set,
-                        ckl::DestAccumulation::Enabled>{t * PER_W_T, t * PER_W_T},
-                    ckl::PackTile<
-                        cb_xsq,
-                        ckl::OutputLifecycle::DestAccumulation,
-                        ckl::PackTileReconfig::Output,
-                        ckl::Dst::D0>{});
+                // (Perf 2: the square chain is now the shared `fused_square` lambda; PASS1_BATCH_REDUCE
+                // hoists the reduce out of this loop — this per-row reduce is the C_this==1/flag-off form.)
+                fused_square(t);
                 ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_stat_local>(
                     ckl::ReduceInputBlockShape::of(1, 1, 1),
                     ckl::ReduceInputMemoryLayout::contiguous(),
@@ -496,6 +542,53 @@ void kernel_main() {
         constexpr auto P2_RC =
             PASS2_RECONFIG_SKIP ? ckl::BinaryDataFormatReconfig::SrcB : ckl::BinaryDataFormatReconfig::Input;
         constexpr auto P2_PRC = PASS2_RECONFIG_SKIP ? ckl::PackTileReconfig::None : ckl::PackTileReconfig::Output;
+        if constexpr (PASS2_BATCH_ROWS) {
+            // ---- Perf 2: batch pass-2 across the C_this rows of the round (tile-aligned + gamma) ----
+            // Host-gated identically to PASS2_RECONFIG_SKIP (non-RM, gamma, !HAS_PARTIAL_W so vwt==
+            // PER_W_T, C>1, Ht_local%C==0), so the whole round is ONE x·rstd chain + ONE ·gamma chain
+            // over grid(C_this, PER_W_T) — vs the C_this per-row chain pairs — amortizing the per-chain
+            // init/pipeline fill-drain over the round. Byte-identical math (same x·rstd·gamma per tile).
+            // x·rstd: Block x from the resident base base_t*PER_W_T (grid index ht*PER_W_T+wt); Col rstd
+            // base 0 (the round's C_this 1/RMS tiles are at cb_stat_global's front; the grid walk advances
+            // the Col index by the row ht -> rstd tile ht for row ht). Streams C_this*PER_W_T into cb_norm.
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::grid(C_this, PER_W_T, 1),
+                ckl::BinaryFpu<
+                    cb_x_in,
+                    cb_stat_global,
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::BroadcastDim::Col,
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::InputLifecycle::CallerManaged,
+                    P2_RC,
+                    ckl::Dst::D0,
+                    ckl::OperandKind::Block,
+                    ckl::OperandKind::Col,
+                    ckl::TileOffset::Set,
+                    ckl::TileOffset::Set>{base_t * PER_W_T, 0},
+                ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, P2_PRC>{});
+            // ·gamma over the whole round: Block norm (Bulk — the C_this*PER_W_T cb_norm tiles are
+            // resident from the chain above), Row gamma (index = wt within the PER_W_T walk, identical
+            // for every tile-row). Packs C_this*PER_W_T tiles to cb_out.
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::grid(C_this, PER_W_T, 1),
+                ckl::BinaryFpu<
+                    cb_norm,
+                    cb_gamma,
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::BroadcastDim::Row,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::InputLifecycle::CallerManaged,
+                    P2_RC,
+                    ckl::Dst::D0,
+                    ckl::OperandKind::Block,
+                    ckl::OperandKind::Row,
+                    ckl::TileOffset::Unset,
+                    ckl::TileOffset::Unset>{0, 0},
+                ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, P2_PRC>{});
+            cb_pop_front(cb_stat_global, C_this);
+            return;
+        }
         for (uint32_t cc = 0; cc < C_this; ++cc) {
             const uint32_t t = base_t + cc;
             if constexpr (PASS2_BATCH) {
