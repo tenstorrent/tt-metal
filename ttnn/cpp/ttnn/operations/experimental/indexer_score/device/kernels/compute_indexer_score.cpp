@@ -22,7 +22,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"  // block-max-pool: compute_kernel_lib::reduce
-#include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
+#include "indexer_score_common.hpp"                             // shared CB indices, compile-time dims, work-unit walk
 #include "api/compute/experimental/indexer_mul_custom.h"
 
 // qk subblock height (head rows per DEST pass).
@@ -40,6 +40,8 @@ constexpr bool apply_relu = get_compile_time_arg_val(num_common_ct_args + 3) != 
 constexpr bool fuse_single = get_compile_time_arg_val(num_common_ct_args + 4) != 0;
 // Fused + no mcast: stream k (waited incrementally in the matmul). Fused + mcast: k is one block, waited whole.
 constexpr bool fused_stream_k = get_compile_time_arg_val(num_common_ct_args + 5) != 0;
+// Fused ring visits bands in the arrival-order permutation supplied in runtime args.
+constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args + 6) != 0;
 
 // k-cols sharing ONE dest acquire in the blocked-custom mul (dest-bounded). One unpack context per head
 // (w[h] + ct_dim qk cols), so unpack-context sync is paid 1/ct_dim of the per-tile bcast-mul rate.
@@ -464,7 +466,17 @@ void kernel_main() {
     const uint32_t band_iters = stream_heads ? max_bands : num_bands;
     for (uint32_t phase = 0; phase < num_groups; ++phase) {
         const uint32_t group = row_group0 + phase * group_stride;
-        for (uint32_t band = 0; band < band_iters; ++band) {
+        for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
+            uint32_t band = band_i;
+            if constexpr (fused_ring_enabled) {
+                // Fused ring visits bands in a reordered order (local-first, then remote by ring arrival) so a
+                // core scores its already-arrived shards while farther slabs are still in flight. Compute has to
+                // follow that permutation -- not just the reader -- because span.set(group, band0 + band) below
+                // derives the causal mask from the band's ABSOLUTE column position, so it needs the true band id
+                // for each cb_k/cb_out FIFO slot; walking bands in natural order here would mask the wrong
+                // columns. The reader/writer read the IDENTICAL permutation so all three FIFOs stay in lockstep.
+                band = get_arg_val<uint32_t>(iscore::fused_rt::compute_band_perm_base + band_i);
+            }
             if constexpr (stream_heads) {
                 if (band >= num_bands) {
                     drain_phantom_band_q();  // q-mcast rendezvous only; no compute/output
@@ -512,7 +524,8 @@ void kernel_main() {
                                 k.wait_front(c_end * head_dim_tiles);  // streamed: wait k cols [0, c_end)
                             }
                             for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-                                matmul_cols_to_acc<cb_q, cb_k, cb_acc_strip>(head_base, r, c, n, r * k_tiles_per_unit + c);
+                                matmul_cols_to_acc<cb_q, cb_k, cb_acc_strip>(
+                                    head_base, r, c, n, r * k_tiles_per_unit + c);
                             }
                         }
                     }
