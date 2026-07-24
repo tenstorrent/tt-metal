@@ -299,6 +299,46 @@ SHAPES = [
     (256, 3072, 1536, 12, 10, False, "plain_gelu"),  # ff_context.ff1 prompt (fused GELU)
     (256, 1536, 3072, 12, 10, False, "plain"),  # ff_context.ff2 prompt (RowParallel)
     (256, 1920, 3072, 12, 10, False, "plain"),  # single proj_out prompt
+    # --- FIBO FULL PIPELINE on the 2x2 BH DEV mesh at 11x10. This board's
+    # compute_with_storage_grid_size() reports 11x10 (a harvested column), and get_matmul_core_grid does
+    # NOT clamp for a 4-device mesh, so the 2x2 denoise/encoder/VAE matmuls run at 11x10 -- MISSING the
+    # 12x10-registered 2x2 configs. Discovered 2026-07-23 from get_matmul_config "No known best blocking
+    # ... on 11x10" warnings in test_fibo_pipeline_perf_breakdown_json[mesh_device0]. All non-AGMM. Per
+    # blocks/attention.py + layers/linear.py the 2x2 path is all plain (no fused addcmul, no qkv chunks)
+    # except the DiT FFN ff1 (M,3072,6144) fused exact GELU; tp=2 so N/K are /2-sharded. Sweep on bh_2x2.
+    (1024, 3072, 4608, 11, 10, False, "plain"),  # DiT to_qkv prompt (M=1024 pad bucket)
+    (1024, 3072, 6144, 11, 10, False, "plain_gelu"),  # DiT ff_context.ff1 (fused GELU; proj_mlp twin plain)
+    (1024, 4096, 1536, 11, 10, False, "plain"),  # DiT context_embedder (joint_attention_dim 4096)
+    (1024, 6144, 3072, 11, 10, False, "plain"),  # DiT ff_context.ff2 (RowParallel)
+    (1024, 7680, 3072, 11, 10, False, "plain"),  # DiT single-block proj_out prompt
+    (128, 1024, 512, 11, 10, False, "plain"),  # VAE decoder conv_shortcut 1x1 (1024->512)
+    (128, 2048, 1024, 11, 10, False, "plain"),  # SmolLM3 o_proj (attn out)
+    (128, 2048, 5504, 11, 10, False, "plain"),  # SmolLM3 MLP gate/up proj (intermediate/tp2)
+    (128, 5504, 2048, 11, 10, False, "plain"),  # SmolLM3 MLP down proj (RowParallel)
+    (2048, 3072, 1536, 11, 10, False, "plain"),  # DiT attn to_out spatial
+    (2048, 3072, 4608, 11, 10, False, "plain"),  # DiT to_qkv spatial
+    (2048, 3072, 6144, 11, 10, False, "plain_gelu"),  # DiT ff.ff1 spatial (fused GELU; proj_mlp twin plain)
+    (2048, 3072, 64, 11, 10, False, "plain"),  # DiT final proj_out (patch*patch*out)
+    (2048, 6144, 3072, 11, 10, False, "plain"),  # DiT ff.ff2 spatial (RowParallel)
+    (2048, 64, 1536, 11, 10, False, "plain"),  # DiT x_embedder (in_channels 48->64 padded)
+    (2048, 7680, 3072, 11, 10, False, "plain"),  # DiT single-block proj_out spatial
+    (256, 2048, 1536, 11, 10, False, "plain"),  # DiT caption_projection (text_encoder_dim 2048)
+    (256, 3072, 1536, 11, 10, False, "plain"),  # DiT attn to_add_out prompt
+    (256, 3072, 4608, 11, 10, False, "plain"),  # DiT to_qkv prompt
+    (256, 3072, 6144, 11, 10, False, "plain_gelu"),  # DiT ff_context.ff1 prompt (fused GELU; proj_mlp twin plain)
+    (256, 4096, 1536, 11, 10, False, "plain"),  # DiT context_embedder prompt
+    (256, 512, 256, 11, 10, False, "plain"),  # VAE decoder conv_shortcut 1x1 (512->256)
+    (256, 6144, 3072, 11, 10, False, "plain"),  # DiT ff_context.ff2 prompt
+    (256, 7680, 3072, 11, 10, False, "plain"),  # DiT single-block proj_out prompt
+    (32, 3072, 4608, 11, 10, False, "plain"),  # DiT single-block time_embed (inner->3*inner/tp2)
+    (32, 3072, 9216, 11, 10, False, "plain"),  # DiT norm1/norm1_context AdaLN modulation
+    (32, 64, 64, 11, 10, False, "plain"),  # VAE small 1x1 conv/proj at 64-ch stage
+    (4096, 1024, 1024, 11, 10, False, "plain"),  # VAE mid-block attention proj (dim 1024)
+    (4096, 1024, 3072, 11, 10, False, "plain"),  # VAE mid-block attention to_qkv (1024->3*1024)
+    (512, 2048, 1024, 11, 10, False, "plain"),  # SmolLM3 o_proj
+    (512, 2048, 1536, 11, 10, False, "plain"),  # SmolLM3 qkv_proj (grouped-query, ColParallel)
+    (512, 2048, 5504, 11, 10, False, "plain"),  # SmolLM3 MLP gate/up proj
+    (512, 5504, 2048, 11, 10, False, "plain"),  # SmolLM3 MLP down proj
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]

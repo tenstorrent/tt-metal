@@ -184,6 +184,52 @@ def _register_fibo_matmul_configs() -> None:
                 (32, 1536, 3072): (2, 3, 10, (2, 2)),  # ff_context.ff2 prompt (M=32, reuse M=128)
                 (32, 1920, 3072): (2, 4, 10, (2, 2)),  # single proj_out prompt (M=32, reuse M=128)
                 (32, 2048, 1536): (2, 4, 6, (2, 2)),  # caption_projection (M=32, reuse M=128)
+                # --- FIBO FULL PIPELINE on the 2x2 BH DEV mesh (sp=2/tp=2) at its ACTUAL 11x10 grid.
+                # This board's compute_with_storage_grid_size() reports 11x10 (harvested column) and
+                # get_matmul_core_grid does NOT clamp for a 4-device mesh, so the 2x2 denoise/encoder/VAE
+                # matmuls run at 11x10 and MISS the 2x2 configs registered above under "12x10". Swept
+                # 2026-07-23 via sweep_mm_block_sizes.py (bh_2x2, 11x10) from the "No known best blocking
+                # ... on 11x10" warnings in test_fibo_pipeline_perf_breakdown_json[mesh_device0]. All plain
+                # except the DiT FFN ff1 (M,3072,6144) fused-exact-GELU (registered as the binding L1 case;
+                # proj_mlp twin is plain). ns = HiFi2 per-op device kernel duration.
+                # DiT denoise spatial (M=2048 = 4096 seq / sp2):
+                (2048, 3072, 4608): (4, 6, 15, (4, 1)),  # to_qkv spatial — 310080 ns
+                (2048, 3072, 6144): (8, 3, 6, (2, 2)),  # ff.ff1 spatial (fused GELU; proj_mlp twin) — 726364 ns
+                (2048, 6144, 3072): (4, 6, 5, (4, 1)),  # ff.ff2 spatial — 410618 ns
+                (2048, 7680, 3072): (4, 10, 5, (4, 1)),  # single-block proj_out spatial — 480209 ns
+                (2048, 3072, 1536): (6, 3, 5, (3, 1)),  # attn to_out spatial — 106198 ns
+                (2048, 3072, 64): (3, 8, 2, (3, 1)),  # final proj_out — 62730 ns
+                (2048, 64, 1536): (16, 2, 6, (2, 2)),  # x_embedder (in_channels 48->64) — 25864 ns
+                # DiT denoise prompt (M=1024 pad bucket / M=256 negative bucket):
+                (1024, 3072, 4608): (6, 4, 8, (2, 2)),  # to_qkv prompt — 175164 ns
+                (1024, 3072, 6144): (4, 3, 6, (2, 2)),  # ff_context.ff1 prompt (fused GELU; proj_mlp twin) — 375314 ns
+                (1024, 4096, 1536): (8, 4, 5, (4, 1)),  # context_embedder prompt — 90365 ns
+                (1024, 6144, 3072): (4, 6, 5, (4, 1)),  # ff_context.ff2 prompt — 225166 ns
+                (1024, 7680, 3072): (4, 8, 5, (4, 1)),  # single-block proj_out prompt — 272160 ns
+                (256, 3072, 4608): (4, 3, 16, (2, 2)),  # to_qkv prompt (M=256) — 129434 ns
+                (256, 3072, 6144): (2, 32, 2, (2, 2)),  # ff_context.ff1 prompt (M=256, fused GELU; twin) — 198330 ns
+                (256, 3072, 1536): (2, 8, 6, (2, 2)),  # attn to_add_out prompt (M=256) — 53370 ns
+                (256, 4096, 1536): (2, 8, 5, (2, 1)),  # context_embedder prompt (M=256) — 67512 ns
+                (256, 2048, 1536): (2, 4, 5, (2, 1)),  # caption_projection (M=256) — 39370 ns
+                (256, 6144, 3072): (4, 4, 10, (2, 2)),  # ff_context.ff2 prompt (M=256) — 162870 ns
+                (256, 7680, 3072): (4, 20, 6, (2, 2)),  # single-block proj_out prompt (M=256) — 199946 ns
+                # DiT timestep / AdaLN modulation (M=32):
+                (32, 3072, 4608): (2, 6, 8, (2, 2)),  # single-block time_embed — 128392 ns
+                (32, 3072, 9216): (2, 16, 4, (2, 2)),  # norm1/norm1_context AdaLN modulation — 239496 ns
+                # SmolLM3 text encoder (tp=2; M = token bucket 128/512):
+                (128, 2048, 1024): (2, 8, 4, (2, 2)),  # o_proj — 27144 ns
+                (128, 2048, 5504): (2, 2, 16, (2, 2)),  # MLP gate/up proj — 106854 ns
+                (128, 5504, 2048): (2, 4, 6, (2, 2)),  # MLP down proj — 105921 ns
+                (512, 2048, 1024): (2, 4, 6, (2, 2)),  # o_proj — 31728 ns
+                (512, 2048, 1536): (2, 4, 5, (2, 1)),  # qkv_proj (grouped-query) — 41340 ns
+                (512, 2048, 5504): (6, 4, 8, (2, 2)),  # MLP gate/up proj — 111325 ns
+                (512, 5504, 2048): (2, 4, 7, (2, 1)),  # MLP down proj — 108604 ns
+                # VAE decoder (mid-block attention M=4096; conv_shortcut 1x1):
+                (4096, 1024, 1024): (14, 4, 4, (2, 2)),  # mid attn proj (dim 1024) — 75292 ns
+                (4096, 1024, 3072): (14, 8, 6, (2, 2)),  # mid attn to_qkv (1024->3*1024) — 186970 ns
+                (128, 1024, 512): (2, 4, 2, (2, 2)),  # conv_shortcut 1x1 (1024->512) — 14232 ns
+                (256, 512, 256): (4, 8, 2, (2, 2)),  # conv_shortcut 1x1 (512->256) — 7254 ns
+                (32, 64, 64): (2, 2, 2, (2, 2)),  # small 1x1 conv/proj (64-ch) — 3511 ns
             },
         }
     )

@@ -114,12 +114,12 @@ class BriaFiboPipelineConfig:
             raise ValueError(msg)
 
         # num_links is bounded by the ethernet channels physically available between adjacent
-        # devices on a mesh axis. The 4x8 Blackhole Galaxy exposes only 2 channels per hop
-        # (num_links=4 -> "Requested link index 2 out of bounds" fabric fatal); the 2x2 BH dev
-        # mesh supports 4. Shape-driven default (the only hardware-dependent preset FIBO carries);
-        # an explicit num_links= overrides. Unknown shapes fall back to the safe minimum of 1.
+        # devices on a mesh axis. Both the 4x8 Blackhole Galaxy and the 2x2 BH dev mesh expose only
+        # 2 channels per hop (num_links>=3 -> "Requested link index 2 out of bounds" fabric fatal).
+        # Shape-driven default (the only hardware-dependent preset FIBO carries); an explicit
+        # num_links= overrides. Unknown shapes fall back to the safe minimum of 1.
         if num_links is None:
-            num_links = {(2, 2): 4, (4, 8): 2}.get(mesh, 1)
+            num_links = {(2, 2): 2, (4, 8): 2}.get(mesh, 1)
 
         sp_axis, tp_axis = 0, 1
         sp_factor = mesh[sp_axis]

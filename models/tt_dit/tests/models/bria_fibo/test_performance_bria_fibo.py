@@ -84,9 +84,9 @@ def _num_links(mesh_device):
     """Ethernet links available per hop for CCL on this mesh (matches the pipeline's shape-driven pick).
 
     The 4x8 Blackhole Galaxy exposes only 2 channels per hop (num_links=4 -> fabric 'link index out of
-    bounds' fatal); the 2x2 dev mesh supports 4. Unknown shapes fall back to the safe minimum of 1.
+    bounds' fatal); the 2x2 dev mesh also exposes only 2. Unknown shapes fall back to the safe minimum of 1.
     """
-    return {(2, 2): 4, (4, 8): 2}.get(tuple(mesh_device.shape), 1)
+    return {(2, 2): 2, (4, 8): 2}.get(tuple(mesh_device.shape), 1)
 
 
 def _build_pipe(mesh_device, height, width, *, run_allocation_pass=True):
