@@ -1,6 +1,7 @@
 """Tests for the real boundaries (execution faked — no hardware, no creds)."""
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -54,7 +55,7 @@ def test_board_to_arch():
 def test_build_tracy_command_is_profile_this_form():
     cmd = build_tracy_command("models/x/test_perf.py", "S128", "/tmp/out")
     # raw profile_this command: -v -r -p (NO --no-runtime-analysis) + -o
-    assert cmd[:6] == ["python", "-m", "tracy", "-v", "-r", "-p"]
+    assert cmd[:6] == [sys.executable, "-m", "tracy", "-v", "-r", "-p"]
     assert "--no-runtime-analysis" not in cmd
     assert cmd[cmd.index("-o") + 1] == "/tmp/out"
     m_idx = cmd.index("-m", cmd.index("-o"))  # the SECOND -m (tracy's), not python's
