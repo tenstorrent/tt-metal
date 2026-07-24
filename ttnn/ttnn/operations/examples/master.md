@@ -1,21 +1,29 @@
-# Performance examples — catalog
+# Performance catalog — examples + propositions
 
-Short, self-contained, **runnable** ops that each isolate one or two kernel-level performance
-concepts and **measure** them on device (real `ns`, never a claimed speedup). Use them to learn a
-pattern, then re-measure on your own shapes with each example's CLI / test.
+One catalog, two parts:
 
-**Reading order:** this file → the example's `README.md` → read the code and run the test only if
-you need to. For the ⭐ Starter examples, the *gist* below is often enough to act immediately.
+- **Part 1 — Realized examples**: short, self-contained, **runnable** ops that each isolate one or two
+  kernel-level performance concepts and **measure** them on device (real `ns`, never a claimed speedup).
+  Learn a pattern, then re-measure on your own shapes with the example's CLI / test.
+- **Part 2 — Propositions**: the cross-codebase "optimal vs non-optimal" data-movement lever checklist —
+  each with a code pointer, most **not yet built as an example**. These are the Mode-A candidate levers to
+  walk when enumerating algorithms with `/perf-ceiling-dm`. Levers already covered by a Part-1 example are
+  tagged **→ example**; the rest are open **propositions** — when you build one, promote it into Part 1.
 
-**Difficulty:**
+**Reading order:** this file → the example's `README.md` → the code + test only if you need to. For the
+⭐ Starter examples the *gist* is often enough to act immediately; for a proposition, follow its code pointer.
+
+**Difficulty (Part 1):**
 - **⭐ T1 Starter** — one knob/placement decision, no kernel restructure. Actionable from the gist.
 - **⭐⭐ T2 Intermediate** — a CB-sizing / transfer-shape / kernel change. Read the README.
 - **⭐⭐⭐ T3 Advanced** — kernel restructure, overlap scheduling, mcast / semaphores. Read the code.
 
-Every number below is stamped in that example's `report.md` with the box + arch it was measured
-on. They are illustrative of the *effect*, not CI bounds.
+Every number in Part 1 is stamped in that example's `report.md` with the box + arch it was measured on.
+Illustrative of the *effect*, not CI bounds.
 
 ---
+
+# Part 1 — Realized examples (runnable, measured)
 
 ## ⭐⭐ T2 — [`noc_placement`](noc_placement/README.md)
 **Concept:** two knobs for interleaved-DRAM NoC contention — core **placement** (column/row/diagonal)
@@ -276,3 +284,107 @@ and every member needs the elementwise group sum.
 push by **4.64–4.73×** on 8-core lines and **6.48×** on a 16-core `2x8` group (**8.36 µs** versus
 **54.18 µs**, 9.8% noise). On 4-core groups, root reduction is fastest at **4.00 µs** because the
 extra two-phase handoff is not amortized.
+
+---
+
+# Part 2 — Propositions (levers, mostly not yet built as examples)
+
+A cross-codebase checklist of what separates an **optimal** data-movement op from a **non-optimal**
+one in tt-metal. The recurring theme:
+
+> **Optimal** = keep data in L1, move large coalesced transactions, overlap read/write streams, and
+> specialize at compile time.
+> **Non-optimal** = stream small pages through DRAM with generic runtime address-gen and a barrier
+> per transaction.
+
+Each lever has a code pointer (file + line, this branch). Levers already covered by a Part-1 example
+are tagged **→ example: `name`**; the rest are open **propositions** — build one and promote it. The
+whole list is the source of Mode-A candidate levers for `/perf-ceiling-dm`: walk it when enumerating
+competing algorithm ideas, then estimate each on your own transfers. Deep references:
+`tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md` (theory behind A–B, >92% DRAM BW
+on WH) and `tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md`
+(host-dispatch overlap, E). API surface: `tt_metal/hw/inc/api/dataflow/dataflow_api.h`.
+
+## A. Core / grid placement — the biggest single lever
+- **A1. Spread worker cores across the DRAM-facing axis, not down one axis** — banks sit in a few
+  columns; a line stacked on one axis piles traffic onto shared NoC links. `row_wise` in
+  `split_work_to_cores` (`tt_metal/api/tt-metalium/work_split.hpp:46`) picks the line.
+  **→ example: `noc_placement`** (placement lever).
+- **A2. Launch only on cores that hold data** *(proposition)* — returns exactly the cores with shards
+  and maps each DRAM bank to its NoC-optimal worker.
+  `get_optimal_worker_cores_for_sharded_tensor()` — `ttnn/core/tensor/tensor_utils.cpp:54`; consumers
+  `untilize/device/factories/untilize_multi_core_program_factory.cpp:330`.
+- **A3. Reader adjacent to its DRAM bank; one reader ↔ one bank** *(proposition)* — one NoC hop,
+  disjoint routes. `Saturating_DRAM_bandwidth.md:4-13`.
+- **A4. Cliff-core specialization** *(proposition)* — split into full cores + one remainder core; skip
+  the cliff kernel when empty. `work_split.hpp:46`; `untilize_multi_core_program_factory.cpp:132,396-400`.
+
+## B. Transaction shape & the NoC (kernel level)
+- **B5. Coalesce into whole-page transactions; don't scatter sub-tile faces** — bigger transactions hit
+  higher achieved BW. `dataflow_api.h:566`. **→ example: `tile_reorder`**.
+- **B6. Hit the one-packet fast path** — transfers ≤ `NOC_MAX_BURST_SIZE` (**512 B** on WH) take the
+  cheap single-packet path. `dataflow_api.h:551,566`; `noc_parameters.h:219`. **→ example: `double_buffer`**
+  (transfer-size lever).
+- **B7. One barrier per *block*, not per transaction** — issue a block of reads, then one
+  `noc_async_read_barrier()`. `Saturating_DRAM_bandwidth.md:11`. **→ example: `double_buffer`**.
+- **B8. Transaction-ID (trid) double-issue** *(proposition — best practice)* — tag each block, barrier
+  only on the *previous* id, so ≥1 request is always in flight. `dataflow_api.h:2366` + the trid
+  barrier/with-state family.
+- **B9. Split streams across NoCs — reader NoC0 / writer NoC1** — read and write streams overlap instead
+  of contending. `dataflow_api_common.h:62-63`; `preferred_noc_for_dram_read/write` in `kernel_types.hpp`.
+  **→ example: `noc_placement`** (NoC-selection lever).
+- **B10. Per-reader VC assignment** *(proposition)* — break first-come-first-serve serialization when
+  readers share a route. `vc`/`use_vc` params on `dataflow_api.h` read/write.
+- **B11. Alignment** *(proposition — mostly automatic)* — 32 B DRAM-read / 16 B DRAM-write; misaligned
+  transfers split or RMW. `noc_parameters.h:295-296`; `dataflow_api_addrgen.h:289` (`aligned_page_size`).
+- **B12. Multicast instead of N unicasts** — one write fans out to a rectangle of receivers.
+  `dataflow_api.h:932` (`noc_async_write_multicast`). **→ example: `shared_input_reuse`** (mcast_pipe).
+- **B13. `set_state`/`with_state` stateful transfers** *(proposition)* — configure the command buffer
+  once for many same-shape transfers to varying addresses. `dataflow_api.h:594,627`.
+
+## C. Buffering & data residency (host + kernel)
+- **C14. Zero-copy: alias the circular buffer directly onto the shard buffer (L1↔L1)** *(proposition)* —
+  the reader "just pushes"; requires input *and* output in L1.
+  `untilize_multi_core_program_factory.cpp:103-116`; `tilize/device/tilize_device_operation.cpp:22`.
+- **C15. Prefer sharded (L1-resident) over interleaved for DRAM-bound ops** *(proposition)* — each reader
+  its own bank, >92% BW vs interleaved congestion. `Saturating_DRAM_bandwidth.md`.
+- **C16. Double-buffer CBs (depth 2) — but only when it pays** — single-block cores skip it to save L1.
+  `concat/device/concat_program_factory.cpp:111`; `untilize_multi_core_program_factory.cpp:132`.
+  **→ example: `double_buffer`**.
+- **C17. In-place / no-copy when buffers don't overlap** *(proposition)* — only copy through a CB when
+  regions actually overlap. `move/move.cpp:69,89-92,107,148`.
+
+## D. Compile-time specialization & program caching (host level)
+- **D18. Bake `TensorAccessorArgs` as compile-time args** *(proposition)* — address-gen unrolled per
+  buffer type, not computed at runtime. `untilize_multi_core_program_factory.cpp:175,209`.
+- **D19. Pass only buffer base addresses as runtime args** *(proposition)* — program caches; only the
+  address is patched on re-run. `untilize_multi_core_program_factory.cpp:330,335,396`.
+- **D20. Layout / special-case factory selection** *(proposition)* — pick the specialized factory by
+  layout match; fall back to the generic streaming factory only when nothing matches.
+  `untilize/device/untilize_device_operation.cpp:285,310,315-316,346-349`.
+- **D21. Precompute per-core indexing host-side; `InterleavedAddrGenFast` (shifts, not multiplies) for
+  pow2 pages** *(proposition)*. `untilize_multi_core_program_factory.cpp:335,396`;
+  `dataflow_api_addrgen.h:349`.
+
+## E. Host-dispatch overlap (whole-model level)
+- **E22. Metal Trace + multiple command queues + events** *(proposition — whole-model, usually outside
+  perf-lab's single-op scope)* — remove per-op host dispatch; overlap input I/O (CQ1) with execution
+  (CQ0). `AdvancedPerformanceOptimizationsForModels.md:33,157,161`.
+
+## Compact optimal-vs-non-optimal
+| Dimension | Non-optimal | Optimal |
+|---|---|---|
+| Core placement | line stacked on one axis | spread across bank-facing axis; only cores with data |
+| Transaction size | many <512 B sub-transactions | coalesced whole pages, one-packet ≤512 B |
+| Barriers | one per transaction | one per block → trid double-issue |
+| Streams | shared NoC | reader NoC0 / writer NoC1, per-reader VCs |
+| Residency | stream through DRAM interleaved | L1 sharded, CB aliased to shard (zero-copy) |
+| Args | runtime address-gen | compile-time `TensorAccessorArgs`, cached program |
+
+## Notes
+- Sections A–B are grounded in `Saturating_DRAM_bandwidth.md` (>92% DRAM BW on Wormhole). Use
+  `/perf-ceiling-dm` to turn a proposed transfer scheme into a predicted target and `/perf-measure` to
+  measure the real number on device.
+- Some ops referenced by earlier drafts (`interleaved_to_sharded`, `sharded_to_interleaved`, `reshard`)
+  are absent on this branch (nuked for agent eval); the surviving `untilize` / `tilize` / `transpose` /
+  `concat` / `move` factories illustrate the same host-side patterns.
