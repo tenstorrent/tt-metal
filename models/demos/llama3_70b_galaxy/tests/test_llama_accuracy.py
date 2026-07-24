@@ -13,6 +13,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from tqdm import tqdm
 
@@ -74,7 +75,8 @@ from tqdm import tqdm
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 23887872,
+            # trace_region_size resolved from models/model_trace_region_sizes.yaml.
+            TRACE_MODEL_KEY_PARAM: "llama3.3-70b-galaxy-decode",
             "worker_l1_size": 1344544,
             "fabric_config": True,
         }

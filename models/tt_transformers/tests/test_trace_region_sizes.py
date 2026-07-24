@@ -81,10 +81,17 @@ def test_resolve_trace_region_size_matches_yaml(model_name, sku, expected_size):
 @pytest.mark.parametrize(
     "model_name,legacy_sku,expected_size",
     [
-        ("Llama-3.1-8B", "N150", 0),  # dynamic allocation, see #48636
-        ("Llama-3.1-8B", "T3K", 50000000),
-        ("Llama-3.3-70B", "P150x4", 96000000),
-        ("meta-llama/Llama-3.1-8B-Instruct", "bh_quietbox_2", 52000000),
+        # Galaxy exceptions stay fixed; also exercises the legacy SKU alias TG -> wh_galaxy_perf.
+        ("llama3.3-70b-galaxy", "TG", 216580672),
+        ("llama3.3-70b-galaxy-decode", "TG", 23887872),
+        ("qwen3-32b-galaxy", "TG", 102000000),
+        ("qwen3-32b-galaxy-decode", "TG", 12726272),
+        # Migrated to dynamic (#47574): formerly-fixed models now fall back to dynamic (0),
+        # regardless of which legacy SKU alias resolves.
+        ("Llama-3.1-8B", "N150", TRACE_REGION_SIZE_DYNAMIC),
+        ("Llama-3.1-8B", "T3K", TRACE_REGION_SIZE_DYNAMIC),
+        ("Llama-3.3-70B", "P150x4", TRACE_REGION_SIZE_DYNAMIC),
+        ("meta-llama/Llama-3.1-8B-Instruct", "bh_quietbox_2", TRACE_REGION_SIZE_DYNAMIC),
     ],
 )
 def test_resolve_trace_region_size_legacy_sku_aliases(model_name, legacy_sku, expected_size):
@@ -151,41 +158,40 @@ def test_ci_hf_model_jobs_resolve_trace_region_size(job_name, hf_model, sku):
     assert isinstance(size, int) and size >= 0
 
 
+# gemma4 migrated to dynamic (#47574): config-path candidate extraction still resolves
+# deterministically, now to dynamic (0) rather than a fixed reserved region.
 @pytest.mark.parametrize(
-    "model_path,sku,expected_size",
+    "model_path,sku",
     [
-        ("models/demos/gemma4/configs/gemma-4-E2B-it", "wh_n150", 30000000),
-        ("models/demos/gemma4/configs/gemma-4-E4B-it", "p300x2", 70000000),
-        ("models/demos/gemma4/configs/gemma-4-E4B-it", "bh_p150", 70000000),
-        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "wh_llmbox_perf", 70000000),
-        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "wh_n150", 70000000),
-        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "bh_p150", 70000000),
-        ("models/demos/gemma4/configs/gemma-4-31B-it", "p300x2", 70000000),
-        ("models/demos/gemma4/configs/gemma-4-31B-it", "wh_n150", 70000000),
-        ("models/demos/gemma4/configs/gemma-4-31B-it", "bh_p150", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-E2B-it", "wh_n150"),
+        ("models/demos/gemma4/configs/gemma-4-E4B-it", "p300x2"),
+        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "wh_llmbox_perf"),
+        ("models/demos/gemma4/configs/gemma-4-31B-it", "bh_p150"),
     ],
 )
-def test_resolve_gemma4_config_path_aliases(model_path, sku, expected_size):
-    assert resolve_trace_region_size(model_path, sku) == expected_size
+def test_resolve_gemma4_config_path_aliases(model_path, sku):
+    assert resolve_trace_region_size(model_path, sku) == TRACE_REGION_SIZE_DYNAMIC
 
 
+# HF hub-cache-path candidate extraction still parses model names deterministically;
+# these models migrated to dynamic (#47574), so resolution now returns dynamic (0).
 @pytest.mark.parametrize(
-    "hub_path,sku,expected_size",
+    "hub_path,sku",
     [
         (
             "/mnt/MLPerf/huggingface/hub/models--google--gemma-3-27b-it/snapshots/005ad3404e59d6023443cb575daa05336842228a",
             "wh_llmbox_perf",
-            30000000,
         ),
         (
             "/mnt/MLPerf/huggingface/hub/models--google--gemma-3-4b-it/snapshots/093f9f388b31de276ce2de164bdc2081324b9767",
             "wh_n150",
-            30000000,
         ),
     ],
 )
-def test_resolve_trace_region_size_from_hf_hub_cache_path(hub_path, sku, expected_size):
-    assert resolve_trace_region_size_for_candidates(hf_model_name_candidates(hub_path), sku) == expected_size
+def test_resolve_trace_region_size_from_hf_hub_cache_path(hub_path, sku):
+    assert (
+        resolve_trace_region_size_for_candidates(hf_model_name_candidates(hub_path), sku) == TRACE_REGION_SIZE_DYNAMIC
+    )
 
 
 def _gpt_oss_trace_model_key_from_env() -> str:

@@ -17,6 +17,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.common.sampling.tt_sampling import TTSampling
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from transformers import AutoTokenizer
 from tqdm import tqdm
 
@@ -72,7 +73,9 @@ from tqdm import tqdm
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 102000000,
+            # trace_region_size is resolved from models/model_trace_region_sizes.yaml
+            # by the mesh_device fixture via TRACE_MODEL_KEY_PARAM (qwen3-32b-galaxy).
+            TRACE_MODEL_KEY_PARAM: "qwen3-32b-galaxy",
             "fabric_config": True,
         }
     ],
