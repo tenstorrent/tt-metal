@@ -54,6 +54,7 @@ show_help() {
     echo "  --toolchain-path                 Set path to CMake toolchain file."
     echo "  --configure-only                 Only configure the project, do not build."
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
+    echo "  --enable-distributed-zmq         Build the experimental ZeroMQ distributed-context backend (runtime-selectable via TT_DISTRIBUTED_BACKEND=zmq). Disabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
     echo "  --enable-lto                     Enable Link Time Optimization (LTO) for Release/RelWithDebInfo builds."
@@ -98,6 +99,7 @@ toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
 
 configure_only="OFF"
 enable_distributed="ON"
+enable_distributed_zmq="OFF"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
 enable_lto="OFF"
@@ -140,6 +142,7 @@ ttnn-shared-sub-libs
 toolchain-path:
 configure-only
 without-distributed
+enable-distributed-zmq
 without-python-bindings
 enable-fake-kernels-target
 enable-lto
@@ -171,6 +174,8 @@ while true; do
             enable_time_trace="ON";;
         --without-distributed)
             enable_distributed="OFF";;
+        --enable-distributed-zmq)
+            enable_distributed_zmq="ON";;
 	--build-dir)
             build_dir="$2";shift;;
         -b|--build-type)
@@ -312,6 +317,7 @@ echo "INFO: Enable Unity builds: $unity_builds"
 echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
+echo "INFO: Enable Distributed ZMQ: $enable_distributed_zmq"
 echo "INFO: With python bindings: $with_python_bindings"
 echo "INFO: Enable Tracy: $tracy_enabled"
 if [ "$tracy_enabled" != "ON" ]; then
@@ -446,6 +452,12 @@ if [ "$enable_distributed" = "ON" ]; then
     cmake_args+=("-DENABLE_DISTRIBUTED=ON")
 else
     cmake_args+=("-DENABLE_DISTRIBUTED=OFF")
+fi
+
+if [ "$enable_distributed_zmq" = "ON" ]; then
+    cmake_args+=("-DENABLE_DISTRIBUTED_ZMQ=ON")
+else
+    cmake_args+=("-DENABLE_DISTRIBUTED_ZMQ=OFF")
 fi
 
 if [ "$enable_fake_kernels_target" = "ON" ]; then

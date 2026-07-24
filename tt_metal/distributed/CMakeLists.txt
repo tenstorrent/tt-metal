@@ -61,6 +61,12 @@ else()
     list(APPEND DISTRIBUTED_SRC multihost/single_host_context.cpp)
 endif()
 
+# Experimental ZeroMQ backend, runtime-selectable alongside the compile-time
+# default (MPI or single-host) via TT_DISTRIBUTED_BACKEND=zmq.
+if(ENABLE_DISTRIBUTED_ZMQ)
+    list(APPEND DISTRIBUTED_SRC multihost/zmq_distributed_context.cpp)
+endif()
+
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
 # Enable unity builds for faster compilation
@@ -87,6 +93,11 @@ add_dependencies(distributed metalium_GeneratedHeaders)
 if(USE_MPI)
     target_link_libraries(distributed PRIVATE OpenMPI::MPI)
     target_compile_definitions(distributed PRIVATE OPEN_MPI="1")
+endif()
+
+if(ENABLE_DISTRIBUTED_ZMQ)
+    target_link_libraries(distributed PRIVATE cppzmq::cppzmq)
+    target_compile_definitions(distributed PRIVATE TT_DISTRIBUTED_ZMQ=1)
 endif()
 
 if(TT_UMD_BUILD_SIMULATION)

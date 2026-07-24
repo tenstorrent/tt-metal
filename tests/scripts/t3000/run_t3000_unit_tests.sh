@@ -144,6 +144,27 @@ run_t3000_ttnn_udm_tests() {
   fi
 }
 
+# Returns 0 if the given binary was built with the experimental ZMQ
+# distributed-context backend (build_metal.sh --enable-distributed-zmq). The
+# backend lives in libtt_metal.so, so we probe the actually-linked library for a
+# ZMQ-only string. This lets the ZMQ runs below activate automatically on
+# ZMQ-enabled builds while staying a clean no-op on the default (MPI-only) build.
+_zmq_backend_available() {
+  local bin="$1"
+  local lib=""
+  # Resolve the actually-linked libtt_metal.so. Avoid pipelines that close early
+  # (awk 'exit'/grep -q downstream of a pipe): under `set -o pipefail` the
+  # resulting SIGPIPE would make this abort/misreport on ZMQ-enabled builds.
+  local ldd_out
+  ldd_out="$(ldd "$bin" 2>/dev/null || true)"
+  lib="$(printf '%s\n' "$ldd_out" | awk '/libtt_metal\.so/ {print $3}' | tail -n1)"
+  if [ -z "$lib" ] || [ ! -e "$lib" ]; then
+    lib="build/lib/libtt_metal.so"
+  fi
+  # grep reads the library file directly (no pipe), so -q's early exit is safe.
+  [ -e "$lib" ] && grep -q -a "TT_ZMQ_ENDPOINTS" "$lib"
+}
+
 run_t3000_tt_metal_multiprocess_tests() {
   local mpi_args="--allow-run-as-root"
   # Disabled by issue #45305: test_tt_fabric crashes with TT_FATAL (Physical chip id not found for eth coord) on T3K 2x2 config
@@ -160,6 +181,36 @@ run_t3000_tt_metal_multiprocess_tests() {
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRankTest2x4*"
   #tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*MeshWorkloadTest*"
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRankMeshShapeSweep*"
+
+  # Same Big-Mesh 2x4 regression tests, but exercised over the experimental ZMQ
+  # distributed-context backend instead of MPI. Two local ranks are spawned by
+  # the ZMQ launcher (no mpirun), which forces the whole control-plane bringup
+  # and mesh-device creation through the ZMQ DistributedContext. The env below
+  # mirrors 2x4_multiprocess_rank_bindings.yaml (mesh 0, t3k dual-host
+  # descriptor, rank 0 -> devices 0,1 / rank 1 -> devices 2,3).
+  #
+  # Only runs when the binary was built with --enable-distributed-zmq; on the
+  # default MPI-only build this is a logged no-op so the lane stays green.
+  local mp_bin="build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests"
+  if _zmq_backend_available "$mp_bin"; then
+    echo "LOG_METAL: Running distributed_multiprocess_tests over the ZMQ distributed-context backend"
+    local zmq_launcher="tests/tt_metal/multihost/zmq_launcher.sh"
+    local zmq_mgd="tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto"
+    "$zmq_launcher" -n 2 \
+      -g "TT_MESH_GRAPH_DESC_PATH $zmq_mgd" \
+      -g "TT_MESH_ID 0" \
+      -e "0 TT_VISIBLE_DEVICES 0,1" \
+      -e "1 TT_VISIBLE_DEVICES 2,3" \
+      -- "$mp_bin" --gtest_filter="*BigMeshDualRankTest*"
+    "$zmq_launcher" -n 2 \
+      -g "TT_MESH_GRAPH_DESC_PATH $zmq_mgd" \
+      -g "TT_MESH_ID 0" \
+      -e "0 TT_VISIBLE_DEVICES 0,1" \
+      -e "1 TT_VISIBLE_DEVICES 2,3" \
+      -- "$mp_bin" --gtest_filter="*BigMeshDualRankMeshShapeSweep*"
+  else
+    echo "LOG_METAL: Skipping ZMQ multiprocess tests (binary not built with --enable-distributed-zmq)"
+  fi
 }
 
 run_t3000_ttnn_multiprocess_tests() {

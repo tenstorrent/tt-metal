@@ -23,6 +23,11 @@ option(ENABLE_TTNN_SHARED_SUBLIBS "Use shared libraries for ttnn to speed up inc
 option(TT_ENABLE_LIGHT_METAL_TRACE "Enable Light Metal Trace" ON)
 option(TT_ENABLE_LTO "Build Releases with Link-Time-Optimization (LTO)" OFF)
 option(ENABLE_DISTRIBUTED "Enable multihost distributed compute support (OpenMPI)" ON)
+option(
+    ENABLE_DISTRIBUTED_ZMQ
+    "Build the experimental ZeroMQ distributed-context backend (runtime-selectable via TT_DISTRIBUTED_BACKEND=zmq)"
+    OFF
+)
 option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" ON)
 option(TT_INSTALL "Define installation rules" ON)
 option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile firmware." OFF)
