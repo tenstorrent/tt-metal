@@ -201,6 +201,24 @@ run_multi_host_tracy_smoke() {
     done
 }
 
+run_llama8b_decode_profile() {
+    # Tracy op-by-op decode profile for Llama-3.1-8B (eval-32, prefetcher).
+    # The demo is instrumented with signposts around the decode loop only, ci-eval-32
+    # is cut to 2 decode iterations, and the prefill warmup is skipped (see
+    # models/tt_transformers/demo/simple_text_demo.py). -p scopes capture to the
+    # decode signpost zone. Artifacts (cpp_device_perf_report.csv, profile_log_device.csv,
+    # tracy capture) land under $PROFILER_ARTIFACTS_DIR and are uploaded by the workflow.
+    remove_default_log_locations
+    mkdir -p $PROFILER_ARTIFACTS_DIR
+
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+
+    python -m tracy -v -r -p -m pytest models/tt_transformers/demo/simple_text_demo.py \
+        -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1 \
+        | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+}
+
 run_device_profiler_test() {
     remove_default_log_locations
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360

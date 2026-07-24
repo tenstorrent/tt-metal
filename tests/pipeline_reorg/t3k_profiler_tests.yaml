@@ -11,6 +11,14 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
+- name: T3000 Llama-3.1-8B decode op profile (Tracy)
+  cmd: run_llama8b_decode_profile
+  skus:
+    wh_llmbox:
+      timeout: 20
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: T3000 mid-run device data dump
   cmd: run_mid_run_data_dump
   skus:

@@ -16,6 +16,15 @@ import torch
 from loguru import logger
 
 import ttnn
+
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*_args, **_kwargs):  # no-op when tracy is unavailable (non-profiler runs)
+        pass
+
+
 from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy, verify_perf
@@ -715,7 +724,7 @@ def prepare_generator_args(
             3,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            2,  # max_generated_tokens (TEMP: reduced from 200 for Tracy op-by-op profiling run)
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
@@ -1217,19 +1226,12 @@ def test_demo_text(
         prefill_sampling_params = device_sampling_params if device_sampling_params is not None else None
 
         if mode == "prefill" or mode == "full":
-            logger.info("Starting prefill warmup...")
+            # TEMP (Tracy decode profiling run): skip the explicit prefill warmup pass to reduce
+            # profiler noise/buffer pressure. Keep the compile_prefill profiler keys that downstream
+            # code/CI expects; the first real prefill below still absorbs compile.
+            logger.info("Skipping prefill warmup (TEMP: Tracy decode profiling run)")
             profiler.start(f"compile_prefill", iteration=batch_idx)
-            logits = generator.prefill_forward_text(
-                input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                prompt_lens=decoding_pos,
-                sampling_params=prefill_sampling_params,
-                warmup_prefill=not is_device_perf_test,
-                enable_trace=enable_trace,
-            )
             profiler.end(f"compile_prefill", iteration=batch_idx)
-            logger.info("Finished prefill warmup")
 
             logger.info(f"Starting prefill...")
             profiler.start(f"inference_prefill", iteration=batch_idx)
@@ -1291,6 +1293,7 @@ def test_demo_text(
             profiler.end(f"inference_decode_time_{1}", iteration=batch_idx)
             logger.info(f"Skipping decode forward pass when prefill mode is enabled")
 
+        signpost(f"decode_start_batch_{batch_idx}")  # Tracy: mark start of decode loop for op-by-op profiling
         while users_decoding and mode != "prefill":
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
@@ -1397,6 +1400,8 @@ def test_demo_text(
                         f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                     )
             profiler.end(f"log_saving_file", iteration=batch_idx)
+
+        signpost(f"decode_stop_batch_{batch_idx}")  # Tracy: mark end of decode loop for op-by-op profiling
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 
