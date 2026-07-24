@@ -297,6 +297,7 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
     }
     if (op_name == "softplus") {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-8.0f, 8.0f, numel, seed);
+    }
     if (op_name == "clamp") {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 2.0f, numel, seed);
     }
