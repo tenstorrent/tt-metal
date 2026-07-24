@@ -434,6 +434,18 @@ def test_no_hand_maintained_model_type_lists():
     assert P._category_from_model_type("vit") == "CNN"
 
 
+def test_audio_markers_distinguish_codec_from_text_embedder():
+    # feature-extraction -> Embed is right for a TEXT embedder but wrong for an audio codec
+    # (mimi/encodec). Audio structural markers are the deterministic tell that re-routes the
+    # codec off Embed; a real text embedder has none, so it is trusted as Embed (no LLM flip).
+    from scripts.tt_hw_planner.probe import _has_audio_markers as H
+
+    assert H({"sampling_rate": 24000, "codebook_size": 2048}) is True
+    assert H({"audio_config": {}}) is True
+    assert H({"num_mel_bins": 80}) is True
+    assert H({"hidden_size": 768, "vocab_size": 30000}) is False  # text embedder: no audio markers
+
+
 def test_any_to_any_tag_maps_to_vlm():
     # 'any-to-any' is an official HF pipeline tag (unified multimodal, e.g. omni models);
     # it belongs in the stable tag vocab -> VLM, not an Unknown that forces the LLM residual.

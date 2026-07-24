@@ -232,6 +232,17 @@ def _is_dual_encoder_contrastive(cfg: dict) -> bool:
     return has_text and has_other and not task_head
 
 
+def _has_audio_markers(cfg: dict) -> bool:
+    """Structural fact that a config describes an audio/waveform model (codec, vocoder,
+    speech): sampling_rate / codebook / quantizer / mel bins / audio_config. Used to catch
+    the ambiguous 'feature-extraction' tag mislabeling an audio codec (mimi, encodec) as a
+    text embedder -- the audio structure contradicts 'text embedding'."""
+    keys = set(cfg or {})
+    if keys & {"sampling_rate", "codebook_size", "num_quantizers", "num_mel_bins", "audio_config"}:
+        return True
+    return any("codebook" in k or "quantizer" in k for k in keys)
+
+
 def _is_category_residual(model_type_category: Optional[str], fingerprint: str) -> bool:
     """The genuine residual for the LLM: NO deterministic fact placed this model.
     True only when the model_type carries no category (not in the curated table nor
@@ -281,23 +292,25 @@ def _llm_resolve_category(model_id: str, cfg: dict, pipeline_tag: Optional[str],
         prompt = (
             "Classify this Hugging Face model into exactly ONE hardware bring-up category.\n"
             f"Allowed categories: {', '.join(_VALID_CATEGORIES)}.\n"
-            "Definitions: LLM=text-only generative language model; VLM=vision+language; "
-            "Image/Video=visual generation; STT=speech->text; TTS=audio synthesis or neural "
-            "audio codec; Embed=text embedding/retrieval; CNN=vision classification/detection/"
-            "segmentation; NLP=encoder-only text understanding; Unknown=cannot tell.\n"
-            "IMPORTANT -- synthesis vs analysis: Image/Video/TTS are ONLY for models that "
-            "SYNTHESIZE brand-new media as output. A model that ANALYZES its input is NOT one of "
-            "those, even when its task name contains 'generation': vision analysis -- "
-            "classification, detection, SEGMENTATION / mask-generation (e.g. Segment-Anything), "
-            "depth, keypoints -- is CNN; producing masks or boxes is analysis, not image synthesis. "
-            "A contrastive / dual-encoder / retrieval / matching / zero-shot model (CLIP / ALIGN / "
-            "CLAP style, which produces embeddings to MATCH inputs) is Embed -- or CNN for a vision "
-            "task. Never label an analysis, segmentation, or matching model Image / Video / TTS.\n"
-            "For a UNIFIED / OMNI / any-to-any / multimodal model (handles or emits several "
-            "modalities, e.g. Qwen-Omni's text+audio+image+video), classify by its CORE trunk: VLM "
-            "if it processes vision+language, else LLM. Do NOT reduce it to one secondary output "
-            "(never call an omni multimodal model TTS just because it can also speak, or Image just "
-            "because it can also draw).\n"
+            "Decide by the model's PRIMARY input/output, in this order:\n"
+            "1. Does it SYNTHESIZE new media? new images/video -> Image/Video; speech/music/audio "
+            "(incl. neural audio codecs) -> TTS. (Producing masks, boxes, depth or embeddings is "
+            "NOT synthesis -- keep going.)\n"
+            "2. Speech/audio -> text (transcription/recognition) -> STT.\n"
+            "3. Vision task with NO language output (image classification, detection, SEGMENTATION/"
+            "masks incl. Segment-Anything, depth, keypoints, matting, super-resolution) -> CNN.\n"
+            "4. Produces embeddings/vectors for retrieval, similarity, matching, reranking, or "
+            "contrastive scoring (CLIP/ALIGN/CLAP/BERT-embedder style) -> Embed. A text-only "
+            "embedding model is Embed even if multilingual or multi-task -- NOT VLM.\n"
+            "5. Takes IMAGES/VIDEO **and** TEXT together and outputs text (captioning, VQA, "
+            "doc/chart understanding, or an omni model whose core reasons over vision+language) "
+            "-> VLM. VLM REQUIRES BOTH vision and language; a vision-only model is CNN, a "
+            "text-only model is never VLM.\n"
+            "6. Text in, text out, generative -> LLM (this includes text seq2seq translation/"
+            "summarization and any *ForCausalLM trunk). Encoder-only text understanding -> NLP.\n"
+            "7. None fit / cannot tell from the evidence -> Unknown.\n"
+            "For a UNIFIED/OMNI model, classify by its CORE trunk (VLM if it reasons over "
+            "vision+language, else LLM), never by a secondary output it can also emit.\n"
             f"model_id: {model_id}\n"
             f"pipeline_tag: {pipeline_tag}\n"
             f"config (salient keys): {json.dumps(key_cfg)[:1500]}\n"
@@ -696,9 +709,10 @@ def _probe_local_model(model_id: str) -> ModelProbe:
     )
     if category == "Unknown":
         category = _category_from_fingerprint(_fpr) or category
-    if _is_category_residual(model_type_category, _fpr) and _is_dual_encoder_contrastive(cfg):
+    _resid = _is_category_residual(model_type_category, _fpr)
+    if _resid and _is_dual_encoder_contrastive(cfg):
         category = "Embed"
-    elif _is_category_residual(model_type_category, _fpr):
+    elif _resid and (category == "Unknown" or (category == "Embed" and _has_audio_markers(cfg))):
         _llm_cat = _llm_resolve_category(model_id, cfg, pipeline_tag)
         if _llm_cat:
             category = _llm_cat
@@ -865,18 +879,23 @@ def probe_model(model_id: str) -> ModelProbe:
         if _fp_cat:
             probe.flags.append(f"Category Unknown -> {_fp_cat!r} via structural fingerprint {_fpr!r}")
             probe.category = _fp_cat
-    if _is_category_residual(model_type_category, _fpr) and _is_dual_encoder_contrastive(cfg):
+    _resid = _is_category_residual(model_type_category, _fpr)
+    if _resid and _is_dual_encoder_contrastive(cfg):
         if probe.category != "Embed":
             probe.flags.append(
                 "Category -> 'Embed' via dual-encoder contrastive fact (text_config + vision/audio_config)"
             )
             probe.category = "Embed"
-    elif _is_category_residual(model_type_category, _fpr):
+    elif _resid and (probe.category == "Unknown" or (probe.category == "Embed" and _has_audio_markers(cfg))):
+        # LLM resolves ONLY a genuinely unplaced (Unknown) category, or an Embed that audio
+        # structure contradicts (feature-extraction mislabeling an audio codec). A category a
+        # pipeline_tag / registry / fact already assigned is TRUSTED -- the LLM never overrides it
+        # (overriding flipped real text embedders to CNN/VLM). Reserves the LLM for the true tail.
         _llm_cat = _llm_resolve_category(model_id, cfg, probe.pipeline_tag)
         if _llm_cat and _llm_cat != probe.category:
             probe.flags.append(
-                f"Category {probe.category!r} -> {_llm_cat!r} by LLM fallback: no deterministic "
-                f"fact placed it (model_type/registry unknown, structural fingerprint 'unknown')."
+                f"Category {probe.category!r} -> {_llm_cat!r} by LLM fallback (genuine residual / "
+                f"audio-marked feature-extraction)."
             )
             probe.category = _llm_cat
 
