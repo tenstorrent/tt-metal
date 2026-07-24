@@ -29,6 +29,7 @@ populates the visualizer comparison tables.
 
 import json
 import math
+import os
 import re
 import sqlite3
 import subprocess
@@ -149,6 +150,34 @@ def run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
         else:
             config_path = report_path / "config.json"
         ttnn.save_config_to_json_file(config_path)
+
+        if (not ttnn.distributed_context_is_initialized() or rank == 0) and (report_path / "db.sqlite").is_file():
+            try:
+                from tracy.visualizer_run import stamp_memory_run_id
+
+                stamp_memory_run_id(report_path / "db.sqlite")
+            except ImportError:
+                # tracy package may be unavailable outside profiler/tooling installs.
+                _stamp_memory_run_id_fallback(report_path / "db.sqlite")
+
+
+def _stamp_memory_run_id_fallback(db_path: Path) -> None:
+    """Minimal run_id stamp when ``tracy.visualizer_run`` is not importable."""
+    import uuid
+
+    env_key = "TT_METAL_RUN_ID"
+    run_id = os.environ.get(env_key, "").strip() or str(uuid.uuid4())
+    os.environ[env_key] = run_id
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO report_metadata (key, value) VALUES (?, ?)",
+            ("run_id", run_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"Visualizer run_id={run_id} written to {db_path} report_metadata")
 
 
 def sanitize_git_remote_url(url: str) -> str:

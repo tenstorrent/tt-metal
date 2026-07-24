@@ -169,9 +169,27 @@ For the mesh coordinate mapping YAML to be generated, you must have `TT_METAL_HO
 
 ---
 
-### Generating Performance Reports
+### Generating both reports in one run (shared run_id)
 
-For the performance report, we'll use the `tracy profiler`. If you're using the same terminal session, unset the previous configuration to avoid regenerating the memory report:
+To produce a memory report and a performance report from the **same** execution (with a shared `run_id` for future visualizer linking), leave TTNN logging enabled and run under Tracy:
+
+```bash
+export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode":false,"enable_logging":true,"enable_graph_report":true,"enable_detailed_buffer_report":true,"report_name":"ttnn_visualizer_tutorial"}'
+python -m tracy -p -r -v -n my_run -m pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0]
+```
+
+Tracy mints `TT_METAL_RUN_ID` (UUID) for the child process and report generation. After the run:
+
+* Memory report: `generated/ttnn/reports/<report_dir>/db.sqlite` has `report_metadata.run_id`
+* Performance report: `generated/profiler/reports/.../manifest.json` contains the same `run_id`
+
+Upload the memory directory and the performance directory to TT-NN Visualizer as usual.
+
+---
+
+### Generating Performance Reports only
+
+For a performance-only capture (no memory report), unset TTNN config so graph reporting does not run:
 
 ```bash
 unset TTNN_CONFIG_PATH
@@ -191,9 +209,10 @@ Tracy will output the path to a directory:
 2025-08-01 10:51:02.731 | INFO     | tt_metal.tools.profiler.process_ops_logs:generate_reports:905 - OPs csv generated at: /root/tt-metal/generated/profiler/reports/2025_08_01_10_51_02/ops_perf_results_2025_08_01_10_51_02.csv
 ```
 
-This diredtory contains the following output files:
+This directory contains the following output files:
 
 * `ops_perf_results_<timestamp>.csv`
+* `manifest.json` (includes `run_id` when captured via `python -m tracy`)
 * `device_profile_log.txt`
 * `<name>.tracy` (Tracy file)
 
