@@ -16,4 +16,4 @@ rank_bindings:
     env_overrides:
       TT_VISIBLE_DEVICES: "2,3"
 
-mesh_graph_desc_path: "configurations/local8/mgd.textproto"
+mesh_graph_desc_path: "configurations/4-4/mgd.textproto"

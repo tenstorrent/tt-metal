@@ -13,8 +13,8 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
 fi
 
 WT_DIR="${TT_METAL_HOME}/tt-train/tests/python/grpo_remote_rollout/weight_transfer"
-HOST_FILE="${WT_DIR}/configurations/local8/hosts.txt"
-RANK_BINDINGS_FILE="${WT_DIR}/configurations/local8/rank_bindings.yaml"
+HOST_FILE="${WT_DIR}/configurations/4-4/hosts.txt"
+RANK_BINDINGS_FILE="${WT_DIR}/configurations/4-4/rank_bindings.yaml"
 TEST_FILE="${WT_DIR}/test_weight_transfer.py"
 
 while [[ "$#" -gt 0 ]]; do
