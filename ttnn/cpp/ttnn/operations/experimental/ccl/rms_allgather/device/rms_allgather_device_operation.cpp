@@ -65,6 +65,15 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         a.shard_spec().value().grid,
         semaphore_cores);
 
+    // The stats reduction runs over the shard grid's bounding-box rectangle, so a
+    // non-rectangular grid reads uninitialized L1 from the phantom cells (tt-xla #5738).
+    const auto& input_shard_grid = a.shard_spec().value().grid;
+    TT_FATAL(
+        input_shard_grid.num_cores() == input_shard_grid.bounding_box().size(),
+        "fused_rms_minimal requires a rectangular shard grid but got {} cores in bounding box {}.",
+        input_shard_grid.num_cores(),
+        input_shard_grid.bounding_box());
+
     uint32_t input_width = a.tensor_spec().tile().get_tile_shape()[1];
     uint32_t input_height = a.tensor_spec().tile().get_tile_shape()[0];
     TT_FATAL(
