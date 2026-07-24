@@ -173,3 +173,89 @@ TEST(GenerateRankBindingsHelpersTest, AllWritersProduceThreeFilesInTempDir) {
     }
     EXPECT_EQ(n, 3);
 }
+
+// -----------------------------------------------------------------------------
+// Multi-solution helpers (see README_generate_rank_bindings.md)
+// -----------------------------------------------------------------------------
+
+TEST(GenerateRankBindingsHelpersTest, SolutionHash_IsStableAndOrderIndependent) {
+    std::vector<RankBindingConfig> a = {
+        make_binding(0, 0, 0, "host-a", 0),
+        make_binding(1, 1, 0, "host-b", 0),
+    };
+    a[0].env_overrides["TT_VISIBLE_DEVICES"] = "0,1";
+    a[1].env_overrides["TT_VISIBLE_DEVICES"] = "2,3";
+
+    // Same solution, bindings supplied in a different order -> identical hash.
+    std::vector<RankBindingConfig> a_reordered = {a[1], a[0]};
+
+    const std::string h1 = compute_solution_signature_hash(a);
+    const std::string h2 = compute_solution_signature_hash(a_reordered);
+    EXPECT_EQ(h1, h2) << "hash must be order-independent";
+    EXPECT_EQ(h1.size(), 16u) << "hash is 16 hex chars";
+    EXPECT_EQ(h1.find_first_not_of("0123456789abcdef"), std::string::npos) << "hash is lowercase hex";
+}
+
+TEST(GenerateRankBindingsHelpersTest, SolutionHash_DiffersForDifferentMappingOnSameHosts) {
+    // Same host set {host-a, host-b}, but the (mesh,host-rank) -> host assignment is swapped.
+    std::vector<RankBindingConfig> s1 = {
+        make_binding(0, 0, 0, "host-a", 0),
+        make_binding(1, 1, 0, "host-b", 0),
+    };
+    std::vector<RankBindingConfig> s2 = {
+        make_binding(0, 0, 0, "host-b", 0),
+        make_binding(1, 1, 0, "host-a", 0),
+    };
+    EXPECT_NE(compute_solution_signature_hash(s1), compute_solution_signature_hash(s2))
+        << "same hosts but different mapping must produce different directories";
+}
+
+TEST(GenerateRankBindingsHelpersTest, WriteSolutionsIndex_HasEnumerationAndSolutions) {
+    const auto dir = make_temp_dir("index");
+    const auto path = dir / "solutions_index.yaml";
+
+    std::vector<SolutionIndexEntry> entries;
+    SolutionIndexEntry e0;
+    e0.id = "3f9c1a20";
+    e0.num_ranks = 2;
+    e0.num_hosts = 2;
+    e0.host_set = {"host-a", "host-b"};
+    entries.push_back(e0);
+
+    write_solutions_index_yaml(
+        "/mesh.textproto", "distinct-host-sets", /*max_solutions=*/4, /*truncated=*/false, entries, path.string());
+
+    ASSERT_TRUE(std::filesystem::exists(path));
+    const YAML::Node root = YAML::LoadFile(path.string());
+    EXPECT_EQ(root["mesh_graph_desc_path"].as<std::string>(), "/mesh.textproto");
+    EXPECT_EQ(root["enumeration"]["mode"].as<std::string>(), "distinct-host-sets");
+    EXPECT_EQ(root["enumeration"]["max_solutions"].as<int>(), 4);
+    EXPECT_EQ(root["enumeration"]["found"].as<int>(), 1);
+    EXPECT_FALSE(root["enumeration"]["truncated"].as<bool>());
+    ASSERT_TRUE(root["solutions"]);
+    ASSERT_EQ(root["solutions"].size(), 1u);
+    EXPECT_EQ(root["solutions"][0]["id"].as<std::string>(), "3f9c1a20");
+    EXPECT_EQ(root["solutions"][0]["dir"].as<std::string>(), "3f9c1a20");
+    EXPECT_EQ(root["solutions"][0]["num_hosts"].as<int>(), 2);
+    EXPECT_EQ(root["solutions"][0]["rank_bindings"].as<std::string>(), "3f9c1a20/rank_bindings.yaml");
+    EXPECT_EQ(root["solutions"][0]["host_set"].size(), 2u);
+}
+
+TEST(GenerateRankBindingsHelpersTest, WriteSolutionMeta_ListsHostsAndCounts) {
+    const auto dir = make_temp_dir("meta");
+    const auto path = dir / "solution_meta.yaml";
+    std::vector<RankBindingConfig> bindings = {
+        make_binding(0, 0, 0, "host-a", 0),
+        make_binding(1, 0, 1, "host-a", 1),
+        make_binding(2, 1, 0, "host-b", 0),
+    };
+
+    write_solution_meta_yaml(bindings, "deadbeef00000000", "/mesh.textproto", path.string());
+
+    ASSERT_TRUE(std::filesystem::exists(path));
+    const YAML::Node root = YAML::LoadFile(path.string());
+    EXPECT_EQ(root["solution_id"].as<std::string>(), "deadbeef00000000");
+    EXPECT_EQ(root["num_ranks"].as<int>(), 3);
+    EXPECT_EQ(root["num_hosts"].as<int>(), 2);  // host-a, host-b
+    EXPECT_EQ(root["host_set"].size(), 2u);
+}

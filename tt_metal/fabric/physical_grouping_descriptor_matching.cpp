@@ -1451,7 +1451,7 @@ std::vector<MappingResult<uint32_t, AsicID>> enumerate_distinct_placements_for_g
         max_solutions,
         ConnectionValidationMode::STRICT,
         /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Auto,
+        TopologyMappingSolverEngine::Sat,  // force SAT backend (Auto also resolves to SAT now)
         /*unique_shapes=*/true);
 }
 

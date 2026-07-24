@@ -62,17 +62,27 @@ PhysicalSystemDescriptor run_psd_discovery() {
     return tt::tt_metal::run_physical_system_discovery(*driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
 }
 
+// Bundle of mapper inputs, built once and shared by the single- and multi-solution paths.
+struct TopologyMappingInputs {
+    LogicalMultiMeshGraph logical_graph;
+    PhysicalMultiMeshGraph physical_graph;
+    TopologyMappingConfig config;
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+};
+
 /**
- * @brief Run topology mapper to map logical meshes to physical ASICs
+ * @brief Build the shared inputs for topology mapping.
  *
  * This function:
  * 1. Builds physical multi-mesh graph from PSD, PGD, and MGD
  * 2. Builds logical multi-mesh graph from MGD (via MeshGraph)
- * 3. Configures topology mapping with strict mode and disabled rank bindings
- * 4. Runs map_multi_mesh_to_physical
- * 5. Returns the mapping result
+ * 3. Configures topology mapping (validation modes, MGD + galaxy-corner pinnings, mesh-rank bindings)
+ *
+ * The result feeds both run_topology_mapping (single solution) and the --all-solutions streaming enumeration
+ * (MultiMeshSolutionEnumerator).
  */
-TopologyMappingResult run_topology_mapping(
+TopologyMappingInputs build_topology_mapping_inputs(
     const PhysicalSystemDescriptor& psd,
     const PhysicalGroupingDescriptor& pgd,
     const MeshGraphDescriptor& mgd,
@@ -166,17 +176,32 @@ TopologyMappingResult run_topology_mapping(
         }
     }
 
-    // Physical rank bindings: all ASICs set to UNSET - let topology mapper assign physical ASICs to hosts
-    // Build asic_id_to_mesh_rank from physical graph mesh IDs to match the physical graph structure
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank = {};
-
-    // Run mapping with logical rank bindings from mesh graph
-    log_info(tt::LogFabric, "Running topology mapping with mesh graph rank bindings...");
-    TopologyMappingResult result = map_multi_mesh_to_physical(
-        logical_graph, physical_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
-
-    return result;
+    // Physical rank bindings are left empty (all ASICs UNSET) so the topology mapper assigns physical
+    // ASICs to hosts itself; TopologyMappingInputs::asic_id_to_mesh_rank defaults to empty.
+    TopologyMappingInputs inputs;
+    inputs.logical_graph = std::move(logical_graph);
+    inputs.physical_graph = std::move(physical_graph);
+    inputs.config = std::move(config);
+    inputs.fabric_node_id_to_mesh_rank = std::move(fabric_node_id_to_mesh_rank);
+    return inputs;
 }
+
+// Single-solution mapping (default): returns the first solution the mapper finds.
+TopologyMappingResult run_topology_mapping(
+    const PhysicalSystemDescriptor& psd,
+    const PhysicalGroupingDescriptor& pgd,
+    const MeshGraphDescriptor& mgd,
+    const std::filesystem::path& mgd_path) {
+    auto inputs = build_topology_mapping_inputs(psd, pgd, mgd, mgd_path);
+    log_info(tt::LogFabric, "Running topology mapping with mesh graph rank bindings...");
+    return map_multi_mesh_to_physical(
+        inputs.logical_graph,
+        inputs.physical_graph,
+        inputs.config,
+        inputs.asic_id_to_mesh_rank,
+        inputs.fabric_node_id_to_mesh_rank);
+}
+
 
 /**
  * @brief Extract rank bindings from topology mapping result with topology-aware splitting.
@@ -410,6 +435,15 @@ struct ProgramArgs {
     std::string mesh_graph_descriptor_path;
     std::optional<std::string> physical_grouping_descriptor_path;
     std::optional<std::string> output_dir;
+    bool all_solutions = false;     // --all-solutions/-a: write one artifact set per solution
+    std::size_t max_solutions = 0;  // --max-solutions/-n: cap (0 = all up to solver cap); implies --all-solutions
+    // --distinct-host-sets/-d: keep only one solution per unique set of HOSTS (post-filter on resolved
+    // hostnames in main(); collapses solutions that occupy the same hosts but wire/assign differently).
+    bool distinct_host_sets = false;
+    // Hidden --allow-shape-permutations: turn OFF the solver's unique_shapes dedup (which is otherwise
+    // always on). When off, the solver may emit multiple automorphic physical footprints (same set of
+    // physical meshes, permuted). Advanced/debug only; not shown in --help.
+    bool allow_shape_permutations = false;
 };
 
 /**
@@ -434,13 +468,31 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         cxxopts::value<std::string>())(
         "o,output-dir",
         "Output directory for rank_bindings.yaml, rankfile, etc. (default: generated/ttrun)",
-        cxxopts::value<std::string>())("h,help", "Print usage information");
+        cxxopts::value<std::string>())(
+        "a,all-solutions",
+        "Enumerate all valid solutions and write one artifact set per solution into per-solution subdirectories "
+        "(plus solutions_index.yaml). Default: write only the first solution flat in --output-dir.")(
+        "n,max-solutions",
+        "Maximum number of solutions to enumerate (0 = all up to the solver safety cap). Implies --all-solutions.",
+        cxxopts::value<std::size_t>())(
+        "d,distinct-host-sets",
+        "Keep only one solution per unique set of HOSTS: after enumeration, solutions that occupy the same hosts "
+        "(even if they wire/assign the meshes differently) are collapsed to the first. Only meaningful with "
+        "--all-solutions.")("h,help", "Print usage information");
+
+    // Hidden/advanced options (in a separate group so they do NOT appear in --help).
+    options.add_options("hidden")(
+        "allow-shape-permutations",
+        "(advanced) Disable the solver's unique_shapes dedup, which is otherwise always on. When set, the solver "
+        "may enumerate multiple automorphic physical footprints (same set of physical meshes, permuted). Rarely "
+        "needed; mainly for debugging enumeration completeness.");
 
     try {
         const auto result = options.parse(argc, argv);
 
         if (result.contains("help") || argc == 1) {
-            std::cout << options.help() << std::endl;
+            // Only the default (unnamed) group; hidden/advanced options are intentionally omitted.
+            std::cout << options.help({""}) << std::endl;
             exit(0);
         }
 
@@ -456,6 +508,23 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         }
         if (result.contains("output-dir")) {
             args.output_dir = result["output-dir"].as<std::string>();
+        }
+        if (result.contains("max-solutions")) {
+            args.max_solutions = result["max-solutions"].as<std::size_t>();
+            args.all_solutions = true;  // --max-solutions implies --all-solutions
+        }
+        if (result.contains("all-solutions")) {
+            args.all_solutions = true;
+        }
+        if (result.contains("distinct-host-sets")) {
+            args.distinct_host_sets = true;
+            if (!args.all_solutions) {
+                log_warning(
+                    tt::LogFabric, "--distinct-host-sets has no effect without --all-solutions; ignoring it.");
+            }
+        }
+        if (result.contains("allow-shape-permutations")) {
+            args.allow_shape_permutations = true;  // hidden: turns OFF the always-on solver unique_shapes dedup
         }
 
         return args;
@@ -509,57 +578,22 @@ int main(int argc, char** argv) {
         // Get current rank - only rank 0 performs topology mapping and file generation
         auto current_rank = *context->rank();
         if (current_rank == 0) {
-            // Stage: Run topology mapping
-            log_info(tt::LogFabric, "Stage: Running topology mapping...");
-            TopologyMappingResult mapping_result = run_topology_mapping(psd, pgd, mgd, mgd_path);
-
-            if (!mapping_result.success) {
-                log_error(tt::LogFabric, "Topology mapping failed: {}", mapping_result.error_message);
-                return 1;
-            }
-            log_info(tt::LogFabric, "Topology mapping complete");
-
-            // Stage: Extract rank bindings
-            log_info(tt::LogFabric, "Stage: Extracting rank bindings...");
-            // Create MeshGraph for getting host ranks
-            auto& context = tt::tt_metal::MetalContext::instance();
-            const auto& cluster = context.get_cluster();
+            // MeshGraph for host-rank lookups during rank-binding extraction.
+            auto& metal_context = tt::tt_metal::MetalContext::instance();
+            const auto& cluster = metal_context.get_cluster();
             MeshGraph mesh_graph(cluster, mgd_path.string());
-            std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(psd, mapping_result, mesh_graph);
-            log_info(tt::LogFabric, "Extracted {} rank binding(s)", rank_bindings.size());
 
-            // Stage: Write YAML file
-            log_info(tt::LogFabric, "Stage: Writing rank bindings to YAML...");
-
-            std::filesystem::path output_dir =
+            const std::filesystem::path output_dir =
                 args.output_dir.has_value() ? std::filesystem::path(*args.output_dir) : "generated/ttrun";
             std::filesystem::create_directories(output_dir);
 
-            std::filesystem::path output_file = output_dir / "rank_bindings.yaml";
-            write_rank_bindings_yaml(rank_bindings, args.mesh_graph_descriptor_path, output_file.string());
-            log_info(tt::LogFabric, "Successfully wrote: {}", output_file.string());
-
-            std::filesystem::path rankfile_path = output_dir / "rankfile";
             const bool mock_cluster_rankfile = !mpi_rank_to_cluster_desc_path.empty();
-            write_rankfile(rank_bindings, rankfile_path.string(), mock_cluster_rankfile);
-            log_info(tt::LogFabric, "Successfully wrote: {}", rankfile_path.string());
 
-            if (!mpi_rank_to_cluster_desc_path.empty()) {
-                std::filesystem::path phase2_mock_path = output_dir / "phase2_mock_mapping.yaml";
-                write_phase2_mock_mapping_yaml(rank_bindings, mpi_rank_to_cluster_desc_path, phase2_mock_path.string());
-                log_info(
-                    tt::LogFabric,
-                    "Successfully wrote: {} (cluster descriptors used during allocation)",
-                    phase2_mock_path.string());
-            }
-
-            // Flush all output files to storage before signaling peers via barrier.
-            // std::ofstream::close() only drains the C++ stream buffer to the OS page cache.
-            // Without fsync(), NFS peers (and local readers) may see stale or absent files
-            // even after generate_rank_bindings exits.  We fsync each file and its parent
-            // directory so that both data and directory entries are durable before we call
-            // barrier() below — making the barrier the authoritative "writes are visible"
-            // signal and allowing ttrun.py to skip any blind sleep after this subprocess.
+            // Flush a file and its parent directory to storage before signaling peers via barrier.
+            // std::ofstream::close() only drains the C++ stream buffer to the OS page cache; without fsync(),
+            // NFS peers (and local readers) may see stale or absent files even after this process exits. We
+            // fsync each file and its parent directory so both data and directory entries are durable before
+            // the barrier() below — making the barrier the authoritative "writes are visible" signal.
             auto fsync_path = [](const std::filesystem::path& p) noexcept {
                 int fd = ::open(p.c_str(), O_RDONLY);
                 if (fd >= 0) {
@@ -572,13 +606,166 @@ int main(int argc, char** argv) {
                     ::close(dir_fd);
                 }
             };
-            fsync_path(output_file);
-            fsync_path(rankfile_path);
-            if (!mpi_rank_to_cluster_desc_path.empty()) {
-                fsync_path(output_dir / "phase2_mock_mapping.yaml");
-            }
-            log_info(tt::LogFabric, "Fsynced output files; barrier will signal peers that writes are visible.");
 
+            // Write one solution's artifacts (rank_bindings.yaml, rankfile, optional phase2 mock mapping) into `dir`.
+            auto write_solution_artifacts =
+                [&](const std::vector<RankBindingConfig>& rank_bindings, const std::filesystem::path& dir) {
+                    std::filesystem::create_directories(dir);
+                    const std::filesystem::path rank_bindings_file = dir / "rank_bindings.yaml";
+                    write_rank_bindings_yaml(
+                        rank_bindings, args.mesh_graph_descriptor_path, rank_bindings_file.string());
+                    const std::filesystem::path rankfile_path = dir / "rankfile";
+                    write_rankfile(rank_bindings, rankfile_path.string(), mock_cluster_rankfile);
+                    fsync_path(rank_bindings_file);
+                    fsync_path(rankfile_path);
+                    if (!mpi_rank_to_cluster_desc_path.empty()) {
+                        const std::filesystem::path phase2_mock_path = dir / "phase2_mock_mapping.yaml";
+                        write_phase2_mock_mapping_yaml(
+                            rank_bindings, mpi_rank_to_cluster_desc_path, phase2_mock_path.string());
+                        fsync_path(phase2_mock_path);
+                    }
+                    log_info(tt::LogFabric, "Successfully wrote solution artifacts to: {}", dir.string());
+                };
+
+            if (!args.all_solutions) {
+                // Default: single solution written flat in output_dir (unchanged behavior).
+                log_info(tt::LogFabric, "Stage: Running topology mapping...");
+                TopologyMappingResult mapping_result = run_topology_mapping(psd, pgd, mgd, mgd_path);
+                if (!mapping_result.success) {
+                    log_error(tt::LogFabric, "Topology mapping failed: {}", mapping_result.error_message);
+                    return 1;
+                }
+                log_info(tt::LogFabric, "Topology mapping complete");
+                std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(psd, mapping_result, mesh_graph);
+                log_info(tt::LogFabric, "Extracted {} rank binding(s)", rank_bindings.size());
+                write_solution_artifacts(rank_bindings, output_dir);
+            } else {
+                // --all-solutions (STREAMING): write each solution's artifact set into a content-hash subdirectory
+                // the instant it is found, and rewrite the top-level solutions_index.yaml after every solution.
+                // Enumeration runs on one persistent incremental SAT session (same SAT path + ring/snake/reflection
+                // shortcuts + minimal-host prime as the single solve; one warm solve per solution). Benefits: a
+                // caller can pick up / test solution k while k+1 is still being searched, and a crash or timeout
+                // leaves a valid index for every solution already written (no more "all-or-nothing at the end").
+                log_info(tt::LogFabric, "Stage: Enumerating all topology mapping solutions (streaming)...");
+                // Solver-level unique_shapes dedup is ALWAYS ON (collapses automorphic physical footprints);
+                // only the hidden --allow-shape-permutations turns it off.
+                const bool unique_shapes = !args.allow_shape_permutations;
+                const std::string enumeration_mode = args.distinct_host_sets ? "distinct-host-sets" : "all";
+                log_info(
+                    tt::LogFabric,
+                    "Enumerating topology mapping solutions (max_solutions={}, unique_shapes={}, streaming)...",
+                    args.max_solutions,
+                    unique_shapes);
+
+                auto inputs = build_topology_mapping_inputs(psd, pgd, mgd, mgd_path);
+                std::vector<SolutionIndexEntry> index_entries;
+                // --distinct-host-sets: dedup written solutions by their resolved set of HOSTS. This is coarser
+                // than the solver's unique_shapes (which dedups by physical-mesh footprint): for sub-host meshes,
+                // several shape-distinct solutions can share one host set, and this keeps only the first.
+                std::set<std::set<std::string>> seen_host_sets;
+                const std::filesystem::path index_path = output_dir / "solutions_index.yaml";
+
+                // Pull-based enumeration: ask the enumerator for one solution at a time and write it immediately.
+                // (next() == std::nullopt => exhausted.) A driver that interleaves testing could run a test on
+                // solution k here before requesting k+1; here we simply write each as it arrives.
+                MultiMeshSolutionEnumerator enumerator(
+                    inputs.logical_graph,
+                    inputs.physical_graph,
+                    inputs.config,
+                    unique_shapes,
+                    inputs.asic_id_to_mesh_rank,
+                    inputs.fabric_node_id_to_mesh_rank);
+
+                std::size_t emitted = 0;
+                while (args.max_solutions == 0 || emitted < args.max_solutions) {
+                    std::optional<TopologyMappingResult> solution = enumerator.next();
+                    if (!solution.has_value()) {
+                        break;  // enumeration exhausted (genuine UNSAT -- no budget give-up)
+                    }
+                    ++emitted;
+
+                    std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(psd, *solution, mesh_graph);
+
+                    const std::set<std::string> hosts = solution_host_set(rank_bindings);
+                    if (args.distinct_host_sets && !seen_host_sets.insert(hosts).second) {
+                        log_info(
+                            tt::LogFabric,
+                            "--distinct-host-sets: skipping solution on an already-seen host set ({} hosts)",
+                            hosts.size());
+                        continue;
+                    }
+
+                    const std::string solution_id = compute_solution_signature_hash(rank_bindings);
+                    const std::filesystem::path solution_dir = output_dir / solution_id;
+
+                    write_solution_artifacts(rank_bindings, solution_dir);
+
+                    // Full canonical signature for short-hash collision disambiguation.
+                    const std::filesystem::path key_path = solution_dir / ".solution_key";
+                    {
+                        std::ofstream key_file(key_path);
+                        key_file << compute_solution_signature_string(rank_bindings) << std::endl;
+                    }
+                    const std::filesystem::path meta_path = solution_dir / "solution_meta.yaml";
+                    write_solution_meta_yaml(
+                        rank_bindings, solution_id, args.mesh_graph_descriptor_path, meta_path.string());
+                    fsync_path(key_path);
+                    fsync_path(meta_path);
+
+                    SolutionIndexEntry entry;
+                    entry.id = solution_id;
+                    entry.num_ranks = static_cast<int>(rank_bindings.size());
+                    entry.num_hosts = static_cast<int>(hosts.size());
+                    entry.host_set.assign(hosts.begin(), hosts.end());
+                    index_entries.push_back(std::move(entry));
+
+                    // Rewrite the index after every solution so the on-disk index always reflects everything written
+                    // so far (crash/timeout resilient). The truncated flag is finalized after enumeration ends.
+                    write_solutions_index_yaml(
+                        args.mesh_graph_descriptor_path,
+                        enumeration_mode,
+                        args.max_solutions,
+                        /*truncated=*/false,
+                        index_entries,
+                        index_path.string());
+                    fsync_path(index_path);
+                    log_info(
+                        tt::LogFabric,
+                        "Wrote solution {} ({} hosts) [{} written so far]",
+                        solution_id,
+                        hosts.size(),
+                        index_entries.size());
+                }
+                log_info(
+                    tt::LogFabric,
+                    "Enumerated {} solution(s) ({} written after host-set dedup)",
+                    emitted,
+                    index_entries.size());
+
+                // truncated == true when a positive cap bounded the enumeration (more solutions may exist).
+                const bool truncated = args.max_solutions != 0 && emitted >= args.max_solutions;
+                write_solutions_index_yaml(
+                    args.mesh_graph_descriptor_path,
+                    enumeration_mode,
+                    args.max_solutions,
+                    truncated,
+                    index_entries,
+                    index_path.string());
+                fsync_path(index_path);
+                log_info(
+                    tt::LogFabric,
+                    "Wrote solutions index: {} ({} solution(s), truncated={})",
+                    index_path.string(),
+                    index_entries.size(),
+                    truncated);
+
+                if (index_entries.empty()) {
+                    log_error(tt::LogFabric, "No valid topology solutions found");
+                    return 1;
+                }
+            }
+
+            log_info(tt::LogFabric, "Fsynced output files; barrier will signal peers that writes are visible.");
             log_info(tt::LogFabric, "Rank bindings generation complete!");
         } else {
             log_info(

@@ -5950,4 +5950,205 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     }
 }
 
+// ── Minimal-host objective: same-rank-group occupancy (set_max / set_minimize) ──
+
+namespace {
+AdjacencyGraph<TestTargetNode> make_disconnected_target_graph(size_t n) {
+    typename AdjacencyGraph<TestTargetNode>::AdjacencyMap m;
+    for (size_t i = 0; i < n; ++i) {
+        m[static_cast<TestTargetNode>(i)] = {};
+    }
+    return AdjacencyGraph<TestTargetNode>(m);
+}
+AdjacencyGraph<TestGlobalNode> make_disconnected_global_graph(size_t n) {
+    typename AdjacencyGraph<TestGlobalNode>::AdjacencyMap m;
+    for (size_t i = 0; i < n; ++i) {
+        m[static_cast<TestGlobalNode>(i)] = {};
+    }
+    return AdjacencyGraph<TestGlobalNode>(m);
+}
+std::vector<std::set<TestGlobalNode>> make_host_groups(size_t n_groups, size_t group_size) {
+    std::vector<std::set<TestGlobalNode>> groups(n_groups);
+    for (size_t g = 0; g < n_groups; ++g) {
+        for (size_t i = 0; i < group_size; ++i) {
+            groups[g].insert(static_cast<TestGlobalNode>(g + i * n_groups));
+        }
+    }
+    return groups;
+}
+size_t count_occupied_groups(
+    const std::map<TestTargetNode, TestGlobalNode>& mapping,
+    const std::vector<std::set<TestGlobalNode>>& groups) {
+    std::set<size_t> occupied;
+    for (const auto& [t, g] : mapping) {
+        for (size_t i = 0; i < groups.size(); ++i) {
+            if (groups[i].count(g) != 0) {
+                occupied.insert(i);
+                break;
+            }
+        }
+    }
+    return occupied.size();
+}
+}  // namespace
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_HardCapRespected) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4, kCap = 2;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    (void)constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups);
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    // Both backends must honor the hard cap: SAT via the occupancy at-most-k encoding, DFS via the candidate
+    // prune in dfs_recursive.
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(result.success) << name << ": " << result.error_message;
+        ASSERT_EQ(result.target_to_global.size(), kNumTargets) << name;
+        EXPECT_LE(count_occupied_groups(result.target_to_global, host_groups), kCap)
+            << name << ": hard cap set_max_same_rank_groups_used(" << kCap << ") must confine placement to <= "
+            << kCap << " host groups";
+    }
+}
+
+// Enumeration parity: every solution returned by the MULTI-solution path (solve_topology_mapping_n) must also
+// respect the hard host-group cap, for BOTH engines. This covers the DFS enumeration lambda (dfs_enum) cap prune,
+// which is a separate code path from the single-solve dfs_recursive prune exercised above.
+TEST_F(TopologySolverTest, SolveTopologyMappingN_MaxSameRankGroups_HardCapRespected_AllSolutions) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4, kCap = 2;
+    constexpr size_t kMaxSolutions = 64;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    (void)constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups);
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto results = solve_topology_mapping_n(
+            target_graph,
+            global_graph,
+            constraints,
+            /*max_solutions=*/kMaxSolutions,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            /*unique_shapes=*/true);
+        ASSERT_FALSE(results.empty()) << name << ": expected at least one capped enumeration solution";
+        for (const auto& result : results) {
+            ASSERT_TRUE(result.success) << name << ": " << result.error_message;
+            ASSERT_EQ(result.target_to_global.size(), kNumTargets) << name;
+            EXPECT_LE(count_occupied_groups(result.target_to_global, host_groups), kCap)
+                << name << ": every enumerated solution must respect set_max_same_rank_groups_used(" << kCap << ")";
+        }
+    }
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_MinimizeSameRankGroups_ReducesOccupiedGroups) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4;
+    constexpr size_t kMinGroups = (kNumTargets + kGroupSize - 1) / kGroupSize;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> uncapped;
+    (void)uncapped.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups);
+    auto baseline = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        uncapped,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(baseline.success) << baseline.error_message;
+    EXPECT_GT(count_occupied_groups(baseline.target_to_global, host_groups), kMinGroups)
+        << "without minimize, placement should spread across more than the capacity lower bound";
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    (void)constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups);
+    constraints.set_minimize_same_rank_groups_used(true);
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(result.success) << result.error_message;
+    ASSERT_EQ(result.target_to_global.size(), kNumTargets);
+    EXPECT_LE(count_occupied_groups(result.target_to_global, host_groups), kMinGroups);
+}
+
+// ── Preferred (soft) constraints on the multi + incremental paths ──
+//
+// KNOWN GAP (tests DISABLED). Preferred constraints are soft and, when jointly satisfiable, the best/first
+// solution *should* satisfy them. The SINGLE solve does (it appends a preferred at-least-k floor), but the SAT
+// MULTI (solve_topology_mapping_n) and INCREMENTAL (EnumerationSession) paths currently DO NOT -- they return
+// the first feasible model and satisfy 0 preferred on the fixture below (verified: preferred_satisfied == 0,
+// preferred_total == 4). The preferred at-least-k floor was intentionally excluded from enumeration because it
+// roughly doubled enumeration time; minimal-host packing there is instead enforced by the HARD occupancy cap
+// (set_max_same_rank_groups_used), which the *_MaxSameRankGroups_* test above confirms on the single-solve path.
+// Enable these two tests once preferred biasing is added to the enumeration/session path.
+TEST_F(TopologySolverTest, DISABLED_SolveTopologyMappingN_PreferredConstraints_BestSolutionSatisfiesPreferred) {
+    constexpr size_t kNumTargets = 4, kNumGlobals = 8;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGlobals);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    for (size_t i = 0; i < kNumTargets; ++i) {
+        constraints.add_preferred_constraint(
+            static_cast<TestTargetNode>(i), static_cast<TestGlobalNode>(kNumTargets + i));
+    }
+
+    auto results = solve_topology_mapping_n(
+        target_graph,
+        global_graph,
+        constraints,
+        /*max_solutions=*/3,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat,
+        /*unique_shapes=*/false);
+    ASSERT_FALSE(results.empty()) << "multi-solve should return at least one solution";
+    EXPECT_EQ(results.front().constraint_stats.preferred_total, kNumTargets);
+    EXPECT_EQ(results.front().constraint_stats.preferred_satisfied, kNumTargets)
+        << "best enumerated solution should satisfy all jointly-feasible preferred constraints";
+}
+
+TEST_F(TopologySolverTest, DISABLED_EnumerationSession_PreferredConstraints_FirstSolutionSatisfiesPreferred) {
+    constexpr size_t kNumTargets = 4, kNumGlobals = 8;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGlobals);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    for (size_t i = 0; i < kNumTargets; ++i) {
+        constraints.add_preferred_constraint(
+            static_cast<TestTargetNode>(i), static_cast<TestGlobalNode>(kNumTargets + i));
+    }
+
+    TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> session;
+    std::vector<std::map<TestTargetNode, TestGlobalNode>> excluded;
+    auto first = session.next(
+        target_graph,
+        global_graph,
+        constraints,
+        excluded,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat,
+        /*unique_shapes=*/false);
+    ASSERT_TRUE(first.success) << "incremental session first next() should succeed";
+    EXPECT_EQ(first.constraint_stats.preferred_total, kNumTargets);
+    EXPECT_EQ(first.constraint_stats.preferred_satisfied, kNumTargets)
+        << "incremental session's first solution should satisfy all jointly-feasible preferred constraints";
+}
+
 }  // namespace tt::tt_fabric

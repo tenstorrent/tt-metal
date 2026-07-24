@@ -5,9 +5,12 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -151,5 +154,153 @@ inline void write_rankfile(
         out_file << "rank " << binding.rank << "=" << hostname << " slot=" << binding.slot << "\n";
     }
 
+    out_file.close();
+}
+
+// -----------------------------------------------------------------------------
+// Multi-solution support (see README_generate_rank_bindings.md)
+// -----------------------------------------------------------------------------
+
+// Sorted set of distinct hostnames a solution occupies. Hostnames are used verbatim (no cleaning); the set
+// deduplicates, so multiple ranks that share a host collapse to a single entry.
+inline std::set<std::string> solution_host_set(const std::vector<RankBindingConfig>& rank_bindings) {
+    std::set<std::string> hosts;
+    for (const auto& b : rank_bindings) {
+        hosts.insert(b.hostname);
+    }
+    return hosts;
+}
+
+// Join hosts as a comma-separated list with NO spaces (e.g. "hostA,hostB,hostC").
+inline std::string host_set_csv(const std::vector<std::string>& hosts) {
+    std::string csv;
+    for (const auto& h : hosts) {
+        if (!csv.empty()) {
+            csv += ',';
+        }
+        csv += h;
+    }
+    return csv;
+}
+
+// Canonical, order-independent signature of a solution. Captures both the set of hosts used AND the
+// assignment (per (mesh_id, mesh_host_rank): which host + which visible devices), so two solutions on the
+// same hosts but different connectivity/mapping produce different signatures. Written verbatim to
+// `.solution_key` so short-hash collisions can be disambiguated by comparing the full string.
+inline std::string compute_solution_signature_string(const std::vector<RankBindingConfig>& rank_bindings) {
+    std::set<std::string> assignment;  // sorted -> canonical regardless of input order
+    for (const auto& b : rank_bindings) {
+        std::string visible_devices;
+        auto it = b.env_overrides.find("TT_VISIBLE_DEVICES");
+        if (it != b.env_overrides.end()) {
+            visible_devices = it->second;
+        }
+        assignment.insert(
+            "m" + std::to_string(b.mesh_id) + "r" + std::to_string(b.mesh_host_rank) + "@" + b.hostname + "[" +
+            visible_devices + "]");
+    }
+
+    std::string signature = "hosts:";
+    for (const auto& host : solution_host_set(rank_bindings)) {
+        signature += host;
+        signature += ',';
+    }
+    signature += "|map:";
+    for (const auto& entry : assignment) {
+        signature += entry;
+        signature += ';';
+    }
+    return signature;
+}
+
+// Stable 64-bit FNV-1a content hash of the canonical signature, rendered as 16 lowercase hex chars.
+// Deterministic across runs/platforms (unlike std::hash), so the same solution always names the same
+// directory -- enabling caching and dedupe. Not cryptographic; `.solution_key` holds the full signature
+// for exact collision disambiguation.
+inline std::string compute_solution_signature_hash(const std::vector<RankBindingConfig>& rank_bindings) {
+    const std::string signature = compute_solution_signature_string(rank_bindings);
+    std::uint64_t hash = 1469598103934665603ULL;  // FNV-1a 64-bit offset basis
+    for (unsigned char c : signature) {
+        hash ^= static_cast<std::uint64_t>(c);
+        hash *= 1099511628211ULL;  // FNV-1a 64-bit prime
+    }
+    char buf[17];
+    std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(hash));
+    return std::string(buf);
+}
+
+// Per-solution metadata file written inside each solution subdirectory.
+inline void write_solution_meta_yaml(
+    const std::vector<RankBindingConfig>& rank_bindings,
+    const std::string& solution_id,
+    const std::string& mesh_graph_desc_path,
+    const std::string& output_file) {
+    const auto hosts = solution_host_set(rank_bindings);
+
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "solution_id" << YAML::Value << solution_id;
+    emitter << YAML::Key << "mesh_graph_desc_path" << YAML::Value << mesh_graph_desc_path;
+    emitter << YAML::Key << "num_ranks" << YAML::Value << static_cast<int>(rank_bindings.size());
+    emitter << YAML::Key << "num_hosts" << YAML::Value << static_cast<int>(hosts.size());
+    // Comma-separated host list, no spaces (e.g. "hostA,hostB").
+    emitter << YAML::Key << "host_set" << YAML::Value
+            << host_set_csv(std::vector<std::string>(hosts.begin(), hosts.end()));
+    emitter << YAML::EndMap;
+
+    std::ofstream out_file(output_file);
+    if (!out_file.is_open()) {
+        throw std::runtime_error("Failed to open solution meta file: " + output_file);
+    }
+    out_file << emitter.c_str() << std::endl;
+    out_file.close();
+}
+
+// One entry in solutions_index.yaml.
+struct SolutionIndexEntry {
+    std::string id;  // == solution subdirectory name (the content hash)
+    int num_ranks = 0;
+    int num_hosts = 0;
+    std::vector<std::string> host_set;
+};
+
+// Top-level index summarizing every enumerated solution, written at the base output directory.
+inline void write_solutions_index_yaml(
+    const std::string& mesh_graph_desc_path,
+    const std::string& enumeration_mode,  // "all" or "distinct-host-sets"
+    std::size_t max_solutions,
+    bool truncated,
+    const std::vector<SolutionIndexEntry>& entries,
+    const std::string& output_file) {
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "mesh_graph_desc_path" << YAML::Value << mesh_graph_desc_path;
+    emitter << YAML::Key << "enumeration" << YAML::Value << YAML::BeginMap;
+    emitter << YAML::Key << "mode" << YAML::Value << enumeration_mode;
+    emitter << YAML::Key << "max_solutions" << YAML::Value << static_cast<int>(max_solutions);
+    emitter << YAML::Key << "found" << YAML::Value << static_cast<int>(entries.size());
+    emitter << YAML::Key << "truncated" << YAML::Value << truncated;
+    emitter << YAML::EndMap;
+    emitter << YAML::Key << "solutions" << YAML::Value << YAML::BeginSeq;
+    for (const auto& entry : entries) {
+        emitter << YAML::BeginMap;
+        emitter << YAML::Key << "id" << YAML::Value << entry.id;
+        emitter << YAML::Key << "dir" << YAML::Value << entry.id;
+        emitter << YAML::Key << "num_hosts" << YAML::Value << entry.num_hosts;
+        emitter << YAML::Key << "num_ranks" << YAML::Value << entry.num_ranks;
+        // Comma-separated host list, no spaces (e.g. "hostA,hostB").
+        emitter << YAML::Key << "host_set" << YAML::Value << host_set_csv(entry.host_set);
+        emitter << YAML::Key << "rank_bindings" << YAML::Value << (entry.id + "/rank_bindings.yaml");
+        emitter << YAML::Key << "rankfile" << YAML::Value << (entry.id + "/rankfile");
+        emitter << YAML::EndMap;
+    }
+    emitter << YAML::EndSeq;
+    emitter << YAML::EndMap;
+
+    std::ofstream out_file(output_file);
+    if (!out_file.is_open()) {
+        throw std::runtime_error("Failed to open solutions index file: " + output_file);
+    }
+    out_file << emitter.c_str() << std::endl;
     out_file.close();
 }
