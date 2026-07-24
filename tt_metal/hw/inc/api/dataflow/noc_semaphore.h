@@ -55,6 +55,7 @@ public:
      */
     void up(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
+        invalidate_l1_cache();
         *sem_addr += value;
     }
 
