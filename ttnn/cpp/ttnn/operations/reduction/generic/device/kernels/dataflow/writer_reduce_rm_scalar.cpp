@@ -104,26 +104,27 @@ void reduce_rm_writer() {
         constexpr uint32_t wt_tiles_per_chunk =
             get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 3 : 0);
         constexpr uint32_t face_w = tt::constants::TILE_WIDTH / 2;
-        const uint32_t num_output_tiles_local = rt_count;
-        const uint32_t start_output_tile_id = rt_start;
+        // Work is handed out in width-chunk "units" (see reader_unary_reduce_rm.cpp). rt_start /
+        // rt_count are in unit space. Compute always emits a full wt_tiles_per_chunk-wide chunk per
+        // unit (padded columns reduce to identity); the writer pops the whole chunk but only scatters
+        // the wt_valid real columns of that unit's (n,c) page.
+        constexpr uint32_t units_per_nc = (Wt + wt_tiles_per_chunk - 1) / wt_tiles_per_chunk;
+        const uint32_t num_units_local = rt_count;
+        const uint32_t start_unit = rt_start;
 
-        uint32_t outputs_remaining = num_output_tiles_local;
-        uint32_t current_nc = start_output_tile_id / Wt;
-        uint32_t wt_in_nc = start_output_tile_id % Wt;
-
-        while (outputs_remaining > 0) {
-            // Pick the largest chunk that stays within one NC and within remaining work.
-            uint32_t wt_in_chunk = wt_tiles_per_chunk;
-            if (wt_in_chunk > Wt - wt_in_nc) {
-                wt_in_chunk = Wt - wt_in_nc;
+        for (uint32_t unit = 0; unit < num_units_local; ++unit) {
+            const uint32_t global_unit = start_unit + unit;
+            const uint32_t current_nc = global_unit / units_per_nc;
+            const uint32_t wchunk = global_unit % units_per_nc;
+            const uint32_t wt_in_nc = wchunk * wt_tiles_per_chunk;
+            uint32_t wt_valid = wt_tiles_per_chunk;
+            if (wt_valid > Wt - wt_in_nc) {
+                wt_valid = Wt - wt_in_nc;
             }
-            if (wt_in_chunk > outputs_remaining) {
-                wt_in_chunk = outputs_remaining;
-            }
 
-            cb_tile.wait_front(wt_in_chunk);
+            cb_tile.wait_front(wt_tiles_per_chunk);
 
-            for (uint32_t wt = 0; wt < wt_in_chunk; ++wt) {
+            for (uint32_t wt = 0; wt < wt_valid; ++wt) {
                 const uint32_t w_tile_col = wt_in_nc + wt;
                 const uint32_t w_base_col = w_tile_col * tt::constants::TILE_WIDTH;
                 // Clamp the last W tile to W_logical so we don't write into padding.
@@ -149,14 +150,7 @@ void reduce_rm_writer() {
             }
 
             noc.async_write_barrier();
-            cb_tile.pop_front(wt_in_chunk);
-
-            wt_in_nc += wt_in_chunk;
-            outputs_remaining -= wt_in_chunk;
-            if (wt_in_nc == Wt) {
-                wt_in_nc = 0;
-                ++current_nc;
-            }
+            cb_tile.pop_front(wt_tiles_per_chunk);
         }
     }
 }
