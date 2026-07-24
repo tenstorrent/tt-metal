@@ -24,7 +24,7 @@
 
 # ── Gemma 3 ────────────────────────────────────────────────────────
 
-- name: "[WH-T3K] Gemma3-27B"
+- name: "Gemma3-27B"
   model: google/gemma-3-27b-it
   server-timeout: 45
   benchmark-timeout: 5
@@ -42,7 +42,7 @@
   co-owner-2-id: U08BH66EXAL # Radoica Draskic
   team: models
 
-- name: "[WH-GLX] Gemma3-27B DP=4"
+- name: "Gemma3-27B DP=4"
   model: google/gemma-3-27b-it
   server-timeout: 45
   benchmark-timeout: 5
@@ -63,7 +63,7 @@
 
 # ── Gemma 4 ────────────────────────────────────────────────────────
 
-- name: "[WH-N150] Gemma4-E2B"
+- name: "Gemma4-E2B"
   model: google/gemma-4-E2B-it
   server-timeout: 30
   benchmark-timeout: 12
@@ -79,7 +79,7 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
-- name: "[BH-QB-2] Gemma4-12B"
+- name: "Gemma4-12B"
   model: google/gemma-4-12B-it
   coherence-test: true
   server-timeout: 20
@@ -96,7 +96,7 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
-- name: "[BH-QB-2] Gemma4-26B-A4B"
+- name: "Gemma4-26B-A4B"
   model: google/gemma-4-26B-A4B-it
   coherence-test: true
   server-timeout: 30
@@ -117,7 +117,7 @@
 # decode on WH-T3K only; the same serving config passes on [BH-QB-2] Gemma4-31B.
 # Not a serving/KV-config issue — a tt-metal dispatch-layer hang. Kept enabled to
 # track. https://github.com/tenstorrent/tt-metal/issues/49494
-- name: "[WH-T3K] Gemma4-31B"
+- name: "Gemma4-31B"
   model: google/gemma-4-31B-it
   server-timeout: 45
   benchmark-timeout: 5
@@ -133,7 +133,7 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
-- name: "[BH-QB-2] Gemma4-31B"
+- name: "Gemma4-31B"
   model: google/gemma-4-31B-it
   server-timeout: 20
   benchmark-timeout: 5
@@ -151,7 +151,7 @@
 
 # ── Qwen 3.6 ───────────────────────────────────────────────────────
 
-- name: "[BH-QB-2] Qwen3.6-27B (multimodal B=1)"
+- name: "Qwen3.6-27B (multimodal B=1)"
   model: Qwen/Qwen3.6-27B
   coherence-test: true
   server-timeout: 30
@@ -169,7 +169,7 @@
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
 
-- name: "[BH-QB-2] Qwen3.6-27B (batch=8)"
+- name: "Qwen3.6-27B (batch=8)"
   model: Qwen/Qwen3.6-27B
   coherence-test: true
   server-timeout: 35
@@ -189,7 +189,7 @@
 
 # ── GPT-OSS ────────────────────────────────────────────────────────
 
-- name: "[WH-GLX] GPT-OSS-120B (low-latency)"
+- name: "GPT-OSS-120B (low-latency)"
   model: openai/gpt-oss-120b
   server-timeout: 35
   benchmark-timeout: 15
@@ -209,7 +209,7 @@
   co-owner-2-id: U06F3ER8X9A # Stuti Raizada
   team: models
 
-- name: "[WH-GLX] GPT-OSS-120B (high-throughput)"
+- name: "GPT-OSS-120B (high-throughput)"
   model: openai/gpt-oss-120b
   server-timeout: 35
   benchmark-timeout: 10
@@ -234,7 +234,7 @@
 
 # ── Llama ──────────────────────────────────────────────────────────
 
-- name: "[WH-T3K] Llama-3.1-8B-Instruct with sampling-tests"
+- name: "Llama-3.1-8B-Instruct with sampling-tests"
   model: meta-llama/Llama-3.1-8B-Instruct
   server-timeout: 15
   benchmark-timeout: 5
@@ -255,7 +255,7 @@
   co-owner-2-id: U08CEGF78ET # Salar Hosseini Khorasgani
   team: models
 
-- name: "[WH-T3K] Llama-3.1-8B-Instruct (prefix caching)"
+- name: "Llama-3.1-8B-Instruct (prefix caching)"
   model: meta-llama/Llama-3.1-8B-Instruct
   server-timeout: 10
   benchmark-timeout: 5
@@ -274,7 +274,7 @@
   co-owner-2-id: U08CEGF78ET # Salar Hosseini Khorasgani
   team: models
 
-- name: "[BH-QB-2] Llama-3.1-8B-Instruct"
+- name: "Llama-3.1-8B-Instruct"
   model: meta-llama/Llama-3.1-8B-Instruct
   server-timeout: 10
   benchmark-timeout: 10
@@ -292,7 +292,7 @@
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
 
-- name: "[BH-LB] Llama-3.1-8B-Instruct with sampling-tests"
+- name: "Llama-3.1-8B-Instruct with sampling-tests"
   model: meta-llama/Llama-3.1-8B-Instruct
   server-timeout: 35
   benchmark-timeout: 10
@@ -310,7 +310,7 @@
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
 
-- name: "[WH-GLX] Llama-3.1-8B-Instruct DP=4"
+- name: "Llama-3.1-8B-Instruct DP=4"
   model: meta-llama/Llama-3.1-8B-Instruct
   server-timeout: 20
   benchmark-timeout: 5
@@ -329,7 +329,7 @@
   co-owner-2-id: U08BH66EXAL # Radoica Draskic
   team: models
 
-- name: "[WH-GLX] Llama-3.3-70B-Instruct device with sampling-tests (prefix caching)"
+- name: "Llama-3.3-70B-Instruct device with sampling-tests (prefix caching)"
   model: meta-llama/Llama-3.3-70B-Instruct
   server-timeout: 35
   benchmark-timeout: 10
@@ -351,7 +351,7 @@
 
 # ── Qwen 3 ─────────────────────────────────────────────────────────
 
-- name: "[WH-GLX] Qwen3-32B device with sampling-tests"
+- name: "Qwen3-32B device with sampling-tests"
   model: Qwen/Qwen3-32B
   server-timeout: 35
   benchmark-timeout: 10
@@ -371,7 +371,7 @@
 
 # ── Qwen VL ────────────────────────────────────────────────────────
 
-- name: "[WH-T3K] Qwen2.5-VL-72B-Instruct"
+- name: "Qwen2.5-VL-72B-Instruct"
   model: Qwen/Qwen2.5-VL-72B-Instruct
   server-timeout: 12
   benchmark-timeout: 10
@@ -389,7 +389,7 @@
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
-- name: "[WH-T3K] Qwen3-VL-32B-Instruct"
+- name: "Qwen3-VL-32B-Instruct"
   model: Qwen/Qwen3-VL-32B-Instruct
   coherence-test: false
   server-timeout: 10
@@ -410,7 +410,7 @@
 
 # ── Infra / overhead ───────────────────────────────────────────────
 
-- name: "[WH-GLX] NoOp test model (vLLM overhead)"
+- name: "NoOp test model (vLLM overhead)"
   model: models/vllm_test_utils/no_op_test
   server-timeout: 2
   benchmark-timeout: 2
@@ -433,7 +433,7 @@
 # causes EngineCore init failure on WH-T3K. Re-enable once hybrid KV cache is
 # enabled. https://github.com/tenstorrent/tt-metal/issues/49257
 #
-# - name: "[WH-T3K] Gemma4-26B-A4B"
+# - name: "Gemma4-26B-A4B"
 #   model: google/gemma-4-26B-A4B-it
 #   coherence-test: true
 #   server-timeout: 30
@@ -454,7 +454,7 @@
 # reduce-scatter async tests. https://github.com/tenstorrent/vllm/issues/416
 # Originally disabled in https://github.com/tenstorrent/tt-metal/pull/39088
 #
-# - name: "[WH-T3K] Multi-process reduce scatter test model"
+# - name: "Multi-process reduce scatter test model"
 #   model: models/vllm_test_utils/t3000_multiproc_test
 #   server-timeout: 4
 #   benchmark-timeout: 4
