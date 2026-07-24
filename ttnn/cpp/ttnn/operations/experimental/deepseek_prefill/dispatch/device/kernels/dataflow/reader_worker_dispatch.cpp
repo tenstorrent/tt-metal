@@ -359,20 +359,29 @@ void kernel_main() {
             // dispatch core (after the ownership / mapping / capacity filters below).
             for (uint32_t k = 0; k < num_experts_per_tok; k++) {
                 int32_t routed_expert = indices_t[k];
-                // Skip experts not owned by this dispatch core (low bits of the expert id
-                // select the dispatch core), and experts the table maps nowhere (-1).
-                if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
-                    continue;
-                }
+                // Experts the table maps nowhere (-1) are dropped by every dispatch core.
                 int32_t expert_chip_og = expert_dispatch_table[routed_expert];
                 if (expert_chip_og == -1) {
                     continue;
                 }
+                uint32_t expert_chip = device_begin_idx + (uint32_t)expert_chip_og * device_stride;
+                bool is_local = (expert_chip == linearized_mesh_coord);
+
+                // Work split between the dispatch cores (= sender cores / fabric links):
+                //  - LOCAL tokens keep the expert-parity split: this core owns experts whose low bits
+                //    == dispatch_core_idx, and only the owner touches offsets[e] / emits them.
+                //  - REMOTE (fabric) tokens: EVERY dispatch core walks all of them and advances
+                //    offsets[e] identically, so page_idx stays globally consistent with no cross-core
+                //    sync (deterministic replica). But each core EMITS only its slice — chosen per
+                //    entry by (token_idx, k) — so the fabric sends split evenly across the links.
+                bool owned_local = (((uint32_t)routed_expert & core_mask) == dispatch_core_idx);
+                if (is_local && !owned_local) {
+                    continue;  // another dispatch core owns this local expert (parity split, unchanged)
+                }
 
                 // Allocate this token's destination DRAM page from the expert's counter.
-                // Single shared counter; all cores grow it left-to-right from offsets[e].
-                // If the dispatch buffer for this expert is full, still bump the counter
-                // (so capacity accounting stays consistent) but drop the token — no entry.
+                // If the dispatch buffer for this expert is full, still bump the counter (so capacity
+                // accounting stays consistent across cores) but drop the token — no entry.
                 uint32_t& offset = offsets[routed_expert];
                 if (offset >= max_dispatch_buffer_token_size) {
                     offset++;
@@ -380,8 +389,14 @@ void kernel_main() {
                 }
                 uint32_t page_idx = offset++;
 
-                uint32_t expert_chip = device_begin_idx + (uint32_t)expert_chip_og * device_stride;
-                bool is_local = (expert_chip == linearized_mesh_coord);
+                // Remote tokens: emit only this core's slice. offset was already advanced above (full
+                // walk on every core) so the page assignment is identical no matter who sends it.
+                if (!is_local) {
+                    uint32_t send_slot = token_idx * num_experts_per_tok + k;
+                    if ((send_slot % num_dispatch_cores) != dispatch_core_idx) {
+                        continue;
+                    }
+                }
 
                 volatile tt_l1_ptr PlanEntry* entry = &entries[entry_count];
                 entry->flags = is_local ? PLAN_FLAG_LOCAL : 0;
