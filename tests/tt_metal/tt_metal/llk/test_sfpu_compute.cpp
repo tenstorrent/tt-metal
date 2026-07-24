@@ -74,7 +74,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"square", {{"SFPU_OP_CHAIN_0", "square_tile_init(); square_tile(0);"}}},
     {"negative", {{"SFPU_OP_CHAIN_0", "negative_tile_init(); negative_tile(0);"}}},
     {"softplus",
-     {{"SFPU_OP_CHAIN_0", "softplus_tile_init(); softplus_tile(0, 0x3F800000u, 0x3F800000u, 0x41A00000u);"}}},
+     {{"SFPU_OP_CHAIN_0", "softplus_tile_init(); softplus_tile(0, /* beta */ 0x3F800000u, /* recip */0x3F800000u, /* threshold */ 0x41A00000u);"}}},
     {"clamp", {{"SFPU_OP_CHAIN_0", "clamp_tile_init(); clamp_tile(0, 0xBF800000u, 0x3F800000u);"}}},  // [-1.0f, 1.0f]
     // Comparison-to-zero family (unary): result = 1.0f if predicate(x, 0) else 0.0f.
     {"eqz", {{"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile(0);"}}},
@@ -296,7 +296,7 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
     }
     if (op_name == "softplus") {
-        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-8.0f, 8.0f, numel, seed);
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 30.0f, numel, seed);
     }
     if (op_name == "clamp") {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 2.0f, numel, seed);
