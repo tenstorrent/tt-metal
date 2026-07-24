@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include "matmul_dataflow_common.hpp"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -118,9 +122,14 @@ void kernel_main() {
     const uint32_t in0_dest_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_sender_noc_y = get_arg_val<uint32_t>(argidx++);
-    uint32_t in0_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    uint32_t in0_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    uint32_t in0_valid_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    const uint32_t in0_sender_semaphore_id = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_receiver_semaphore_id = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_valid_semaphore_id = get_arg_val<uint32_t>(argidx++);
+    Semaphore<> in0_sender_sem(in0_sender_semaphore_id);
+    Semaphore<> in0_receiver_sem(in0_receiver_semaphore_id);
+    Semaphore<> in0_valid_sem(in0_valid_semaphore_id);
+    uint32_t in0_valid_semaphore_addr = get_semaphore(in0_valid_semaphore_id);
+    uint32_t in0_receiver_semaphore_addr = get_semaphore(in0_receiver_semaphore_id);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -188,10 +197,25 @@ void kernel_main() {
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
+#ifdef FUSE_SWIGLU
+    // SwiGLU emits one output tile per interleaved gate/up pair -> output N is half the
+    // matmul (weight) N. Weight-space n ranges are halved at each write call site.
+    constexpr uint32_t out_N_block_tiles = N_block_tiles / 2;
+    constexpr uint32_t out_block_num_tiles_swiglu = M_block_tiles * out_N_block_tiles;
+    const TensorShape2D out_shape_swiglu(M_tiles, N_tiles / 2, padded_M_tiles, padded_N_tiles / 2);
+#endif
+
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
 #ifdef FUSE_BIAS
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
+#endif
+
+    Noc noc_obj;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_out(cb_id_out);
+#ifdef FUSE_BIAS
+    CircularBuffer cb_in2(cb_id_in2);
 #endif
 
 #ifdef READ_FROM_LOCAL_INPUT
@@ -221,6 +245,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
     constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
+    CircularBuffer cb_ternary_a(cb_id_ternary_a);
+    CircularBuffer cb_ternary_b(cb_id_ternary_b);
 
     constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_id_ternary_a);
     constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_id_ternary_b);
@@ -229,15 +255,7 @@ void kernel_main() {
     const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr);
 #endif
 
-    volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_semaphore_addr);
-    *(in0_valid_semaphore_addr_ptr) = VALID;
-    volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_receiver_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* in0_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_sender_semaphore_addr);
-    const uint64_t in0_sender_semaphore_noc_addr =
-        get_noc_addr(in0_sender_noc_x, in0_sender_noc_y, in0_sender_semaphore_addr);
+    in0_valid_sem.set(VALID);
 
     const uint64_t in0_receiver_semaphore_noc_addr =
         get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
@@ -299,13 +317,29 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        cb_wait_front(cb_id_out, out_block_num_tiles);
-                        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+#ifdef FUSE_SWIGLU
+                        cb_out.wait_front(out_block_num_tiles_swiglu);
+                        uint32_t out_read_ptr_swiglu = cb_out.get_read_ptr();
+                        write_block_sync<M_block_tiles, out_N_block_tiles>(
+                            noc_obj,
+                            std::get<0>(outputs_tuple),
+                            out_shape_swiglu,
+                            out_read_ptr_swiglu,
+                            out_tile_size,
+                            defer_write_m_tile,
+                            defer_write_m_tile_end,
+                            defer_write_n_tile / 2,
+                            defer_write_n_tile_end / 2);
+                        cb_out.pop_front(out_block_num_tiles_swiglu);
+#else
+                        cb_out.wait_front(out_block_num_tiles);
+                        uint32_t out_read_ptr = cb_out.get_read_ptr();
 
                         // write_block_sync_split is more generic (support multiple output tensors)
                         // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
                         if constexpr (N_chunks == 1) {
                             write_block_sync<M_block_tiles, N_block_tiles>(
+                                noc_obj,
                                 std::get<0>(outputs_tuple),
                                 out_shape,
                                 out_read_ptr,
@@ -316,6 +350,7 @@ void kernel_main() {
                                 defer_write_n_tile_end);
                         } else {
                             write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                                noc_obj,
                                 outputs_tuple,
                                 out0_shape,
                                 out_read_ptr,
@@ -325,7 +360,8 @@ void kernel_main() {
                                 defer_write_n_tile,
                                 defer_write_n_tile_end);
                         }
-                        cb_pop_front(cb_id_out, out_block_num_tiles);
+                        cb_out.pop_front(out_block_num_tiles);
+#endif  // FUSE_SWIGLU
                     }
                 }
                 if (reuse_block && k_block_iter == 0) {
@@ -333,9 +369,9 @@ void kernel_main() {
                     reuse_block = false;
                     continue;
                 }
-                cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                cb_in0.reserve_back(in0_block_num_tiles);
 
-                uint32_t in0_start_address = get_write_ptr(cb_id_in0);
+                uint32_t in0_start_address = cb_in0.get_write_ptr();
 
                 uint32_t k_block_left_tile = 0;
                 uint32_t k_block_right_tile = 0;
@@ -386,9 +422,10 @@ void kernel_main() {
                 }
                 if (is_injector_core) {
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
+                        noc_obj,
                         in0_reader,
                         in0_shape,
-                        cb_id_in0,
+                        cb_in0,
                         in0_tile_size,
 #ifdef READ_FROM_LOCAL_INPUT
                         in3_reader,
@@ -406,17 +443,17 @@ void kernel_main() {
                         k_right_tiles);
                 } else {
                     // Get from previous device
-                    noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
-                    noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
+                    in0_receiver_sem.set(INVALID);
+                    in0_sender_sem.up(noc_obj, in0_sender_noc_x, in0_sender_noc_y, 1);
+                    in0_receiver_sem.wait(VALID);
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
-                cb_push_back(cb_id_in0, in0_block_num_tiles);
+                cb_in0.push_back(in0_block_num_tiles);
                 if (!is_sink_core) {
-                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
-                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+                    in0_sender_sem.wait(1);
+                    in0_sender_sem.set(0);
 
                     uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
 
@@ -427,7 +464,7 @@ void kernel_main() {
                     noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
 
 #ifdef ARCH_BLACKHOLE
-                    noc_async_writes_flushed();
+                    noc_obj.async_writes_flushed();
 #endif
 
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
@@ -455,6 +492,7 @@ void kernel_main() {
                                     in0_core_order_index < forward_in0_core_order_index &&
                                     k_block_iter < (K_num_blocks - K_blocks_per_device)) {
                                     forward_half_block_to_fabric_neighbor(
+                                        noc_obj,
                                         m_tile,
                                         k_block_left_tile,
                                         current_M_block_tiles,
@@ -478,6 +516,7 @@ void kernel_main() {
                             if (in0_core_order_index >= forward_in0_core_order_index &&
                                 k_block_iter < (K_num_blocks - K_blocks_per_device)) {
                                 forward_half_block_to_fabric_neighbor(
+                                    noc_obj,
                                     m_tile,
                                     k_block_left_tile,
                                     current_M_block_tiles,
@@ -504,6 +543,7 @@ void kernel_main() {
                             if constexpr (num_targets_backward_direction > 0) {
                                 if (in0_core_order_index >= forward_in0_core_order_index) {
                                     forward_half_block_to_fabric_neighbor(
+                                        noc_obj,
                                         m_tile,
                                         k_block_left_tile,
                                         current_M_block_tiles,
@@ -526,6 +566,7 @@ void kernel_main() {
                                 if (in0_core_order_index >= backward_in0_core_order_index &&
                                     in0_core_order_index < forward_in0_core_order_index) {
                                     forward_half_block_to_fabric_neighbor(
+                                        noc_obj,
                                         m_tile,
                                         k_block_right_tile,
                                         current_M_block_tiles,
@@ -551,27 +592,33 @@ void kernel_main() {
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
-                cb_reserve_back(cb_id_in2, N_block_tiles);
+                cb_in2.reserve_back(N_block_tiles);
 
-                uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
+                uint32_t l1_write_addr_in2 = cb_in2.get_write_ptr();
                 for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
-                    noc_async_read_page(n_tile_id, in2_reader, l1_write_addr_in2);
+                    noc_obj.async_read(
+                        in2_reader,
+                        CoreLocalMem<uint8_t>(l1_write_addr_in2),
+                        in2_tile_size,
+                        {.page_id = n_tile_id},
+                        {});
                     l1_write_addr_in2 += in2_tile_size;
                 }
-                noc_async_read_barrier();
+                noc_obj.async_read_barrier();
 
-                cb_push_back(cb_id_in2, N_block_tiles);
+                cb_in2.push_back(N_block_tiles);
             }
 #endif
 
 #ifdef FUSE_TERNARY
             if constexpr (!is_output_writer) {
                 read_ternary_blocks_sync<M_block_tiles, N_block_tiles>(
+                    noc_obj,
                     ternary_a_reader,
                     ternary_b_reader,
                     out_shape,
-                    cb_id_ternary_a,
-                    cb_id_ternary_b,
+                    cb_ternary_a,
+                    cb_ternary_b,
                     ternary_a_tile_size,
                     ternary_b_tile_size,
                     broadcast_ternary_b,
@@ -605,13 +652,26 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
+#ifdef FUSE_SWIGLU
+                    write_block_sync_granular<M_block_tiles, out_N_block_tiles>(
+                        noc_obj,
+                        std::get<0>(outputs_tuple),
+                        out_shape_swiglu,
+                        cb_out,
+                        out_tile_size,
+                        m_tile,
+                        m_tile_end,
+                        n_tile / 2,
+                        n_tile_end / 2);
+#else
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
                     // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {
                         write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                            noc_obj,
                             std::get<0>(outputs_tuple),
                             out_shape,
-                            cb_id_out,
+                            cb_out,
                             out_tile_size,
                             m_tile,
                             m_tile_end,
@@ -619,26 +679,29 @@ void kernel_main() {
                             n_tile_end);
                     } else {
                         write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                            noc_obj,
                             outputs_tuple,
                             out0_shape,
-                            cb_id_out,
+                            cb_out,
                             out_tile_size,
                             m_tile,
                             m_tile_end,
                             n_tile,
                             n_tile_end);
                     }
+#endif  // FUSE_SWIGLU
                 }
             }
         }
     }
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 
 #ifdef USE_MUX
     if (mux_backward.connection_valid) {
         close_mux(
+            noc_obj,
             mux_connection_handle_backward,
             mux_backward.is_termination_master,
             mux_backward.termination_sync_address,
@@ -651,6 +714,7 @@ void kernel_main() {
     }
     if (mux_forward.connection_valid) {
         close_mux(
+            noc_obj,
             mux_connection_handle_forward,
             mux_forward.is_termination_master,
             mux_forward.termination_sync_address,
@@ -663,7 +727,7 @@ void kernel_main() {
     }
 #endif  // USE_MUX
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 
     noc_semaphore_set(out_ready_sem_backward_addr_ptr, 0);
     noc_semaphore_set(out_ready_sem_forward_addr_ptr, 0);

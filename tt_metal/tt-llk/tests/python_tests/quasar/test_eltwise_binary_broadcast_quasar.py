@@ -25,6 +25,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -80,8 +81,10 @@ FACE_ELEMS = 16 * 16
         else [ImpliedMathFormat.Yes]
     ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=lambda dest_acc, dest_sync_mode: generate_unary_input_dimensions(
-        dest_acc, dest_sync_mode
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync_mode: generate_unary_input_dimensions(
+            dest_acc, dest_sync_mode
+        )
     ),
 )
 def test_eltwise_binary_broadcast_quasar(

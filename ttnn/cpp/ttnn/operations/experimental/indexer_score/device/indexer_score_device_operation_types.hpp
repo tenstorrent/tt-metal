@@ -6,9 +6,11 @@
 
 #include <cstddef>
 #include <optional>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/sdpa/device/block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
 #include <tt-metalium/base_types.hpp>
 
 namespace ttnn::operations::experimental::indexer_score {
@@ -27,11 +29,26 @@ inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_
     return cfg.head_group_size == 0 ? Hi : static_cast<uint32_t>(cfg.head_group_size);
 }
 
+// Shared type (sp, chunk_local) with sparse_sdpa / sparse_sdpa_msa — see block_cyclic_layout.hpp; the
+// indexer reader reads K in logical order via this invP (reader_indexer_score.cpp).
+using ttnn::prim::BlockCyclicLayout;
+
 struct operation_attributes_t {
     // Absolute chunk_start of rank 0. Rank r uses chunk_start_idx + r*Sq; the per-device value is derived
     // host-side and passed to compute as a RUNTIME arg (hash-excluded), so distinct values reuse one program.
-    uint32_t chunk_start_idx{0};             // elements, tile-aligned
-    std::optional<uint32_t> cluster_axis{};  // mesh axis that is the SP ring; unset = linear device order
+    uint32_t chunk_start_idx{0};  // elements, tile-aligned
+    // Mesh axes the query sequence is sharded over, outermost (SP ring) first: {} = linear device order,
+    // {sp} = 1D SP ring, {sp, tp} = 2D SP ring + TP sub-shard. The SP axis sets each device's causal offset;
+    // the optional TP axis (only alongside an SP axis + block_cyclic) adds a Sq-row sub-offset so each device
+    // owns [tp_rank*Sq, (tp_rank+1)*Sq) of its SP chip's chunk_local slab. Read via sp_axis()/tp_axis().
+    // Hashed via those accessors (it shapes the causal geometry, so distinct shardings get distinct programs).
+    std::vector<uint32_t> seq_shard_axes{};
+    std::optional<uint32_t> sp_axis() const {
+        return seq_shard_axes.empty() ? std::nullopt : std::optional<uint32_t>(seq_shard_axes.front());
+    }
+    std::optional<uint32_t> tp_axis() const {
+        return seq_shard_axes.size() >= 2 ? std::optional<uint32_t>(seq_shard_axes[1]) : std::nullopt;
+    }
     // ReLU on each per-head q.kT before the gate-mul. true = DSA/GLM (relu(q.k)*w); false = raw dot (M3 MSA).
     // Compile-time, so the true path is byte-identical to before.
     bool apply_relu{true};
@@ -62,6 +79,12 @@ struct operation_attributes_t {
     // reuses ONE program. grid/work-split/output width stay keyed on the hashed T. nullopt == T.
     std::optional<uint32_t> kv_len{std::nullopt};
     bool has_runtime_kv_len() const { return kv_len.has_value(); }
+    // Resolved block-cyclic (per-SP-shard) K layout. When set, the reader remaps each logical k-tile to its
+    // physical (permuted) tile, presenting K in natural token order. HASHED (sp/chunk_local shape the reader
+    // binary via compile-time arguments). nullopt == contiguous K
+    // (which is also what sp == 1 resolves to, since that is the identity permutation).
+    std::optional<BlockCyclicLayout> block_cyclic{std::nullopt};
+    bool has_block_cyclic() const { return block_cyclic.has_value(); }
 };
 
 struct tensor_args_t {
@@ -72,6 +95,6 @@ struct tensor_args_t {
 
 using tensor_return_value_t = Tensor;
 
-using spec_return_value_t = TensorSpec;
+using spec_return_value_t = tt::tt_metal::TensorSpec;
 
 }  // namespace ttnn::operations::experimental::indexer_score

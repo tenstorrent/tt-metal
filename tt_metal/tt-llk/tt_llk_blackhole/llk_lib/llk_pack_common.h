@@ -143,12 +143,19 @@ TT_ALWAYS_INLINE void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_con
 {
     const std::uint32_t mode = static_cast<std::uint32_t>(relu_config.get_mode());
     const std::uint32_t val  = (relu_config.get_threshold() << STACC_RELU_ReluThreshold_SHAMT) | (mode << STACC_RELU_ApplyRelu_SHAMT);
-    TT_SETDMAREG(0, val & 0xffff, 0, LO_16(p_gpr_pack::TMP0));
-    TT_SETDMAREG(0, val >> 16, 0, HI_16(p_gpr_pack::TMP0));
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
-    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, STACC_RELU_ApplyRelu_ADDR32);
-    TTI_NOP;
-    TTI_NOP;
+
+    // STACC_RELU shares this cfg word with ALU_ACC_CTRL_Zero_Flag_disabled_src/dst (bits 0-1, owned by the
+    // MATH/UNPACK threads). A whole-word WRCFG_32b would clobber those bits, so use a masked RMW under
+    // mutex::REG_RMW -- matching how configure_pack programs relu.
+    static_assert(STACC_RELU_ApplyRelu_ADDR32 == STACC_RELU_ReluThreshold_ADDR32, "STACC_RELU ApplyRelu and ReluThreshold must share ADDR32 for combined RMW");
+    constexpr std::uint32_t hw_relu_mask = STACC_RELU_ApplyRelu_MASK | STACC_RELU_ReluThreshold_MASK;
+
+    // Only the packer needs draining: RMWCIB takes the data as an immediate (no GPR), so there is no
+    // SETDMAREG->WRCFG producer to fence -- the THCON wait the old whole-word path used is no longer needed.
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+    t6_mutex_acquire(mutex::REG_RMW);
+    cfg_reg_rmw_tensix<STACC_RELU_ApplyRelu_ADDR32, 0, hw_relu_mask>(val);
+    t6_mutex_release(mutex::REG_RMW);
 }
 
 /**

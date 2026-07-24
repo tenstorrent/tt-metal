@@ -18,6 +18,7 @@ from helpers.param_config import (
     generate_sfpu_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -104,7 +105,7 @@ def _is_unpack_to_dest(fmt: FormatConfig, dest_acc: DestAccumulation) -> bool:
     implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
         formats_dest_acc[0]
     ),
-    test_case=["mixed", "all_ones", "all_zeros"],
+    test_case=runtime(["mixed", "all_ones", "all_zeros"]),
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
 def test_sfpu_where_quasar(

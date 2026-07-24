@@ -201,6 +201,7 @@ def test_exp_fp32_accuracy(device):
 
 
 def test_exp_fp32_special_values(device):
+    negative_nan = torch.tensor([-0x400000], dtype=torch.int32).view(torch.float32)
     input_tensor = torch.tensor(
         [
             -float("inf"),
@@ -217,6 +218,7 @@ def test_exp_fp32_special_values(device):
         ],
         dtype=torch.float32,
     )
+    input_tensor = torch.cat([input_tensor, negative_nan])
 
     tt_in = ttnn.from_torch(
         input_tensor,

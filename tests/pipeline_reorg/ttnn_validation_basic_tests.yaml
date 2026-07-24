@@ -1,16 +1,15 @@
 # tt-nn-validation-basic (deb) for merge gate.
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
-# For max allowed timeout refer to .github/time_budget.yaml (ttnn -> smoke; budget is shared with validation smoke).
+# For max allowed timeout refer to .github/time_budget.yaml (ttnn -> merge_gate; budget is shared with validation merge gate).
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 
 - name: ttnn validation basic
   cmd: /usr/bin/tt-nn-validation-basic
   skus:
     wh_n150_civ2:
-      timeout: 30
+      timeout: 15
     bh_p150b_civ2_viommu:
-      timeout: 30
-    bh_p150b_civ2_viommu_prio:
-      timeout: 30
+      timeout: 15
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev

@@ -23,6 +23,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -98,10 +99,10 @@ def generate_eltwise_unary_datacopy_combinations(
                                         fmt,
                                         dest_acc,
                                         data_copy_type,
-                                        dimensions,
+                                        runtime(dimensions),
                                         dest_sync,
-                                        edgecase_dest_index,
-                                        tile_dims,
+                                        runtime(edgecase_dest_index),
+                                        runtime(tile_dims),
                                     )
                                 )
 

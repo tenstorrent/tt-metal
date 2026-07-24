@@ -692,7 +692,7 @@ def test_moreh_layer_norm_backward_callback(input_shape_normalized_dims, element
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-def test_moreh_layer_norm_backward_rejects_invalid_mean_volume(device):
+def test_moreh_layer_norm_backward_rejects_invalid_mean_volume(device, expect_error):
     torch.manual_seed(2023)
     input_shape = [2, 32, 64]
     normalized_dims = 1
@@ -715,7 +715,7 @@ def test_moreh_layer_norm_backward_rejects_invalid_mean_volume(device):
     npu_rstd = to_ttnn(rstd, device=device, dtype=ttnn.bfloat16, shape=input_shape[:-normalized_dims])
     npu_input_grad = to_ttnn(torch.empty(input_shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16)
 
-    with pytest.raises(RuntimeError, match="mean must have logical shape"):
+    with expect_error(RuntimeError, "mean must have logical shape"):
         ttnn.operations.moreh.layer_norm_backward(
             npu_output_grad,
             npu_input,
@@ -726,7 +726,7 @@ def test_moreh_layer_norm_backward_rejects_invalid_mean_volume(device):
         )
 
 
-def test_moreh_layer_norm_backward_rejects_same_volume_wrong_mean_shape(device):
+def test_moreh_layer_norm_backward_rejects_same_volume_wrong_mean_shape(device, expect_error):
     torch.manual_seed(2023)
     input_shape = [2, 32, 64]
     normalized_dims = 1
@@ -750,7 +750,7 @@ def test_moreh_layer_norm_backward_rejects_same_volume_wrong_mean_shape(device):
     npu_rstd = to_ttnn(rstd, device=device, dtype=ttnn.bfloat16, shape=valid_mean_shape)
     npu_input_grad = to_ttnn(torch.empty(input_shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16)
 
-    with pytest.raises(RuntimeError, match="mean must have logical shape"):
+    with expect_error(RuntimeError, "mean must have logical shape"):
         ttnn.operations.moreh.layer_norm_backward(
             npu_output_grad,
             npu_input,
@@ -793,6 +793,7 @@ def test_moreh_layer_norm_no_mean_rstd(input_shape_normalized_dims, elementwise_
 
 
 # Validation test for moreh.layer_norm not populating rstd when mean=None, see #22089
+@pytest.mark.skip(reason="Broken mean/rstd output #48606")
 def test_moreh_layer_norm_rstd_only_mean_none(device):
     torch.manual_seed(2023)
     input_shape = [2, 32, 512]

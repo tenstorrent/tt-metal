@@ -21,7 +21,7 @@ namespace ttnn::experimental::prim {
 struct MoEComputeDeviceOperation {
     using operation_attributes_t = MoEComputeParams;
     using tensor_args_t = MoEComputeInputs;
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
     using program_factory_t = std::variant<MoEComputeMeshWorkloadFactory>;
 
@@ -62,5 +62,6 @@ std::vector<Tensor> moe_compute(
 
 using ttnn::experimental::prim::get_moe_combine_cores;
 using ttnn::experimental::prim::get_moe_worker_mcast_bounding_box;
+using ttnn::experimental::prim::get_moe_tilize_drain_core;
 
 }  // namespace ttnn::prim

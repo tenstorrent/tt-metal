@@ -24,7 +24,7 @@ struct PointToPointOp {
         const ::ttnn::ccl::Topology topology;
 
         // put this in here to hash on tensor spec
-        const ttnn::TensorSpec _input_tensor_spec;
+        const tt::tt_metal::TensorSpec _input_tensor_spec;
 
         static constexpr auto attribute_names = std::forward_as_tuple("send_coord", "receive_coord", "topology");
         auto attribute_values() const { return std::forward_as_tuple(send_coord, receive_coord, topology); };
@@ -37,7 +37,7 @@ struct PointToPointOp {
     };
 
     // entry 0 is the intermediate. Entry 1 is the final output
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
+    using spec_return_value_t = std::array<tt::tt_metal::TensorSpec, 2>;
     using tensor_return_value_t = std::array<ttnn::Tensor, 2>;
 
     struct SendReceive {
@@ -117,6 +117,10 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
     const PointToPointOp::operation_attributes_t& operation_attributes,
     PointToPointOp::tensor_return_value_t& output_tensor,
     const tt::tt_metal::GlobalSemaphore& semaphore);
+
+// Same-device (send_coord == receive_coord) local on-device copy — no fabric.
+tt::tt_metal::ProgramDescriptor local_copy_program_factory(
+    const PointToPointOp::tensor_args_t& tensor_args, PointToPointOp::tensor_return_value_t& output_tensors);
 }  // namespace operations::point_to_point
 
 namespace prim {

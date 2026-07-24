@@ -12,11 +12,20 @@ import time
 from pathlib import Path
 from typing import Callable
 
+import ttml
 from ttml.checkpointing import load_checkpoint, read_header, save_checkpoint
 from ttml.common.data import CharTokenizer
 from ttml.trainers import SFTTrainer
 
 from model_builders import Model, ModelConfig, create_model
+
+
+def _capture_rng_state() -> dict:
+    return {"cpp": ttml.autograd.AutoContext.get_instance().get_generator_state()}
+
+
+def _restore_rng_state(state: dict) -> None:
+    ttml.autograd.AutoContext.get_instance().set_generator_state(state["cpp"])
 
 
 def _human_size(num_bytes: int) -> str:
@@ -56,7 +65,13 @@ def build_checkpoint_io(
         start = time.perf_counter()
         save_checkpoint(
             path,
-            header={"step": trainer.step, "tokenizer": tokenizer, "model_config": model_cfg},
+            header={
+                "step": trainer.step,
+                "tokenizer": tokenizer,
+                "model_config": model_cfg,
+                "rng": _capture_rng_state(),
+                "dataloader": trainer.train_dataloader.get_state_dict(),
+            },
             model_params=trainer.model.parameters(),
             optimizer=trainer.optimizer,
             display_progress=_show_progress(),
@@ -73,6 +88,8 @@ def build_checkpoint_io(
             optimizer=trainer.optimizer,
             display_progress=_show_progress(),
         )
+        _restore_rng_state(header["rng"])
+        trainer.train_dataloader.set_state_dict(header["dataloader"])
         elapsed = time.perf_counter() - start
         print(f"  Loaded checkpoint from {path} (in {_human_time(elapsed)})")
         return int(header["step"])

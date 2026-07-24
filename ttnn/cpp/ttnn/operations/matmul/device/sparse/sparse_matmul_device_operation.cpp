@@ -243,7 +243,7 @@ SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::co
         operation_attributes.output_tile,
         /*optional_output_tensor_tile=*/std::nullopt);
 
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             output_dtype,

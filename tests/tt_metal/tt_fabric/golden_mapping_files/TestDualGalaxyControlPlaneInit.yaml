@@ -1,6 +1,6 @@
 asic_to_fabric_node_mapping:
   hostnames:
-    - hostname: g14glx03_0
+    - hostname: 6u_dual_host_cluster_desc_rank_0.yaml
       mesh:
         - mesh: 0
         - chips:
@@ -260,7 +260,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 0
                 chip_id: 37
               asic_id: 591434117207306841
-    - hostname: g14glx03_1
+    - hostname: 6u_dual_host_cluster_desc_rank_1.yaml
       mesh:
         - mesh: 0
         - chips:

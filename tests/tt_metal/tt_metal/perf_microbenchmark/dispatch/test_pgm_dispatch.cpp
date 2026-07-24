@@ -689,7 +689,10 @@ static int pgm_dispatch(T& state, TestInfo info) {
         const ChipId device_id = 0;
         const std::size_t cq_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
-        size_t trace_region_size = 1'000'000'000;
+        // load_prefetcher_test captures hundreds of programs in a single trace to overflow the
+        // prefetcher cache; the captured trace is ~1.03 GB on wormhole_b0 (refs #46983), so the
+        // region must comfortably exceed 1 GB.
+        size_t trace_region_size = 1'500'000'000;
         std::string arch_name = tt::tt_metal::hal::get_arch_name();
         if (arch_name == std::string("blackhole")) {
             // Blackhole has more cores, so we need more room to store RTAs.

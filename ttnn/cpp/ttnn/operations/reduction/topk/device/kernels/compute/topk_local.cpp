@@ -124,8 +124,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(input_cb_index, index_cb_index, input_transposed_cb_index);
     ckernel::topk_tile_init();
-    transpose_init(input_cb_index);
-    transpose_init(index_cb_index);
 
     CircularBuffer input_transposed_cb(input_transposed_cb_index);
     CircularBuffer index_transposed_cb(index_transposed_cb_index);

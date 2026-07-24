@@ -136,7 +136,7 @@ Program create_program(IDevice* /*device*/, const ProgramAttributes& program_att
 
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         DataMovementConfig{.processor = program_attributes.writer_processor, .noc = program_attributes.writer_noc});
 

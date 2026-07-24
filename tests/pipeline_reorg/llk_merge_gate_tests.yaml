@@ -1,0 +1,91 @@
+# LLK gtest merge-gate matrix (FD shards + SD Quasar slice).
+#
+# Each entry: name, cmd, skus, team, arch, dispatch_mode; optional gtest sharding.
+# For sd entries the impl prepends TT_METAL_SLOW_DISPATCH_MODE=1 at invocation time.
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
+
+# --- FD shards (full LLK gtest suite) ---
+- name: LLK FD wormhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: llk
+  arch: wormhole_b0
+  dispatch_mode: fd
+  gtest_shard_total: 4
+  gtest_shard_index: 0
+
+- name: LLK FD wormhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: llk
+  arch: wormhole_b0
+  dispatch_mode: fd
+  gtest_shard_total: 4
+  gtest_shard_index: 1
+
+- name: LLK FD wormhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: llk
+  arch: wormhole_b0
+  dispatch_mode: fd
+  gtest_shard_total: 4
+  gtest_shard_index: 2
+
+- name: LLK FD wormhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: llk
+  arch: wormhole_b0
+  dispatch_mode: fd
+  gtest_shard_total: 4
+  gtest_shard_index: 3
+
+- name: LLK FD blackhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*'
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 15
+  team: llk
+  arch: blackhole
+  dispatch_mode: fd
+  gtest_shard_total: 2
+  gtest_shard_index: 0
+
+- name: LLK FD blackhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*'
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 15
+  team: llk
+  arch: blackhole
+  dispatch_mode: fd
+  gtest_shard_total: 2
+  gtest_shard_index: 1
+
+# --- SD-only / Quasar slice ---
+- name: LLK SD wormhole (Quasar slice)
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: llk
+  arch: wormhole_b0
+  dispatch_mode: sd
+
+- name: LLK SD blackhole (Quasar slice)
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*-LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3'
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 15
+  team: llk
+  arch: blackhole
+  dispatch_mode: sd

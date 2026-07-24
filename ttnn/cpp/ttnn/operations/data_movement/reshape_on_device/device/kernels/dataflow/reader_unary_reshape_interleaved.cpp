@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -30,18 +30,18 @@ void kernel_main() {
 
     constexpr uint32_t SUBTILE_LINE_BYTES = (16 << 1);
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
 
     constexpr bool MISALIGNED = ALIGNMENT > SUBTILE_LINE_BYTES;
-    constexpr uint32_t cb_id_intermed = 1;
-    CircularBuffer cb_intermed(cb_id_intermed);
-    uint32_t intermed_l1_scratch = MISALIGNED ? cb_intermed.get_write_ptr() : 0;
+    constexpr uint32_t dfb_id_intermed = 1;
+    DataflowBuffer dfb_intermed(dfb_id_intermed);
+    uint32_t intermed_l1_scratch = MISALIGNED ? dfb_intermed.get_write_ptr() : 0;
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
 
     const auto s0 = TensorAccessor(src0_args, src0_addr);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
 
     // Sticks are a row of elements in a single tile (32 elements)
     // Stick id increments row-wise
@@ -53,7 +53,7 @@ void kernel_main() {
                 uint32_t base_tile_stick_id = base_tile_row_stick_id;
                 for (uint32_t w = 0; w < output_Wt; w++) {
                     uint32_t output_stick_id = base_tile_stick_id;  // Offset tile id of the current sub tile row
-                    cb_in0.reserve_back(onetile);
+                    dfb_in0.reserve_back(onetile);
                     for (uint32_t tile_h = 0; tile_h < 32; tile_h++) {
                         uint32_t input_tile_row_to_read = output_stick_id / num_sticks_per_input_tile_row;
                         uint32_t input_tile_col_to_read = output_stick_id % input_Wt;
@@ -65,7 +65,7 @@ void kernel_main() {
                         uint32_t intra_tile_offset =
                             (((input_tile_sub_row_to_read >> 4) << 1) << 9) + ((input_tile_sub_row_to_read & 15) << 5);
 
-                        uint32_t dest_tr0_l1 = cb_in0.get_write_ptr();
+                        uint32_t dest_tr0_l1 = dfb_in0.get_write_ptr();
                         dest_tr0_l1 +=
                             (((tile_h >> 4) << 1) << 9);  // if intra-tile source h is > 16, add 2*512 to subtile offset
                         dest_tr0_l1 += ((tile_h & 15) << 5);  // 16 * 2 bytes per face row
@@ -117,7 +117,7 @@ void kernel_main() {
                     }
                     noc.async_read_barrier();
                     // notifies the unpacker that the buffer is populated
-                    cb_in0.push_back(onetile);
+                    dfb_in0.push_back(onetile);
 
                     base_tile_stick_id += 1;
                 }

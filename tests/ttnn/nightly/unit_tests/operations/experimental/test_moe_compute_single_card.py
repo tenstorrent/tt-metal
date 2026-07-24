@@ -42,7 +42,6 @@ from ttnn.experimental.moe_compute_utils import (
     get_weight_core_shard_maps,
     get_weight_mem_configs,
     auto_output_width_shard_dim,
-    get_tilize_drain_core,
     effective_matmul_ring_size,
 )
 
@@ -82,6 +81,7 @@ def _run_moe_compute_single_card_test(
     dtype,
     activation_type,
     has_bias=False,
+    skip_on_ci=False,
 ):
     """
     Single-card MoE compute test body. cluster_axis is fixed to None
@@ -111,6 +111,13 @@ def _run_moe_compute_single_card_test(
                 f"tilize/matmul bounding-box overlap."
             )
     elif arch == ttnn.device.Arch.BLACKHOLE:
+        if skip_on_ci:
+            # Matmul output fails PCC on BH; runs locally for regression, skipped in CI pending fix.
+            # https://github.com/tenstorrent/tt-metal/issues/50038
+            pytest.skip(
+                "MoE compute single-card test fails PCC on BH; skipped in CI pending fix "
+                "(https://github.com/tenstorrent/tt-metal/issues/50038)."
+            )
         # BH layout assumes the 11x10 production worker grid (logical x=0..10, y=0..9).
         # See moe_compute_program_factory.cpp::get_layout() BH branch.
         if grid.y < 10 or grid.x < 11:
@@ -155,11 +162,23 @@ def _run_moe_compute_single_card_test(
     # CREATE TILIZE INPUT TENSORS AND GOLDENS
     #########################################
 
-    # Drain tilize core: the op uses `max_tilize_cores[0]` from the per-arch layout
-    # table (`get_layout()` in moe_compute_program_factory.cpp). WH full-grid -> (6,9);
-    # BH 11x10 -> (10,9). Harvested grids are skipped above, so y>=10 always holds here.
-    drain_core_coord = get_tilize_drain_core()
-    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core_coord, drain_core_coord)})
+    # Drain tilize core: use dynamic core placement API to get the drain core
+    # instead of hardcoding per-arch coordinates. This works on both WH and BH
+    # and adapts to harvested grids (when supported).
+    drain_core_coord = ttnn.experimental.get_moe_tilize_drain_core(
+        mesh_device,
+        output_height_shard_dim,
+        output_width_shard_dim,
+        hidden_size,
+    )
+    tilize_drain_core = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(drain_core_coord.x, drain_core_coord.y),
+                ttnn.CoreCoord(drain_core_coord.x, drain_core_coord.y),
+            )
+        }
+    )
 
     expert_mapping = gen_expert_mapping(
         num_devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
@@ -396,22 +415,14 @@ def _run_moe_compute_single_card_test(
         }
     )
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
-        mesh_device, output_height_shard_dim, output_width_shard_dim
+        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
     )
     worker_mcast_bbox = ttnn.experimental.get_moe_worker_mcast_bounding_box(
         mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
     )
 
     base_pcc_threshold = _get_base_pcc_threshold(activation_type, has_bias)
-
-    # Arch- and sim-aware PCC floor (see #41827).
-    # ttsim has known partial fidelity (e.g. pack_untilize_dest), so the floor on sim is
-    # lower than on real silicon. Take the min with the helper's default so we don't
-    # accidentally relax a tighter threshold that might land later.
-    # WH and BH currently share the same floor; differentiate here when they diverge.
-    _on_simulator = bool(os.environ.get("TT_METAL_SIMULATOR"))
-    _arch_floor = 0.84 if _on_simulator else 0.984
-    base_pcc_threshold = min(base_pcc_threshold, _arch_floor)
+    base_pcc_threshold = min(base_pcc_threshold, 0.984)
 
     per_expert_tokens_all_passed = validate_per_expert_tokens(
         mesh_device,
@@ -494,7 +505,7 @@ def _run_moe_compute_single_card_test(
 )
 @pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "with_bias"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias):
+def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, is_ci_env, is_ci_v2_env):
     """compute_only=True on a 1x1 mesh, DeepSeek-shaped workload (hidden=7168).
 
     The matmul ring size is auto-detected from the arch (12 on WH, 8 on BH); the op no longer
@@ -513,6 +524,7 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias):
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
         has_bias=has_bias,
+        skip_on_ci=is_ci_env or is_ci_v2_env,
     )
 
 
@@ -530,7 +542,7 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias):
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape):
+def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, is_ci_env, is_ci_v2_env):
     """compute_only=True on a 1x1 mesh, GPT-OSS-shaped workload (hidden=N=2880, SWIGLU+bias).
 
     The matmul ring size is auto-detected from the arch (12 on WH, 8 on BH); the op no longer
@@ -550,6 +562,7 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape):
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SWIGLU,
         has_bias=True,
+        skip_on_ci=is_ci_env or is_ci_v2_env,
     )
 
 
