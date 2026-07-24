@@ -41,7 +41,9 @@ def test_profile_once_steering_uses_1cq_and_restores(monkeypatch):
             os.environ["TT_PERF_NUM_CQ"] = saved
 
 
-def test_profile_once_bookend_uses_2cq(monkeypatch):
+def test_profile_once_passes_through_requested_cq(monkeypatch):
+    # _profile_once(cq=N) is a generic passthrough: it sets TT_PERF_NUM_CQ to whatever cq is asked.
+    # The tool is trace+1cq end to end (callers pass cq=1), but the mechanism honors any value.
     seen = _stub_profile_env(monkeypatch)
     saved = os.environ.get("TT_PERF_NUM_CQ")
     try:

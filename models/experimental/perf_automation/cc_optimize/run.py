@@ -86,8 +86,8 @@ LOOP:
     cpp        -> author a C++ Metalium kernel via ttnn.generic_op (Read GUIDELINES/12). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'cpp',measured_ms,beat_baseline).
   COVERAGE — the profiled slice is a REPRESENTATIVE set of layers, not all of them, so after a dtype knob or a kernel swap call check_lever_coverage(op_match, stale_dtype, new_dtype) to CONFIRM the lever reached EVERY layer instance. A repeated block is ONE class instantiated N times, so editing the SHARED block definition/config propagates to all N; editing an instance-specific path (e.g. layers[0], a per-layer override) changes only that one and silently misses the rest. If fully_applied is false, REAPPLY on the shared definition (target the reported missed_blocks) and re-check until fully_applied — a partial application is NOT a real win even if the slice looks faster.
   ALWAYS pass note= to record_kernel_attempt: ONE line stating (a) WHY you tried this lever on this op (the hypothesis — e.g. 'op is DRAM-bw bound, bf8_b weights halve reads') and (b) WHY it won or failed (the outcome reason — e.g. 'kept: 4.1->3.6ms', 'reverted: PCC 0.71<0.95', 'no gain: 4.1->4.1ms bw-bound', 'OOM under 2CQ'). This note is streamed LIVE into the model's RUN_REPORT.md the instant the attempt resolves (win OR fail), so it must explain the reasoning, not just restate the numbers. ALSO pass stages_json to record_kernel_attempt whenever you have per-stage trace timings (the SAME JSON list of {{"name","ms","dominant?"}} you'd pass hitl_gate, e.g. from check_full_pipeline_latency's stage breakdown) — this renders the block-level timing table in RUN_REPORT.md so BOTH hitl and non-hitl runs show where device time went per stage/block.
-  TWO measurements are fed back to you each step — use BOTH: (1) measure_candidate returns the per-op tracy device_ms (the fast steering signal that tells you WHICH op moved); (2) check_full_pipeline_latency returns the robust whole-pipeline trace+1cq per-token ms (its `mode` field = trace+1cq, `full_pipeline_ms` + `delta_pct` vs best) — this is the per-iteration VERDICT you bank a compute win on. trace+1cq always engages (no 2-CQ reservation), so a dtype/grid/fusion/kernel win it confirms is real and will NOT spuriously fail the way a 2-CQ run can; the trace+2cq production number is measured only at the start/end bookend, so DO NOT treat a mid-loop 1cq result as a downgrade. Only levers whose whole value is the 2-CQ input/compute overlap or L1 headroom need the 2cq bookend to judge.
-  (IRON RULE: a real win = check_pcc ok AND check_full_pipeline_latency status 'ok' (moved TOWARD the target / not diverged, at its trace+1cq mode) AND measure_candidate verdict 'valid' AND is_real_gain AND (for a dtype/kernel lever) check_lever_coverage fully_applied (reached every layer, not just the profiled slice). REJECTED, pcc-fail, or a DIVERGED full-pipeline latency is never a win — revert. Note: check_full_pipeline_latency never fails for missing the target, only for getting SLOWER than best-so-far in its CQ track.)
+  TWO measurements are fed back to you each step — use BOTH: (1) measure_candidate returns the per-op tracy device_ms (the fast steering signal that tells you WHICH op moved); (2) check_full_pipeline_latency returns the robust whole-pipeline trace+1cq per-token ms (its `mode` field = trace+1cq, `full_pipeline_ms` + `delta_pct` vs best) — this is the per-iteration VERDICT you bank a compute win on. This is the ONLY production metric — the run is trace+1cq end to end (there is NO trace+2cq bookend): trace+1cq always engages (no 2-CQ reservation), so a dtype/grid/fusion/kernel win it confirms is real and will NOT spuriously fail the way a 2-CQ run can. The BEFORE number is one 1cq bookend run and the AFTER number is simply your last committed 1cq verdict (no second full-model run at the end).
+  (IRON RULE: a real win = check_pcc ok AND check_full_pipeline_latency status 'ok' (moved TOWARD the target / not diverged, at its trace+1cq mode) AND measure_candidate verdict 'valid' AND is_real_gain AND (for a dtype/kernel lever) check_lever_coverage fully_applied (reached every layer, not just the profiled slice). REJECTED, pcc-fail, or a DIVERGED full-pipeline latency is never a win — revert. Note: check_full_pipeline_latency never fails for missing the target, only for getting SLOWER than the trace+1cq best-so-far.)
   WRITE-BACK: after you COMMIT a win you IMPROVISED (recall_knobs had no match), call distill_knob to persist the general technique; if the win RE-USED a provisional lever learned on another model, pass its id to distill_knob to graduate it.
   Re-run termination_check. Repeat. NEVER stop while can_stop=false. NEVER reason a lever "won't help" — prove it by measuring + recording the attempt.
 
@@ -227,7 +227,6 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
         "TT_METAL_HOME": str(repo_root),
         "PYTHONPATH": str(repo_root),
         "PATH": f"{repo_root / 'python_env' / 'bin'}{os.pathsep}/usr/bin:/bin",
-        "PERF_MCP_FULLPIPE_CQ": "1",
     }
     if pipe.get("case"):
         env["PERF_MCP_PERF_CASE"] = pipe["case"]
@@ -294,29 +293,38 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
 
 
 def _reset_fullpipe_baselines() -> None:
-    """Delete BOTH full-pipeline baseline files at task start so a fresh optimize
+    """Delete the full-pipeline (trace+1cq) baseline file at task start so a fresh optimize
     never inherits a stale best-so-far from a previous model, module, or run.
 
-    The 1-CQ file (`..._1cq.json`) is the one compute wins are actually banked
-    against; clearing only the 2-CQ twin (the old behaviour) left the 1-CQ file to
-    persist across runs, where an old higher-rank entry would veto every candidate
-    for the whole run without ever being overwritten."""
-    for _name in (
-        "perf_mcp_full_pipeline_baseline.json",
-        "perf_mcp_full_pipeline_baseline_1cq.json",
-    ):
-        try:
-            (Path(tempfile.gettempdir()) / _name).unlink()
-        except Exception:
-            pass
+    The 1-CQ file (`..._1cq.json`) is the ONLY full-pipeline baseline now (the tool is
+    trace+1cq end to end) and the one every compute win is banked against; an old higher-rank
+    entry left behind would veto every candidate for the whole run without ever being overwritten."""
+    try:
+        (Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline_1cq.json").unlink()
+    except Exception:
+        pass
+
+
+def _read_fullpipe_best_1cq() -> float | None:
+    """Read the best-so-far trace+1cq full-pipeline latency banked by the per-lever
+    check_full_pipeline_latency gate (the 1cq baseline file). This IS the AFTER scoreboard
+    number — the last committed 1cq verdict — so the end-of-run bookend reuses it instead of
+    launching a second full-model device run."""
+    try:
+        p = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline_1cq.json"
+        ms = float(json.loads(p.read_text()).get("full_pipeline_ms") or 0.0)
+        return ms if ms > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> float | None:
-    """Measure the FULL-model end-to-end (ALL 52 layers, no tracy, prefill + 1 decode) ONCE and print it
-    with `label` (BEFORE / AFTER). Returns end_to_end_ms or None. This is the whole-model SCOREBOARD, run
-    only at the two BOOKENDS of a pipeline's optimization (start + right before stop) — never per iteration
-    — so a real before/after full-model speedup is reported without the per-step cost. The device_ms loop
-    metric is the fast 2-layer STEERING signal; this is the verdict. Disable via PERF_MCP_FULLPIPE_E2E=0."""
+    """Measure the FULL-model end-to-end (ALL 52 layers, no tracy, prefill + 1 decode) ONCE at trace+1cq
+    and print it with `label` (typically the BEFORE bookend). Returns end_to_end_ms or None. This is the
+    whole-model SCOREBOARD; the tool is trace+1cq end to end, so the one BEFORE run here establishes the
+    same 1cq baseline the per-lever check_full_pipeline_latency then reuses (no separate 2-CQ bookend).
+    The device_ms loop metric is the fast 2-layer STEERING signal; this is the verdict. Disable via
+    PERF_MCP_FULLPIPE_E2E=0."""
     if os.environ.get("PERF_MCP_FULLPIPE_E2E", "1") != "1":
         return None
     code = (
@@ -329,7 +337,6 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
     )
     env = cc_env(repo_root, devices)
     env.update(mcp_env)
-    env["PERF_MCP_FULLPIPE_CQ"] = "2"
     env.setdefault("PERF_MCP_FULLPIPE_SAMPLES", "3")
     print(
         f"  [optimize/cc] measuring FULL-model end-to-end ({label}) — ALL 52 layers, no tracy (one slow run, minutes)..."
@@ -371,7 +378,7 @@ _HOST_XFER_OPS = ("from_torch", "to_torch", "from_device", "to_device")
 def _parse_facts(raw: str, sigs: set | None) -> dict:
     """Extract the UNIVERSAL scorecard facts from an op-sig probe run: TP/DP + shard state (from the
     pipeline's MeshDevice line) and whether the step round-trips to host (host-transfer ops in the op
-    set) — the latter is the trace+2CQ gate. Model-agnostic: reads the op stream, not a per-model map."""
+    set) — the latter is the fully-on-device (host-free) gate. Model-agnostic: reads the op stream, not a per-model map."""
     facts = {"dp": 1, "tp": 1, "shard_active": False, "host_ops": [], "n_op_types": len(sigs or ())}
     m = re.search(r"DP=(\d+)\s+TP=(\d+)", raw or "")
     if m:
@@ -874,9 +881,9 @@ def _print_scorecard(
         if not probed:
             L.append("  │ fully on device   : UNKNOWN  (op-coverage probe did not run)")
         elif on_device:
-            L.append("  │ fully on device   : YES  (trace + 2CQ possible)")
+            L.append("  │ fully on device   : YES  (fully trace-capable)")
         else:
-            L.append("  │ fully on device   : NO   -> trace + 2CQ blocked; host round-trips: %s" % ", ".join(host_ops))
+            L.append("  │ fully on device   : NO   -> full-device trace blocked; host round-trips: %s" % ", ".join(host_ops))
         L.append("  │ batch / users     : %s" % batch)
         reason = (
             "probe did not run"
@@ -1818,7 +1825,14 @@ def optimize_pipeline(
             wedge_strikes = 0
         rounds += 1
     _stop_watcher.set()
-    after_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "AFTER")
+    # AFTER bookend: reuse the best committed trace+1cq verdict (the per-lever gate already banked
+    # the final number in the 1cq baseline file) — do NOT run the full pipeline again at the end.
+    after_ms = _read_fullpipe_best_1cq()
+    if after_ms is not None:
+        print(
+            f"  [optimize/cc] FULL-model end-to-end (AFTER) = {after_ms:.1f} ms  "
+            "(best committed trace+1cq; reused, no extra device run)"
+        )
     if before_ms and after_ms:
         d = (before_ms - after_ms) / before_ms * 100.0
         print(

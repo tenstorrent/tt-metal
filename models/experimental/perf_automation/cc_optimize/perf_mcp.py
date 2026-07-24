@@ -58,7 +58,7 @@ _MODEL_ROOT = Path(os.environ.get("PERF_MCP_MODEL_ROOT") or _MANIFEST.get("confi
 _ENV = _MANIFEST.get("env", {})
 # where profile_model stashes the current baseline so measure_candidate can compare structurally
 _BASELINE_PATH = Path(tempfile.gettempdir()) / "perf_mcp_baseline.json"
-_FULLPIPE_BASELINE_PATH = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline.json"
+# The tool is trace+1cq end to end; this is the ONLY full-pipeline baseline (no 2-CQ twin).
 _FULLPIPE_BASELINE_1CQ_PATH = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline_1cq.json"
 _FULLPIPE_TOL = float(os.environ.get("PERF_MCP_FULLPIPE_TOL", "0.08"))
 _FULLPIPE_SAMPLES = max(1, int(os.environ.get("PERF_MCP_FULLPIPE_SAMPLES", "1")))
@@ -995,7 +995,7 @@ def profile_model() -> dict:
     roofline target (the achievable floor). Records this as the baseline for measure_candidate.
     Call this first, and again whenever you want a fresh picture."""
     try:
-        prof = _profile_once(cq=2)
+        prof = _profile_once(cq=1)
     except Exception as exc:  # noqa: BLE001
         _msg = str(exc)
         if _is_dram_trace_overflow(_msg):
@@ -1250,9 +1250,6 @@ def _run_full_pipeline_ms():
             env.update(json.loads(_prof))
         except (ValueError, TypeError):
             pass
-    _cq = os.environ.get("PERF_MCP_FULLPIPE_CQ")
-    if _cq and _cq.isdigit():
-        env["TT_PERF_NUM_CQ"] = _cq
     env.pop("TT_METAL_DEVICE_PROFILER", None)
     cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node]
     if case:
@@ -1583,20 +1580,18 @@ def check_full_pipeline_latency() -> dict:
     $TMPDIR/perf_mcp_fullpipe_gate.log so the gated end-to-end time is visible every iteration.
     Returns {status, full_pipeline_ms, method, metric, best_ms?, delta_pct?, target_ms?,
     gap_to_target_ms?, reached_target?}."""
-    _cq_env = os.environ.get("PERF_MCP_FULLPIPE_CQ")
-    cq = int(_cq_env) if (_cq_env and _cq_env.isdigit()) else 1
+    # The tool is trace+1cq end to end: one track, one baseline, no 2-CQ bookend.
+    cq = 1
     ms, method, err, path = _run_full_pipeline_ms()
     if ms is None:
         return _emit_fullpipe({"status": "crash", "error": err, "cq": cq})
     metric = "trace_per_token_ms" if method == "trace" else "eager_full_pipeline_ms"
     mode = _track_mode(_fullpipe_mode(method, path), cq)
-    base_path = _FULLPIPE_BASELINE_PATH if cq >= 2 else _FULLPIPE_BASELINE_1CQ_PATH
+    base_path = _FULLPIPE_BASELINE_1CQ_PATH
     cq_note = (
-        "trace+1cq (robust per-iteration signal): validate/bank compute-op wins here — it always engages "
-        "(no 2-CQ reservation, so no OOM/downgrade). The trace+2cq production number is confirmed at the "
-        "start/end bookend; only 2-CQ-overlap / L1-headroom levers require that bookend to judge."
-        if cq < 2
-        else "trace+2cq (production ship metric): start/end bookend anchor."
+        "trace+1cq (the production metric): validate/bank EVERY win here — it always engages (no 2-CQ "
+        "reservation, so no OOM/downgrade). The run is trace+1cq end to end; the start/end bookend is the "
+        "same 1cq measure (AFTER = last committed 1cq verdict)."
     )
     tgt = _FULLPIPE_TARGET_MS if _FULLPIPE_TARGET_MS > 0 else None
     tgt_fields = {}
@@ -1916,9 +1911,9 @@ def _trace_budget_facts():
     if os.environ.get("TT_PERF_TRACE", "1") != "1":
         return None
     try:
-        ncq = int(os.environ.get("TT_PERF_NUM_CQ", "2") or "2")
+        ncq = int(os.environ.get("TT_PERF_NUM_CQ", "1") or "1")
     except ValueError:
-        ncq = 2
+        ncq = 1
     if ncq < 2:
         return None
     try:

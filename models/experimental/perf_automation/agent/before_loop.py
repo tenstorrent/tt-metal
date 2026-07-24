@@ -532,7 +532,7 @@ def before_loop(
         print(f"      depth-bridge skipped: {str(_bl_e)[:160]}", file=sys.stderr, flush=True)
         print(_tb.format_exc()[-600:], file=sys.stderr, flush=True)
 
-    stages.start("tracy_baseline", "Measuring the baseline latency (trace+2CQ)")
+    stages.start("tracy_baseline", "Measuring the baseline latency (trace+1CQ)")
 
     def _run_baseline():
         return profile_model(

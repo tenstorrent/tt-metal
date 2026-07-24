@@ -299,11 +299,11 @@ def render_summary(
     if before_ms and after_ms:
         _d = (before_ms - after_ms) / before_ms * 100.0 if before_ms else 0.0
         lines.append(
-            f"trace+2CQ {_trace_scope}:  before {before_ms:.2f} ms  ->  after {after_ms:.2f} ms"
+            f"trace+1CQ {_trace_scope}:  before {before_ms:.2f} ms  ->  after {after_ms:.2f} ms"
             f"   ({_d:+.1f}% {'faster' if _d >= 0 else 'SLOWER'})"
         )
     elif before_ms:
-        lines.append(f"trace+2CQ {_trace_scope}:  before {before_ms:.2f} ms  ->  (after not measured)")
+        lines.append(f"trace+1CQ {_trace_scope}:  before {before_ms:.2f} ms  ->  (after not measured)")
     lines.append("")
 
     lines.extend(_roofline_lines(throughput, final_ms))
@@ -412,9 +412,9 @@ def render_summary(
     lines.append("")
     lines.append("Reproduce:")
     lines.append(
-        f"  trace+2CQ perf:  python -m pytest {perf_test} -svv"
+        f"  trace+1CQ perf:  python -m pytest {perf_test} -svv"
         if perf_test
-        else "  trace+2CQ perf:  (node-id not provided)"
+        else "  trace+1CQ perf:  (node-id not provided)"
     )
     # Derive the demo (real input/output) + full-model e2e PCC test from the perf-test path
     # (perf tests live under models/demos/<model>/tests/...); best-effort, pointer only.

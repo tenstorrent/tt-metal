@@ -75,34 +75,31 @@ def test_validation_rejects_test_that_does_not_run_pipeline(tmp_path, monkeypatc
     assert node is None
 
 
-def test_validation_accepts_and_records_genuine_2cq(tmp_path, monkeypatch):
-    """A draft that produces a real per-token marker is accepted; when the 2-CQ probe genuinely engages
-    (path==trace+2cq) it is recorded trace_2cq=True in the capability sidecar."""
+def test_validation_accepts_and_records_1cq(tmp_path, monkeypatch):
+    """1CQ-only: a draft that produces a real per-token trace marker at 1 CQ is accepted and recorded
+    trace_1cq=True in the capability sidecar (there is no separate 2-CQ probe/pass anymore)."""
     demo_rel = _demo(tmp_path)
 
     def fake_run(node, env, timeout_s=2400):
-        if env.get("TT_PERF_NUM_CQ") == "2":
-            return 0, "TRACE_PER_TOKEN_MS=5.0\nTRACE_REPLAY_PATH=trace+2cq batch=1\n"
         return 0, "TRACE_PER_TOKEN_MS=6.0\nTRACE_REPLAY_PATH=trace+1cq batch=1\n"
 
     monkeypatch.setattr("agent.perf_test_gen._run_perf_node", fake_run)
     node = generate_perf_test(tmp_path, "text_generation", demo_rel, runner=lambda p: _VALID, force=True, validate=True)
     assert node is not None
     caps = _caps(tmp_path)
-    assert caps["trace_1cq"] is True and caps["trace_2cq"] is True and caps["trace_2cq_path"] == "trace+2cq"
+    assert caps["trace_1cq"] is True and caps["trace_2cq"] is False
 
 
-def test_persistent_1cq_is_corrected_not_shipped(tmp_path, monkeypatch):
-    """STRICT: a trace-capable pipeline that only ever degrades to 1CQ is NOT shipped — the loop keeps
-    feeding the failure back to correct it and returns None rather than accept a test that fails 2CQ
-    (it would silently downgrade at the optimize bookend). The degrade is still recorded along the way."""
+def test_trace_capable_1cq_is_shipped(tmp_path, monkeypatch):
+    """1CQ-only: a trace-capable pipeline that traces at 1 CQ is SHIPPED. Previously a 1cq-only pipeline
+    was rejected until it reached trace+2cq; that 2-CQ pass is gone (the tool is trace+1cq end to end)."""
     demo_rel = _demo(tmp_path)
     monkeypatch.setattr(
         "agent.perf_test_gen._run_perf_node",
         lambda node, env, timeout_s=2400: (0, "TRACE_PER_TOKEN_MS=6.0\nTRACE_REPLAY_PATH=trace+1cq\n"),
     )
     node = generate_perf_test(tmp_path, "text_generation", demo_rel, runner=lambda p: _VALID, force=True, validate=True)
-    assert node is None
+    assert node is not None
     caps = _caps(tmp_path)
     assert caps["trace_1cq"] is True and caps["trace_2cq"] is False
 
