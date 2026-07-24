@@ -82,16 +82,33 @@
 - name: "Gemma4-12B"
   model: google/gemma-4-12B-it
   coherence-test: true
-  server-timeout: 20
-  benchmark-timeout: 5
+  server-timeout: 30
+  benchmark-timeout: 10
   mesh-device: P150x4
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 400000000}'
-  additional-server-args: "--max_model_len 131072 --max_num_seqs 1 --async-scheduling"
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
   multimodal: false
   skus:
     bh_quietbox_2:
       timeout: 40
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: "Gemma4-12B"
+  model: google/gemma-4-12B-it
+  coherence-test: true
+  server-timeout: 30
+  benchmark-timeout: 10
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 50
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -135,16 +152,34 @@
 
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
-  server-timeout: 20
-  benchmark-timeout: 5
+  coherence-test: true
+  server-timeout: 35
+  benchmark-timeout: 15
   mesh-device: P150x4
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D"}'
-  additional-server-args: "--max_model_len 32768 --max_num_seqs 1 --async-scheduling"
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
   multimodal: false
   skus:
     bh_quietbox_2:
-      timeout: 35
+      timeout: 50
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: "Gemma4-31B"
+  model: google/gemma-4-31B-it
+  coherence-test: true
+  server-timeout: 35
+  benchmark-timeout: 15
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 60
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
