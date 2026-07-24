@@ -116,27 +116,6 @@ class MLP(LightweightModule):
 
             self.prefetcher.register_callback(register_weights)
 
-    def _update_w1(self, tensor: ttnn.Tensor) -> None:
-        """In-place replace ``self.w1`` (gate_proj) via ``ttnn.copy``. Caller must
-        match the constructor's ``self.w1``: shape ``(1, 1, dim, hidden_dim)``
-        (transposed from HF), TILE, same ``ShardTensor2dMesh`` dims and memcfg.
-        """
-        copy_to_buffer(tensor, self.w1, self.ff1_3_dtype)
-
-    def _update_w2(self, tensor: ttnn.Tensor) -> None:
-        """In-place replace ``self.w2`` (down_proj) via ``ttnn.copy``. Shape
-        ``(1, 1, hidden_dim, dim)`` (transposed from HF), TILE, same
-        ``ShardTensor2dMesh`` dims and memcfg as constructed.
-        """
-        copy_to_buffer(tensor, self.w2, self.ff2_dtype)
-
-    def _update_w3(self, tensor: ttnn.Tensor) -> None:
-        """In-place replace ``self.w3`` (up_proj) via ``ttnn.copy``.
-
-        Same shape/layout/memcfg constraints as ``_update_w1``.
-        """
-        copy_to_buffer(tensor, self.w3, self.ff1_3_dtype)
-
     def update(
         self,
         *,
@@ -171,9 +150,9 @@ class MLP(LightweightModule):
         w3_internal = ttnn.transpose(up_proj, -2, -1)
         w2_internal = ttnn.transpose(down_proj, -2, -1)
 
-        self._update_w1(w1_internal)
-        self._update_w3(w3_internal)
-        self._update_w2(w2_internal)
+        copy_to_buffer(w1_internal, self.w1, self.ff1_3_dtype)
+        copy_to_buffer(w3_internal, self.w3, self.ff1_3_dtype)
+        copy_to_buffer(w2_internal, self.w2, self.ff2_dtype)
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         """
