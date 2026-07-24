@@ -28,18 +28,80 @@ inline void set_dst_write_addr(std::uint32_t addr)
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index);
 }
 
+// UInt16 values in 32-bit DEST (fp32_dest_acc_en): datum lives in the low 16 bits with garbage in the
+// high half (#50215 / bit-11 removal). Sort/topk must INT32-load values, clear the high bits before
+// compare-swap, and SFPSTORE mode-9 before pack so the packer reads the high half. Gated by
+// TOPK_UINT16_FP32_DEST from the sort program factory when values are UInt16 and indices force 32-bit DEST.
+#if defined(TOPK_UINT16_FP32_DEST) && TOPK_UINT16_FP32_DEST
+constexpr bool TOPK_UINT16_IN_FP32_DEST = true;
+#else
+constexpr bool TOPK_UINT16_IN_FP32_DEST = false;
+#endif
+
+// SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16): low→high 16-bit so packer sees UInt16 in 32-bit DEST.
+constexpr std::uint32_t TOPK_SFPSTORE_MODE_PACK_UINT16 = 9;
+
+// 32 SFPU vectors cover one 32-bit DEST tile at addresses 0,2,...,62. Explicit offsets on
+// ADDR_MOD_7 (topk's incr=0 bank) avoid mutating ADDR_MOD_6 used for alt-stores.
+constexpr int TOPK_UINT16_ITERS_PER_TILE = 32;
+
+inline void topk_uint16_strip_tile(std::uint32_t tile_index, std::uint32_t store_mode)
+{
+    const std::uint32_t base = tile_index * 64;
+#pragma GCC unroll 0
+    for (int i = 0; i < TOPK_UINT16_ITERS_PER_TILE; i++)
+    {
+        const std::uint32_t addr = base + (i << 1);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, addr);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, store_mode, ADDR_MOD_7, addr);
+    }
+}
+
+inline void topk_uint16_clear_value_tiles_high_bits()
+{
+    if constexpr (TOPK_UINT16_IN_FP32_DEST)
+    {
+        sfpi::vConstIntPrgm0 = 0x0000FFFF;
+        set_dst_write_addr(0);
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        topk_uint16_strip_tile(0, static_cast<std::uint32_t>(InstrModLoadStore::INT32));
+        topk_uint16_strip_tile(1, static_cast<std::uint32_t>(InstrModLoadStore::INT32));
+        set_dst_write_addr(0);
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
+}
+
+inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t dst_tile_index)
+{
+    if constexpr (TOPK_UINT16_IN_FP32_DEST)
+    {
+        sfpi::vConstIntPrgm0 = 0x0000FFFF;
+        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+        set_dst_write_addr(0);
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        topk_uint16_strip_tile(dst_tile_index, TOPK_SFPSTORE_MODE_PACK_UINT16);
+        set_dst_write_addr(0);
+    }
+    else
+    {
+        (void)dst_tile_index;
+    }
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_load8(std::uint32_t offset, std::uint32_t dist)
 {
     constexpr std::uint32_t dst_indices_offset = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    constexpr InstrModLoadStore instr_mod_value = TOPK_UINT16_IN_FP32_DEST ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
 
     std::uint32_t face_offset = offset >> 4;
     std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
 
     // Load 16 consecutive numbers
-    TT_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, ld_offset);
-    TT_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, ld_offset + dist);
+    TT_SFPLOAD(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, ld_offset);
+    TT_SFPLOAD(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, ld_offset + dist);
 
     // Load 16 consecutive indices
     TT_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset);
@@ -51,13 +113,14 @@ inline void bitonic_topk_store8(std::uint32_t offset, std::uint32_t dist)
 {
     constexpr std::uint32_t dst_indices_offset = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    constexpr InstrModLoadStore instr_mod_value = TOPK_UINT16_IN_FP32_DEST ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
 
     std::uint32_t face_offset = offset >> 4;
     std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
 
     // Load 16 consecutive numbers
-    TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, ld_offset);
-    TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, ld_offset + dist);
+    TT_SFPSTORE(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, ld_offset);
+    TT_SFPSTORE(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, ld_offset + dist);
 
     // Load 16 consecutive indices
     TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset + 0);
@@ -69,20 +132,21 @@ inline void bitonic_topk_load16(std::uint32_t dist0, std::uint32_t dist1)
 {
     constexpr std::uint32_t dst_indices_offset = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    constexpr InstrModLoadStore instr_mod_value = TOPK_UINT16_IN_FP32_DEST ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
 
     // Load 16 consecutive numbers
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
+    TTI_SFPLOAD(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, 0);
     if ((dist0 == 4) && (dist1 == 8))
     {
-        TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 4);
-        TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, 8);
-        TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_7, 12);
+        TTI_SFPLOAD(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, 4);
+        TTI_SFPLOAD(p_sfpu::LREG2, instr_mod_value, ADDR_MOD_7, 8);
+        TTI_SFPLOAD(p_sfpu::LREG3, instr_mod_value, ADDR_MOD_7, 12);
     }
     else
     {
-        TT_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 0 + dist0);
-        TT_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, dist1);
-        TT_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_7, dist1 + dist0);
+        TT_SFPLOAD(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, 0 + dist0);
+        TT_SFPLOAD(p_sfpu::LREG2, instr_mod_value, ADDR_MOD_7, dist1);
+        TT_SFPLOAD(p_sfpu::LREG3, instr_mod_value, ADDR_MOD_7, dist1 + dist0);
     }
 
     // Load 16 consecutive indices
@@ -106,20 +170,21 @@ inline void bitonic_topk_store16(std::uint32_t dist0, std::uint32_t dist1)
 {
     constexpr std::uint32_t dst_indices_offset = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    constexpr InstrModLoadStore instr_mod_value = TOPK_UINT16_IN_FP32_DEST ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
 
     // Load 16 consecutive numbers
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, 0);
     if ((dist0 == 4) && (dist1 == 8))
     {
-        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 4);
-        TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 8);
-        TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_7, 12);
+        TTI_SFPSTORE(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, 4);
+        TTI_SFPSTORE(p_sfpu::LREG2, instr_mod_value, ADDR_MOD_7, 8);
+        TTI_SFPSTORE(p_sfpu::LREG3, instr_mod_value, ADDR_MOD_7, 12);
     }
     else
     {
-        TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0 + dist0);
-        TT_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, dist1);
-        TT_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_7, dist1 + dist0);
+        TT_SFPSTORE(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, 0 + dist0);
+        TT_SFPSTORE(p_sfpu::LREG2, instr_mod_value, ADDR_MOD_7, dist1);
+        TT_SFPSTORE(p_sfpu::LREG3, instr_mod_value, ADDR_MOD_7, dist1 + dist0);
     }
 
     // Load 16 consecutive indices
@@ -411,6 +476,9 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
     // If more than 1 phase is requested, do all the steps from all phases
     // If 1 phase is requested, use i_start_step/i_end_step parameters
 
+    // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
+    topk_uint16_clear_value_tiles_high_bits();
+
     // init the replay buffer for local sort if uninitialized
     bool init_load  = (topk_replay_init >= 0) ? true : false;
     bool init_store = (topk_replay_init >= 0) ? true : false;
@@ -577,6 +645,9 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT = false>
 inline void _bitonic_topk_merge(const int m_iter, const int k)
 {
+    // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
+    topk_uint16_clear_value_tiles_high_bits();
+
     std::uint32_t dst_addr_offset = 0;
     for (int face = 0; face < 2; face++)
     {
@@ -629,6 +700,9 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
 inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k, const int logk, const int skip_second)
 {
+    // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
+    topk_uint16_clear_value_tiles_high_bits();
+
     // init replay buffer for rebuild iteration 'm_iter' if uninitialized
     bool init_rebuild = (topk_replay_init != m_iter + 1) ? true : false;
 
@@ -899,6 +973,11 @@ inline void _init_topk()
 {
     topk_replay_init = 0;
     _sfpu_load_config32_(0xF, 0x0, 0x4); // Set bit [2] of the SFPU_CONTROL_REG to enable index tracking mode
+    if constexpr (TOPK_UINT16_IN_FP32_DEST)
+    {
+        // Mask used to clear garbage high bits when loading UInt16 from 32-bit DEST (LREG12 / vConstIntPrgm0).
+        sfpi::vConstIntPrgm0 = 0x0000FFFF;
+    }
 }
 
 } // namespace sfpu

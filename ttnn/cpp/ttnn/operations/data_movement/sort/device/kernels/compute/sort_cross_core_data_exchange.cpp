@@ -178,6 +178,8 @@ void kernel_main() {
                                     tile_index_high = index_dest_start;
                                 }
                             }
+                            // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).
+                            prepare_uint16_fp32_dest_value_tiles_for_pack(tile_input_low, tile_input_high);
                             tile_regs_commit();
                             tile_regs_wait();
 
@@ -206,7 +208,12 @@ void kernel_main() {
                             index_tensor_intermediate_dfb.push_back(one_tile);
 
                             copy_tile_between_cbs(
-                                global_old_cb, input_tensor_transposed_dfb, tile_id, value_tensor_intermediate_dfb);
+                                global_old_cb,
+                                input_tensor_transposed_dfb,
+                                tile_id,
+                                value_tensor_intermediate_dfb,
+                                0,
+                                /*prepare_uint16_value_for_pack=*/true);
                             value_tensor_intermediate_dfb.push_back(one_tile);
 
                             value_tensor_intermediate_dfb.reserve_back(one_tile);
@@ -217,7 +224,12 @@ void kernel_main() {
                             index_tensor_intermediate_dfb.push_back(one_tile);
 
                             copy_tile_between_cbs(
-                                global_old_cb, input_tensor_transposed_dfb, tile_id + 1, value_tensor_intermediate_dfb);
+                                global_old_cb,
+                                input_tensor_transposed_dfb,
+                                tile_id + 1,
+                                value_tensor_intermediate_dfb,
+                                0,
+                                /*prepare_uint16_value_for_pack=*/true);
                             value_tensor_intermediate_dfb.push_back(one_tile);
                             sync_packer_unpacker(packer_unpacker_sync_dfb);
                         }
@@ -263,6 +275,9 @@ void kernel_main() {
                             index_output_tile = index_dest_end;
                         }
 
+                        // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).
+                        prepare_uint16_fp32_dest_value_tile_for_pack(value_output_tile);
+
                         tile_regs_commit();
                         tile_regs_wait();
 
@@ -290,7 +305,11 @@ void kernel_main() {
         index_tensor_transposed_dfb.push_back(number_of_tiles_per_core);
 
         if constexpr (!is_row_major) {
-            transpose_and_pack(input_tensor_transposed_dfb, value_tensor_dfb, number_of_tiles_per_core);
+            transpose_and_pack(
+                input_tensor_transposed_dfb,
+                value_tensor_dfb,
+                number_of_tiles_per_core,
+                /*prepare_uint16_value_for_pack=*/true);
             transpose_and_pack(index_tensor_transposed_dfb, index_tensor_output_dfb, number_of_tiles_per_core);
         } else {
             // ROW_MAJOR output: un-transpose the sorted tiles back into the
@@ -315,7 +334,11 @@ void kernel_main() {
                 number_of_tiles_per_core % SUB_BLOCK_DIM == 0,
                 "number_of_tiles_per_core must be divisible by SUB_BLOCK_DIM");
 
-            transpose_and_pack(input_tensor_transposed_dfb, input_tensor_dfb, number_of_tiles_per_core);
+            transpose_and_pack(
+                input_tensor_transposed_dfb,
+                input_tensor_dfb,
+                number_of_tiles_per_core,
+                /*prepare_uint16_value_for_pack=*/true);
 
             transpose_and_pack(index_tensor_transposed_dfb, rm_post_sort_index_dfb, number_of_tiles_per_core);
 
