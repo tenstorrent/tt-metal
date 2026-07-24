@@ -403,17 +403,17 @@ references without parsing the kernel source.</p>
 <span class="linenos"> 45</span><span class="w">    </span><span class="p">};</span>
 <span class="linenos"> 46</span>
 <span class="linenos"> 47</span><span class="w">    </span><span class="c1">// Define the return types for the spec(s) of the operation.</span>
-<span class="linenos"> 48</span><span class="w">    </span><span class="c1">// Can be a single ttnn::TensorSpec, std::optional&lt;ttnn::TensorSpec&gt;, std::vector&lt;ttnn::TensorSpec&gt;,</span>
-<span class="linenos"> 49</span><span class="w">    </span><span class="c1">// std::tuple&lt;ttnn::TensorSpec, ...&gt; etc.</span>
-<span class="linenos"> 50</span><span class="w">    </span><span class="k">using</span><span class="w"> </span><span class="n">spec_return_value_t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">TensorSpec</span><span class="p">;</span>
+<span class="linenos"> 48</span><span class="w">    </span><span class="c1">// Can be a single tt::tt_metal::TensorSpec, std::optional&lt;tt::tt_metal::TensorSpec&gt;,</span>
+<span class="linenos"> 49</span><span class="w">    </span><span class="c1">// std::vector&lt;tt::tt_metal::TensorSpec&gt;, std::tuple&lt;tt::tt_metal::TensorSpec, ...&gt; etc.</span>
+<span class="linenos"> 50</span><span class="w">    </span><span class="k">using</span><span class="w"> </span><span class="n">spec_return_value_t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">TensorSpec</span><span class="p">;</span>
 <span class="linenos"> 51</span>
 <span class="linenos"> 52</span><span class="w">    </span><span class="c1">// Define the return types for the tensor(s) of the operation.</span>
 <span class="linenos"> 53</span><span class="w">    </span><span class="c1">// Can be a single Tensor, std::optional&lt;Tensor&gt;, std::vector&lt;Tensor&gt;, std::tuple&lt;Tensor, ...&gt; etc.</span>
 <span class="linenos"> 54</span><span class="w">    </span><span class="k">using</span><span class="w"> </span><span class="n">tensor_return_value_t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Tensor</span><span class="p">;</span>
 <span class="linenos"> 55</span>
 <span class="linenos"> 56</span><span class="w">    </span><span class="c1">// Note: spec_return_value_t and tensor_return_value_t should follow the same pattern.</span>
-<span class="linenos"> 57</span><span class="w">    </span><span class="c1">// i.e. if spec_return_value_t is a std::vector&lt;std::optional&lt;ttnn::TensorSpec&gt;&gt; then tensor_return_value_t should</span>
-<span class="linenos"> 58</span><span class="w">    </span><span class="c1">// be std::vector&lt;std::optional&lt;Tensor&gt;&gt;</span>
+<span class="linenos"> 57</span><span class="w">    </span><span class="c1">// i.e. if spec_return_value_t is a std::vector&lt;std::optional&lt;tt::tt_metal::TensorSpec&gt;&gt; then tensor_return_value_t</span>
+<span class="linenos"> 58</span><span class="w">    </span><span class="c1">// should be std::vector&lt;std::optional&lt;Tensor&gt;&gt;</span>
 <span class="linenos"> 59</span>
 <span class="linenos"> 60</span><span class="w">    </span><span class="c1">// -------------------------------------------------------------------------</span>
 <span class="linenos"> 61</span><span class="w">    </span><span class="c1">// Descriptor-based program factories</span>
@@ -494,7 +494,7 @@ references without parsing the kernel source.</p>
 <span class="linenos">22</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">spec_return_value_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::compute_output_specs</span><span class="p">(</span>
 <span class="linenos">23</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="linenos">24</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">.</span><span class="n">input_tensor</span><span class="p">;</span>
-<span class="linenos">25</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">TensorSpec</span><span class="p">(</span>
+<span class="linenos">25</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">TensorSpec</span><span class="p">(</span>
 <span class="linenos">26</span><span class="w">        </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">logical_shape</span><span class="p">(),</span>
 <span class="linenos">27</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">TensorLayout</span><span class="p">(</span>
 <span class="linenos">28</span><span class="w">            </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">dtype</span><span class="p">(),</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">PageConfig</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">.</span><span class="n">layout</span><span class="p">()),</span><span class="w"> </span><span class="n">MemoryConfig</span><span class="p">{}));</span>

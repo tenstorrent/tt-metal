@@ -230,20 +230,50 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.split">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">split</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.split" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">split</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#ttnn.split" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Returns a tensor that is in num_splits ways on dim.</p>
-<p>Equivalent pytorch code:</p>
+<p>Splits <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> into chunks along dimension <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> and returns them as a list of tensors.</p>
+<p>The behavior depends on the type of <code class="xref py py-attr docutils literal notranslate"><span class="pre">split_size</span></code>:</p>
+<ul class="simple">
+<li><p>If <code class="xref py py-attr docutils literal notranslate"><span class="pre">split_size</span></code> is an <code class="docutils literal notranslate"><span class="pre">int</span></code>, the tensor is split into contiguous chunks of
+<code class="docutils literal notranslate"><span class="pre">split_size</span></code> elements along <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>. When <code class="docutils literal notranslate"><span class="pre">input_tensor.shape[dim]</span></code> is not an
+exact multiple of <code class="docutils literal notranslate"><span class="pre">split_size</span></code>, the final chunk holds the remainder and is smaller.
+The number of outputs is <code class="docutils literal notranslate"><span class="pre">ceil(input_tensor.shape[dim]</span> <span class="pre">/</span> <span class="pre">split_size)</span></code>.</p></li>
+<li><p>If <code class="xref py py-attr docutils literal notranslate"><span class="pre">split_size</span></code> is a <code class="docutils literal notranslate"><span class="pre">list[int]</span></code>, the tensor is split into <code class="docutils literal notranslate"><span class="pre">len(split_size)</span></code>
+contiguous chunks whose sizes along <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> are the list entries, in order. The
+entries must sum exactly to <code class="docutils literal notranslate"><span class="pre">input_tensor.shape[dim]</span></code>.</p></li>
+</ul>
+<p>Constraints:</p>
+<ul class="simple">
+<li><p>Every chunk size must be greater than 0 (both a zero entry in a <code class="xref py py-attr docutils literal notranslate"><span class="pre">split_size</span></code>
+list and a zero-size split dimension raise an error; zero-volume tensors are not
+supported by the device kernels).</p></li>
+<li><p>For a <code class="xref py py-attr docutils literal notranslate"><span class="pre">split_size</span></code> list, the entries must sum exactly to <code class="docutils literal notranslate"><span class="pre">input_tensor.shape[dim]</span></code>;
+an error is raised for both under- and over-covering lists.</p></li>
+</ul>
+<p>Example:</p>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="n">output_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="c1"># int split_size: 6 along dim=1 -&gt; chunks of size 2</span>
+<span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>  <span class="c1"># input_tensor.shape[1] == 6</span>
+
+<span class="c1"># list split_size: explicit per-chunk sizes summing to shape[1]</span>
+<span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>  <span class="c1"># input_tensor.shape[1] == 6</span>
 </pre></div>
 </div>
 <p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: Input Tensor.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">split_size</span></code>: Single chunk size or list of chunk sizes. Output may be smaller if dim not evenly divisible.
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">split_size</span></code>: Size of a single chunk, or a list of per-chunk sizes.
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">split_size</span></code>: Union[int, list[int]]
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim2</span></code>: Dim to split. Defaults to 0.</p>
-<p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: Memory Config of the output tensor</p>
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>: Dimension along which to split. Negative indexing is supported. Defaults to 0.
+:type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>: int</p>
+<p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: Memory Config of the output tensors.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><em>List[ttnn.Tensor]</em> – The list of output tensors.</p>
+</dd>
+</dl>
 </dd>
 </dl>
 

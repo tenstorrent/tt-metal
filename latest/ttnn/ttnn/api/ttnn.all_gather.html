@@ -195,45 +195,45 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.all_gather">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">all_gather</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster_axis</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subdevice_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.SubDeviceId</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_links</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">topology</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Topology</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunks_per_sync</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_workers_per_link</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_buffers_per_channel</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">CoreRangeSet</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_l1_small_for_semaphores</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.all_gather" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">all_gather</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim:</span> <span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster_axis:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">the</span> <span class="pre">input</span> <span class="pre">tensor's</span> <span class="pre">memory</span> <span class="pre">config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">=</span> <span class="pre">None</span> <span class="pre">(op</span> <span class="pre">allocates</span> <span class="pre">a</span> <span class="pre">new</span> <span class="pre">output</span> <span class="pre">tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subdevice_id:</span> <span class="pre">ttnn.SubDeviceId</span> <span class="pre">=</span> <span class="pre">the</span> <span class="pre">first</span> <span class="pre">subdevice</span> <span class="pre">on</span> <span class="pre">the</span> <span class="pre">mesh</span> <span class="pre">device</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids:</span> <span class="pre">CoreRangeSet</span> <span class="pre">=</span> <span class="pre">all</span> <span class="pre">cores</span> <span class="pre">on</span> <span class="pre">the</span> <span class="pre">chosen</span> <span class="pre">subdevice</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_links:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">topology:</span> <span class="pre">ttnn.Topology</span> <span class="pre">|</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunks_per_sync:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_workers_per_link:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_buffers_per_channel:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_l1_small_for_semaphores:</span> <span class="pre">bool</span> <span class="pre">|</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.all_gather" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>All-gather operation across devices along a selected dimension and optional cluster axis. If cluster axis is specified then we gather across the cluster axis, resulting in identical tensor shards across all devices along the cluster axis. If it is not specified, then we gather across all devices in the mesh. All-gather is a collective operation that gathers data from all devices into a new output tensor, concatenated along the specified <cite>dim</cite>. When cluster_axis is specified, each of the non-cluster_axis dimensions are performing independent all-gathers along the devices on the cluster axis. When the layout is row-major or we have tile padding on the gather dim, we use the composite all-gather implementation that falls back to all-broadcast.</p>
+<p>Performs an all-gather collective operation that gathers data from all devices into a new output tensor, concatenated along the specified <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>. If the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> has unaligned row-major pages or padded tiles on the gather <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>, a slower composite all-gather implementation is used.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
 <li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – Input tensor to be gathered.</p></li>
-<li><p><strong>dim</strong> (<em>int</em>) – Dimension along which to gather.</p></li>
+<li><p><strong>dim</strong> (<em>int</em>) – Dimension along which to concatenate.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>cluster_axis</strong> (<em>int</em><em>, </em><em>optional</em>) – The axis on the mesh device to gather across. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>subdevice_id</strong> (<em>ttnn.SubDeviceId</em><em>, </em><em>optional</em>) – Subdevice id for worker cores.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Output memory configuration.</p></li>
-<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor.</p></li>
-<li><p><strong>num_links</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of links to use for the all-gather operation. Defaults to <cite>None</cite>, for which the number of links is determined automatically.</p></li>
-<li><p><strong>topology</strong> (<em>ttnn.Topology</em><em>, </em><em>optional</em>) – Fabric topology. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>chunks_per_sync</strong> (<em>int</em><em>, </em><em>optional</em>) – Hyperparameter.</p></li>
-<li><p><strong>num_workers_per_link</strong> (<em>int</em><em>, </em><em>optional</em>) – Hyperparameter.</p></li>
-<li><p><strong>num_buffers_per_channel</strong> (<em>int</em><em>, </em><em>optional</em>) – Hyperparameter.</p></li>
-<li><p><strong>sub_core_grids</strong> (<em>CoreRangeSet</em><em>, </em><em>optional</em>) – Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.</p></li>
-<li><p><strong>use_l1_small_for_semaphores</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, allocate internal global semaphores in L1_SMALL instead of L1 to reduce L1 fragmentation. Defaults to <cite>False</cite>.</p></li>
+<li><p><strong>cluster_axis</strong> (<em>int</em><em>, </em><em>optional</em>) – Axis on the 2D mesh device grid to gather along. Each of the non-cluster_axis dimensions perform independent all-gathers along the devices on the cluster_axis. Irrelevant for 1D mesh grids.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the output tensor. Defaults to the input tensor’s memory config.</p></li>
+<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Pre-allocated output tensor, can improve performance if provided. This must be allocated before invoking any op to avoid races. Defaults to None (op allocates a new output tensor).</p></li>
+<li><p><strong>subdevice_id</strong> (<em>ttnn.SubDeviceId</em><em>, </em><em>optional</em>) – Subdevice id for worker cores. Defaults to the first subdevice on the mesh device.</p></li>
+<li><p><strong>sub_core_grids</strong> (<em>CoreRangeSet</em><em>, </em><em>optional</em>) – Restricts worker core selection to this sub-grid. Defaults to all cores on the chosen subdevice.</p></li>
+<li><p><strong>num_links</strong> (<em>int</em><em>, </em><em>optional</em>) – Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.</p></li>
+<li><p><strong>topology</strong> (<em>ttnn.Topology</em><em>, </em><em>optional</em>) – Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.</p></li>
+<li><p><strong>chunks_per_sync</strong> (<em>int</em><em>, </em><em>optional</em>) – Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.</p></li>
+<li><p><strong>num_workers_per_link</strong> (<em>int</em><em>, </em><em>optional</em>) – Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.</p></li>
+<li><p><strong>num_buffers_per_channel</strong> (<em>int</em><em>, </em><em>optional</em>) – Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.</p></li>
+<li><p><strong>use_l1_small_for_semaphores</strong> (<em>bool</em><em>, </em><em>optional</em>) – Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the <cite>cluster_axis</cite> if specified, else the total number of devices along the mesh.</p>
+<p><em>ttnn.Tensor</em> – The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the <cite>cluster_axis</cite> if specified, else the total number of devices in the mesh.</p>
 </dd>
 </dl>
-<p>Supported dtypes and layouts:</p>
-<blockquote>
-<div>
+<dl>
+<dt>Supported dtypes and layouts:</dt>
+<dd>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
@@ -243,21 +243,18 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B, FLOAT32, UINT32</p></td>
+<td><p>Any</p></td>
 <td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
-<p>All-gather is a data-movement collective and does not restrict the input dtype (e.g. UINT32 is supported and tested); the output preserves the input dtype. Input must be rank 2 or greater. Row-major inputs, and tiled inputs whose gather dim is not tile-aligned, are routed through the composite (all-broadcast based) implementation.</p>
-</div>
-</blockquote>
-<dl class="simple">
+</dd>
 <dt>Memory Support:</dt>
 <dd>
 <ul class="simple">
-<li><p>Interleaved: DRAM and L1 (input and output)</p></li>
-<li><p>Sharded input: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED; a BLOCK_SHARDED input must be in L1 (DRAM block sharding is rejected), the others may be in DRAM or L1.</p></li>
-<li><p>Sharded output: the output memory config may differ from the input’s and is not subject to the input BLOCK_SHARDED/DRAM restriction.</p></li>
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Sharded: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED (DRAM and L1)</p></li>
+<li><p>Input and output memory configs are independent; any supported combination may be used.</p></li>
 </ul>
 </dd>
 </dl>
