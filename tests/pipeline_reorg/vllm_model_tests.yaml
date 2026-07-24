@@ -1,0 +1,472 @@
+# This file defines the test matrix for the vLLM Model Tests pipelines.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   model: HF hub id of the model to serve (also used for workflow_dispatch model filtering).
+#   skus: A mapping of SKU names to their configuration:
+#     timeout: Job timeout in minutes (whole-job guard; also summed for budget checks).
+#     tier: Model tier (1, 2, or 3). Classification only — every entry runs at the
+#           same cadence in this single pipeline. The value mirrors the tier of the
+#           equivalent model in the e2e/unit pipelines (models_e2e_tests.yaml /
+#           models_unit_tests.yaml) for the matching SKU, for reporting/parity.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#
+# vLLM-specific per-entry keys (consumed by vllm-model-tests-impl.yaml):
+#   server-timeout / benchmark-timeout / sampling-test-timeout: per-step timeouts (minutes).
+#   mesh-device, arch, tt-config, additional-server-args, additional-benchmark-args,
+#   additional-structured-output-args, default-chat-template-kwargs, tt-llama-text-ver,
+#   tt-qwen3-text-ver, tt_mm_throttle_perf: server / benchmark configuration.
+#   coherence-test / structured-output / multimodal / sampling-tests: optional test toggles.
+#   sampling-test-filter: -k filter for the sampling test step.
+#
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# ── Gemma 3 ────────────────────────────────────────────────────────
+
+- name: "[WH-T3K] Gemma3-27B"
+  model: google/gemma-3-27b-it
+  server-timeout: 45
+  benchmark-timeout: 5
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "l1_small_size": 4096}'
+  additional-server-args: "--async-scheduling"
+  tt-llama-text-ver: tt_transformers
+  multimodal: true
+  skus:
+    wh_llmbox:
+      timeout: 65
+      tier: 2
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U08BH66EXAL # Radoica Draskic
+  team: models
+
+- name: "[WH-GLX] Gemma3-27B DP=4"
+  model: google/gemma-3-27b-it
+  server-timeout: 45
+  benchmark-timeout: 5
+  mesh-device: "(4, 8)"
+  arch: arch-wormhole_b0
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D_RING", "l1_small_size": 4096}'
+  additional-server-args: "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling"
+  tt_mm_throttle_perf: 5
+  tt-llama-text-ver: tt_transformers
+  multimodal: true
+  skus:
+    wh_galaxy_perf:
+      timeout: 65
+      tier: 2
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U08BH66EXAL # Radoica Draskic
+  team: models
+
+# ── Gemma 4 ────────────────────────────────────────────────────────
+
+- name: "[WH-N150] Gemma4-E2B"
+  model: google/gemma-4-E2B-it
+  server-timeout: 30
+  benchmark-timeout: 12
+  coherence-test: true
+  mesh-device: N150
+  arch: arch-wormhole_b0
+  additional-server-args: "--max_num_seqs 1 --async-scheduling"
+  multimodal: false
+  skus:
+    wh_n150:
+      timeout: 65
+      tier: 3
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: "[BH-QB-2] Gemma4-12B"
+  model: google/gemma-4-12B-it
+  coherence-test: true
+  server-timeout: 20
+  benchmark-timeout: 5
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 400000000}'
+  additional-server-args: "--max_model_len 131072 --max_num_seqs 1 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_quietbox_2:
+      timeout: 40
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: "[BH-QB-2] Gemma4-26B-A4B"
+  model: google/gemma-4-26B-A4B-it
+  coherence-test: true
+  server-timeout: 30
+  benchmark-timeout: 10
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 300000000}'
+  additional-server-args: "--max_model_len 131072 --max_num_seqs 1 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_quietbox_2:
+      timeout: 60
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+# KNOWN ERROR — [WH-T3K] Gemma4-31B: device hang (fast-dispatch timeout) during
+# decode on WH-T3K only; the same serving config passes on [BH-QB-2] Gemma4-31B.
+# Not a serving/KV-config issue — a tt-metal dispatch-layer hang. Kept enabled to
+# track. https://github.com/tenstorrent/tt-metal/issues/49494
+- name: "[WH-T3K] Gemma4-31B"
+  model: google/gemma-4-31B-it
+  server-timeout: 45
+  benchmark-timeout: 5
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D"}'
+  additional-server-args: "--max_model_len 32768 --max_num_seqs 1 --async-scheduling"
+  multimodal: false
+  skus:
+    wh_llmbox:
+      timeout: 60
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: "[BH-QB-2] Gemma4-31B"
+  model: google/gemma-4-31B-it
+  server-timeout: 20
+  benchmark-timeout: 5
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D"}'
+  additional-server-args: "--max_model_len 32768 --max_num_seqs 1 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_quietbox_2:
+      timeout: 35
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+# ── Qwen 3.6 ───────────────────────────────────────────────────────
+
+- name: "[BH-QB-2] Qwen3.6-27B (multimodal B=1)"
+  model: Qwen/Qwen3.6-27B
+  coherence-test: true
+  server-timeout: 30
+  benchmark-timeout: 10
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 268435456, "l1_small_size": 24576}'
+  additional-server-args: "--max_num_seqs 1 --async-scheduling"
+  default-chat-template-kwargs: '{"enable_thinking": false}'
+  multimodal: true
+  skus:
+    bh_quietbox_2:
+      timeout: 70
+      tier: 1
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
+- name: "[BH-QB-2] Qwen3.6-27B (batch=8)"
+  model: Qwen/Qwen3.6-27B
+  coherence-test: true
+  server-timeout: 35
+  benchmark-timeout: 10
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 1073741824, "l1_small_size": 24576}'
+  additional-server-args: "--max_num_seqs 8 --max_model_len 65536 --async-scheduling"
+  default-chat-template-kwargs: '{"enable_thinking": false}'
+  multimodal: false
+  skus:
+    bh_quietbox_2:
+      timeout: 65
+      tier: 1
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
+# ── GPT-OSS ────────────────────────────────────────────────────────
+
+- name: "[WH-GLX] GPT-OSS-120B (low-latency)"
+  model: openai/gpt-oss-120b
+  server-timeout: 35
+  benchmark-timeout: 15
+  mesh-device: "(4, 8)"
+  arch: arch-wormhole_b0
+  multimodal: false
+  tt-llama-text-ver: tt_transformers
+  tt-config: '{"sample_on_device_mode": "all"}'
+  additional-server-args: "--max_num_seqs 1 --async-scheduling"
+  structured-output: true
+  additional-structured-output-args: "--backend openai-chat --endpoint /v1/chat/completions --dataset json"
+  skus:
+    wh_galaxy_perf:
+      timeout: 75
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  co-owner-2-id: U06F3ER8X9A # Stuti Raizada
+  team: models
+
+- name: "[WH-GLX] GPT-OSS-120B (high-throughput)"
+  model: openai/gpt-oss-120b
+  server-timeout: 35
+  benchmark-timeout: 10
+  mesh-device: "(4, 8)"
+  arch: arch-wormhole_b0
+  multimodal: false
+  tt-llama-text-ver: tt_transformers
+  tt-config: '{"fabric_config": "FABRIC_1D_RING", "sample_on_device_mode": "all", "trace_region_size": 100000000}'
+  tt_mm_throttle_perf: 2
+  additional-server-args: "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling"
+  structured-output: true
+  sampling-tests: true
+  sampling-test-timeout: 40
+  additional-structured-output-args: "--backend openai-chat --endpoint /v1/chat/completions --dataset json"
+  skus:
+    wh_galaxy_perf:
+      timeout: 105
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  co-owner-2-id: U06F3ER8X9A # Stuti Raizada
+  team: models
+
+# ── Llama ──────────────────────────────────────────────────────────
+
+- name: "[WH-T3K] Llama-3.1-8B-Instruct with sampling-tests"
+  model: meta-llama/Llama-3.1-8B-Instruct
+  server-timeout: 15
+  benchmark-timeout: 5
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: tt_transformers
+  tt-config: '{"fabric_config": "FABRIC_1D", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
+  additional-server-args: "--async-scheduling"
+  structured-output: true
+  sampling-tests: true
+  sampling-test-filter: "not test_mixed_params_batch and not TestSeedingAndVariety and not test_repetition_penalty_mixed_batch and not test_presence_penalty_mixed_batch and not test_frequency_penalty_mixed_batch"
+  multimodal: false
+  skus:
+    wh_llmbox:
+      timeout: 45
+      tier: 2
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U08CEGF78ET # Salar Hosseini Khorasgani
+  team: models
+
+- name: "[WH-T3K] Llama-3.1-8B-Instruct (prefix caching)"
+  model: meta-llama/Llama-3.1-8B-Instruct
+  server-timeout: 10
+  benchmark-timeout: 5
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: tt_transformers
+  tt-config: '{"fabric_config": "FABRIC_1D"}'
+  multimodal: false
+  additional-benchmark-args: "--random-prefix-len 128"
+  additional-server-args: "--async-scheduling"
+  skus:
+    wh_llmbox:
+      timeout: 25
+      tier: 2
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U08CEGF78ET # Salar Hosseini Khorasgani
+  team: models
+
+- name: "[BH-QB-2] Llama-3.1-8B-Instruct"
+  model: meta-llama/Llama-3.1-8B-Instruct
+  server-timeout: 10
+  benchmark-timeout: 10
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"trace_region_size": 76000000}'
+  tt-llama-text-ver: tt_transformers
+  additional-server-args: "--async-scheduling"
+  structured-output: true
+  multimodal: false
+  skus:
+    bh_quietbox_2:
+      timeout: 40
+      tier: 2
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+
+- name: "[BH-LB] Llama-3.1-8B-Instruct with sampling-tests"
+  model: meta-llama/Llama-3.1-8B-Instruct
+  server-timeout: 35
+  benchmark-timeout: 10
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-llama-text-ver: tt_transformers
+  additional-server-args: "--data_parallel_size 8 --async-scheduling"
+  structured-output: true
+  sampling-tests: true
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 75
+      tier: 2
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+
+- name: "[WH-GLX] Llama-3.1-8B-Instruct DP=4"
+  model: meta-llama/Llama-3.1-8B-Instruct
+  server-timeout: 20
+  benchmark-timeout: 5
+  mesh-device: TG
+  arch: arch-wormhole_b0
+  tt-config: '{"fabric_config": "FABRIC_1D_RING", "sample_on_device_mode": "all"}'
+  tt-llama-text-ver: tt_transformers
+  additional-server-args: "--data_parallel_size 4 --async-scheduling"
+  structured-output: true
+  multimodal: false
+  skus:
+    wh_galaxy_perf:
+      timeout: 40
+      tier: 1
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U08BH66EXAL # Radoica Draskic
+  team: models
+
+- name: "[WH-GLX] Llama-3.3-70B-Instruct device with sampling-tests (prefix caching)"
+  model: meta-llama/Llama-3.3-70B-Instruct
+  server-timeout: 35
+  benchmark-timeout: 10
+  mesh-device: TG
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: llama3_70b_galaxy
+  tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 220000000}'
+  additional-server-args: "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling"
+  additional-benchmark-args: "--random-prefix-len 256"
+  sampling-tests: true
+  multimodal: false
+  skus:
+    wh_galaxy_perf:
+      timeout: 65
+      tier: 1
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U08CEGF78ET # Salar Hosseini Khorasgani
+  team: models
+
+# ── Qwen 3 ─────────────────────────────────────────────────────────
+
+- name: "[WH-GLX] Qwen3-32B device with sampling-tests"
+  model: Qwen/Qwen3-32B
+  server-timeout: 35
+  benchmark-timeout: 10
+  mesh-device: TG
+  arch: arch-wormhole_b0
+  tt-qwen3-text-ver: qwen3_32b_galaxy
+  tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}'
+  additional-server-args: "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling"
+  sampling-tests: true
+  multimodal: false
+  skus:
+    wh_galaxy_perf:
+      timeout: 65
+      tier: 1
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
+# ── Qwen VL ────────────────────────────────────────────────────────
+
+- name: "[WH-T3K] Qwen2.5-VL-72B-Instruct"
+  model: Qwen/Qwen2.5-VL-72B-Instruct
+  server-timeout: 12
+  benchmark-timeout: 10
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: tt_transformers
+  tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 28467200}'
+  structured-output: true
+  multimodal: true
+  additional-server-args: "--max_model_len 2048 --async-scheduling"
+  skus:
+    wh_llmbox:
+      timeout: 52
+      tier: 2
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+
+- name: "[WH-T3K] Qwen3-VL-32B-Instruct"
+  model: Qwen/Qwen3-VL-32B-Instruct
+  coherence-test: false
+  server-timeout: 10
+  benchmark-timeout: 10
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: tt_transformers
+  tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 28467200}'
+  structured-output: true
+  multimodal: true
+  additional-server-args: "--max_model_len 131072 --async-scheduling"
+  skus:
+    wh_llmbox:
+      timeout: 50
+      tier: 2
+  owner_id: U08H31YMN4Q # Sarva Sanjay
+  team: models
+
+# ── Infra / overhead ───────────────────────────────────────────────
+
+- name: "[WH-GLX] NoOp test model (vLLM overhead)"
+  model: models/vllm_test_utils/no_op_test
+  server-timeout: 2
+  benchmark-timeout: 2
+  mesh-device: "(1, 1)"
+  arch: arch-wormhole_b0
+  tt-config: '{"register_test_models": true, "input_queue_batching_delay": 0}'
+  additional-server-args: "--tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling"
+  additional-benchmark-args: "--tokenizer meta-llama/Llama-3.1-8B-Instruct --temperature 0.0"
+  multimodal: false
+  skus:
+    wh_galaxy_perf:
+      timeout: 15
+      tier: 1
+  owner_id: U08CEGF78ET # Salar Hosseini Khorasgani
+  team: models
+
+# ── Disabled entries (preserved for re-enable) ─────────────────────
+#
+# [WH-T3K] Gemma4-26B-A4B — DRAM OOM during KV cache allocation (layer 25/30)
+# causes EngineCore init failure on WH-T3K. Re-enable once hybrid KV cache is
+# enabled. https://github.com/tenstorrent/tt-metal/issues/49257
+#
+# - name: "[WH-T3K] Gemma4-26B-A4B"
+#   model: google/gemma-4-26B-A4B-it
+#   coherence-test: true
+#   server-timeout: 30
+#   benchmark-timeout: 10
+#   mesh-device: T3K
+#   arch: arch-wormhole_b0
+#   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 200000000}'
+#   additional-server-args: "--max_num_seqs 1 --async-scheduling"
+#   multimodal: false
+#   skus:
+#     wh_llmbox:
+#       timeout: 45
+#       tier: 2
+#   owner_id: U08TJ70UFRT # Harry Andrews
+#   team: models
+#
+# [WH-T3K] Multi-process reduce scatter test model — Metal timeout in
+# reduce-scatter async tests. https://github.com/tenstorrent/vllm/issues/416
+# Originally disabled in https://github.com/tenstorrent/tt-metal/pull/39088
+#
+# - name: "[WH-T3K] Multi-process reduce scatter test model"
+#   model: models/vllm_test_utils/t3000_multiproc_test
+#   server-timeout: 4
+#   benchmark-timeout: 4
+#   mesh-device: "(2, 4)"
+#   arch: arch-wormhole_b0
+#   tt-config: '{"rank_binding": "tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml", "mpi_args": "--allow-run-as-root --tag-output", "config_pkl_dir": "vllm", "register_test_models": true}'
+#   additional-server-args: "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling"
+#   additional-benchmark-args: "--tokenizer meta-llama/Llama-3.1-8B-Instruct"
+#   multimodal: false
+#   skus:
+#     wh_llmbox:
+#       timeout: 15
+#       tier: 2
+#   owner_id: U08CEGF78ET # Salar Hosseini Khorasgani
+#   team: models

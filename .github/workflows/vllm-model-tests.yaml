@@ -1,0 +1,166 @@
+name: "vLLM Model Tests"
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # Runs every day at 12am UTC — all models, all SKUs
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Select model to test (substring match on HF hub id)"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - meta-llama/Llama-3.1-8B-Instruct
+          - meta-llama/Llama-3.3-70B-Instruct
+          - Qwen/Qwen3-32B
+          - Qwen/Qwen3.6-27B
+          - Qwen/Qwen2.5-VL-72B-Instruct
+          - Qwen/Qwen3-VL-32B-Instruct
+          - google/gemma-3-27b-it
+          - google/gemma-4
+          - openai/gpt-oss-120b
+          - models/vllm_test_utils/no_op_test
+      sku:
+        description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - "wh_llmbox (T3000)"
+          - "wh_galaxy_perf (WH Galaxy perf)"
+          - "bh_quietbox_2 (BH QB2)"
+          - "bh_loudbox (BH LoudBox)"
+          - "wh_n150 (N150)"
+      tier:
+        description: "Select tier to test (classification mirrors the e2e/unit tier; 'all' runs every tier)"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - "1"
+          - "2"
+          - "3"
+      vllm-commit:
+        description: "vLLM branch or sha"
+        required: false
+        default: dev
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+      mlperf-write-access:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable read-write access to /mnt/MLPerf (e.g. to regenerate tensor cache). Default is read-only."
+
+permissions:
+  packages: write
+  contents: write
+
+run-name: "vLLM Model Tests ${{ github.event_name == 'schedule' && '[scheduled]' || format('[{0}] [{1}] [{2}]', (inputs.model == 'all' && 'All models' || inputs.model), (inputs.sku == 'all' && 'All SKUs' || inputs.sku), (inputs.tier == 'all' && 'All tiers' || format('Tier {0}', inputs.tier))) }}"
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+  resolve-skus:
+    runs-on: ubuntu-slim
+    outputs:
+      enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
+      model: ${{ steps.resolve.outputs.model }}
+      tier: ${{ steps.resolve.outputs.tier }}
+    steps:
+      - name: Resolve SKU, model and tier selection
+        id: resolve
+        run: |
+          ALL_SKUS="wh_llmbox,wh_galaxy_perf,bh_quietbox_2,bh_loudbox,wh_n150"
+          EVENT="${{ github.event_name }}"
+          if [[ "$EVENT" == "workflow_dispatch" ]]; then
+            SKU_INPUT="${{ inputs.sku || 'all' }}"
+            if [[ "$SKU_INPUT" == "all" ]]; then
+              echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+            else
+              SKU_NAME=$(echo "$SKU_INPUT" | sed 's/ (.*//')
+              echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
+            fi
+            echo "model=${{ inputs.model }}" >> $GITHUB_OUTPUT
+            echo "tier=${{ inputs.tier || 'all' }}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          # Scheduled runs: all models, all SKUs, all tiers
+          echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+          echo "model=all" >> $GITHUB_OUTPUT
+          echo "tier=all" >> $GITHUB_OUTPUT
+  validate-filters:
+    # Fail fast (seconds, before the build) if the selected model/SKU/tier
+    # combination selects no tests. Prints the valid combinations on failure.
+    needs: resolve-skus
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Validate filter combination
+        run: |
+          python3 .github/scripts/utils/validate_test_combination.py \
+            ./tests/pipeline_reorg/vllm_model_tests.yaml \
+            "${{ needs.resolve-skus.outputs.enabled-skus }}" \
+            "${{ needs.resolve-skus.outputs.tier }}" \
+            "${{ needs.resolve-skus.outputs.model }}"
+  build-artifact:
+    needs: [check-harbor, validate-filters]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+  vllm-tests:
+    needs: [check-harbor, build-artifact, resolve-skus]
+    secrets: inherit
+    uses: ./.github/workflows/vllm-model-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      model: ${{ needs.resolve-skus.outputs.model }}
+      tier: ${{ needs.resolve-skus.outputs.tier }}
+      vllm-commit: ${{ inputs.vllm-commit || 'dev' }}
+      mlperf-read-only: ${{ inputs.mlperf-write-access != true }}

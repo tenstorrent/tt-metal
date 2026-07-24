@@ -154,7 +154,12 @@ def substitute_cmd_placeholders(entry):
     paths) to be injected into the same base command.
     """
     cmd = entry.get("cmd")
-    if not cmd or not isinstance(cmd, str):
+    # Some pipelines (e.g. vLLM Model Tests) have no `cmd`: the command is
+    # constructed in the impl workflow from structured per-entry fields. Nothing
+    # to substitute in that case.
+    if cmd is None:
+        return
+    if not isinstance(cmd, str):
         raise ValueError(f"cmd is not a string: {cmd}")
     for key, value in entry.items():
         placeholder = "{" + key + "}"
