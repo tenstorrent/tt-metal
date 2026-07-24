@@ -31,7 +31,7 @@ from models.experimental.hunyuan_image_3_0.ref.vae.encoder import (
     load_encoder_head,
     load_mid,
 )
-from models.experimental.hunyuan_image_3_0.tests.vae.test_utils import (
+from models.experimental.hunyuan_image_3_0.tests.pcc.vae_helpers import (
     pad_encoder_channels_bcthw,
     run_bcthw_module,
 )
