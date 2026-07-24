@@ -149,7 +149,12 @@ def _hf_download(repo_id: str, local_dir: Path | None = None) -> None:
 
 
 def resolve_checkpoint(*, env_var: str, repo_id: str) -> Path:
-    """Resolve checkpoint dir: env override, then newest HF hub snapshot."""
+    """Lookup-only: env override, then newest HF hub snapshot (may be incomplete).
+
+    Prefer ``resolve_base_model_dir`` / ``resolve_instruct_model_dir`` /
+    ``resolve_instruct_distil_model_dir`` (or ``ensure_*``) when missing weights
+    should auto-download into the HF hub cache.
+    """
     if override := os.environ.get(env_var):
         return Path(override)
     if snap := find_hf_snapshot(repo_id):
@@ -157,23 +162,61 @@ def resolve_checkpoint(*, env_var: str, repo_id: str) -> Path:
     raise FileNotFoundError(f"No checkpoint for {repo_id!r}. Set {env_var} or run: hf download {repo_id}")
 
 
+def _resolve_complete_or_ensure(*, env_var: str, repo_id: str, ensure_fn) -> Path:
+    """Return a complete checkpoint, downloading to hub cache (or ``env_var``) if needed."""
+    if override := os.environ.get(env_var):
+        path = Path(override)
+        if is_checkpoint_complete(path):
+            return path
+        return ensure_fn()
+    if snap := find_hf_snapshot(repo_id):
+        if is_checkpoint_complete(snap):
+            return snap
+    return ensure_fn()
+
+
 def resolve_base_model_dir() -> Path:
-    """Resolve base VAE/DiT weights: ``HUNYUAN_MODEL_DIR``, then HF base, then instruct fallbacks."""
+    """Resolve base VAE/DiT weights: ``HUNYUAN_MODEL_DIR``, then HF base, then instruct fallbacks.
+
+    If nothing local is found, downloads the base repo into the HF hub cache
+    (``~/.cache/huggingface/hub``, or ``HF_HOME`` / ``HUGGINGFACE_HUB_CACHE``).
+    Set ``HUNYUAN_MODEL_DIR`` to download/reuse a fixed directory instead.
+    """
     if override := os.environ.get(ENV_BASE):
-        return Path(override)
+        path = Path(override)
+        if is_checkpoint_complete(path):
+            return path
+        return ensure_base_weights()
     if snap := find_hf_snapshot(HF_REPO_BASE):
-        return snap
+        if is_checkpoint_complete(snap):
+            return snap
     for env_var, repo_id in (
         (ENV_INSTRUCT_DISTIL, HF_REPO_INSTRUCT_DISTIL),
         (ENV_INSTRUCT, HF_REPO_INSTRUCT),
     ):
         if override := os.environ.get(env_var):
-            return Path(override)
+            path = Path(override)
+            if is_checkpoint_complete(path):
+                return path
         if snap := find_hf_snapshot(repo_id):
-            return snap
-    raise FileNotFoundError(
-        f"No checkpoint for {HF_REPO_BASE!r}. Set {ENV_BASE} (or {ENV_INSTRUCT_MODEL_DIR} / "
-        f"{ENV_INSTRUCT_DISTIL_MODEL_DIR}) or run: hf download {HF_REPO_BASE}"
+            if is_checkpoint_complete(snap):
+                return snap
+    return ensure_base_weights()
+
+
+def resolve_instruct_model_dir() -> Path:
+    """Resolve Instruct weights; download to HF hub cache when missing/incomplete."""
+    return _resolve_complete_or_ensure(
+        env_var=ENV_INSTRUCT, repo_id=HF_REPO_INSTRUCT, ensure_fn=ensure_instruct_weights
+    )
+
+
+def resolve_instruct_distil_model_dir() -> Path:
+    """Resolve Instruct-Distil weights; download to HF hub cache when missing/incomplete."""
+    return _resolve_complete_or_ensure(
+        env_var=ENV_INSTRUCT_DISTIL,
+        repo_id=HF_REPO_INSTRUCT_DISTIL,
+        ensure_fn=ensure_instruct_distil_weights,
     )
 
 
@@ -246,13 +289,15 @@ def has_distil_weights(model_dir: Path | None = None) -> bool:
 
 
 def __getattr__(name: str):
-    """Lazy paths: env override, HF hub snapshot, or placeholder (for skip-if-missing tests)."""
+    """Lazy paths: env / hub snapshot, downloading into the HF hub cache when missing.
+
+    Import-time ``MODEL_DIR`` / ``INSTRUCT_*`` (e.g. from ``ref.vae.decoder``) auto-download
+    unless ``HY_SKIP_WEIGHT_DOWNLOAD=1``.
+    """
     _mapping = {
         "MODEL_DIR": resolve_base_model_dir,
-        "INSTRUCT_MODEL_DIR": lambda: resolve_checkpoint(env_var=ENV_INSTRUCT, repo_id=HF_REPO_INSTRUCT),
-        "INSTRUCT_DISTIL_MODEL_DIR": lambda: resolve_checkpoint(
-            env_var=ENV_INSTRUCT_DISTIL, repo_id=HF_REPO_INSTRUCT_DISTIL
-        ),
+        "INSTRUCT_MODEL_DIR": resolve_instruct_model_dir,
+        "INSTRUCT_DISTIL_MODEL_DIR": resolve_instruct_distil_model_dir,
     }
     if name in _mapping:
         return _mapping[name]()
