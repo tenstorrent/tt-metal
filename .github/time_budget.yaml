@@ -346,8 +346,7 @@ models:
     wh_n300: 15
     bh_p150: 7
     bh_p300: 8
-    # 15 (qwen2.5-vl-32b) + 15 (gemma-4-e4b) + 35 (hunyuan-image-3.0)
-    bh_quietbox_2: 65
+    bh_quietbox_2: 30
   unit:
     wh_llmbox: 100
     wh_galaxy_perf: 10
@@ -375,8 +374,8 @@ models:
     wh_n300: 15
     bh_p150: 20
     bh_p300: 30
-    # 15 (gemma-4-e4b) + 20 (hunyuan-image-3.0)
-    bh_quietbox_2: 35
+    # Gemma-4-E4B (15) + HunyuanImage-3.0 lean denoise smoke (10)
+    bh_quietbox_2: 25
   integration:
     wh_llmbox: 422
   perf:
