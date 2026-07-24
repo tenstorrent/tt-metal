@@ -1383,3 +1383,12 @@
 - Result: convolution active time improved `606.272 -> 603.237 us` (`-0.50%`), but median wall regressed `3385.003 -> 3387.903 us` (`+0.09%`). Replay spans were `[3372.809, 3378.543, 3394.839, 3393.488, 3402.440, 3380.552, 3374.595, 3382.587, 3393.219, 3393.310] us`.
 - Diagnosis: the native source cost model compares one reader overlapping activation+tilize against two readers that delay weight transfer. The tiny active-time gain and wall regression empirically confirm that the forced schedule does not improve the critical path.
 - Verdict: reject and restore auto selection; it misses both the 1% wall and 5% block gates.
+
+
+### 2026-07-24 19:03:50 UTC — Reject convolution activation double buffering
+
+- Hypothesis: double the activation CB so the ordinary single reader can overlap the next DRAM activation block with current convolution compute.
+- Command: `QWEN_KDA_CONV_ACT_DB=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> pytest FAIL before execution. The outer profiler wrapper emitted a partial CSV and misleading PASS status; no replay metric is valid.
+- Exact device error: DRAM auto slicing tried up to 160 width slices for output dimension 5120 but could not find a valid configuration with `1,434,496 bytes` available L1.
+- Diagnosis: doubled activation CB capacity, not dispatch or timeout, is the proven blocker. Maximum slicing rules out recovering enough L1 by shrinking the sequence working set.
+- Verdict: reject and restore source. The native Conv1d path has now rejected finer slicing, activation reuse, forced split reading, and activation double buffering; further gain requires a custom tiled depthwise reader/compute/writer path.

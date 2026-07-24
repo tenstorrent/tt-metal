@@ -253,6 +253,9 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
       `3385.003 -> 3387.903 us` (`+0.09%`). Reject the override; the native
       viability model correctly prefers overlapping the single activation
       reader with weight transfer.
+    - Activation double-buffer result, 2026-07-24: reject for capacity. Even
+      160 width slices cannot fit doubled activation CBs in the available
+      `1,434,496 B` L1 budget, so auto slicing fails before execution.
 50. Produce tiled Q/K/V directly when that avoids a later layout conversion.
 
 ### F. Projection and epilogue
