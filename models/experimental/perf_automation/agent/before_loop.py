@@ -718,6 +718,17 @@ def main(argv: list[str] | None = None) -> int:
         "discovery is claude-code like the rest of cc. Off => the FSM SDK sub-agent. Gates unchanged.",
     )
     ap.add_argument("--mock-tracy", action="store_true")
+    ap.add_argument(
+        "--matmul-sweep",
+        action="store_true",
+        dest="matmul_sweep",
+        help="run the standalone matmul fidelity x dtype sweep pre-pass FIRST (after discovery, before "
+        "the optimize loop) and write matmul_sweep.json in the run dir. OFF by default; when off this "
+        "changes nothing. The sweep is a separate module -- it does not alter the optimize loop's logic.",
+    )
+    ap.add_argument("--matmul-sweep-pcc", type=float, default=0.99, help="matmul-sweep min PCC to accept a config")
+    ap.add_argument("--matmul-sweep-iters", type=int, default=5, help="matmul-sweep timed reps per config")
+    ap.add_argument("--matmul-sweep-max-shapes", type=int, default=0, help="matmul-sweep distinct-shape cap (0=all)")
     args = ap.parse_args(argv)
 
     missing = check_dependencies()
@@ -811,7 +822,59 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(stack_report(p["buckets"]))
     print(f"\nartifacts: {result['run_dir']}")
+    if getattr(args, "matmul_sweep", False):
+        _matmul_sweep_prepass(result["run_dir"], args)
     return 0
+
+
+def _matmul_sweep_prepass(run_dir: str, args) -> None:
+    """Optional pre-pass hook: after discovery/baseline, run the SEPARATE matmul_sweep module on the
+    resolved perf-test node and drop matmul_sweep.json in the run dir. This only ORCHESTRATES the
+    standalone sweep (it imports and calls it); it does not touch the optimize loop. Any failure is
+    reported and swallowed so a sweep problem never blocks the optimize run that follows."""
+    manifest_path = Path(run_dir) / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [matmul-sweep] could not read manifest ({exc}); skipping", file=sys.stderr)
+        return
+    ptr = manifest.get("perf_test_resolved", {}) or {}
+    node = ptr.get("path")
+    if not node:
+        print("  [matmul-sweep] no resolved perf-test node in manifest; skipping", file=sys.stderr)
+        return
+    case = ptr.get("case") or None
+    out = str(Path(run_dir) / "matmul_sweep.json")
+    print(
+        f"\n  [matmul-sweep] pre-pass on {node}{' (-k ' + case + ')' if case else ''} -> {out}",
+        file=sys.stderr,
+        flush=True,
+    )
+    try:
+        if str(PKG_ROOT) not in sys.path:
+            sys.path.insert(0, str(PKG_ROOT))
+        from cc_optimize.matmul_sweep import run_prepass
+
+        summary = run_prepass(
+            node,
+            case=case,
+            out_path=out,
+            pcc_threshold=args.matmul_sweep_pcc,
+            iters=args.matmul_sweep_iters,
+            max_shapes=args.matmul_sweep_max_shapes,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"  [matmul-sweep] sweep failed ({type(exc).__name__}: {str(exc)[-300:]}); optimize continues",
+            file=sys.stderr,
+        )
+        return
+    print(
+        f"  [matmul-sweep] {summary.get('shapes', 0)} matmul shapes, {summary.get('seeded', 0)} seeded, "
+        f"{summary.get('improved', 0)} beat full-precision. Seed the optimize run from {out}.",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
