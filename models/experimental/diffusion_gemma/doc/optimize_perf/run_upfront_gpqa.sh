@@ -177,6 +177,19 @@ echo "  prefill whitelist: ${PREFILL_WARMUP_LENS}"
 # sampling/denoise on device. DiffusionConfig supplies the released temperature,
 # entropy, and halt settings. Do not replace host mode with chunked: QB2's current
 # 1024-wide RNG has a known distribution bias.
+#
+# DG_VLLM_GUMBEL_MODE defaults to `device`: the W4-validated on-device permuted-vocab
+# Gumbel, which removes the ~313 ms/step host RNG and the ~256 MiB/step replicated PCIe
+# DMA (~1.8x denoise/step, device no longer idles on host noise). It is a distribution
+# change, NOT a bit-exact swap; adopted as default on owner decision (2026-07-24) with a
+# ~512 MiB-1 GiB transient DRAM peak per step (confirm headroom at large MAX_MODEL_LEN).
+# A sub-40 GPQA host-vs-device @3072 re-gate is still the recommended follow-up to confirm
+# parity; set DG_VLLM_GUMBEL_MODE=host to fall back to IID full-vocabulary host Gumbel.
+#
+# Host mode also overlaps each step's Gumbel generation behind the previous step's
+# device trace (DG_HOST_GUMBEL_PREFETCH=1, default on; set 0 for the exact serial
+# baseline). This is byte-identical (per-(block,step) private Gumbel seeds only; the
+# shared-generator renoise-token stream is untouched).
 setsid env \
     TT_METAL_HOME="${TT_METAL_ROOT}" \
     TT_METAL_RUNTIME_ROOT="${TT_METAL_ROOT}" \
@@ -186,7 +199,7 @@ setsid env \
     DG_UPFRONT_CAPTURE=1 \
     DG_UPFRONT_PREFILL_WARMUP_LENS="${PREFILL_WARMUP_LENS}" \
     DG_DENOISE_REVEAL_PMAX="${MAX_MODEL_LEN}" \
-    DG_VLLM_GUMBEL_MODE=host \
+    DG_VLLM_GUMBEL_MODE="${DG_VLLM_GUMBEL_MODE:-device}" \
     DG_TRACE_REGION_SIZE="${TRACE_REGION_SIZE}" \
     DG_VLLM_MAX_DENOISE_STEPS=48 \
     VLLM_RPC_TIMEOUT=1800000 \

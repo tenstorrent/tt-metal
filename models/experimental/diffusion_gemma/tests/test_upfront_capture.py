@@ -201,12 +201,23 @@ def test_vllm_upfront_configuration_accepts_only_released_contract(monkeypatch, 
             max_denoise_steps=47,
             gumbel_mode="host",
         )
-    with expect_error(RuntimeError, match="GUMBEL_MODE=host"):
+    # The on-device permuted-vocab source is now an accepted up-front Gumbel mode.
+    assert (
         generator_vllm._validate_upfront_capture_configuration(
             canvas_length=256,
-            max_denoise_steps=48,
-            gumbel_mode="argmax",
+            max_denoise_steps=UPFRONT_DENOISE_STEPS,
+            gumbel_mode="device",
         )
+        == 1024
+    )
+    # Non-materialized sources (chunked descriptor / argmax None) remain rejected loudly.
+    for rejected_mode in ("argmax", "chunked"):
+        with expect_error(RuntimeError, match=r"GUMBEL_MODE in \{host, device\}"):
+            generator_vllm._validate_upfront_capture_configuration(
+                canvas_length=256,
+                max_denoise_steps=48,
+                gumbel_mode=rejected_mode,
+            )
 
     monkeypatch.setenv("DG_TRACE_REGION_SIZE", "0")
     with expect_error(RuntimeError, match="DG_TRACE_REGION_SIZE > 0"):

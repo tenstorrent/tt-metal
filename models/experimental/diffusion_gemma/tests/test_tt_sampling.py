@@ -56,36 +56,36 @@ def test_rand_mesh_mapper_single_device_returns_none():
 
 
 @pytest.mark.parametrize("seed", [0, -3])
-def test_ttnn_gumbel_noise_helpers_reject_nonpositive_seed(seed):
+def test_ttnn_gumbel_noise_helpers_reject_nonpositive_seed(seed, expect_error):
     device = _FakeDevice(num_devices=1)
 
-    with pytest.raises(ValueError, match="positive nonzero"):
+    with expect_error(ValueError, match="positive nonzero"):
         TS.sample_gumbel_noise((1, 1, 32, 32), device=device, seed=seed)
-    with pytest.raises(ValueError, match="positive nonzero"):
+    with expect_error(ValueError, match="positive nonzero"):
         TS.sample_gumbel_noise_with_permuted_vocab((1, 1, 32, 32), device=device, seed=seed)
-    with pytest.raises(ValueError, match="positive nonzero"):
+    with expect_error(ValueError, match="positive nonzero"):
         TS.sample_gumbel_noise_by_vocab_chunks((1, 1, 32, 32), device=device, seed=seed)
 
 
 @pytest.mark.parametrize("shape", [(), (1, 0, 32), (1, -2, 32)])
-def test_ttnn_gumbel_noise_helpers_reject_bad_shape_dimensions(shape):
+def test_ttnn_gumbel_noise_helpers_reject_bad_shape_dimensions(shape, expect_error):
     device = _FakeDevice(num_devices=1)
 
-    with pytest.raises(ValueError, match="shape"):
+    with expect_error(ValueError, match="shape"):
         TS.sample_gumbel_noise(shape, device=device, seed=47472)
-    with pytest.raises(ValueError, match="shape"):
+    with expect_error(ValueError, match="shape"):
         TS.sample_gumbel_noise_with_permuted_vocab(shape, device=device, seed=47472)
-    with pytest.raises(ValueError, match="shape"):
+    with expect_error(ValueError, match="shape"):
         TS.sample_gumbel_noise_by_vocab_chunks(shape, device=device, seed=47472)
 
 
 @pytest.mark.parametrize("shape", [(32,), (1,)])
-def test_vocab_axis_gumbel_noise_helpers_require_sample_and_vocab_axes(shape):
+def test_vocab_axis_gumbel_noise_helpers_require_sample_and_vocab_axes(shape, expect_error):
     device = _FakeDevice(num_devices=1)
 
-    with pytest.raises(ValueError, match="sample axis and a vocab axis"):
+    with expect_error(ValueError, match="sample axis and a vocab axis"):
         TS.sample_gumbel_noise_with_permuted_vocab(shape, device=device, seed=47472)
-    with pytest.raises(ValueError, match="sample axis and a vocab axis"):
+    with expect_error(ValueError, match="sample axis and a vocab axis"):
         TS.sample_gumbel_noise_by_vocab_chunks(shape, device=device, seed=47472)
 
 
@@ -93,6 +93,7 @@ def test_permuted_vocab_gumbel_noise_deallocates_pre_permute_tensor(monkeypatch)
     calls = {}
     raw = _FakeTensor("raw")
     permuted = _FakeTensor("permuted")
+    reshaped = _FakeTensor("reshaped")
 
     class _FakeTtnn:
         TILE_LAYOUT = "tile"
@@ -107,6 +108,11 @@ def test_permuted_vocab_gumbel_noise_deallocates_pre_permute_tensor(monkeypatch)
             calls["permute"] = (tensor, order)
             return permuted
 
+        @staticmethod
+        def reshape(tensor, shape):
+            calls["reshape"] = (tensor, shape)
+            return reshaped
+
     def fake_gumbel_from_uniform(tensor):
         calls["gumbel"] = tensor
         return "gumbel"
@@ -117,11 +123,15 @@ def test_permuted_vocab_gumbel_noise_deallocates_pre_permute_tensor(monkeypatch)
     out = TS.sample_gumbel_noise_with_permuted_vocab((2, 1, 4, 16), device="mesh", seed=47472, dtype="float32")
 
     assert out == "gumbel"
-    assert calls["rand"][0] == (16, 1, 4, 2)
-    assert calls["permute"] == (raw, (3, 1, 2, 0))
-    assert calls["gumbel"] is permuted
+    # vocab (16) outermost, all non-vocab dims (2*1*4=8) collapsed into one tile-aligned axis;
+    # no singleton axis lands in the tiled last-two dims (the 32x TILE-pad OOM fix).
+    assert calls["rand"][0] == (16, 8)
+    assert calls["permute"] == (raw, (1, 0))
+    assert calls["reshape"] == (permuted, (2, 1, 4, 16))
+    assert calls["gumbel"] is reshaped
     assert raw.deallocated is True
-    assert permuted.deallocated is False
+    assert permuted.deallocated is True
+    assert reshaped.deallocated is False
 
 
 def test_chunked_gumbel_noise_deallocates_parts_after_concat(monkeypatch):

@@ -120,8 +120,16 @@ def _validate_upfront_capture_configuration(
         raise RuntimeError(
             f"DG_UPFRONT_CAPTURE requires max_denoise_steps={UPFRONT_DENOISE_STEPS}, " f"got {max_denoise_steps}"
         )
-    if gumbel_mode != "host":
-        raise RuntimeError("DG_UPFRONT_CAPTURE requires DG_VLLM_GUMBEL_MODE=host; " f"got {gumbel_mode!r}")
+    if gumbel_mode not in ("host", "device"):
+        raise RuntimeError(
+            "DG_UPFRONT_CAPTURE requires DG_VLLM_GUMBEL_MODE in {host, device}; "
+            f"got {gumbel_mode!r}. 'host' is the IID full-vocab torch Gumbel (default); "
+            "'device' is the W4-validated on-device permuted-vocab RNG (no per-step host "
+            "RNG or PCIe DMA, but a distribution change that must clear the #48291/GPQA "
+            "decision gate before it replaces the served default). 'chunked'/'argmax' are "
+            "not materialized full-tensor sources and are unsupported by the up-front "
+            "controller."
+        )
 
     raw_trace_region = os.environ.get("DG_TRACE_REGION_SIZE", "").strip()
     if not raw_trace_region:

@@ -327,10 +327,21 @@ def sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed: int, dtype=t
     seed = _validate_ttnn_rand_seed(seed)
     shape = _validate_gumbel_noise_shape(shape, require_vocab_axis=True)
 
-    rand_shape = (shape[-1], *shape[1:-1], shape[0])
-    permute_order = (len(shape) - 1, *range(1, len(shape) - 1), 0)
+    # Generate with the vocab axis OUTERMOST (so it is never the rand innermost axis that
+    # carries the QB2 last-dim correlation) and every non-vocab axis collapsed into ONE
+    # trailing axis. The earlier form kept the batch/singleton axes as explicit trailing
+    # dims — e.g. rand([vocab, 1, canvas, 1]) — and TILE_LAYOUT pads each size-1 axis that
+    # lands in the last two positions up to a full 32-wide tile, inflating the buffer 32x
+    # per singleton (the [1,1,256,262144] canvas case ballooned 256 MiB -> 8 GiB and OOMed).
+    # A 2-D [vocab, inner] rand keeps both tiled axes tile-aligned, then we permute the vocab
+    # axis to innermost and reshape back to the requested logits shape (values differ from the
+    # old grid but the distribution — vocab-outermost draw — is unchanged).
+    vocab = int(shape[-1])
+    inner = 1
+    for dim in shape[:-1]:
+        inner *= int(dim)
     raw_u = ttnn.rand(
-        rand_shape,
+        (vocab, inner),
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -339,9 +350,12 @@ def sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed: int, dtype=t
         seed=seed,
         mesh_mapper=_rand_mesh_mapper(device),
     )
-    u = ttnn.permute(raw_u, permute_order)
-    if u is not raw_u:
+    u2 = ttnn.permute(raw_u, (1, 0))  # [inner, vocab]
+    if u2 is not raw_u:
         raw_u.deallocate(True)
+    u = ttnn.reshape(u2, tuple(int(d) for d in shape))
+    if u is not u2:
+        u2.deallocate(True)
     return _gumbel_from_uniform(u)
 
 
