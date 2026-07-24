@@ -2384,6 +2384,85 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_OmittingKernelRetainsArgs)
         << "an omitted kernel's args are retained";
 }
 
+// --- Omitted vararg sections (per-node + common) and untouched nodes are retained ---
+
+// Regression for the arbitrary-partial-update vararg axis: a partial update that touches only one
+// named arg on one node must leave every OMITTED vararg section — per-node on both nodes, and the
+// common section — plus the untouched node's values intact. Guards against (a) a re-introduced
+// vararg completeness check (would FATAL on the omission) and (b) a patch that clobbers a retained
+// section or writes the wrong node.
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsOmittedVarargsAcrossNodes) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+    NodeRangeSet all_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
+
+    ProgramSpec spec;
+    spec.name = "vararg_retain_program";
+
+    // producer: one named RTA ("addr") + 2 per-node varargs + 2 common varargs, spanning both nodes.
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    producer.runtime_arg_schema.runtime_arg_names = {"addr"};
+    producer.advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 2, .num_common_runtime_varargs = 2};
+    auto consumer = MakeMinimalGen2DMKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Full set: named RTA + per-node varargs on both nodes + common varargs.
+    KernelRunArgs::RuntimeArgValues named;
+    AddRuntimeArgsForNode(named, node0, {{"addr", 100}});
+    AddRuntimeArgsForNode(named, node1, {{"addr", 200}});
+    ProgramRunArgs full;
+    full.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"producer"},
+        .runtime_arg_values = named,
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {{node0, {10, 11}}, {node1, {20, 21}}},
+                .common_runtime_varargs = {30, 31},
+            },
+    });
+    full.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"consumer"},
+        .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{node0, {}}, {node1, {}}}},
+    });
+    SetProgramRunArgs(program, full);
+
+    // Partial update: change ONLY the named RTA on node0. Every vararg section (both nodes' per-node,
+    // and the common section) and node1's named RTA are omitted -> all must be retained.
+    KernelRunArgs::RuntimeArgValues upd_named;
+    AddRuntimeArgsForNode(upd_named, node0, {{"addr", 999}});
+    ProgramRunArgs upd;
+    upd.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"producer"},
+        .runtime_arg_values = upd_named,
+    });
+    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+
+    auto prod = program.impl().get_kernel_by_spec_name("producer");
+    // Per-node RTA buffer layout: [named "addr" @ slot 0][vararg0 @ 1][vararg1 @ 2].
+    const auto& rta0 = prod->runtime_args_data(node0);
+    const auto& rta1 = prod->runtime_args_data(node1);
+    ASSERT_GE(rta0.size(), 3u);
+    ASSERT_GE(rta1.size(), 3u);
+    EXPECT_EQ(rta0.data()[0], 999u) << "supplied named RTA on node0 updated";
+    EXPECT_EQ(rta0.data()[1], 10u) << "node0 vararg 0 retained (omitted)";
+    EXPECT_EQ(rta0.data()[2], 11u) << "node0 vararg 1 retained (omitted)";
+    EXPECT_EQ(rta1.data()[0], 200u) << "untouched node1 named RTA retained";
+    EXPECT_EQ(rta1.data()[1], 20u) << "untouched node1 vararg 0 retained";
+    EXPECT_EQ(rta1.data()[2], 21u) << "untouched node1 vararg 1 retained";
+    // CRTA buffer here is just the common varargs (no named CRTAs, tensor bindings, or scratchpad).
+    const auto* crta = prod->common_runtime_args_data().data();
+    EXPECT_EQ(crta[0], 30u) << "common vararg 0 retained (omitted)";
+    EXPECT_EQ(crta[1], 31u) << "common vararg 1 retained (omitted)";
+}
+
 // --- DFB size overrides on the fast path (mock fixture: inspects config, no enqueue) ---
 
 // UpdateProgramRunArgs applies a DFB size override, mirroring the SetProgramRunArgs path.
