@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """CausalConditionalDecoder UNet1D estimator — native TTNN implementation (Stage 2.3).
 
 Ports the flow estimator from host CPU to Tenstorrent N300 via TTNN.

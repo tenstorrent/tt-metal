@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """HiFTGenerator vocoder — native TTNN implementation (Stage 2.4).
 
 Ports the HiFT vocoder conv stack from host CPU to Tenstorrent N300 via TTNN.

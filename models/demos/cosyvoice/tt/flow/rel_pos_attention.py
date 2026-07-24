@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """ESPnet Transformer-XL relative position self-attention (TTNN).
 
 Implements `RelPositionMultiHeadedAttention` from ESPnet/CosyVoice:

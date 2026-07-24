@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Interactive CosyVoice2 demo — test zero_shot, cross_lingual, instruct2 with your own inputs.
 
 Usage:

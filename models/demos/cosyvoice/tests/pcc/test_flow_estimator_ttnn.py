@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """PCC tests for CosyVoice flow estimator TTNN port (Stage 2.3).
 
 Tests:

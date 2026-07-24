@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Download the CosyVoice2-0.5B checkpoint into a repo-local cache.
 
 Phase-0 setup step (BRINGUP_PLAN.md §7 Phase 0 Task 2). Uses

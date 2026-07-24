@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """CosyVoice E2E demo — generates 20 WAVs (4 modes × 5 languages) on N300.
 
 Usage:

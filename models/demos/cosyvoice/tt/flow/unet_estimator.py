@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """CausalConditionalDecoder UNet1D estimator (Stage 1, host-side torch).
 
 Stage 1: wraps the reference CausalConditionalDecoder from CosyVoice source,

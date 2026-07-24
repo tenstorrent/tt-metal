@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Flow model wrapper — full tokens→mu pipeline (Stage 1, host-side).
 
 Combines:

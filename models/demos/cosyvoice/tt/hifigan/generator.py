@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """HiFTGenerator vocoder — Stage 1 implementation (host-side torch).
 
 Architecture (from cosyvoice2.yaml + source):

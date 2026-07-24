@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """RAS (Repetition-Aware Sampling) for CosyVoice LLM decode.
 
 Ported from `cosyvoice/utils/common.py::ras_sampling` (reference repo @ 074ca6d).

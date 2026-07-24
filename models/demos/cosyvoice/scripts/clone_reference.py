@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Download the FunAudioLLM/CosyVoice reference repo into ``model_data/CosyVoice_src/``.
 
 Phase-0 setup step (BRINGUP_PLAN.md §7 Phase 0 Task 2). The reference repo is

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """CausalConditionalCFM — Euler ODE solver + CFG.
 
 Orchestrates the UNet1D estimator over n_timesteps=10 Euler steps with

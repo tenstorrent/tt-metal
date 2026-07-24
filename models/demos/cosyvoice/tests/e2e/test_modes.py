@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """E2E tests — run pipeline for each mode, assert no errors + output shape sanity.
 
 Usage:

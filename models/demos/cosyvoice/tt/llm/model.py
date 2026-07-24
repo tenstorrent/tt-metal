@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """CosyVoice LLM — TTNN wrapper around tt_transformers Qwen2.5-0.5B.
 
 Reuses the tt_transformers Transformer (24× TransformerBlock, GQA attention,

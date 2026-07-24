@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """C8 Audio quality evaluation — WER + Speaker Similarity.
 
 Measures:

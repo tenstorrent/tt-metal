@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # CosyVoice2-0.5B — TTS on Wormhole N300
 
 ## Platforms

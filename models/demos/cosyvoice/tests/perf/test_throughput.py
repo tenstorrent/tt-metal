@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Performance tests
 
 Stage 2.3: Flow estimator ported to TTNN on N300 (4.3x speedup vs host CPU).

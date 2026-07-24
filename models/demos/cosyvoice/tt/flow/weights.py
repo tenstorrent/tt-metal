@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Weight loading for CosyVoice2 flow model (encoder + UNet1D estimator).
 
 Splits `flow.pt` (1121 keys) into:

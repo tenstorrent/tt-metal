@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Weight conversion for CosyVoice2-0.5B → TTNN state dicts.
 
 Converts `llm.pt` (Qwen2LM full state dict) into:
