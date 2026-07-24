@@ -46,14 +46,26 @@ def render_table(headers: list[str], rows: list[list[str]]) -> list[str]:
     return [sep, render_row(headers), sep, *[render_row(r) for r in rows], sep]
 
 
-def emit_summary(kind: str, run_name: str, title: str, table_lines: list[str]) -> Path:
-    """Log the table to output AND persist it as PREFILL_SUMMARIES/<kind>/<run_name>.md. Emitting to
-    output is deliberate: the table must stay visible in the step log, not only in the file. The file
-    fences the table so it renders monospaced when a CI step concatenates these into
-    $GITHUB_STEP_SUMMARY."""
-    body = "\n".join(table_lines)
-    logger.info(f"{title}\n{body}")
+def _is_primary_rank() -> bool:
+    """True on MPI rank 0 (or a non-MPI run). Under `mpirun --pernode` every node runs the whole test,
+    so without this every rank would race-write the same file on the shared volume."""
+    for var in ("OMPI_COMM_WORLD_RANK", "PMIX_RANK", "PMI_RANK"):
+        rank = os.environ.get(var)
+        if rank is not None:
+            return rank == "0"
+    return True
+
+
+def emit_summary(kind: str, run_name: str, title: str, lines: list[str]) -> Path | None:
+    """On rank 0 only: print the block to stdout AND persist it as PREFILL_SUMMARIES/<kind>/<run_name>.md.
+    stdout (not loguru, which is stderr-bound here) so the block lands in the captured `-s` output. The
+    file fences the block so it renders monospaced when a CI step concatenates these into
+    $GITHUB_STEP_SUMMARY. Returns None on non-primary ranks (nothing written)."""
+    if not _is_primary_rank():
+        return None
+    body = "\n".join(lines)
+    print(f"{title}\n{body}", flush=True)
     path = summary_dir(kind) / f"{run_name}.md"
     path.write_text(f"### {title}\n\n```text\n{body}\n```\n")
-    logger.info(f"{kind} summary written to {path}")
+    logger.info(f"{kind} summary -> {path}")
     return path

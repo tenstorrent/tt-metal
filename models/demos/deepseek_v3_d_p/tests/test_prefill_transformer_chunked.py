@@ -1406,15 +1406,16 @@ def run_chunked_transformer_no_pcc(
         f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, " f"num_iters={num_iters})"
     )
     perf_failures, perf_table_lines = print_duration_table(iteration_chunk_times)
+    timing_lines = [f"  {key}: {profiler.get(key) * 1000:.2f} ms" for key in profiler.times]
     if perf_table_lines:
         emit_summary(
             "perf",
             f"{variant.name}_L{num_layers}_c{n_chunks}_i{num_iters}_p{preload_isl}",
             f"Chunk timing — {variant.name} (L{num_layers}, {n_chunks} chunks, {num_iters} iters, preload {preload_isl})",
-            perf_table_lines,
+            perf_table_lines + ["", "phase timings:"] + timing_lines,
         )
-    for key in profiler.times:
-        logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
+    for line in timing_lines:
+        logger.info(line)
 
     # Rough per-layer MLA-vs-FFN split (TT_PREFILL_BLOCK_TIMING=1): host wall-clock, sync-bracketed, so
     # absolutes inflate (syncs serialize) — read the RATIO and per-layer shape, not the totals. Mean +/- std

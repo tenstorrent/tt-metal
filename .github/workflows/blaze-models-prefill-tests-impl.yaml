@@ -141,10 +141,11 @@ jobs:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
-      # Root the tests' CI summaries (chunked-prefill perf tables under perf/) at a known path so the
-      # publish step below can surface them in the job summary. Rank 0 runs on this head node, so its
-      # files land here.
-      PREFILL_SUMMARIES: /home/user/tt-metal/generated/prefill_summaries
+      # Root the tests' CI summaries (chunked-prefill perf tables under perf/) on the /ci NFS volume that
+      # is shared between the mpirun worker pods and this runner (same mount the build artifacts flow
+      # through). /home/user is per-node, so a file written there by a worker rank is invisible to the
+      # runner's publish step; /ci is not. Only rank 0 writes (see emit_summary).
+      PREFILL_SUMMARIES: /ci/prefill_summaries
     strategy:
       fail-fast: false
       matrix:
