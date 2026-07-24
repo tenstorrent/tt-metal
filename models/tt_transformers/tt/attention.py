@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.common.utility_functions import nearest_32
+from models.common.utility_functions import inplace_copy, nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
@@ -436,35 +436,12 @@ class Attention(LightweightModule):
             for k_or_v in [cache_k, cache_v]
         ]
 
-    @staticmethod
-    def _inplace_copy(src: ttnn.Tensor, dst: ttnn.Tensor, target_dtype) -> None:
-        """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg, then
-        ``ttnn.copy`` into ``dst``. ``dst``'s device buffer is preserved (no
-        reallocation) so any captured trace and the DRAM prefetcher's recorded
-        buffer addresses remain valid.
-        """
-        converted = src
-
-        if converted.layout != dst.layout:
-            converted = ttnn.to_layout(converted, layout=dst.layout)
-
-        if converted.dtype != target_dtype:
-            converted = ttnn.typecast(converted, dtype=target_dtype)
-
-        if tuple(converted.shape) != tuple(dst.shape):
-            converted = ttnn.reshape(converted, list(dst.shape))
-
-        if converted.memory_config() != dst.memory_config():
-            converted = ttnn.to_memory_config(converted, dst.memory_config())
-
-        ttnn.copy(input_a=converted, input_b=dst)
-
     def _update_wqkv(self, tensor: ttnn.Tensor) -> None:
         """In-place replace ``self.wqkv`` via ``ttnn.copy``. Caller must match
         the constructor's ``self.wqkv``: shape ``(1, 1, H, qkv_size_per_device)``,
         TILE, ``ShardTensor2dMesh(dims=(2, 3))`` (or ``(3, 2)`` on TG).
         """
-        self._inplace_copy(tensor, self.wqkv, self.wqkv_dtype)
+        inplace_copy(tensor, self.wqkv, self.wqkv_dtype)
 
     def _update_wo(self, tensor: ttnn.Tensor) -> None:
         """In-place replace ``self.wo`` (and ``self.wo_sharded_ring`` when the
@@ -472,10 +449,10 @@ class Attention(LightweightModule):
         decode path reads ``wo_sharded_ring`` instead of ``wo`` when
         ``self.prefetcher is not None``.
         """
-        self._inplace_copy(tensor, self.wo, self.wo_dtype)
+        inplace_copy(tensor, self.wo, self.wo_dtype)
         wo_sharded_ring = getattr(self, "wo_sharded_ring", None)
         if wo_sharded_ring is not None:
-            self._inplace_copy(tensor, wo_sharded_ring, self.wo_dtype)
+            inplace_copy(tensor, wo_sharded_ring, self.wo_dtype)
 
     def _update_wqkv_bias(
         self,
