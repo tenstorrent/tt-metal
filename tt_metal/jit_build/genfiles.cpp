@@ -180,11 +180,20 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         if (!dfb_entries.empty()) {
             content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
         }
+        const bool has_cached_sem = std::any_of(sem_entries.begin(), sem_entries.end(), [](const SemEntry& e) {
+            return e.scope == SemScope::DM_LOCAL_CACHED;
+        });
         if (!sem_entries.empty()) {
             // Defines SemAccessor<Id, SemScope> (and pulls in SemScope), the token each
             // sem::<name> symbol is emitted as; the kernel's Semaphore ctor deduces the
             // baked scope from it via CTAD.
             content << "#include \"api/dataflow/semaphore_token.h\"\n";
+            if (has_cached_sem) {
+                // sem::init_dm_cached() (emitted below) needs get_semaphore + the L1 aliases
+                // (dataflow_api.h / dev_mem_map.h) and the per-thread barrier + id.
+                content << "#include \"api/dataflow/dataflow_api.h\"\n";
+                content << "#include \"api/kernel_thread_globals.h\"\n";
+            }
         }
         if (!ta_entries.empty()) {
             // This header defines TensorBindingToken, a type which can be used
@@ -212,10 +221,41 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // so the host-resolved mechanism (LOCAL_NONATOMIC / DM_LOCAL_CACHED / EXTERNAL) is
             // selected with zero kernel-source change. scope is emitted numerically to avoid a
             // host<->device enumerator-name dependency.
+            if (has_cached_sem) {
+                // Signal to the kernel that it must call sem::init_dm_cached() at entry (this
+                // program has >= 1 DM_LOCAL_CACHED semaphore). Non-cached programs never see this
+                // macro, the init function, or its includes -> zero impact.
+                content << "#define SEM_HAS_DM_CACHED 1\n";
+            }
             content << "namespace sem {\n";
             for (const auto& entry : sem_entries) {
                 content << "constexpr ::SemAccessor<" << entry.id << "u, static_cast<::SemScope>("
                         << static_cast<int>(entry.scope) << ")> " << entry.name << "{};\n";
+            }
+            if (has_cached_sem) {
+                // DM_LOCAL_CACHED semaphores live in a dedicated cached-only pool that the
+                // dispatcher never NoC-writes; their init value (which the dispatcher DID write to
+                // the ring slot) is copied into the pool via a cached store here. Thread 0 seeds
+                // each cached pool slot from its ring slot (read via the uncached alias), then a
+                // barrier so every thread sees the init before its first up(). A kernel that binds
+                // a DM_LOCAL_CACHED semaphore calls sem::init_dm_cached() ONCE at entry, before any
+                // Semaphore up()/down(). No-op on non-Quasar (cached sems fall back to the ring).
+                content << "inline void init_dm_cached() {\n";
+                content << "#ifdef ARCH_QUASAR\n";
+                content << "    if (::get_my_thread_id() == 0u) {\n";
+                for (const auto& entry : sem_entries) {
+                    if (entry.scope != SemScope::DM_LOCAL_CACHED) {
+                        continue;
+                    }
+                    content << "        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>("
+                            << "static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + " << entry.id
+                            << "u * L1_ALIGNMENT) = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>("
+                            << "::get_semaphore(" << entry.id << "u) + MEM_L1_UNCACHED_BASE);\n";
+                }
+                content << "    }\n";
+                content << "    ::sync_threads();\n";
+                content << "#endif\n";
+                content << "}\n";
             }
             content << "}  // namespace sem\n";
         }
