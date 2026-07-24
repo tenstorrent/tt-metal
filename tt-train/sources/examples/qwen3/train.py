@@ -80,7 +80,7 @@ import ttml
 from ttnn.device import is_blackhole, is_wormhole_b0
 from ttml.models.qwen3.flops import calculate_flops_per_token
 
-from utils.lora import LORA_TARGETS_ALL, inject_adapter_in_model
+from utils.lora import LORA_TARGETS_ACCEPTED, LORA_TARGETS_ALL, inject_adapter_in_model, normalize_lora_targets
 from utils.memory import MemoryUsageTracker, finalize_memory
 from ttml.common.utils import no_grad, build_causal_mask
 from utils.tensor_utils import (
@@ -375,8 +375,8 @@ def main():
         nargs="+",
         default=None,
         help="LoRA target modules (default: all projections). "
-        "Choices: q_proj, k_proj, v_proj, o_proj, "
-        "gate_proj, up_proj, down_proj",
+        "Choices: q_proj, kv_proj, o_proj, gate_proj, up_proj, down_proj "
+        "(k_proj/v_proj are accepted aliases for the fused kv_proj).",
     )
     # Checkpointing
     parser.add_argument(
@@ -533,9 +533,12 @@ def main():
             for t in args.lora_targets:
                 expanded.extend(t.split(","))
             lora_targets = [t.strip() for t in expanded if t.strip()]
-            invalid = [t for t in lora_targets if t not in LORA_TARGETS_ALL]
+            # Validate against the accepted set (canonical names + k_proj/v_proj
+            # aliases), then normalize aliases to the fused kv_proj before injection.
+            invalid = [t for t in lora_targets if t not in LORA_TARGETS_ACCEPTED]
             if invalid:
-                parser.error(f"Invalid --lora_targets: {invalid}. " f"Valid choices: {', '.join(LORA_TARGETS_ALL)}")
+                parser.error(f"Invalid --lora_targets: {invalid}. Valid choices: {', '.join(LORA_TARGETS_ACCEPTED)}")
+            lora_targets = normalize_lora_targets(lora_targets)
         else:
             lora_targets = list(LORA_TARGETS_ALL)
         lora_config = {

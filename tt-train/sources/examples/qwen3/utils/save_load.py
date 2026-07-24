@@ -259,8 +259,12 @@ def _resolve_ttml_name(ttml_name: str, ttml_params: dict) -> Optional[str]:
 
 
 def _is_col_parallel_lora_B(ttml_name: str) -> bool:
-    """True when this lora_B belongs to a column-parallel projection (TP mode)."""
-    for proj in ("q_proj", "k_proj", "v_proj", "gate_proj", "up_proj"):
+    """True when this lora_B belongs to a column-parallel projection (TP mode).
+
+    The fused ``kv_proj`` is column-parallel (its output rows are sharded like
+    q_proj), so its lora_B is col-sharded on dim 2 the same way.
+    """
+    for proj in ("q_proj", "kv_proj", "gate_proj", "up_proj"):
         if f"/{proj}/lora_B" in ttml_name:
             return True
     return False
@@ -361,6 +365,7 @@ def extract_hf_state_dict(
             inv_transforms,
             hf_shapes,
             root_prefix,
+            tp_size=tp_size,
         )
 
     return hf_state_dict
@@ -377,43 +382,57 @@ def _merge_lora_inplace(
     inv_transforms: dict,
     hf_shapes: dict,
     root_prefix: str,
+    tp_size: int = 1,
 ) -> None:
     """Merge LoRA adapter weights into the base weights in hf_state_dict (in-place).
 
     The lora_B and lora_A tensors live in TTML layout.  We compute the delta
     (lora_B @ lora_A * scaling) in TTML layout, apply the same inverse
     permutation as the base weight, crop, and add it to hf_state_dict.
+
+    The fused ``kv_proj`` adapter is a single LoRA module whose delta spans the
+    fused ``[2*kv_out, hidden]`` output. On export it is split into the HF
+    ``k_proj`` / ``v_proj`` halves (K re-permuted, V as-is) and each half added to
+    its own HF entry -- mirroring the base-weight fused-KV export split.
     """
     rank = lora_config["rank"]
     alpha = lora_config.get("alpha", rank)
     scaling = alpha / rank
     targets = set(lora_config.get("targets", []))
 
-    col_parallel = {"q_proj", "k_proj", "v_proj", "gate_proj", "up_proj"}
+    # Column-parallel output projections (lora_B col-sharded on dim 2 under TP).
+    # kv_proj is column-parallel too: its fused output rows are sharded like q_proj.
+    col_parallel = {"q_proj", "kv_proj", "gate_proj", "up_proj"}
 
     proj_locations = {
         "q_proj": "self_attn",
-        "k_proj": "self_attn",
-        "v_proj": "self_attn",
+        "kv_proj": "self_attn",
         "o_proj": "self_attn",
         "gate_proj": "mlp",
         "up_proj": "mlp",
         "down_proj": "mlp",
     }
 
+    kv_out = config.num_key_value_heads * config.head_dim
+
+    def _add_delta(hf_wname: str, delta: torch.Tensor) -> None:
+        """Crop ``delta`` to the HF param shape and add it into hf_state_dict."""
+        if hf_wname not in hf_state_dict:
+            return
+        hf_shape = hf_shapes[hf_wname]
+        delta = delta[: hf_shape[0], : hf_shape[1]]
+        hf_state_dict[hf_wname] = (hf_state_dict[hf_wname].float() + delta.float()).to(torch.bfloat16)
+
     for i in range(config.num_hidden_layers):
         for proj_name in targets:
             sub = proj_locations.get(proj_name)
             if sub is None:
                 continue
-            hf_wname = f"model.layers.{i}.{sub}.{proj_name}.weight"
             ttml_base = f"{root_prefix}/model/layers/{i}/{sub}/{proj_name}"
             lora_A_name = f"{ttml_base}/lora_A"
             lora_B_name = f"{ttml_base}/lora_B"
 
             if lora_A_name not in ttml_params or lora_B_name not in ttml_params:
-                continue
-            if hf_wname not in hf_state_dict:
                 continue
 
             if distributed and proj_name not in col_parallel:
@@ -433,16 +452,28 @@ def _merge_lora_inplace(
 
             # delta is in TTML layout (same as the base weight before inv_transform)
             delta = (lora_B @ lora_A) * scaling
-            hf_shape = hf_shapes[hf_wname]
-            # Pass kv_out=hf_shape[0] so that if a k_proj/v_proj target ever maps
-            # to a split_kv inverse the carve-out uses the true K/V width. (For the
-            # fused kv_proj model there is no separate k_proj/v_proj LoRA module,
-            # so those targets are skipped above at the lora_A/B presence check;
-            # this keeps the call correct if that ever changes. Non-fused targets
-            # ignore kv_out.)
-            delta = _apply_inv_transform(delta, hf_wname, inv_transforms, kv_out=hf_shape[0])
-            delta = delta[: hf_shape[0], : hf_shape[1]]
-            hf_state_dict[hf_wname] = (hf_state_dict[hf_wname].float() + delta.float()).to(torch.bfloat16)
+
+            if proj_name == "kv_proj":
+                # Fused KV: the delta spans [2*kv_out, hidden]. Split into K/V the
+                # same way the base weight is split on export -- contiguous
+                # [K;V] for single-device, per-shard interleave for TP -- then
+                # re-permute the K half (V untouched) and add each to its HF entry.
+                interleaved = bool(distributed)
+                k_delta = _split_fused_kv(delta, "k", kv_out, tp_size, interleaved=interleaved)
+                v_delta = _split_fused_kv(delta, "v", kv_out, tp_size, interleaved=interleaved)
+                k_delta = repermute_proj_rows(k_delta, num_heads=config.num_key_value_heads)
+                _add_delta(f"model.layers.{i}.self_attn.k_proj.weight", k_delta)
+                _add_delta(f"model.layers.{i}.self_attn.v_proj.weight", v_delta)
+                continue
+
+            hf_wname = f"model.layers.{i}.{sub}.{proj_name}.weight"
+            # Non-fused projections: apply the same inverse permutation as the base
+            # weight (q_proj -> repermute_proj; others -> identity), then add.
+            hf_shape = hf_shapes.get(hf_wname)
+            if hf_shape is None:
+                continue
+            delta = _apply_inv_transform(delta, hf_wname, inv_transforms, kv_out=hf_shape[0], tp_size=tp_size)
+            _add_delta(hf_wname, delta)
 
 
 # =====================================================================

@@ -42,15 +42,43 @@ from .tensor_utils import (
     make_dist_sharded_zeros,
 )
 
+# Canonical LoRA target attribute names, as they appear on the (fused-KV) Qwen3
+# attention/MLP modules. K and V share a single fused ``kv_proj`` projection, so
+# the injectable attribute is ``kv_proj`` (there are no ``k_proj``/``v_proj``
+# submodules anymore -- see model_qwen3_distributed.py / ttml.models.qwen3.attention).
 LORA_TARGETS_ALL = [
     "q_proj",
-    "k_proj",
-    "v_proj",
+    "kv_proj",
     "o_proj",
     "gate_proj",
     "up_proj",
     "down_proj",
 ]
+
+# Back-compat aliases: users / scripts may still pass the pre-fusion ``k_proj`` /
+# ``v_proj`` names. Both map to the single fused ``kv_proj`` so "train K and V"
+# keeps working. ``normalize_lora_targets`` applies this mapping and de-dupes.
+_LORA_TARGET_ALIASES = {
+    "k_proj": "kv_proj",
+    "v_proj": "kv_proj",
+}
+
+# Names accepted on the CLI: canonical targets plus the back-compat aliases.
+LORA_TARGETS_ACCEPTED = LORA_TARGETS_ALL + list(_LORA_TARGET_ALIASES)
+
+
+def normalize_lora_targets(targets):
+    """Map any ``k_proj``/``v_proj`` aliases to the fused ``kv_proj`` and de-dupe.
+
+    Order is preserved (first occurrence wins) so error messages / logs stay
+    stable. Unknown names are passed through unchanged for the caller to validate.
+    """
+    out = []
+    for t in targets:
+        canon = _LORA_TARGET_ALIASES.get(t, t)
+        if canon not in out:
+            out.append(canon)
+    return out
 
 
 # =====================================================================
@@ -190,7 +218,10 @@ def inject_adapter_in_model(model, lora_config: dict):
     Args:
         model:       ttml model (Qwen3ForCausalLM or DistributedQwen3ForCausalLM).
         lora_config: dict with keys:
-                       ``targets`` – list of module names, e.g. ``["q_proj", "v_proj"]``
+                       ``targets`` – list of module names, e.g. ``["q_proj", "kv_proj"]``
+                                     (``k_proj``/``v_proj`` are accepted aliases for
+                                     the fused ``kv_proj``; normalize via
+                                     ``normalize_lora_targets`` before injection)
                        ``rank``    – LoRA rank *r*
                        ``alpha``   – LoRA scaling alpha (default: rank → scaling = 1.0)
 
