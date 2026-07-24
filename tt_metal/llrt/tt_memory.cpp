@@ -48,6 +48,13 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
     pack_from_segments(path, elf.GetSegments());
 }
 
+memory memory::from_segments(const std::vector<ElfFile::Segment>& segments, Loading loading) {
+    memory m;
+    m.loading_ = loading;
+    m.pack_from_segments("<segments>", segments);
+    return m;
+}
+
 void memory::pack_from_segments(const std::string& path, const std::vector<ElfFile::Segment>& segments) {
     // The ELF file puts the text segment first, but one set of
     // binaries (ncrisc) places data a lower address, and at least one

@@ -37,16 +37,17 @@ private:
     Loading loading_{Loading::DISCRETE};
 
     // Populate link_spans_/data_/text_addr_/text_size_ from ELF segments, ordering by address for
-    // DISCRETE loads. Split out of the (path, loading) constructor so the ordering logic can be
-    // exercised by unit tests with synthetic segments (no on-disk ELF needed).
+    // DISCRETE loads. Shared by the (path, loading) constructor and from_segments().
     void pack_from_segments(const std::string& path, const std::vector<ElfFile::Segment>& segments);
-
-    // Grants the ordering unit test access to loading_ and pack_from_segments.
-    friend class MemorySegmentOrderingTest;
 
 public:
     memory();
     memory(const std::string& path, Loading loading);
+
+    // Build a memory directly from in-memory ELF segments (no on-disk ELF), running the same
+    // address-ordering/packing logic as the (path, loading) constructor. Lets the segment-ordering
+    // behaviour be unit-tested with synthetic segments.
+    static memory from_segments(const std::vector<ElfFile::Segment>& segments, Loading loading);
 
     // These can be large objects, so ban copying ...
     memory(const memory&) = delete;

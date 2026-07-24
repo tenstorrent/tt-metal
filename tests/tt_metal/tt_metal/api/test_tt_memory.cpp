@@ -11,36 +11,23 @@
 #include "tt_metal/llrt/tt_memory.h"
 
 namespace ll_api {
+namespace {
 
-// Friend of ll_api::memory (declared in tt_memory.h). Lets the tests inject synthetic ELF
-// segments and drive the address-ordering logic without an on-disk ELF file.
-class MemorySegmentOrderingTest : public ::testing::Test {
-protected:
-    using word_t = memory::word_t;
+using word_t = memory::word_t;
 
-    // Build a memory from synthetic segments, running the same packing logic the
-    // (path, loading) constructor uses.
-    static memory build(const std::vector<ElfFile::Segment>& segments, memory::Loading loading) {
-        memory m;
-        m.loading_ = loading;
-        m.pack_from_segments("<test>", segments);
-        return m;
-    }
-
-    // Collect (addr, len) for each span, in the order pack_from_segments emitted them.
-    static std::vector<std::pair<std::uint64_t, std::uint32_t>> span_order(const memory& m) {
-        std::vector<std::pair<std::uint64_t, std::uint32_t>> spans;
-        m.process_spans([&](std::vector<std::uint32_t>::const_iterator, std::uint64_t addr, std::uint32_t len) {
-            spans.emplace_back(addr, len);
-        });
-        return spans;
-    }
-};
+// Collect (addr, len) for each span, in the order the packing logic emitted them.
+std::vector<std::pair<std::uint64_t, std::uint32_t>> span_order(const memory& m) {
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> spans;
+    m.process_spans([&](std::vector<std::uint32_t>::const_iterator, std::uint64_t addr, std::uint32_t len) {
+        spans.emplace_back(addr, len);
+    });
+    return spans;
+}
 
 // DISCRETE loading must emit spans in ascending address order even when the address sort is a
 // non-identity permutation. An ncrisc-style binary places its data segment at a LOWER address than
 // text, which produces exactly such a permutation, so it exercises that ordering.
-TEST_F(MemorySegmentOrderingTest, DiscreteEmitsSpansInAscendingAddressOrder) {
+TEST(MemorySegmentOrdering, DiscreteEmitsSpansInAscendingAddressOrder) {
     // segments[0] is text (the loader treats the first segment as text), placed high in memory;
     // the data segment is placed lower -- the ncrisc layout that triggers a non-identity sort.
     const std::vector<word_t> text_contents = {0x1111'1111, 0x2222'2222};  // addr 0x2000, 2 words
@@ -50,7 +37,7 @@ TEST_F(MemorySegmentOrderingTest, DiscreteEmitsSpansInAscendingAddressOrder) {
     segments.emplace_back(std::span<const word_t>(text_contents), /*addr=*/0x2000, /*lma=*/0x2000, /*membytes=*/8);
     segments.emplace_back(std::span<const word_t>(data_contents), /*addr=*/0x1000, /*lma=*/0x1000, /*membytes=*/4);
 
-    const memory m = build(segments, memory::Loading::DISCRETE);
+    const memory m = memory::from_segments(segments, memory::Loading::DISCRETE);
 
     // Ascending address order: data (0x1000) first, then text (0x2000).
     // Source/segment order would place text (0x2000) first, so this verifies the address sort is applied.
@@ -68,7 +55,7 @@ TEST_F(MemorySegmentOrderingTest, DiscreteEmitsSpansInAscendingAddressOrder) {
 
 // The identity-permutation paths (non-DISCRETE) coalesce contiguous segments into a single span.
 // This guards that non-DISCRETE behaviour: contiguous segments must still collapse to one span.
-TEST_F(MemorySegmentOrderingTest, ContiguousCoalescesIntoSingleSpan) {
+TEST(MemorySegmentOrdering, ContiguousCoalescesIntoSingleSpan) {
     const std::vector<word_t> text_contents = {0x1111'1111, 0x2222'2222};  // lma 0x1000, 2 words
     const std::vector<word_t> data_contents = {0x3333'3333};               // lma 0x1008, 1 word
 
@@ -76,7 +63,7 @@ TEST_F(MemorySegmentOrderingTest, ContiguousCoalescesIntoSingleSpan) {
     segments.emplace_back(std::span<const word_t>(text_contents), /*addr=*/0x1000, /*lma=*/0x1000, /*membytes=*/8);
     segments.emplace_back(std::span<const word_t>(data_contents), /*addr=*/0x1008, /*lma=*/0x1008, /*membytes=*/4);
 
-    const memory m = build(segments, memory::Loading::CONTIGUOUS);
+    const memory m = memory::from_segments(segments, memory::Loading::CONTIGUOUS);
 
     const std::vector<std::pair<std::uint64_t, std::uint32_t>> expected = {{0x1000, 3}};
     EXPECT_EQ(span_order(m), expected);
@@ -85,4 +72,5 @@ TEST_F(MemorySegmentOrderingTest, ContiguousCoalescesIntoSingleSpan) {
     EXPECT_EQ(m.data(), expected_data);
 }
 
+}  // namespace
 }  // namespace ll_api
