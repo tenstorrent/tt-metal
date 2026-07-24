@@ -1340,12 +1340,11 @@ class Gemma4Model:
     def _page_table_torch_to_ttnn(self, page_table_torch):
         """Build a page-table device tensor from a torch tensor.
 
-        Mirrors the single-page-table handling in
-        :meth:`prepare_decode_inputs_host`: slice to the first user
-        (Gemma4 currently runs batch=1 per submesh) and replicate across
-        the mesh.
+        Prefill is usually batch=1; decode warmup/runtime pass the full
+        ``max_batch_size`` rows. Preserve the host batch dim so
+        ``paged_update_cache`` sees ``page_table.shape[0] == input.shape[1]``.
         """
-        pt = page_table_torch[0:1] if page_table_torch.dim() > 1 else page_table_torch.unsqueeze(0)
+        pt = page_table_torch if page_table_torch.dim() > 1 else page_table_torch.unsqueeze(0)
         return ttnn.from_torch(
             pt,
             device=self.mesh_device,
@@ -1354,13 +1353,23 @@ class Gemma4Model:
             mesh_mapper=self._replicate_to_mesh_mapper(),
         )
 
+    @staticmethod
+    def _host_page_tables_batch(page_tables_per_layer) -> int | None:
+        for pt in page_tables_per_layer or []:
+            if pt is not None and isinstance(pt, torch.Tensor):
+                return int(pt.shape[0]) if pt.dim() > 1 else 1
+        return None
+
     def _page_tables_to_ttnn(self, page_tables_per_layer):
         """Lazy-allocate persistent device tensors for per-layer page tables.
 
-        The persistent buffers are allocated once and reused across calls
-        so trace capture binds stable device addresses. Per-step content
-        updates happen out-of-trace via
-        :meth:`update_persistent_per_layer_page_tables`.
+        Buffers are stored **per host batch** so B=1 and B=max decode traces
+        each bind stable addresses without cross-batch realloc (which used to
+        orphan Metal decode traces and hang B=32 after sequential prefill).
+
+        Within a batch key: never shrink; pad host up to the device shape in
+        :meth:`update_persistent_per_layer_page_tables`. Grow only when host
+        is strictly larger (and invalidate traces).
 
         Layers in upstream's HMA tensor-sharing layout that point at the
         same DRAM buffer still get their own page table object here — the
@@ -1369,9 +1378,36 @@ class Gemma4Model:
         """
         if page_tables_per_layer is None:
             return None
-        persistent = getattr(self, "_persistent_per_layer_page_tables", None)
+        by_batch = getattr(self, "_persistent_pt_by_batch", None)
+        if by_batch is None:
+            by_batch = {}
+            self._persistent_pt_by_batch = by_batch
+        batch_key = self._host_page_tables_batch(page_tables_per_layer)
+        if batch_key is None:
+            return None
+        persistent = by_batch.get(batch_key)
         n = len(page_tables_per_layer)
-        if persistent is None or len(persistent) != n:
+        needs_alloc = persistent is None or len(persistent) != n
+        needs_grow = False
+        if not needs_alloc and persistent is not None:
+            for i, pt in enumerate(page_tables_per_layer):
+                if pt is None or isinstance(pt, ttnn.Tensor) or persistent[i] is None:
+                    continue
+                try:
+                    host_b = int(pt.shape[0]) if pt.dim() > 1 else 1
+                    host_w = int(pt.shape[-1]) if pt.dim() > 1 else int(pt.shape[0])
+                    dev_b = int(persistent[i].shape[0])
+                    dev_w = int(persistent[i].shape[-1])
+                except (TypeError, IndexError, AttributeError):
+                    continue
+                if host_b > dev_b or host_w > dev_w:
+                    needs_grow = True
+                    break
+        if needs_alloc or needs_grow:
+            if needs_grow:
+                # Growing after decode-trace capture would leave execute_trace
+                # reading stale addresses; force a recapture on the next decode.
+                self._invalidate_decode_traces_after_page_table_realloc = True
             persistent = []
             for pt in page_tables_per_layer:
                 if pt is None:
@@ -1381,8 +1417,23 @@ class Gemma4Model:
                     persistent.append(pt)
                     continue
                 persistent.append(self._page_table_torch_to_ttnn(pt))
-            self._persistent_per_layer_page_tables = persistent
+            by_batch[batch_key] = persistent
+        self._persistent_per_layer_page_tables = persistent
         return persistent
+
+    @staticmethod
+    def _pad_page_table_host_to_shape(pt_host, target_b, target_w):
+        """Pad a host page table with -1 up to ``(target_b, target_w)``."""
+        pt_host = pt_host if pt_host.dim() > 1 else pt_host.unsqueeze(0)
+        host_b, host_w = int(pt_host.shape[0]), int(pt_host.shape[-1])
+        if host_b == target_b and host_w == target_w:
+            return pt_host
+        if host_b > target_b or host_w > target_w:
+            # Caller should have grown the device buffer already.
+            return pt_host[:target_b, :target_w].contiguous()
+        out = torch.full((target_b, target_w), -1, dtype=torch.int32)
+        out[:host_b, :host_w] = pt_host.to(dtype=torch.int32)
+        return out
 
     def update_persistent_per_layer_page_tables(self, page_tables_per_layer):
         """Update the content of persistent per-layer page-table device
@@ -1392,38 +1443,62 @@ class Gemma4Model:
         ``copy_host_to_device`` rather than reallocate. Called by the
         vLLM hybrid bridge before each forward (out-of-trace) so the
         next traced call observes the new block IDs.
+
+        Prefill often passes B < max_batch (e.g. sequential B=31); pad the
+        host table to the captured device shape so we never reallocate and
+        orphan decode-trace addresses. Skip the H2D when the host table is
+        unchanged from the last update for this batch key (decode steps
+        within a KV block).
         """
         if page_tables_per_layer is None:
             return
-        persistent = getattr(self, "_persistent_per_layer_page_tables", None)
-        if persistent is None or len(persistent) != len(page_tables_per_layer):
-            # First call (warmup) — the persistent buffers don't exist yet.
-            # Allocate them *now*, while we're still out-of-trace. The bridge
-            # invokes this method before ``Generator.{prefill,decode}_forward``,
-            # which is what captures the trace; deferring allocation to
-            # ``_page_tables_to_ttnn`` inside the traced forward would create
-            # the buffers *during* an active trace capture (the "Allocating
-            # device buffers is unsafe due to the existence of an active trace"
-            # case). The captured paged-attention reads would then bind to
-            # buffers whose backing memory the trace can invalidate, so replay
-            # reads stale block IDs and decode emits garbage. Pre-allocating
-            # here binds capture to stable addresses; later calls just do the
-            # in-place host->device copy below.
-            persistent = self._page_tables_to_ttnn(page_tables_per_layer)
-            if persistent is None:
-                return
+        batch_key = self._host_page_tables_batch(page_tables_per_layer)
+        persistent = self._page_tables_to_ttnn(page_tables_per_layer)
+        if persistent is None:
+            return
+        last_by_batch = getattr(self, "_last_host_pt_by_batch", None)
+        if last_by_batch is None:
+            last_by_batch = {}
+            self._last_host_pt_by_batch = last_by_batch
+        last_hosts = last_by_batch.get(batch_key)
+        # Sliding layers often share one remapped host table; copy each unique
+        # (padded) host tensor once and fan out to every persistent buffer.
+        host_cache = {}
+        new_last = [None] * len(page_tables_per_layer)
         for i, pt in enumerate(page_tables_per_layer):
             if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
                 continue
-            pt_sliced = pt[0:1] if pt.dim() > 1 else pt.unsqueeze(0)
-            host_pt = ttnn.from_torch(
-                pt_sliced,
-                device=None,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=self._replicate_to_mesh_mapper(),
-            )
+            pt_host = pt if pt.dim() > 1 else pt.unsqueeze(0)
+            try:
+                target_b = int(persistent[i].shape[0])
+                target_w = int(persistent[i].shape[-1])
+            except (TypeError, IndexError, AttributeError):
+                target_b = int(pt_host.shape[0])
+                target_w = int(pt_host.shape[-1])
+            pt_padded = self._pad_page_table_host_to_shape(pt_host, target_b, target_w)
+            if (
+                last_hosts is not None
+                and i < len(last_hosts)
+                and last_hosts[i] is not None
+                and torch.equal(last_hosts[i], pt_padded)
+            ):
+                new_last[i] = last_hosts[i]
+                continue
+            new_last[i] = pt_padded.detach().clone() if pt_padded is not None else None
+            # Cache key includes target shape so B=1 and B=32 pads don't collide.
+            key = (id(pt), target_b, target_w)
+            host_pt = host_cache.get(key)
+            if host_pt is None:
+                host_pt = ttnn.from_torch(
+                    pt_padded,
+                    device=None,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=self._replicate_to_mesh_mapper(),
+                )
+                host_cache[key] = host_pt
             ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
+        last_by_batch[batch_key] = new_last
 
     def prepare_inputs_prefill(
         self,
