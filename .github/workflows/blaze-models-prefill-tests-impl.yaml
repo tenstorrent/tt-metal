@@ -144,8 +144,9 @@ jobs:
       # Root the tests' CI summaries (chunked-prefill perf tables under perf/) on the /ci NFS volume that
       # is shared between the mpirun worker pods and this runner (same mount the build artifacts flow
       # through). /home/user is per-node, so a file written there by a worker rank is invisible to the
-      # runner's publish step; /ci is not. Only rank 0 writes (see emit_summary).
-      PREFILL_SUMMARIES: /ci/prefill_summaries
+      # runner's publish step; /ci is not. Only rank 0 writes (see emit_summary). The run/attempt/job
+      # subpath isolates each run on the (reused) PVC, so no prior run's files can leak into this one.
+      PREFILL_SUMMARIES: /ci/prefill_summaries/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
     strategy:
       fail-fast: false
       matrix:
@@ -220,8 +221,6 @@ jobs:
       - name: Unpack artifacts & install
         run: |
           rm -rf /ci/tt-metal
-          # Start clean: /ci may be a reused PVC, so drop any prior run's summaries before this one writes.
-          if [ -n "$PREFILL_SUMMARIES" ]; then rm -rf "$PREFILL_SUMMARIES"; fi
           cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
           if ! command -v zstd >/dev/null 2>&1; then
             echo "zstd not found in runner context, installing fallback..."
@@ -382,7 +381,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: prefill-summaries-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          path: /ci/prefill_summaries/**/*.md
+          path: ${{ env.PREFILL_SUMMARIES }}/**/*.md
           if-no-files-found: ignore
           retention-days: 30
 
