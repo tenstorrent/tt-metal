@@ -523,3 +523,113 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
         atol=0.09,
         frobenius_threshold=0.03,
     )
+
+
+GN_INTERLEAVED_SHAPES = [
+    (1, 320, 32, 32, 16, 1, 1, 8),  # base config (original single-shape test)
+    (1, 480, 1, 64, 8, 1, 1, 1),  # single core, last group ends less than max tile span
+    (1, 768, 1, 512, 32, 2, 8, 8),  # group channel count less than tile size
+    (2, 768, 1, 512, 32, 2, 8, 8),  # batch 2 (still multicast), num_out_blocks 2
+    (1, 2560, 1, 512, 32, 2, 8, 8),  # mcast num_out_blocks 2
+    (1, 128, 1, 512, 32, 2, 4, 4),  # all groups on core fit in less than one tile
+    (8, 768, 1, 512, 32, 3, 8, 8),  # batch 8 (no multicast), uneven num_out_blocks divisor
+]
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_INTERLEAVED_SHAPES)
+@pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize("welford_mode", WELFORD_MODES)
+def test_group_norm_interleaved_all_config(
+    device, N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x, in_dtype, gb_dtype, welford_mode
+):
+    # Interleaved (DRAM) group_norm across all WELFORD_MODES. The modes differ only in
+    # use_welford/use_reciprocals and the accuracy thresholds; everything else (fp32/bf16 input,
+    # fp32/bf16 gamma-beta, gamma/beta/mask prep via dram_group_norm_params_from_torch) is identical.
+    # Interleaved input/output is TILE-only (ROW_MAJOR is rejected by the op for non-sharded tensors).
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+    torch.manual_seed(0)
+
+    # Determine welford and reciprocals settings
+    use_welford = welford_mode in ("welford_normal", "welford_reciprocal")
+    use_reciprocals = welford_mode == "welford_reciprocal"
+
+    x = torch.rand((N, C, H, W), dtype=torch.float32)
+    w = torch.rand((C,), dtype=torch.float32)
+    b = torch.rand((C,), dtype=torch.float32)
+    ref = torch.nn.functional.group_norm(x, num_groups, weight=w, bias=b).permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for FP32 (Welford path, or legacy fp32 DEST accumulation)
+        packer_l1_acc=False,
+    )
+
+    xt = x.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    xt = ttnn.from_torch(
+        xt, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    [gt, bt], mask = ttnn.dram_group_norm_params_from_torch(
+        [w, b], C, num_groups, device, core_grid=grid, return_mask=True, dtype=gb_dtype
+    )
+
+    # Create reciprocals tensor if needed (host-precomputed 1/count fed via the reciprocals= arg)
+    reciprocals_tensor = None
+    if use_reciprocals:
+        torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid)
+        reciprocals_tensor = ttnn.from_torch(
+            torch_reciprocals,
+            dtype=ttnn.DataType.FLOAT32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}),
+                    (torch_reciprocals.shape[0] // (grid.x * grid.y), torch_reciprocals.shape[1]),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        )
+
+    out = ttnn.group_norm(
+        xt,
+        num_groups=num_groups,
+        input_mask=mask,
+        weight=gt,
+        bias=bt,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        core_grid=grid,
+        dtype=in_dtype,
+        compute_kernel_config=ck,
+        use_welford=use_welford,
+        num_out_blocks=num_out_blocks,
+        inplace=False,
+        reciprocals=reciprocals_tensor,
+    )
+    out = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
+
+    # Thresholds branch on the reduction path and the input dtype (bf16 input is the dominant error
+    # source); each bound sits ~1.4x above the worst observed value across the shape/gamma-beta matrix.
+    if use_welford:
+        if in_dtype == ttnn.bfloat16:
+            pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.06, 0.015
+        else:
+            pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.02, 0.004
+    else:
+        if in_dtype == ttnn.bfloat16:
+            pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.10, 0.03
+        else:
+            pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.03, 0.01
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )

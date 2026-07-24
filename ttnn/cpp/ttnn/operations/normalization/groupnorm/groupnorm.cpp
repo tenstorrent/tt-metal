@@ -15,6 +15,11 @@ namespace {
 using ttnn::operations::normalization::compute_num_virtual_cols;
 using ttnn::operations::normalization::find_expected_dram_grid;
 
+// Stats/intermediate CB format: fp32 input uses fp32 stats, bf16 input uses bf16.
+ttnn::DataType group_norm_im_data_format(ttnn::DataType input_dtype) {
+    return input_dtype == ttnn::DataType::FLOAT32 ? ttnn::DataType::FLOAT32 : ttnn::DataType::BFLOAT16;
+}
+
 // Validates that the requested core grid satisfies the DRAM group-norm constraints.
 // If the requested grid is invalid, fatals with an error suggesting the largest valid sub-grid.
 void validate_dram_grid(
@@ -153,7 +158,7 @@ Tensor group_norm(
     const std::optional<Tensor>& bias,
     const std::optional<Tensor>& reciprocals,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DataType> /*dtype*/,
+    const std::optional<DataType> dtype,
     std::optional<CoreGrid> core_grid,
     std::optional<bool> inplace,
     std::optional<Layout> output_layout,
@@ -243,10 +248,21 @@ Tensor group_norm(
         TT_FATAL(input_mask->buffer() != nullptr, "Input mask must be allocated in buffers on device!");
         TT_FATAL(input_tensor.device() == input_mask->device(), "Input and input mask tensors must be on same device");
     }
+
+    // Program factories require output dtype == input dtype.
+    const auto out_dtype = dtype.value_or(input_tensor.dtype());
+    TT_FATAL(
+        out_dtype == input_tensor.dtype(),
+        "group_norm output dtype must match input dtype ({}), got dtype={}",
+        input_tensor.dtype(),
+        out_dtype);
+
     const auto arch = input_tensor.device()->arch();
     const auto math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     const auto approx_mode = true;
-    const auto fp32_acc = use_welford;
+    // fp32 input accumulates in the fp32 DEST (like LayerNorm); welford already forces it. A
+    // user-supplied compute_kernel_config still overrides this default.
+    const auto fp32_acc = use_welford || (input_tensor.dtype() == DataType::FLOAT32);
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
 
@@ -368,8 +384,8 @@ Tensor group_norm(
     if (input_tensor.is_sharded()) {
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-            .im_data_format = DataType::BFLOAT16,
-            .out_data_format = DataType::BFLOAT16,
+            .im_data_format = group_norm_im_data_format(input_tensor.dtype()),
+            .out_data_format = out_dtype,
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout())};
         return ttnn::prim::group_norm(
@@ -391,8 +407,8 @@ Tensor group_norm(
     // Otherwise honor the explicit num_out_blocks (defaulting to 1 = no chunking).
     const ttnn::prim::GroupNormMultiCoreProgramConfig program_config = {
         .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-        .im_data_format = DataType::BFLOAT16,
-        .out_data_format = DataType::BFLOAT16,
+        .im_data_format = group_norm_im_data_format(input_tensor.dtype()),
+        .out_data_format = out_dtype,
         .inplace = inplace.value_or(false),
         .output_layout = output_layout.value_or(input_tensor.layout()),
         .num_out_blocks = core_grid_auto_selected ? -1 : num_out_blocks.value_or(1)};

@@ -125,15 +125,13 @@ void kernel_main() {
     constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
     // Boolean indicating whether the welford kernel uses the alias CB.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    // True when the welford intake CB is configured with UnpackToDestFp32, i.e. the FP32
-    // path. Covers both the TILIZE_IN branch (intake CB is c_29) and the non-TILIZE_IN
-    // alias branch (intake CB is cb_in0_welford, see welford_fp32_alias). On this path,
-    // transpose_tile routes through llk_math_transpose_dest, whose math-side init
-    // records slots [16, 32) of the math-thread replay buffer, clobbering welford's
-    // LREG2 / LREG3 portions, so the welford SFPU state must be re-initialized after each
-    // transpose. For bf16 input, transpose routes through SrcA without touching the
-    // math-thread replay buffer, so no re-init is needed.
+    // True on the fp32 intake path (transpose reads an UnpackToDestFp32 CB). transpose_tile then
+    // clobbers welford's LREG2/LREG3, so welford SFPU state must be re-inited after each transpose.
+    // bf16 transposes via SrcA and needs no re-init.
     constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
+    // True when a reconfig-relevant operand is fp32: the per-tile reconfig_data_format calls below
+    // are then required. All-bf16 compiles them out (no-ops). See program factory.
+    constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
     constexpr uint32_t cb_eps_id = tt::CBIndex::c_3;
     constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta_id = tt::CBIndex::c_6;
@@ -385,7 +383,12 @@ void kernel_main() {
         cb_ex_global.wait_front(2 * num_groups);
         cb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
+        // fp32: cb_ex_global is fp32 (var), cb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
+        // Reset both srcs so they match the operands read below. no-op for bf16.
         add_tiles_init(cb_ex_global_id, cb_eps_id);
+        if constexpr (enable_fp32_reconfig) {
+            reconfig_data_format_srca(cb_ex_global_id);
+        }
         reconfig_data_format_srcb(cb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
@@ -444,8 +447,16 @@ void kernel_main() {
 
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
+                        // fp32: SrcA needs cb_in0 (fp32 input), SrcB needs cb_ex_global (fp32 mean); the prior group's
+                        // mul_tiles(cb_xmm) left SrcA on cb_xmm. Use the unconditional 1-arg form: the old 2-arg
+                        // srcb(cb_eps -> cb_ex_global) never reset SrcA at all.
                         sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
-                        reconfig_data_format_srcb(cb_eps_id, cb_ex_global_id);
+                        if constexpr (enable_fp32_reconfig) {
+                            reconfig_data_format_srca(cb_in0_id);
+                            reconfig_data_format_srcb(cb_ex_global_id);
+                        } else {
+                            reconfig_data_format_srcb(cb_eps_id, cb_ex_global_id);
+                        }
 
                         tile_regs_acquire();
                         sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, 0, 0 + (g << 1), dst0);
@@ -458,7 +469,12 @@ void kernel_main() {
                         const uint32_t mask_offset = g * block_w;
                         const uint32_t mask_index = mask_offset + block_w_index;
 
+                        // fp32: reset SrcA to the mask format before reading cb_input_mask (prior step left it on fp32
+                        // cb_in0).
                         mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
+                        if constexpr (enable_fp32_reconfig) {
+                            reconfig_data_format_srca(cb_in0_id, cb_input_mask_id);
+                        }
                         reconfig_data_format_srcb(cb_ex_global_id, cb_ex2pe_id);
                         tile_regs_acquire();
                         mul_tiles_bcast_scalar(cb_input_mask_id, cb_ex2pe_id, mask_index, g, dst0);
@@ -471,6 +487,10 @@ void kernel_main() {
                         // // c. a * b
                         cb_xmm.wait_front(2);
                         mul_tiles_init(cb_xmm_id, cb_xmm_id);
+                        // fp32: reset SrcA to cb_xmm (fp32); step b above left SrcA on the bf16 input mask.
+                        if constexpr (enable_fp32_reconfig) {
+                            reconfig_data_format_srca(cb_xmm_id);
+                        }
                         reconfig_data_format_srcb(cb_ex2pe_id, cb_xmm_id);
                         tile_regs_acquire();
                         mul_tiles(cb_xmm_id, cb_xmm_id, 0, 1, dst0);
@@ -548,8 +568,15 @@ void kernel_main() {
                     }
 
                     if constexpr (do_gamma) {
-                        mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
-                        reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
+                        // fp32: reset SrcA to cb_x (fp32); the prior mask/accumulate step left SrcA on a bf16 format.
+                        if constexpr (enable_fp32_reconfig) {
+                            reconfig_data_format_srca(cb_x_id);
+                            reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
+                            mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
+                        } else {
+                            mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
+                            reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
+                        }
 
                         cb_x.wait_front(1);
                         tile_regs_acquire();
@@ -564,8 +591,15 @@ void kernel_main() {
                     }
 
                     if constexpr (do_beta) {
-                        add_bcast_rows_init_short(cb_x_id, cb_beta_id);
-                        reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
+                        // fp32: reset SrcA to cb_x (fp32), same as the gamma step above.
+                        if constexpr (enable_fp32_reconfig) {
+                            reconfig_data_format_srca(cb_x_id);
+                            reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
+                            add_bcast_rows_init_short(cb_x_id, cb_beta_id);
+                        } else {
+                            add_bcast_rows_init_short(cb_x_id, cb_beta_id);
+                            reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
+                        }
 
                         cb_x.wait_front(1);
                         tile_regs_acquire();
@@ -581,6 +615,9 @@ void kernel_main() {
 
                     // Write out the final output
                     copy_tile_init(cb_x_id);
+                    if constexpr (enable_fp32_reconfig) {
+                        reconfig_data_format_srca(cb_x_id);
+                    }
                     reconfig_data_format_srcb(do_beta ? cb_beta_id : cb_xmm_id, cb_x_id);
 
                     cb_x.wait_front(1);
@@ -590,7 +627,19 @@ void kernel_main() {
                     cb_x.pop_front(1);
                     cb_out.reserve_back(1);
                     tile_regs_wait();
+#ifndef UNTILIZE_OUT
+                    // Packer was last set for bf16 cb_x; reconfigure to cb_out_id (may be fp32) before pack, restore
+                    // after. Only needed when out differs from cb_x (fp32 path); no-op gated out for bf16.
+                    if constexpr (enable_fp32_reconfig) {
+                        pack_reconfig_data_format(cb_out_id);
+                    }
+#endif
                     pack_tile(dst0, cb_out_id);
+#ifndef UNTILIZE_OUT
+                    if constexpr (enable_fp32_reconfig) {
+                        pack_reconfig_data_format(cb_x_id);
+                    }
+#endif
                     tile_regs_release();
                     cb_out.push_back(1);
                 }

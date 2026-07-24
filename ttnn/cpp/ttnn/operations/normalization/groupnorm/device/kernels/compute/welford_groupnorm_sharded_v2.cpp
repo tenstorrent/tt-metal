@@ -56,6 +56,9 @@ void kernel_main() {
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
     constexpr uint32_t cb_in_welford_id = get_named_compile_time_arg_val("cb_in_welford");
+    // True when a reconfig-relevant operand is fp32: the per-tile reconfig_data_format calls below
+    // are then required. All-bf16 compiles them out (no-ops). See program factory.
+    constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
 
     // dst regs
     constexpr uint32_t dst0 = 0;
@@ -285,6 +288,10 @@ void kernel_main() {
         cb_ex_global.wait_front(2 * num_groups);
         cb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
+        // fp32: cb_ex_global is fp32 (var), cb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
+        if constexpr (enable_fp32_reconfig) {
+            reconfig_data_format_srca(cb_ex_global_id);
+        }
         reconfig_data_format_srcb(cb_eps_id);
         add_tiles_init(cb_ex_global_id, cb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
@@ -437,6 +444,10 @@ void kernel_main() {
                 ++tile_id;
 
                 if constexpr (do_gamma) {
+                    // fp32: reset SrcA to cb_x (fp32).
+                    if constexpr (enable_fp32_reconfig) {
+                        reconfig_data_format_srca(cb_x_id);
+                    }
                     reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
                     mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
 
@@ -453,6 +464,10 @@ void kernel_main() {
                 }
 
                 if constexpr (do_beta) {
+                    // fp32: reset SrcA to cb_x (fp32).
+                    if constexpr (enable_fp32_reconfig) {
+                        reconfig_data_format_srca(cb_x_id);
+                    }
                     reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
                     add_bcast_rows_init_short(cb_x_id, cb_beta_id);
 
@@ -469,6 +484,10 @@ void kernel_main() {
                 }
 
                 // Write out the final output
+                // fp32: reset SrcA to cb_x (fp32).
+                if constexpr (enable_fp32_reconfig) {
+                    reconfig_data_format_srca(cb_x_id);
+                }
                 reconfig_data_format_srcb(do_beta ? cb_beta_id : cb_xmm_id, cb_x_id);
                 copy_tile_init(cb_x_id);
 
@@ -485,7 +504,19 @@ void kernel_main() {
                 CircularBuffer write_cb(write_cb_id);
                 write_cb.reserve_back(1);
                 tile_regs_wait();
+#ifndef UNTILIZE_OUT
+                // Packer was last set for bf16 cb_xmm; reconfigure to write_cb_id (may be fp32) before pack, restore
+                // after. Gated out for bf16 (no format change).
+                if constexpr (enable_fp32_reconfig) {
+                    pack_reconfig_data_format(write_cb_id);
+                }
+#endif
                 pack_tile(dst0, write_cb_id);
+#ifndef UNTILIZE_OUT
+                if constexpr (enable_fp32_reconfig) {
+                    pack_reconfig_data_format(cb_xmm_id);
+                }
+#endif
                 tile_regs_release();
                 write_cb.push_back(1);
             }

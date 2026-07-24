@@ -78,6 +78,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(im_data_format);
+    // fp32 stats CBs (welford + fp32 DEST): reader kernels combine mean/variance as fp32, not bf16.
+    const bool stats_is_fp32 = cb_data_format == tt::DataFormat::Float32;
     tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat reciprocal_cb_data_format =
         reciprocals.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(reciprocals.value().dtype())
@@ -91,19 +93,23 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     tt::DataFormat in_mask_cb_data_format =
         input_mask.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(input_mask.value().dtype())
                                : tt::DataFormat::Float16_b;
-    uint32_t datum_size_bytes = 2;
-
     TT_FATAL(
         out_data_format == in_data_format,
         "input: {} and output: {} must be the same data format",
         in_data_format,
         out_data_format);
+    // datum size follows the dtype (out==in, enforced above); a bf16 hardcode would halve fp32 strides.
+    uint32_t datum_size_bytes = output.element_size();
 
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t gamma_beta_single_tile_size = tt::tile_size(gamma_beta_cb_data_format);
     uint32_t in_mask_single_tile_size = tt::tile_size(in_mask_cb_data_format);
+    // eps is delivered as a bf16 scalar (generate_bcast_col_scalar packs the top 16 bits), so its CB
+    // stays bf16 even with fp32 stats; add_tiles(cb_ex_global, cb_eps) then runs mixed fp32/bf16.
+    const tt::DataFormat eps_cb_data_format = tt::DataFormat::Float16_b;
+    const uint32_t eps_single_tile_size = tt::tile_size(eps_cb_data_format);
 
     IDevice* device = a.device();
 
@@ -228,15 +234,20 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
-    // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's
-    // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
-    // UnpackToDestFp32 writes into. Without fp32 DEST, UnpackToDestFp32 can't be enabled
-    // and inputs are silently truncated to TF32 (10 mantissa bits) on the way through SrcA.
+    // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:
+    //  - Welford: prerequisite for UnpackToDestFp32 (set below), which bypasses the unpacker's
+    //    Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
+    //    UnpackToDestFp32 writes into.
+    //  - Legacy (non-welford): intermediates are stored fp32 (im_data_format=Float32) and
+    //    accumulated in the fp32 DEST register, which requires fp32_dest_acc_en.
+    // Without fp32_dest_acc_en the DEST register is bfloat16, so accumulated/intermediate results are
+    // silently rounded to bf16 (7 mantissa bits) and UnpackToDestFp32 cannot be enabled. (SrcA's TF32
+    // rounding on FPU operands is separate and applies regardless of this flag.)
     TT_FATAL(
-        !(use_welford && in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
-        "group_norm welford with Float32 input requires fp32_dest_acc_en=true in the compute "
-        "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
+        !(in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "group_norm with Float32 input requires fp32_dest_acc_en=true in the compute kernel config; "
+        "otherwise the DEST accumulator is bfloat16 and intermediate/accumulated results are silently "
+        "rounded to bf16.");
 
     // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_tile
     // reads from a CB that carries UnpackToDestFp32, regardless of which CB is used: c_29
@@ -251,6 +262,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     // welford_fp32_alias is the non-TILIZE_IN sub-case (c_19 alias is only useful when
     // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
     const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
+
+    // cb_reciprocals is excluded: it's fp32 here but the reconfigs never touch it.
+    const bool enable_fp32_reconfig = groupnorm_needs_fp32_reconfig(
+        {in_data_format, out_data_format, cb_data_format, gamma_beta_cb_data_format, in_mask_cb_data_format});
 
     const uint32_t cb_in0_welford_index =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
@@ -287,7 +302,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t in0_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
     uint32_t in_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
     uint32_t in2_CB_size = single_tile_size;
-    uint32_t in3_CB_size = single_tile_size;
+    uint32_t in3_CB_size = eps_single_tile_size;
     uint32_t gamma_beta_num_cols_tile_per_core = per_core_Nt;
     uint32_t in5_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     uint32_t in6_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
@@ -435,6 +450,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         // cb_in0_welford_index == c_0 and the reader's gated push is skipped.
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"cb_in0_welford", cb_in0_welford_index},
+        {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
     };
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
@@ -469,6 +485,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         // cb_in0_welford_index == c_0 and the reader's gated push is skipped.
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"cb_in0_welford", cb_in0_welford_index},
+        {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
     };
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
@@ -705,10 +722,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     mcast_sender_compute_named_compile_time_args["welford_unpack_fp32_active"] =
         static_cast<uint32_t>(welford_unpack_fp32_active);
     mcast_sender_compute_named_compile_time_args["cb_in0_welford"] = cb_in0_welford_index;
+    mcast_sender_compute_named_compile_time_args["enable_fp32_reconfig"] = static_cast<uint32_t>(enable_fp32_reconfig);
     mcast_receiver_compute_named_compile_time_args["welford_fp32_alias"] = static_cast<uint32_t>(welford_fp32_alias);
     mcast_receiver_compute_named_compile_time_args["welford_unpack_fp32_active"] =
         static_cast<uint32_t>(welford_unpack_fp32_active);
     mcast_receiver_compute_named_compile_time_args["cb_in0_welford"] = cb_in0_welford_index;
+    mcast_receiver_compute_named_compile_time_args["enable_fp32_reconfig"] =
+        static_cast<uint32_t>(enable_fp32_reconfig);
 
     KernelDescriptor compute_sender_desc;
     compute_sender_desc.kernel_source = compute_kernel_path;
@@ -816,8 +836,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(in3_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
+            .data_format = eps_cb_data_format,
+            .page_size = eps_single_tile_size,
         }}},
     });
 
