@@ -93,7 +93,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 10
+      timeout: 7
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -253,7 +253,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 35
+      timeout: 25
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -274,7 +274,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 23
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -439,26 +439,27 @@
     export PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320
     # Full model depth (all 61 layers) instead of the 2-layer smoke default, to gate the whole
-    # network's KV. Raise both inner sub-timeouts (producer wait ceiling, default 15 min; runner-ready
-    # ceiling, default 20 min) to 29 min so neither trips before the 30-min job/pytest timeout governs
+    # network's KV. Measured ~14 min end-to-end on bh_sc1 (run 30075995186), so 20 min gives ~6 min
+    # headroom. Raise both inner sub-timeouts (producer wait ceiling, default 15 min; runner-ready
+    # ceiling, default 20 min) to 19 min so neither trips before the 20-min job/pytest timeout governs
     # (--timeout below): the runner does the heavy 61-layer load + forward pass and the producer just
     # waits on its per-layer acks.
     export PREFILL_NUM_LAYERS=61
-    export PREFILL_CI_PRODUCER_TIMEOUT_S=1740
-    export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1740
+    export PREFILL_CI_PRODUCER_TIMEOUT_S=1140
+    export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1140
     # CI launch path: detaches the runner/producer children from this mpirun/prterun session so they
     # run as standalone singletons and the job returns pytest's real exit code.
     export PREFILL_RUNNER_LAUNCH=ci
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=1800
+      python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=1200
     '
   test_type: prefill_runner
   test_group: module
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 20
   owner_id: U09L76N1MAT  # Nenad Babin
   team: models
   sp_config: sc1
