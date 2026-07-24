@@ -11,7 +11,7 @@
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/named_kernel_args.hpp>
+#include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include <functional>
@@ -153,7 +153,7 @@ struct KernelDescriptor {
     RuntimeArgs runtime_args;
     CommonRuntimeArgs common_runtime_args;
     // EXPERIMENTAL: named kernel args
-    experimental::NamedKernelArgs named_args;
+    experimental::blaze::NamedKernelArgs blaze_named_args;
 
     std::optional<KernelBuildOptLevel> opt_level = std::nullopt;
 

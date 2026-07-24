@@ -6,12 +6,12 @@
 //
 // This header defines the host-side named-arg structs that were previously
 // inlined in `KernelDescriptor` (program_descriptors.hpp).  They are now
-// quarantined in `namespace tt::tt_metal::experimental` as a sub-struct
+// quarantined in `namespace tt::tt_metal::experimental::blaze` as a sub-struct
 // (`NamedKernelArgs`) aggregated by `KernelDescriptor`.
 //
 // This feature will be deleted when Blaze migrates to the Metal 2.0
-// `args::` system.  See:
-//   tt_metal/api/tt-metalium/experimental/README_named_kernel_args.md
+// `args::` system.  Removal is tracked by issue #50953.  See:
+//   tt_metal/api/tt-metalium/experimental/blaze/README.md
 
 #pragma once
 
@@ -29,7 +29,7 @@ struct KernelDescriptor;
 
 }  // namespace tt::tt_metal
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal::experimental::blaze {
 
 // Named runtime args use "ns.field" convention (e.g. "demo.num_tiles").
 // The name is split on '.' to produce namespace hierarchy in the generated header.
@@ -79,7 +79,7 @@ struct NamedKernelArgs {
 // Processes named runtime args for a kernel: merges named values into
 // positional runtime/common arg vectors, validates identifiers, and builds
 // the namespace maps used by the JIT header generator.
-// Called from the Program constructor when `kernel_descriptor.named_args` is non-empty.
+// Called from the Program constructor when `kernel_descriptor.blaze_named_args` is non-empty.
 void process_named_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_handle);
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal::experimental::blaze

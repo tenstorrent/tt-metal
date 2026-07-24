@@ -4,8 +4,8 @@
 
 // Named runtime arg types for device kernels.
 //
-// Defines rt_args::Dispatch and rt_args::Arg used by the JIT-generated header
-// (named_args_generated.h) and by rt_args::get<>() in the API headers.
+// Defines blaze_rt_args::Dispatch and blaze_rt_args::Arg used by the JIT-generated header
+// (named_args_generated.h) and by blaze_rt_args::get<>() in the API headers.
 //
 // This file is safe to -include before any API headers because it only
 // defines types (no functions that depend on get_arg_val etc.).
@@ -14,7 +14,7 @@
 
 #include <cstdint>
 
-namespace rt_args {
+namespace blaze_rt_args {
 
 enum class Dispatch : uint8_t { COMMON, PER_CORE };
 
@@ -29,4 +29,4 @@ struct ArrayArg {
     Dispatch dispatch;
 };
 
-}  // namespace rt_args
+}  // namespace blaze_rt_args

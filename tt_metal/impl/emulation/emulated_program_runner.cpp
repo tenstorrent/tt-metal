@@ -89,10 +89,10 @@
 #endif
 
 // EXPERIMENTAL: named kernel args
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal::experimental::blaze {
 bool emit_named_args_header(
     const std::string& dir, const NamedCTArgNamespaces& ct_namespaces, const NamedRuntimeArgNamespaces& rt_namespaces);
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal::experimental::blaze
 
 // ---------------------------------------------------------------------------
 // Thread-local context for JIT kernels.
@@ -823,9 +823,9 @@ static void emit_metal2_namespaces(
             // which is not a valid flat C++ identifier, so emitting
             // `constexpr CtaVal<uint32_t> cp.dst{...}` here would fail to compile;
             // skip them to keep the flat `args::` form namespaced-safe. This change
-            // does NOT emit the matching `ct_args::<ns>` structs — that is a separate
+            // does NOT emit the matching `blaze_ct_args::<ns>` structs — that is a separate
             // emission step (it needs a Kernel::process_named_ct_arg_namespaces API);
-            // a kernel that references `ct_args::<ns>` requires that step to be
+            // a kernel that references `blaze_ct_args::<ns>` requires that step to be
             // present, so skipping here only prevents invalid flat C++, it does not
             // itself make namespaced args available.
             if (name.find('.') != std::string::npos) {
@@ -951,7 +951,7 @@ static std::function<void()> jit_compile_kernel(
     // Emule's JIT path bypasses genfiles; call the experimental helper to
     // emit named_args_generated.h. Included from wrapper.cpp when non-empty.
     bool has_named_args =
-        experimental::emit_named_args_header(dir, named_ct_arg_namespaces, named_runtime_arg_namespaces);
+        experimental::blaze::emit_named_args_header(dir, named_ct_arg_namespaces, named_runtime_arg_namespaces);
 
     // 3. Write wrapper.cpp
     // Kernel defines are written as #define directives in the wrapper to avoid
@@ -971,7 +971,7 @@ static std::function<void()> jit_compile_kernel(
             }
         }
         f << "#include \"jit_kernel_stubs.hpp\"\n";
-        // Metal-2.0 `namespace args` (base) + experimental `ct_args::` header (additive layer).
+        // Metal-2.0 `namespace args` (base) + experimental `blaze_ct_args::` header (additive layer).
         emit_metal2_namespaces(f, bindings, named_compile_args);
         if (has_named_args) {
             f << "#include \"" << dir << "/named_args_generated.h\"\n";

@@ -4,7 +4,7 @@
 
 // EXPERIMENTAL: Named kernel-args — temporary, Blaze-only.
 
-#include <tt-metalium/experimental/named_kernel_args.hpp>
+#include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -26,10 +26,10 @@
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_settings.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal::experimental::blaze {
 
 void process_named_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_handle) {
-    const auto& named_args = kernel_descriptor.named_args;
+    const auto& named_args = kernel_descriptor.blaze_named_args;
 
     // Set per-core runtime args: positional values followed by named values.
     // Build merged vectors per core, then set once.
@@ -194,14 +194,15 @@ bool emit_named_args_header(
         }
         if (auto it = named_runtime_arg_namespaces.find(ns); it != named_runtime_arg_namespaces.end()) {
             for (const auto& entry : it->second) {
-                const char* dispatch_str = entry.dispatch == RuntimeArgDispatch::COMMON ? "rt_args::Dispatch::COMMON"
-                                                                                        : "rt_args::Dispatch::PER_CORE";
+                const char* dispatch_str = entry.dispatch == RuntimeArgDispatch::COMMON
+                                               ? "blaze_rt_args::Dispatch::COMMON"
+                                               : "blaze_rt_args::Dispatch::PER_CORE";
                 if (entry.length > 1) {
-                    header_ct << "    static constexpr rt_args::ArrayArg " << entry.field << " = {" << entry.index
+                    header_ct << "    static constexpr blaze_rt_args::ArrayArg " << entry.field << " = {" << entry.index
                               << ", " << entry.length << ", " << dispatch_str << "};\n";
                 } else {
-                    header_ct << "    static constexpr rt_args::Arg " << entry.field << " = {" << entry.index << ", "
-                              << dispatch_str << "};\n";
+                    header_ct << "    static constexpr blaze_rt_args::Arg " << entry.field << " = {" << entry.index
+                              << ", " << dispatch_str << "};\n";
                 }
             }
         }
@@ -214,9 +215,9 @@ bool emit_named_args_header(
         return false;
     }
     std::ofstream f(dir + "/named_args_generated.h");
-    f << "#pragma once\n#include \"api/rt_arg.h\"\n\n";
-    f << "namespace ct_args {\n" << ct_str << "}\n";
+    f << "#pragma once\n#include \"experimental/blaze_rt_arg.h\"\n\n";
+    f << "namespace blaze_ct_args {\n" << ct_str << "}\n";
     return true;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal::experimental::blaze

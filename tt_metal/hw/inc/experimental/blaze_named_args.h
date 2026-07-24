@@ -4,9 +4,9 @@
 
 // EXPERIMENTAL: Named kernel-args — temporary, Blaze-only.
 //
-// This header provides the device-side `rt_args::get<>()` accessor template
+// This header provides the device-side `blaze_rt_args::get<>()` accessor template
 // that works with the JIT-generated `named_args_generated.h` descriptors
-// (`rt_args::Arg` / `rt_args::ArrayArg`).  It is an opt-in header: Blaze
+// (`blaze_rt_args::Arg` / `blaze_rt_args::ArrayArg`).  It is an opt-in header: Blaze
 // (and test) kernels must `#include "experimental/named_args.h"` explicitly.
 // Core device headers (`dataflow_api.h`, `compute/common.h`) no longer pull
 // this template into every kernel's namespace.
@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "api/rt_arg.h"
+#include "experimental/blaze_rt_arg.h"
 
 // DEPENDENCY NOTE:
 // This header requires the following to be visible at the point of inclusion:
@@ -33,9 +33,9 @@
 #endif
 
 // Unified accessor for named runtime args (works for both Arg and ArrayArg).
-// Scalar:  uint32_t n = rt_args::get<ct_args::my_op::num_tiles>();
-// Array:   uint32_t a = rt_args::get<ct_args::my_op::worker_sem_addr>(i);
-namespace rt_args {
+// Scalar:  uint32_t n = blaze_rt_args::get<blaze_ct_args::my_op::num_tiles>();
+// Array:   uint32_t a = blaze_rt_args::get<blaze_ct_args::my_op::worker_sem_addr>(i);
+namespace blaze_rt_args {
 template <auto arg, typename T = uint32_t>
 FORCE_INLINE T get(uint32_t i = 0) {
     if constexpr (arg.dispatch == Dispatch::COMMON) {
@@ -44,4 +44,4 @@ FORCE_INLINE T get(uint32_t i = 0) {
         return get_arg_val<T>(arg.index + i);
     }
 }
-}  // namespace rt_args
+}  // namespace blaze_rt_args

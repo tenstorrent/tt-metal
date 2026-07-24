@@ -73,7 +73,7 @@ string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool 
         prolog << "#include \"kernel_bindings_generated.h\"\n";
         prolog << "#include \"kernel_args_generated.h\"\n";
     }
-    // EXPERIMENTAL named ct_args::/rt_args:: header — presence-gated, NOT is_metal2-gated.
+    // EXPERIMENTAL named blaze_ct_args::/blaze_rt_args:: header — presence-gated, NOT is_metal2-gated.
     if (has_experimental_ct_args) {
         prolog << "#include \"named_args_generated.h\"\n";
     }
@@ -367,9 +367,9 @@ std::string generate_tt_kernel_shim_if_present(
 }
 
 // EXPERIMENTAL named args (NOT Metal 2.0):
-// Emits named_args_generated.h with a single ct_args:: namespace. Each prefix becomes a
-// struct containing both CT values (uint32_t) and RT arg descriptors (rt_args::Arg /
-// rt_args::ArrayArg). Gated on named-arg PRESENCE, NOT on is_metal2_kernel(): named_*_namespaces_
+// Emits named_args_generated.h with a single blaze_ct_args:: namespace. Each prefix becomes a
+// struct containing both CT values (uint32_t) and RT arg descriptors (blaze_rt_args::Arg /
+// blaze_rt_args::ArrayArg). Gated on named-arg PRESENCE, NOT on is_metal2_kernel(): named_*_namespaces_
 // are set via setters (program.cpp) independent of the Metal 2.0 fence.
 // Returns true if a header was written (i.e. the kernel has named args), so callers can
 // decide whether to add the #include.
@@ -416,14 +416,15 @@ bool write_named_args_generated_header(const string& out_dir, const JitBuildSett
         // RT descriptors
         if (auto it = rt_by_ns.find(ns); it != rt_by_ns.end()) {
             for (const auto& entry : it->second) {
-                const char* dispatch_str = entry.dispatch == RuntimeArgDispatch::COMMON ? "rt_args::Dispatch::COMMON"
-                                                                                        : "rt_args::Dispatch::PER_CORE";
+                const char* dispatch_str = entry.dispatch == RuntimeArgDispatch::COMMON
+                                               ? "blaze_rt_args::Dispatch::COMMON"
+                                               : "blaze_rt_args::Dispatch::PER_CORE";
                 if (entry.length > 1) {
-                    header_ct << "    static constexpr rt_args::ArrayArg " << entry.field << " = {" << entry.index
+                    header_ct << "    static constexpr blaze_rt_args::ArrayArg " << entry.field << " = {" << entry.index
                               << ", " << entry.length << ", " << dispatch_str << "};\n";
                 } else {
-                    header_ct << "    static constexpr rt_args::Arg " << entry.field << " = {" << entry.index << ", "
-                              << dispatch_str << "};\n";
+                    header_ct << "    static constexpr blaze_rt_args::Arg " << entry.field << " = {" << entry.index
+                              << ", " << dispatch_str << "};\n";
                 }
             }
         }
@@ -437,8 +438,8 @@ bool write_named_args_generated_header(const string& out_dir, const JitBuildSett
         return false;  // no named args, no header, no #include
     }
     std::ostringstream content;
-    content << "#pragma once\n#include \"api/rt_arg.h\"\n\n";
-    content << "namespace ct_args {\n" << ct_str << "}\n";
+    content << "#pragma once\n#include \"experimental/blaze_rt_arg.h\"\n\n";
+    content << "namespace blaze_ct_args {\n" << ct_str << "}\n";
     write_file(out_dir + "named_args_generated.h", content.str());
     return true;
 }

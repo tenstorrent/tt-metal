@@ -729,7 +729,7 @@ void py_module_types(nb::module_& mod) {
                std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level,
                tt::tt_metal::KernelDescriptor::ConfigDescriptor config,
                tt::tt_metal::KernelDescriptor::IncludePaths compiler_include_paths) {
-                using namespace tt::tt_metal::experimental;
+                using namespace tt::tt_metal::experimental::blaze;
                 NamedCommonRuntimeArgs ncra;
                 for (auto item : named_common_runtime_args) {
                     auto tup = nb::cast<nb::tuple>(item);
@@ -884,16 +884,16 @@ void py_module_types(nb::module_& mod) {
             "named_common_runtime_args",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
-                for (const auto& arg : self.named_args.named_common_runtime_args) {
+                for (const auto& arg : self.blaze_named_args.named_common_runtime_args) {
                     result.append(nb::make_tuple(arg.name, arg.value));
                 }
                 return result;
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
-                self.named_args.named_common_runtime_args.clear();
+                self.blaze_named_args.named_common_runtime_args.clear();
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
-                    self.named_args.named_common_runtime_args.push_back(
+                    self.blaze_named_args.named_common_runtime_args.push_back(
                         {nb::cast<std::string>(tup[0]), nb::cast<uint32_t>(tup[1])});
                 }
             },
@@ -902,7 +902,7 @@ void py_module_types(nb::module_& mod) {
             "named_per_core_runtime_args",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
-                for (const auto& arg : self.named_args.named_per_core_runtime_args) {
+                for (const auto& arg : self.blaze_named_args.named_per_core_runtime_args) {
                     nb::dict core_values;
                     for (const auto& [core, value] : arg.core_values) {
                         core_values[nb::cast(core)] = nb::cast(value);
@@ -912,7 +912,7 @@ void py_module_types(nb::module_& mod) {
                 return result;
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
-                self.named_args.named_per_core_runtime_args.clear();
+                self.blaze_named_args.named_per_core_runtime_args.clear();
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
@@ -921,7 +921,8 @@ void py_module_types(nb::module_& mod) {
                     for (const auto& [k, v] : dict) {
                         core_values.emplace_back(nb::cast<CoreCoord>(k), nb::cast<uint32_t>(v));
                     }
-                    self.named_args.named_per_core_runtime_args.push_back({std::move(name), std::move(core_values)});
+                    self.blaze_named_args.named_per_core_runtime_args.push_back(
+                        {std::move(name), std::move(core_values)});
                 }
             },
             "Named per-core runtime args: list of (name, {CoreCoord: value}) pairs")
@@ -929,7 +930,7 @@ void py_module_types(nb::module_& mod) {
             "named_common_runtime_arg_arrays",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
-                for (const auto& arg : self.named_args.named_common_runtime_arg_arrays) {
+                for (const auto& arg : self.blaze_named_args.named_common_runtime_arg_arrays) {
                     nb::list values;
                     for (auto v : arg.values) {
                         values.append(v);
@@ -939,7 +940,7 @@ void py_module_types(nb::module_& mod) {
                 return result;
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
-                self.named_args.named_common_runtime_arg_arrays.clear();
+                self.blaze_named_args.named_common_runtime_arg_arrays.clear();
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
@@ -948,7 +949,8 @@ void py_module_types(nb::module_& mod) {
                     for (auto v : values_list) {
                         values.push_back(nb::cast<uint32_t>(v));
                     }
-                    self.named_args.named_common_runtime_arg_arrays.push_back({std::move(name), std::move(values)});
+                    self.blaze_named_args.named_common_runtime_arg_arrays.push_back(
+                        {std::move(name), std::move(values)});
                 }
             },
             "Named common runtime arg arrays: list of (name, [values]) pairs")
@@ -956,7 +958,7 @@ void py_module_types(nb::module_& mod) {
             "named_per_core_runtime_arg_arrays",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
-                for (const auto& arg : self.named_args.named_per_core_runtime_arg_arrays) {
+                for (const auto& arg : self.blaze_named_args.named_per_core_runtime_arg_arrays) {
                     nb::dict core_values;
                     for (const auto& [core, values] : arg.core_values) {
                         nb::list val_list;
@@ -970,7 +972,7 @@ void py_module_types(nb::module_& mod) {
                 return result;
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
-                self.named_args.named_per_core_runtime_arg_arrays.clear();
+                self.blaze_named_args.named_per_core_runtime_arg_arrays.clear();
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
@@ -984,7 +986,7 @@ void py_module_types(nb::module_& mod) {
                         }
                         core_values.emplace_back(nb::cast<CoreCoord>(k), std::move(values));
                     }
-                    self.named_args.named_per_core_runtime_arg_arrays.push_back(
+                    self.blaze_named_args.named_per_core_runtime_arg_arrays.push_back(
                         {std::move(name), std::move(core_values)});
                 }
             },
