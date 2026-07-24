@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 from typing import List
 
+import torch
+
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[4]  # .../tt-metal
 sys.path.insert(0, str(HERE))
@@ -47,7 +49,6 @@ def _build_collapsed_embedding(completer):
 def _ids_to_ttnn(completer, ids: List[int]):
     """Convert token ids to the ``(1, 1, 1, S)`` ttnn tensor ``Embedding.forward``
     expects."""
-    import torch
     import ttnn
 
     model = completer.models[0]
@@ -72,7 +73,6 @@ def _embed(completer, ids: List[int]):
 
 
 def main() -> None:
-    import torch
     import ttnn
 
     from _completer_utils import open_completer

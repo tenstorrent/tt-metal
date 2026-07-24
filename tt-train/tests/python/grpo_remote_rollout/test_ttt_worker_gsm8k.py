@@ -17,6 +17,7 @@ from __future__ import annotations
 import gc
 
 import pytest
+from transformers import AutoTokenizer
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 MESH_SHAPE = (1, 2)  # data_parallel = 2 submeshes
@@ -34,7 +35,6 @@ GSM8K_QUESTION = (
 @pytest.mark.timeout(0)
 def test_16_greedy_completions_are_identical():
     import ttnn
-    from transformers import AutoTokenizer
 
     from _completer_utils import _TRACE_REGION_SIZE, build_completer
 

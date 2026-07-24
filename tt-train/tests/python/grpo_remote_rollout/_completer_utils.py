@@ -12,6 +12,9 @@ import os
 from pathlib import Path
 from typing import Any
 
+import torch
+from transformers import AutoTokenizer
+
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_1dev.yaml"
 MAX_SEQ_LEN = 2048
@@ -65,8 +68,6 @@ class _TttCompleter:
         tok = getattr(self._worker.model_args[0], "tokenizer", None)
         if tok is not None:
             return tok
-        from transformers import AutoTokenizer
-
         return AutoTokenizer.from_pretrained(self._model_source)
 
     def __getattr__(self, name: str) -> Any:
@@ -169,7 +170,6 @@ def as_update_input(t, mesh_device):
     4D ``bfloat16`` ``ttnn.Tensor``, mesh-replicated, DRAM-interleaved,
     ``TILE_LAYOUT``. Casts non-bf16 and makes non-contiguous inputs contiguous.
     """
-    import torch
     import ttnn
 
     if t.dtype != torch.bfloat16:
