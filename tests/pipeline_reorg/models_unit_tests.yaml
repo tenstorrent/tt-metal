@@ -1012,7 +1012,7 @@
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and t2v"
   model: wan-2.2-t2v
   skus:
-    bh_sc4:
+    bh_sc4-mgd:
       timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
@@ -1031,7 +1031,7 @@
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and i2v"
   model: wan-2.2-i2v
   skus:
-    bh_sc4:
+    bh_sc4-mgd:
       timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
