@@ -57,6 +57,14 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             biased_scores->logical_shape() == scores.logical_shape(),
             "biased_scores tensor must have the same shape as scores");
+        TT_FATAL(
+            biased_scores->padded_shape() == scores.padded_shape(),
+            "biased_scores tensor must have the same padded shape as scores");
+        const auto& biased_tile = biased_scores->tensor_spec().page_config().get_tile();
+        const auto& scores_tile = scores.tensor_spec().page_config().get_tile();
+        TT_FATAL(
+            biased_tile.get_width() == scores_tile.get_width() && biased_tile.get_height() == scores_tile.get_height(),
+            "biased_scores tensor must have the same tile geometry as scores");
     }
 
     const uint32_t experts = scores.logical_shape()[-1];

@@ -30,8 +30,14 @@ void bind_moe_grouped_topk(nb::module_& mod) {
               5. Normalize and scale: normalize the gathered scores and scale them by ``route_scale``.
 
             Args:
-                scores (ttnn.Tensor): Input scores tensor (dtype must be FLOAT32 or BFLOAT16, layout must be TILE). BFLOAT16 inputs are upcast to FLOAT32 inside the kernel, so the op computes in fp32 either way (this avoids a separate host-side typecast). The shape should be [N, B, S, 256]. N, B and S can be any value. 256 is the number of experts in DeepSeek at each layer.
-                bias (ttnn.Tensor): Bias tensor (dtype must be FLOAT32 or BFLOAT16, layout must be TILE). BFLOAT16 inputs are upcast to FLOAT32 inside the kernel. The shape should be [N, B, S, 256]. N, B and S can be any value. 256 is the number of experts in DeepSeek at each layer.
+                scores (ttnn.Tensor): Input scores tensor (dtype must be FLOAT32 or BFLOAT16, layout must be
+                    TILE). BFLOAT16 inputs are upcast to FLOAT32 inside the kernel, so the op computes in fp32
+                    either way (this avoids a separate host-side typecast). The shape should be [N, B, S, E],
+                    where N, B and S can be any value and E is the number of experts. For the grouped path
+                    (n_groups == 8) E must be 256 (DeepSeek). For the single-group path (n_groups == 1) E may be
+                    any tile-aligned width (a multiple of 32), e.g. 384 for Kimi.
+                bias (ttnn.Tensor): Bias tensor (dtype must be FLOAT32 or BFLOAT16, layout must be TILE).
+                    BFLOAT16 inputs are upcast to FLOAT32 inside the kernel. Same shape [N, B, S, E] as ``scores``.
                 n_groups (int): Number of groups to partition the experts into. Right now this number must be 8.
                 summed_experts_per_group (int): Number of experts per group to sum prior to ranking groups. Right now this number must be 2.
                 topk_groups (int): Number of top groups to select from. Right now this number must be 4.
@@ -46,8 +52,8 @@ void bind_moe_grouped_topk(nb::module_& mod) {
                 biased_scores (ttnn.Tensor, optional): Test-only debug output. A pre-allocated FLOAT32 TILE tensor with
                     the same shape as ``scores``; when provided, the op writes the full-width biased scores
                     (score_activation(logits) + bias, before top-k selection) into it. This is the exact tensor top-k
-                    operates on, so it can be PCC-checked against the torch reference without top-k tie-break ambiguity.
-                    Defaults to None (no debug output, zero overhead).
+                    operates on, so it can be compared against a reference implementation without top-k tie-break
+                    ambiguity. Defaults to None (no debug output, zero overhead).
 
             Returns:
                 Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the scaled expert scores (dtype BFLOAT16) and selected expert indices (dtype UINT16). The shape of the scores tensor should be [N, B, S, 8]. The shape of the indices tensor should be [N, B, S, 8]. N, B and S can be any value. 8 is the number of experts in the final selected groups.
