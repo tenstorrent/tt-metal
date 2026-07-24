@@ -1306,6 +1306,16 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     first_kernel,
                     records[i].kernel->unique_id);
                 TT_FATAL(
+                    records[i].binding->block_size == records[0].binding->block_size,
+                    "DFB '{}' has multiple {} bindings with mismatched block_size (kernel '{}' = {} vs kernel '{}' = "
+                    "{})",
+                    dfb.unique_id,
+                    role,
+                    first_kernel,
+                    records[0].binding->block_size,
+                    records[i].kernel->unique_id,
+                    records[i].binding->block_size);
+                TT_FATAL(
                     records[i].kernel->num_threads == first_threads,
                     "DFB '{}' has multiple {} KernelSpecs with mismatched num_threads (kernel '{}' = {} vs kernel '{}' "
                     "= {})",
@@ -1332,6 +1342,93 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (!allow_multi) {
             check_role_uniformity(endpoints.producers, "PRODUCER");
             check_role_uniformity(endpoints.consumers, "CONSUMER");
+        }
+
+        // block_size is meaningful only for the BLOCKED access pattern: it must be > 0 iff
+        // BLOCKED, and 0 for STRIDED/ALL. (Divisibility of num_entries by block_size*threads
+        // is enforced device-side in the capacity switch alongside the STRIDED/ALL checks.)
+        auto check_block_size_validity = [&](const auto& records, std::string_view role) {
+            for (const auto& rec : records) {
+                const bool is_blocked = rec.binding->access_pattern == DFBAccessPattern::BLOCKED;
+                TT_FATAL(
+                    (rec.binding->block_size > 0) == is_blocked,
+                    "DFB '{}' {} binding (kernel '{}'): block_size must be > 0 iff access_pattern == BLOCKED "
+                    "(got block_size={}, access_pattern={})",
+                    dfb.unique_id,
+                    role,
+                    rec.kernel->unique_id,
+                    rec.binding->block_size,
+                    is_blocked ? "BLOCKED" : "STRIDED/ALL");
+            }
+        };
+        check_block_size_validity(endpoints.producers, "PRODUCER");
+        check_block_size_validity(endpoints.consumers, "CONSUMER");
+
+        // Cross-role BLOCKED consistency. The supported BLOCKED-involving pairings are:
+        //   - BLOCKED -> BLOCKED  (symmetric, or integer-ratio asymmetric fan-in/out via the
+        //     tile-counter round-robin over contiguous sub-rings)
+        //   - BLOCKED-producer -> ALL-consumer  (the producer block-bursts into the existing ALL
+        //     broadcast ring; every consumer reads every block, free-after-all-ack)
+        //   - BLOCKED-producer -> STRIDED-consumer  (the producer reads block_size contiguous DRAM
+        //     pages but pushes per-tile, so the existing STRIDED round-robin scatters each tile into
+        //     the consumer's interleaved slot; no remapper, no credit-path change)
+        // Any BLOCKED *consumer* under a non-BLOCKED producer is NOT yet supported. (Within-role
+        // agreement is enforced above, so the first record of each role is representative.) For
+        // BLOCKED->ALL the producer's block_size>0 is already validated per-binding, and
+        // num_entries % (block_size * num_producers) == 0 is enforced device-side in the ALL/STRIDED case.
+        if (!endpoints.producers.empty() && !endpoints.consumers.empty()) {
+            const auto& prod = endpoints.producers.front();
+            const auto& cons = endpoints.consumers.front();
+            const bool prod_blocked = prod.binding->access_pattern == DFBAccessPattern::BLOCKED;
+            const bool cons_blocked = cons.binding->access_pattern == DFBAccessPattern::BLOCKED;
+            if (prod_blocked || cons_blocked) {
+                // BLOCKED-producer -> ALL- or STRIDED-consumer ride the existing broadcast/round-robin
+                // credit paths (not the symmetric sub-ring pairing), so they are exempt from the
+                // BLOCKED->BLOCKED constraints below. Note the device contract differs per case:
+                // BLOCKED->STRIDED requires an integer producer/consumer thread-count ratio, which IS
+                // re-enforced device-side in calculate_num_tile_counters' STRIDED branch (TT_FATAL on a
+                // non-integer ratio). BLOCKED->ALL requires NO ratio (the ALL branch keys only on
+                // num_producers / num_consumers<=4, not their ratio), so do not rely on a ratio check for it.
+                const bool blocked_to_all = prod_blocked && cons.binding->access_pattern == DFBAccessPattern::ALL;
+                const bool blocked_to_strided =
+                    prod_blocked && cons.binding->access_pattern == DFBAccessPattern::STRIDED;
+                if (!blocked_to_all && !blocked_to_strided) {
+                    TT_FATAL(
+                        prod_blocked && cons_blocked,
+                        "DFB '{}': a BLOCKED endpoint must pair as BLOCKED->BLOCKED or "
+                        "BLOCKED-producer->ALL-consumer (producer '{}' is {}, consumer '{}' is {}); other "
+                        "mixed-BLOCKED combinations are not yet supported.",
+                        dfb.unique_id,
+                        prod.kernel->unique_id,
+                        prod_blocked ? "BLOCKED" : "non-BLOCKED",
+                        cons.kernel->unique_id,
+                        cons_blocked ? "BLOCKED" : "non-BLOCKED");
+                    TT_FATAL(
+                        prod.binding->block_size == cons.binding->block_size,
+                        "DFB '{}': BLOCKED producer and consumer must share the same block_size "
+                        "(producer '{}' = {}, consumer '{}' = {}).",
+                        dfb.unique_id,
+                        prod.kernel->unique_id,
+                        prod.binding->block_size,
+                        cons.kernel->unique_id,
+                        cons.binding->block_size);
+                    // BLOCKED->BLOCKED supports asymmetric thread counts (fan-in/out via the tile-counter
+                    // round-robin), but only at an INTEGER ratio (matches calculate_num_tile_counters).
+                    const uint32_t pt = prod.kernel->num_threads;
+                    const uint32_t ct = cons.kernel->num_threads;
+                    const uint32_t hi = std::max(pt, ct);
+                    const uint32_t lo = std::min(pt, ct);
+                    TT_FATAL(
+                        lo > 0 && hi % lo == 0,
+                        "DFB '{}': BLOCKED producer/consumer thread counts must form an integer ratio "
+                        "(producer '{}' = {}, consumer '{}' = {}); non-integer ratios are not supported.",
+                        dfb.unique_id,
+                        prod.kernel->unique_id,
+                        pt,
+                        cons.kernel->unique_id,
+                        ct);
+                }
+            }
         }
 
         // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
@@ -2551,7 +2648,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         switch (pattern) {
             case DFBAccessPattern::STRIDED: return experimental::dfb::AccessPattern::STRIDED;
             case DFBAccessPattern::ALL: return experimental::dfb::AccessPattern::ALL;
-            case DFBAccessPattern::BLOCKED: TT_FATAL(false, "BLOCKED access pattern is not yet supported");
+            case DFBAccessPattern::BLOCKED: return experimental::dfb::AccessPattern::BLOCKED;
         }
         TT_FATAL(false, "Unknown DFBAccessPattern");
     };
@@ -2609,9 +2706,11 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .producer_risc_mask = producer_risc_mask,
         .num_producers = static_cast<uint8_t>(producer->num_threads),
         .pap = producer_access_pattern,
+        .producer_block_size = producer_binding->block_size,
         .consumer_risc_mask = consumer_risc_mask,
         .num_consumers = static_cast<uint8_t>(consumer->num_threads),
         .cap = consumer_access_pattern,
+        .consumer_block_size = consumer_binding->block_size,
         .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
