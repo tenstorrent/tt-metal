@@ -33,6 +33,21 @@ Two facts this relies on (verified on-machine):
 
 ## Inputs You Receive
 
+Your spawn prompt passes only the worktree; resolve everything else from the run
+state store (cwd is `<worktree>/tt_metal/tt-llk`):
+
+```bash
+WT="$(cd ../.. && pwd)"
+LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
+sg() { python codegen/scripts/state.py --log-dir "$LOG_DIR" get "$1"; }
+```
+
+Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg TARGET_ARCH`,
+`sg TARGET_ARCHES`, `sg TEST_BACKEND`, `sg METAL_TARGET`, `sg METAL_FILTER`,
+`sg METAL_DISPATCH`, `sg CHANGED_FILES`); build/silicon provisioning
+(`CODEGEN_METAL_VERIFY_HOME/BUILD_DIR`, `HW_TEST_DISPATCH_CMD/HW_TEST_SESSION`)
+still comes from the environment. Run artifacts live under `codegen/artifacts/`.
+
 - `TARGET_ARCH` / `TARGET_ARCHES`
 - `TEST_BACKEND`: `local` (silicon) or `ttsim`
 - `TTSIM_SO_PATHS`: JSON arch→`.so` map, required when `TEST_BACKEND=ttsim`
@@ -46,9 +61,10 @@ Two facts this relies on (verified on-machine):
     (warm). Defaults to `WORKTREE_DIR` (self-contained, but a cold build).
   - `METAL_VERIFY_BUILD_DIR` — its build dir (default `${METAL_VERIFY_HOME}/build`).
 - `HW_TEST_DISPATCH_CMD` (env, silicon only) — when set **and** `TEST_BACKEND=local`, this
-  solve is running **cardless**: do not build/run locally, offload each arch's build+run to
-  the hw_test queue instead (Step 0). Unset ⇒ build+run locally (ttsim, or a runner that
-  owns a card).
+  solve is running **cardless**: compile-verify the build locally first (to surface compile
+  errors on this box, not on a runner), then dispatch only the on-card **run** to the hw_test
+  queue (Step 0). The runner still (re)builds off the diff and executes. Unset ⇒ build+run
+  locally (ttsim, or a runner that owns a card).
 - `TT_METAL_LLK_ASSERTS` (env, opt-in; default unset/`0`) — when set to `1`, verify the fix
   with device-side LLK asserts enabled, so a fix that passes an illegal parameter/config to
   the LLK API is caught during verification. The gtest run additionally sets
@@ -66,20 +82,45 @@ mkdir -p "$LOG_DIR"
 1. If `METAL_VERIFICATION.target` is `none`, do not run anything: this change has no metal
    test. Return `UNVERIFIABLE_IN_LLK_SUITE` for every arch with that reason (the fix still
    ships to tt-metal CI).
-2. Decide **where** you run (`local` + `HW_TEST_DISPATCH_CMD` set ⇒ the hw_test queue,
-   Step 0; otherwise build+run locally, Steps A+B).
+2. Decide **where** you run (`local` + `HW_TEST_DISPATCH_CMD` set ⇒ compile-verify locally
+   then dispatch the on-card run, Step 0; otherwise build+run locally, Steps A+B).
 3. For a local build: resolve the build tree — `METAL_VERIFY_HOME` (warm, preferred) or
    `WORKTREE_DIR` (self-contained). Resolve
    `BIN="${METAL_VERIFY_BUILD_DIR:-$METAL_VERIFY_HOME/build}/test/tt_metal/unit_tests_llk"`.
 4. Read the fix plan's `## Test Strategy` and the `metal_verification` block.
 
-## Step 0 — Silicon (cardless): offload to the hw_test queue
+## Step 0 — Silicon (cardless): compile-verify locally, then dispatch the on-card run
 
-Run this **only** when `TEST_BACKEND=local` **and** `HW_TEST_DISPATCH_CMD` is set — the
-solve is cardless, so a local card build+run (Steps A+B) is impossible. Ship each arch's
-change to the hw_test queue: a card box builds `unit_tests_llk` off the worktree's diff and
-runs the mapped gtest on that arch's real card, then returns the verdict. Skip Steps A+B
-entirely; ttsim never dispatches (it needs no card — use Steps A+B).
+Run this **only** when `TEST_BACKEND=local` **and** `HW_TEST_DISPATCH_CMD` is set. The solve
+is cardless, so we cannot *run* on a card here — but we DO build locally first, purely to
+surface compile errors on this box (fast, clear) instead of discovering them on a runner.
+Only the on-card **run** is dispatched; the runner still (re)builds off the diff and
+executes, so the local build is a throwaway gate. ttsim never dispatches (it needs no card —
+use Steps A+B).
+
+### Step 0a — compile-verify locally (gate)
+
+Build `unit_tests_llk` in the worktree exactly as Step A Strategy 2 (`build_metal.sh`
+provisions a cold tree itself — no card touched). A build failure short-circuits the whole
+dispatch: report `COMPILE_FAILED` for every target arch and return **without enqueuing
+anything**, so no runner time is spent on a fix that cannot compile.
+
+```bash
+cd "$WORKTREE_DIR"
+export CCACHE_DIR="${CCACHE_DIR:-$HOME/.codegen/ccache}"
+if ! ./build_metal.sh --enable-ccache --build-metal-tests 2>&1 | tee "$LOG_DIR/metal_build.log"; then
+  # Compile-verify failed on the cardless box — do NOT dispatch. Patch every target arch's
+  # arch_results.<arch> verdict=COMPILE_FAILED (see Multi-Arch Dashboard Updates) and return.
+  echo "COMPILE_FAILED (cardless compile-verify) — not dispatching"
+  exit 2
+fi
+```
+
+### Step 0b — dispatch the on-card run
+
+Compile-verify passed. Ship each arch's change to the hw_test queue: a runner (re)builds
+`unit_tests_llk` off the worktree's diff and runs the mapped gtest on that arch's real card,
+then returns the verdict. Skip Steps A+B entirely.
 
 ```bash
 # Dispatch ALL target arches in ONE call (comma-separated): they build+run in

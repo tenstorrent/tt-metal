@@ -20,6 +20,18 @@ You are an architecture research specialist for one issue. Answer only the quest
 
 ## Inputs You Receive
 
+Your spawn prompt passes only the worktree + the exact research questions; resolve
+everything else from the run state store (cwd is `<worktree>/tt_metal/tt-llk`):
+
+```bash
+WT="$(cd ../.. && pwd)"
+LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
+sg() { python codegen/scripts/state.py --log-dir "$LOG_DIR" get "$1"; }
+```
+
+Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg TARGET_ARCH`,
+`sg TARGET_ARCHES`); run artifacts live under `codegen/artifacts/`.
+
 - `TARGET_ARCH` for single-arch runs, or `TARGET_ARCHES` for multi-arch runs
 - issue number/title
 - `codegen/artifacts/issue_<number>_analysis.md`

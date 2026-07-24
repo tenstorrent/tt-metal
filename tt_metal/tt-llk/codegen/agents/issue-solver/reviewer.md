@@ -32,6 +32,19 @@ sent to the worker to fix, so raise one only when you would stake the fix on it.
 
 ## Inputs You Receive
 
+Your spawn prompt passes only the worktree; resolve everything else from the run
+state store (cwd is `<worktree>/tt_metal/tt-llk`):
+
+```bash
+WT="$(cd ../.. && pwd)"
+LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
+sg() { python codegen/scripts/state.py --log-dir "$LOG_DIR" get "$1"; }
+```
+
+Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg TARGET_ARCH`,
+`sg TARGET_ARCHES`, `sg CHANGED_FILES`, `sg PR_REVIEW_KNOWLEDGE_DIR`); run
+artifacts live under `codegen/artifacts/`.
+
 - issue number
 - `TARGET_ARCH` (single-arch) or `TARGET_ARCHES` (multi-arch)
 - changed files
