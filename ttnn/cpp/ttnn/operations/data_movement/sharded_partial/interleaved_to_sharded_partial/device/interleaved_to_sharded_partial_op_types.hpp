@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <utility>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -17,6 +19,12 @@ struct InterleavedToShardedPartialParams {
     uint32_t slice_index{};
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype{tt::tt_metal::DataType::INVALID};
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "grid_size", "shard_spec", "num_slices", "slice_index", "output_mem_config", "output_dtype");
+    auto attribute_values() const {
+        return std::forward_as_tuple(grid_size, shard_spec, num_slices, slice_index, output_mem_config, output_dtype);
+    }
 };
 
 }  // namespace ttnn::prim
