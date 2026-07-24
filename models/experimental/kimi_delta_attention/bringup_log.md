@@ -1226,3 +1226,35 @@
   L1 occupancy and perturbs scheduling. The all-input experiment bounds the
   narrower BF16-only variant, so both are rejected.
 - Verdict: reject and remove; no implementation change retained.
+
+
+### 2026-07-24 18:23:20 UTC — Reject unbounded L1 gate residency
+
+- Hypothesis: keep the transformed FP32 decay gate in distributed L1 so the
+  110-core prep phase consumes it without a DRAM write/read handoff. At
+  T=5,120 this occupies about 10 MiB/chip, or 95 KiB per L1 bank.
+- Focused TP command:
+  `QWEN_KDA_GATE_L1=1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s`
+  -> PASS; output/recurrent/convolution PCC remained
+  `0.999964/0.999903/0.999997`.
+- T=640 profile command:
+  `QWEN_KDA_GATE_L1=1 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> PASS. CSV
+  `generated/profiler/reports/2026_07_24_18_19_44/ops_perf_results_2026_07_24_18_19_44.csv`
+  (SHA-256 `f1faee3fd5712b2b429e7d1db303af23d27b3fb3833b48f40a6bbc723817eb8e`).
+  Wall improves `622.564 -> 619.986 us` (`-0.41%`); recurrence improves
+  `144.945 -> 142.713 us` (`-1.54%`). The decay op itself is unchanged
+  (`33.106 -> 32.881 us`), confirming that the gain is the prep read path.
+- T=5,120 was repeated twice with the identical trace command. Both tests
+  passed, but neither report contained a traced replay: each had 488 rows with
+  an empty `METAL TRACE REPLAY SESSION ID`, and the raw device log also had
+  empty trace IDs. CSVs: `2026_07_24_18_20_53` (SHA-256
+  `a620c95731bdb672b744cc22ca6247c1cb819dfaeac6ca0e8201c18bf9f08d36`)
+  and `2026_07_24_18_22_24` (SHA-256
+  `060f60093b891280d75e4160c922c244e75e038dce61d70c0533e7219f4b74d1`).
+- Diagnosis: the 10 MiB/chip full-sequence L1 allocation is incompatible with
+  the target trace capture/profiler path. The repeat rules out a transient
+  instrumentation miss; without replay IDs there is no valid long wall metric.
+- Verdict: reject and remove the unbounded allocation. The short-context gain
+  supports only a bounded rolling L1 window in a prep/scan producer-consumer
+  design.

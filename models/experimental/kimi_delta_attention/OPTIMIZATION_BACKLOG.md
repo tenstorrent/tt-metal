@@ -197,6 +197,11 @@ For local scan changes, retain an experiment only when:
 38. Consume beta sigmoid/typecast inside prep without a separate launch.
 39. Fuse decay projection, bias, Softplus, scaling, and FP32 conversion.
 40. Feed decay output directly into prep.
+    - Experiment result, 2026-07-24: full-sequence distributed-L1 gate
+      residency preserved TP PCC and improved T=640 wall `0.41%` and recurrence
+      `1.54%`, but both T=5,120 attempts produced no trace replay sessions
+      (488 eager/setup rows, empty trace IDs). Reject the unbounded form; retain
+      only a bounded rolling-window producer/consumer design.
 41. Feed recurrence output directly into gated RMS.
 42. Produce the exact output-projection input layout from gated RMS.
 43. Remove remaining reshape/view programs that materialize data.
