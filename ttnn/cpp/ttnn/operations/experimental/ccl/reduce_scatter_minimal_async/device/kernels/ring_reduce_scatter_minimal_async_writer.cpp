@@ -330,6 +330,13 @@ void kernel_main() {
         return false;
     };
 
+    // Monotonic target for the per-link batch-ready handshake below. The batch_ready_sem is incremented
+    // once per batch by the opposite-direction neighbour; instead of resetting it with set(0) after every
+    // batch (which races a fast neighbour's next-batch increment and non-deterministically hangs the ring),
+    // we wait for a strictly increasing target and never reset mid-loop. Mirrors the reader's out_ready_sem
+    // handling. The semaphore is reset once after the batch loop for the next dispatch.
+    uint32_t batch_ready_target = 0;
+
     for (uint32_t b = 0; b < input_tensor_B; ++b) {
         constexpr uint32_t ring_size_by_2 = ring_size / 2;
         int slice_idx = my_chip_id + ring_size_by_2;  // start with slice belonging to device half-way across in ring
@@ -565,10 +572,19 @@ void kernel_main() {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_batch_ready_sem_noc_addr, 0});
             noc_obj.async_writes_flushed();
 
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 1);
-            noc_semaphore_set(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);  // reset before next batch
+            // Cumulative target (see note before the batch loop): wait for the neighbour's increment for
+            // THIS batch without resetting, so an early next-batch increment is preserved instead of being
+            // clobbered by a set(0) reset (which previously caused a non-deterministic hang).
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ++batch_ready_target);
         }
+    }
+
+    // Reset batch_ready_sem once, after all batches, so the next dispatch / trace iteration starts from a
+    // known-zero baseline. Safe here (unlike a mid-loop reset): a full op separates this from any
+    // neighbour's next-iteration increment. Compiles away for B == 1 (handshake never runs).
+    if constexpr (input_tensor_B > 1) {
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
     }
 
     noc_obj.async_write_barrier();
