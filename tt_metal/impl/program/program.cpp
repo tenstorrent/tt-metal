@@ -465,10 +465,14 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                 ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
                 : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
 
-        // EXPERIMENTAL: named kernel args
+        ////////////////////////////////////////////////////////////
+        // Blaze-only experimental named args
+        // Removal is tracked by issue #50953
         if (!kernel_descriptor.blaze_named_args.empty() || !kernel_descriptor.named_compile_time_args.empty()) {
             experimental::blaze::process_named_args(*this, kernel_descriptor, kernel_handle);
         } else {
+            ////////////////////////////////////////////////////////////
+            // Regular (non-Blaze) code path
             for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
                 SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);
             }

@@ -46,7 +46,9 @@ struct KernelCrtaLayout {
     uint32_t vararg_section_offset = 0;
 };
 
-// EXPERIMENTAL: named kernel args
+////////////////////////////////////////////////////////////
+// Blaze-only experimental named args
+// Removal is tracked by issue #50953
 // Dispatch type for named runtime args — determines which device-side accessor to use.
 enum class RuntimeArgDispatch : uint8_t {
     COMMON,   // get_common_arg_val (shared across all cores)
@@ -68,6 +70,8 @@ using NamedRuntimeArgNamespaces = std::map<std::string, std::vector<NamedRuntime
 
 // Namespace → [(field, value)] map for named compile-time arg header generation.
 using NamedCTArgNamespaces = std::map<std::string, std::vector<std::pair<std::string, uint32_t>>>;
+////////////////////////////////////////////////////////////
+
 // Abstract base class for kernel specialization
 // Higher levels of the SW derive from this and fill in build details not known to the build system
 // (eg, API specified settings)
@@ -141,12 +145,15 @@ public:
     // which matches the legacy-kernel case where the buffer has only varargs.
     virtual KernelCrtaLayout get_crta_layout() const { return {}; }
 
-    // EXPERIMENTAL: named kernel args
-    // Called to process named runtime arg namespaces for generated header (rt:: namespace).
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    // Called to process named runtime arg namespaces for generated header (blaze_rt_args:: namespace).
     // Default no-op so Kernel subclasses that don't use named args compile unchanged.
     virtual void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)>) const {}
-    // Called to process named compile-time arg namespaces for generated header (ct:: namespace).
+    // Called to process named compile-time arg namespaces for generated header (blaze_ct_args:: namespace).
     virtual void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)>) const {}
+    ////////////////////////////////////////////////////////////
     // Called to process additional include paths (e.g., kernel source directory for relative includes)
     virtual void process_include_paths(const std::function<void(const std::string& path)>&) const {}
 

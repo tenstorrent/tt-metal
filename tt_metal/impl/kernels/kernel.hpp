@@ -169,13 +169,29 @@ public:
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
     std::unordered_map<std::string, uint32_t> named_compile_time_args() const { return named_compile_time_args_; }
 
-    // EXPERIMENTAL: named kernel args
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    //
+    // All named-args declarations for this class are grouped in this single
+    // block for easy removal. Accessor/override methods are public; the
+    // backing members follow under `protected:`, and the enclosing `public:`
+    // access is restored after the closing fence.
     const NamedRuntimeArgNamespaces& named_runtime_arg_namespaces() const { return named_runtime_arg_namespaces_; }
     void set_named_runtime_arg_namespaces(const NamedRuntimeArgNamespaces& namespaces) {
         named_runtime_arg_namespaces_ = namespaces;
     }
     const NamedCTArgNamespaces& named_ct_arg_namespaces() const { return named_ct_arg_namespaces_; }
     void set_named_ct_arg_namespaces(const NamedCTArgNamespaces& namespaces) { named_ct_arg_namespaces_ = namespaces; }
+    void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)>) const override;
+    void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)>) const override;
+
+protected:
+    NamedRuntimeArgNamespaces named_runtime_arg_namespaces_;
+    NamedCTArgNamespaces named_ct_arg_namespaces_;
+
+public:
+    ////////////////////////////////////////////////////////////
 
     // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& runtime_args(const CoreCoord& logical_core);
@@ -228,9 +244,6 @@ public:
     const std::vector<std::string>& get_common_runtime_arg_names() const override { return common_runtime_arg_names_; }
     KernelCrtaLayout get_crta_layout() const override { return crta_layout_; }
     bool is_metal2_kernel() const override { return is_metal2_kernel_; }
-    // EXPERIMENTAL: named kernel args
-    void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)>) const override;
-    void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)>) const override;
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     void validate_runtime_args_size(
@@ -323,9 +336,6 @@ protected:
     // and allocate_scratchpads fills each handle's allocated_address after L1 allocation.
     // NOTE: Scratchpad allocated addresses can change between enqueues if DFB size overrides are used.
     std::vector<ScratchpadBindingHandle> scratchpad_binding_handles_;
-    // EXPERIMENTAL: named kernel args
-    NamedRuntimeArgNamespaces named_runtime_arg_namespaces_;
-    NamedCTArgNamespaces named_ct_arg_namespaces_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
