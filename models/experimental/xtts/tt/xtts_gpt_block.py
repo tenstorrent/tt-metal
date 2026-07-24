@@ -71,6 +71,45 @@ def _to_device_bias(torch_tensor, device):
     return _to_device(torch_tensor.reshape(1, -1), device)
 
 
+_LN_SHARD_CACHE = {}  # device-id -> (sharded memory_config, sharded LN program_config)
+
+
+def _decode_ln_cfg(device):
+    """Build (and cache per device) the width-sharded decode layer-norm config: hidden (1024)
+    split over 8 cores, one tile row (decode M = 1 token)."""
+    key = id(device)
+    if key not in _LN_SHARD_CACHE:
+        nc = 8
+        bw = HIDDEN_SIZE // nc // 32  # width tiles per core
+        mc = ttnn.create_sharded_memory_config(
+            shape=(32, HIDDEN_SIZE // nc),
+            core_grid=ttnn.CoreGrid(x=nc, y=1),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[nc, 1], subblock_w=bw, block_h=1, block_w=bw, inplace=False
+        )
+        _LN_SHARD_CACHE[key] = (mc, pc)
+    return _LN_SHARD_CACHE[key]
+
+
+def sharded_decode_ln(x, weight, bias, device):
+    """Width-sharded DECODE layer-norm (single token, M padded to one tile): reshard the L1
+    activation to width-sharded, run the sharded LN kernel, reshard the result back to interleaved
+    L1. ~48% faster than the interleaved LN and BIT-IDENTICAL (isolated PCC 1.0) because the whole
+    1024-wide reduction is parallelized over 8 cores instead of running on too few. Shared by the
+    block (ln_1/ln_2), the stack (ln_f), and the model (final_norm). Consumes ``x``."""
+    mc, pc = _decode_ln_cfg(device)
+    xs = ttnn.to_memory_config(x, mc)
+    h = ttnn.layer_norm(xs, weight=weight, bias=bias, epsilon=LAYER_NORM_EPS, program_config=pc, memory_config=mc)
+    ttnn.deallocate(xs)
+    out = ttnn.to_memory_config(h, L1)
+    ttnn.deallocate(h)
+    return out
+
+
 def _mm_1d_config(device, m, k, n, fused_activation=None):
     """1D-multicast matmul program_config for the GPT linears (mcast the L1 activation, stream the
     DRAM weight per-core over N). Passing an explicit config is what lets ttnn fuse the bias (and,
@@ -156,28 +195,6 @@ class TtXttsGptBlock(LightweightModule):
         self.mlp_c_proj_weight = _w("mlp.c_proj.weight")
         self.mlp_c_proj_bias = _to_device_bias(state_dict[prefix + "mlp.c_proj.bias"], device)
 
-        # Sharded layer-norm config for the DECODE layernorms (one-token, M padded to a single tile;
-        # hidden width-sharded over 8 cores). Bit-identical to the interleaved layer_norm (PCC 1.0)
-        # but ~48% faster INCLUDING the two reshards it needs (23.0 -> 12.0 us/LN measured) — the
-        # interleaved LN runs the whole 1024-wide reduction on too few cores; width-sharding
-        # parallelizes it. Prefill (large M) keeps the interleaved path (different block_h regime).
-        _LN_CORES = 8
-        _bw = HIDDEN_SIZE // _LN_CORES // 32  # width tiles per core
-        self._ln_shard_mc = ttnn.create_sharded_memory_config(
-            shape=(32, HIDDEN_SIZE // _LN_CORES),
-            core_grid=ttnn.CoreGrid(x=_LN_CORES, y=1),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        self._ln_pcfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[_LN_CORES, 1],
-            subblock_w=_bw,
-            block_h=1,  # decode M = 1 token -> one tile row
-            block_w=_bw,
-            inplace=False,
-        )
-
     def _qkv(self, x):  # [b, s, hidden] -> q, k, v each [b, heads, s, head_dim]
         # Split the [b, s, 3*hidden] c_attn output (GPT-2 [Q|K|V] block layout) into per-head Q, K, V.
         # ttnn.experimental.nlp_create_qkv_heads is measurably faster than the transformer-namespace
@@ -241,23 +258,8 @@ class TtXttsGptBlock(LightweightModule):
         return out
 
     def _ln(self, x, weight, bias):
-        """DECODE layer-norm via the width-sharded kernel (see the config in __init__): reshard the
-        L1 activation to width-sharded, run the sharded LN, reshard the result back to interleaved L1
-        for the following matmul. Net ~48% faster than the interleaved LN and BIT-IDENTICAL (PCC 1.0).
-        Consumes ``x``."""
-        xs = ttnn.to_memory_config(x, self._ln_shard_mc)
-        h = ttnn.layer_norm(
-            xs,
-            weight=weight,
-            bias=bias,
-            epsilon=LAYER_NORM_EPS,
-            program_config=self._ln_pcfg,
-            memory_config=self._ln_shard_mc,
-        )
-        ttnn.deallocate(xs)
-        out = ttnn.to_memory_config(h, L1)
-        ttnn.deallocate(h)
-        return out
+        """DECODE layer-norm via the shared width-sharded kernel (``sharded_decode_ln``). Consumes ``x``."""
+        return sharded_decode_ln(x, weight, bias, self.device)
 
     def _residual_ffn(self, x, sharded=False):
         """Shared post-attention half: ``x + mlp(ln_2(x))``. Consumes and replaces ``x``.
