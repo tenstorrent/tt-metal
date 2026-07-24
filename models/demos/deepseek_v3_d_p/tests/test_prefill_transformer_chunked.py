@@ -181,7 +181,7 @@ def _record_kv_cache_pcc(
     [:total_len] against the golden kv_post_transform trace ([nope | pe], the pe half re-based to the
     device Meta interleave via cache_half_pccs). Per-layer cache — slot == layer."""
     logger.info("Device KV cache vs golden kv_post_transform:")
-    cache_full = gather_cache_tp0(tt_kvpe_cache, mesh_device)  # [num_layers, seq_len_cache, kvpe]
+    cache_full = gather_cache_tp0(tt_kvpe_cache.storage, mesh_device)  # [num_layers, seq_len_cache, kvpe]
     p = blockcyclic_positions(sp, CHUNK, seq_len_cache)
     cache_min_pcc = {}
     for i in range(num_layers):
