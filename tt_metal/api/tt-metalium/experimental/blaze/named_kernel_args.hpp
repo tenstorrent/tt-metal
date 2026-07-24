@@ -82,4 +82,12 @@ struct NamedKernelArgs {
 // Called from the Program constructor when `kernel_descriptor.blaze_named_args` is non-empty.
 void process_named_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_handle);
 
+// Hashes the named-RT-arg SCHEMA for the program cache: names + array lengths + dispatch kind
+// (common vs per-core) + order. Deliberately EXCLUDES runtime values — they are written per
+// enqueue and do not affect the JIT-generated header, so hashing them would cause needless
+// program-cache misses. Used by both the tt_metal and ttnn generic-op descriptor hashers.
+// (Return type is ttsl::hash::hash_t == std::uint64_t; spelled uint64_t here to avoid pulling
+// reflection.hpp into this widely-included header.)
+std::uint64_t hash_named_args_schema(const NamedKernelArgs& named_args);
+
 }  // namespace tt::tt_metal::experimental::blaze

@@ -21,6 +21,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>  // ttsl::hash for hash_named_args_schema
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -163,6 +164,38 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
         }
         kernel->set_named_ct_arg_namespaces(ct_ns_map);
     }
+}
+
+ttsl::hash::hash_t hash_named_args_schema(const NamedKernelArgs& named_args) {
+    // Hash only the SCHEMA baked into named_args_generated.h — names, array lengths, dispatch
+    // kind (implied by section), and order. Runtime VALUES are intentionally excluded: they are
+    // written per enqueue and never affect the generated header, so hashing them would cause
+    // needless program-cache misses. Per-section sizes are hashed first so that (a) ["a","b"]
+    // cannot collide with ["ab"] and (b) the section a name lands in — which encodes its
+    // common-vs-per-core dispatch and scalar-vs-array kind — is unambiguous.
+    // (std::size_t accumulator matches hash_combine's `std::size_t&` parameter; the return
+    // value widens/reinterprets to hash_t == std::uint64_t, identical on 64-bit targets.)
+    std::size_t hash = 0;
+    ttsl::hash::hash_combine(hash, named_args.named_common_runtime_args.size());
+    for (const auto& arg : named_args.named_common_runtime_args) {
+        ttsl::hash::hash_combine(hash, arg.name);
+    }
+    ttsl::hash::hash_combine(hash, named_args.named_common_runtime_arg_arrays.size());
+    for (const auto& arg : named_args.named_common_runtime_arg_arrays) {
+        ttsl::hash::hash_combine(hash, arg.name);
+        ttsl::hash::hash_combine(hash, arg.values.size());
+    }
+    ttsl::hash::hash_combine(hash, named_args.named_per_core_runtime_args.size());
+    for (const auto& arg : named_args.named_per_core_runtime_args) {
+        ttsl::hash::hash_combine(hash, arg.name);
+    }
+    ttsl::hash::hash_combine(hash, named_args.named_per_core_runtime_arg_arrays.size());
+    for (const auto& arg : named_args.named_per_core_runtime_arg_arrays) {
+        ttsl::hash::hash_combine(hash, arg.name);
+        // Per-core array width (uniform across cores); the values themselves are runtime data.
+        ttsl::hash::hash_combine(hash, arg.core_values.empty() ? std::size_t{0} : arg.core_values[0].second.size());
+    }
+    return hash;
 }
 
 // Emits named_args_generated.h into the given directory.

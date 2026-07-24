@@ -588,6 +588,36 @@ uint64_t Kernel::compute_hash() const {
     for (const auto& name : this->common_runtime_arg_names_) {
         hasher.update(name);
     }
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    // Hash the Blaze named-arg SCHEMA baked into named_args_generated.h. Without this, two
+    // kernels sharing source but differing only in their named args would collide in the cache.
+    //  - RT namespaces: ns/field/index/length/dispatch (the emitted Arg/ArrayArg descriptors).
+    //    RT VALUES are runtime data (written per enqueue) and are NOT part of the build.
+    //  - CT namespaces: ns/field/value (emitted as `constexpr uint32_t field = value`).
+    // std::map iterates in sorted key order; sizes are hashed first to avoid ["a","b"] vs ["ab"].
+    hasher.update(static_cast<uint64_t>(this->named_runtime_arg_namespaces_.size()));
+    for (const auto& [ns, entries] : this->named_runtime_arg_namespaces_) {
+        hasher.update(ns);
+        hasher.update(static_cast<uint64_t>(entries.size()));
+        for (const auto& entry : entries) {
+            hasher.update(entry.field);
+            hasher.update(static_cast<uint64_t>(entry.index));
+            hasher.update(static_cast<uint64_t>(entry.length));
+            hasher.update(static_cast<uint64_t>(entry.dispatch));
+        }
+    }
+    hasher.update(static_cast<uint64_t>(this->named_ct_arg_namespaces_.size()));
+    for (const auto& [ns, entries] : this->named_ct_arg_namespaces_) {
+        hasher.update(ns);
+        hasher.update(static_cast<uint64_t>(entries.size()));
+        for (const auto& [field, value] : entries) {
+            hasher.update(field);
+            hasher.update(static_cast<uint64_t>(value));
+        }
+    }
+    ////////////////////////////////////////////////////////////
     hasher.update(this->kernel_src_.source_);
     hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
     hasher.update(this->config_hash());
