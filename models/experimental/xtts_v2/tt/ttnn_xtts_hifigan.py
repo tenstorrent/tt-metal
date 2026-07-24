@@ -34,11 +34,15 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
 )
 DTYPE = ttnn.float32
-_SLICE_BUDGET = 200_000  # per-slice output footprint budget (bytes); big convs slice in DRAM to fit L1
+# Per-op slice budgets (per-slice output footprint, bytes). conv1d gets a big budget -> few, large
+# slices (far fewer kernel launches = much faster). conv_transpose keeps a small budget -> more,
+# smaller slices, which is needed to avoid a circular-buffer/L1 clash in the sliced transpose path.
+_CONV_BUDGET = 2_000_000
+_TR_BUDGET = 200_000
 
 
-def _num_slices(L_out, C):
-    return int(max(1, -(-L_out * C * 4 // _SLICE_BUDGET)))  # ceil(footprint_bytes / budget)
+def _num_slices(L_out, C, budget):
+    return int(max(1, -(-L_out * C * 4 // budget)))  # ceil(footprint_bytes / budget)
 
 
 class TtHifiganGenerator(torch.nn.Module):
@@ -82,7 +86,7 @@ class TtHifiganGenerator(torch.nn.Module):
         if transpose:
             Lout = (L - 1) * stride - 2 * padding + k
             kw = {}
-            n = _num_slices(Lout, max(Cin, Cout))
+            n = _num_slices(Lout, max(Cin, Cout), _TR_BUDGET)
             if n > 1:
                 kw["dram_slice_config"] = ttnn.Op2DSliceConfig(slice_type=ttnn.Op2DDRAMSliceHeight, num_slices=n)
             out, (Lo, _) = ttnn.conv_transpose2d(
@@ -94,7 +98,7 @@ class TtHifiganGenerator(torch.nn.Module):
         else:
             Lout = (L + 2 * padding - dilation * (k - 1) - 1) // stride + 1
             kw = {}
-            n = _num_slices(Lout, max(Cin, Cout))
+            n = _num_slices(Lout, max(Cin, Cout), _CONV_BUDGET)
             if n > 1:
                 kw["slice_config"] = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=n)
             out, Lo = ttnn.conv1d(
