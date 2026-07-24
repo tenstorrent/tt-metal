@@ -867,13 +867,9 @@ void FDMeshCommandQueue::increment_num_entries_in_completion_queue() {
 }
 
 void FDMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
-    bool blocking,
-    std::vector<MemoryPin> memory_pins) {
+    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking, std::vector<MemoryPin> memory_pins) {
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshBufferReadDescriptor>,
-        std::move(num_txns_per_device),
-        std::move(memory_pins)));
+        std::in_place_type<MeshBufferReadDescriptor>, std::move(num_txns_per_device), std::move(memory_pins)));
 
     this->increment_num_entries_in_completion_queue();
 
@@ -1192,12 +1188,30 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
                                     .get_dispatch_core_manager()
                                     .get_dispatch_core_config();
     CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
+    // Fan the per-device command-sequence writes out across the dispatch thread pool instead of writing
+    // serially (mirrors enqueue_record_event). This is safe because:
+    //   - each task writes to a distinct device's SystemMemoryManager, and the device-bound pool maps a
+    //     given device id to a fixed worker thread, so no two threads ever touch the same manager;
+    //   - program_cmd_seq is only read here -- it was finalized/patched serially in
+    //     update_program_dispatch_commands and is device-independent across this sub_grid;
+    //   - exceptions thrown in a task are captured and rethrown on this thread by dispatch_thread_pool_->wait().
+    // chip_ids_in_workload is not thread-safe, so it is populated serially and only the writes are parallelized.
     for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
         auto device = mesh_device_->impl().get_device(coord);
-        program_dispatch::write_program_command_sequence(
-            program_cmd_seq, device->sysmem_manager(), id_, dispatch_core_type, stall_first, stall_before_program);
         chip_ids_in_workload.insert(device->id());
+        dispatch_thread_pool_->enqueue(
+            [this, &program_cmd_seq, device, dispatch_core_type, stall_first, stall_before_program]() {
+                program_dispatch::write_program_command_sequence(
+                    program_cmd_seq,
+                    device->sysmem_manager(),
+                    id_,
+                    dispatch_core_type,
+                    stall_first,
+                    stall_before_program);
+            },
+            device->id());
     });
+    dispatch_thread_pool_->wait();
 }
 
 void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
@@ -1207,20 +1221,37 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
     bool mcast_go_signals,
     bool unicast_go_signals,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
+    // Same rationale as write_program_cmds_to_subgrid: each go-signal write targets a distinct device's
+    // SystemMemoryManager, so fan the writes out across the dispatch thread pool rather than writing
+    // serially. chip_ids_in_workload is only read here (fully populated by the program-command write
+    // above), and get_devices() returns local devices, each of which owns a pool thread.
+    const CoreCoord dispatch_core = this->virtual_program_dispatch_core();
     for (auto& device : mesh_device_->get_devices()) {
         if (!chip_ids_in_workload.contains(device->id())) {
-            write_go_signal(
-                id_,
-                mesh_device_,
-                sub_device_id,
-                device->sysmem_manager(),
-                expected_num_workers_completed,
-                this->virtual_program_dispatch_core(),
-                mcast_go_signals,
-                unicast_go_signals,
-                dispatch_md);
+            dispatch_thread_pool_->enqueue(
+                [this,
+                 device,
+                 sub_device_id,
+                 expected_num_workers_completed,
+                 dispatch_core,
+                 mcast_go_signals,
+                 unicast_go_signals,
+                 &dispatch_md]() {
+                    write_go_signal(
+                        id_,
+                        mesh_device_,
+                        sub_device_id,
+                        device->sysmem_manager(),
+                        expected_num_workers_completed,
+                        dispatch_core,
+                        mcast_go_signals,
+                        unicast_go_signals,
+                        dispatch_md);
+                },
+                device->id());
         }
     }
+    dispatch_thread_pool_->wait();
 }
 
 void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
