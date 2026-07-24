@@ -949,10 +949,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
     // the final TERMINATE) but before the rest of the device teardown.
-    if (realtime_profiler_) {
-        realtime_profiler_->shutdown();
-        realtime_profiler_.reset();
-    }
+    destroy_realtime_profiler_socket();
 
     // Drain any in-flight Tensor prefetcher kernel and release its state before the
     // rest of the mesh tears down. If the caller forgot to call StopTensorPrefetcher
@@ -1502,6 +1499,18 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         return;
     }
     realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
+}
+
+void MeshDeviceImpl::destroy_realtime_profiler_socket() {
+    if (!realtime_profiler_) {
+        return;
+    }
+    auto& device_manager = MetalContext::instance(get_context_id()).device_manager();
+    for (const auto& device : get_devices()) {
+        device_manager->clear_rt_profiler_device_init_complete(device->id());
+    }
+    realtime_profiler_->shutdown();
+    realtime_profiler_.reset();
 }
 
 void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
