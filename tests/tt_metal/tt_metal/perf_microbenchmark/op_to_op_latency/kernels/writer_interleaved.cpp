@@ -8,11 +8,11 @@
 // [start_tile_id, start_tile_id + n_tiles) slice via runtime args.
 //
 // Synchronization (per kernel review feedback):
-//   - noc_async_writes_flushed() so the source L1 slot is safe to recycle on
-//     cb_pop_front (write has at least left L1).  Mode 0: flush every page.
+//   - noc.async_writes_flushed() so the source L1 slot is safe to recycle on
+//     out_cb.pop_front() (write has at least left L1).  Mode 0: flush every page.
 //     Mode 1: flush only when output CB back-pressure requires it —
 //     batch up to (output_cb_depth / tiles_per_page - 1) writes before flush.
-//   - noc_async_write_barrier() ONCE at kernel exit so the next op sees fully
+//   - noc.async_write_barrier() ONCE at kernel exit so the next op sees fully
 //     committed DRAM writes (op-end safety).
 //
 // Runtime args:
@@ -33,8 +33,8 @@
 //   5: CROSS_PROGRAM_OFFSET_TILES (0 = every program writes same slice; >0 = program k
 //                                  writes pages starting at start_tile_id + k*OFFSET)
 //   6: END_BARRIER_MODE   (Batch-8 latency experiment — HW-barrier proposal)
-//                          0 = noc_async_write_barrier (DEFAULT; wait for DRAM ACK; current)
-//                          1 = noc_async_writes_flushed (just flush local L1; writes left
+//                          0 = noc.async_write_barrier (DEFAULT; wait for DRAM ACK; current)
+//                          1 = noc.async_writes_flushed (just flush local L1; writes left
 //                              the source but next op may see in-flight committed-at-NoC)
 //                          2 = no barrier, no flush (UNSAFE for correctness in real
 //                              workloads; simulates "HW gives us this for free")
@@ -43,6 +43,9 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 // Research-only detail markers. Compiled out on the lean CI path (PROFILE_DETAIL == 0) so
@@ -81,6 +84,13 @@ void kernel_main() {
 
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
+    // Device 2.0 data-movement handles: Noc() binds to this kernel's configured noc_index and
+    // CircularBuffer wraps the output CB (used as the NoC write source via its read pointer).
+    Noc noc;
+    CircularBuffer out_cb(cb_out);
+    // Full DRAM page in bytes: one write pushes tiles_per_page tiles in a single NoC transaction.
+    const uint32_t page_bytes = tiles_per_page * get_local_cb_interface(cb_out).fifo_page_size;
+
     DETAIL_MARK("PROG_ID", program_id);
     DETAIL_MARK("BRISC_GO", program_id);
 
@@ -89,7 +99,7 @@ void kernel_main() {
     const uint32_t effective_start_tile_id = start_tile_id + program_id * CROSS_PROGRAM_OFFSET_TILES;
     // DRAM page = tiles_per_page tiles. Compute pushes 1 CB page (1 tile) at
     // a time; we accumulate tiles_per_page in the CB then issue one
-    // noc_async_write_tile that pushes the whole page in a single NoC txn.
+    // async_write that pushes the whole page in a single NoC txn.
     const uint32_t start_page_id = effective_start_tile_id / tiles_per_page;
     const uint32_t n_pages = n_tiles / tiles_per_page;
     const uint32_t end_page_id = start_page_id + n_pages;
@@ -103,44 +113,44 @@ void kernel_main() {
     // continues across the boundary for CB recycling); the end barrier below runs after the last.
     for (uint32_t rep = 0; rep < workload_repeat; ++rep) {
         for (uint32_t page_id = start_page_id; page_id < end_page_id; ++page_id) {
-            cb_wait_front(cb_out, tiles_per_page);
+            out_cb.wait_front(tiles_per_page);
             if constexpr (READ_ONLY == 0) {
-                const uint32_t l1_read_addr = get_read_ptr(cb_out);
-                noc_async_write_tile(page_id, dst, l1_read_addr);
+                // out_cb as the NoC source reads from its read pointer (the just-waited page).
+                noc.async_write(out_cb, dst, page_bytes, {.offset_bytes = 0}, {.page_id = page_id});
                 writes_since_flush++;
                 const bool flush_every_page = (WRITER_FLUSH_MODE == 0);
                 const bool flush_on_pressure =
                     (WRITER_FLUSH_MODE != 0) && (writes_since_flush >= max_writes_before_flush);
                 if (flush_every_page || flush_on_pressure) {
-                    noc_async_writes_flushed();
+                    noc.async_writes_flushed();
                     writes_since_flush = 0;
                 } else {
                     // Pressure mode skipped the periodic flush this iteration. The NoC only
-                    // guarantees a write source has departed after noc_async_writes_flushed(),
-                    // so flush before cb_pop_front returns this L1 slot to the producer --
+                    // guarantees a write source has departed after async_writes_flushed(),
+                    // so flush before pop_front returns this L1 slot to the producer --
                     // otherwise compute can overwrite an in-flight write source and corrupt
                     // the DRAM output when the CB is full.
-                    noc_async_writes_flushed();
+                    noc.async_writes_flushed();
                 }
                 if (write_progress_every && (++pages_written % write_progress_every == 0)) {
                     DeviceTimestampedData("WRITE_PROG", pages_written);  // measured pages-vs-time
                 }
             }
-            cb_pop_front(cb_out, tiles_per_page);
+            out_cb.pop_front(tiles_per_page);
         }
     }
 
     if constexpr (READ_ONLY == 0) {
         if ((WRITER_FLUSH_MODE != 0) && (writes_since_flush > 0)) {
-            noc_async_writes_flushed();
+            noc.async_writes_flushed();
         }
     }
 
     if constexpr (READ_ONLY == 0) {
         if constexpr (END_BARRIER_MODE == 0) {
-            noc_async_write_barrier();
+            noc.async_write_barrier();
         } else if constexpr (END_BARRIER_MODE == 1) {
-            noc_async_writes_flushed();
+            noc.async_writes_flushed();
         }
     }
     DETAIL_MARK("WRITE_AFTER_BARRIER", last_page_id);

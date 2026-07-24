@@ -40,6 +40,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
@@ -56,6 +57,11 @@ void kernel_main() {
 
     unary_op_init_common(cb_in, cb_out);
     copy_tile_init(cb_in);
+
+    // Device 2.0 CB handles for the flow-control ops (wait/reserve/push/pop). The tile-copy /
+    // pack LLK calls below still take the raw CB ids.
+    CircularBuffer in_cb(cb_in);
+    CircularBuffer out_cb(cb_out);
 
     // Lean-mode markers use DeviceRecordEvent (event id only, no data payload) instead of
     // DeviceTimestampedData: it writes fewer words to the L1 profiler buffer (less op2op
@@ -91,8 +97,8 @@ void kernel_main() {
 
     for (uint32_t rep = 0; rep < workload_repeat; ++rep) {  // kernel-unroll: no barrier between reps
         for (uint32_t i = 0; i < n_tiles; ++i) {
-            cb_wait_front(cb_in, 1);
-            cb_reserve_back(cb_out, 1);
+            in_cb.wait_front(1);
+            out_cb.reserve_back(1);
 
             // Per-tile TILE_IDX marker only in profiling mode; lean mode keeps just tile 0
             // (op-to-op latency needs the program's first-tile compute start).
@@ -111,8 +117,8 @@ void kernel_main() {
                 copy_one_tile();
             }
 
-            cb_push_back(cb_out, 1);
-            cb_pop_front(cb_in, 1);
+            out_cb.push_back(1);
+            in_cb.pop_front(1);
         }
     }
 

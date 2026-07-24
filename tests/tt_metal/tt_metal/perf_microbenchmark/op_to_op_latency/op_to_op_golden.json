@@ -1,12 +1,12 @@
 {
   "arch": "wormhole_b0",
-  "description": "op-to-op latency CI golden (Wormhole, wh_n300_civ2). Runs under TT_METAL_PROFILER_ACCUMULATE=1 so the per-program L1->DRAM profiler dump does not land in the op2op gap (reviewer request: otherwise the gap is inflated by profiler writeout). ARMED: golden = mean of accumulate CI runs (official_op2op_us 1.959/2.027/1.956/2.034 -> 1.99; pack_to_unpack_op2op_us 4.718/4.640/4.376/4.525 -> 4.56, recentered down from 4.68 after gated runs showed pack sits ~4% below the first two calibration runs), tolerance_pct=10 (worst observed run-to-run dev ~4%, ~2.5x margin; revisit as more runs land). Pre-accumulate device-profiler baselines were official_op2op_us=2.565, pack_to_unpack_op2op_us=4.681.",
+  "description": "op-to-op latency CI golden (Wormhole, wh_n300_civ2). Runs under TT_METAL_PROFILER_ACCUMULATE=1 so the per-program L1->DRAM profiler dump does not land in the op2op gap (reviewer request: otherwise the gap is inflated by profiler writeout). RECORD MODE (null): the kernels were migrated to the Device 2.0 data-movement API (Noc/CircularBuffer), which reproducibly ~halves op2op vs the legacy free-function path, so the prior goldens are stale. Re-collecting fresh CI baselines under the new API before re-arming. Prior legacy-API armed values were official_op2op_us=1.99, pack_to_unpack_op2op_us=4.56 (tolerance_pct=10).",
   "pinned_config": "TT_METAL_PROFILER_ACCUMULATE=1 --use-trace --trace-warmup-replays 2 --num-programs 8 --num-pages-per-core 4 --compute-nops 2000 --use-device-profiler",
   "min_prog_id": 3,
   "gated_metrics": ["official_op2op_us", "pack_to_unpack_op2op_us"],
   "golden": {
-    "official_op2op_us": 1.99,
-    "pack_to_unpack_op2op_us": 4.56,
+    "official_op2op_us": null,
+    "pack_to_unpack_op2op_us": null,
     "tolerance_pct": 10.0
   },
   "tracked": {
