@@ -81,6 +81,32 @@ independently (revert the Opt A commit → back to `host` + prefetch) if a probl
 (byte-identical) ships as the always-on default. **A sub-40 GPQA host-vs-device @3072 re-gate
 remains the recommended follow-up** to confirm answer-parity at scale.
 
+## Post-Opt-A/B per-step op distribution (synchronized-component, Tracy OFF)
+
+Reduced-layer synchronized per-component device-time (approved substitute; `hardware-profiler-limited`),
+2-point fit L=2/L=6 (`prof_step_breakdown` + added Gumbel-RNG / gumbel-max-terminal components),
+`DG_SPARSE_MOE_TUNED=1`. per_layer = (84.14−28.38)/4 = 13.94 ms; 30L backbone = 418.7 ms; full
+device-mode step (eager sync-sum) ≈ 496 ms (≈ the ~450 ms traced step; traced≈eager).
+
+| component | 30L ms | % step |
+|---|--:|--:|
+| backbone layers | 418.7 | 84.3 |
+| — MoE (router+gather+experts) | 282.6 | 56.9 |
+| — attention + norms + RoPE | 135.6 | 27.3 |
+| terminal (gumbel-max sampling + sort/cumsum/scatter accept) | 45.0 | 9.1 |
+| soft-embedding (262k self-cond input) | 16.0 | 3.2 |
+| Gumbel RNG (Opt-A device permuted-vocab) | 10.9 | 2.2 |
+| LM head | 4.3 | 0.9 |
+| self-cond gated MLP | 1.6 | 0.3 |
+| commit (per block, separate) | ~960 | 16–54 of block |
+
+Findings: (1) device Gumbel RNG is only ~2.2% (~11 ms) after the OOM shape-fix — the 2-CQ-RNG-overlap
+lever is NOT worth it. (2) MoE is ~57% of the step (supersedes the pre-fusion SESSION-10 "89%"), still
+#1; attention/norms are now a real ~27% #2. (3) terminal gumbel-max sampling is ~9% (+16 ms over argmax:
+29→45 ms). Refined next levers: MoE 6-D gather-Permute fusion > attention/canvas-recompute > commit
+trace/overlap (dominates short early-halt blocks) > sort/cumsum/scatter accept-chain tuning. Artifacts:
+`prof_step_breakdown.py` (+ scratch gumbel-augmented variant).
+
 Commands: `run_upfront_gpqa.sh smoke` with `DG_VLLM_GUMBEL_MODE={host,device}` and
 `MAX_GEN_TOKS=3072`; throughput via `bench_gumbel_mode.py` / host A/B via `bench_upfront_prefetch.py`.
 All runs: 4× Blackhole p300c, no Tracy/watcher.
