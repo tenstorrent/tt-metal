@@ -11,10 +11,11 @@ Provides:
 - Summary file writer for CI integration
 """
 
-import os
 from pathlib import Path
 
 from loguru import logger
+
+from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import summary_dir
 
 
 def _build_run_name(result: dict) -> str:
@@ -347,20 +348,15 @@ def write_pcc_summary(result: dict, threshold: float = 0.99, output_dir: str = N
     Args:
         result: Dict with 'pcc' tuple and metadata.
         threshold: PCC threshold for pass/fail.
-        output_dir: Directory for summary files.
-                    Defaults to PCC_SUMMARY_DIR env var or /tmp/pcc_summaries.
+        output_dir: Directory for summary files. Defaults to PREFILL_SUMMARIES/pcc.
 
     Returns:
         Path to the written file.
     """
     if output_dir is None:
-        # Per-user default dir: a shared hardcoded /tmp/pcc_summaries is owned by
-        # whoever created it first and raises PermissionError for everyone else.
-        import getpass
-
-        output_dir = os.getenv("PCC_SUMMARY_DIR", f"/tmp/pcc_summaries_{getpass.getuser()}")
-
-    out = Path(output_dir).resolve()
+        out = summary_dir("pcc")  # unified summaries root: PREFILL_SUMMARIES/pcc
+    else:
+        out = Path(output_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
     run_name = _build_run_name(result)

@@ -51,6 +51,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summary, render_table
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     cache_half_pccs,
     gather_cache_tp0,
@@ -1117,7 +1118,7 @@ def run_chunked_transformer_no_pcc(
         samples = iteration_chunk_times[1:]
         if not samples:
             logger.warning("No post-warmup iterations available for chunk timing stats (need num_iters >= 2)")
-            return []
+            return [], []
 
         gated = baseline_chunk_times_s is not None
         if gated and len(baseline_chunk_times_s) != n_chunks:
@@ -1154,25 +1155,9 @@ def run_chunked_transformer_no_pcc(
                     )
             rows.append(row)
 
-        widths = [len(header) for header in headers]
-        for row in rows:
-            for idx, cell in enumerate(row):
-                widths[idx] = max(widths[idx], len(cell))
-
-        def render_row(values: list[str]) -> str:
-            return "| " + " | ".join(value.ljust(widths[idx]) for idx, value in enumerate(values)) + " |"
-
-        separator = "+-" + "-+-".join("-" * width for width in widths) + "-+"
-
         margin_note = f", baseline gate +/- {margin * 100:.1f}%" if gated else ", record-only (no baseline)"
         logger.info(f"chunk timing stats computed over {len(samples)} iterations (iter 0 omitted){margin_note}")
-        logger.info("\n" + separator)
-        logger.info(render_row(headers))
-        logger.info(separator)
-        for row in rows:
-            logger.info(render_row(row))
-        logger.info(separator)
-        return failures
+        return failures, render_table(headers, rows)
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -1420,7 +1405,14 @@ def run_chunked_transformer_no_pcc(
     logger.success(
         f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, " f"num_iters={num_iters})"
     )
-    perf_failures = print_duration_table(iteration_chunk_times)
+    perf_failures, perf_table_lines = print_duration_table(iteration_chunk_times)
+    if perf_table_lines:
+        emit_summary(
+            "perf",
+            f"{variant.name}_L{num_layers}_c{n_chunks}_i{num_iters}_p{preload_isl}",
+            f"Chunk timing — {variant.name} (L{num_layers}, {n_chunks} chunks, {num_iters} iters, preload {preload_isl})",
+            perf_table_lines,
+        )
     for key in profiler.times:
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
 

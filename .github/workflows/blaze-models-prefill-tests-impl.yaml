@@ -141,6 +141,10 @@ jobs:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
+      # Root the tests' CI summaries (chunked-prefill perf tables under perf/) at a known path so the
+      # publish step below can surface them in the job summary. Rank 0 runs on this head node, so its
+      # files land here.
+      PREFILL_SUMMARIES: /home/user/tt-metal/generated/prefill_summaries
     strategy:
       fail-fast: false
       matrix:
@@ -350,6 +354,22 @@ jobs:
             echo "Running: ${{ matrix.test-group.name }}"
             echo "$CMD"
             eval "$CMD"
+
+      - name: 📊 Publish prefill summaries
+        if: always() && !cancelled()
+        continue-on-error: true
+        run: |
+          shopt -s nullglob
+          files=("$PREFILL_SUMMARIES"/perf/*.md "$PREFILL_SUMMARIES"/pcc/*.md)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No prefill summary files under $PREFILL_SUMMARIES"
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            cat "$f" >> "$GITHUB_STEP_SUMMARY"
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "Published ${#files[@]} prefill summary file(s) to the job summary"
 
       - name: 🤖 AI job summary
         if: always() && !cancelled()
