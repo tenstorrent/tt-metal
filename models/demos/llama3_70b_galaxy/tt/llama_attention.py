@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.tt_transformers.tt.common import get_tt_kv_cache_path
 
 
 class TtLlamaAttention(LightweightModule):
@@ -462,6 +463,9 @@ class TtLlamaAttention(LightweightModule):
         """
         Generates empty KV cache and pushed to device memory
         """
+        kv_cache_path = (
+            get_tt_kv_cache_path(weight_cache_path) if weight_cache_path and not configuration.dummy_weights else None
+        )
 
         if self.paged_attention_config:
             cache_k = torch.zeros(
@@ -506,9 +510,7 @@ class TtLlamaAttention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                if weight_cache_path and not configuration.dummy_weights
-                else None,
+                cache_file_name=kv_cache_path / f"kvcache_{k_or_v.shape}" if kv_cache_path else None,
             )
             for k_or_v in [cache_k, cache_v]
         ]
