@@ -163,6 +163,7 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
         ring_size,                        // ring_size
         barrier_semaphore.has_value() &&  // use_barrier_sem
             !using_persistent_buffers,
+        operation_attributes.buffer_reuse_sync_semaphore.has_value(),  // use_buffer_reuse_sync_sem
     };
     writer_kernel_config.compile_args.insert(
         writer_kernel_config.compile_args.end(), forward_args.begin(), forward_args.end());
@@ -281,14 +282,12 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
                 : 0,
             barrier_core.x,  // barrier_sem_noc0_x
             barrier_core.y,  // barrier_sem_noc0_y
-            // WAR-hazard wait: only the drain core (link 0) waits on the war semaphore before
-            // overwriting the reused persistent buffer. war_sem_addr==0 disables the wait on all
-            // other cores; the drain core's existing out_ready_sem sync fans the release out.
-            (operation_attributes.war_semaphore.has_value() && link == 0)  // war_sem_addr
-                ? static_cast<uint32_t>(operation_attributes.war_semaphore.value().address())
+            // buffer_reuse_sync_sem_addr==0 disables the wait on all other cores;
+            (operation_attributes.buffer_reuse_sync_semaphore.has_value() && link == 0)
+                ? static_cast<uint32_t>(operation_attributes.buffer_reuse_sync_semaphore.value().address())
                 : 0,
-            (operation_attributes.war_semaphore.has_value() && link == 0)  // war_wait_value
-                ? operation_attributes.war_wait_value.value_or(0)
+            (operation_attributes.buffer_reuse_sync_semaphore.has_value() && link == 0)
+                ? operation_attributes.buffer_reuse_sync_sem_wait_value.value_or(0)
                 : 0};
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());

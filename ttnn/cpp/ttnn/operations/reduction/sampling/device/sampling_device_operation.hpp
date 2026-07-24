@@ -39,6 +39,6 @@ ttnn::Tensor sampling(
     const std::optional<uint32_t>& seed = std::nullopt,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<Tensor>& preallocated_output_tensor = std::nullopt,
-    const std::optional<tt::tt_metal::GlobalSemaphore>& war_semaphore = std::nullopt,
-    const std::optional<tt::tt_metal::CoreCoord>& war_sem_drain_core = std::nullopt);
+    const std::optional<tt::tt_metal::GlobalSemaphore>& buffer_reuse_sync_semaphore = std::nullopt,
+    const std::optional<tt::tt_metal::CoreCoord>& buffer_reuse_sync_sem_drain_core = std::nullopt);
 }  // namespace ttnn::prim

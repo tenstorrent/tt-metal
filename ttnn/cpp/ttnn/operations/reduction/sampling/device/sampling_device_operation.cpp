@@ -198,14 +198,14 @@ ttnn::Tensor sampling(
     const std::optional<uint32_t>& seed,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& preallocated_output_tensor,
-    const std::optional<tt::tt_metal::GlobalSemaphore>& war_semaphore,
-    const std::optional<tt::tt_metal::CoreCoord>& war_sem_drain_core) {
+    const std::optional<tt::tt_metal::GlobalSemaphore>& buffer_reuse_sync_semaphore,
+    const std::optional<tt::tt_metal::CoreCoord>& buffer_reuse_sync_sem_drain_core) {
     return ttnn::device_operation::launch<SamplingDeviceOperation>(
         SamplingParams{
             .seed = seed,
             .sub_core_grids = sub_core_grids,
-            .war_semaphore = war_semaphore,
-            .war_sem_drain_core = war_sem_drain_core},
+            .buffer_reuse_sync_semaphore = buffer_reuse_sync_semaphore,
+            .buffer_reuse_sync_sem_drain_core = buffer_reuse_sync_sem_drain_core},
         SamplingInputs{
             .input_values = input_values_tensor,
             .input_indices = input_indices_tensor,

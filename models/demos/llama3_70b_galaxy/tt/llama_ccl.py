@@ -137,25 +137,25 @@ class TT_CCL:
         self.barrier_semaphore_idx = [0, 0]
         self.persistent_buffers = {}
         self.all_gather_buffers = {}
-        # WAR-hazard semaphore for safe reuse of the persistent SAMPLING_VALUES/INDICES all-gather
+        # buffer-reuse sync semaphore for safe reuse of the persistent SAMPLING_VALUES/INDICES all-gather
         # buffers under decode trace. After its final read, the downstream sampling op increments this
         # (once per user core) on the SAMPLING_VALUES gather's drain core; that gather waits on it
         # before overwriting the buffer, closing the cross-sub-device Write-After-Read race that made
         # the first decode token non-deterministic under trace. Created on sub_device_crs (a superset
         # of the CCL worker cores, so the drain core's local copy is allocated).
         #
-        # war_sem_drain_core is the gather's drain core = choose_worker_cores(worker_sub_device_id)[0]
+        # buffer_reuse_sync_sem_drain_core is the gather's drain core = choose_worker_cores(worker_sub_device_id)[0]
         # = first row-wise core of worker_cores_range_set (model_config.get_core_ranges), which is
         # (1, 0). If that worker-core layout ever changes, update this coordinate to match.
-        self.war_semaphore = None
-        self.war_sem_drain_core = None
-        self.war_sem_wait_value = self.max_batch_size
+        self.buffer_reuse_sync_semaphore = None
+        self.buffer_reuse_sync_sem_drain_core = None
+        self.buffer_reuse_sync_sem_wait_value = self.max_batch_size
         if mode == "decode":
-            self.war_sem_drain_core = ttnn.CoreCoord(1, 0)
+            self.buffer_reuse_sync_sem_drain_core = ttnn.CoreCoord(1, 0)
             # Init value == wait value so the very first decode step's gather wait passes immediately
             # (no prior sampling has signalled yet); each step then rebalances (32 signals -> reset 0).
-            self.war_semaphore = ttnn.create_global_semaphore(
-                self.mesh_device, self.sub_device_crs, self.war_sem_wait_value
+            self.buffer_reuse_sync_semaphore = ttnn.create_global_semaphore(
+                self.mesh_device, self.sub_device_crs, self.buffer_reuse_sync_sem_wait_value
             )
 
         if mode == "decode":
@@ -1286,11 +1286,12 @@ class TT_CCL:
                     self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs],
                 ]
             )
-            # Only the SAMPLING_VALUES gather (first sampling gather of the decode step) waits on the WAR
-            # semaphore; being first on the worker sub-device it program-orders the whole sampling section
-            # after the previous step's ttnn.sampling, so the later SAMPLING_INDICES gather is safe too.
-            war_semaphore = self.war_semaphore if buffer_key == "SAMPLING_VALUES" else None
-            war_wait_value = self.war_sem_wait_value if buffer_key == "SAMPLING_VALUES" else None
+            # Only the SAMPLING_VALUES gather (first sampling gather of the decode step) waits on the
+            # buffer-reuse sync semaphore; being first on the worker sub-device it program-orders the whole
+            # sampling section after the previous step's ttnn.sampling, so the later SAMPLING_INDICES gather
+            # is safe too.
+            buffer_reuse_sync_semaphore = self.buffer_reuse_sync_semaphore if buffer_key == "SAMPLING_VALUES" else None
+            buffer_reuse_sync_sem_wait_value = self.buffer_reuse_sync_sem_wait_value if buffer_key == "SAMPLING_VALUES" else None
             ttnn_tensor_out = ttnn.experimental.all_gather_async(
                 input_tensor_mesh,
                 dim,
@@ -1304,8 +1305,8 @@ class TT_CCL:
                 memory_config=memory_config,
                 subdevice_id=self.worker_sub_device_id if use_subdevice else None,
                 use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
-                war_semaphore=war_semaphore,
-                war_wait_value=war_wait_value,
+                buffer_reuse_sync_semaphore=buffer_reuse_sync_semaphore,
+                buffer_reuse_sync_sem_wait_value=buffer_reuse_sync_sem_wait_value,
             )
         else:
             # Default to the stable/public all_gather API.

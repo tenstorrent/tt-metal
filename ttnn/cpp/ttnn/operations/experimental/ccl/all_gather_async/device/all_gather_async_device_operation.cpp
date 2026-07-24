@@ -268,8 +268,8 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_op
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid,
     const MeshDevice* optional_mesh_device,
-    const std::optional<GlobalSemaphore>& war_semaphore,
-    const std::optional<uint32_t>& war_wait_value) {
+    const std::optional<GlobalSemaphore>& buffer_reuse_sync_semaphore,
+    const std::optional<uint32_t>& buffer_reuse_sync_sem_wait_value) {
     // Combine 3 implementations of the old all_gather_async_op.cpp::all_gather_async_impl
     // 1. only input_tensor, no output or optional mesh device
     // 2. has input tensor and output tensor but not optional mesh device
@@ -327,8 +327,8 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_op
             num_buffers_per_channel,
             reverse_order,
             sub_core_grid,
-            war_semaphore,
-            war_wait_value),
+            buffer_reuse_sync_semaphore,
+            buffer_reuse_sync_sem_wait_value),
         AllGatherAsyncInputs{.input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer}};
 }
 
@@ -472,8 +472,8 @@ Tensor all_gather_async(
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid,
     const MeshDevice* optional_mesh_device,
-    const std::optional<GlobalSemaphore>& war_semaphore,
-    const std::optional<uint32_t>& war_wait_value) {
+    const std::optional<GlobalSemaphore>& buffer_reuse_sync_semaphore,
+    const std::optional<uint32_t>& buffer_reuse_sync_sem_wait_value) {
     auto [params, inputs] = experimental::prim::all_gather_async_build_operation_args(
         input_tensor,
         persistent_output_buffer,
@@ -494,8 +494,8 @@ Tensor all_gather_async(
         reverse_order,
         sub_core_grid,
         optional_mesh_device,
-        war_semaphore,
-        war_wait_value);
+        buffer_reuse_sync_semaphore,
+        buffer_reuse_sync_sem_wait_value);
     return ttnn::device_operation::launch<experimental::prim::AllGatherAsyncDeviceOperation>(params, inputs);
 }
 
