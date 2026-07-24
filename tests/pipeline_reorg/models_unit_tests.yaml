@@ -1004,7 +1004,7 @@
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
     TTRUN_DIR=/etc/ttop
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    PIPELINE_HOSTS=$(grep . "${TTRUN_DIR}/hostfile" | sed "s/[[:space:]].*//" | paste -sd,)
     python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
       --tcp-interface ens5f0np0 \
       --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
