@@ -47,6 +47,7 @@ from models.experimental.janus_pro.tt.janus_pro_e2e_model import JanusMultimodal
 from models.experimental.janus_pro.tt.model_config import ModelArgs
 from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.generator_vllm import allocate_vllm_kv_cache
+from models.tt_transformers.tt.model_config import DecodersPrecision
 
 # Prefer the Tenstorrent-fork ``janus_pro`` processor; fall back gracefully if
 # this vLLM build does not include it yet. See the module docstring.
@@ -75,6 +76,28 @@ class JanusForConditionalGeneration(JanusMultimodalGenerator, SupportsMultiModal
         "supports_sample_on_device": False,
     }
 
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        max_model_len: int | None = None,
+        max_num_seqs: int | None = None,
+        **kwargs,
+    ) -> int:
+        # Default ModelCapabilitiesMixin returns FALLBACK_MAX_TOKENS_ALL_USERS
+        # (131072) which sizes a ~1GB/layer paged KV on N150 and OOMs after the
+        # bf16 vision + bf8 decoder weights are loaded. Derive from the vLLM
+        # scheduler knobs the plugin already passes (see DeepSeek bridge /
+        # tenstorrent/vllm#384).
+        if max_model_len is None or max_num_seqs is None:
+            raise ValueError(
+                "Janus-Pro requires max_model_len and max_num_seqs to size the "
+                f"KV pool; got max_model_len={max_model_len}, max_num_seqs={max_num_seqs}."
+            )
+        return int(max_model_len) * int(max_num_seqs)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Image placeholder token id, resolved by TtJanusProModel from the HF config.
@@ -92,9 +115,13 @@ class JanusForConditionalGeneration(JanusMultimodalGenerator, SupportsMultiModal
         tt_data_parallel=1,
         optimizations: str = None,
     ):
-        # Janus uses model-specific program configs (see model_config.py); the
-        # DecodersPrecision knobs the text-only bridges expose are not wired here.
-        assert optimizations is None, "Custom optimizations are not supported for Janus-Pro"
+        # Default ModelArgs optimizations=None → DecodersPrecision.accuracy →
+        # BF16 KV. That doubles the paged KV vs the demo path (bf8 decoder) and
+        # OOMs on N150 once vision weights are resident. Match other vLLM
+        # bridges: performance (= BFP8 KV) unless the caller overrides.
+        opt_level = (
+            DecodersPrecision.from_string(optimizations) if optimizations is not None else DecodersPrecision.performance
+        )
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
@@ -107,6 +134,7 @@ class JanusForConditionalGeneration(JanusMultimodalGenerator, SupportsMultiModal
                 max_batch_size=max_batch_size // tt_data_parallel,
                 max_seq_len=max_seq_len,
                 cache_hf=True,
+                optimizations=lambda ma, _opt=opt_level: _opt(ma.n_layers, ma.model_name),
             )
             hf_model_id = getattr(hf_config, "_name_or_path", "") or getattr(hf_config, "name_or_path", "")
             assert model_args_i.model_name.replace("-", "") in hf_model_id.replace("-", ""), (
@@ -140,10 +168,10 @@ class JanusForConditionalGeneration(JanusMultimodalGenerator, SupportsMultiModal
         image in prompt order (each is encoded then coalesced onto its
         ``image_token`` placeholder block; see ``JanusMultimodalGenerator``).
 
-        The exact kwarg names/shapes depend on the vLLM Janus processor (Step 0),
-        so accept the two conventions the other TT bridges use: ``pixel_values``
-        (a list, one entry per user) or ``images`` (objects exposing
-        ``.pixel_values``).
+        TT plugin contract (``_gather_multi_modal_inputs``): ``pixel_values`` is
+        a list aligned with the batch, each entry ``None`` (text-only) or a
+        list of per-image tensors. Also accept a bare tensor / ``images`` with
+        ``.pixel_values`` for the older bridge shapes.
         """
         pixel_values = kwargs.get("pixel_values", None)
         if pixel_values is None:
@@ -153,13 +181,26 @@ class JanusForConditionalGeneration(JanusMultimodalGenerator, SupportsMultiModal
         if not pixel_values:
             return None
 
+        def _to_chw_batch(t):
+            if not torch.is_tensor(t):
+                t = torch.as_tensor(t)
+            if t.dim() == 3:  # [3, H, W] -> [1, 3, H, W]
+                t = t.unsqueeze(0)
+            return t
+
         images = []
         for user_pv in pixel_values:
             if user_pv is None:
                 continue
-            t = user_pv if torch.is_tensor(user_pv) else torch.as_tensor(user_pv)
-            if t.dim() == 3:  # [3, H, W] -> [1, 3, H, W]
-                t = t.unsqueeze(0)
+            # Per-user list of image tensors (TT plugin / Qwen-style layout).
+            if isinstance(user_pv, (list, tuple)):
+                for im in user_pv:
+                    if im is None:
+                        continue
+                    t = _to_chw_batch(im)
+                    images += [t[i : i + 1] for i in range(t.shape[0])]
+                continue
+            t = _to_chw_batch(user_pv)
             images += [t[i : i + 1] for i in range(t.shape[0])]
         return images or None
 
