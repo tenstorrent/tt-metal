@@ -254,32 +254,6 @@ Tensor RMSAllGatherDeviceOperation::create_output_tensors(
     return create_device_tensor(output_spec, tensor_args.input.device());
 }
 
-ttsl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "RMSAllGatherDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = args.sub_device_id;
-    auto* mesh_device = tensor_args.input.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    return tt::tt_metal::operation::hash_operation<RMSAllGatherDeviceOperation>(
-        args.eps,
-        args.output_mem_config,
-        args.subblock_wt,
-        args.block_wt,
-        args.inplace,
-        args.grid_size,
-        args.compute_kernel_config,
-        args.dtype,
-        args.topology,
-        args.num_links,
-        args.ring_size,
-        args.cluster_axis,
-        args.use_noc1_only,
-        subdevice_core_range_set,
-        tensor_args);
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

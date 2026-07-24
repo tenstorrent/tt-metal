@@ -13,6 +13,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -80,6 +81,39 @@ struct RMSAllGatherParams {
         attrs.emplace_back("semaphore", semaphore);
         attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
+    }
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "eps",
+        "output_mem_config",
+        "subblock_wt",
+        "block_wt",
+        "inplace",
+        "grid_size",
+        "compute_kernel_config",
+        "dtype",
+        "topology",
+        "num_links",
+        "ring_size",
+        "cluster_axis",
+        "use_noc1_only",
+        "sub_device_id");
+    auto attribute_values() const {
+        return std::make_tuple(
+            eps,
+            output_mem_config,
+            subblock_wt,
+            block_wt,
+            inplace,
+            grid_size,
+            compute_kernel_config,
+            dtype,
+            topology,
+            num_links,
+            ring_size,
+            cluster_axis,
+            use_noc1_only,
+            sub_device_id);
     }
 };
 
