@@ -377,7 +377,8 @@ def create_program_descriptor(
             device,
             grid_crs,
             ttnn.Mcast1DShape.PerRow,
-            0,  # sender_index: col 0 injects each row
+            0,  # starting_sender_index
+            ttnn.Mcast1DSenderPlacement.Diagonal,  # stagger injectors across columns (row r -> col r%span)
             ttnn.McastConfig(handshake=True, base_sem_id=0),
         )
         semaphores = mc.owned_semaphores()
@@ -545,6 +546,13 @@ def create_program_descriptor(
         # global query-chunk index (qc = (q_start + qb) % q_num_chunks) to truncate
         # the KV loop + gate the mask add identically to the reader.
         q_num_chunks,
+        # Fusion #1 — fused O-accumulate. Enable when q-chunks are full (sqt % sq_chunk_t
+        # == 0, always true here since sq_chunk_t is chosen as a divisor of sqt): the PV
+        # matmul L1-accumulates P·V directly onto the running cb_o (packer L1-acc +
+        # caller-owned Interm target), eliminating the separate cb_out_new PV target and
+        # the O += PV add pass. The full-q-chunk gate guarantees cb_o is a single-block
+        # full ring the packer can accumulate onto in place.
+        0 if os.environ.get("TTNN_SDPA_NO_FUSE_OACCUM") else (1 if (sqt % sq_chunk_t == 0) else 0),
     ]
     # Rebuild the compute config with the dtype-correct fidelity (never pass a
     # HiFi4 + fp32-DEST + bf16 combo through — issue #38306). fp32_dest_acc_en

@@ -348,6 +348,7 @@ template <
     typename In0SourceFn = NoIn0Source,
     typename In1BaseOffsetFn = NoIn1BaseOffset,
     bool caller_owns_pack_target = false,
+    bool accumulate_output = false,
     typename Activation = NoneActivation,
     matmul_config::DataFormatReconfig reconfig = matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT,
     typename Buf = ::CircularBuffer>

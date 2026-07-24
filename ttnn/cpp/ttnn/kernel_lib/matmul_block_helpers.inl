@@ -84,6 +84,7 @@ template <
     typename In0SourceFn,
     typename In1BaseOffsetFn,
     bool caller_owns_pack_target,
+    bool accumulate_output,
     typename Activation,
     matmul_config::DataFormatReconfig reconfig,
     typename Buf>
@@ -398,7 +399,10 @@ ALWI void matmul_block(
                         if constexpr (packer_l1_acc) {
                             if constexpr (pack_last_to_interm) {
                                 // Interm target: L1 accumulates across all blocks in the same region.
-                                PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
+                                // accumulate_output (caller_owns path): block 0 ALSO accumulates onto the
+                                // caller-preloaded interm target instead of seeding, so a single-K-block
+                                // matmul adds C = A×B onto the caller's running accumulator.
+                                PACK((llk_pack_reconfig_l1_acc((block == 0 && !accumulate_output) ? 0 : 1)));
                             } else {
                                 // Out target: the last block's partial was reloaded into DST, so the
                                 // pack must NOT re-accumulate.

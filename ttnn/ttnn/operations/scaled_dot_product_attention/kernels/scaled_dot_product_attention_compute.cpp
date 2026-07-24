@@ -29,6 +29,7 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
+#include "api/compute/pack.h"  // pack_reconfig_l1_acc (fused O-accumulate reset)
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
@@ -93,7 +94,7 @@ struct MMParams {
 // (the reader generates + pushes cb_mask_in exactly for those); fully-past blocks
 // carry no mask and skip the add — the reader pushes nothing for them, so the CB
 // balance holds. For mask_mode=none it is always false.
-template <ckl::Approx CorrExpMode, ckl::Approx PExpMode>
+template <ckl::Approx CorrExpMode, ckl::Approx PExpMode, bool Fuse>
 void kv_step(bool first, bool apply_mask, const MMParams& p) {
     const uint32_t sq = p.sq, sk = p.sk, dht = p.dht;
 
@@ -201,49 +202,152 @@ void kv_step(bool first, bool apply_mask, const MMParams& p) {
             ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::of(sq, sk));
     }
 
-    // ---- 6. O_new = P·V  (P popped, V popped) ----
-    if (p.ablate >= 1) {
-        // matmul-stub: keep CB scaffolding, no FPU work.
-        cb_wait_front(cb_qk_scores, sq * sk);
-        cb_pop_front(cb_qk_scores, sq * sk);
-        cb_wait_front(cb_v_in, sk * dht);
-        cb_pop_front(cb_v_in, sk * dht);
-        cb_reserve_back(cb_out_new, sq * dht);
-        cb_push_back(cb_out_new, sq * dht);
-    } else {
-        CircularBuffer p_buf(cb_qk_scores), v_buf(cb_v_in), o_buf(cb_out_new);
-        ckl::matmul_block<
-            /*transpose=*/false,
-            /*packer_l1_acc=*/false,
-            ckl::LastBlockTarget::Out,
-            ckl::OutputCBLayout::TileRowMajor>(
-            p_buf,
-            v_buf,
-            o_buf,
-            o_buf,
-            ckl::MatmulBlockShape::of(p.pv_in0_sb, p.pv_in1_sb, p.pv_sb_h, p.pv_sb_w, sk, 1));
-    }
+    if constexpr (Fuse) {
+        // ---- 6+7 (FUSED). l update, then O = corr·O_prev + P·V in one shot ----
+        // The PV matmul L1-accumulates P·V directly onto the running cb_o via the packer
+        // (caller-owned Interm target + packer_l1_acc + accumulate_output), so the separate
+        // cb_out_new PV target and the O += cb_out_new add pass both disappear. For !first,
+        // cb_o is rescaled in place by corr BEFORE the matmul so it is the accumulator the
+        // matmul adds onto. Requires full q-chunks (cb_o a single-block full ring), gated
+        // host-side by fuse_oaccum = (sqt % sq_chunk_t == 0).
 
-    // ---- 7. update running l, O ----
-    if (first) {
-        // l = rowsum(P); O = O_new
-        ckl::copy<ckl::input(cb_sum_new), ckl::output(cb_l)>(ckl::EltwiseShape::tiles(sq));
-        ckl::copy<ckl::input(cb_out_new), ckl::output(cb_o)>(ckl::EltwiseShape::tiles(sq * dht));
+        // -- running l update (unchanged from the non-fused path; corr held for O rescale) --
+        if (first) {
+            // l = rowsum(P)
+            ckl::copy<ckl::input(cb_sum_new), ckl::output(cb_l)>(ckl::EltwiseShape::tiles(sq));
+        } else {
+            // l = corr·l_prev + rowsum(P)   (cb_l updated in place; corr HELD)
+            ckl::mul<
+                ckl::input(cb_l),
+                ckl::input(cb_exp_max_diff, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
+                ckl::output(cb_sum_scaled)>(ckl::EltwiseShape::tiles(sq));
+            ckl::add<ckl::input(cb_sum_new), ckl::input(cb_sum_scaled), ckl::output(cb_l)>(
+                ckl::EltwiseShape::tiles(sq));
+            // O_prev *= corr in place (corr col-broadcast across DHT; consumes corr).
+            ckl::mul<
+                ckl::input(cb_o),
+                ckl::input(cb_exp_max_diff, ckl::InputLifecycle::Bulk, ckl::OperandKind::Col),
+                ckl::output(cb_o),
+                ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(sq, dht));
+        }
+
+        // -- O += P·V — PV matmul packs directly onto cb_o (caller-owned, in place) --
+        if (p.ablate >= 1) {
+            // matmul-stub: mirror the real path's CB ops exactly, no FPU work.
+            cb_wait_front(cb_qk_scores, sq * sk);
+            cb_pop_front(cb_qk_scores, sq * sk);
+            cb_wait_front(cb_v_in, sk * dht);
+            cb_pop_front(cb_v_in, sk * dht);
+            if (first) {
+                cb_reserve_back(cb_o, sq * dht);
+                cb_push_back(cb_o, sq * dht);
+            } else {
+                cb_wait_front(cb_o, sq * dht);
+                cb_pop_front(cb_o, sq * dht);
+                cb_reserve_back(cb_o, sq * dht);
+                cb_push_back(cb_o, sq * dht);
+            }
+        } else {
+            CircularBuffer p_buf(cb_qk_scores), v_buf(cb_v_in), o_buf(cb_o);
+            const auto pv_shape = ckl::MatmulBlockShape::of(p.pv_in0_sb, p.pv_in1_sb, p.pv_sb_h, p.pv_sb_w, sk, 1);
+            if (first) {
+                // Seed: block 0 overwrites (accumulate_output=false). cb_o empty → reserve/push.
+                cb_reserve_back(cb_o, sq * dht);
+                ckl::matmul_block<
+                    /*transpose=*/false,
+                    /*packer_l1_acc=*/true,
+                    ckl::LastBlockTarget::Interm,
+                    ckl::OutputCBLayout::TileRowMajor,
+                    ckl::matmul_config::InitMode::Short,
+                    ckl::InputPolicy::WaitAndPopPerKBlock,
+                    ckl::InputPolicy::WaitAndPopPerKBlock,
+                    ckl::NoPostCompute,
+                    ckl::NoPreKBlock,
+                    ckl::NoPostKBlock,
+                    /*untilize_block_ct_dim=*/0,
+                    ckl::NoKBlockInnerDimFn,
+                    ckl::NoIn0Source,
+                    ckl::NoIn1BaseOffset,
+                    /*caller_owns_pack_target=*/true,
+                    /*accumulate_output=*/false>(
+                    p_buf, v_buf, o_buf, o_buf, pv_shape, {}, {}, /*in1_per_core_w=*/0, /*out_row_width=*/dht);
+                cb_push_back(cb_o, sq * dht);
+            } else {
+                // Accumulate: block 0 adds onto the resident corr·O (accumulate_output=true).
+                // cb_o is caller-owned: pop the corr·O we just wrote (rd ptr advances; tiles
+                // stay in L1), reserve (full ring → wr ptr wraps back onto them), let the
+                // matmul L1-accumulate P·V in place, then publish the updated O.
+                cb_wait_front(cb_o, sq * dht);
+                cb_pop_front(cb_o, sq * dht);
+                cb_reserve_back(cb_o, sq * dht);
+                ckl::matmul_block<
+                    /*transpose=*/false,
+                    /*packer_l1_acc=*/true,
+                    ckl::LastBlockTarget::Interm,
+                    ckl::OutputCBLayout::TileRowMajor,
+                    ckl::matmul_config::InitMode::Short,
+                    ckl::InputPolicy::WaitAndPopPerKBlock,
+                    ckl::InputPolicy::WaitAndPopPerKBlock,
+                    ckl::NoPostCompute,
+                    ckl::NoPreKBlock,
+                    ckl::NoPostKBlock,
+                    /*untilize_block_ct_dim=*/0,
+                    ckl::NoKBlockInnerDimFn,
+                    ckl::NoIn0Source,
+                    ckl::NoIn1BaseOffset,
+                    /*caller_owns_pack_target=*/true,
+                    /*accumulate_output=*/true>(
+                    p_buf, v_buf, o_buf, o_buf, pv_shape, {}, {}, /*in1_per_core_w=*/0, /*out_row_width=*/dht);
+                cb_push_back(cb_o, sq * dht);
+            }
+            ckernel::pack_reconfig_l1_acc(0);  // restore overwrite mode for next QKᵀ pack / normalize.
+        }
     } else {
-        // l = corr·l_prev + rowsum(P)   (cb_l updated in place)
-        ckl::mul<
-            ckl::input(cb_l),
-            ckl::input(cb_exp_max_diff, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
-            ckl::output(cb_sum_scaled)>(ckl::EltwiseShape::tiles(sq));
-        ckl::add<ckl::input(cb_sum_new), ckl::input(cb_sum_scaled), ckl::output(cb_l)>(ckl::EltwiseShape::tiles(sq));
-        // O = corr·O_prev + O_new   (corr col-broadcast across DHT; cb_o in place)
-        ckl::mul<
-            ckl::input(cb_o),
-            ckl::input(cb_exp_max_diff, ckl::InputLifecycle::Bulk, ckl::OperandKind::Col),
-            ckl::output(cb_out_scaled),
-            ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(sq, dht));
-        ckl::add<ckl::input(cb_out_new), ckl::input(cb_out_scaled), ckl::output(cb_o)>(
-            ckl::EltwiseShape::grid(sq, dht));
+        // ---- 6. O_new = P·V  (P popped, V popped) ---- [non-fused fallback, byte-identical]
+        if (p.ablate >= 1) {
+            // matmul-stub: keep CB scaffolding, no FPU work.
+            cb_wait_front(cb_qk_scores, sq * sk);
+            cb_pop_front(cb_qk_scores, sq * sk);
+            cb_wait_front(cb_v_in, sk * dht);
+            cb_pop_front(cb_v_in, sk * dht);
+            cb_reserve_back(cb_out_new, sq * dht);
+            cb_push_back(cb_out_new, sq * dht);
+        } else {
+            CircularBuffer p_buf(cb_qk_scores), v_buf(cb_v_in), o_buf(cb_out_new);
+            ckl::matmul_block<
+                /*transpose=*/false,
+                /*packer_l1_acc=*/false,
+                ckl::LastBlockTarget::Out,
+                ckl::OutputCBLayout::TileRowMajor>(
+                p_buf,
+                v_buf,
+                o_buf,
+                o_buf,
+                ckl::MatmulBlockShape::of(p.pv_in0_sb, p.pv_in1_sb, p.pv_sb_h, p.pv_sb_w, sk, 1));
+        }
+
+        // ---- 7. update running l, O ----
+        if (first) {
+            // l = rowsum(P); O = O_new
+            ckl::copy<ckl::input(cb_sum_new), ckl::output(cb_l)>(ckl::EltwiseShape::tiles(sq));
+            ckl::copy<ckl::input(cb_out_new), ckl::output(cb_o)>(ckl::EltwiseShape::tiles(sq * dht));
+        } else {
+            // l = corr·l_prev + rowsum(P)   (cb_l updated in place)
+            ckl::mul<
+                ckl::input(cb_l),
+                ckl::input(cb_exp_max_diff, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
+                ckl::output(cb_sum_scaled)>(ckl::EltwiseShape::tiles(sq));
+            ckl::add<ckl::input(cb_sum_new), ckl::input(cb_sum_scaled), ckl::output(cb_l)>(
+                ckl::EltwiseShape::tiles(sq));
+            // O = corr·O_prev + O_new   (corr col-broadcast across DHT; cb_o in place)
+            ckl::mul<
+                ckl::input(cb_o),
+                ckl::input(cb_exp_max_diff, ckl::InputLifecycle::Bulk, ckl::OperandKind::Col),
+                ckl::output(cb_out_scaled),
+                ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(sq, dht));
+            ckl::add<ckl::input(cb_out_new), ckl::input(cb_out_scaled), ckl::output(cb_o)>(
+                ckl::EltwiseShape::grid(sq, dht));
+        }
     }
 }
 
@@ -280,6 +384,11 @@ void kernel_main() {
     // query-chunk index per Q-block (qc = (q_start + qb) % q_num_chunks) so it can
     // truncate the KV loop + gate the mask add identically to the reader.
     const uint32_t q_num_chunks = get_compile_time_arg_val(15);
+    // Fusion #1 — fused O-accumulate. When set, the PV matmul L1-accumulates P·V directly
+    // onto the running output cb_o (dropping the cb_out_new PV target + the O += PV add pass).
+    // Host gates this on full q-chunks (sqt % sq_chunk_t == 0), so cb_o is a single-block
+    // full ring the packer can accumulate onto in place.
+    constexpr uint32_t fuse_oaccum = get_compile_time_arg_val(16);
 
     const uint32_t q_count = get_arg_val<uint32_t>(0);
     const uint32_t k_num_chunks = get_arg_val<uint32_t>(1);
@@ -318,11 +427,11 @@ void kernel_main() {
             // exp_mode is a compile-time constant → the two unused kv_step
             // instantiations are dead-code-eliminated (no binary bloat).
             if constexpr (exp_mode == 1u) {
-                kv_step<ckl::Approx::Fast, ckl::Approx::Fast>(k == 0, apply_mask, p);
+                kv_step<ckl::Approx::Fast, ckl::Approx::Fast, fuse_oaccum != 0u>(k == 0, apply_mask, p);
             } else if constexpr (exp_mode == 2u) {
-                kv_step<ckl::Approx::Exact, ckl::Approx::Fast>(k == 0, apply_mask, p);
+                kv_step<ckl::Approx::Exact, ckl::Approx::Fast, fuse_oaccum != 0u>(k == 0, apply_mask, p);
             } else {
-                kv_step<ckl::Approx::Exact, ckl::Approx::Exact>(k == 0, apply_mask, p);
+                kv_step<ckl::Approx::Exact, ckl::Approx::Exact, fuse_oaccum != 0u>(k == 0, apply_mask, p);
             }
         }
 
