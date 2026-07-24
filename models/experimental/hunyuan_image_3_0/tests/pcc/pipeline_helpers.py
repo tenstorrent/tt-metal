@@ -16,9 +16,9 @@ from models.experimental.hunyuan_image_3_0.ref.image_gen.patch_embed import UNet
 from models.experimental.hunyuan_image_3_0.ref.image_gen.timestep_embedder import TimestepEmbedder as RefTimeEmbed
 from models.experimental.hunyuan_image_3_0.ref.transformer_layer import HunyuanImage3DecoderLayer as RefLayer
 from models.experimental.hunyuan_image_3_0.ref.weights import load_prefixed_state_dict, resolve_base_model_dir
-from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
-from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
+from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
+from models.experimental.hunyuan_image_3_0.ttnn.pipeline import HunyuanTtDenoiseStep
 from models.tt_dit.parallel.manager import CCLManager
 
 

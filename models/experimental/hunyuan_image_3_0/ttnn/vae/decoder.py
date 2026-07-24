@@ -22,7 +22,7 @@ from models.experimental.hunyuan_image_3_0.ref.vae.decoder import (
     decoder_tail_shape,
     decoder_up_level_specs,
 )
-from models.experimental.hunyuan_image_3_0.tt.vae.conv3d import (
+from models.experimental.hunyuan_image_3_0.ttnn.vae.conv3d import (
     HunyuanSymmetricConv3d,
     _TAIL_CONV_OUT_CHUNK_ELEMS,
     conv3d_h_chunk_size,
@@ -30,11 +30,11 @@ from models.experimental.hunyuan_image_3_0.tt.vae.conv3d import (
     conv3d_valid_input_h_chunk,
     promote_conv3d_fallback_to_exact,
 )
-from models.experimental.hunyuan_image_3_0.tt.vae.pointwise import HunyuanPointwiseLinear
-from models.experimental.hunyuan_image_3_0.tt.vae.resnet_conv import HunyuanResnetConvPair
+from models.experimental.hunyuan_image_3_0.ttnn.vae.pointwise import HunyuanPointwiseLinear
+from models.experimental.hunyuan_image_3_0.ttnn.vae.resnet_conv import HunyuanResnetConvPair
 from models.tt_dit.utils.conv3d import aligned_channels
-from models.experimental.hunyuan_image_3_0.tt.vae.spatial import gather_hw, partition_hw, norm_sharded
-from models.experimental.hunyuan_image_3_0.tt.vae.decoder_weights import (
+from models.experimental.hunyuan_image_3_0.ttnn.vae.spatial import gather_hw, partition_hw, norm_sharded
+from models.experimental.hunyuan_image_3_0.ttnn.vae.decoder_weights import (
     init_conv_in as init_conv_in_weights,
     init_decoder_tail as init_decoder_tail_weights,
     init_decoder_up as init_decoder_up_weights,

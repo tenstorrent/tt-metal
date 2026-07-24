@@ -45,8 +45,8 @@ from models.experimental.hunyuan_image_3_0.ref.weights import (
     load_tensors,
     resolve_base_model_dir,
 )
-from models.experimental.hunyuan_image_3_0.tt.attention.rms_norm import HunyuanTtRMSNorm
-from models.experimental.hunyuan_image_3_0.tt.transformer_layer import HunyuanTtDecoderLayer
+from models.experimental.hunyuan_image_3_0.ttnn.attention.rms_norm import HunyuanTtRMSNorm
+from models.experimental.hunyuan_image_3_0.ttnn.transformer_layer import HunyuanTtDecoderLayer
 from pcc_common import (
     LEAN_ISL_CASES,
     PRODUCTION_SEQ,

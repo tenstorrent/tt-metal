@@ -33,11 +33,11 @@ if str(PCC_DIR) not in sys.path:
 import ttnn
 from models.experimental.hunyuan_image_3_0.ref.weights import load_prefixed_state_dict, resolve_base_model_dir
 from models.experimental.hunyuan_image_3_0.tests.pcc import i2i_helpers as i2i
-from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
-from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
-from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep, denoise_loop
-from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
+from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
+from models.experimental.hunyuan_image_3_0.ttnn.pipeline import HunyuanTtDenoiseStep, denoise_loop
+from models.experimental.hunyuan_image_3_0.ttnn.scheduler import HunyuanTtScheduler
 from denoise_helpers import (
     denoise_steps,
     host_step_pcc_threshold,

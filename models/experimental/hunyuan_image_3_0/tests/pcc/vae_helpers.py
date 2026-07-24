@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.experimental.hunyuan_image_3_0.ref.vae.encoder import IN_CHANNELS
-from models.experimental.hunyuan_image_3_0.tt.vae.decoder import bcthw_to_bthwc, bthwc_to_bcthw
+from models.experimental.hunyuan_image_3_0.ttnn.vae.decoder import bcthw_to_bthwc, bthwc_to_bcthw
 from models.tt_dit.utils.conv3d import aligned_channels
 
 
@@ -51,7 +51,7 @@ def upload_bcthw_spatial(
     dtype: ttnn.DataType = ttnn.bfloat16,
 ) -> ttnn.Tensor:
     """Host BCTHW -> H/W-sharded device BTHWC (channels already padded on host)."""
-    from models.experimental.hunyuan_image_3_0.tt.vae.spatial import mesh_mapper_hw_spatial
+    from models.experimental.hunyuan_image_3_0.ttnn.vae.spatial import mesh_mapper_hw_spatial
 
     host = (z_bcthw.bfloat16() if dtype == ttnn.bfloat16 else z_bcthw.float()).permute(0, 2, 3, 4, 1).contiguous()
     return ttnn.from_torch(

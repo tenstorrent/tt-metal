@@ -44,10 +44,10 @@ from models.experimental.hunyuan_image_3_0.ref.weights import (
     load_tensors,
     resolve_base_model_dir,
 )
-from models.experimental.hunyuan_image_3_0.tt.attention.rms_norm import HunyuanTtRMSNorm
-from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
-from models.experimental.hunyuan_image_3_0.tt.transformer_layer import HunyuanTtDecoderLayer
+from models.experimental.hunyuan_image_3_0.ttnn.attention.rms_norm import HunyuanTtRMSNorm
+from models.experimental.hunyuan_image_3_0.ttnn.lm_head import HunyuanTtLMHead
+from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
+from models.experimental.hunyuan_image_3_0.ttnn.transformer_layer import HunyuanTtDecoderLayer
 from pcc_common import (
     PCC_LOGIT_DECODE,
     PCC_LOGIT_MAX_CONTEXT,

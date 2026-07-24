@@ -18,14 +18,14 @@ import time
 import torch
 import ttnn
 
-from models.experimental.hunyuan_image_3_0.tt.ar_dual_cq import COMPUTE_CQ, IO_CQ
-from models.experimental.hunyuan_image_3_0.tt.matmul_utils import spill_resident_emb_to_dram
-from models.experimental.hunyuan_image_3_0.tt.pipeline import (
+from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import COMPUTE_CQ, IO_CQ
+from models.experimental.hunyuan_image_3_0.ttnn.matmul_utils import spill_resident_emb_to_dram
+from models.experimental.hunyuan_image_3_0.ttnn.pipeline import (
     HunyuanTtDenoiseStep,
     classifier_free_guidance_tt,
     latent_tt_to_torch,
 )
-from models.experimental.hunyuan_image_3_0.tt.trace_config import denoise_execute_trace_enabled
+from models.experimental.hunyuan_image_3_0.ttnn.trace_config import denoise_execute_trace_enabled
 
 
 def _upload_trace_buffer(device, torch_data: torch.Tensor, *, dtype, layout) -> ttnn.Tensor:
@@ -156,7 +156,7 @@ class DenoiseStepTracer:
         return latent_bchw.permute(0, 2, 3, 1).reshape(1, 1, B * hh * ww, C).contiguous()
 
     def _device_scatter(self) -> bool:
-        from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import (
+        from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import (
             HunyuanTtTimestepEmbedder,
         )
 
@@ -252,10 +252,10 @@ class DenoiseStepTracer:
         return buf
 
     def _stage_one_base_embeds_device(self, c: dict, t_scalar: float, *, device_attr: str) -> None:
-        from models.experimental.hunyuan_image_3_0.tt.image_gen.cond_instantiate import (
+        from models.experimental.hunyuan_image_3_0.ttnn.image_gen.cond_instantiate import (
             scatter_distill_step_embeds_tt,
         )
-        from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import (
+        from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import (
             HunyuanTtTimestepEmbedder,
         )
 

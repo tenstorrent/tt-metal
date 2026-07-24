@@ -58,11 +58,11 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.common.modules.tt_ccl import get_num_links
 
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import HunyuanTokenizer, prepare_recaption_inputs
-from models.experimental.hunyuan_image_3_0.tt.attention.mask import build_attention_mask_tt
+from models.experimental.hunyuan_image_3_0.ttnn.attention.mask import build_attention_mask_tt
 from models.experimental.hunyuan_image_3_0.tests.pcc import i2i_helpers as h
-from models.experimental.hunyuan_image_3_0.tt.kv_cache import HunyuanTtKvCache
-from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
+from models.experimental.hunyuan_image_3_0.ttnn.kv_cache import HunyuanTtKvCache
+from models.experimental.hunyuan_image_3_0.ttnn.lm_head import HunyuanTtLMHead
+from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
 
 PROMPT = "a cat on a mat"
 BOT_TASK = "recaption"

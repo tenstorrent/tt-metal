@@ -59,10 +59,10 @@ from models.experimental.hunyuan_image_3_0.ref.weights import (
     load_tensors,
     resolve_base_model_dir,
 )
-from models.experimental.hunyuan_image_3_0.tt.attention.rms_norm import HunyuanTtRMSNorm
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
-from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
-from models.experimental.hunyuan_image_3_0.tt.transformer_layer import HunyuanTtDecoderLayer
+from models.experimental.hunyuan_image_3_0.ttnn.attention.rms_norm import HunyuanTtRMSNorm
+from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
+from models.experimental.hunyuan_image_3_0.ttnn.scheduler import HunyuanTtScheduler
+from models.experimental.hunyuan_image_3_0.ttnn.transformer_layer import HunyuanTtDecoderLayer
 from models.tt_dit.parallel.manager import CCLManager
 from denoise_helpers import _forward_ref_layers, clear_ref_layer_cache
 from pcc_common import (

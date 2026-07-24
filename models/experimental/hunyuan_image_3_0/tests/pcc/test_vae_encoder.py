@@ -35,7 +35,7 @@ from models.experimental.hunyuan_image_3_0.tests.pcc.vae_helpers import (
     pad_encoder_channels_bcthw,
     run_bcthw_module,
 )
-from models.experimental.hunyuan_image_3_0.tt.vae.encoder import (
+from models.experimental.hunyuan_image_3_0.ttnn.vae.encoder import (
     DownBlockTTNN,
     EncoderConvInTTNN,
     EncoderDownTTNN,
@@ -43,7 +43,7 @@ from models.experimental.hunyuan_image_3_0.tt.vae.encoder import (
     EncoderMidBlockTTNN,
     VAEEncoderTTNN,
 )
-from models.experimental.hunyuan_image_3_0.tt.vae.encoder_weights import load_down_block as load_tt_down_block
+from models.experimental.hunyuan_image_3_0.ttnn.vae.encoder_weights import load_down_block as load_tt_down_block
 
 PCC_THRESHOLD = 0.998
 

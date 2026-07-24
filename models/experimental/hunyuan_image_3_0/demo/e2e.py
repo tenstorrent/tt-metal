@@ -91,13 +91,13 @@ from models.experimental.hunyuan_image_3_0.ref.model_config import (
     load_config,
     transformer_cfg,
 )
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel, default_bf16_layers
-from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
-from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
-from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep, denoise_loop, decode_latent
-from models.experimental.hunyuan_image_3_0.tt.denoise_dual_cq import open_denoise_mesh
-from models.experimental.hunyuan_image_3_0.tt.vae_dual_cq import open_vae_mesh
-from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
+from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel, default_bf16_layers
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
+from models.experimental.hunyuan_image_3_0.ttnn.pipeline import HunyuanTtDenoiseStep, denoise_loop, decode_latent
+from models.experimental.hunyuan_image_3_0.ttnn.denoise_dual_cq import open_denoise_mesh
+from models.experimental.hunyuan_image_3_0.ttnn.vae_dual_cq import open_vae_mesh
+from models.experimental.hunyuan_image_3_0.ttnn.scheduler import HunyuanTtScheduler
 
 # Host ref TimestepEmbedder for the gen-timestep / guidance / timestep_r continuous tokens
 # scattered each denoise step (instruct/distil variants only).

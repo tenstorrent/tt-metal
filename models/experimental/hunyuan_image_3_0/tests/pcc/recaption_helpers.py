@@ -156,8 +156,8 @@ def _layer_loader(i: int):
 
 def build_tt_backbone_lm(device, c, wte, ln_f_w):
     """1-chip / smoke path: stream experts for deep stacks so DRAM stays bounded."""
-    from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
-    from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
+    from models.experimental.hunyuan_image_3_0.ttnn.lm_head import HunyuanTtLMHead
+    from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
 
     # Deep stacks: stream experts so 32L does not pin all expert weights in DRAM.
     # model_dir MUST match layer_loader's checkpoint (Instruct). Defaulting the
@@ -193,8 +193,8 @@ def build_tt_backbone_lm(device, c, wte, ln_f_w):
 
 def build_tt_backbone_lm_mesh(mesh_device, ccl, c, wte, ln_f_w, *, sp_factor: int = 2):
     """Production 2×2 path: demo-matching resident EP/TP/SP (no per-token expert stream)."""
-    from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
-    from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel, default_bf16_layers
+    from models.experimental.hunyuan_image_3_0.ttnn.lm_head import HunyuanTtLMHead
+    from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel, default_bf16_layers
 
     bf16_layers = default_bf16_layers(NUM_LAYERS)
     print(
