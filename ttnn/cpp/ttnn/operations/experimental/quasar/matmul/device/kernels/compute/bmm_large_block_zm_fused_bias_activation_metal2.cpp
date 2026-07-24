@@ -651,5 +651,13 @@ void kernel_main() {
         bias_cb.pop_front(bias_ntiles);
     }
 #endif
+    // [#48552 EXPERIMENT] Drain the compute's DFB credits (posted==acked) before exit. This is the Tensix
+    // (packer/unpacker) side, which updates the tile counters via the TRISC port — the cross-port straggler
+    // source in the reuse-incoherence. Balancing here leaves the counters quiescent for the next program that
+    // reuses them. Remove before merge. (If finish() itself hangs, that's evidence the counter is already
+    // corrupted -> posted!=acked can never balance.)
+    in0_cb.finish();
+    in1_cb.finish();
+    untilize_mode_out_cb.finish();
     DPRINT("MMC end\n");  // DEBUG: stem conv1 Program-B hang
 }

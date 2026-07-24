@@ -81,5 +81,7 @@ void kernel_main() {
         DPRINT("SWW wrote iter, popping\n");  // [#48552 DEBUG]
         cb_in0.pop_front(num_read_per_barrier);
     }
+    cb_in0.finish();  // [#48552 EXPERIMENT] drain credits (posted==acked) before exit so the counter is quiescent for
+                      // reuse
     DPRINT("SWW end\n");  // [#48552 DEBUG]
 }

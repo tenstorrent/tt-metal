@@ -178,4 +178,6 @@ void kernel_main() {
             cb_in0.push_back(num_read_per_barrier);
         }
     }
+    cb_in0.finish();  // [#48552 EXPERIMENT] drain credits (posted==acked) before exit so the counter is quiescent for
+                      // reuse
 }

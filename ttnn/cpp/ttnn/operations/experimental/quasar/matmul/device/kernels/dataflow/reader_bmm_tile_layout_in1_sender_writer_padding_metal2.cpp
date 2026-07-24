@@ -529,5 +529,9 @@ void kernel_main() {
 
     // Drain outstanding NOC writes AND atomics before returning (Metal 2.0 FW epilogue does not).
     noc.async_full_barrier();
+    // [#48552 EXPERIMENT] Drain this program's DFB credits (posted==acked) before exit so the physical tile
+    // counters are balanced/quiescent for the next program that reuses them. Remove before merge.
+    cb_in1.finish();
+    cb_out.finish();
     DPRINT("WSM end\n");  // DEBUG: matmul layer3 hang
 }
