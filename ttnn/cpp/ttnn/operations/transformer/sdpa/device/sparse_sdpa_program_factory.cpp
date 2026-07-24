@@ -8,6 +8,7 @@
 #include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>  // GetRuntimeArgs (cache-hit in-place patch)
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <array>
@@ -352,10 +353,25 @@ void SparseSDPAOperation::override_runtime_arguments(
     const SparseSDPAInputs& tensor_args,
     Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Re-derive the descriptor from the single source of truth (create_descriptor) and re-apply its per-core
-    // args + tensor-backed CB/buffer addresses to the cached program. No rebuild; supersedes get_dynamic.
-    auto desc = SparseSDPAProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
-    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+    // Only the buffer addresses and kv_batch_page_offset vary per dispatch (tok_start/tok_count are pinned by
+    // the hashed q shape); patch those slots in place instead of rebuilding the whole descriptor on every hit.
+    const SparseSDPAInputs& t = tensor_args;
+    const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
+    const uint32_t offset = operation_attributes.cache_batch_idx.value_or(0) * t.kv.logical_shape()[2];
+    const uint32_t q = t.q.buffer()->address(), kv = t.kv.buffer()->address(), idx = t.indices.buffer()->address(),
+                   out = tensor_return_value.buffer()->address();
+    for (uint32_t i = 0; i < grid.x * grid.y; ++i) {
+        const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
+        auto& r = tt::tt_metal::GetRuntimeArgs(program, 0, core);  // {q, kv, idx, tok_start, tok_count, offset}
+        auto& w = tt::tt_metal::GetRuntimeArgs(program, 1, core);  // {out, tok_start, tok_count, kv, offset}
+        r[0] = q;
+        r[1] = kv;
+        r[2] = idx;
+        r[5] = offset;
+        w[0] = out;
+        w[3] = kv;
+        w[4] = offset;
+    }
 }
 
 }  // namespace ttnn::prim

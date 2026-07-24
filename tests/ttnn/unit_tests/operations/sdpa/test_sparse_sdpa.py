@@ -404,11 +404,11 @@ def test_sparse_sdpa_indexed_kv_cache(device):
     assert n == 1, f"indexing into a different slot recompiled: {n} program-cache entries (expected 1)"
 
 
-# ---- override_runtime_arguments on a cache HIT must re-derive BOTH the excluded slot offset
+# ---- override_runtime_arguments on a cache HIT must re-apply BOTH the excluded slot offset
 # ---- (kv_batch_page_offset = cache_batch_idx*T) AND every tensor buffer address. Here each iteration changes
 # ---- cache_batch_idx AND freshly allocates q/kv/indices (prior tensors kept alive so the new buffers get
 # ---- different addresses) — correct PCC for every step, on ONE cache entry, proves the hit path re-applies
-# ---- both from create_descriptor (not stale baked values). ----
+# ---- both (not stale baked values). ----
 @run_for_blackhole()
 def test_sparse_sdpa_indexed_addr_change_on_hit(device):
     H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 3

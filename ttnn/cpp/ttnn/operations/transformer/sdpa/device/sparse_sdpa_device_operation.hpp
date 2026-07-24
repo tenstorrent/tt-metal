@@ -39,8 +39,8 @@ struct SparseSDPAOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
-    // Cache-hit re-apply of ALL per-dispatch state (per-core args + tensor-backed CB/buffer addresses), since
-    // the hash excludes the kv length T and cache_batch_idx (kv_batch_page_offset). See the program factory.
+    // Cache-hit re-apply of the per-dispatch state the hash excludes: buffer addresses and kv_batch_page_offset
+    // (cache_batch_idx * kv length T). See the program factory.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
