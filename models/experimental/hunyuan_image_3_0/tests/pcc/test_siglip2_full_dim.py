@@ -5,7 +5,7 @@
 # Smoke suite in test_siglip2_ttnn.py stays at S=64 / 1L.
 #
 #   python_env/bin/python -m pytest \
-#     models/experimental/hunyuan_image_3_0/tests/vision/test_siglip2_full_dim.py -v -s --timeout=10800
+#     models/experimental/hunyuan_image_3_0/tests/pcc/test_siglip2_full_dim.py -v -s --timeout=10800
 
 from __future__ import annotations
 

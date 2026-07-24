@@ -6,11 +6,11 @@
 #
 # Run (glue only, fast):
 #   python_env/bin/python -m pytest \
-#     models/experimental/hunyuan_image_3_0/tests/vae/test_decode_pipeline.py -k glue -v -s
+#     models/experimental/hunyuan_image_3_0/tests/pcc/test_vae_decode_pipeline.py -k glue -v -s
 #
 # Full spatial decode (slow, needs 2×2 mesh):
 #   python_env/bin/python -m pytest \
-#     models/experimental/hunyuan_image_3_0/tests/vae/test_decode_pipeline.py \
+#     models/experimental/hunyuan_image_3_0/tests/pcc/test_vae_decode_pipeline.py \
 #     -k spatial -v -s --timeout=1200
 
 from __future__ import annotations

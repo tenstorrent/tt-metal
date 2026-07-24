@@ -3,15 +3,15 @@
 #
 # Device PCC tests: TTNN SigLIP2 vision encoder + aligner vs ref/vision/siglip2.py.
 # Weights: real HunyuanImage checkpoint (HUNYUAN_MODEL_DIR / ref/weights.MODEL_DIR).
-# Inputs: random activations with fixed seed (same pattern as tests/vae/).
+# Inputs: random activations with fixed seed (same pattern as VAE PCC tests).
 #
 # Run (fast, 1 encoder layer):
 #   python_env/bin/python -m pytest \
-#     models/experimental/hunyuan_image_3_0/tests/vision/test_siglip2_ttnn.py -v
+#     models/experimental/hunyuan_image_3_0/tests/pcc/test_siglip2_ttnn.py -v
 #
 # Full 27-layer vision stack:
 #   HY_VIT_NUM_LAYERS=27 python_env/bin/python -m pytest \
-#     models/experimental/hunyuan_image_3_0/tests/vision/test_siglip2_ttnn.py -v
+#     models/experimental/hunyuan_image_3_0/tests/pcc/test_siglip2_ttnn.py -v
 
 import torch
 import ttnn
@@ -34,7 +34,7 @@ from models.experimental.hunyuan_image_3_0.tt.vision.siglip2 import (
     forward_vision_with_aligner,
 )
 
-from .conftest import (
+from models.experimental.hunyuan_image_3_0.tests.pcc.siglip2_helpers import (
     B,
     NUM_LAYERS,
     PCC_THR,
