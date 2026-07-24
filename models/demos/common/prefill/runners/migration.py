@@ -25,6 +25,7 @@ imported LAZILY so the runner still works standalone when migration is opted out
 import os
 import socket
 import sys
+import time
 import zlib
 from ctypes import c_int32
 
@@ -88,13 +89,49 @@ def _attach_migration_client():
     return client, cmd_q, table_q, resp_q
 
 
-def _deliver_local_device_map(device_map) -> None:
-    """Deliver THIS rank's FNID->UMD device map on the static outward table queue
-    (``PREFILL_MIGRATION_*_QUEUE``, passed in by the migration layer); the endpoint orchestrator
-    relays the AssignDevMap/DevMapEntry burst to its internal A/B workers."""
-    client, _cmd_q, table_q, _resp_q = _attach_migration_client()
-    client.send_device_map(device_map)
-    logger.info(f"[migration] delivered {len(device_map)} device-map entries -> {table_q}")
+def _deliver_local_device_map(device_map, rank: int, attach_timeout_s: float = 30.0) -> None:
+    """Deliver THIS rank's FNID->UMD device map to its co-located migration worker(s).
+
+    POSIX shmem is host-local and the endpoint's orchestrator relays the map ONLY to the A/B workers
+    on its master host -- it does NOT forward the map to subordinate worker ranks on other hosts, and
+    the worker does not MPI-broadcast it (endpoint_orchestrator.cpp forward_device_map -> client_a/b;
+    control_thread.cpp reads it from the rank's OWN shmem). So on a multi-host pipeline endpoint every
+    worker rank must be fed its own host's map directly.
+
+    Each worker rank exposes a deterministic shmem trio ``/ep_<endpoint_id>_{a,b}_{cmd,table,resp}``
+    (rank 0 has no suffix; rank r>0 adds ``_r<r>``). The base is ``/ep_<endpoint_id>`` since the
+    getpid()->endpoint_id rename (tt-llm-engine b64f8dee) -- so we can construct the exact name from
+    (endpoint_id, rank) with NO ``/dev/shm/ep_*`` glob, keeping the determinism / no-stale-race the
+    static-queue delivery was after while still working across hosts. Deliver to BOTH the A sender and
+    the B loopback receiver -- both need the map. The static ``PREFILL_MIGRATION_*_QUEUE``
+    (``/mig_ep<id>_*``) stays the master-only SET_TABLE / WORKER_READY control channel (see
+    :func:`publish_serialized_table_and_wait_ready`).
+    """
+    mod = _import_migration_client()
+    endpoint_id = int(os.environ.get("PREFILL_MIGRATION_ENDPOINT_ID", "1"))
+    base = f"/ep_{endpoint_id}"
+    suffix = "" if rank == 0 else f"_r{rank}"
+    deadline = time.monotonic() + attach_timeout_s
+    for side in ("a", "b"):
+        cmd = f"{base}_{side}_cmd{suffix}"
+        table = f"{base}_{side}_table{suffix}"
+        resp = f"{base}_{side}_resp{suffix}"
+        # The worker's queues may not exist the instant the runner reaches this (endpoint bring-up
+        # races the runner's device open); retry the attach briefly, exactly like the smoke sender.
+        while True:
+            try:
+                client = mod.MigrationLayerClient(cmd, table, resp)
+                break
+            except RuntimeError as e:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"[migration] could not attach to local worker queue {cmd} (rank {rank}, "
+                        f"endpoint_id={endpoint_id}): {e}. Is the migration_endpoint worker for THIS "
+                        f"host running? (queues are /ep_<endpoint_id>_{{a,b}}_* per tt-llm-engine b64f8dee)"
+                    ) from e
+                time.sleep(0.1)
+        client.send_device_map(device_map)
+        logger.info(f"[migration] delivered {len(device_map)} device-map entries -> {cmd}")
 
 
 def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
@@ -193,12 +230,25 @@ def serialize_kv_chunk_table(
     cfg.chunk_n_tokens = chunk_n_tokens
     cfg.chunk_size_bytes = chunk_size_bytes
     table = table_builder(config=cfg, chunk_size_bytes=chunk_size_bytes, num_users=num_users)
+    return serialize_prebuilt_kv_chunk_table(table=table, path=path)
+
+
+def serialize_prebuilt_kv_chunk_table(*, table, path: str) -> str:
+    """Serialize an already-built KvChunkAddressTable (single- OR multi-config) to a protobuf file for
+    the worker's SET_TABLE, log it, and return ``path``. This is the model-agnostic serialize step;
+    callers that build a multi-config table themselves (e.g. a sparse model merging its KVPE + index
+    caches) construct the table and hand it here."""
     _serialize_table_to_path(table, path)
-    logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
+    logger.info(
+        f"[migration] KV chunk address table serialized to {path} "
+        f"(configs={table.num_configs()}, entries={table.total_entries()})"
+    )
     return path
 
 
-def deliver_device_map_and_gather_stage_layout(mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers):
+def deliver_device_map_and_gather_stage_layout(
+    mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers, rank
+):
     """ALL RANKS run this (the runner drives it for every rank). Deliver THIS rank's local FNID->UMD
     device map to its co-located worker, then join the collective all-gather that merges every stage
     into one table. Returns the gathered ``stage_layout`` (the runner passes it to rank 0's
@@ -209,7 +259,7 @@ def deliver_device_map_and_gather_stage_layout(mesh_device, kvpe_cache, mesh_sha
     rank must reach it or the communicator deadlocks.
     """
     device_map = _build_device_map(mesh_device, mesh_shape)
-    _deliver_local_device_map(device_map)
+    _deliver_local_device_map(device_map, rank)
     return allgather_kv_stage_layout(mesh_device, kvpe_cache, mesh_shape, first_layer_idx, num_my_layers)
 
 

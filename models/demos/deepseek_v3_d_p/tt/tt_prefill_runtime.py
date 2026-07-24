@@ -386,20 +386,26 @@ class TtPrefillRuntime:
         read-back."""
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
+        # `.kvpe` is an MlaKvCache wrapper, NOT a bare tensor: physical ops use `.storage`, and physical
+        # rows may be packed (SCALED_FP8), so decode them with `unpack_host` to logical [latent || RoPE] —
+        # the same path kv_cache_pcc_check takes. (Using `kvpe` directly here raised
+        # 'MlaKvCache' object has no attribute 'shape'.)
         kvpe = kv_caches.kvpe
-        s = list(kvpe.shape)
+        storage = kvpe.storage
+        s = list(storage.shape)
         sl = ttnn.slice(
-            kvpe,
+            storage,
             [slot * num_layers, 0, 0, 0],
             [(slot + 1) * num_layers, s[1], s[2], s[3]],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        block = ttnn.to_torch(
+        physical = ttnn.to_torch(
             sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-        ).float()[
+        )[
             :, :1
-        ]  # [num_layers, 1, seq_cache, kvpe]
+        ]  # one TP replica: [num_layers, 1, seq_cache, packed_row]
         ttnn.deallocate(sl)
+        block = kvpe.unpack_host(physical).to(torch.float32)  # [num_layers, 1, seq_cache, kvpe_logical]
         return [block]
 
     def kv_cache_pcc_check(

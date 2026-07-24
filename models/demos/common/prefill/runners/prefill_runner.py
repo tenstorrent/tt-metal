@@ -1265,7 +1265,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
         # ALL RANKS: deliver local device map + contribute this stage to the merged table (barrier).
         stage_layout = deliver_device_map_and_gather_stage_layout(
-            mesh_device, kv_caches.kvpe.storage, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers
+            mesh_device, kv_caches.kvpe.storage, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers, rank
         )
 
         if is_first_rank:
@@ -1427,8 +1427,17 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             src_slot = int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0"))
             dst_slot = int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1"))
 
-            if mig_driver is None:
-                # ensure KV cache is written if not interleaving migration
+            # Interleaved-vs-bulk MUST be decided by an all-ranks-agree predicate (the env flag), NOT by
+            # `mig_driver is None`: mig_driver is set ONLY on rank 0, so keying the pre-migrate barrier on it
+            # made non-first ranks (mig_driver None) run an EXTRA barrier that rank 0 (draining) skipped ->
+            # distributed_context_barrier() is an anonymous collective, so the mismatched count deadlocks
+            # (rank 0's post-migrate barrier pairs with the others' pre-migrate barrier, then the others
+            # block forever on their second barrier). Every rank evaluates `interleaved` identically.
+            interleaved = os.environ.get("PREFILL_MIGRATION_INTERLEAVED", "0") == "1"
+
+            if not interleaved:
+                # Bulk migrate path: ALL ranks sync + barrier so the KV cache is fully written before rank 0
+                # issues the single post-loop migrate. (Interleaved mode instead drains on rank 0 below.)
                 ttnn.synchronize_device(runtime.mesh_device)
                 if num_ranks > 1:
                     ttnn.distributed_context_barrier()
