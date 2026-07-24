@@ -836,19 +836,16 @@ def _probe_local_model(model_id: str) -> ModelProbe:
     )
     if category == "Unknown":
         category = _category_from_fingerprint(_fpr) or category
-    if _has_generative_vlm_fact(cfg):
-        # AUTHORITATIVE structural fact -- a generative model with a vision tower is a VLM; the
-        # agent does not get to override it (it over-weights text-heavy cards and misses vision).
-        category = "VLM"
+    # PRIMARY + VERIFIED: CC agent (3-vote majority) decides every model, incl. vision models --
+    # majority voting removes the single-run flakiness, so no unverified authoritative fact is
+    # needed. Deterministic facts are the OFFLINE FALLBACK (agent unavailable).
+    _agent_cat = _agent_classify_category(model_id, cfg, _fetch_model_card_text(model_id))
+    if _agent_cat:
+        category = _agent_cat
     else:
-        # No definitive fact: a real agent reads the model and decides (reasoning, not a table).
-        _agent_cat = _agent_classify_category(model_id, cfg, _fetch_model_card_text(model_id))
-        if _agent_cat:
-            category = _agent_cat
+        if _has_generative_vlm_fact(cfg):
+            category = "VLM"
         else:
-            # Claude Code agent unavailable/None -> deterministic FACTS only (no non-agentic
-            # one-shot call). dual-encoder contrastive -> Embed; otherwise the tag/registry/
-            # fingerprint category already computed above stands (degrade-loud).
             _resid = _is_category_residual(model_type_category, _fpr)
             if _resid and _is_dual_encoder_contrastive(cfg) and category in {"Unknown", "Embed"}:
                 category = "Embed"
@@ -1021,24 +1018,21 @@ def probe_model(model_id: str) -> ModelProbe:
         if _fp_cat:
             probe.flags.append(f"Category Unknown -> {_fp_cat!r} via structural fingerprint {_fpr!r}")
             probe.category = _fp_cat
-    if _has_generative_vlm_fact(cfg):
-        # AUTHORITATIVE fact: a generative model with a vision tower is a VLM. Not overridable by
-        # the agent (which over-weights text-heavy cards and can miss the vision tower, e.g. Ornith).
-        if probe.category != "VLM":
-            probe.flags.append("Category -> 'VLM' via structural fact (vision tower + generative arch)")
-            probe.category = "VLM"
+    # PRIMARY + VERIFIED: the Claude Code agent (3-vote majority, TT_HW_PLANNER_AGENT_VOTES) decides
+    # EVERY model by reasoning over its card+config -- including vision models. The majority vote
+    # removes the single-run flakiness that once mis-called a VLM (Ornith), so no unverified
+    # authoritative fact override is needed; the agent's own answer is the (self-consistent) verdict.
+    # The deterministic facts below are the OFFLINE FALLBACK, used only if the agent is unavailable.
+    _agent_cat = _agent_classify_category(model_id, cfg, _fetch_model_card_text(model_id))
+    if _agent_cat:
+        if _agent_cat != probe.category:
+            probe.flags.append(f"Category {probe.category!r} -> {_agent_cat!r} by CC agent (3-vote, card+config)")
+            probe.category = _agent_cat
     else:
-        # No definitive fact: a real agent reads the model and decides by REASONING (the
-        # generalizing path). The deterministic chain is the offline fallback.
-        _agent_cat = _agent_classify_category(model_id, cfg, _fetch_model_card_text(model_id))
-        if _agent_cat:
-            if _agent_cat != probe.category:
-                probe.flags.append(f"Category {probe.category!r} -> {_agent_cat!r} by agent (read card+config)")
-                probe.category = _agent_cat
+        # agent unavailable -> deterministic facts (offline degrade-loud).
+        if _has_generative_vlm_fact(cfg):
+            probe.category = "VLM"
         else:
-            # Claude Code agent unavailable/None -> deterministic FACTS only (no non-agentic
-            # one-shot call). Dual-encoder contrastive -> Embed; otherwise the already-computed
-            # tag/registry/fingerprint category stands (degrade-loud).
             _resid = _is_category_residual(model_type_category, _fpr)
             if _resid and _is_dual_encoder_contrastive(cfg) and probe.category in {"Unknown", "Embed"}:
                 if probe.category != "Embed":
