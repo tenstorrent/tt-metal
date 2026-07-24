@@ -738,6 +738,26 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         height_sharded && !is_conv_1d_depthwise_conv && !enable_split_reader && !enable_activation_reuse &&
         (in0_num_blocks_w == 1) && (num_blocks_weight_w_per_core == 1);
 
+    // [#48552 DEBUG -- remove before merge] When the split env is set but this conv did NOT run tilize-only,
+    // Program A produces a normal conv output [M, N] instead of the tilized activation [M, full_K], and the
+    // chained Program B matmul then under-reserves its in0 CB (the RBFAIL dfb=0 need=M*full_K cap=M*N). Dump
+    // each gate so we can see WHICH condition is false and align conv2d.cpp's split decision with it.
+    if ((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) || split_program_unpack_tilize) {
+        log_warning(
+            tt::LogOp,
+            "[QSR-SPLIT #48552] split_program_tilize_only={} | height_sharded={} not_depthwise={} "
+            "not_split_reader={} not_act_reuse={} in0_num_blocks_w={}(want 1) num_blocks_weight_w_per_core={}(want "
+            "1) a_mem_layout={}",
+            split_program_tilize_only,
+            height_sharded,
+            !is_conv_1d_depthwise_conv,
+            !enable_split_reader,
+            !enable_activation_reuse,
+            in0_num_blocks_w,
+            num_blocks_weight_w_per_core,
+            static_cast<int>(a.memory_config().memory_layout()));
+    }
+
     // Program A (tilize-only) EXPERIMENT: the pure tilize (conv_tilize_only_metal2.cpp) faults with ERROR_TRISC1
     // 0x19 mid-stream (after several 4-wide blocks tilize cleanly, config identical to the PASSING standalone
     // tilize), which matches the residual Quasar tilize DEST-bank-release LLK issue in HALF sync (syncfull=0 —
