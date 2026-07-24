@@ -208,6 +208,24 @@
 # ── Qwen ───────────────────────────────────────────────────────────
 
 - name: Qwen3-32B e2e tests
+  # TTTv2 substitution (wh_llmbox_perf / T3K only — the TTTv2 qwen3_32b demo is T3K-only: 64 attn / 8 KV
+  # heads need 8-way TP and the 32B weights don't fit < 8 devices). ci-token-matching -> token-accuracy,
+  # ci-eval-32 -> eval-32; both under the performance optimization, matching the TTTv1 leg's cases.
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-32B HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen3-32B MESH_DEVICE=T3K
+    pytest --timeout 3000 models/common/tests/demos/qwen3_32b/demo.py -k "(token-accuracy or eval-32) and performance"
+  model: qwen3-32b
+  model_family: Qwen
+  skus:
+    wh_llmbox_perf:
+      timeout: 40
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Qwen3-32B e2e tests (Blackhole)
+  # The TTTv2 qwen3_32b demo is T3K-only, so the Blackhole (bh_quietbox_2) SKU keeps its TTTv1
+  # simple_text_demo leg until a Blackhole TTTv2 bring-up exists — no coverage dropped.
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
@@ -215,9 +233,6 @@
   model: qwen3-32b
   model_family: Qwen
   skus:
-    wh_llmbox_perf:
-      timeout: 15
-      tier: 2
     bh_quietbox_2:
       timeout: 15
       tier: 2
@@ -256,22 +271,25 @@
 
 - name: Qwen2.5-Coder-32B e2e tests
   cmd: |
-    export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
-    pytest --timeout 1500 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-Coder-32B-Instruct MESH_DEVICE=T3K
+    # TTTv2 demo substitutes the TTTv1 simple_text_demo legs (same T3K SKU/tier, no coverage dropped):
+    # token-accuracy<->ci-token-matching, eval-32<->ci-eval-32. TT_CACHE_PATH is a fresh TTTv2-namespaced
+    # LazyWeight cache (cold weight conversion on first run; warm re-runs faster).
+    pytest --timeout 1800 models/common/tests/demos/qwen25_coder_32b/demo.py -k "token-accuracy and performance"
+    pytest --timeout 1800 models/common/tests/demos/qwen25_coder_32b/demo.py -k "eval-32 and performance"
   model: qwen2.5-coder-32b
   model_family: Qwen
   skus:
     wh_llmbox_perf:
-      timeout: 18
+      timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
 - name: Qwen2.5-7B e2e tests
   cmd: |
-    export HF_MODEL=Qwen/Qwen2.5-7B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-7B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    export HF_MODEL=Qwen/Qwen2.5-7B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-7B-Instruct MESH_DEVICE=N300
+    pytest --timeout 420 models/common/tests/demos/qwen25_7b/demo.py -k "token-accuracy and performance"
   model: qwen2.5-7b
   model_family: Qwen
   skus:
@@ -281,18 +299,23 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-# Qwen2.5-72B: disabled, ci-token-matching hanging on CI
-# - name: Qwen2.5-72B e2e tests
-#   cmd: |
-#     export HF_MODEL=Qwen/Qwen2.5-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-72B-Instruct
-#     pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-#   model: qwen2.5-72b
-#   skus:
-#     wh_llmbox_perf:
-#       timeout: 10
-#       tier: 3
-#   owner_id: U03HY7MK4BT # Mark O'Connor
-#   team: models
+# Qwen2.5-72B: re-enabled as the TTTv2 demo. The TTTv1 simple_text_demo leg was disabled (ci-token-matching
+# hung on CI); the TTTv2 qwen25_72b demo replaces it on the same T3K (wh_llmbox_perf) SKU, mirroring the
+# disabled leg's single ci-token-matching case as token-accuracy.
+- name: Qwen2.5-72B e2e tests
+  # TTTv2 qwen25_72b demo is T3K-only (80 layers / 64 attn / 8 KV heads => 8-way TP; 72B weights need 8
+  # devices). First CI run builds the TTTv2 LazyWeight cache (cold 72B weight conversion) before the demo.
+  cmd: |
+    export HF_MODEL=Qwen/Qwen2.5-72B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-72B-Instruct MESH_DEVICE=T3K
+    pytest --timeout 3600 models/common/tests/demos/qwen25_72b/demo.py -k "token-accuracy and performance"
+  model: qwen2.5-72b
+  model_family: Qwen
+  skus:
+    wh_llmbox_perf:
+      timeout: 55
+      tier: 3
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
 
 - name: Qwen2.5-VL-72B e2e tests
   cmd: |
@@ -535,14 +558,22 @@
 
 - name: Mistral-7B e2e tests
   cmd: |
-    export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    # TTTv2 token-accuracy leg (replaces TTTv1 performance-ci-token-matching): teacher-forcing top1/top5
+    # vs the same book .refpt. MESH_DEVICE is required (module-level skip) and TTTv2 uses its OWN
+    # tt_cache/tttv2 namespace (the TTTv1 cache format is incompatible); the demo builds it on a miss.
+    export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mistralai/Mistral-7B-Instruct-v0.3 MESH_DEVICE=N150
+    pytest --timeout 600 models/common/tests/demos/mistral_7b/demo.py -k "token-accuracy and performance"
+    # TTTv1 performance-ci-eval-32 leg RETAINED (its own TTTv1 cache namespace, per-command so it does not
+    # inherit the tttv2 TT_CACHE_PATH above): the TTTv2 eval-32 case is an N150 capability skip (a single
+    # unsharded device can't hold the 7B eval-32 fresh-executor churn — see demo.py), so it cannot cover
+    # this on wh_n150. Retaining the TTTv1 leg preserves coverage exactly (same precedent as the retained
+    # TTTv1 unit legs below). TTTv2 eval-32 IS exercised on sharded N300/T3K in the demo matrix.
+    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3 pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: mistral-7b
   model_family: Mistral
   skus:
     wh_n150:
-      timeout: 7
+      timeout: 10
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
