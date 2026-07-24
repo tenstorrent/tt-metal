@@ -36,6 +36,12 @@ on:
         description: "Filtered matrix of exabox multihost legs that ran."
         value: ${{ jobs.load-test-matrix.outputs.matrix_multihost }}
 
+# Default to read-only. Only the multihost job needs id-token (ttop OIDC), which it grants on the
+# job itself. Single-host legs pull the dev container image, so packages: read is the default.
+permissions:
+  contents: read
+  packages: read
+
 jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
