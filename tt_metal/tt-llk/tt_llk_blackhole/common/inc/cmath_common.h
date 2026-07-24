@@ -109,6 +109,30 @@ inline void _invalidate_src_zero_flag_state_()
     src_zero_flag_state = SrcZeroFlagState::UNCONFIGURED;
 }
 
+
+class ZeroFlags {
+public:
+    enum class State {
+        UNCONFIGURED   = 0,
+        DEFAULT        = 1,
+        UNARY_PRESERVE = 2,
+        MOV_OPS        = 3,
+    };
+
+private:
+
+
+public:
+
+    static invalidate()
+    {
+
+    }
+
+}
+
+
+
 inline void reset_counters(const std::uint32_t setrwc)
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, setrwc);

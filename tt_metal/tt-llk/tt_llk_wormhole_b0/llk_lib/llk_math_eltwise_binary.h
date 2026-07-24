@@ -95,6 +95,62 @@ inline auto eltwise_binary_func(std::uint8_t clr_src, std::uint8_t acc_to_dest, 
 }
 
 /**
+ * @brief Map a standard (no dest reuse) eltwise binary op type to its sanitizer @ref llk::san::Operation.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @return The matching @ref llk::san::Operation used for init/execute contract tracking.
+ */
+template <EltwiseBinaryType eltwise_binary_type>
+constexpr llk::san::Operation sanitizer_operation_eltwise_binary_standard()
+{
+    static_assert(
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
+            (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
+        "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
+
+    if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD)
+    {
+        return llk::san::Operation::FpuEltwiseBinaryAdd;
+    }
+    else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWSUB)
+    {
+        return llk::san::Operation::FpuEltwiseBinarySub;
+    }
+    else
+    {
+        return llk::san::Operation::FpuEltwiseBinaryMul;
+    }
+}
+
+/**
+ * @brief Map a dest-reuse eltwise binary op type to its sanitizer @ref llk::san::Operation.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @return The matching @ref llk::san::Operation used for init/execute contract tracking.
+ */
+template <EltwiseBinaryType eltwise_binary_type>
+constexpr llk::san::Operation sanitizer_operation_eltwise_binary_dest_reuse()
+{
+    static_assert(
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
+            (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
+        "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
+
+    if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD)
+    {
+        return llk::san::Operation::FpuEltwiseBinaryAddDestReuse;
+    }
+    else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWSUB)
+    {
+        return llk::san::Operation::FpuEltwiseBinarySubDestReuse;
+    }
+    else
+    {
+        return llk::san::Operation::FpuEltwiseBinaryMulDestReuse;
+    }
+}
+
+/**
  * @brief Configure MOP for standard eltwise binary operations (no dest reuse).
  *
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
@@ -195,6 +251,10 @@ inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape &
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
+    llk::san::math_operand_check(llk::san::IGNORE, llk::san::IGNORE);
+    constexpr auto operation = sanitizer_operation_eltwise_binary_standard<eltwise_binary_type>();
+    llk::san::operation_init<operation>(src_b_bcast_type, math_fidelity, tensor_shape);
+
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
     eltwise_binary_configure_mop_standard<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
 
@@ -230,6 +290,10 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
         (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) || (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
         "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+
+    llk::san::math_operand_check(llk::san::IGNORE, llk::san::IGNORE);
+    constexpr auto operation = sanitizer_operation_eltwise_binary_standard<eltwise_binary_type>();
+    llk::san::operation_check<operation>(src_b_bcast_type, math_fidelity, tensor_shape);
 
     // Dest counter always jumps by 32x32 tile spacing regardless of actual tile size
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
@@ -443,6 +507,10 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::Tensor
     static_assert(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE, "Use _llk_math_eltwise_binary_standard_init_ for no dest reuse");
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
+    llk::san::math_operand_check(llk::san::IGNORE, llk::san::IGNORE);
+    constexpr auto operation = sanitizer_operation_eltwise_binary_dest_reuse<eltwise_binary_type>();
+    llk::san::operation_init<operation>(src_b_bcast_type, math_fidelity, tensor_shape);
+
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
     eltwise_binary_configure_mop_with_dest_reuse<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
 
@@ -522,6 +590,10 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
     const std::uint32_t num_faces       = tensor_shape.total_num_faces();
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
     const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
+
+    llk::san::math_operand_check(llk::san::IGNORE, llk::san::IGNORE);
+    constexpr auto operation = sanitizer_operation_eltwise_binary_dest_reuse<eltwise_binary_type>();
+    llk::san::operation_check<operation>(src_b_bcast_type, math_fidelity, tensor_shape);
 
     // Dest counter always jumps by 32x32 tile spacing regardless of actual tile size
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
