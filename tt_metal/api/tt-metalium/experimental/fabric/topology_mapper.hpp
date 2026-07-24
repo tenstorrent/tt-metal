@@ -95,7 +95,7 @@ public:
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
-        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(120.0f));
 
     // Construct a TopologyMapper with fixed ASIC-position pinnings.
     // Each pinning maps a FabricNodeId to one or more ASIC positions (tray, location).
@@ -108,7 +108,7 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
         const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>& fixed_asic_position_pinnings,
-        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(120.0f));
 
     // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
     // Skips discovery and builds fabric node id to asic id mapping directly from the provided mapping.
@@ -119,7 +119,7 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(120.0f));
 
     /**
      * @brief Get logical mesh graph connectivity
