@@ -42,6 +42,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
+#include <tt-metalium/experimental/mesh_buffer_allocation.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
@@ -244,6 +245,27 @@ TEST_F(MeshBufferTest2x4, ReplicatedBufferInitialization) {
     EXPECT_EQ(replicated_buffer->size(), 16 << 10);
     EXPECT_EQ(replicated_buffer->global_layout(), MeshBufferLayout::REPLICATED);
     EXPECT_EQ(replicated_buffer->device_local_size(), 16 << 10);
+}
+
+TEST_F(MeshBufferTest2x4, AllocateMeshBufferByValue) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ShardedBufferConfig buffer_config{
+        .global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 32}};
+
+    // The experimental API returns a MeshBuffer by value, leaving ownership to the caller.
+    MeshBuffer sharded_buffer =
+        experimental::allocate_mesh_buffer(buffer_config, device_local_config, mesh_device_.get());
+    EXPECT_TRUE(sharded_buffer.is_allocated());
+    EXPECT_EQ(sharded_buffer.size(), 16 << 10);
+    EXPECT_EQ(sharded_buffer.global_layout(), MeshBufferLayout::SHARDED);
+    EXPECT_EQ(sharded_buffer.device_local_size(), 2 << 10);
+
+    // The caller can choose its own ownership -- e.g. move the value into a unique_ptr.
+    const DeviceAddr address = sharded_buffer.address();
+    auto owned = std::make_unique<MeshBuffer>(std::move(sharded_buffer));
+    EXPECT_TRUE(owned->is_allocated());
+    EXPECT_EQ(owned->address(), address);
 }
 
 TEST_F(MeshBufferTestSuite, EnqueueWriteMeshBufferValidSrcSize) {

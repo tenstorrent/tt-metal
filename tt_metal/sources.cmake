@@ -58,6 +58,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
+    api/tt-metalium/experimental/mesh_buffer_allocation.hpp
     api/tt-metalium/experimental/mesh_program_descriptor.hpp
     api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
     api/tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp
