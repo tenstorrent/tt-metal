@@ -8,6 +8,7 @@
 #include "api/compute/transpose.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 ////////////////////
 // global variables
@@ -18,16 +19,16 @@ constexpr uint32_t num_mask_tiles = 3;
 constexpr uint32_t MASK_TILE_H_IDX = 0;
 constexpr uint32_t MASK_TILE_W_IDX = 1;
 constexpr uint32_t MASK_TILE_HW_IDX = 2;
-constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
-constexpr uint32_t cb_in2 = tt::CBIndex::c_2;
-constexpr uint32_t cb_in3 = tt::CBIndex::c_3;
-constexpr uint32_t bias_cb_id = tt::CBIndex::c_4;
-constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
-constexpr uint32_t cb_intermed0 = tt::CBIndex::c_24;
-constexpr uint32_t cb_intermed1 = tt::CBIndex::c_25;
-constexpr uint32_t cb_intermed2 = tt::CBIndex::c_26;
-constexpr uint32_t cb_intermed3 = tt::CBIndex::c_27;
+constexpr uint32_t cb_in0 = dfb::in0;
+constexpr uint32_t cb_in1 = dfb::in1;
+constexpr uint32_t cb_in2 = dfb::in2;
+constexpr uint32_t cb_in3 = dfb::in3;
+constexpr uint32_t bias_cb_id = dfb::in4;
+constexpr uint32_t cb_out0 = dfb::out0;
+constexpr uint32_t cb_intermed0 = dfb::im0;
+constexpr uint32_t cb_intermed1 = dfb::im1;
+constexpr uint32_t cb_intermed2 = dfb::im2;
+constexpr uint32_t cb_intermed3 = dfb::im3;
 
 ////////////////////
 // inline functions
@@ -77,7 +78,7 @@ FORCE_INLINE void transpose_src_tile(uint32_t& mm_src, bool transpose, bool need
     }
 }
 
-FORCE_INLINE void pack_onetile_to_cb(uint32_t ocb = 16, uint32_t idst = 0) {
+FORCE_INLINE void pack_onetile_to_cb(uint32_t ocb = dfb::out0, uint32_t idst = 0) {
     DataflowBuffer ocb_obj(ocb);
     ocb_obj.reserve_back(onetile);
     tile_regs_wait();
@@ -347,18 +348,18 @@ FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
 
 void kernel_main() {
     // compile-time args
-    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t Mt = get_compile_time_arg_val(1);
-    constexpr uint32_t Nt = get_compile_time_arg_val(2);
-    constexpr uint32_t Kt = get_compile_time_arg_val(3);
-    constexpr bool transpose_input = (get_compile_time_arg_val(4) == 1);
-    constexpr bool transpose_other = (get_compile_time_arg_val(5) == 1);
-    constexpr uint32_t input_mask_h = get_compile_time_arg_val(6);
-    constexpr uint32_t input_mask_w = get_compile_time_arg_val(7);
-    constexpr uint32_t other_mask_h = get_compile_time_arg_val(8);
-    constexpr uint32_t other_mask_w = get_compile_time_arg_val(9);
+    constexpr uint32_t num_output_tiles = get_arg(args::num_output_tiles);
+    constexpr uint32_t Mt = get_arg(args::Mt);
+    constexpr uint32_t Nt = get_arg(args::Nt);
+    constexpr uint32_t Kt = get_arg(args::Kt);
+    constexpr bool transpose_input = (get_arg(args::transpose_input) == 1);
+    constexpr bool transpose_other = (get_arg(args::transpose_other) == 1);
+    constexpr uint32_t input_mask_h = get_arg(args::input_mask_h);
+    constexpr uint32_t input_mask_w = get_arg(args::input_mask_w);
+    constexpr uint32_t other_mask_h = get_arg(args::other_mask_h);
+    constexpr uint32_t other_mask_w = get_arg(args::other_mask_w);
 #ifdef FUSE_BIAS
-    constexpr bool is_scalar_bias = (get_compile_time_arg_val(10) == 1);
+    constexpr bool is_scalar_bias = (get_arg(args::is_scalar_bias) == 1);
     constexpr bool need_bias_add = true;
 #else
     constexpr bool is_scalar_bias = false;
@@ -372,11 +373,11 @@ void kernel_main() {
     constexpr bool need_transpose = (transpose_input || transpose_other);
 
     // runtime args
-    ArgFetcher arg_fetcher;
-    uint32_t output_tile_start_idx = arg_fetcher.get_next_arg_val<uint32_t>();
+    uint32_t output_tile_start_idx = get_arg(args::output_tile_start_idx);
+    // output_stride is a homogeneous, index-addressed collection -> runtime varargs.
     uint32_t output_stride[MAX_NUM_DIMENSIONS];
     for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
-        output_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+        output_stride[i] = get_vararg(i);
     }
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out0);
