@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <variant>
 
 #include <tt-metalium/program.hpp>
@@ -37,6 +38,33 @@ struct ZeroPaddedKvCacheDeviceOperation {
         uint32_t layer_idx;          // hashed (structural)
         uint32_t num_layers;         // hashed (structural)
         uint32_t cluster_axis;       // hashed (structural): which mesh dim is sequence-parallel
+        DataType cache_dtype;
+        Layout cache_layout;
+        MemoryConfig cache_memory_config;
+        Shape cache_padded_shape;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "layer_idx",
+            "num_layers",
+            "cluster_axis",
+            "chunk_size_global",
+            "pad_align",
+            "cache_dtype",
+            "cache_layout",
+            "cache_memory_config",
+            "cache_padded_shape");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                layer_idx,
+                num_layers,
+                cluster_axis,
+                chunk_size_global,
+                pad_align,
+                cache_dtype,
+                cache_layout,
+                std::cref(cache_memory_config),
+                cache_padded_shape);
+        }
     };
 
     struct tensor_args_t {
@@ -92,7 +120,6 @@ struct ZeroPaddedKvCacheDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::zero_padded_kv_cache
