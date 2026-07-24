@@ -181,11 +181,25 @@ def _arch_override_category(category: str, cfg: dict) -> str:
     itself declares a ``*ForCausalLM``/``*ForCausalMM`` architecture, reclassify
     an ``Image``/``Video``/``Unknown`` category to ``LLM`` so architecture
     detection runs. Model-agnostic (matches the architecture suffix, not a
-    model name)."""
+    model name).
+
+    The same authority order (architectures > model_type > pipeline_tag) also
+    disambiguates a shared model_type: ``speecht5`` is one model_type serving
+    ASR, TTS and voice-conversion, so the model_type table alone can only guess
+    (it defaults to STT) and would mislabel ``SpeechT5ForTextToSpeech`` as STT.
+    The class-name suffix states the task outright -- ``*ForTextToSpeech`` is
+    TTS, ``*ForSpeechToText``/``*ForCTC`` is STT -- so when the current category
+    is in the speech family (or Unknown) let the architecture suffix correct it.
+    Suffix-matched, not model-name-matched."""
+    archs = " ".join(cfg.get("architectures") or [])
     if category in {"Image", "Video", "Unknown"}:
-        archs = " ".join(cfg.get("architectures") or [])
         if re.search(r"ForCausal(LM|MM)\b", archs):
             return "LLM"
+    if category in {"TTS", "STT", "Unknown"}:
+        if re.search(r"ForTextToSpeech\b", archs):
+            return "TTS"
+        if re.search(r"For(SpeechToText|CTC)\b", archs):
+            return "STT"
     return category
 
 
@@ -533,6 +547,7 @@ def _probe_local_model(model_id: str) -> ModelProbe:
         category = model_type_category
     elif category == "Unknown" and cfg.get("model_type"):
         category = "LLM"
+    category = _arch_override_category(category, cfg)
 
     _td = str(cfg.get("torch_dtype") or "").lower().replace("torch.", "").strip()
     _bpp = _TORCH_DTYPE_BYTES.get(_td)

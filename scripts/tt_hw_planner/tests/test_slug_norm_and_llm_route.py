@@ -345,6 +345,24 @@ def test_arch_fingerprint_backbone_families():
     assert arch_descriptor(model_type="resnet", architectures=["ResNetForImageClassification"]).startswith("CNN")
 
 
+def test_arch_class_disambiguates_shared_model_type():
+    from scripts.tt_hw_planner.probe import _arch_override_category
+
+    # speecht5 is ONE model_type for ASR + TTS + voice-conversion, so the
+    # model_type table can only guess (STT); the architectures class-name suffix
+    # is the authoritative task signal and must correct it.
+    assert _arch_override_category("STT", {"architectures": ["SpeechT5ForTextToSpeech"]}) == "TTS"
+    assert _arch_override_category("STT", {"architectures": ["SpeechT5ForSpeechToText"]}) == "STT"
+    assert _arch_override_category("STT", {"architectures": ["Wav2Vec2ForCTC"]}) == "STT"
+    # same authority rule as #3: a text-to-image tag on a causal-MM arch is still LLM
+    assert _arch_override_category("Image", {"architectures": ["HunyuanImage3ForCausalMM"]}) == "LLM"
+    # the speech rule is scoped: it never flips a non-speech category
+    assert _arch_override_category("LLM", {"architectures": ["SpeechT5ForTextToSpeech"]}) == "LLM"
+    assert _arch_override_category("Image", {"architectures": ["SpeechT5ForTextToSpeech"]}) == "Image"
+    # no architectures -> unchanged (degrade to model_type table)
+    assert _arch_override_category("STT", {"architectures": []}) == "STT"
+
+
 def test_derivation_reads_real_model_type_from_config(tmp_path):
     # a fetched tree that ships the real HF config under a synced model_params dir
     cfg_dir = tmp_path / "models" / "tt_transformers" / "model_params" / "Qwen2.5-VL-7B-Instruct"
