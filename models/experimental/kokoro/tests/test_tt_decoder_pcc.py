@@ -266,13 +266,6 @@ def _build_tt_walk_cat_in_bct(
 ) -> torch.Tensor:
     """``D2_cat_in`` (TT F0/N conv + ref ASR) compared against the reference decode stack."""
     mc = ttnn.DRAM_MEMORY_CONFIG
-    ck = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
     asr_nlc = asr_bct.transpose(1, 2).contiguous()
     asr_tt = ttnn.from_torch(asr_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
     f0_nlc = ttnn.unsqueeze(
