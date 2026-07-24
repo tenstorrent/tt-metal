@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.common.utility_functions import inplace_copy, nearest_32
+from models.common.utility_functions import copy_to_buffer, nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
@@ -441,7 +441,7 @@ class Attention(LightweightModule):
         the constructor's ``self.wqkv``: shape ``(1, 1, H, qkv_size_per_device)``,
         TILE, ``ShardTensor2dMesh(dims=(2, 3))`` (or ``(3, 2)`` on TG).
         """
-        inplace_copy(tensor, self.wqkv, self.wqkv_dtype)
+        copy_to_buffer(tensor, self.wqkv, self.wqkv_dtype)
 
     def _update_wo(self, tensor: ttnn.Tensor) -> None:
         """In-place replace ``self.wo`` (and ``self.wo_sharded_ring`` when the
@@ -449,10 +449,10 @@ class Attention(LightweightModule):
         decode path reads ``wo_sharded_ring`` instead of ``wo`` when
         ``self.prefetcher is not None``.
         """
-        inplace_copy(tensor, self.wo, self.wo_dtype)
+        copy_to_buffer(tensor, self.wo, self.wo_dtype)
         wo_sharded_ring = getattr(self, "wo_sharded_ring", None)
         if wo_sharded_ring is not None:
-            inplace_copy(tensor, wo_sharded_ring, self.wo_dtype)
+            copy_to_buffer(tensor, wo_sharded_ring, self.wo_dtype)
 
     def _update_wqkv_bias(
         self,

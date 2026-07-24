@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import inplace_copy
+from models.common.utility_functions import copy_to_buffer
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 
@@ -146,7 +146,7 @@ class LMHead(LightweightModule):
         DRAM-interleaved). Mirrors the constructor's host-side pad+transpose+split
         but on device: optional ``ttnn.pad`` to ``padded_vocab_size``,
         ``ttnn.transpose``, contiguous per-chunk ``ttnn.slice``, then
-        ``inplace_copy`` reshards into the DRAM-sharded dest (preserving
+        ``copy_to_buffer`` reshards into the DRAM-sharded dest (preserving
         addresses). Single-device only; multi-device per-device gather not
         implemented.
 
@@ -177,7 +177,7 @@ class LMHead(LightweightModule):
         for i, split_size in enumerate(self.split_sizes_dram_sharded):
             end = start + split_size
             chunk = ttnn.slice(permuted, (0, 0, 0, start), (1, 1, self.args.dim, end))
-            inplace_copy(chunk, self.output_weights_dram_sharded[i], self.dtype)
+            copy_to_buffer(chunk, self.output_weights_dram_sharded[i], self.dtype)
             start = end
 
     def _update_output_weights_ring_mm(self, weight: ttnn.Tensor) -> None:

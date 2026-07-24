@@ -1245,11 +1245,12 @@ def hf_empty_encoder_decoder_cache():
     return EncoderDecoderCache(DynamicCache(), DynamicCache())  # transformers >= 5.x
 
 
-def inplace_copy(src: "ttnn.Tensor", dst: "ttnn.Tensor", target_dtype) -> None:
-    """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg, then ``ttnn.copy``
-    it into ``dst``. ``dst``'s device buffer is preserved (no reallocation) so
-    any captured trace and the DRAM prefetcher's recorded buffer addresses
-    remain valid.
+def copy_to_buffer(src: "ttnn.Tensor", dst: "ttnn.Tensor", target_dtype) -> None:
+    """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg and write it into
+    ``dst``. ``dst``'s device buffer is preserved (no reallocation) so any
+    captured trace and the DRAM prefetcher's recorded buffer addresses remain
+    valid. The final ``ttnn.to_memory_config`` with ``output_tensor=dst`` both
+    reshards to ``dst``'s memory config and copies into ``dst``'s buffer.
     """
     converted = src
 
@@ -1262,7 +1263,4 @@ def inplace_copy(src: "ttnn.Tensor", dst: "ttnn.Tensor", target_dtype) -> None:
     if tuple(converted.shape) != tuple(dst.shape):
         converted = ttnn.reshape(converted, list(dst.shape))
 
-    if converted.memory_config() != dst.memory_config():
-        converted = ttnn.to_memory_config(converted, dst.memory_config())
-
-    ttnn.copy(input_a=converted, input_b=dst)
+    ttnn.to_memory_config(converted, dst.memory_config(), output_tensor=dst)
