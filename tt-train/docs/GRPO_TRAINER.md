@@ -437,16 +437,17 @@ data parallelism is applied within that mesh:
 
 1. The completer initialises ttml's parallelism context against the
    already-opened mesh.
-2. Input batches are sharded across the N chips along the batch
-   dimension. Each chip processes
-   `batch_size // (N * gradient_accumulation_steps)` prompts per
-   micro-batch.
+2. Input tensors are sharded across the N chips along the batch
+   dimension.
 3. Gradients are synchronized via
    `ttml.core.distributed.synchronize_gradients` before each
    optimizer step.
 
-`batch_size` in `GRPOConfig` is the **global** batch size across the
-mesh, not per-chip.
+`per_device_train_batch_size` specifies the number of completions on
+a **single device** per micro-batch. The whole mesh therefore
+processes `per_device_train_batch_size * total_devices` completions
+per micro-batch, and the per-micro-batch prompt count is derived as
+`per_device_train_batch_size * total_devices / num_generations`.
 
 This section describes only the trainer's own mesh — the in-process
 data parallelism that the trainer drives. If your completer also runs
