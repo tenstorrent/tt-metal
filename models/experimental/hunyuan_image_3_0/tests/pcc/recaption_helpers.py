@@ -65,7 +65,11 @@ def clear_ref_layers_bf16() -> None:
 
 
 def _make_ref_layer_bf16(c: dict, i: int) -> RefLayer:
-    """Load one MoE layer and cast weights to bf16 (activations stay fp32 via autocast-free fwd)."""
+    """Load one MoE layer as bf16, but keep the router (gate.wg) in fp32.
+
+    ``HunyuanTopKGate`` is designed to project/softmax in fp32 — ``layer.to(bf16)``
+    would demote ``wg`` and flip top-k expert ids vs the reference / TT HiFi gate.
+    """
     sd = h.load_prefix(f"model.layers.{i}")
     layer = RefLayer(
         hidden_size=c["H"],
@@ -84,6 +88,7 @@ def _make_ref_layer_bf16(c: dict, i: int) -> RefLayer:
     )
     layer.load_state_dict({k: v.float() for k, v in sd.items()}, strict=True)
     layer.to(dtype=torch.bfloat16)
+    layer.mlp.gate.wg.to(dtype=torch.float32)
     layer.eval()
     return layer
 
@@ -145,12 +150,19 @@ def ref_logits_fn(tok, bundle, c, ln_f_w):
     return forward_logits_fn
 
 
+def _layer_loader(i: int):
+    return {f"model.layers.{i}.{k}": v for k, v in h.load_prefix(f"model.layers.{i}").items()}
+
+
 def build_tt_backbone_lm(device, c, wte, ln_f_w):
+    """1-chip / smoke path: stream experts for deep stacks so DRAM stays bounded."""
     from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
     from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
 
-    layer_loader = lambda i: {f"model.layers.{i}.{k}": v for k, v in h.load_prefix(f"model.layers.{i}").items()}
     # Deep stacks: stream experts so 32L does not pin all expert weights in DRAM.
+    # model_dir MUST match layer_loader's checkpoint (Instruct). Defaulting the
+    # disk expert loader to resolve_base_model_dir() silently mixes base experts
+    # with instruct attention/gate and collapses free-running greedy tokens.
     stream_experts = NUM_LAYERS > 8
     backbone = HunyuanTtModel(
         device,
@@ -166,30 +178,79 @@ def build_tt_backbone_lm(device, c, wte, ln_f_w):
         norm_topk_prob=c["NORM_TOPK"],
         rms_norm_eps=c["EPS"],
         stream_experts=stream_experts,
-        layer_loader=layer_loader,
+        layer_loader=_layer_loader,
         embed_state_dict={"model.wte.weight": wte},
         norm_state_dict={"model.ln_f.weight": ln_f_w},
         apply_final_norm=True,
         weight_dtype=ttnn.bfloat16,
         sp_factor=1,
+        model_dir=INSTRUCT_MODEL_DIR,
+        model_cache_name="hunyuan-image-3.0-instruct",
     )
     lm_head = HunyuanTtLMHead(device, {"lm_head.weight": h.load_tensor("lm_head.weight")})
     return backbone, lm_head
 
 
+def build_tt_backbone_lm_mesh(mesh_device, ccl, c, wte, ln_f_w, *, sp_factor: int = 2):
+    """Production 2×2 path: demo-matching resident EP/TP/SP (no per-token expert stream)."""
+    from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
+    from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel, default_bf16_layers
+
+    bf16_layers = default_bf16_layers(NUM_LAYERS)
+    print(
+        f"[recaption] building 2x2 resident backbone layers={NUM_LAYERS} "
+        f"sp={sp_factor} tp=2 ep_axis=1 bf8+bf16_ends={sorted(bf16_layers)}",
+        flush=True,
+    )
+    backbone = HunyuanTtModel(
+        mesh_device,
+        num_layers=NUM_LAYERS,
+        hidden_size=c["H"],
+        num_heads=c["HEADS"],
+        num_kv_heads=c["KV_HEADS"],
+        head_dim=c["HEAD_DIM"],
+        num_experts=c["NUM_EXPERTS"],
+        moe_topk=c["MOE_TOPK"],
+        use_qk_norm=c["USE_QK_NORM"],
+        use_mixed_mlp_moe=c["USE_MIXED"],
+        norm_topk_prob=c["NORM_TOPK"],
+        rms_norm_eps=c["EPS"],
+        stream_experts=False,
+        layer_loader=_layer_loader,
+        embed_state_dict={"model.wte.weight": wte},
+        norm_state_dict={"model.ln_f.weight": ln_f_w},
+        apply_final_norm=True,
+        weight_dtype=ttnn.bfloat8_b,
+        bf16_layers=bf16_layers,
+        ccl_manager=ccl,
+        expert_mesh_axis=1,
+        tp_axis=1,
+        tp_factor=2,
+        sp_axis=0,
+        sp_factor=sp_factor,
+        model_dir=INSTRUCT_MODEL_DIR,
+        model_cache_name="hunyuan-image-3.0-instruct",
+    )
+    lm_head = HunyuanTtLMHead(mesh_device, {"lm_head.weight": h.load_tensor("lm_head.weight")})
+    return backbone, lm_head
+
+
 def attention_mask_fn(device, bundle):
     attn_slices = bundle.full_attn_slices or [[]]
+    multi = hasattr(device, "get_num_devices") and device.get_num_devices() > 1
 
     def fn(s: int):
         mask_bool = build_attention_mask(s, attn_slices, bsz=1)
         mask_add = to_additive(mask_bool, dtype=torch.bfloat16).reshape(1, 1, s, s)
-        return ttnn.from_torch(
-            mask_add,
+        kwargs = dict(
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if multi:
+            kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
+        return ttnn.from_torch(mask_add, **kwargs)
 
     return fn
 

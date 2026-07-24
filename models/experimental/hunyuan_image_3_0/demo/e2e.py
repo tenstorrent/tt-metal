@@ -70,6 +70,8 @@ _MODEL_DIRS = {
 if HY_MODEL not in _MODEL_DIRS:
     raise SystemExit(f"HY_MODEL={HY_MODEL!r} not in {sorted(_MODEL_DIRS)}")
 WEIGHTS = _MODEL_DIRS[HY_MODEL]
+if not os.path.isdir(WEIGHTS):
+    raise SystemExit(f"weights dir missing for HY_MODEL={HY_MODEL!r}: {WEIGHTS}")
 for p in (ROOT, HUNYUAN):
     if p not in sys.path:
         sys.path.insert(0, p)

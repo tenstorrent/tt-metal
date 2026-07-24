@@ -391,9 +391,8 @@ class HunyuanSymmetricConv3d(Module):
         return cache[key]
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
-        assert (
-            x_bthwc.layout == ttnn.ROW_MAJOR_LAYOUT
-        ), f"HunyuanSymmetricConv3d expects ROW_MAJOR, got {x_bthwc.layout}"
+        if x_bthwc.layout != ttnn.ROW_MAJOR_LAYOUT:
+            raise ValueError(f"HunyuanSymmetricConv3d expects ROW_MAJOR, got {x_bthwc.layout}")
 
         if self.spatial_sharded:
             return self._forward_sharded(x_bthwc)

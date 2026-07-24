@@ -152,7 +152,8 @@ def group_norm_distributed(
     C = norm.num_channels
     Cg = C // G
     B, T, Hl, Wl, _ = x_bthwc.shape
-    assert B == 1, "distributed group_norm assumes batch 1 (VAE decode)"
+    if B != 1:
+        raise ValueError("distributed group_norm assumes batch 1 (VAE decode)")
     n_local = T * Hl * Wl
 
     x = ttnn.to_layout(x_bthwc, ttnn.TILE_LAYOUT)
