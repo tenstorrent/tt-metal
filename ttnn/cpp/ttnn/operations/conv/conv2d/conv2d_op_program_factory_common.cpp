@@ -157,7 +157,8 @@ std::vector<CBInfo> get_cb_info(
         }
     }
 
-    const uint32_t weight_matrix_height_ntiles = weights_shape[2] / tt::constants::TILE_HEIGHT;
+    const uint32_t weight_matrix_height = is_1d_depthwise_conv ? weights_shape[1] * weights_shape[2] : weights_shape[2];
+    const uint32_t weight_matrix_height_ntiles = weight_matrix_height / tt::constants::TILE_HEIGHT;
     const uint32_t weight_matrix_width_ntiles = weights_shape[3] / tt::constants::TILE_WIDTH;
 
     const uint32_t per_core_out_ntiles =
@@ -170,8 +171,10 @@ std::vector<CBInfo> get_cb_info(
                                           : weight_matrix_height_ntiles / block_config.act_block_w_ntiles;
 
     const uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
-    const uint32_t in0_num_blocks_w =
-        sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED ? num_blocks_act_w * conv_act_c_blocks : num_blocks_act_w;
+    const uint32_t in0_num_blocks_w = is_1d_depthwise_conv ? num_blocks_act_w
+                                                           : (sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED
+                                                                  ? num_blocks_act_w * conv_act_c_blocks
+                                                                  : num_blocks_act_w);
     packer_l1_acc = determine_packer_l1_acc(packer_l1_acc, enable_bias, in0_num_blocks_w);
     const tt::tt_metal::DataType partial_dtype =
         packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : output_datatype;
@@ -216,9 +219,8 @@ std::vector<CBInfo> get_cb_info(
     //  - Multiple height blocks, non-coalesced: out_cb is the persistent sharded output and cannot
     //    double as the dest-reuse scratch across blocks, so allocate a dedicated scratch CB in the
     //    output data format.
-    const bool depthwise_dest_reuse_scratch = is_1d_depthwise_conv &&
-                                              sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
-                                              !coalesce_1d_depthwise_kw_reads && num_blocks_act_h > 1;
+    const bool depthwise_dest_reuse_scratch =
+        is_1d_depthwise_conv && !coalesce_1d_depthwise_kw_reads && num_blocks_act_h > 1;
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::MATMUL_PARTIALS,
         .num_pages =
@@ -227,8 +229,8 @@ std::vector<CBInfo> get_cb_info(
         .is_globally_allocated = (!untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv),
         .data_format = depthwise_dest_reuse_scratch ? output_df : partial_df});
 
-    const bool overlap_im2col_cb =
-        sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df && !skip_act_cb_create;
+    const bool overlap_im2col_cb = sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && !is_1d_depthwise_conv &&
+                                   conv_input_df == output_df && !skip_act_cb_create;
     {
         // ACT and ACT_SECOND_READER CB
         if (conv_config.enable_act_double_buffer) {
@@ -237,10 +239,12 @@ std::vector<CBInfo> get_cb_info(
         }
 
         const uint32_t act_cb_tile_size =
-            sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? input_tile_size : output_tile_size;
+            (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED || is_1d_depthwise_conv) ? input_tile_size
+                                                                                            : output_tile_size;
         const tt::DataFormat act_cb_data_format =
-            sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? conv_input_df : output_df;
-        const bool overlap_act_cb = sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED && skip_act_cb_create;
+            (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED || is_1d_depthwise_conv) ? conv_input_df : output_df;
+        const bool overlap_act_cb =
+            !is_1d_depthwise_conv && sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED && skip_act_cb_create;
         // ACT CB plays a different role depending on the sharding scheme
         // In block sharded convs, ACT CB is used for mcasting activations and needs full activation block size
         // regardless of split reader.
@@ -284,7 +288,7 @@ std::vector<CBInfo> get_cb_info(
         uint32_t row_major_act_cb_num_tiles = 0;
         if (sharding_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
             row_major_act_cb_num_tiles = block_config.act_block_w_ntiles * 2;
-        } else if (sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+        } else if (sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && !is_1d_depthwise_conv) {
             row_major_act_cb_num_tiles = act_block_num_tiles;
         }
 
