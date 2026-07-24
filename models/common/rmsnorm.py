@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import inplace_copy
+from models.common.utility_functions import copy_to_buffer
 from models.tt_transformers.tt.common import Mode
 
 TILE = 32
@@ -126,7 +126,7 @@ class RMSNorm(LightweightModule):
         HF-format input: ``weight`` is HF ``...norm.weight``, shape
         ``(1, 1, 1, dim)``, bf16, TILE, DRAM-interleaved, replicated.
 
-        ``inplace_copy`` reshapes to the storage shape
+        ``copy_to_buffer`` reshapes to the storage shape
         ``(1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)`` and TILE -> ROW_MAJOR to
         match ``self.weight``. No ``add_unit_offset`` here: the constructor's
         offset is baked into the cached weights once, and ``.update`` ships in
@@ -139,7 +139,7 @@ class RMSNorm(LightweightModule):
         and ``ttnn.copy`` into it. Both buffers keep their address, so captured
         traces and the prefetcher's recorded addresses stay valid.
         """
-        inplace_copy(weight, self.weight, self.weight.dtype)
+        copy_to_buffer(weight, self.weight, self.weight.dtype)
 
         if getattr(self, "weight_distributed", None) is not None:
             partitioned = ttnn.mesh_partition(
@@ -148,7 +148,7 @@ class RMSNorm(LightweightModule):
                 dim=2,
                 cluster_axis=1,
             )
-            inplace_copy(partitioned, self.weight_distributed, self.weight_distributed.dtype)
+            copy_to_buffer(partitioned, self.weight_distributed, self.weight_distributed.dtype)
 
     def forward(
         self,

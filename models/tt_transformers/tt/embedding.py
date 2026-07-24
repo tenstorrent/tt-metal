@@ -4,7 +4,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import inplace_copy
+from models.common.utility_functions import copy_to_buffer
 
 
 class Embedding(LightweightModule):
@@ -57,7 +57,7 @@ class Embedding(LightweightModule):
             "padding the embedding table is not yet supported."
         )
 
-        inplace_copy(embed_tokens, self.weights, self._dtype)
+        copy_to_buffer(embed_tokens, self.weights, self._dtype)
 
     def forward(self, x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
         x = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
