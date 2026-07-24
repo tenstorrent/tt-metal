@@ -42,16 +42,6 @@ def repo_root() -> Path:
     return _REPO_ROOT
 
 
-def resolve_within_repo(user_path: Any) -> Path:
-    # this check is added to comply with the "❗Cycode: SAST violation: 'Unsanitized dynamic input in file path'."
-    # check.
-    base = str(_REPO_ROOT)
-    resolved = os.path.abspath(os.path.join(base, os.fspath(user_path)))
-    if os.path.commonpath([base, resolved]) != base:
-        raise ValueError(f"path escapes repo root: {user_path!r} (resolved {resolved}, allowed base {base})")
-    return Path(resolved)
-
-
 @dataclass(frozen=True)
 class OpSpec:
     """Static description of a traced op kind.
@@ -61,15 +51,15 @@ class OpSpec:
         required_params: ``params`` keys the harness dereferences to replay the
             op; the validator checks these are present. These are exactly the
             extra ``params`` a given op (like ``Conv2d``) reads at runtime.
-        uses_weight: Whether the op carries a weight artifact (``w_path``).
-        uses_bias: Whether the op carries a bias artifact (``b_path``).
+        uses_weight: Whether the op always carries a weight artifact (``w_path``);
+            enforced by ``shared_validate_record``. (Bias is intentionally not
+            modelled here: it is optional per-op, e.g. ``Conv2d(bias=False)``.)
         runnable: Whether ``tracer_test_harness`` can replay this kind on device.
     """
 
     kind: str
     required_params: Tuple[str, ...] = ()
     uses_weight: bool = False
-    uses_bias: bool = False
     runnable: bool = False
 
 
@@ -88,12 +78,11 @@ OP_SPECS: Dict[str, OpSpec] = {
             "groups",
         ),
         uses_weight=True,
-        uses_bias=True,
         runnable=True,
     ),
-    "ConvTranspose2d": OpSpec(kind="ConvTranspose2d", uses_weight=True, uses_bias=True),
-    "GroupNorm": OpSpec(kind="GroupNorm", uses_weight=True, uses_bias=True),
-    "BatchNorm2d": OpSpec(kind="BatchNorm2d", uses_weight=True, uses_bias=True),
+    "ConvTranspose2d": OpSpec(kind="ConvTranspose2d", uses_weight=True),
+    "GroupNorm": OpSpec(kind="GroupNorm", uses_weight=True),
+    "BatchNorm2d": OpSpec(kind="BatchNorm2d", uses_weight=True),
     "ReLU": OpSpec(kind="ReLU", runnable=True),
     "MaxPool2d": OpSpec(kind="MaxPool2d"),
     "Upsample": OpSpec(kind="Upsample"),
@@ -209,10 +198,12 @@ def record_from_mapping(raw: Mapping[str, Any], idx: int) -> Record:
 def load_manifest(manifest_path: Any) -> List[Record]:
     """Load a manifest JSON file into a list of ``Record`` objects."""
     # Confine the (possibly user-supplied) manifest path to the repo root before
-    # reading it, to prevent path traversal outside the intended scope.
-    base = str(_REPO_ROOT)
+    # reading it, to prevent path traversal outside the intended scope. The
+    # trailing os.sep guard ensures a sibling like ``<repo>-secrets`` cannot pass
+    # a naive prefix check.
+    base = os.path.abspath(_REPO_ROOT)
     resolved = os.path.abspath(os.path.join(base, os.fspath(manifest_path)))
-    if not resolved.startswith(base):
+    if resolved != base and not resolved.startswith(base + os.sep):
         raise ValueError(f"manifest path escapes repo root {base!r}: {manifest_path!r} (resolved {resolved})")
     data = json.loads(Path(resolved).read_text(encoding="utf-8"))
     records = data.get("records", []) if isinstance(data, dict) else []
@@ -266,12 +257,14 @@ def shared_validate_record(record: Record) -> List[str]:
       * ``in_shape`` / ``out_shape`` are well-formed 4D positive-int shapes.
       * the op's required ``params`` (e.g. ``Conv2d``'s kernel/stride/...) are
         present.
+      * ops that always carry a weight (``uses_weight``) reference a ``w_path``.
 
     Returns human-readable error messages (no context prefix); empty means valid.
     """
     errors: List[str] = []
 
-    if not is_supported(record.kind):
+    spec = get_spec(record.kind)
+    if spec is None:
         errors.append(f"unsupported 'kind' {record.kind!r}; expected one of {sorted(SUPPORTED_KINDS)}")
 
     for key, shape in (("in_shape", record.in_shape), ("out_shape", record.out_shape)):
@@ -281,6 +274,11 @@ def shared_validate_record(record: Record) -> List[str]:
     missing = missing_params(record.kind, record.params)
     if missing:
         errors.append(f"{record.kind} 'params' missing {missing}")
+
+    # Ops that always carry a weight must reference a weight artifact, so the
+    # validator (not just the harness) catches a manifest missing ``w_path``.
+    if spec is not None and spec.uses_weight and not record.w_path:
+        errors.append(f"{record.kind} requires a weight artifact but 'w_path' is missing")
 
     if record.kind == "Conv2d":
         errors.extend(_validate_conv2d_consistency(record))
@@ -355,6 +353,12 @@ def _validate_conv2d_consistency(record: Record) -> List[str]:
     ):
         if s <= 0:
             errors.append(f"Conv2d {dim} 'stride' ({s}) must be positive")
+            continue
+        if p < 0:
+            errors.append(f"Conv2d {dim} 'padding' ({p}) must be non-negative")
+            continue
+        if d <= 0:
+            errors.append(f"Conv2d {dim} 'dilation' ({d}) must be positive")
             continue
         expected = (in_sz + 2 * p - d * (k - 1) - 1) // s + 1
         if expected != out_sz:

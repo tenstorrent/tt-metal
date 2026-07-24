@@ -47,11 +47,12 @@ def strip_module_prefix(sd: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
 
 
 def build_model_from_ckpt(ckpt_path: Path | None) -> nn.Module:
-    # Matches your train.py model construction: norm="group", gn_groups=16, bridge_kernel_size=1, bilinear upsample by default.
+    # Model construction mirrors the training config: group norm with 16 groups,
+    # bridge_kernel_size=1, pretrained encoder, and bilinear decoder upsampling.
     model = UNetVGG19(
         num_classes=1,
-        pretrained=True,  # you train with pretrained_encoder=True in config :contentReference[oaicite:2]{index=2}
-        bilinear=True,  # decoder_upsample="bilinear" in config :contentReference[oaicite:3]{index=3}
+        pretrained=True,
+        bilinear=True,
         use_checkpoint=False,
         norm="group",
         gn_groups=16,
@@ -124,10 +125,13 @@ def main():
     torch.manual_seed(args.seed)
 
     # Confine the (possibly user-supplied) output dir to the repo root before
-    # creating files under it, to prevent path traversal outside the intended scope.
-    out_dir_resolved = os.path.abspath(os.path.join(_REPO_ROOT, os.fspath(args.out)))
-    if not out_dir_resolved.startswith(_REPO_ROOT):
-        raise ValueError(f"--out escapes repo root {_REPO_ROOT!r}: {args.out!r} (resolved {out_dir_resolved})")
+    # creating files under it, to prevent path traversal outside the intended
+    # scope. The trailing os.sep guard ensures a sibling like ``<repo>-secrets``
+    # cannot pass a naive prefix check.
+    _base = os.path.abspath(_REPO_ROOT)
+    out_dir_resolved = os.path.abspath(os.path.join(_base, os.fspath(args.out)))
+    if out_dir_resolved != _base and not out_dir_resolved.startswith(_base + os.sep):
+        raise ValueError(f"--out escapes repo root {_base!r}: {args.out!r} (resolved {out_dir_resolved})")
     out_dir = Path(out_dir_resolved)
     tensors_dir = out_dir / "tensors"
     tensors_dir.mkdir(parents=True, exist_ok=True)

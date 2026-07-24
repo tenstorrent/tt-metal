@@ -27,6 +27,7 @@ validator and the ``tracer_test_harness`` replay path apply the same rules.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
@@ -34,7 +35,7 @@ from tracer_op_specs import (
     is_int,
     is_valid_shape,
     record_from_mapping,
-    resolve_within_repo,
+    repo_root,
     shared_validate_record,
     validate_record_mapping,
 )
@@ -81,9 +82,15 @@ def _default_shape_loader(path: Path) -> Tuple[int, ...]:
     if isinstance(obj, torch.Tensor):
         return tuple(obj.shape)
     if isinstance(obj, dict):
-        for value in obj.values():
-            if isinstance(value, torch.Tensor):
-                return tuple(value.shape)
+        # A dict payload is only unambiguous when it holds exactly one tensor.
+        # Returning the "first" tensor from a multi-tensor dict would validate an
+        # arbitrary shape while reporting success, so treat that as an error.
+        tensor_items = [(k, v) for k, v in obj.items() if isinstance(v, torch.Tensor)]
+        if len(tensor_items) == 1:
+            return tuple(tensor_items[0][1].shape)
+        if len(tensor_items) > 1:
+            keys = [k for k, _ in tensor_items]
+            raise TypeError(f"ambiguous tensor payload: dict holds {len(tensor_items)} tensors (keys: {keys})")
     raise TypeError(f"unsupported tensor payload type: {type(obj).__name__}")
 
 
@@ -178,11 +185,15 @@ def validate_manifest(
             to avoid importing torch). Defaults to a ``torch.load``-based loader.
     """
     report = Report()
-    try:
-        manifest_path = resolve_within_repo(manifest_path)
-    except ValueError as exc:
-        report.error("manifest", str(exc))
+    # Confine the (possibly user-supplied) manifest path to the repo root. The
+    # trailing os.sep guard ensures a sibling like ``<repo>-secrets`` cannot pass
+    # a naive prefix check.
+    base = os.path.abspath(repo_root())
+    resolved = os.path.abspath(os.path.join(base, os.fspath(manifest_path)))
+    if resolved != base and not resolved.startswith(base + os.sep):
+        report.error("manifest", f"path escapes repo root {base!r}: {manifest_path!r} (resolved {resolved})")
         return report
+    manifest_path = Path(resolved)
 
     if not manifest_path.exists():
         report.error("manifest", f"file not found: {manifest_path}")
@@ -232,9 +243,15 @@ def validate_manifest(
 
 def print_resolved(manifest_path: Path, limit: int) -> None:
     """Print resolved artifact paths for the first ``limit`` records."""
+    # Confine to the repo root (trailing os.sep guard prevents a sibling like
+    # ``<repo>-secrets`` from passing a naive prefix check).
+    base = os.path.abspath(repo_root())
+    resolved = os.path.abspath(os.path.join(base, os.fspath(manifest_path)))
+    if resolved != base and not resolved.startswith(base + os.sep):
+        return
     try:
-        data = json.loads(resolve_within_repo(manifest_path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, ValueError):
+        data = json.loads(Path(resolved).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return
     records = data.get("records", []) if isinstance(data, dict) else []
 

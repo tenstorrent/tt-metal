@@ -22,19 +22,6 @@ from typing import Any, Dict, List, Optional, Sequence
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def _resolve_within_repo(user_path: Any, *, label: str) -> str:
-    """Resolve ``user_path`` against the repo root and confine it there.
-
-    Uses an absolute-path + ``startswith`` check against ``_REPO_ROOT`` so that
-    dynamic (CLI/user) input cannot escape the repo tree via traversal or an
-    out-of-tree absolute path.
-    """
-    resolved = os.path.abspath(os.path.join(_REPO_ROOT, os.fspath(user_path)))
-    if not resolved.startswith(_REPO_ROOT):
-        raise ValueError(f"{label} escapes repo root {_REPO_ROOT!r}: {user_path!r} (resolved {resolved})")
-    return resolved
-
-
 def _parse_only(value: Optional[str]) -> Optional[List[str]]:
     if not value:
         return None
@@ -44,10 +31,12 @@ def _parse_only(value: Optional[str]) -> Optional[List[str]]:
 
 def _load_manifest_records(manifest_path: Path) -> List[Dict[str, Any]]:
     # Confine the (possibly user-supplied) manifest path to the repo root before
-    # reading it, to prevent path traversal outside the intended scope.
-    resolved = os.path.abspath(os.path.join(_REPO_ROOT, os.fspath(manifest_path)))
-    if not resolved.startswith(_REPO_ROOT):
-        raise ValueError(f"manifest path escapes repo root {_REPO_ROOT!r}: {manifest_path!r} (resolved {resolved})")
+    # reading it. The trailing os.sep guard ensures a sibling like
+    # ``<repo>-secrets`` cannot pass a naive prefix check.
+    base = os.path.abspath(_REPO_ROOT)
+    resolved = os.path.abspath(os.path.join(base, os.fspath(manifest_path)))
+    if resolved != base and not resolved.startswith(base + os.sep):
+        raise ValueError(f"manifest path escapes repo root {base!r}: {manifest_path!r} (resolved {resolved})")
     data = json.loads(Path(resolved).read_text(encoding="utf-8"))
     return list(data.get("records", []))
 
@@ -61,6 +50,11 @@ def _select_record_ids(records: Sequence[Dict[str, Any]], only: Optional[List[st
         kind = str(r.get("kind"))
         if kind in only_set:
             ids.append(i)
+    if not ids:
+        # A typo in --only would otherwise yield a green pytest run that tested
+        # nothing. Fail loudly, listing the kinds actually present.
+        available = sorted({str(r.get("kind")) for r in records})
+        raise SystemExit(f"--only={sorted(only_set)} matched no records; available kinds: {available}")
     return ids
 
 
@@ -150,7 +144,14 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    manifest_path = Path(_resolve_within_repo(args.manifest, label="--manifest"))
+    # Confine the user-supplied --manifest path to the repo root. The trailing
+    # os.sep guard ensures a sibling like ``<repo>-secrets`` cannot pass a naive
+    # prefix check.
+    _base = os.path.abspath(_REPO_ROOT)
+    _manifest_resolved = os.path.abspath(os.path.join(_base, os.fspath(args.manifest)))
+    if _manifest_resolved != _base and not _manifest_resolved.startswith(_base + os.sep):
+        raise ValueError(f"--manifest escapes repo root {_base!r}: {args.manifest!r} (resolved {_manifest_resolved})")
+    manifest_path = Path(_manifest_resolved)
 
     # --out-test is a repo-root-relative path; reject absolute paths outright.
     if os.path.isabs(args.out_test):
@@ -180,15 +181,18 @@ def main() -> None:
         l1_small_size=int(args.l1_small_size),
     )
 
-    # Confine the user-supplied (relative) output path to the repo root using the
-    # exact abspath(join(BASE_DIRECTORY, dynamic_input)) + startswith guard that
-    # SAST recognizes as proper sanitization for 'Unsanitized dynamic input in file path'.
-    out_test = os.path.abspath(os.path.join(_REPO_ROOT, args.out_test))
-    if out_test.startswith(_REPO_ROOT):
+    # Confine the user-supplied (relative) output path to the repo root using an
+    # abspath(join(BASE_DIRECTORY, dynamic_input)) + startswith guard (SAST
+    # recognizes this as proper sanitization for 'Unsanitized dynamic input in
+    # file path'). The trailing os.sep guard ensures a sibling like
+    # ``<repo>-secrets`` cannot pass the prefix check.
+    out_base = os.path.abspath(_REPO_ROOT)
+    out_test = os.path.abspath(os.path.join(out_base, args.out_test))
+    if out_test == out_base or out_test.startswith(out_base + os.sep):
         os.makedirs(os.path.dirname(out_test), exist_ok=True)
         Path(out_test).write_text(content, encoding="utf-8")
     else:
-        raise RuntimeError(f"out_test resolved to {out_test}, but the output must be within the repo root {_REPO_ROOT}")
+        raise RuntimeError(f"out_test resolved to {out_test}, but the output must be within the repo root {out_base}")
 
     print(f"Wrote pytest: {out_test}")
     print(f"Records selected: {len(record_ids)} / {len(records)} (only={only})")

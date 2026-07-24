@@ -219,7 +219,7 @@ def test_missing_artifact_fails(tmp_path, capsys):
 
 
 def test_shape_consistency_match_via_loader(tmp_path):
-    rec = _valid_record(tmp_path, with_weight=False)
+    rec = _valid_record(tmp_path, with_weight=True)
     path = _write_manifest(tmp_path, [rec])
 
     def loader(p):
@@ -236,7 +236,7 @@ def test_shape_consistency_match_via_loader(tmp_path):
 
 
 def test_shape_consistency_mismatch_via_loader(tmp_path):
-    rec = _valid_record(tmp_path, with_weight=False)
+    rec = _valid_record(tmp_path, with_weight=True)
     path = _write_manifest(tmp_path, [rec])
 
     def loader(p):
@@ -330,6 +330,6 @@ def test_shape_check_without_torch_errors(tmp_path, monkeypatch, capsys):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    path = _write_manifest(tmp_path, [_valid_record(tmp_path, with_weight=False)])
+    path = _write_manifest(tmp_path, [_valid_record(tmp_path, with_weight=True)])
     assert main(["--manifest", str(path)]) == 1
     assert "torch is required" in capsys.readouterr().out

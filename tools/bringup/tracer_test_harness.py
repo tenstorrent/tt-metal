@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
@@ -29,6 +30,17 @@ import ttnn
 
 import tracer_op_specs
 from tracer_op_specs import Record, load_manifest
+
+
+@functools.lru_cache(maxsize=None)
+def _load_manifest_cached(manifest_path_str: str) -> Tuple[Record, ...]:
+    """Parse a manifest once per unique path.
+
+    ``run_record_id`` is invoked once per parametrized record, so parsing the
+    manifest on every call is O(N^2). Caching keyed by the resolved path string
+    (and returning an immutable tuple) keeps repeated calls O(N) overall.
+    """
+    return tuple(load_manifest(manifest_path_str))
 
 
 def _resolve_artifact_path(manifest_path: Path, artifact_path: str) -> Path:
@@ -315,7 +327,7 @@ def run_record_id(
     pcc_threshold: float,
     allow_crop: bool = False,
 ) -> float:
-    recs = load_manifest(manifest_path)
+    recs = _load_manifest_cached(str(manifest_path))
     if rec_id < 0 or rec_id >= len(recs):
         raise IndexError(f"rec_id out of range: {rec_id} (num_records={len(recs)})")
     return run_record(
