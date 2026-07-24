@@ -69,31 +69,68 @@ data-dependent and only known after reading `pred_dur` back to the host to build
 matrix. This splits the traceable device graph into **Trace A** (input → `pred_dur`) and **Trace B**
 (alignment → audio). See [Notable implementation details](#notable-implementation-details).
 
-## Modules & file paths
+## Repository layout
 
 All implementation lives under `models/experimental/kokoro/`. Each TTNN module is a separate class
-and has a matching PCC test and reference.
+in `tt/` with a matching reference in `reference/` and a PCC test in `tests/`.
 
-| module | TTNN class / file | reference | test |
-|--------|-------------------|-----------|------|
-| Full model | `TTKModel` — `tt/tt_kmodel.py` | `reference/model.py` | `test_tt_kmodel_pcc.py` |
-| PL-BERT | `TTCustomAlbert` — `tt/tt_custom_albert.py` | `reference/plbert` (Albert) | `test_tt_custom_albert_pcc.py` |
-| Prosody predictor | `TTProsodyPredictor` — `tt/tt_prosody_predictor.py` | `reference/istftnet.py` | `test_tt_prosody_predictor_pcc.py` |
-| Duration encoder | `TTDurationEncoder` — `tt/tt_duration_encoder.py` | `reference/istftnet.py` | `test_tt_duration_encoder_pcc.py` |
-| BiLSTM | `tt_bilstm_nlc` — `tt/tt_lstm.py` | torch `nn.LSTM` | `test_tt_lstm_pcc.py` |
-| Text encoder (ASR) | `TTTextEncoder` — `tt/tt_text_encoder.py` | `reference/models.py` | `test_tt_text_encoder_pcc.py` |
-| Decoder | `TTDecoder` — `tt/tt_decoder.py` | `reference/istftnet.py` | `test_tt_decoder_pcc.py` |
-| Generator | `TTGenerator` — `tt/tt_generator.py` | `reference/istftnet.py` | `test_tt_generator_pcc.py` |
-| AdaIN blocks | `TTAdaIN1d` / `TTAdainResBlk1d` / `TTAdaINResBlock1` — `tt/tt_adain_*.py` | `reference/istftnet.py` | `test_tt_adain_*_pcc.py` |
-| AdaLayerNorm | `TTAdaLayerNorm` — `tt/tt_ada_layer_norm.py` | `reference/istftnet.py` | `test_tt_ada_layer_norm_pcc.py` |
-| LinearNorm | `TTLinearNorm` — `tt/tt_linear_norm.py` | `reference/models.py` | `test_tt_linear_norm_pcc.py` |
-| UpSample1d | `TTUpSample1d` — `tt/tt_upsample_1d.py` | torch `F.interpolate` | `test_tt_upsample_1d_pcc.py` |
-| SineGen | `TTSineGen` — `tt/tt_sinegen.py` | `reference/istftnet.py` | `test_tt_sinegen_pcc.py` |
-| Source module | `TTSourceModuleHnNSF` — `tt/tt_source_module_hn_nsf.py` | `reference/istftnet.py` | `test_tt_source_module_hn_nsf_pcc.py` |
-| STFT (torch-formulation) | `TTTorchSTFT` — `tt/tt_torch_stft.py` | `reference/istftnet.py` TorchSTFT | `test_tt_torch_stft_pcc.py` |
-| STFT (custom, no fallback) | `TTCustomSTFT` — `tt/tt_custom_stft.py` | `reference/istftnet.py` CustomSTFT | `test_tt_custom_stft_pcc.py` |
-| Trace manager | `TraceManager` — `tt/tt_trace_manager.py` | — | `test_tt_trace_manager.py` |
-| Demo | `demo/ttnn_kokoro_full_demo.py` | — | — |
+```
+models/experimental/kokoro/
+├── requirements.txt                 # demo/test deps (kokoro, soundfile, librosa, transformers)
+├── README.md
+├── m_source_rng.py                  # deterministic SineGen/source RNG upload helpers
+├── demo/
+│   └── ttnn_kokoro_full_demo.py     # full TT demo: text → 24 kHz WAV (trace + mel-PCC vs reference)
+├── reference/                       # CPU-only PyTorch reference (parity target)
+│   ├── model.py                     #   KModel — full reference forward
+│   ├── istftnet.py                  #   prosody predictor, decoder/generator, SineGen, source, STFT
+│   ├── custom_stft.py               #   CustomSTFT (conv-based STFT / iSTFT)
+│   ├── models.py                    #   text encoder + shared modules
+│   ├── modules.py                   #   misc reference layers
+│   └── pipeline.py                  #   KPipeline glue
+├── tt/                              # TTNN on-device implementations (one class per file)
+│   ├── tt_kmodel.py                 #   TTKModel — top-level; wires Trace A / host step / Trace B
+│   ├── tt_custom_albert.py          #   TTCustomAlbert (PL-BERT backbone)
+│   ├── tt_prosody_predictor.py      #   TTProsodyPredictor (duration BiLSTM + F0Ntrain)
+│   ├── tt_duration_encoder.py       #   TTDurationEncoder
+│   ├── tt_lstm.py                   #   tt_bilstm_nlc (BiLSTM)
+│   ├── tt_text_encoder.py           #   TTTextEncoder (ASR features)
+│   ├── tt_decoder.py                #   TTDecoder
+│   ├── tt_generator.py              #   TTGenerator (ISTFTNet vocoder)
+│   ├── tt_adain_1d.py               #   TTAdaIN1d / TTInstanceNorm1d
+│   ├── tt_adain_resblk_1d.py        #   TTAdainResBlk1d
+│   ├── tt_adain_resblock1.py        #   TTAdaINResBlock1
+│   ├── tt_ada_layer_norm.py         #   TTAdaLayerNorm
+│   ├── tt_linear_norm.py            #   TTLinearNorm
+│   ├── tt_upsample_1d.py            #   TTUpSample1d
+│   ├── tt_sinegen.py                #   TTSineGen (harmonic phase generator)
+│   ├── tt_source_module_hn_nsf.py   #   TTSourceModuleHnNSF (harmonic-plus-noise source)
+│   ├── tt_torch_stft.py             #   TTTorchSTFT (torch-formulation STFT / dense iSTFT)
+│   ├── tt_custom_stft.py            #   TTCustomSTFT (on-device conv STFT, no fallback)
+│   ├── tt_conv.py                   #   conv1d/conv2d helpers (shard + double-buffer)
+│   ├── tt_trace_manager.py          #   TraceManager (metal-trace capture / replay)
+│   ├── tt_trace_prep.py             #   trace-safe weight-prep caching
+│   ├── tt_matmul_memory.py          #   matmul program/memory configs
+│   └── tt_pipeline.py               #   pipeline glue
+└── tests/
+    ├── conftest.py                  #   device / mesh_device fixtures
+    ├── kokoro_checkpoint.py         #   shared helpers (checkpoint load, prosody refs, config-E kwargs)
+    ├── test_tt_<module>_pcc.py      #   per-module PCC tests (real weights, full HF config)
+    ├── test_tt_kmodel_pcc.py        #   full-pipeline audio PCC (fallback matrix)
+    ├── test_tt_kmodel_mel_pcc.py    #   E2E spectral parity (log-mel PCC)
+    ├── test_tt_kmodel_asr_wer.py    #   E2E intelligibility (Whisper WER)
+    ├── test_tt_kmodel_speaker_cosine.py   # E2E speaker parity (SECS)
+    ├── test_tt_kmodel_cfw2vd.py            # E2E perceptual parity (cFW2VD)
+    ├── test_tt_kmodel_prosody_injection_pcc.py  # teacher-forced waveform PCC
+    ├── test_tt_kmodel_two_trace_*.py  # metal-trace capture/replay + E2E
+    ├── test_tt_trace_manager.py     #   TraceManager capture-once / replay-new-inputs
+    └── test_*_proof.py              #   numerical-failure isolation proofs (SineGen phase, atan2, BF16)
+
+```
+
+Reference mapping for the four stages: PL-BERT/prosody/text-encoder → `reference/model.py` +
+`reference/models.py` + `reference/istftnet.py`; decoder/generator/source/STFT → `reference/istftnet.py`
+(+ `reference/custom_stft.py`). Every `tt/tt_<x>.py` has a `tests/test_tt_<x>_pcc.py` counterpart.
 
 ## Supported Devices
 
@@ -130,7 +167,7 @@ From the **tt-metal** repo root, using the venv that matches your Metal build:
 export PYTHONPATH=$(pwd)
 source python_env/bin/activate
 
-pip install "kokoro>=0.9.2" soundfile librosa
+pip install -r models/experimental/kokoro/requirements.txt
 # espeak-ng must be on PATH for grapheme-to-phoneme (G2P)
 ```
 
