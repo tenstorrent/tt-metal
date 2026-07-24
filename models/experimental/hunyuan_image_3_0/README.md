@@ -106,6 +106,11 @@ and is gated by a PCC test under `tests/`.
 | LM head | `tt/lm_head.py` | Hidden state → vocabulary logits projection |
 | KV cache | `tt/kv_cache.py`, `tt/cache.py` | Incremental key/value cache for decode |
 
+The **transformer decoder** (backbone + attention/MoE layers) is shared by **AR recaption**
+(prefill and decode) and **denoise**. AR prefill and the decoder path are **optimized for
+full sequence length**, targeting the default **1024×1024** image size (production layout:
+~4K image tokens in a ~4K–8K+ total sequence, up to the HF max context of 22,800).
+
 ### Image generation (DiT / flow-matching)
 
 | Module | File path | Description |
@@ -422,6 +427,9 @@ python_env/bin/python models/experimental/hunyuan_image_3_0/demo/demo.py \
   $'A cinematic medium shot captures a single Asian woman seated on a chair within a dimly lit room, creating an intimate and theatrical atmosphere. The composition is focused on the subject, rendered with rich colors and intricate textures that evoke a nostalgic and moody feeling.\n\nThe primary subject is a young Asian woman with a thoughtful and expressive countenance, her gaze directed slightly away from the camera. She is seated in a relaxed yet elegant posture on an ornate, vintage armchair. The chair is upholstered in a deep red velvet, its fabric showing detailed, intricate textures and slight signs of wear. She wears a simple, elegant dress in a dark teal hue, the material catching the light in a way that reveals its fine-woven texture. Her skin has a soft, matte quality, and the light delicately models the contours of her face and arms.\n\nThe surrounding room is characterized by its vintage decor, which contributes to the historic and evocative mood. In the immediate background, partially blurred due to a shallow depth of field consistent with a f/2.8 aperture, the wall is covered with wallpaper featuring a subtle, damask pattern. The overall color palette is a carefully balanced interplay of deep teal and rich red hues, creating a visually compelling and cohesive environment. The entire scene is detailed, from the fibers of the upholstery to the subtle patterns on the wall.\n\nThe lighting is highly dramatic and artistic, defined by high contrast and pronounced shadow play. A single key light source, positioned off-camera, projects gobo lighting patterns onto the scene, casting intricate shapes of light and shadow across the woman and the back wall. These dramatic shadows create a strong sense of depth and a theatrical quality. While some shadows are deep and defined, others remain soft, gently wrapping around the subject and preventing the loss of detail in darker areas. The soft focus on the background enhances the intimate feeling, drawing all attention to the expressive subject. The overall image presents a cinematic, photorealistic photography style.'
 ```
 
+**Expected output:** a PNG image at the default resolution **1024×1024**, written to
+`models/experimental/hunyuan_image_3_0/output.png` (override with `HY_OUT` / `HY_IMAGE_SIZE`).
+
 Base T2I defaults to **50 denoise steps** and **CFG 5.0**, matching HF
 `tencent/HunyuanImage-3.0` `generation_config.json` (`diff_infer_steps=50`,
 `diff_guidance_scale=5.0`). Override with `HY_STEPS` / `HY_GUIDANCE`. Matches upstream
@@ -449,6 +457,9 @@ HY_STEPS=50 HY_NUM_LAYERS=32 HY_GUIDANCE=2.5 python_env/bin/python \
   --out hy_instruct.png
 ```
 
+**Expected output:** a PNG image at the default resolution **1024×1024**, written to
+`hy_instruct.png` (override with `--out` / `HY_OUT` or `--image-size` / `HY_IMAGE_SIZE`).
+
 ### Instruct-Distil image-to-image (8-step MeanFlow)
 
 Denoise `execute_trace` is **off by default** (8 steps ≤ `HY_DENOISE_TRACE_MIN_STEPS`);
@@ -463,6 +474,9 @@ HY_DISTIL=1 HY_NUM_LAYERS=32 HY_GUIDANCE=2.5 python_env/bin/python \
   --bot-task image \
   --out hy_instruct_distil.png
 ```
+
+**Expected output:** a PNG image at the default resolution **1024×1024**, written to
+`hy_instruct_distil.png` (override with `--out` / `HY_OUT` or `--image-size` / `HY_IMAGE_SIZE`).
 
 Without `HY_STEPS`, Instruct defaults to 50 steps and Distil to 8 (from each checkpoint's
 `generation_config.json` when present).
@@ -623,6 +637,9 @@ Used only by `tests/` (not the demos). PCC gates: `HY_LATENT_PCC`, `HY_RGB_PCC`,
 
 The implementation supports total sequence lengths up to the model's max_position_embeddings of 22,800 tokens (tile-aligned to 22,784). For a given image resolution, the image token count is fixed; only the text prompt length (along with a small number of special tokens) changes the final sequence length. The full pipeline has been validated end-to-end at this maximum supported context.
 
+The shared transformer decoder used by **AR (prefill + decode) and denoise** is optimized
+for **full sequence length** at the default **1024×1024** output resolution.
+
 Image *quality*, however, is only correct up to approximately **8K** sequence length.
 Beyond ~8K, the generated images become increasingly noisy. The same behavior is observed
 with the Hugging Face reference implementation, so this is a property of the model rather
@@ -630,6 +647,42 @@ than of this port.
 
 
 ### Limitations
+
+#### KV-cache prefill / decode PCC at long ISL
+
+Long-context KV-cache PCC is gated at **≥ 0.95** (2 layers) / **≥ 0.85** (deeper stacks).
+At **32 layers** and `ISL=22800`, chained prefill lands near **~0.95**; **teacher-forced**
+checks recover to **~0.99** (see `test_teacher_forced.py` in [PCC Results](#pcc-results)).
+
+**Decode** (default `HY_NUM_LAYERS=2`; `HY_MAX_ISL` is the prefill ISL):
+
+```bash
+HY_MAX_ISL=22800 HY_DECODE_STEPS=1 python_env/bin/python -m pytest \
+  models/experimental/hunyuan_image_3_0/tests/pcc/test_kv_cache_decode.py -v -s
+```
+
+| ISL | Step | hidden_pcc | logits_pcc |
+|----:|-----:|-----------:|-----------:|
+| 512 | 8 | 0.999782 | 0.999713 |
+| 22800 | 1 | 0.995632 | 0.997369 |
+
+**Prefill sanity** (`-k sanity` runs ISL=128 and `HY_MAX_ISL`):
+
+```bash
+# 2-layer default (fast gate)
+HY_MAX_ISL=22800 python_env/bin/python -m pytest \
+  models/experimental/hunyuan_image_3_0/tests/pcc/test_kv_cache_prefill.py -k sanity -v -s
+
+# Full 32-layer stack
+HY_NUM_LAYERS=32 HY_MAX_ISL=22800 python_env/bin/python -m pytest \
+  models/experimental/hunyuan_image_3_0/tests/pcc/test_kv_cache_prefill.py -k sanity -v -s
+```
+
+| ISL | Layers | hidden_pcc | logits_pcc | Notes |
+|----:|-------:|-----------:|-----------:|-------|
+| 22800 | 2 (default) | 0.999451 | 0.999318 | ≥ 0.95 |
+| 128 | 32 | 0.971850 | 0.973826 | |
+| 22800 | 32 | 0.947658 | 0.951536 | ~0.95 floor; teacher-forced → ~0.99 |
 
 #### Device Sampling (`ttnn.sampling`)
 
