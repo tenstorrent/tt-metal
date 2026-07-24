@@ -1,0 +1,39 @@
+{
+  "component": "vibe_voice_semantic_tokenizer_model",
+  "submodule_path": "model.semantic_tokenizer",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          1,
+          64000
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {}
+  },
+  "output": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "none"
+      },
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          20,
+          128
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  }
+}

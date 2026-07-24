@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.best_native
+*.last_good_native
+*.last_good_sharded
+*.preiter_native

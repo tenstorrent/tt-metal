@@ -1,0 +1,444 @@
+{
+  "artifacts": {
+    "raw_csv": "/tmp/tt_hw_planner_hexgrad_Kokoro-82M_1783376840/models/experimental/perf_automation/runs/2026-07-07T01-56-33/profiles/iter_baseline_raw.csv",
+    "report_csv": "/tmp/tt_hw_planner_hexgrad_Kokoro-82M_1783376840/models/experimental/perf_automation/runs/2026-07-07T01-56-33/profiles/iter_baseline_report.csv"
+  },
+  "buckets": [
+    {
+      "count": 36936,
+      "device_ms": 237.81269100000026,
+      "dispatch_gap_ms": 33.9194,
+      "id": "eltwise",
+      "layout_churn_count": 0,
+      "layout_churn_ms": 0.0,
+      "lever_state": {},
+      "pct": 38.242633064886654,
+      "tags": {
+        "bound": "slow",
+        "dispatch": "ok",
+        "fidelity": "hifi4",
+        "grid": "partial",
+        "memory": "dram_interleaved",
+        "op_class": "eltwise",
+        "rank": "time",
+        "regime": "na"
+      },
+      "top_ops": [
+        {
+          "bytes": 1022656512.0,
+          "cores": 110,
+          "count": 20806,
+          "device_ms": 173.301,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "BinaryNgDeviceOperation",
+          "shape": "32x128 @ 32x128"
+        },
+        {
+          "bytes": 298106880.0,
+          "cores": 110,
+          "count": 12130,
+          "device_ms": 40.3369,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "BinaryNgDeviceOperation",
+          "shape": "32x64 @ 32x64"
+        },
+        {
+          "bytes": 14782464.0,
+          "cores": 110,
+          "count": 401,
+          "device_ms": 7.4361,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "BinaryNgDeviceOperation",
+          "shape": "32x128 @ 32x32"
+        },
+        {
+          "bytes": 602406912.0,
+          "cores": 110,
+          "count": 1149,
+          "device_ms": 4.344,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "UnaryDeviceOperation",
+          "shape": "32x2048 @ ?x?"
+        },
+        {
+          "bytes": 111738880.0,
+          "cores": 110,
+          "count": 1705,
+          "device_ms": 4.3167,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "UnaryDeviceOperation",
+          "shape": "32x256 @ ?x?"
+        },
+        {
+          "bytes": 64225280.0,
+          "cores": 110,
+          "count": 140,
+          "device_ms": 2.8018,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "BinaryNgDeviceOperation",
+          "shape": "512x96 @ 512x32"
+        }
+      ]
+    },
+    {
+      "count": 43664,
+      "device_ms": 221.93687799999998,
+      "dispatch_gap_ms": 77.6454,
+      "id": "datamove",
+      "layout_churn_count": 3139,
+      "layout_churn_ms": 109.3168,
+      "lever_state": {},
+      "pct": 35.689645297022885,
+      "tags": {
+        "bound": "slow",
+        "dispatch": "ok",
+        "fidelity": "hifi4",
+        "grid": "partial",
+        "memory": "dram_interleaved",
+        "op_class": "datamove",
+        "rank": "time",
+        "regime": "na"
+      },
+      "top_ops": [
+        {
+          "bytes": 73801728.0,
+          "cores": 1,
+          "count": 546,
+          "device_ms": 42.5602,
+          "fidelity": "hifi4",
+          "grid": "tiny",
+          "memory": "dram_interleaved",
+          "op_code": "TilizeWithValPaddingDeviceOperation",
+          "shape": "1x1024 @ ?x?"
+        },
+        {
+          "bytes": 2282225664.0,
+          "cores": 64,
+          "count": 5804,
+          "device_ms": 11.7708,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "TypecastDeviceOperation",
+          "shape": "64x1024 @ ?x?"
+        },
+        {
+          "bytes": 94961664.0,
+          "cores": 2,
+          "count": 7728,
+          "device_ms": 9.1958,
+          "fidelity": "hifi4",
+          "grid": "tiny",
+          "memory": "dram_interleaved",
+          "op_code": "TypecastDeviceOperation",
+          "shape": "32x64 @ ?x?"
+        },
+        {
+          "bytes": 90734592.0,
+          "cores": 1,
+          "count": 392,
+          "device_ms": 8.893,
+          "fidelity": "hifi4",
+          "grid": "tiny",
+          "memory": "dram_interleaved",
+          "op_code": "UntilizeWithUnpaddingDeviceOperation",
+          "shape": "32x1024 @ ?x?"
+        },
+        {
+          "bytes": 3090874368.0,
+          "cores": 110,
+          "count": 796,
+          "device_ms": 8.6875,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "TypecastDeviceOperation",
+          "shape": "10112x64 @ ?x?"
+        },
+        {
+          "bytes": 3329032192.0,
+          "cores": 110,
+          "count": 421,
+          "device_ms": 8.3092,
+          "fidelity": "na",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "SliceDeviceOperation",
+          "shape": "10112x128 @ ?x?"
+        }
+      ]
+    },
+    {
+      "count": 18156,
+      "device_ms": 152.87660200000002,
+      "dispatch_gap_ms": 22.9366,
+      "id": "matmul",
+      "layout_churn_count": 0,
+      "layout_churn_ms": 0.0,
+      "lever_state": {
+        "fp32_dest_acc_en": "1",
+        "math_approx_mode": "1",
+        "math_fidelity": "HiFi4",
+        "packer_l1_acc": "1"
+      },
+      "pct": 24.584069798414212,
+      "tags": {
+        "bound": "slow",
+        "dispatch": "ok",
+        "fidelity": "hifi4",
+        "grid": "partial",
+        "memory": "dram_interleaved",
+        "op_class": "matmul",
+        "rank": "time",
+        "regime": "na"
+      },
+      "top_ops": [
+        {
+          "bytes": 8984199168.0,
+          "cores": 106,
+          "count": 1152,
+          "device_ms": 43.8804,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "MatmulDeviceOperation 10112 x 64 x 128",
+          "shape": "10112x64 @ 64x128"
+        },
+        {
+          "bytes": 5582094336.0,
+          "cores": 53,
+          "count": 2496,
+          "device_ms": 40.6208,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "MatmulDeviceOperation 1696 x 64 x 256",
+          "shape": "1696x64 @ 64x256"
+        },
+        {
+          "bytes": 2955165696.0,
+          "cores": 32,
+          "count": 7362,
+          "device_ms": 20.3202,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "MatmulDeviceOperation 32 x 64 x 1024",
+          "shape": "32x64 @ 64x1024"
+        },
+        {
+          "bytes": 3099525120.0,
+          "cores": 106,
+          "count": 240,
+          "device_ms": 15.0078,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "MatmulDeviceOperation 50432 x 32 x 32",
+          "shape": "50432x32 @ 32x32"
+        },
+        {
+          "bytes": 913833984.0,
+          "cores": 32,
+          "count": 1344,
+          "device_ms": 7.3202,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "MatmulDeviceOperation 96 x 64 x 1024",
+          "shape": "96x64 @ 64x1024"
+        },
+        {
+          "bytes": 874758144.0,
+          "cores": 24,
+          "count": 2886,
+          "device_ms": 7.2641,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "MatmulDeviceOperation 32 x 64 x 768",
+          "shape": "32x64 @ 64x768"
+        }
+      ]
+    },
+    {
+      "count": 233,
+      "device_ms": 9.141882999999996,
+      "dispatch_gap_ms": 3.5922,
+      "id": "reduction",
+      "layout_churn_count": 0,
+      "layout_churn_ms": 0.0,
+      "lever_state": {
+        "fp32_dest_acc_en": "1",
+        "math_approx_mode": "0",
+        "math_fidelity": "HiFi4",
+        "packer_l1_acc": "0"
+      },
+      "pct": 1.4701052144064282,
+      "tags": {
+        "bound": "slow",
+        "dispatch": "ok",
+        "fidelity": "hifi4",
+        "grid": "partial",
+        "memory": "dram_interleaved",
+        "op_class": "reduction",
+        "rank": "time",
+        "regime": "na"
+      },
+      "top_ops": [
+        {
+          "bytes": 249298944.0,
+          "cores": 4,
+          "count": 48,
+          "device_ms": 7.0032,
+          "fidelity": "hifi4",
+          "grid": "tiny",
+          "memory": "dram_interleaved",
+          "op_code": "ReduceDeviceOperation",
+          "shape": "128x10112 @ ?x?"
+        },
+        {
+          "bytes": 84934656.0,
+          "cores": 8,
+          "count": 48,
+          "device_ms": 1.2623,
+          "fidelity": "hifi4",
+          "grid": "tiny",
+          "memory": "dram_interleaved",
+          "op_code": "ReduceDeviceOperation",
+          "shape": "256x1696 @ ?x?"
+        },
+        {
+          "bytes": 4915200.0,
+          "cores": 1,
+          "count": 48,
+          "device_ms": 0.5446,
+          "fidelity": "hifi4",
+          "grid": "tiny",
+          "memory": "dram_interleaved",
+          "op_code": "ReduceDeviceOperation",
+          "shape": "32x768 @ ?x?"
+        },
+        {
+          "bytes": 1253376.0,
+          "cores": 1,
+          "count": 18,
+          "device_ms": 0.1412,
+          "fidelity": "hifi4",
+          "grid": "tiny",
+          "memory": "dram_interleaved",
+          "op_code": "ReduceDeviceOperation",
+          "shape": "32x512 @ ?x?"
+        },
+        {
+          "bytes": 2752512.0,
+          "cores": 8,
+          "count": 12,
+          "device_ms": 0.0486,
+          "fidelity": "hifi4",
+          "grid": "tiny",
+          "memory": "dram_interleaved",
+          "op_code": "ReduceDeviceOperation",
+          "shape": "256x192 @ ?x?"
+        },
+        {
+          "bytes": 196608.0,
+          "cores": 12,
+          "count": 24,
+          "device_ms": 0.0411,
+          "fidelity": "hifi4",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "ReduceDeviceOperation",
+          "shape": "32x32 @ ?x?"
+        }
+      ]
+    },
+    {
+      "count": 3,
+      "device_ms": 0.08424,
+      "dispatch_gap_ms": 0.5948,
+      "id": "other",
+      "layout_churn_count": 0,
+      "layout_churn_ms": 0.0,
+      "lever_state": {},
+      "pct": 0.01354662526982653,
+      "tags": {
+        "bound": "slow",
+        "dispatch": "gappy",
+        "fidelity": "na",
+        "grid": "partial",
+        "memory": "dram_interleaved",
+        "op_class": "other",
+        "rank": "time",
+        "regime": "na"
+      },
+      "top_ops": [
+        {
+          "bytes": 8192.0,
+          "cores": 1,
+          "count": 1,
+          "device_ms": 0.0809,
+          "fidelity": "hifi4",
+          "grid": "tiny",
+          "memory": "dram_interleaved",
+          "op_code": "AccumulationDeviceOperation",
+          "shape": "32x32 @ ?x?"
+        },
+        {
+          "bytes": 2048.0,
+          "cores": 110,
+          "count": 2,
+          "device_ms": 0.0033,
+          "fidelity": "na",
+          "grid": "partial",
+          "memory": "dram_interleaved",
+          "op_code": "RepeatDeviceOperation",
+          "shape": "1x128 @ ?x?"
+        }
+      ]
+    },
+    {
+      "count": 0,
+      "device_ms": 138.6884,
+      "id": "host_overhead",
+      "lever_state": {},
+      "pct": 22.302466357364924,
+      "tags": {
+        "bound": "host",
+        "op_class": "host_fallback",
+        "rank": "time",
+        "regime": "decode",
+        "source": "op_gap"
+      },
+      "top_ops": []
+    }
+  ],
+  "decode_status": "repeat_prefill",
+  "device_ms": 621.8523,
+  "forward_wall_ms": 139575.6263,
+  "host_fraction": 0.0002,
+  "host_ms": 138.6884,
+  "layout_churn": {
+    "count": 3139,
+    "device_ms": 109.3168,
+    "pct_device": 17.6
+  },
+  "per_token_ms": null,
+  "stack_report": "bucket             ms    pct  count  tags\neltwise       237.813  38.2%  36936  op_class=eltwise bound=slow rank=time fidelity=hifi4 grid=partial dispatch=ok memory=dram_interleaved regime=na\ndatamove      221.937  35.7%  43664  op_class=datamove bound=slow rank=time fidelity=hifi4 grid=partial dispatch=ok memory=dram_interleaved regime=na  [layout-churn 3139\u00d7 = 109.317ms]\nmatmul        152.877  24.6%  18156  op_class=matmul bound=slow rank=time fidelity=hifi4 grid=partial dispatch=ok memory=dram_interleaved regime=na\nreduction       9.142   1.5%    233  op_class=reduction bound=slow rank=time fidelity=hifi4 grid=partial dispatch=ok memory=dram_interleaved regime=na\nother           0.084   0.0%      3  op_class=other bound=slow rank=time fidelity=na grid=partial dispatch=gappy memory=dram_interleaved regime=na\nhost_overhead  138.688  22.3%      0  op_class=host_fallback bound=host rank=time regime=decode source=op_gap\n\nlayout coherence: 3139 pure layout-conversion ops = 109.317ms (17.6% of device time) -- redundant if producers emit the consumer's layout (see #layout-coherence).",
+  "tokens_per_sec": null,
+  "tokens_per_sec_per_user": null,
+  "wall_ms": 565630.3587120492
+}
