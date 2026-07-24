@@ -185,11 +185,12 @@ class TtPrefillRuntime:
         )
 
     def _embed_tokens(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
-        """Embed the SP-sharded token tensor into the bf16 hidden state each layer consumes. The
-        embedding weight is replicated across the mesh, so each chip embeds its own seq shard (rows) with
-        the full embedding dim (cols); this reproduces ``prepare_inputs_prefill``'s SP embedding starting
-        from an already-on-device token tensor. bf16 (not bf8) keeps the residual stream's dynamic range."""
-        x = ttnn.embedding(tokens, self.model.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        """Embed the SP-sharded token tensor into the bf16 hidden state each layer consumes. Delegates to
+        the model's TtParallelEmbedding: the table is sharded on emb_dim across the TP cols (replicated
+        across SP rows), so each chip does its own emb-dim-slice lookup on its seq shard, then a managed
+        TP all-gather rebuilds the full-hidden, TP-replicated residual stream. bf16 (not bf8) keeps the
+        residual stream's dynamic range. (Returns [1, 1, s_local, emb_dim].)"""
+        x = self.model.embedding(tokens)
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
         return x
