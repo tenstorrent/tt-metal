@@ -1258,3 +1258,23 @@
 - Verdict: reject and remove the unbounded allocation. The short-context gain
   supports only a bounded rolling L1 window in a prep/scan producer-consumer
   design.
+
+
+### 2026-07-24 18:27:10 UTC — Reject BF8 fused input-projection weights
+
+- Hypothesis: use the established Qwen `bfloat8_b` weight format for the fused
+  KDA input projection to reduce its 524.798 us T=5,120 weight-traffic cost.
+  Activations remain BF16 and the existing HiFi4/FP32 accumulation config is
+  unchanged.
+- Implementation was isolated behind `QWEN_KDA_INPUT_BF8=1`; cache names used
+  a `.bf8` suffix so BF16 and BF8 artifacts could not collide.
+- Focused command:
+  `QWEN_KDA_INPUT_BF8=1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s`
+  -> PASS under the test threshold, but output/recurrent/convolution PCC was
+  `0.999867/0.999878/0.999975` versus the selected endpoint
+  `0.999964/0.999903/0.999997`.
+- Diagnosis: the fused projection jointly produces Q/K/V, decay rank, beta,
+  and output gate. BF8 weight error therefore enters the recurrent update and
+  lowers recurrent-state PCC below the selected `0.999900` guard.
+- Verdict: reject and remove without profiling; accuracy already disqualifies
+  it. Test output-projection BF8 independently because it cannot affect state.

@@ -221,6 +221,11 @@ For local scan changes, retain an experiment only when:
 
 51. Retune the fused input projection at T=5,120.
 52. Evaluate BF8 projection weights with BF16 activations and FP32 accumulation.
+    - Input-projection result, 2026-07-24: established `bfloat8_b` weight
+      storage passed the test suite threshold but failed the selected endpoint
+      guard: output PCC `0.999964 -> 0.999867`, recurrent state
+      `0.999903 -> 0.999878`. Reject BF8 for the fused input projection; the
+      output projection remains an independent experiment.
 53. Fold additional auxiliary projection work into the grouped projection.
 54. Tune gated-RMS core mapping separately for short and long sequences.
 55. Evaluate lower-precision gated-RMS output only at the projection boundary.
