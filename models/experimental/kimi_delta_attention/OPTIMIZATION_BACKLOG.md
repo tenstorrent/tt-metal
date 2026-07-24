@@ -248,6 +248,11 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
       The kernel requires activation block height greater than output width;
       KDA has `1 vs 1` tiles at T=32 and `2 vs 160` at T=5,120. Both fail
       validation before execution. Retain ordinary slice streaming.
+    - Forced split-reader result, 2026-07-24: convolution active time improved
+      only `606.272 -> 603.237 us` (`-0.50%`) while wall regressed
+      `3385.003 -> 3387.903 us` (`+0.09%`). Reject the override; the native
+      viability model correctly prefers overlapping the single activation
+      reader with weight transfer.
 50. Produce tiled Q/K/V directly when that avoids a later layout conversion.
 
 ### F. Projection and epilogue

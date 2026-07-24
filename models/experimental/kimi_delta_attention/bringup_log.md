@@ -1374,3 +1374,12 @@
 - Long-context localization enabled reuse only for `sequence > 640`. Command: `QWEN_KDA_CONV_ACT_REUSE=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`. Pytest failed before trace capture: activation block height 2 must be greater than output width 160 tiles. The profiler wrapper produced only a partial failure CSV; no performance metric is valid.
 - Diagnosis: activation reuse is designed for block-height-dominant convolution. KDA is width-dominant: satisfying the guard at T=5,120 requires an activation block of at least 161 tiles instead of 2, incompatible with the current L1 geometry. Both short and long controls rule out sequence-local applicability.
 - Verdict: reject and restore source. Ordinary DRAM width-slice streaming remains the compatible native path.
+
+
+### 2026-07-24 19:02:30 UTC — Reject forced convolution split reader
+
+- Hypothesis: override the native convolution viability model and use both data-movement readers for activation transfer at T=5,120.
+- Command: `QWEN_KDA_CONV_SPLIT_READER=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS. CSV `generated/profiler/reports/2026_07_24_19_02_09/ops_perf_results_2026_07_24_19_02_09.csv` (SHA-256 `08d451430f276b88d0e14452c0e2e890998ec9273779504fa8e7794d64103688`).
+- Result: convolution active time improved `606.272 -> 603.237 us` (`-0.50%`), but median wall regressed `3385.003 -> 3387.903 us` (`+0.09%`). Replay spans were `[3372.809, 3378.543, 3394.839, 3393.488, 3402.440, 3380.552, 3374.595, 3382.587, 3393.219, 3393.310] us`.
+- Diagnosis: the native source cost model compares one reader overlapping activation+tilize against two readers that delay weight transfer. The tiny active-time gain and wall regression empirically confirm that the forced schedule does not improve the critical path.
+- Verdict: reject and restore auto selection; it misses both the 1% wall and 5% block gates.
