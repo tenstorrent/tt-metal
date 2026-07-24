@@ -378,7 +378,7 @@ def create_program_descriptor(
     # Causal (needs_mask_cb) never takes the mcast path: the mask varies along S_q,
     # so K/V are not the only S_q-shared operand, and the mcast reader has no mask
     # branch. The gate already requires no mask; needs_mask_cb also excludes causal.
-    mcast_opt_in = os.environ.get("TTNN_SDPA_KV_MCAST", "0") == "1"
+    mcast_opt_in = os.environ.get("TTNN_SDPA_KV_MCAST", "1") == "1"
     use_mcast = mcast_opt_in and (not needs_mask_cb) and (b * h_q == grid_rows) and (grid_cols > 1)
 
     # Refinement 5 — reader-barrier batching (perf knob): issue the per-KV-block K and
