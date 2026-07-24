@@ -112,6 +112,12 @@ FORCE_INLINE void unary(uint32_t a, uint32_t op, uint32_t scalar_bits, uint32_t 
     tile_regs_acquire();
     copy_tile(a, 0, 0);
     if (op == OP_EXP) {
+        // Cap logits before exp so an out-of-range learned logit cannot overflow to inf
+        // (which becomes inf/inf = NaN in the softmax divide). The softmax ratio is unchanged
+        // for any realistic logit (a_res init ~ 0.01 => |logit| << 1) -- equivalent to the
+        // canonical row-max subtraction within range, with no cross-lane reduce.
+        unary_min_tile_init();
+        unary_min_tile(0, 0x42a00000u);  // min(x, 80.0f)
         exp_tile_init();
         exp_tile(0);
     } else if (op == OP_SIGMOID) {
@@ -152,11 +158,11 @@ FORCE_INLINE void normalize(uint32_t m_in, uint32_t k_tile, bool use_eps, uint32
 }  // namespace
 
 void kernel_main() {
+    compute_kernel_hw_startup(CB_MIXES, CB_CONSTS, CB_COMB);  // must precede any other compute work
     const uint32_t num_token_tiles = get_arg_val<uint32_t>(0);
     constexpr uint32_t iters = get_compile_time_arg_val(0);
     constexpr uint32_t eps_bits = get_compile_time_arg_val(1);
 
-    compute_kernel_hw_startup(CB_MIXES, CB_CONSTS, CB_COMB);
     CircularBuffer cb_consts(CB_CONSTS), cb_mixes(CB_MIXES);
     cb_consts.wait_front(8);  // constants resident for the whole op
 

@@ -19,8 +19,9 @@ void bind_experimental_mhc_split_sinkhorn_operation(nb::module_& mod) {
             Fused mHC parametrization (Manifold-Constrained Hyper-Connections, DeepSeek-V4).
 
             Splits the fused-projection output ``mixes`` into H_pre, H_post and H_res and
-            Sinkhorn-normalizes H_res on the doubly-stochastic manifold, on a single core.
-            Matches models/demos/deepseek_v4/reference/mhc_reference.py::parametrize.
+            Sinkhorn-normalizes H_res on the doubly-stochastic manifold. Token-parallel across
+            the Tensix grid (also single-core, L1-sharded, and multi-device paths).
+            Matches models/demos/deepseek_v3_d_p/reference/mhc/mhc_reference.py::parametrize.
 
             The scalars a and biases b, plus the row/col-sum selection matrices, are baked
             into ``consts`` host-side (see the Python wrapper), so the kernel is pure tile ops.
@@ -34,7 +35,9 @@ void bind_experimental_mhc_split_sinkhorn_operation(nb::module_& mod) {
                 * :attr:`eps`: stochasticity epsilon.
 
             Returns:
-                (pre [T,n], post [T,n], comb [T,n*n]) FLOAT32 TILE.
+                (pre [T,n], post [T,n], comb [T,n*n]) FLOAT32 TILE. For a sharded ``mixes`` the
+                outputs come back 32-wide sharded (real values in the first n / n*n columns, the
+                rest padding); the caller slices [:, :w].
         )doc",
         &mhc_split_sinkhorn,
         nb::arg("mixes").noconvert(),

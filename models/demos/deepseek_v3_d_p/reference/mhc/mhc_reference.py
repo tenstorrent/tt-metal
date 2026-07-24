@@ -21,10 +21,11 @@ DeepSeek's code, H_res in the paper / design doc). mHC projects it onto the
 *doubly-stochastic manifold* (Birkhoff polytope) via Sinkhorn-Knopp. Vanilla HC leaves
 it unconstrained.
 
-Doubly-stochastic  =>  spectral norm exactly 1 (max value in matrix)  AND  the all-ones vector is a fixed
-eigenvector (the mean across streams is preserved). The set is closed under matrix
-multiplication, so the depth-composite (product over all layers) is *still* doubly
-stochastic at any depth -> it can never amplify or attenuate the signal. That restores
+Doubly-stochastic  =>  largest singular value exactly 1 (NOT a matrix entry equal to 1), with the
+all-ones vector a fixed eigenvector: the mean across streams is preserved, while off-mean
+components are non-expansive (singular values <= 1) -- they may attenuate but never amplify.
+The set is closed under matrix multiplication, so the depth-composite (product over all layers)
+is *still* doubly stochastic at any depth -> it can never amplify the signal. That restores
 the ResNet identity-mapping property that unconstrained HC loses. Set constraint="none"
 to get vanilla HC and watch the depth-composite blow up (see the __main__ demo).
 

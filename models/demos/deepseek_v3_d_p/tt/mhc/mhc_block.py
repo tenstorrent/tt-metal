@@ -25,6 +25,8 @@ class TtMHCBlock:
         self.n = cfg.n
         self.iters = int(cfg.sinkhorn_iters)
         self.eps = float(cfg.eps)
+        # the fused op is fp32-only; reject unsupported dtypes here rather than fail deep in hc_pre
+        assert dtype == ttnn.float32, f"TtMHCBlock is fp32-only (fused op requires FLOAT32), got {dtype}"
         # TtMHC supplies project() (RMSNorm + fused proj), hc_post(), and _row_to_batch().
         self.mhc = TtMHC(device, cfg, fn, base, scale, dtype)
         self.consts = ttnn.from_torch(

@@ -15,7 +15,7 @@ namespace ttnn::experimental::prim {
 struct MhcSplitSinkhornDeviceOperation {
     using operation_attributes_t = MhcSplitSinkhornParams;
     using tensor_args_t = MhcSplitSinkhornTensorArgs;
-    using spec_return_value_t = std::array<TensorSpec, 3>;
+    using spec_return_value_t = std::array<tt::tt_metal::TensorSpec, 3>;
     using tensor_return_value_t = std::array<Tensor, 3>;
     using program_factory_t = std::variant<MhcSplitSinkhornProgramFactory>;
 

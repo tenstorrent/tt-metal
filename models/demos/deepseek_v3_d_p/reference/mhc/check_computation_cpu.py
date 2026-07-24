@@ -19,11 +19,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mhc_reference import MHCConfig, MHCHead, MHCWrap, parametrize, sinkhorn_knopp  # noqa: E402
 
 
-# --- DeepSeek-V4 inference/model.py, copied verbatim (the kernel call is factored out) ---
+# --- mirrors the model's Block.hc_post (the kernel call is factored out) ---
 def ds_hc_post(x, residual, post, comb):
-    """model.py Block.hc_post (verbatim)."""
+    """Block.hc_post. Casts to the residual (entry) dtype, matching modeling_deepseek_v4.py."""
     y = post.unsqueeze(-1) * x.unsqueeze(-2) + torch.sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=2)
-    return y.type_as(x)
+    return y.type_as(residual)
 
 
 def ds_hc_head(x, hc_fn, hc_scale, hc_base, norm_eps, hc_eps):

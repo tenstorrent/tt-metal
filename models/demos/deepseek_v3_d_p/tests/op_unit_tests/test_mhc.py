@@ -17,9 +17,10 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig, MHCWrap, parametrize
 from models.demos.deepseek_v3_d_p.tt.mhc.mhc_block import TtMHCBlock
-from models.demos.deepseek_v3_d_p.tt.mhc.mhc_kernel import mhc_split_sinkhorn
+from models.demos.deepseek_v3_d_p.tt.mhc.mhc_kernel import build_consts, mhc_split_sinkhorn
 
-PCC = 0.999
+PCC = 0.999  # block e2e (includes the projection matmul)
+PCC_PARAM = 0.99999  # mHC-specific parametrization outputs — the deliverable's stated bar
 
 
 def _check(name, ref, dev, pcc=PCC):
@@ -42,9 +43,9 @@ def test_mhc_split_sinkhorn(device, T, scale_val):
     r_pre, r_post, r_comb = parametrize(mixes.reshape(1, T, cfg.mix_hc), scale, base, cfg, constraint="sinkhorn")
     d_pre, d_post, d_comb = mhc_split_sinkhorn(device, mixes, scale, base, cfg)
 
-    _check("pre", r_pre.reshape(T, cfg.n), d_pre)
-    _check("post", r_post.reshape(T, cfg.n), d_post)
-    _check("comb", r_comb.reshape(T, cfg.n, cfg.n), d_comb)
+    _check("pre", r_pre.reshape(T, cfg.n), d_pre, PCC_PARAM)
+    _check("post", r_post.reshape(T, cfg.n), d_post, PCC_PARAM)
+    _check("comb", r_comb.reshape(T, cfg.n, cfg.n), d_comb, PCC_PARAM)
 
 
 def test_mhc_block(device):
@@ -65,3 +66,49 @@ def test_mhc_block(device):
     x_tt = ttnn.from_torch(x.float(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
     dev = ttnn.to_torch(block(x_tt, lambda z: z))
     _check("block", ref, dev)
+
+
+# Multi-chip: parametrization is per-token-independent, so shard tokens across the mesh, replicate
+# the const tiles, run the multi-core kernel per device, no CCL. The mesh_device fixture auto-skips
+# on SKUs with too few devices (conftest), so this runs on the 8-chip LoudBox and skips on p150/p300.
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 4)], indirect=True, ids=["mesh1x4", "mesh2x4"])
+@pytest.mark.parametrize("T_per_dev", [32, 256], ids=["Td32", "Td256"])
+def test_mhc_multichip(mesh_device, T_per_dev, device_params):
+    torch.manual_seed(0)
+    D = mesh_device.get_num_devices()
+    T = T_per_dev * D
+    cfg = MHCConfig(dim=64, n=4)
+    g = torch.Generator().manual_seed(1)
+    mixes = torch.randn(T, cfg.mix_hc, generator=g)
+    scale = torch.full((3,), 1.0)
+    base = torch.randn(cfg.mix_hc, generator=g)
+
+    r_pre, r_post, r_comb = parametrize(mixes.reshape(1, T, cfg.mix_hc), scale, base, cfg, constraint="sinkhorn")
+
+    mt = ttnn.from_torch(
+        mixes,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.float32,
+    )
+    ct = ttnn.from_torch(
+        build_consts(cfg, scale, base),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.float32,
+    )
+    pre, post, comb = ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
+        mt, ct, cfg.n, int(cfg.sinkhorn_iters), float(cfg.eps)
+    )
+    cat0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    _check("pre", r_pre.reshape(T, cfg.n), ttnn.to_torch(pre, mesh_composer=cat0), PCC_PARAM)
+    _check("post", r_post.reshape(T, cfg.n), ttnn.to_torch(post, mesh_composer=cat0), PCC_PARAM)
+    _check(
+        "comb",
+        r_comb.reshape(T, cfg.n, cfg.n),
+        ttnn.to_torch(comb, mesh_composer=cat0).reshape(T, cfg.n, cfg.n),
+        PCC_PARAM,
+    )

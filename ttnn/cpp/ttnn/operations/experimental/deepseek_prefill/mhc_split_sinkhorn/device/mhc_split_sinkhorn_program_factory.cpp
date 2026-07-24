@@ -132,8 +132,9 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
     // Parametrization is independent per token, so distribute the token-tiles across the grid.
     const uint32_t num_token_tiles = tensor_args.mixes.physical_volume() / tt::constants::TILE_HW;
     auto grid = tensor_args.mixes.device()->compute_with_storage_grid_size();
-    // MHC_MAX_CORES=1 pins to a single core -- the baseline for the multi-core A/B benchmark.
-    if (const char* mc = std::getenv("MHC_MAX_CORES"); mc != nullptr && std::atoi(mc) == 1) {
+    // max_cores==1 pins to a single core -- the multi-core A/B baseline. It rides in the hashed
+    // attributes (read from MHC_MAX_CORES at op launch), so the program cache stays correct.
+    if (operation_attributes.max_cores == 1) {
         grid = CoreCoord{1, 1};
     }
     const uint32_t num_cores_y = grid.y;

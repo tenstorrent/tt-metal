@@ -12,6 +12,7 @@ struct MhcSplitSinkhornParams {
     uint32_t n;  // expansion rate (streams); mix_hc = (2+n)*n
     uint32_t sinkhorn_iters;
     float eps;
+    uint32_t max_cores;  // 0 = full grid; 1 pins single-core (benchmark A/B). Hashed for cache correctness.
 };
 
 // mixes: fused-projection output [T, (2+n)*n].  consts: [8, 32, 32] host-prepared tiles
