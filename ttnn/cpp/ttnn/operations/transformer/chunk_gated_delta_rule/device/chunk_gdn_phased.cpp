@@ -197,6 +197,13 @@ void ChunkGdnScanOperation::validate_on_program_cache_miss(
     if (in.initial_state.has_value()) {
         check(*in.initial_state, "initial_state", DataType::FLOAT32);
     }
+    if (in.identity_tile.has_value()) {
+        check(*in.identity_tile, "identity_tile", DataType::FLOAT32);
+        TT_FATAL(attrs.key_dim == attrs.val_dim, "identity initial state requires K == V");
+    }
+    TT_FATAL(
+        !(in.initial_state.has_value() && in.identity_tile.has_value()),
+        "initial_state and identity_tile are mutually exclusive");
     TT_FATAL(attrs.chunk_size % TILE_HEIGHT == 0, "chunk_size must be a multiple of 32");
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
@@ -209,7 +216,8 @@ ChunkGdnScanOperation::spec_return_value_t ChunkGdnScanOperation::compute_output
     // seq path also keeps o fp32.)
     const auto o_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     const auto s_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
-    ttnn::Shape o_shape({attrs.BH, attrs.num_chunks, attrs.chunk_size, attrs.val_dim});
+    ttnn::Shape o_shape = attrs.state_only ? ttnn::Shape({1, 1, 32, 32})
+                                           : ttnn::Shape({attrs.BH, attrs.num_chunks, attrs.chunk_size, attrs.val_dim});
     ttnn::Shape s_shape({attrs.BH, attrs.key_dim, attrs.val_dim});
     return {tt::tt_metal::TensorSpec(o_shape, o_layout), tt::tt_metal::TensorSpec(s_shape, s_layout)};
 }
@@ -239,7 +247,9 @@ std::vector<Tensor> chunk_gdn_scan(
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    bool vector_gate) {
+    bool vector_gate,
+    bool state_only,
+    const std::optional<Tensor>& identity_tile) {
     const auto& vb_shape = v_beta.logical_shape();  // [BH, NC, C, V]
     const auto& kd_shape = kd.logical_shape();      // [BH, NC, C, K]
     auto attrs = ChunkGdnScanOperation::operation_attributes_t{
@@ -249,7 +259,9 @@ std::vector<Tensor> chunk_gdn_scan(
         .key_dim = kd_shape[3],
         .val_dim = vb_shape[3],
         .has_initial_state = initial_state.has_value(),
+        .identity_initial_state = identity_tile.has_value(),
         .output_final_state = output_final_state,
+        .state_only = state_only,
         .vector_gate = vector_gate,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
@@ -262,7 +274,8 @@ std::vector<Tensor> chunk_gdn_scan(
         .k_dec_t = k_dec_t,
         .dl = dl,
         .t_inv = t_inv,
-        .initial_state = initial_state};
+        .initial_state = initial_state,
+        .identity_tile = identity_tile};
     return ttnn::device_operation::launch<ChunkGdnScanOperation>(attrs, tensor_args);
 }
 

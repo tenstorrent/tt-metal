@@ -16,11 +16,12 @@ void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
     constexpr uint32_t Vt = get_compile_time_arg_val(2);  // per-core V-block width (tiles)
-    constexpr uint32_t has_s0 = get_compile_time_arg_val(3);
+    constexpr uint32_t initial_state_mode = get_compile_time_arg_val(3);
     constexpr uint32_t Vt_full = get_compile_time_arg_val(4);  // full V (tiles) for row stride
-    (void)has_s0;
+    constexpr bool state_only = get_compile_time_arg_val(5) == 1;
+    (void)initial_state_mode;
 
-    constexpr auto o_a = TensorAccessorArgs<5>();
+    constexpr auto o_a = TensorAccessorArgs<6>();
     constexpr auto fs_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
 
     const uint32_t h = get_arg_val<uint32_t>(0);
@@ -45,15 +46,17 @@ void kernel_main() {
     // o [BH, NC, C, V]: scatter this V-block back — row stride Vt_full, column offset vb*Vt.
     for (uint32_t c = 0; c < NC; c++) {
         cbout.wait_front(cv);
-        const uint32_t row_base = (h * NC + c) * Ct * Vt_full;
-        auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbout);
-        for (uint32_t r = 0; r < Ct; r++) {
-            const uint32_t dst = row_base + r * Vt_full + vb * Vt;
-            for (uint32_t vt = 0; vt < Vt; vt++) {
-                noc.async_write(src, o_acc, tb_o, {.offset_bytes = (r * Vt + vt) * tb_o}, {.page_id = dst + vt});
+        if constexpr (!state_only) {
+            const uint32_t row_base = (h * NC + c) * Ct * Vt_full;
+            auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbout);
+            for (uint32_t r = 0; r < Ct; r++) {
+                const uint32_t dst = row_base + r * Vt_full + vb * Vt;
+                for (uint32_t vt = 0; vt < Vt; vt++) {
+                    noc.async_write(src, o_acc, tb_o, {.offset_bytes = (r * Vt + vt) * tb_o}, {.page_id = dst + vt});
+                }
             }
+            noc.async_write_barrier();
         }
-        noc.async_write_barrier();
         cbout.pop_front(cv);
     }
 

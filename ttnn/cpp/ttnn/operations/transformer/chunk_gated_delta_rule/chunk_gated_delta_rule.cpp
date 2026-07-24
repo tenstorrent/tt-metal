@@ -23,6 +23,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/device.hpp"
 
 using namespace tt::tt_metal;
@@ -544,8 +545,65 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         flat_g,
         true,
         prep_bf16_mask);
+    std::optional<ttnn::Tensor> summary_reconstructed_state;
+    // Experimental affine-summary construction: eight contiguous chunks become one
+    // independent pseudo-head. Running the proven recurrence from zero gives B; running
+    // from I gives A+B. State-only mode drains token outputs without materializing them.
+    constexpr uint32_t group_chunks = 8;
+    if (std::getenv("QWEN_KDA_GROUP_SUMMARY") != nullptr && NC % group_chunks == 0 && K == V) {
+        const uint32_t group_heads = BH * (NC / group_chunks);
+        auto grouped = prep;
+        grouped[0] = ttnn::reshape(grouped[0], ttnn::Shape({group_heads, group_chunks, C, V}));
+        grouped[1] = ttnn::reshape(grouped[1], ttnn::Shape({group_heads, group_chunks, C, K}));
+        grouped[2] = ttnn::reshape(grouped[2], ttnn::Shape({group_heads, group_chunks, C, K}));
+        grouped[3] = ttnn::reshape(grouped[3], ttnn::Shape({group_heads, group_chunks, C, C}));
+        grouped[4] = ttnn::reshape(grouped[4], ttnn::Shape({group_heads, group_chunks, K, C}));
+        grouped[5] = ttnn::reshape(grouped[5], ttnn::Shape({group_heads, group_chunks, K, 1}));
+        grouped[6] = ttnn::reshape(grouped[6], ttnn::Shape({group_heads, group_chunks, C, C}));
+        auto summary_b = ttnn::prim::chunk_gdn_scan(
+            grouped[0],
+            grouped[1],
+            grouped[2],
+            grouped[3],
+            grouped[4],
+            grouped[5],
+            grouped[6],
+            std::nullopt,
+            C,
+            true,
+            prep_mem,
+            kernel_cfg,
+            true,
+            true);
+        auto summary_a_plus_b = ttnn::prim::chunk_gdn_scan(
+            grouped[0],
+            grouped[1],
+            grouped[2],
+            grouped[3],
+            grouped[4],
+            grouped[5],
+            grouped[6],
+            std::nullopt,
+            C,
+            true,
+            prep_mem,
+            kernel_cfg,
+            true,
+            true,
+            eye_c);
+        auto summary_a = ttnn::subtract(summary_a_plus_b[1], summary_b[1], std::nullopt, prep_mem);
+        if (NC == group_chunks) {
+            TT_FATAL(s0.has_value(), "one-group summary validation requires initial state");
+            auto transformed_state = ttnn::matmul(
+                summary_a, *s0, false, false, prep_mem, DataType::FLOAT32, std::nullopt, std::nullopt, kernel_cfg);
+            summary_reconstructed_state = ttnn::add(transformed_state, summary_b[1], std::nullopt, prep_mem);
+        }
+    }
     auto scan = ttnn::prim::chunk_gdn_scan(
         prep[0], prep[1], prep[2], prep[3], prep[4], prep[5], prep[6], s0, C, true, out_mem, kernel_cfg, true);
+    if (summary_reconstructed_state.has_value()) {
+        scan[1] = *summary_reconstructed_state;
+    }
 
     std::optional<ttnn::Tensor> final_state;
     if (output_final_state) {

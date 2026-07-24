@@ -16,12 +16,11 @@ constexpr uint32_t cb_vbeta = 17, cb_kd = 18, cb_qdecay = 19, cb_intra = 20, cb_
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
-    constexpr uint32_t Vt = get_compile_time_arg_val(2);  // per-core V-block width (tiles)
-    constexpr uint32_t has_s0 = get_compile_time_arg_val(3);
-    constexpr uint32_t Vt_full = get_compile_time_arg_val(4);  // full V (tiles) for row stride
-    (void)has_s0;
+    constexpr uint32_t Vt = get_compile_time_arg_val(2);                  // per-core V-block width (tiles)
+    constexpr uint32_t initial_state_mode = get_compile_time_arg_val(3);  // 0=provided, 1=zeros, 2=identity
+    constexpr uint32_t Vt_full = get_compile_time_arg_val(4);             // full V (tiles) for row stride
 
-    constexpr auto vb_a = TensorAccessorArgs<5>();
+    constexpr auto vb_a = TensorAccessorArgs<6>();
     constexpr auto kd_a = TensorAccessorArgs<vb_a.next_compile_time_args_offset()>();
     constexpr auto qd_a = TensorAccessorArgs<kd_a.next_compile_time_args_offset()>();
     constexpr auto it_a = TensorAccessorArgs<qd_a.next_compile_time_args_offset()>();
@@ -29,6 +28,7 @@ void kernel_main() {
     constexpr auto dl_a = TensorAccessorArgs<kc_a.next_compile_time_args_offset()>();
     constexpr auto ti_a = TensorAccessorArgs<dl_a.next_compile_time_args_offset()>();
     constexpr auto s0_a = TensorAccessorArgs<ti_a.next_compile_time_args_offset()>();
+    constexpr auto id_a = TensorAccessorArgs<s0_a.next_compile_time_args_offset()>();
 
     // This core handles head h, V-block vb (columns [vb*Vt, vb*Vt+Vt) of the full V dimension).
     const uint32_t h = get_arg_val<uint32_t>(0);
@@ -42,6 +42,7 @@ void kernel_main() {
     const uint32_t dl_addr = get_arg_val<uint32_t>(8);
     const uint32_t ti_addr = get_arg_val<uint32_t>(9);
     const uint32_t s0_addr = get_arg_val<uint32_t>(10);
+    const uint32_t id_addr = get_arg_val<uint32_t>(11);
 
     const uint32_t vb_tb = get_tile_size(cb_vbeta);
     const uint32_t kd_tb = get_tile_size(cb_kd);
@@ -59,6 +60,7 @@ void kernel_main() {
     const auto dl_acc = TensorAccessor(dl_a, dl_addr, dl_tb);
     const auto ti_acc = TensorAccessor(ti_a, ti_addr, ti_tb);
     const auto s0_acc = TensorAccessor(s0_a, s0_addr, s0_tb);
+    const auto id_acc = TensorAccessor(id_a, id_addr, s0_tb);
 
     // V-independent tile counts (full reads). cv/kv are per-row Vt and handled by read_vslice.
     constexpr uint32_t cc = Ct * Ct;
@@ -95,8 +97,22 @@ void kernel_main() {
         cb.push_back(R * Vt);
     };
 
-    // initial state S [K, V] (once) — host always provides it (zeros if none). V-sliced.
-    read_vslice(s0_acc, cb_S, s0_tb, h * Kt * Vt_full, Kt);
+    // Initial state S [K,V]: provided, generated zero, or a block identity.
+    if constexpr (initial_state_mode == 0) {
+        read_vslice(s0_acc, cb_S, s0_tb, h * Kt * Vt_full, Kt);
+    } else {
+        CircularBuffer state_cb(cb_S);
+        state_cb.reserve_back(Kt * Vt);
+        noc.async_write_zeros(state_cb, Kt * Vt * s0_tb);
+        noc.write_zeros_l1_barrier();
+        if constexpr (initial_state_mode == 2) {
+            for (uint32_t i = 0; i < Kt; i++) {
+                noc.async_read(id_acc, state_cb, s0_tb, {.page_id = 0}, {.offset_bytes = (i * Vt + i) * s0_tb});
+            }
+            noc.async_read_barrier();
+        }
+        state_cb.push_back(Kt * Vt);
+    }
 
     for (uint32_t c = 0; c < NC; c++) {
         const uint32_t hc = h * NC + c;

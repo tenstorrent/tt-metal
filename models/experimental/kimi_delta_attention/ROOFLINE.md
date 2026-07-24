@@ -525,3 +525,33 @@ their accumulator in CBs, avoiding the roughly `780 MiB` level traffic of the
 rejected full-prefix form. The remaining distributed-L1/NOC traffic is modeled
 at roughly `200 MiB/chip`, implying about `400 GB/s` at break-even. That NOC
 number is unmeasured and is the first device-prototype falsification target.
+
+
+## Measured scan-reuse summary refinement
+
+The first device prototype replaced explicit transform construction with two
+uses of the proven scan. Because target K=V=128, scanning each group from zero
+produces B, scanning it from a block identity produces A+B, and one device
+subtract produces A. Eight chunks/group divides 160 exactly, mapping 20 groups
+per head over 80 whole-V workers.
+
+A T=256 one-group validation returned `A @ S0 + B` as final state for a
+nonzero S0 and measured output/state PCC `0.999992/0.999993`. The matched
+T=5,120 trace measured:
+
+| Component | Median | Cores |
+|---|---:|---:|
+| zero-state group scan (B) | 70.869 us | 80 |
+| identity-state group scan (A+B) | 91.912 us | 80 |
+| subtraction (A) | 21.706 us | 110 |
+| summary construction total | 184.487 us | mixed |
+| retained serial scan | 500.140 us | 16 |
+
+Whole-layer median rises only `3380.644 -> 3557.576 us` (`+176.932 us`) while
+the old scan is still present. A final grouped scan is represented by the
+`70.869 us` zero-state measurement, leaving `244.784 us` for summary prefix at
+break-even, `241.403 us` for a gain above 0.1% whole-layer noise, and
+`210.978 us` for a 1% whole-layer win. The summary scans execute about
+`4.698 GFLOP` in `162.781 us`, roughly `28.86 TFLOP/s` or `18.98%` chip peak.
+This measured efficiency validates the parallel-core premise; prefix latency is
+now the decisive unknown.

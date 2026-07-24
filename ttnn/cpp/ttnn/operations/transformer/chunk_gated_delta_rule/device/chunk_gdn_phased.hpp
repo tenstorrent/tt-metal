@@ -121,7 +121,9 @@ struct ChunkGdnScanParams {
     uint32_t key_dim;
     uint32_t val_dim;
     bool has_initial_state;
+    bool identity_initial_state = false;
     bool output_final_state;
+    bool state_only = false;
     bool vector_gate = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -136,6 +138,7 @@ struct ChunkGdnScanInputs {
     Tensor dl;                            // [BH, NC, 1|K, 1] fp32 or bf16 (scalar GDN or vector KDA decay)
     Tensor t_inv;                         // [BH, NC, C, C] fp32  (WY inverse)
     std::optional<Tensor> initial_state;  // [BH, K, V] fp32 or absent (zeros)
+    std::optional<Tensor> identity_tile;  // [1,1,32,32] fp32; block identity when present
 };
 
 struct ChunkGdnScanProgramFactory {
@@ -170,7 +173,9 @@ std::vector<Tensor> chunk_gdn_scan(
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    bool vector_gate = false);
+    bool vector_gate = false,
+    bool state_only = false,
+    const std::optional<Tensor>& identity_tile = std::nullopt);
 
 struct KdaGatedRmsParams {
     uint32_t batch;

@@ -40,6 +40,7 @@ def _assert_pcc(name: str, golden: torch.Tensor, actual: torch.Tensor, threshold
         (64, 32, 128, 128, False, False, False, None),
         (64, 32, 128, 128, True, False, True, None),
         (64, 32, 128, 128, True, True, True, "HiFi2"),
+        (256, 4, 128, 128, True, True, True, None),
     ],
 )
 def test_chunk_kda_pcc(

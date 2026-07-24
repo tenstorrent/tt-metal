@@ -1478,3 +1478,50 @@
   compute and capacity assumptions. Proceed to a device prototype; first
   falsify summary construction correctness and measured phase cost before
   integrating the full prefix.
+
+
+### 2026-07-24 21:04:00 UTC — Retain scan-reuse affine group summaries
+
+- Hypothesis: at target `K=V=128`, evaluate each eight-chunk affine transform
+  with the existing recurrence twice: zero initial state gives B and block
+  identity gives A+B. A device subtraction then gives A. This replaces custom
+  transform construction and maps 20 groups/head over 80 whole-V workers.
+- Implementation: private `QWEN_KDA_GROUP_SUMMARY=1` reshapes the seven
+  prepared tensors into 80 pseudo-heads x 8 chunks. The phased scan gained
+  generated-zero/generated-identity initial states and state-only output
+  draining. Ordinary scan behavior remains the default.
+- First failure: the T=256 gate failed at device-kernel compile because the
+  small-head heuristic split V four ways (`Vt=1`, `Vt_full=4`). Identity state
+  requires a whole square state. State-only scans now force whole-V ownership.
+- Second failure: an ordinary split-V kernel still evaluated a non-dependent
+  `static_assert` inside a discarded `if constexpr` branch. Removing that
+  device assertion fixed compilation; the host mapping enforces whole-V for
+  identity mode.
+- Consumed-summary correctness command: `QWEN_KDA_GROUP_SUMMARY=1
+  scripts/run_safe_pytest.sh --run-all
+  models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s -k
+  ' 256 and 4 and 128 '` -> PASS. T=256 K=V=128 output/state PCC was
+  `0.999992/0.999993`; final state came from `A @ S0 + B` with nonzero S0.
+- Regression command: `scripts/run_safe_pytest.sh --run-all
+  models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s` ->
+  6 passed.
+- Summary profile: `QWEN_KDA_GROUP_SUMMARY=1 PERF_TRACE=1 PERF_SEQ=5120
+  PERF_REPS=10 scripts/run_safe_pytest.sh --profile
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py
+  -q -s` -> PASS. CSV
+  `generated/profiler/reports/2026_07_24_21_00_22/ops_perf_results_2026_07_24_21_00_22.csv`,
+  SHA-256 `50455a0e39fd3c6548beefdce3f211c8b405ed52ae9db5c33be3e7b23e9f0471`.
+  Wall median `3557.576 us`; spans `[3550.477, 3545.151, 3558.251,
+  3556.901, 3525.836, 3577.817, 3553.974, 3560.619, 3580.649,
+  3575.392] us`. Zero scan, identity scan, and subtraction are
+  `70.869/91.912/21.706 us`, totaling `184.487 us`.
+- Matched control: same command without the env -> PASS. CSV
+  `generated/profiler/reports/2026_07_24_21_03_12/ops_perf_results_2026_07_24_21_03_12.csv`,
+  SHA-256 `b00f96f5c893f6fa85dbbe0bdeb5891eef9f61bc5bd1224b457464f66f28728c`.
+  Wall median `3380.644 us`; spans `[3378.048, 3380.180, 3376.323,
+  3381.107, 3376.248, 3372.413, 3382.379, 3397.456, 3388.239,
+  3393.462] us`; serial scan `500.140 us`.
+- Verdict: retain the opt-in prototype. Summary construction adds only
+  `176.932 us` wall while the original scan remains. Assuming the measured
+  `70.869 us` grouped final scan, prefix must be below `210.978 us` for a 1%
+  whole-layer win. Proceed to the summary-prefix kernel.

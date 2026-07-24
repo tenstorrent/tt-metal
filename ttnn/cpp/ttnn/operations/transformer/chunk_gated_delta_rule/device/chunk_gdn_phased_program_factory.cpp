@@ -363,7 +363,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     const uint32_t Ct = attrs.chunk_size / TILE_HEIGHT;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt_full = attrs.val_dim / TILE_WIDTH;
-    const uint32_t has_s0 = attrs.has_initial_state ? 1u : 0u;
+    const uint32_t initial_state_mode = attrs.identity_initial_state ? 2u : (attrs.has_initial_state ? 0u : 1u);
 
     // o output is fp32 (matches the scan op's compute_output_specs; a bf16 o degraded full-model
     // quality and was removed). cb_out format must match, else the writer strides wrong.
@@ -371,7 +371,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
 
     auto* device = in.v_beta.device();
     // Value-parallel fan-out: each core runs one (head, v-block) sequential scan.
-    auto sdist = distribute_scan(device->compute_with_storage_grid_size(), BH, Vt_full, attrs.vector_gate);
+    auto sdist =
+        distribute_scan(device->compute_with_storage_grid_size(), BH, Vt_full, attrs.vector_gate && !attrs.state_only);
     const CoreRangeSet& cores = sdist.core_set;
     const uint32_t Vt = sdist.Vtl;  // per-core V-block width; CBs/compute use this
     const uint32_t n_used = static_cast<uint32_t>(sdist.cores.size());
@@ -419,7 +420,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
     // ct arg 2 = per-core Vt(=Vtl); arg 4 = Vt_full (full V in tiles) for the readers'/writer's
     // V-slice row stride. Compute reads only args 0..2 (Ct, Kt, Vt) so the extra arg is harmless.
-    const std::vector<uint32_t> ct_args = {Ct, Kt, Vt, has_s0, Vt_full};
+    const std::vector<uint32_t> ct_args = {Ct, Kt, Vt, initial_state_mode, Vt_full, attrs.state_only ? 1u : 0u};
 
     std::vector<uint32_t> reader_ct = ct_args;
     TensorAccessorArgs(*in.v_beta.buffer()).append_to(reader_ct);
@@ -430,6 +431,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     TensorAccessorArgs(*in.dl.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.t_inv.buffer()).append_to(reader_ct);
     TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct);
+    TensorAccessorArgs(in.identity_tile.has_value() ? in.identity_tile->buffer() : nullptr).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = ct_args;
     TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
@@ -468,6 +470,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     auto* dl_buf = in.dl.buffer();
     auto* ti_buf = in.t_inv.buffer();
     auto* s0_buf = in.initial_state.has_value() ? in.initial_state->buffer() : nullptr;
+    auto* identity_buf = in.identity_tile.has_value() ? in.identity_tile->buffer() : nullptr;
     auto* o_buf = outputs[0].buffer();
     auto* fs_buf = outputs[1].buffer();
 
@@ -476,7 +479,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
         const uint32_t h = sdist.head[i];
         const uint32_t vb = sdist.vblk[i];
         reader.emplace_runtime_args(
-            core, {h, vb, NC, vb_buf, kd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf, s0_buf});
+            core, {h, vb, NC, vb_buf, kd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf, s0_buf, identity_buf});
         writer.emplace_runtime_args(core, {h, vb, NC, o_buf, fs_buf});
         compute.emplace_runtime_args(core, {NC});
     }

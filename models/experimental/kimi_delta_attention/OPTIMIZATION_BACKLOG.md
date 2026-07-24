@@ -118,6 +118,22 @@ transforms with a parallel prefix scan.
   distributed-L1/NOC traffic, requiring about `400 GB/s` to beat the serial
   scan. This is a hypothesis to validate with the device prototype, not a
   measured NOC result.
+- Device prototype, 2026-07-24: reuse the validated recurrence itself to
+  construct summaries. At target K=V, an eight-chunk scan from zero yields B;
+  a second scan from block identity yields A+B; one subtraction yields A. This
+  changes the map to 20 groups/head and 80 whole-V workers, avoiding a new
+  transform-construction kernel.
+- Correctness: a one-group T=256 test consumed the summaries as `A @ S0 + B`
+  with nonzero S0 and passed output/state PCC `0.999992/0.999993`. All six
+  direct KDA regression cases pass with the experiment disabled.
+- Matched T=5,120 result: control wall `3380.644 us`; summary wall
+  `3557.576 us`; overhead `176.932 us`. Call medians are `70.869 us` for the
+  zero scan, `91.912 us` for the identity scan, and `21.706 us` for subtract,
+  totaling `184.487 us`. The original serial scan remains `500.140 us`.
+- Revised decision: retain the opt-in summary prototype and implement the
+  summary-prefix phase. Reusing a `70.869 us` grouped scan after prefix leaves
+  `244.784 us` for prefix at break-even, `241.403 us` for a gain above the
+  `0.1%` noise floor, and `210.978 us` for the established 1% wall gate.
 
 ### 2. Direct prep-to-scan producer/consumer pipeline
 

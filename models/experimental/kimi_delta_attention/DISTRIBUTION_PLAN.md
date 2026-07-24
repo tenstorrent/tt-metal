@@ -292,3 +292,21 @@ Reject these variants unless new evidence changes the capacity model:
 - all 160 per-chunk `(A,B)` prefixes in L1 (`80 MiB/chip` extra);
 - DRAM-backed prefix levels (modeled floor already exceeds the serial scan);
 - sequence sharding across chips, which adds state handoff to the TP path.
+
+
+### Measured 80-worker summary map
+
+The scan-reuse prototype refines the initial 108-worker model to a simpler
+80-worker map:
+
+- 20 contiguous groups/head, eight chunks/group; four heads/device;
+- one whole-V worker/group, row-major across 80 cores;
+- scan from zero to produce B and from block identity to produce A+B;
+- subtract once over the 80 summaries to produce A;
+- next phase: prefix 20 summaries/head, then seed the same 80 workers for the
+  final eight-chunk output scan.
+
+The measured two scans plus subtraction cost 184.487 us. A same-shape grouped
+scan costs 70.869 us, so the summary-prefix phase must stay below 210.978 us to
+clear the 1% whole-layer retention gate. The remaining 30 cores are available
+for a 32-leaf padded prefix tree but must not perturb the 80 group owners.
